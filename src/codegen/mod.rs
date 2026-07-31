@@ -285,14 +285,13 @@ fn finalize_user_asm(
         &module.enum_infos,
         Some(&allowed_class_names),
         emit_eval_reflection_metadata,
-        // The source path feeds eval Reflection source-location hooks only;
-        // embedding it in native-only programs leaks the build path into the
-        // assembly (and trips needle-based optimizer asm asserts).
-        if emit_eval_reflection_metadata {
-            module.source_path.as_deref()
-        } else {
-            None
-        },
+        // The source path now feeds `Throwable::getFile()` and the ` in <file>:<line>`
+        // suffix of the uncaught-exception report as well as the eval Reflection
+        // source-location hooks, so it is passed unconditionally. It is not new
+        // information in the artifact: `__FILE__` already bakes this exact
+        // canonicalized string into any program that mentions it, and reference PHP
+        // prints it in every fatal error.
+        module.source_path.as_deref(),
     );
 
     let mut user_asm = emitter.output();

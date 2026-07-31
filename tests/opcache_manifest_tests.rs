@@ -807,3 +807,64 @@ echo 'exists_fc=', var_export(function_exists('opcache_is_script_cached_in_file_
     let out2 = run_binary(&bin2);
     assert!(out2.contains("exists_fc=true\n"), "the string literal counts as a reference:\n{out2}");
 }
+
+/// Verifies the `scripts` entry carries `revalidate` only from PHP 8.3 on.
+///
+/// php-src added the key in 8.3; a `--php-version 8.2` build must not report a key the runtime it
+/// targets does not have. Captured from the official Docker images on Linux, which is the only
+/// place this is observable — macOS's shared-memory model hides the `scripts` map entirely, so
+/// every local probe saw an empty entry set and the gap was invisible:
+///
+/// ```text
+/// php:8.2-cli  full_path hits last_used last_used_timestamp memory_consumption timestamp
+/// php:8.3-cli  full_path hits last_used last_used_timestamp memory_consumption revalidate timestamp
+/// ```
+///
+/// The 8.3 row is the control: without it a fix that dropped `revalidate` everywhere would pass.
+#[test]
+fn scripts_entry_reports_revalidate_only_from_php_83() {
+    for (version, expects_revalidate) in [("8.2", false), ("8.3", true), ("8.5", true)] {
+        let dir = make_test_dir(&format!("opcache_revalidate_{}", version.replace('.', "_")));
+        fs::write(
+            dir.join("reval.php"),
+            r#"<?php
+$s = opcache_get_status();
+if (is_array($s)) {
+    foreach ($s['scripts'] as $key => $entry) {
+        foreach ($entry as $field => $value) { echo 'K=', $field, "\n"; }
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let output = Command::new(elephc_bin())
+            .env("XDG_CACHE_HOME", dir.join("cache-root"))
+            .current_dir(&dir)
+            .arg("--php-version")
+            .arg(version)
+            .arg("--ini")
+            .arg("opcache.enable_cli=1")
+            .arg(dir.join("reval.php"))
+            .output()
+            .expect("failed to spawn elephc");
+        assert!(
+            output.status.success(),
+            "compile failed for {version}:\n{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let out = run_binary(&dir.join("reval"));
+
+        assert!(
+            out.contains("K=timestamp\n"),
+            "the entry must still carry its other fields under {version}:\n{out}"
+        );
+        assert_eq!(
+            out.contains("K=revalidate\n"),
+            expects_revalidate,
+            "PHP {version} {} report `revalidate`:\n{out}",
+            if expects_revalidate { "must" } else { "must NOT" }
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+}

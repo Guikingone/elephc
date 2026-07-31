@@ -48,6 +48,19 @@ impl FakeOps {
     pub(super) fn runtime_resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::Resource(value)))
     }
+    /// Creates a fake inert hash-context cell that consumes no PHP resource id.
+    ///
+    /// Models resource kind 5. The cell is still `FakeValue::Resource` because the tag
+    /// stays 9 in the real runtime and `eval_resource_payload` reads the key back out
+    /// of it; marking the payload inert FIRST is what makes `alloc` skip id binding,
+    /// mirroring `__rt_mixed_from_value` skipping `__rt_resource_id_of` for kind 5.
+    pub(super) fn runtime_hash_context(
+        &mut self,
+        value: i64,
+    ) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.mark_resource_inert(value);
+        Ok(self.alloc(FakeValue::Resource(value)))
+    }
     /// Creates a fake float cell.
     pub(super) fn runtime_float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus> {
         Ok(self.alloc(FakeValue::Float(value)))

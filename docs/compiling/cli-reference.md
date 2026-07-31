@@ -196,6 +196,7 @@ and one at run time.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `--ini KEY=VALUE` / `--ini=KEY=VALUE` | any `opcache.*` directive | — | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the FIRST `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. |
+| `--strict-opcache` | — | off | Throw a `RuntimeException` when `opcache_invalidate($file, true)` targets code compiled into this binary, instead of reporting the success reference PHP reports. Off, the default is byte-identical to reference PHP. See [`--strict-opcache`](../php/opcache.md#--strict-opcache). |
 
 ```bash
 elephc --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php

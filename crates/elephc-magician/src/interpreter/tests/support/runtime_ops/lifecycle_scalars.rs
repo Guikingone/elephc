@@ -60,6 +60,10 @@ macro_rules! impl_fake_lifecycle_scalar_ops {
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_resource(value)
     }
+    /// Creates a fake inert hash-context cell, consuming no fake PHP resource id.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        self.runtime_hash_context(value)
+    }
     /// Creates a fake float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus> {
         self.runtime_float(value)

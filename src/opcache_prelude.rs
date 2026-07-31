@@ -514,6 +514,53 @@ const INVALIDATE_TEMPLATE: &str = r#"function opcache_invalidate($filename, $for
 }
 "#;
 
+/// The `--strict-opcache` variant of [`INVALIDATE_TEMPLATE`].
+///
+/// D5 IS THE ONE DOCUMENTED DIVERGENCE of this OPcache model, and it is the only one that can
+/// silently change what a program DOES rather than what it reports. Reference PHP's
+/// `opcache_invalidate($f, true)` discards the cached script so the NEXT include re-reads and
+/// re-compiles `$f` from disk. Code that elephc compiled into the binary cannot be re-read: it
+/// is frozen at link time. The default body therefore reports success exactly as reference PHP
+/// does, which is right for a program that merely inspects the cache — and wrong, silently, for
+/// one that invalidates in order to pick up changed code (a dev-mode cache-buster, a plugin
+/// reloader). Such a program keeps running the OLD code with no signal at all.
+///
+/// Under `--strict-opcache` that request throws instead. The throw is deliberately narrow:
+/// ONLY a manifest member — code actually frozen into this binary — is impossible to honor.
+/// A non-manifest path is a file this binary never compiled, so invalidating it is a no-op in
+/// reference PHP too and stays a plain `true`. The `$force` distinction is likewise preserved:
+/// without `$force` reference PHP does not discard anything either, so there is nothing elephc
+/// fails to honor and nothing to throw about.
+///
+/// `RuntimeException` is thrown directly rather than through a prelude-declared subclass:
+/// a prelude class extending a built-in `Exception` cannot call `parent::__construct` without
+/// a link error, so subclassing here would buy a nicer type at the cost of a fragile ctor.
+const STRICT_INVALIDATE_TEMPLATE: &str = r#"function opcache_invalidate($filename, $force = false): bool {
+    if (__OPCACHE_ENABLED__ === false) {
+        return false;
+    }
+    $force = (bool) $force;
+    $path = '';
+    if ($filename === '') {
+        $cwd = getcwd();
+        if ($cwd === false) {
+            return false;
+        }
+        $path = (string) $cwd;
+    } else {
+        $rp = realpath($filename);
+        if ($rp === false) {
+            return false;
+        }
+        $path = (string) $rp;
+    }
+    if ($force && in_array($path, __MANIFEST_PATHS__, true)) {
+        throw new RuntimeException('opcache_invalidate(): --strict-opcache: cannot invalidate "' . $path . '": it is compiled into this binary and cannot be reloaded from disk');
+    }
+    return true;
+}
+"#;
+
 /// The `opcache_compile_file` function template. `__OPCACHE_ENABLED__` is spliced with the
 /// compile-time cache-enabled boolean (`true`/`false`) and it takes exactly one argument.
 ///
@@ -1416,7 +1463,7 @@ fn render_get_status_function(
     let memory_free = memory_total - memory_used;
 
     let revalidate_freq = directive_int(version_id, "opcache.revalidate_freq", overrides);
-    let scripts_map = render_scripts_map_literal(manifest, revalidate_freq);
+    let scripts_map = render_scripts_map_literal(manifest, revalidate_freq, version_id);
 
     // Reference reports `interned_strings_buffer` (MiB) as a byte count here.
     let interned_buffer_size =
@@ -1659,7 +1706,31 @@ fn splice_interned_strings_usage(template: &str, buffer_size: i64) -> String {
 /// (see [`INVALIDATE_TEMPLATE`]). With nothing invalidated the call returns the mtime unchanged.
 ///
 /// An empty manifest renders `[]`.
-fn render_scripts_map_literal(manifest: &[ScriptEntry], revalidate_freq: i64) -> String {
+/// First `version_id` whose `opcache_get_status()` script entries carry a `revalidate` key.
+///
+/// php-src added it in 8.3; a `--php-version 8.2` build must not report it. Verified against the
+/// official `php:8.2-cli` and `php:8.3-cli` images.
+const SCRIPTS_REVALIDATE_MIN_VERSION_ID: u32 = 80300;
+
+fn render_scripts_map_literal(
+    manifest: &[ScriptEntry],
+    revalidate_freq: i64,
+    version_id: u32,
+) -> String {
+    // `revalidate` DOES NOT EXIST in PHP 8.2's script entries; php-src added it in 8.3.
+    // Captured from the official `php:8.X-cli` images on Linux:
+    //
+    //   8.2  full_path hits last_used last_used_timestamp memory_consumption timestamp
+    //   8.3  full_path hits last_used last_used_timestamp memory_consumption revalidate timestamp
+    //
+    // Emitting it unconditionally made a `--php-version 8.2` build report a key the runtime it
+    // targets never has. macOS could not catch this: its shared-memory model hides the `scripts`
+    // map entirely, so every local probe saw an empty entry set.
+    let revalidate_entry = if version_id >= SCRIPTS_REVALIDATE_MIN_VERSION_ID {
+        format!(", 'revalidate' => $__elephc_opcache_start_time + {revalidate_freq}")
+    } else {
+        String::new()
+    };
     let mut literal = String::from("[");
     for entry in manifest {
         let path = render_php_single_quoted(&entry.path);
@@ -1668,8 +1739,8 @@ fn render_scripts_map_literal(manifest: &[ScriptEntry], revalidate_freq: i64) ->
              'memory_consumption' => {mem}, \
              'last_used' => __elephc_opcache_asctime($__elephc_opcache_start_time), \
              'last_used_timestamp' => $__elephc_opcache_start_time, \
-             'timestamp' => __elephc_opcache_script_timestamp({path}, {ts}), \
-             'revalidate' => $__elephc_opcache_start_time + {revalidate_freq}], ",
+             'timestamp' => __elephc_opcache_script_timestamp({path}, {ts})\
+             {revalidate_entry}], ",
             mem = entry.memory_consumption,
             ts = entry.timestamp,
         ));
@@ -1732,13 +1803,19 @@ fn render_invalidate_function(
     web: bool,
     manifest: &[ScriptEntry],
     overrides: &[(String, String)],
+    strict: bool,
 ) -> String {
     let enabled = render_bool(opcache_cache_enabled_with_overrides(
         php_version.version_id(),
         web,
         overrides,
     ));
-    INVALIDATE_TEMPLATE
+    let template = if strict {
+        STRICT_INVALIDATE_TEMPLATE
+    } else {
+        INVALIDATE_TEMPLATE
+    };
+    template
         .replace("__OPCACHE_ENABLED__", enabled)
         .replace("__MANIFEST_PATHS__", &render_manifest_paths_literal(manifest))
 }
@@ -2343,6 +2420,7 @@ pub fn inject_if_used(
     manifest: &[ScriptEntry],
     overrides: &[(String, String)],
     preload: Option<&PreloadStatistics>,
+    strict: bool,
 ) -> (Program, ManifestBakeSites) {
     let mut bodies = String::new();
     let mut sites = ManifestBakeSites {
@@ -2425,7 +2503,7 @@ pub fn inject_if_used(
         bodies.push_str(&if restricted {
             render_restricted_function(RESTRICTED_INVALIDATE_TEMPLATE)
         } else {
-            render_invalidate_function(php_version, web, manifest, overrides)
+            render_invalidate_function(php_version, web, manifest, overrides, strict)
         });
     }
 
@@ -2610,6 +2688,7 @@ pub fn bake_manifest(
     manifest: &[ScriptEntry],
     overrides: &[(String, String)],
     preload: Option<&PreloadStatistics>,
+    strict: bool,
 ) -> Program {
     if sites.is_empty() {
         return program;
@@ -2659,6 +2738,7 @@ pub fn bake_manifest(
                 web,
                 manifest,
                 overrides,
+                strict,
             )),
         ));
     }
@@ -2767,7 +2847,7 @@ mod tests {
     #[test]
     fn skips_injection_when_unused() {
         let program = parse("<?php echo 1;");
-        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert_eq!(injected.len(), program.len());
     }
 
@@ -2775,7 +2855,7 @@ mod tests {
     #[test]
     fn injects_when_called() {
         let program = parse("<?php $c = opcache_get_configuration();");
-        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert!(injected.len() > program.len());
     }
 
@@ -2800,10 +2880,10 @@ mod tests {
     fn injects_reset_with_sapi_gated_constant() {
         let program = parse("<?php var_dump(opcache_reset());");
 
-        let cli = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+        let cli = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert!(cli.len() > program.len());
 
-        let web = inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None).0;
+        let web = inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
         assert!(web.len() > program.len());
     }
 
@@ -2820,7 +2900,7 @@ mod tests {
     #[test]
     fn injection_is_per_function() {
         let reset_only = parse("<?php opcache_reset();");
-        let injected = inject_if_used(reset_only.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+        let injected = inject_if_used(reset_only.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         // Exactly one OPcache function plus the one shared state block.
         assert_eq!(injected.len(), reset_only.len() + 1 + STATE_HELPER_DECLS);
     }
@@ -3005,7 +3085,7 @@ mod tests {
     #[test]
     fn injects_get_status_per_function() {
         let status_only = parse("<?php var_dump(opcache_get_status());");
-        let injected = inject_if_used(status_only.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+        let injected = inject_if_used(status_only.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         // Exactly one OPcache function plus the one shared state block (`opcache_get_status`
         // reads the restart latch, the discard-aware `timestamp`, and the `asctime` formatter).
         assert_eq!(injected.len(), status_only.len() + 1 + STATE_HELPER_DECLS);
@@ -3046,12 +3126,12 @@ mod tests {
             memory_consumption: 4096,
         }];
 
-        let cli = render_invalidate_function(PhpVersion::Php85, false, &entries, &[]);
+        let cli = render_invalidate_function(PhpVersion::Php85, false, &entries, &[], false);
         assert!(cli.contains("if (false === false)"));
         assert!(cli.contains("$rp = realpath($filename)"));
         let _ = parse(&format!("<?php {cli}"));
 
-        let web = render_invalidate_function(PhpVersion::Php85, true, &entries, &[]);
+        let web = render_invalidate_function(PhpVersion::Php85, true, &entries, &[], false);
         // Web enabled → the gate never fires, the path resolution is reached.
         assert!(web.contains("if (true === false)"));
         assert!(web.contains("$rp = realpath($filename)"));
@@ -3100,7 +3180,7 @@ mod tests {
             "<?php var_dump(opcache_compile_file(__FILE__));",
         ] {
             let program = parse(source);
-            let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+            let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
             // Exactly one OPcache function per referenced name, plus the shared state block.
             assert_eq!(injected.len(), program.len() + 1 + STATE_HELPER_DECLS);
         }
@@ -3146,7 +3226,7 @@ mod tests {
     #[test]
     fn renders_scripts_map_literal() {
         // revalidate_freq = 2 (the 8.5 directive default).
-        let map = render_scripts_map_literal(&sample_manifest(), 2);
+        let map = render_scripts_map_literal(&sample_manifest(), 2, 80500);
         // Keyed by full_path.
         assert!(map.contains("'/srv/app/index.php' => ["));
         assert!(map.contains("'full_path' => '/srv/app/index.php'"));
@@ -3168,7 +3248,7 @@ mod tests {
         let _ = parse(&format!("<?php $s = {map};"));
 
         // Empty manifest → empty map.
-        assert_eq!(render_scripts_map_literal(&[], 2), "[]");
+        assert_eq!(render_scripts_map_literal(&[], 2, 80500), "[]");
     }
 
     /// `opcache_get_status` bakes the manifest count into `num_cached_scripts` /
@@ -3346,7 +3426,7 @@ mod tests {
     #[test]
     fn cli_ini_get_all_renders_filter_dispatch() {
         let program = parse("<?php var_dump(ini_get_all(null, false));");
-        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         let rendered = format!("{injected:?}");
         assert!(injected.len() > program.len(), "ini_get_all must be injected");
         // The predicate is injected alongside the wrapper.
@@ -3374,10 +3454,10 @@ mod tests {
     fn cli_injects_ini_get_opcache_wrapper() {
         let program = parse("<?php echo ini_get('opcache.enable');");
 
-        let cli = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+        let cli = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert!(cli.len() > program.len());
         // web = true must not inject the CLI wrappers (would redeclare web_prelude's ini_get).
-        let web = inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None).0;
+        let web = inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
         assert_eq!(web.len(), program.len());
     }
 
@@ -3473,7 +3553,7 @@ mod tests {
 
         for program in [&configuration_only, &ini_only, &both] {
             let cli =
-                inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+                inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
             assert_eq!(
                 declarations_of(&cli, "__elephc_opcache_env"),
                 1,
@@ -3482,14 +3562,14 @@ mod tests {
             assert_eq!(declarations_of(&cli, "__elephc_opcache_env_raw"), 1);
             // web = true never emits it here; the web prelude bakes it instead.
             let web =
-                inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None).0;
+                inject_if_used(program.clone(), PhpVersion::Php85, true, None, &[], &[], None, false).0;
             assert_eq!(declarations_of(&web, "__elephc_opcache_env"), 0);
         }
 
         // A program that uses neither surface pays nothing.
         let unrelated = parse("<?php echo 1;");
         let none =
-            inject_if_used(unrelated.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+            inject_if_used(unrelated.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert_eq!(declarations_of(&none, "__elephc_opcache_env"), 0);
     }
 
@@ -3508,6 +3588,7 @@ mod tests {
             &[],
             &overrides,
             None,
+            false,
         )
         .0;
         assert_eq!(declarations_of(&injected, "__elephc_opcache_env"), 1);
@@ -3518,7 +3599,7 @@ mod tests {
     #[test]
     fn cli_ini_get_respects_user_declaration() {
         let program = parse("<?php function ini_get($o): string|false { return 'x'; } echo ini_get('a');");
-        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None).0;
+        let injected = inject_if_used(program.clone(), PhpVersion::Php85, false, None, &[], &[], None, false).0;
         assert_eq!(injected.len(), program.len());
     }
 
@@ -3644,7 +3725,7 @@ mod tests {
              opcache_is_script_cached(__FILE__); opcache_invalidate(__FILE__); \
              opcache_compile_file(__FILE__);",
         );
-        let injected = inject_if_used(program, PhpVersion::Php85, false, entry, &[], &overrides, None).0;
+        let injected = inject_if_used(program, PhpVersion::Php85, false, entry, &[], &overrides, None, false).0;
         let rendered = format!("{injected:?}");
 
         // The warning text appears once per restricted function, and never a sixth time.
@@ -3874,18 +3955,18 @@ mod tests {
     fn bake_manifest_replaces_only_recorded_sites() {
         let program = parse("<?php $s = opcache_get_status(); $c = opcache_is_script_cached(__FILE__);");
         let (injected, sites) =
-            inject_if_used(program, PhpVersion::Php85, true, None, &[], &[], None);
+            inject_if_used(program, PhpVersion::Php85, true, None, &[], &[], None, false);
         assert!(!sites.is_empty());
 
         let manifest = sample_manifest();
-        let baked = bake_manifest(injected, &sites, PhpVersion::Php85, true, &manifest, &[], None);
+        let baked = bake_manifest(injected, &sites, PhpVersion::Php85, true, &manifest, &[], None, false);
         let rendered = format!("{:?}", baked);
         assert!(rendered.contains("/srv/app/index.php"));
         assert!(rendered.contains("/srv/app/vendor/autoload_files/helpers.php"));
 
         // A user-declared `opcache_get_status` is never a bake site.
         let own = parse("<?php function opcache_get_status($x = true) { return false; } $s = opcache_get_status();");
-        let (_, own_sites) = inject_if_used(own, PhpVersion::Php85, true, None, &[], &[], None);
+        let (_, own_sites) = inject_if_used(own, PhpVersion::Php85, true, None, &[], &[], None, false);
         assert!(!own_sites.get_status);
     }
 

@@ -505,3 +505,33 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
     let _ = fs::remove_dir_all(&dir);
     elephc_out
 }
+
+/// Returns `user_asm` with the compiled script's embedded path removed, for needle assertions.
+///
+/// `_script_source_file` carries the CANONICAL PATH of the compiled script, read by
+/// `Throwable::getFile()` and by the ` in <file>:<line>` suffix of the uncaught-exception report.
+/// For a fixture that path is the harness's own temp directory — and those directories are named
+/// after the test, so a needle the test searches for is often a substring of the path it just
+/// compiled from. `!user_asm.contains("pow")` in a fixture compiled under
+/// `elephc_constant_folding_pow` matched the DIRECTORY NAME, not a surviving `pow` call.
+///
+/// Only the path bytes are dropped. Every instruction and every other data literal survives, so an
+/// assertion keeps exactly the meaning it had — in particular, string literals an optimizer was
+/// supposed to eliminate are still visible, which is what several of these tests actually check.
+///
+/// This cannot be folded into `compile_source_to_asm_with_options`: callers pass its result on to
+/// `assemble_and_run`, and a `_script_source_file` with no bytes would make the assembled program
+/// report a garbage filename.
+pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
+    let mut out = Vec::new();
+    let mut drop_next_ascii = false;
+    for line in user_asm.lines() {
+        if drop_next_ascii && line.trim_start().starts_with(".ascii") {
+            drop_next_ascii = false;
+            continue;
+        }
+        drop_next_ascii = line.trim() == "_script_source_file:";
+        out.push(line);
+    }
+    out.join("\n")
+}

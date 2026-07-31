@@ -303,12 +303,21 @@ wrapper exposes glob matches through the same directory-stream API.
 
 | Function | Signature | Description |
 |---|---|---|
-| `get_resource_type()` | `get_resource_type(resource $handle): string` | Return `"stream"` for every resource elephc produces. |
+| `get_resource_type()` | `get_resource_type(resource $handle): string` | Return `"stream"` for every OPEN resource elephc produces, and `"Unknown"` once the handle has been closed. |
 | `get_resource_id()` | `get_resource_id(resource $handle): int` | Return the numeric id shown in `Resource id #N`. |
 | `stream_isatty()` | `stream_isatty(resource $stream): bool` | Report whether the stream is connected to an interactive terminal. |
 | `stream_is_local()` | `stream_is_local(resource\|string $stream): bool` | Return `true` for local streams. |
 | `stream_supports_lock()` | `stream_supports_lock(resource $stream): bool` | Return `true` when a stream supports `flock()`. |
 | `stream_get_meta_data()` | `stream_get_meta_data(resource $stream): array` | Return metadata keys `timed_out`, `blocked`, `eof`, `unread_bytes`, `stream_type`, `wrapper_type`, `mode`, `seekable`, and `uri`. |
+
+Closing a handle changes its reported type but not its id. After `fclose()`,
+`pclose()` or `closedir()`, `get_resource_type($handle)` returns `"Unknown"` and
+`var_dump($handle)` prints `resource(N) of type (Unknown)` — matching PHP 8.5.6,
+which renames every closed resource that way regardless of what it was. The id
+`N` is unchanged, `get_resource_id()` still answers it, and `"$handle"` still
+renders `Resource id #N`, because php-src leaves `zend_resource.handle` alone on
+close. elephc still reports the single open type name `"stream"`; PHP's further
+names (`"stream-context"`, `"stream filter"`) are not distinguished yet.
 
 `stream_get_meta_data()` derives `eof`, `seekable`, `blocked`, and `mode` from
 the live descriptor. `stream_type` is `"STDIO"` for seekable streams and

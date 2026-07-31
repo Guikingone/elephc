@@ -21,6 +21,8 @@
 //!   var_dump_object`. KNOWN DIVERGENCE: no `#id` handle — see that module.
 
 use crate::codegen::abi;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
@@ -508,16 +510,59 @@ fn emit_var_dump_bool(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// previous `payload + 1` happened to look right for a descriptor and printed a
 /// raw heap address for anything else — `var_dump(hash_init('md5'))` rendered
 /// `resource(4318862849) of type (stream)`, a different number on every run.
+///
+/// The type name comes from `__rt_resource_type_name`, never from a literal. It used
+/// to be baked into the single closing literal `") of type (stream)\n"`, so a closed
+/// handle kept advertising its original type where PHP 8.5.6 prints
+/// `resource(5) of type (Unknown)`. Splitting that literal in two is what lets the
+/// runtime-computed name sit between the halves.
+///
+/// The payload must therefore survive `__rt_resource_id_of`, which consumes it, so it
+/// is pushed a second time. `abi::emit_push_reg` reserves 16 bytes on both targets, so
+/// nesting the two pushes keeps the stack aligned across the intervening calls; the
+/// two pops below balance the two pushes exactly.
 fn emit_var_dump_resource(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    emit_write_literal(ctx, b"resource(");
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    abi::emit_call_label(ctx.emitter, "__rt_resource_id_of");
-    abi::emit_call_label(ctx.emitter, "__rt_itoa");
-    emit_write_current_string(ctx);
-    emit_write_literal(ctx, b") of type (stream)\n");
+    emit_var_dump_resource_asm(ctx.emitter, ctx.data);
     Ok(())
+}
+
+/// Emits the WHOLE `resource(N) of type (T)` line, split out of `emit_var_dump_resource`
+/// so both target variants can be pinned at assembly level without a `FunctionContext`
+/// (the precedent is `emit_resource_release_sentinel` in
+/// `crate::codegen::lower_inst::builtins::io`).
+///
+/// Splitting only the type-name FIELD out was not enough: a sentinel that deleted the
+/// call from the line and restored the old single literal left every field-level pin
+/// green, because the field helper itself was untouched. The whole line therefore lives
+/// here, where a pin sees the literals and the call together — the only shape that fails
+/// when the call site is removed rather than when the callee is broken. `ctx` supplies
+/// nothing else, so this loses no information.
+///
+/// Entry state: the native resource payload is in the int result register. Exit state:
+/// the line has been written and the stack is balanced — two pushes, two pops.
+fn emit_var_dump_resource_asm(emitter: &mut Emitter, data: &mut DataSection) {
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result_reg);
+    emit_literal_to_stdout(emitter, data, b"resource(");
+    abi::emit_pop_reg(emitter, result_reg);
+    abi::emit_push_reg(emitter, result_reg);                                    // __rt_resource_id_of consumes the register copy; the name needs it back
+    abi::emit_call_label(emitter, "__rt_resource_id_of");
+    abi::emit_call_label(emitter, "__rt_itoa");
+    abi::emit_write_stdout(emitter, &PhpType::Str);
+    emit_literal_to_stdout(emitter, data, b") of type (");
+    abi::emit_pop_reg(emitter, result_reg);                                     // recover the payload __rt_resource_id_of consumed
+    abi::emit_call_label(emitter, "__rt_resource_type_name");                   // stream while the handle is open, Unknown once it is closed
+    abi::emit_write_stdout(emitter, &PhpType::Str);
+    emit_literal_to_stdout(emitter, data, b")\n");
+}
+
+/// Writes a compile-time literal byte string to stdout without a `FunctionContext`.
+fn emit_literal_to_stdout(emitter: &mut Emitter, data: &mut DataSection, bytes: &[u8]) {
+    let (label, len) = data.add_string(bytes);
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_symbol_address(emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(emitter, len_reg, len as i64);
+    abi::emit_write_stdout(emitter, &PhpType::Str);
 }
 
 /// Emits `var_dump` output for null, void, or never payloads.
@@ -754,6 +799,180 @@ fn emit_branch_if_eq(ctx: &mut FunctionContext<'_>, label: &str) {
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("je {}", label));                  // branch when the compared register payloads are equal
+        }
+    }
+}
+
+#[cfg(test)]
+mod var_dump_resource_line_tests {
+    use super::emit_var_dump_resource_asm;
+    use crate::codegen::data_section::DataSection;
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    /// Emits the whole `var_dump` resource line for one target.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        emit_var_dump_resource_asm(&mut emitter, &mut data);
+        emitter.output()
+    }
+
+    /// Pins the whole AArch64 line as an ordered call/branch sequence.
+    ///
+    /// The load-bearing pair is `bl __rt_resource_type_name` sitting BETWEEN two literal
+    /// writes. Before the fix the line ended in one 19-byte literal
+    /// `") of type (stream)\n"`, so a closed handle kept advertising `stream` where PHP
+    /// 8.5.6 prints `(Unknown)`. Pinning the field helper alone was NOT enough: a sentinel
+    /// that deleted the call from this line and restored the old literal left the field
+    /// helper untouched and every field-level pin green.
+    #[test]
+    fn aarch64_writes_the_type_name_between_the_two_closing_literals() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let expected = concat!(
+            "    str x0, [sp, #-16]!\n",
+            "    adrp x1, _str_0@PAGE\n",
+            "    add x1, x1, _str_0@PAGEOFF\n",
+            "    mov x2, #9\n",
+            "    mov x0, x1\n",
+            "    mov x1, x2\n",
+            "    bl __rt_stdout_write\n",
+            "    ldr x0, [sp], #16\n",
+            "    str x0, [sp, #-16]!\n",
+            "    bl __rt_resource_id_of\n",
+            "    bl __rt_itoa\n",
+            "    mov x0, x1\n",
+            "    mov x1, x2\n",
+            "    bl __rt_stdout_write\n",
+            "    adrp x1, _str_1@PAGE\n",
+            "    add x1, x1, _str_1@PAGEOFF\n",
+            "    mov x2, #11\n",
+            "    mov x0, x1\n",
+            "    mov x1, x2\n",
+            "    bl __rt_stdout_write\n",
+            "    ldr x0, [sp], #16\n",
+            "    bl __rt_resource_type_name\n",
+            "    mov x0, x1\n",
+            "    mov x1, x2\n",
+            "    bl __rt_stdout_write\n",
+            "    adrp x1, _str_2@PAGE\n",
+            "    add x1, x1, _str_2@PAGEOFF\n",
+            "    mov x2, #2\n",
+        );
+        assert!(asm.contains(expected), "expected block missing:\n{asm}");
+    }
+
+    /// Pins the same line on x86_64, where the pushes and pops are two-instruction
+    /// sequences and the payload register doubles as the string-result pointer. An
+    /// aarch64-only pin has already let an x86 fix be deleted silently on this branch.
+    #[test]
+    fn x86_64_writes_the_type_name_between_the_two_closing_literals() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let expected = concat!(
+            "    sub rsp, 16\n",
+            "    mov QWORD PTR [rsp], rax\n",
+            "    lea rax, [rip + _str_0]\n",
+            "    mov rdx, 9\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
+            "    mov rax, QWORD PTR [rsp]\n",
+            "    add rsp, 16\n",
+            "    sub rsp, 16\n",
+            "    mov QWORD PTR [rsp], rax\n",
+            "    call __rt_resource_id_of\n",
+            "    call __rt_itoa\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
+            "    lea rax, [rip + _str_1]\n",
+            "    mov rdx, 11\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
+            "    mov rax, QWORD PTR [rsp]\n",
+            "    add rsp, 16\n",
+            "    call __rt_resource_type_name\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
+            "    lea rax, [rip + _str_2]\n",
+            "    mov rdx, 2\n",
+        );
+        assert!(asm.contains(expected), "expected block missing:\n{asm}");
+    }
+
+    /// The three literals must be exactly `resource(`, `) of type (` and `)\n` — and in
+    /// particular the pre-fix 19-byte `") of type (stream)\n"` must be gone.
+    ///
+    /// A pin on the assembly alone cannot see this: the literals live in the data section
+    /// and the code only names `_str_N`. Restoring the old single literal would leave the
+    /// instruction stream shorter but still plausible.
+    #[test]
+    fn the_line_interns_no_hardcoded_type_name_on_either_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            emit_var_dump_resource_asm(&mut emitter, &mut data);
+            assert_eq!(
+                data.add_string(b"resource(").0,
+                "_str_0",
+                "the first literal must be the opening one ({target:?})"
+            );
+            assert_eq!(
+                data.add_string(b") of type (").0,
+                "_str_1",
+                "the second literal must stop before the type name ({target:?})"
+            );
+            assert_eq!(
+                data.add_string(b")\n").0,
+                "_str_2",
+                "the third literal must be the closing paren alone ({target:?})"
+            );
+            // `add_string` interns: a label of `_str_3` means this byte string was NOT
+            // already in the section, i.e. the pre-fix hardcoded literal is gone. Had it
+            // still been emitted, the call would have returned its existing label.
+            assert_eq!(
+                data.add_string(b") of type (stream)\n").0,
+                "_str_3",
+                "the pre-fix hardcoded type literal must not be interned ({target:?})"
+            );
+        }
+    }
+
+    /// The line must push and pop exactly twice on both targets.
+    ///
+    /// The payload is stashed once around the `resource(` write and once around
+    /// `__rt_resource_id_of`, which consumes the register copy. An unbalanced pop here
+    /// corrupts the caller frame silently on macOS.
+    #[test]
+    fn the_line_balances_two_pushes_with_two_pops_on_both_targets() {
+        for (target, push, pop) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "str x0, [sp, #-16]!",
+                "ldr x0, [sp], #16",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "mov QWORD PTR [rsp], rax",
+                "mov rax, QWORD PTR [rsp]",
+            ),
+        ] {
+            let asm = emit_for(target);
+            assert_eq!(
+                asm.matches(push).count(),
+                2,
+                "exactly two pushes expected ({target:?}):\n{asm}"
+            );
+            assert_eq!(
+                asm.matches(pop).count(),
+                2,
+                "exactly two pops expected ({target:?}):\n{asm}"
+            );
         }
     }
 }

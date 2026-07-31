@@ -5296,17 +5296,39 @@ echo $items["name"];
     assert_eq!(out, "Ada");
 }
 
-/// Verifies nested eval calls reuse the materialized caller scope.
+/// Verifies a nested `eval()` INTERPOLATES its double-quoted fragment, refusing what PHP refuses.
+///
+/// This previously asserted `5`, which reference PHP 8.5.6 NEVER produces. It passed only because
+/// the magician's lexer had no interpolation scanner, so `"$x = $x + 4;"` reached the inner
+/// `eval()` literally and assigned in the shared scope. Once the interpreter learned to
+/// interpolate, `$x` became its VALUE and the inner fragment reads `1 = 1 + 4;` — an assignment to
+/// a literal. Measured with `php -d xdebug.mode=off` on this exact source:
+///
+/// ```text
+/// Parse error: syntax error, unexpected token "=" in …(3) : eval()'d code(1) : eval()'d code on line 1
+/// ```
+///
+/// PHP's stdout is EMPTY — an `E_PARSE` inside `eval()` halts the script, so the trailing
+/// `echo $x` never runs. elephc halts the same way, so the two agree on both the refusal and the
+/// absence of output; only the diagnostic wording differs.
+///
+/// Nested-eval SCOPE SHARING itself is unaffected and still covered: see
+/// `test_eval_nested_interpolates_scalar_into_inner_fragment`, where the inner fragment reads the
+/// outer `$v`, and `test_eval_nested_eval_return_value_is_expression_result` just below.
 #[test]
 fn test_eval_nested_eval_uses_same_scope() {
-    let out = compile_and_run(
+    let err = compile_and_run_expect_failure(
         r#"<?php
 $x = 1;
 eval('eval("$x = $x + 4;");');
 echo $x;
 "#,
     );
-    assert_eq!(out, "5");
+    assert!(
+        err.contains("Parse error: eval() fragment is invalid"),
+        "the interpolated fragment assigns to a literal and must be refused, as reference PHP \
+         refuses it; stderr was: {err}"
+    );
 }
 
 /// Verifies a nested eval return is the value of the inner eval expression.
@@ -9172,7 +9194,9 @@ fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
                 "$callback = new EvalPanicBoundaryPlainCallback(); ",
                 "call_user_func($callback);');"
             ),
-            "Fatal error: uncaught exception",
+            // Prefix only: this row pins THAT the eval boundary raises a fatal, not which
+            // Throwable the invoker synthesizes for a non-callable object.
+            "Fatal error: Uncaught ",
         ),
     ] {
         let err = compile_and_run_expect_failure(source);
@@ -15196,7 +15220,7 @@ echo $box->hidden();');
 "#,
     );
     assert!(
-        err.contains("Fatal error: uncaught exception"),
+        err.contains("Fatal error: Uncaught "),
         "stderr did not contain uncaught throwable diagnostic: {err}"
     );
 }
@@ -28476,10 +28500,34 @@ try {
     assert_eq!(out, "caught:dyn boom");
 }
 
-/// Verifies Throwable objects thrown by nested eval calls keep the original catch target.
+/// Verifies a nested `eval()` INTERPOLATES its double-quoted fragment, as reference PHP does.
+///
+/// This test previously asserted `caught:nested boom`, which reference PHP 8.5.6 NEVER produces.
+/// It passed only because the magician's lexer had no interpolation scanner: `"throw $e;"` reached
+/// the inner `eval()` with `$e` still literal, so the inner fragment parsed as a plain `throw $e;`
+/// and the exception crossed the caller's `try`. Once the interpreter learned to interpolate, the
+/// old expectation became unreachable — the test was pinning the absence of a feature.
+///
+/// What reference PHP actually does, measured with `php -d xdebug.mode=off` on this exact source:
+///
+/// ```text
+/// Parse error: syntax error, unexpected token ":" in …(4) : eval()'d code(1) : eval()'d code on line 1
+/// ```
+///
+/// `$e` is an `Exception`, so interpolating it calls `__toString()` and the inner fragment becomes
+/// `throw Exception: nested boom in /path…;` — a syntax error. Neither `bad` nor `caught:` is ever
+/// printed. That the fragment is REFUSED is the behaviour worth pinning.
+///
+/// The failure MODE still differs and is a pre-existing divergence, not one this change
+/// introduced: reference PHP reports a recoverable parse error and continues, while elephc treats
+/// an unparseable eval fragment as fatal (the same `Fatal error: eval() runtime failed` every
+/// other invalid-fragment test in this file asserts). Only WHICH fragments are invalid moved here.
+///
+/// The scalar case is the positive half and is verified separately: `eval('eval("echo $v + 1;");')`
+/// with `$v = 41` prints `42` in both, so interpolation reaches nested fragments correctly.
 #[test]
 fn test_eval_nested_throw_crosses_caller_try_catch() {
-    let out = compile_and_run(
+    let err = compile_and_run_expect_failure(
         r#"<?php
 $e = new Exception("nested boom");
 try {
@@ -28490,7 +28538,30 @@ try {
 }
 "#,
     );
-    assert_eq!(out, "caught:nested boom");
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "an interpolated Exception makes the inner fragment unparseable, as it does in reference \
+         PHP; stderr was: {err}"
+    );
+}
+
+/// Verifies nested `eval()` interpolation of a SCALAR, the positive half of the case above.
+///
+/// `eval('eval("echo $v + 1;");')` with `$v = 41` prints `42` under reference PHP 8.5.6, proving
+/// the outer fragment's double-quoted string is interpolated before the inner `eval()` sees it.
+/// Before the interpreter grew an interpolation scanner this printed nothing useful, because the
+/// inner fragment received the literal text `echo $v + 1;` and resolved `$v` itself — which
+/// happens to agree here, so only a case where interpolation CHANGES the parse (the Exception
+/// above) could tell the two models apart. Both are pinned so neither can regress alone.
+#[test]
+fn test_eval_nested_interpolates_scalar_into_inner_fragment() {
+    let out = compile_and_run(
+        r#"<?php
+$v = 41;
+eval('eval("echo $v + 1;");');
+"#,
+    );
+    assert_eq!(out, "42");
 }
 
 /// Verifies eval-internal try/catch consumes a thrown Throwable before returning.

@@ -978,6 +978,8 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b.eq __elephc_eval_value_cast_string_float");          // doubles cast through decimal formatting
     emitter.instruction("cmp x0, #3");                                          // is the eval value a boolean?
     emitter.instruction("b.eq __elephc_eval_value_cast_string_bool");           // booleans cast to "1" or the empty string
+    emitter.instruction("cmp x0, #9");                                          // is the eval value a resource?
+    emitter.instruction("b.eq __elephc_eval_value_cast_string_resource");       // resources render as PHP's "Resource id #N"
     emitter.label("__elephc_eval_value_cast_string_empty");
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("mov x1, xzr");                                         // unsupported and falsey payloads use an empty string pointer
@@ -993,6 +995,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_value_cast_string_box");
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the existing string payload once
+    emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_resource");
+    emitter.instruction("mov x0, x1");                                          // pass the native resource payload to the display formatter
+    emitter.instruction("bl __rt_resource_to_string");                          // format "Resource id #N" into the shared concat scratch (x1/x2)
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the borrowed resource display string
     emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
     emitter.label("__elephc_eval_value_cast_string_float");
     emitter.instruction("fmov d0, x1");                                         // move the double payload bits into the FP argument register
@@ -1035,6 +1043,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
     emitter.instruction("mov x2, xzr");                                         // resource payloads do not use a high word
     emitter.instruction("b __rt_mixed_from_value");                             // box the resource payload and return to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_hash_context");
+    emitter.instruction("mov x1, x0");                                          // move the eval hash-context table key into the mixed payload slot
+    emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource, the shape eval's hash builtins read back
+    emitter.instruction("mov x2, #5");                                          // resource kind 5 = eval-owned inert handle: no PHP id, no destructor
+    emitter.instruction("b __rt_mixed_from_value");                             // box the inert hash-context payload and return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_float");
     emitter.instruction("fmov x1, d0");                                         // move the C double bits into the mixed payload slot
@@ -2774,6 +2788,8 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_value_cast_string_float_x86");        // doubles cast through decimal formatting
     emitter.instruction("cmp rax, 3");                                          // is the eval value a boolean?
     emitter.instruction("je __elephc_eval_value_cast_string_bool_x86");         // booleans cast to \"1\" or the empty string
+    emitter.instruction("cmp rax, 9");                                          // is the eval value a resource?
+    emitter.instruction("je __elephc_eval_value_cast_string_resource_x86");     // resources render as PHP's \"Resource id #N\"
     emitter.label("__elephc_eval_value_cast_string_empty_x86");
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("xor edi, edi");                                        // unsupported and falsey payloads use an empty string pointer
@@ -2792,6 +2808,14 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rdx");                                        // move the existing string length into mixed value_hi
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // persist and box the existing string payload once
+    emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_resource_x86");
+    emitter.instruction("mov rax, rdi");                                        // pass the native resource payload to the display formatter
+    emitter.instruction("call __rt_resource_to_string");                        // format \"Resource id #N\" into the shared concat scratch
+    emitter.instruction("mov rdi, rax");                                        // move the formatted string pointer into mixed value_lo
+    emitter.instruction("mov rsi, rdx");                                        // move the formatted string length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the borrowed resource display string
     emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
     emitter.label("__elephc_eval_value_cast_string_float_x86");
     emitter.instruction("movq xmm0, rdi");                                      // move the double payload bits into the FP argument register
@@ -2835,6 +2859,11 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource, with C id already in rdi
     emitter.instruction("xor esi, esi");                                        // resource payloads do not use a high word
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the resource payload and return to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_hash_context");
+    emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource, with the eval table key already in rdi
+    emitter.instruction("mov esi, 5");                                          // resource kind 5 = eval-owned inert handle: no PHP id, no destructor
+    emitter.instruction("jmp __rt_mixed_from_value");                           // box the inert hash-context payload and return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_float");
     emitter.instruction("movq rdi, xmm0");                                      // move the C double bits into mixed value_lo
@@ -5178,4 +5207,181 @@ fn emit_x86_64_reject_runtime_managed_clone_classes(
 fn label_c_global(emitter: &mut Emitter, name: &str) {
     let symbol = emitter.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits the whole eval bridge for one target and returns the assembly text.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_eval_bridge_runtime(&mut emitter);
+        emitter.output()
+    }
+
+    /// Pins the AArch64 tag-9 arm of `__elephc_eval_value_cast_string`.
+    ///
+    /// The eval bridge re-implements its own tag dispatch rather than calling
+    /// `__rt_mixed_cast_string`, so fixing the boxed-Mixed cast alone left
+    /// `strval($r)` inside a runtime-interpreted `eval()` returning the EMPTY string
+    /// while PHP 8.5.6 returned `Resource id #5`. Both dispatches must carry the arm.
+    #[test]
+    fn aarch64_eval_string_cast_renders_resources() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(
+            asm.contains("    cmp x0, #9\n    b.eq __elephc_eval_value_cast_string_resource\n"),
+            "{asm}"
+        );
+        assert!(asm.contains("__elephc_eval_value_cast_string_resource:\n"), "{asm}");
+        assert!(asm.contains("bl __rt_resource_to_string"), "{asm}");
+    }
+
+    /// Pins the same arm on x86_64, so the eval bridge cannot render resources on one
+    /// target and empty strings on the other.
+    #[test]
+    fn x86_64_eval_string_cast_renders_resources() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(
+            asm.contains("    cmp rax, 9\n    je __elephc_eval_value_cast_string_resource_x86\n"),
+            "{asm}"
+        );
+        assert!(asm.contains("__elephc_eval_value_cast_string_resource_x86:\n"), "{asm}");
+        assert!(asm.contains("call __rt_resource_to_string"), "{asm}");
+    }
+
+    /// The eval arm hands the borrowed `_concat_buf` scratch straight to
+    /// `__rt_mixed_from_value` with tag 1, which PERSISTS the bytes into a fresh boxed
+    /// string. That copy is what makes returning scratch safe here: the Rust side owns a
+    /// real boxed value and nothing ever frees the concat buffer.
+    #[test]
+    fn the_eval_resource_arm_boxes_a_persisted_string_on_both_targets() {
+        for (target, label, next) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "__elephc_eval_value_cast_string_resource:\n",
+                "__elephc_eval_value_cast_string_float:\n",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "__elephc_eval_value_cast_string_resource_x86:\n",
+                "__elephc_eval_value_cast_string_float_x86:\n",
+            ),
+        ] {
+            let asm = emit_for(target);
+            let arm = asm
+                .split(label)
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing eval resource arm for {target:?}:\n{asm}"));
+            let arm = arm.split(next).next().expect("resource arm precedes the float arm");
+            assert!(
+                arm.contains("__rt_mixed_from_value"),
+                "the eval resource arm must box the formatted string ({target:?}):\n{arm}"
+            );
+            assert!(
+                !arm.contains("__rt_heap_free"),
+                "the eval resource arm must not free borrowed scratch ({target:?}):\n{arm}"
+            );
+        }
+    }
+
+    /// Pins the whole body of `__elephc_eval_value_hash_context` on AArch64.
+    ///
+    /// The symbol exists to stamp resource KIND 5 — eval-owned inert handle — into the
+    /// high payload word, so `__rt_mixed_from_value` skips `__rt_resource_id_of` and
+    /// `__rt_mixed_free_deep` runs no destructor. PHP 8's `hash_init()` returns a
+    /// `HashContext` OBJECT and consumes nothing from the resource counter; routing eval's
+    /// context through `__elephc_eval_value_resource` (which writes `xzr`, i.e. kind 0)
+    /// burned an id and shifted every later `fopen()` in the request.
+    ///
+    /// The full four-line body is pinned rather than `contains("mov x2, #5")`, which
+    /// `mov x2, #50` also satisfies. `mov x2, #5` next to a `b` (never a `bl`) is also the
+    /// tail-branch shape this helper needs: it takes no frame and saves no link register.
+    #[test]
+    fn aarch64_boxes_eval_hash_contexts_as_inert_kind_five() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(
+            asm.contains(
+                "__elephc_eval_value_hash_context:\n\
+                 \x20   mov x1, x0\n\
+                 \x20   mov x0, #9\n\
+                 \x20   mov x2, #5\n\
+                 \x20   b __rt_mixed_from_value\n"
+            ),
+            "{asm}"
+        );
+    }
+
+    /// Pins the same body on x86_64, where the key already sits in `rdi` per the SysV ABI
+    /// and the internal `__rt_mixed_from_value` contract is tag=rax, lo=rdi, hi=rsi.
+    ///
+    /// Without this the x86 half could be omitted or left writing `xor esi, esi` and every
+    /// aarch64 pin above would still pass — the single-arch blind spot that has already
+    /// let a runtime fix be deleted from one target in this tree.
+    #[test]
+    fn x86_64_boxes_eval_hash_contexts_as_inert_kind_five() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(
+            asm.contains(
+                "__elephc_eval_value_hash_context:\n\
+                 \x20   mov eax, 9\n\
+                 \x20   mov esi, 5\n\
+                 \x20   jmp __rt_mixed_from_value\n"
+            ),
+            "{asm}"
+        );
+    }
+
+    /// Pins that the hash-context wrapper is DISTINCT from the plain resource wrapper.
+    ///
+    /// The likeliest silent regression is someone "simplifying" the new symbol into an
+    /// alias of `__elephc_eval_value_resource`: the magician side would still compile and
+    /// link, every hash digest would still be correct, and the id leak would come back.
+    /// The plain wrapper must keep zeroing the kind word (genuine eval resources — fopen,
+    /// opendir, popen, sockets — MUST consume ids), and the hash wrapper must not.
+    #[test]
+    fn the_resource_and_hash_context_wrappers_stamp_different_kinds() {
+        for (target, resource_zero, hash_kind) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "mov x2, xzr", "mov x2, #5"),
+            (Target::new(Platform::Linux, Arch::X86_64), "xor esi, esi", "mov esi, 5"),
+        ] {
+            let asm = emit_for(target);
+            let resource_body = body_of(&asm, "__elephc_eval_value_resource");
+            let hash_body = body_of(&asm, "__elephc_eval_value_hash_context");
+            assert!(
+                resource_body.contains(resource_zero),
+                "genuine eval resources must stay kind 0 and keep consuming ids ({target:?}):\n{resource_body}"
+            );
+            assert!(
+                hash_body.contains(hash_kind),
+                "eval hash contexts must be stamped kind 5 ({target:?}):\n{hash_body}"
+            );
+            assert!(
+                !hash_body.contains(resource_zero),
+                "the hash-context wrapper must not zero the kind word ({target:?}):\n{hash_body}"
+            );
+        }
+    }
+
+    /// Returns the instruction lines following `label` up to the next exported helper.
+    ///
+    /// `label_c_global` emits `.globl <sym>` immediately before each wrapper's label, so
+    /// the next `.globl` is where this wrapper's body ends. Splitting on a BLANK line
+    /// would not work — the bridge emits none between wrappers — and would silently hand
+    /// back the whole remainder of the file, making every negative assertion below
+    /// vacuous: `mov x2, xzr` from the very next wrapper would satisfy it.
+    fn body_of<'a>(asm: &'a str, label: &str) -> &'a str {
+        let marker = format!("{label}:\n");
+        let body = asm
+            .split(&marker)
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing {label} in emitted assembly:\n{asm}"));
+        let body = body.split("\n.globl ").next().expect("split yields a first segment");
+        assert!(
+            !body.is_empty(),
+            "isolated an empty body for {label}; the emitter's helper separator changed"
+        );
+        body
+    }
 }
