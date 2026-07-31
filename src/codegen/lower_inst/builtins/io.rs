@@ -490,6 +490,13 @@ fn begin_fopen_context_scope(
                 PhpType::Void | PhpType::Never => {
                     abi::emit_jump(ctx.emitter, &use_default);
                 }
+                // NOTE: `PhpType::Int` deliberately does NOT join this arm. A resource
+                // bound to an untyped parameter is narrowed to Int by `codegen_repr()`,
+                // and while the handle value survives the call, routing it here still
+                // fails `__rt_context_state` validation at runtime. Accepting Int would
+                // turn an explicit unsupported-feature diagnostic into an uncaught
+                // exception. The real fix is preserving Resource across untyped
+                // parameter binding in the checker.
                 PhpType::Resource(_) => {
                     ctx.load_value_to_result(context)?;
                     abi::emit_jump(ctx.emitter, &selected);
@@ -2420,6 +2427,29 @@ enum CompressWrapper {
     Bzip2,
 }
 
+/// Re-adopts a compress-wrapper descriptor into the resource registry.
+///
+/// The `zlib.inflate` / `bzip2.decompress` attach emitters finish by re-boxing
+/// the raw descriptor with `__rt_mixed_from_value(9, fd)` so they can also serve
+/// `stream_filter_append`. On the `compress.*://` wrapper path that leaves an
+/// unregistered descriptor, which `fclose()` cannot resolve. Unbox it and hand
+/// the descriptor to the registry adoption used by every other literal open.
+///
+/// Input:  x0 / rax = Mixed cell boxing the raw descriptor.
+/// Output: x0 / rax = Mixed cell boxing the registry handle, or PHP false.
+fn emit_adopt_attached_compress_descriptor(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // recover the raw descriptor from the Mixed payload
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rax, rdi");                            // recover the raw descriptor from the Mixed payload
+        }
+    }
+    box_stream_fd_or_false_result(ctx, "compress_adopt");
+}
+
 /// Opens `underlying` read-only through `__rt_fopen` and attaches the matching
 /// decompressor so subsequent reads see plain bytes, boxing the filtered
 /// descriptor as a resource. An empty path, or a failed open, boxes PHP false —
@@ -2465,13 +2495,20 @@ fn emit_literal_compress_wrapper_fopen_result(
             ctx.emitter.instruction(&format!("js {}", false_label));            // box PHP false when the source could not be opened
         }
     }
+    // The attach helpers end by re-boxing through `__rt_mixed_from_value(9, fd)`,
+    // which wraps the RAW descriptor. That predates the resource registry: the
+    // stream never got adopted, so `fclose()` could not resolve the handle and
+    // raised. Unbox the descriptor back out and adopt it properly, matching
+    // `emit_runtime_fopen_literal_result`'s box-then-record order.
     match kind {
         CompressWrapper::Zlib => {
             emit_zlib_inflate_attach_in_place(ctx);
+            emit_adopt_attached_compress_descriptor(ctx);
             emit_record_stream_meta_after_boxed_literal(ctx, 8, full_uri);
         }
         CompressWrapper::Bzip2 => {
             emit_bzip2_decompress_attach_in_place(ctx);
+            emit_adopt_attached_compress_descriptor(ctx);
             emit_record_stream_meta_after_boxed_literal(ctx, 9, full_uri);
         }
     }
