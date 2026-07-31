@@ -94,6 +94,8 @@ fn test_source(identifier: &str) -> &'static str {
         include_str!("../strict.rs")
     } else if identifier.starts_with("codegen_wasm::function::tests::") {
         include_str!("../function.rs")
+    } else if identifier.starts_with("codegen_wasm::builtins::tests::") {
+        include_str!("../builtins.rs")
     } else if identifier.starts_with("codegen::cli::") {
         include_str!("../../../tests/codegen/cli.rs")
     } else if identifier.starts_with("ir_lower::tests::ownership::") {
@@ -620,6 +622,8 @@ fn supported_lowerer_paths_resolve_to_backend_functions() {
             include_str!("../values.rs")
         } else if lowerer.starts_with("codegen_wasm::strict::") {
             include_str!("../strict.rs")
+        } else if lowerer.starts_with("codegen_wasm::builtins::") {
+            include_str!("../builtins.rs")
         } else {
             panic!(
                 "supported row {:?} references unaudited lowerer path {lowerer:?}",

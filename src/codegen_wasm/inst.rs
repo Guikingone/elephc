@@ -1850,6 +1850,9 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             )));
         }
     };
+    if super::builtins::is_direct_builtin(target) {
+        return super::builtins::lower_direct_builtin(ctx, inst, target);
+    }
     match target {
         RuntimeFnId::GetClass => super::classes::lower_get_class(ctx, inst),
         RuntimeFnId::ArrayMap => lower_array_map(ctx, inst),

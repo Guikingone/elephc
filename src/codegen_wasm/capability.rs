@@ -3616,6 +3616,9 @@ fn runtime_function_shape_issue(
     call: &Instruction,
     target: RuntimeFnId,
 ) -> Option<String> {
+    if super::builtins::is_direct_builtin(target) {
+        return super::builtins::direct_builtin_shape_issue(function, call, target);
+    }
     match target {
         RuntimeFnId::GetClass => get_class_shape_issue(function, call),
         RuntimeFnId::ArrayMap => array_map_shape_issue(module, function, call),
@@ -4439,7 +4442,12 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         RuntimeFnId::GetClass
         | RuntimeFnId::ArrayMap
         | RuntimeFnId::Usort
-        | RuntimeFnId::ArrayReduce => true,
+        | RuntimeFnId::ArrayReduce
+        | RuntimeFnId::Abs
+        | RuntimeFnId::Floor
+        | RuntimeFnId::Ceil
+        | RuntimeFnId::Sqrt
+        | RuntimeFnId::Count => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4488,7 +4496,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayWalkRecursive
         | RuntimeFnId::Arsort
         | RuntimeFnId::Asort
-        | RuntimeFnId::Count
         | RuntimeFnId::InArray
         | RuntimeFnId::Krsort
         | RuntimeFnId::Ksort
@@ -4689,19 +4696,16 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Unlink
         | RuntimeFnId::VarDump
         | RuntimeFnId::Vfprintf
-        | RuntimeFnId::Abs
         | RuntimeFnId::Acos
         | RuntimeFnId::Asin
         | RuntimeFnId::Atan
         | RuntimeFnId::Atan2
-        | RuntimeFnId::Ceil
         | RuntimeFnId::Clamp
         | RuntimeFnId::Cos
         | RuntimeFnId::Cosh
         | RuntimeFnId::Deg2rad
         | RuntimeFnId::Exp
         | RuntimeFnId::Fdiv
-        | RuntimeFnId::Floor
         | RuntimeFnId::Fmod
         | RuntimeFnId::Hypot
         | RuntimeFnId::Intdiv
@@ -4719,7 +4723,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Round
         | RuntimeFnId::Sin
         | RuntimeFnId::Sinh
-        | RuntimeFnId::Sqrt
         | RuntimeFnId::Tan
         | RuntimeFnId::Tanh
         | RuntimeFnId::ElephcPtrIsNull

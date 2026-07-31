@@ -219,6 +219,15 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             "codegen_wasm::inst::lower_array_reduce",
             &["codegen_wasm::closures::tests::array_reduce_lowering_boxes_mixed_result"][..],
         ),
+        RuntimeFnId::Abs | RuntimeFnId::Floor | RuntimeFnId::Ceil | RuntimeFnId::Sqrt
+        | RuntimeFnId::Count => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
+                "codegen::cli::test_cli_wasm_direct_builtins_match_php",
+            ][..],
+        ),
         _ => return None,
     };
     Some(SupportedEvidence {

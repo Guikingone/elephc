@@ -2998,3 +2998,94 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the builtins lowered to a single WebAssembly instruction match php-src exactly.
+///
+/// `floor`, `ceil` and `sqrt` are bit-for-bit identities with their WebAssembly counterparts,
+/// which the negative-zero case pins: `ceil(-0.5)` is `-0`, not `0`. `count` reads the container
+/// header. `abs` is the one with an argument-dependent shape — integral in, integral out.
+#[test]
+fn test_cli_wasm_direct_builtins_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_direct_builtins");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function ints(int $n): void { echo abs($n), "\n"; }
+function floats(float $x): void { echo abs($x), "|", floor($x), "|", ceil($x), "|", sqrt(abs($x)), "\n"; }
+ints(-3); ints(3); ints(0);
+floats(3.7); floats(-3.2); floats(-0.5); floats(0.0);
+$a = [1, 2, 3];
+echo count($a), "\n";
+$h = ['x' => 1, 'y' => 2];
+echo count($h), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the direct builtins to WASM");
+    assert!(
+        output.status.success(),
+        "direct builtin compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the direct builtins under Node");
+    assert!(
+        run.status.success(),
+        "direct builtins trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5's own output for the same program.
+    let expected = concat!(
+        "3\n",
+        "3\n",
+        "0\n",
+        "3.7|3|4|1.9235384061671\n",
+        "3.2|-4|-3|1.7888543819998\n",
+        "0.5|-1|-0|0.70710678118655\n",
+        "0|0|0|0\n",
+        "3\n",
+        "2\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    assert!(
+        run.stderr.is_empty(),
+        "these builtins diagnose nothing: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
