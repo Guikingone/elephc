@@ -1038,10 +1038,19 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
             &result_php,
             explicit,
         );
+    // An EXPLICIT `(int)` / `(float)` runs `__rt_mixed_cast_int` / `__rt_mixed_cast_float`,
+    // whose per-tag answers are measured against php-src 8.5 down to the array-yields-one rule
+    // and the object diagnostic. An IMPLICIT coercion is a different operation entirely — the
+    // same value that `(int)` turns into 0 or a wrapped integer makes a declared `int` return
+    // raise a `TypeError` — so it stays refused until that path carries its own diagnostics.
+    // `(string)` is refused for both: its array and object arms still answer the empty string
+    // where PHP produces "Array" with a notice, or dispatches `__toString`.
+    let admitted_mixed_scalar = explicit && matches!(target, IrType::I64 | IrType::F64);
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed)
         && source_php == PhpType::Mixed
         && matches!(target, IrType::I64 | IrType::F64 | IrType::Str)
         && !exact_mixed_scalar
+        && !admitted_mixed_scalar
     {
         return Some(
             "Mixed-to-scalar casts require exact per-tag PHP values and diagnostics"
@@ -1085,6 +1094,14 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
             explicit && source_php == PhpType::Float && result_php == PhpType::Int
         }
         (IrType::Heap(IrHeapKind::Mixed), _) if exact_mixed_scalar => true,
+        // An explicit `(int)` / `(float)` over an arbitrary Mixed: the runtime dispatches on the
+        // cell's tag and reproduces php-src's answer for each, diagnostics included.
+        (IrType::Heap(IrHeapKind::Mixed), IrType::I64) => {
+            admitted_mixed_scalar && result_php == PhpType::Int
+        }
+        (IrType::Heap(IrHeapKind::Mixed), IrType::F64) => {
+            admitted_mixed_scalar && result_php == PhpType::Float
+        }
         _ => false,
     };
     if !supported {

@@ -202,7 +202,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // `__gc_desc_count == 0` (no classes).
     classes::emit_class_runtime(&mut wm);
     arrays::emit_array_runtime(&mut wm);
-    mixed::emit_mixed_runtime(&mut wm);
+    mixed::emit_mixed_runtime(&mut wm, has_main);
     hashes::emit_hash_runtime(&mut wm);
     // Float<->string runtime (ftoa + strtod). Published with the `$__float_scratch`
     // global set to `FLOAT_SCRATCH_BASE` so cast/echo/mixed-stdout callers pass

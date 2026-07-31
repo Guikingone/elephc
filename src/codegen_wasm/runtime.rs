@@ -93,6 +93,11 @@ const WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX: &[u8] =
     b" is not representable as an int, cast occurred\n";
 /// Arithmetic on a string carrying only a numeric prefix warns and uses the prefix.
 const WARN_NON_NUMERIC_VALUE: &[u8] = b"Warning: A non-numeric value encountered\n";
+/// PHP reports an object reaching a numeric cast, then uses 1. The class name sits between
+/// the prefix and the per-target suffix.
+const WARN_OBJECT_TO_SCALAR_PREFIX: &[u8] = b"Warning: Object of class ";
+const WARN_OBJECT_TO_INT_SUFFIX: &[u8] = b" could not be converted to int\n";
+const WARN_OBJECT_TO_FLOAT_SUFFIX: &[u8] = b" could not be converted to float\n";
 /// Arithmetic on a wholly non-numeric string is a PHP `TypeError`. Reported as an
 /// uncaught fatal until this target gains exception support.
 const ERR_UNSUPPORTED_OPERAND: &[u8] =
@@ -132,6 +137,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_FLOAT_NOT_REPRESENTABLE_PREFIX.len() as u32
     + WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX.len() as u32
     + WARN_NON_NUMERIC_VALUE.len() as u32
+    + WARN_OBJECT_TO_SCALAR_PREFIX.len() as u32
+    + WARN_OBJECT_TO_INT_SUFFIX.len() as u32
+    + WARN_OBJECT_TO_FLOAT_SUFFIX.len() as u32
     + ERR_UNSUPPORTED_OPERAND.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
@@ -247,6 +255,9 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX,
         WARN_NON_NUMERIC_VALUE,
         ERR_UNSUPPORTED_OPERAND,
+        WARN_OBJECT_TO_SCALAR_PREFIX,
+        WARN_OBJECT_TO_INT_SUFFIX,
+        WARN_OBJECT_TO_FLOAT_SUFFIX,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -369,7 +380,7 @@ fn emit_undefined_array_key_warning_runtime(
     wm: &mut WatModule,
     offsets: &[(u32, u32)],
 ) {
-    debug_assert_eq!(offsets.len(), 9);
+    debug_assert_eq!(offsets.len(), 12);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (quote_ptr, quote_len) = offsets[1];
     let (suffix_ptr, suffix_len) = offsets[2];
@@ -377,6 +388,9 @@ fn emit_undefined_array_key_warning_runtime(
     let (float_suffix_ptr, float_suffix_len) = offsets[6];
     let (non_numeric_ptr, non_numeric_len) = offsets[7];
     let (operand_ptr, operand_len) = offsets[8];
+    let (object_prefix_ptr, object_prefix_len) = offsets[9];
+    let (object_int_ptr, object_int_len) = offsets[10];
+    let (object_float_ptr, object_float_len) = offsets[11];
     let (offset_on_null_ptr, offset_on_null_len) =
         if crate::codegen_support::runtime::array_offset_on_null_warning()
             == crate::ir::ARRAY_OFFSET_ON_NULL_WARNING_PHP82
@@ -416,6 +430,28 @@ fn emit_undefined_array_key_warning_runtime(
   (local.set $ptr)                                                ;; then the pointer
   (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (local.get $len))  ;; the float text itself
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_suffix_ptr}) (i32.const {float_suffix_len})))  ;; " is not representable as an int, cast occurred\n""#
+    ));
+    // The class name is looked up from the runtime class id, so one helper per target type
+    // covers every class rather than needing a per-class message.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_object_to_int (param $cid i64)
+  (local $ptr i32) (local $len i64)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {object_prefix_ptr}) (i32.const {object_prefix_len}))  ;; "Warning: Object of class "
+  (call $__rt_class_name_by_cid (local.get $cid))                 ;; resolve the class name -> (ptr, len)
+  (local.set $len)                                                ;; pop the name length
+  (local.set $ptr)                                                ;; pop the name pointer
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (i32.wrap_i64 (local.get $len)))  ;; the class name itself
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {object_int_ptr}) (i32.const {object_int_len})))  ;; " could not be converted to int\n""#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_object_to_float (param $cid i64)
+  (local $ptr i32) (local $len i64)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {object_prefix_ptr}) (i32.const {object_prefix_len}))  ;; "Warning: Object of class "
+  (call $__rt_class_name_by_cid (local.get $cid))                 ;; resolve the class name -> (ptr, len)
+  (local.set $len)                                                ;; pop the name length
+  (local.set $ptr)                                                ;; pop the name pointer
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (i32.wrap_i64 (local.get $len)))  ;; the class name itself
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {object_float_ptr}) (i32.const {object_float_len})))  ;; " could not be converted to float\n""#
     ));
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_non_numeric_value

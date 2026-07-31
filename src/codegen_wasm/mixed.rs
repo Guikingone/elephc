@@ -28,14 +28,14 @@ use super::wat::WatModule;
 /// Adds the boxed-Mixed runtime routines to `wm`. Emitted after the heap, refcount,
 /// and array runtimes, whose `__rt_heap_alloc`/`__rt_heap_free`/`__rt_heap_free_safe`
 /// /`__rt_incref`/`__rt_decref_any`/`__rt_str_persist` and heap globals it references.
-pub(super) fn emit_mixed_runtime(wm: &mut WatModule) {
+pub(super) fn emit_mixed_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_MIXED_FROM_VALUE);
     wm.add_raw_func(RT_MIXED_UNBOX);
     wm.add_raw_func(RT_MIXED_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_MIXED);
     wm.add_raw_func(RT_MIXED_CAST_BOOL);
-    wm.add_raw_func(RT_MIXED_CAST_INT);
-    wm.add_raw_func(RT_MIXED_CAST_FLOAT);
+    wm.add_raw_func(&mixed_cast_int(has_main));
+    wm.add_raw_func(&mixed_cast_float(has_main));
     wm.add_raw_func(RT_MIXED_CAST_STRING);
     wm.add_raw_func(RT_MIXED_CAST_STRING_REF);
 }
@@ -182,8 +182,47 @@ const RT_MIXED_CAST_BOOL: &str = r#"(func $__rt_mixed_cast_bool (param $ptr i32)
 /// modulo 2^64 like `zend_dval_to_lval` while +/-INF/NaN become 0; a bool forwards its
 /// 0/1; an array/hash returns its element count (or 0 for a null container); a resource
 /// returns its 1-based display id (payload + 1); null/object/callable/other return 0.
+
+/// Renders `__rt_mixed_cast_int` for this module.
+///
+/// Two things vary. The float arm routes through the diagnosing conversion under the PHP 8.5
+/// profile, which is the only profile that reports an unrepresentable float. And the object arm
+/// can only warn from a COMMAND module: `__rt_warn_object_to_int` writes to stderr through the
+/// WASI imports a reactor does not carry, so an import-free module produces PHP's value without
+/// its diagnostic rather than failing to link.
+fn mixed_cast_int(has_main: bool) -> String {
+    let float_to_int = if has_main
+        && matches!(
+            crate::codegen_support::compile_php_version(),
+            crate::web_prelude::PhpVersion::Php85
+        ) {
+        "$__rt_float_to_int_warn"
+    } else {
+        "$__rt_float_to_int"
+    };
+    let warning = if has_main {
+        "(call $__rt_warn_object_to_int (i64.load (i32.wrap_i64 (local.get $lo))))  ;; class id lives at [obj+0]"
+    } else {
+        ";; reactor modules carry no WASI imports, so the diagnostic is omitted"
+    };
+    RT_MIXED_CAST_INT_TEMPLATE
+        .replace("{FLOAT_TO_INT}", float_to_int)
+        .replace("{OBJECT_INT_WARNING}", warning)
+}
+
+/// Renders `__rt_mixed_cast_float` for this module; see [`mixed_cast_int`] for why the object
+/// arm's diagnostic is command-only.
+fn mixed_cast_float(has_main: bool) -> String {
+    let warning = if has_main {
+        "(call $__rt_warn_object_to_float (i64.load (i32.wrap_i64 (local.get $lo))))  ;; class id lives at [obj+0]"
+    } else {
+        ";; reactor modules carry no WASI imports, so the diagnostic is omitted"
+    };
+    RT_MIXED_CAST_FLOAT_TEMPLATE.replace("{OBJECT_FLOAT_WARNING}", warning)
+}
+
 /// Borrows the cell (never frees).
-const RT_MIXED_CAST_INT: &str = r#"(func $__rt_mixed_cast_int (param $ptr i32) (result i64) (local $tag i64) (local $lo i64) (local $hi i64) (local $cp i32) ;; cast a boxed Mixed cell to a PHP int, mirroring native tag dispatch
+const RT_MIXED_CAST_INT_TEMPLATE: &str = r#"(func $__rt_mixed_cast_int (param $ptr i32) (result i64) (local $tag i64) (local $lo i64) (local $hi i64) (local $cp i32) ;; cast a boxed Mixed cell to a PHP int, mirroring native tag dispatch
   (call $__rt_mixed_unbox (local.get $ptr))                             ;; unbox -> stack: tag, lo, hi
   (local.set $hi)                                                       ;; pop value high word
   (local.set $lo)                                                       ;; pop value low word
@@ -193,7 +232,7 @@ const RT_MIXED_CAST_INT: &str = r#"(func $__rt_mixed_cast_int (param $ptr i32) (
   (if (i64.eq (local.get $tag) (i64.const 1))                           ;; tag 1 = string
     (then (return (call $__rt_str_to_int (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi)) (global.get $__float_scratch))))) ;; PHP string -> int (saturate, INF/NaN -> 0)
   (if (i64.eq (local.get $tag) (i64.const 2))                           ;; tag 2 = float
-    (then (return (call $__rt_float_to_int (local.get $lo)))))          ;; PHP raw float cast: truncate, wrap finite OOR, non-finite -> 0
+    (then (return (call {FLOAT_TO_INT} (local.get $lo)))))              ;; PHP raw float cast: truncate, wrap finite OOR, non-finite -> 0
   (if (i64.eq (local.get $tag) (i64.const 3))                           ;; tag 3 = bool
     (then (return (local.get $lo))))                                    ;; already normalized 0/1
   (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5))) ;; tag 4/5 = array/hash
@@ -201,10 +240,14 @@ const RT_MIXED_CAST_INT: &str = r#"(func $__rt_mixed_cast_int (param $ptr i32) (
       (local.set $cp (i32.wrap_i64 (local.get $lo)))                    ;; container pointer
       (if (i32.eqz (local.get $cp))                                     ;; null container pointer?
         (then (return (i64.const 0)))                                   ;; null -> 0 (matches an empty container)
-        (else (return (i64.load (local.get $cp)))))))                   ;; element count from the container header [cp+0]
+        (else (return (i64.extend_i32_u (i64.ne (i64.load (local.get $cp)) (i64.const 0)))))))) ;; PHP yields 1 for ANY non-empty array, never its length
+  (if (i64.eq (local.get $tag) (i64.const 6))                           ;; tag 6 = object
+    (then
+      {OBJECT_INT_WARNING}
+      (return (i64.const 1))))                                          ;; PHP still produces 1 after diagnosing
   (if (i64.eq (local.get $tag) (i64.const 9))                           ;; tag 9 = resource
     (then (return (i64.add (local.get $lo) (i64.const 1)))))            ;; 1-based display id (payload + 1)
-  (i64.const 0))                                                        ;; null(8)/object(6)/callable(10)/other -> 0
+  (i64.const 0))                                                        ;; null(8)/callable(10)/other -> 0
 "#;
 
 /// `__rt_mixed_cast_float`: casts a boxed Mixed cell to a PHP float, returning the raw
@@ -213,7 +256,7 @@ const RT_MIXED_CAST_INT: &str = r#"(func $__rt_mixed_cast_int (param $ptr i32) (
 /// `f64.convert_i64_s`; a string parses through `__rt_str_to_f64` (PHP string->float); a
 /// float forwards its stored bits; arrays/hashes/objects/resources/null/other return 0.0.
 /// Borrows the cell (never frees).
-const RT_MIXED_CAST_FLOAT: &str = r#"(func $__rt_mixed_cast_float (param $ptr i32) (result i64) (local $tag i64) (local $lo i64) (local $hi i64) ;; cast a boxed Mixed cell to a PHP float, returning raw f64 bits
+const RT_MIXED_CAST_FLOAT_TEMPLATE: &str = r#"(func $__rt_mixed_cast_float (param $ptr i32) (result i64) (local $tag i64) (local $lo i64) (local $hi i64) (local $cp i32) ;; cast a boxed Mixed cell to a PHP float, returning raw f64 bits
   (call $__rt_mixed_unbox (local.get $ptr))                             ;; unbox -> stack: tag, lo, hi
   (local.set $hi)                                                       ;; pop value high word
   (local.set $lo)                                                       ;; pop value low word
@@ -228,7 +271,17 @@ const RT_MIXED_CAST_FLOAT: &str = r#"(func $__rt_mixed_cast_float (param $ptr i3
     (then (return (local.get $lo))))                                    ;; forward the stored f64 bits
   (if (i64.eq (local.get $tag) (i64.const 3))                           ;; tag 3 = bool
     (then (return (i64.reinterpret_f64 (f64.convert_i64_s (local.get $lo)))))) ;; widen 0/1 -> f64 bits
-  (i64.const 0))                                                        ;; array/hash/object/resource/null/other -> 0.0
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5))) ;; tag 4/5 = array/hash
+    (then
+      (local.set $cp (i32.wrap_i64 (local.get $lo)))                    ;; container pointer
+      (if (i32.eqz (local.get $cp))                                     ;; null container pointer?
+        (then (return (i64.const 0)))                                   ;; null -> 0.0
+        (else (return (i64.reinterpret_f64 (f64.convert_i64_u (i64.extend_i32_u (i64.ne (i64.load (local.get $cp)) (i64.const 0)))))))))) ;; PHP yields 1.0 for ANY non-empty array
+  (if (i64.eq (local.get $tag) (i64.const 6))                           ;; tag 6 = object
+    (then
+      {OBJECT_FLOAT_WARNING}
+      (return (i64.reinterpret_f64 (f64.const 1)))))                    ;; PHP still produces 1.0 after diagnosing
+  (i64.const 0))                                                        ;; resource/null/other -> 0.0
 "#;
 
 /// `__rt_mixed_cast_string`: casts a boxed Mixed cell to a PHP string, returning
@@ -377,7 +430,7 @@ mod tests {
         emit_refcount_runtime(&mut wm);
         emit_closure_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm, false);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);

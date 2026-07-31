@@ -2891,3 +2891,110 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the explicit `(int)` / `(float)` cast of a runtime-typed value matches php-src.
+///
+/// The interesting cases are the ones a naive implementation gets wrong: PHP yields 1 for ANY
+/// non-empty array rather than its length, wraps a finite out-of-range float modulo 2^64 instead
+/// of saturating, maps NaN and both infinities to zero, and diagnoses an object while still
+/// producing 1. Every expected line here is php-src 8.5's own output for the same program.
+#[test]
+fn test_cli_wasm_explicit_mixed_scalar_casts_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_scalar_casts");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class C {}
+function box(mixed $v): mixed { return $v; }
+echo (int) box(42), "\n";
+echo (int) box(true), "\n";
+echo (int) box(null), "\n";
+echo (int) box(3.7), "\n";
+echo (int) box(-3.7), "\n";
+echo (int) box("  12abc"), "\n";
+echo (int) box("abc"), "\n";
+echo (int) box([]), "\n";
+echo (int) box([1, 2, 3]), "\n";
+echo (int) box(1.0e19), "\n";
+echo (int) box(NAN), "\n";
+echo (int) box(INF), "\n";
+echo (int) box(new C()), "\n";
+echo (float) box("3.5"), "\n";
+echo (float) box([1]), "\n";
+echo (float) box(new C()), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile mixed scalar casts to WASM");
+    assert!(
+        output.status.success(),
+        "mixed scalar cast compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // `--no-warnings` keeps Node's own ExperimentalWarning about `node:wasi` out of the stderr
+    // this test compares against php-src's diagnostics.
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run mixed scalar casts under Node");
+    assert!(
+        run.status.success(),
+        "mixed scalar casts trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let expected = concat!(
+        "42\n", "1\n", "0\n", "3\n", "-3\n", "12\n", "0\n", "0\n", "1\n",
+        "-8446744073709551616\n", "0\n", "0\n", "1\n", "3.5\n", "1\n", "1\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+
+    // php-src reports the same four diagnostics, in this order. The project's WASM convention
+    // drops php-src's `PHP ` prefix and its ` in <file> on line <n>` tail.
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let diagnostics: Vec<&str> = stderr.lines().collect();
+    assert_eq!(
+        diagnostics,
+        vec![
+            "Warning: The float 1.0E+19 is not representable as an int, cast occurred",
+            "Warning: The float NAN is not representable as an int, cast occurred",
+            "Warning: The float INF is not representable as an int, cast occurred",
+            "Warning: Object of class C could not be converted to int",
+            "Warning: Object of class C could not be converted to float",
+        ],
+        "diagnostics must match php-src's set and order"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

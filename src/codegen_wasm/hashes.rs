@@ -1440,7 +1440,7 @@ mod tests {
         emit_refcount_runtime(&mut wm);
         emit_closure_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm, false);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         emit_hash_runtime_for_version(&mut wm, php_version);
         emit_object_runtime(&mut wm);
@@ -1487,7 +1487,7 @@ mod tests {
         emit_refcount_runtime(&mut wm);
         emit_closure_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm, false);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         emit_hash_runtime_for_version(&mut wm, PhpVersion::Php85);
         emit_object_runtime(&mut wm);

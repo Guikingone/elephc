@@ -260,7 +260,7 @@ mod tests {
         // `__rt_decref_mixed`, so the array, hash, and mixed runtimes must be present
         // to validate (generate() emits all of them).
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm, false);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         // `__rt_decref_any` kind-4 dispatches to `__rt_decref_object`, so the object
@@ -499,7 +499,7 @@ mod tests {
         emit_closure_runtime(&mut wm);
         // `__rt_decref_any` dispatches to the array/hash/mixed object runtimes.
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm);
+        emit_mixed_runtime(&mut wm, false);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
