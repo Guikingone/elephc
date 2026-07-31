@@ -2644,6 +2644,12 @@ fn lower_prop_get_nonnull(
     property: &str,
 ) -> Result<()> {
     if let Some((class_name, true)) = nullable_object_receiver_class(ctx, object)? {
+        // A nullable INTERFACE receiver has no slot of its own to resolve against, so it takes the
+        // implementor-dispatch route instead of `resolve_property_slot_for_class`, which would
+        // fail with `unknown class <Iface>` on its very first statement.
+        if ctx.module.interface_infos.contains_key(&class_name) {
+            return lower_nullable_interface_prop_get(ctx, inst, object, &class_name, property);
+        }
         return lower_nullable_prop_get_with_warning(ctx, inst, object, &class_name, property);
     }
     if let Some(class_name) = union_object_member_class(ctx, object)? {
@@ -2659,7 +2665,7 @@ fn lower_prop_get_nonnull(
         ctx.value_php_type(object)?.codegen_repr(),
         PhpType::Object(class_name) if class_name.is_empty()
     ) {
-        return lower_generic_object_prop_get(ctx, inst, object, property);
+        return lower_generic_object_prop_get(ctx, inst, object, property, None);
     }
     if let Some(candidates) =
         abstract_descendant_property_candidates(ctx, object, property, inst)?
@@ -2671,6 +2677,18 @@ fn lower_prop_get_nonnull(
     }
     if let Some(class_name) = magic_get_receiver_class(ctx, object, property)? {
         return lower_magic_get_prop(ctx, inst, object, &class_name, property);
+    }
+    // An INTERFACE-typed receiver resolves its property against the RUNTIME class, exactly as a
+    // bare `object` receiver does, so it reuses that proven emitter with the candidate set
+    // filtered to this interface's implementors.
+    //
+    // Placement is deliberate: this arm sits AFTER `magic_get_receiver_class` so that teaching
+    // that helper about interfaces later fixes `__get` for interface receivers too. Putting it
+    // earlier would shadow the magic-get branch and bake the miss in permanently. (`__get` is not
+    // invoked for a bare `object` receiver today either — a pre-existing divergence tracked
+    // separately, neither introduced nor widened here.)
+    if let Some(interface_name) = interface_receiver_name(ctx, object)? {
+        return lower_generic_object_prop_get(ctx, inst, object, property, Some(&interface_name));
     }
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, property)? {
         return lower_allow_dynamic_prop_get(ctx, inst, object, property, offset);
@@ -2865,7 +2883,7 @@ fn lower_mixed_load_prop_ref_cell(
     property: &str,
 ) -> Result<()> {
     let candidates: Vec<MixedPropertyCandidate> =
-        declared_mixed_property_candidates(ctx, property, inst)?
+        declared_mixed_property_candidates(ctx, property, inst, None)?
             .into_iter()
             .filter(|candidate| candidate.slot.is_reference)
             .collect();
@@ -3119,7 +3137,7 @@ fn lower_mixed_prop_get(
     object: ValueId,
     property: &str,
 ) -> Result<()> {
-    let candidates = declared_mixed_property_candidates(ctx, property, inst)?;
+    let candidates = declared_mixed_property_candidates(ctx, property, inst, None)?;
     if !candidates.is_empty() {
         return lower_declared_mixed_prop_get(ctx, inst, object, property, candidates);
     }
@@ -3137,8 +3155,9 @@ fn lower_generic_object_prop_get(
     inst: &Instruction,
     object: ValueId,
     property: &str,
+    interface_filter: Option<&str>,
 ) -> Result<()> {
-    let candidates = declared_mixed_property_candidates(ctx, property, inst)?;
+    let candidates = declared_mixed_property_candidates(ctx, property, inst, interface_filter)?;
     let miss_label = ctx.next_label("generic_object_prop_miss");
     let done_label = ctx.next_label("generic_object_prop_done");
     let stdclass_label = ctx.next_label("generic_object_prop_stdclass");
@@ -3272,10 +3291,17 @@ fn lower_runtime_mixed_prop_get(
 }
 
 /// Collects declared-property candidates for a property read on an unknown `Mixed` object.
+///
+/// `interface_filter` narrows the candidate set to the classes that actually implement a given
+/// interface, for the interface-typed receiver arms. It is an OPTIMISATION, not a correctness
+/// requirement — the class-id arms of a non-implementor are unreachable either way — but it keeps
+/// the emitted dispatch chain proportional to the interface's real implementors instead of to
+/// every class in the program that happens to declare a same-named property.
 fn declared_mixed_property_candidates(
     ctx: &FunctionContext<'_>,
     property: &str,
     inst: &Instruction,
+    interface_filter: Option<&str>,
 ) -> Result<Vec<MixedPropertyCandidate>> {
     let mut candidates = Vec::new();
     for (class_name, class_info) in &ctx.module.class_infos {
@@ -3288,6 +3314,11 @@ fn declared_mixed_property_candidates(
             .any(|(name, _)| name == property)
         {
             continue;
+        }
+        if let Some(interface_name) = interface_filter {
+            if !super::class_implements_interface(ctx, class_name, interface_name) {
+                continue;
+            }
         }
         let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
         candidates.push(MixedPropertyCandidate {
@@ -3460,6 +3491,92 @@ fn lower_nullable_prop_get_with_warning(
     emit_boxed_null(ctx);
 
     ctx.emitter.label(&done_label);
+    store_if_result(ctx, inst)
+}
+
+/// Returns the interface name when `object`'s codegen representation is an INTERFACE rather than
+/// a class.
+///
+/// `Module::class_infos` and `Module::interface_infos` are two separate maps (see
+/// `crate::ir_lower::program`), and every property-access path with a named object receiver used
+/// to assume the name was a class. A receiver typed by an interface therefore fell through every
+/// branch and died on `unknown class <Iface>`, even though PHP resolves such a read dynamically
+/// against the runtime class. The method-call side has always made this distinction
+/// (`lower_interface_method_call`); this is the property-access counterpart.
+fn interface_receiver_name(ctx: &FunctionContext<'_>, object: ValueId) -> Result<Option<String>> {
+    let PhpType::Object(class_name) = ctx.value_php_type(object)?.codegen_repr() else {
+        return Ok(None);
+    };
+    if class_name.is_empty() || !ctx.module.interface_infos.contains_key(&class_name) {
+        return Ok(None);
+    }
+    Ok(Some(class_name))
+}
+
+/// Lowers a property read through a NULLABLE interface-typed receiver (`?Iface`).
+///
+/// Mirrors `lower_nullable_prop_get_with_warning`'s null handling — PHP's
+/// `Attempt to read property "x" on null` warning then a null result — but resolves the property
+/// against the runtime class through the same implementor dispatch the non-nullable arm uses,
+/// because an interface has no slot of its own to resolve against.
+fn lower_nullable_interface_prop_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    object: ValueId,
+    interface_name: &str,
+    property: &str,
+) -> Result<()> {
+    let candidates = declared_mixed_property_candidates(ctx, property, inst, Some(interface_name))?;
+    let null_label = ctx.next_label("nullable_iface_prop_null");
+    let miss_label = ctx.next_label("nullable_iface_prop_miss");
+    let done_label = ctx.next_label("nullable_iface_prop_done");
+    let stdclass_label = ctx.next_label("nullable_iface_prop_stdclass");
+    let match_labels = candidates
+        .iter()
+        .map(|candidate| {
+            ctx.next_label(&format!(
+                "nullable_iface_prop_{}",
+                label_fragment(&candidate.slot.class_name)
+            ))
+        })
+        .collect::<Vec<_>>();
+
+    let base_reg = abi::int_result_reg(ctx.emitter);
+    emit_nullable_receiver_object_payload(ctx, object, &null_label, base_reg)?;
+    emit_mixed_property_class_dispatch(
+        ctx,
+        &candidates,
+        &match_labels,
+        &stdclass_label,
+        &miss_label,
+    );
+
+    for (candidate, label) in candidates.iter().zip(match_labels.iter()) {
+        ctx.emitter.label(label);
+        let base_reg = abi::int_result_reg(ctx.emitter);
+        if candidate.slot.is_declared {
+            emit_uninitialized_typed_property_guard(ctx, &candidate.slot, base_reg);
+        }
+        emit_property_load(ctx, &candidate.slot, base_reg)?;
+        box_mixed_property_candidate_result(ctx, &candidate.slot.php_type);
+        abi::emit_jump(ctx.emitter, &done_label);
+    }
+
+    ctx.emitter.label(&stdclass_label);
+    emit_stdclass_get_from_loaded_object(ctx, property);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&miss_label);
+    emit_undefined_property_warning_for_loaded_object(ctx, property);
+    emit_boxed_null(ctx);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&null_label);
+    emit_property_on_null_warning(ctx, property);
+    emit_boxed_null(ctx);
+
+    ctx.emitter.label(&done_label);
+    cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
 

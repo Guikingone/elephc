@@ -631,3 +631,117 @@ echo getRadius(new Square());
         "expected a clean member-call Error for the genuinely-absent method, got: {err}"
     );
 }
+
+/// Verifies a property READ through an INTERFACE-typed parameter resolves against the runtime
+/// class instead of failing codegen with `unknown class <Iface>`.
+/// `Module::class_infos` and `Module::interface_infos` are separate maps, so every property path
+/// with a named object receiver used to assume the name was a class; an interface receiver fell
+/// through every branch and died in the backend even though PHP resolves such a read dynamically.
+/// Fixture: `NodeI` implemented by `A` (declares `$depth`), read through a `NodeI` parameter.
+#[test]
+fn test_interface_typed_param_property_read_dispatches_on_runtime_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface NodeI { public function tag(): string; }
+class A implements NodeI { public int $depth = 3; public function tag(): string { return "A"; } }
+function r(NodeI $n): int { return $n->depth; }
+echo r(new A());
+"#,
+    );
+    assert_eq!(out, "3");
+}
+
+/// Verifies an interface-typed receiver whose runtime class does NOT declare the property produces
+/// PHP's own undefined-property warning and a null result, rather than a compile error.
+/// `php -n` prints `Warning: Undefined property: B::$depth` followed by an empty string for the
+/// null; only PHP's ` in FILE on line N` suffix is omitted, the campaign-wide AOT deviation.
+#[test]
+fn test_interface_typed_param_property_read_missing_property_warns() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface NodeI { public function tag(): string; }
+class B implements NodeI { public function tag(): string { return "B"; } }
+function r(NodeI $n): void { echo $n->depth; echo "|end"; }
+r(new B());
+"#,
+    );
+    assert!(out.success, "program unexpectedly failed: {}", out.stderr);
+    assert_eq!(out.stdout, "|end");
+    assert!(
+        out.stderr.contains("Warning: Undefined property: B::$depth"),
+        "expected PHP's undefined-property warning on stderr, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies a NULLABLE interface receiver (`?Iface`) reads through the same implementor dispatch
+/// and still emits PHP's null-receiver warning for a null argument.
+/// An interface has no slot of its own, so `?Iface` cannot take `resolve_property_slot_for_class`
+/// — that helper fails on its first statement with `unknown class <Iface>`.
+#[test]
+fn test_nullable_interface_param_property_read_handles_object_and_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+interface NodeI { public function tag(): string; }
+class A implements NodeI { public int $depth = 3; public function tag(): string { return "A"; } }
+function r(?NodeI $n): void { echo $n->depth; echo "|"; }
+r(new A());
+r(null);
+echo "end";
+"#,
+    );
+    assert!(out.success, "program unexpectedly failed: {}", out.stderr);
+    assert_eq!(out.stdout, "3||end");
+    assert!(
+        out.stderr
+            .contains("Attempt to read property \"depth\" on null"),
+        "expected PHP's null-receiver warning on stderr, got: {}",
+        out.stderr
+    );
+}
+
+/// Verifies the Symfony shape that motivated the fix: an interface-typed PROPERTY chained into a
+/// property access under an `instanceof` guard.
+/// Mirrors `Config\Definition\PrototypedArrayNode::233`, whose `instanceof` narrowing is discarded
+/// before the backend, so the access really does reach an interface receiver.
+#[test]
+fn test_interface_typed_property_chained_under_instanceof_guard() {
+    let out = compile_and_run(
+        r#"<?php
+interface PrototypeNodeI {}
+class ArrayNodeX implements PrototypeNodeI { public array $normalizationClosures = []; }
+class Holder {
+    protected PrototypeNodeI $prototype;
+    public function __construct(PrototypeNodeI $p) { $this->prototype = $p; }
+    public function run(): int {
+        if ($this->prototype instanceof ArrayNodeX) {
+            $originalClosures = $this->prototype->normalizationClosures;
+            return count($originalClosures);
+        }
+        return -1;
+    }
+}
+echo (new Holder(new ArrayNodeX()))->run();
+"#,
+    );
+    assert_eq!(out, "0");
+}
+
+/// NEGATIVE CONTROL for the interface property arm: a union receiver mixing an implementor and an
+/// unrelated class must keep taking the boxed-Mixed candidate dispatch, not the interface arm.
+/// Both members declare `$depth`, so a wrongly-routed read would still produce a number — the
+/// values differ (3 vs 9) precisely so a mis-dispatch is visible rather than silently plausible.
+#[test]
+fn test_union_receiver_property_read_unaffected_by_interface_arm() {
+    let out = compile_and_run(
+        r#"<?php
+interface NodeI { public function tag(): string; }
+class A implements NodeI { public int $depth = 3; public function tag(): string { return "A"; } }
+class Other { public int $depth = 9; }
+function pick(int $k): Other|A { return $k === 0 ? new A() : new Other(); }
+function r(Other|A $n): int { return $n->depth; }
+echo r(pick(0)), ":", r(pick(1));
+"#,
+    );
+    assert_eq!(out, "3:9");
+}
