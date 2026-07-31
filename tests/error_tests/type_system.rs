@@ -1506,31 +1506,34 @@ fn test_error_union_no_assignable_object_member_stays_loud() {
     );
 }
 
-/// A union whose extra member is a scalar (`Q|string`) into an object parameter stays loud even
-/// though one member matches: bit-casting a string payload to an object pointer at runtime is
-/// unsound, so this shape is kept loud rather than deferred (PHP would TypeError on the string
-/// value anyway).
+/// SUPERSEDED by the checked downcast for UNION SOURCES: a union whose extra member is a scalar
+/// (`Q|string`) into an object parameter is accepted, because the boundary now emits a guard whose
+/// `Op::InstanceOf` answers false for a string payload and throws PHP's own catchable `TypeError`.
+/// No payload is ever bit-cast to an object pointer, which was the reason this stayed loud. The
+/// program itself runs under `php -n` (the value IS a `Q`), so the compile error rejected a
+/// program PHP accepts. The mismatch case that still throws is pinned end-to-end in
+/// `tests/codegen/oop/checked_downcast_argument.rs`.
 #[test]
-fn test_error_union_scalar_member_into_object_param_stays_loud() {
-    expect_error(
+fn test_union_scalar_member_into_object_param_accepted_with_runtime_guard() {
+    expect_ok(
         "<?php class Q { function q(): int { return 1; } } \
          function need(Q $x): int { return $x->q(); } \
          function pick(int $n): Q|string { return new Q(); } \
          $x = pick($argc); echo need($x);",
-        "expects Object(\"Q\")",
     );
 }
 
-/// A scalar assignment inside a conditional branch remains part of the post-branch flow type.
+/// SUPERSEDED for the same reason as the sibling above: a scalar assignment inside a conditional
+/// branch still widens the post-branch flow type to `ConditionalObject|string`, but that union now
+/// reaches the parameter behind a runtime guard instead of being rejected outright.
 #[test]
-fn test_error_conditional_scalar_assignment_into_object_param_stays_loud() {
-    expect_error(
+fn test_conditional_scalar_assignment_into_object_param_accepted_with_runtime_guard() {
+    expect_ok(
         "<?php class ConditionalObject {} \
          function needConditionalObject(ConditionalObject $value): void {} \
          $value = new ConditionalObject(); \
          if ($argc > 1) { $value = 'bad'; } \
          needConditionalObject($value);",
-        "expects Object(\"ConditionalObject\")",
     );
 }
 
@@ -1577,16 +1580,19 @@ fn test_error_base_into_derived_typed_property_stays_loud() {
     );
 }
 
-/// An all-object union whose extra member is UNRELATED to the concrete object target stays loud
-/// (`RC|Route` into `RC $x`, where `Route` is not assignable to `RC`). The unrelated member could
-/// be the runtime value and would bit-read as the wrong object; PHP raises a TypeError, so it must
-/// stay loud. Guards the R3/R4 revert of the union-object gradual acceptance.
+/// SUPERSEDED by the checked downcast for UNION SOURCES. An all-object union whose extra member is
+/// UNRELATED to the concrete object target (`RC|Route` into `RC $x`) used to stay loud because the
+/// unrelated member would be bit-read as the wrong object. The boundary now emits the guard, so
+/// `Route` is RULED OUT by an `Op::InstanceOf` and throws PHP's own catchable `TypeError` instead
+/// of reaching the callee — and the matching member reaches it as a real `RC`. This is the exact
+/// Symfony `RouteTrait::$route` shape (a declared `RouteCollection|Route` feeding
+/// `RouteCollection::addCollection`). Runtime coverage of both arms lives in
+/// `tests/codegen/oop/checked_downcast_argument.rs`.
 #[test]
-fn test_error_object_union_unrelated_member_into_param_stays_loud() {
-    expect_error(
+fn test_object_union_unrelated_member_into_param_accepted_with_runtime_guard() {
+    expect_ok(
         "<?php class Route{} class RC{} function add(RC $x){} \
          function pick(int $n):RC|Route{return new RC();} echo add(pick(1));",
-        "expects Object(\"RC\"), got Union([Object(\"RC\"), Object(\"Route\")])",
     );
 }
 
@@ -1614,32 +1620,32 @@ fn test_object_base_return_into_derived_return_accepted_with_runtime_guard() {
     );
 }
 
-// --- Family F boundary: union supertype-object direction into a derived target stays loud ---
+// --- Family F boundary: the union supertype-object direction into a derived target is now
+//     GUARDED at the positions that emit one. `gradual_union_flows_into` still excludes it (it
+//     also feeds property stores, which emit nothing); the checked-downcast fallback admits it
+//     for call arguments and returns. ---
 
-/// A nullable base type (`?Base`) flowing into a derived-class parameter stays loud (`?B` into
-/// `S $x`). The `B` member of the union is a supertype of the concrete `S` target, which is the
-/// unprovable base→derived direction; elephc emits no runtime instanceof guard, so accepting it
-/// would SIGSEGV when the runtime value is a bare `B`. PHP raises a TypeError, matching this loud
-/// rejection. Guards the round-3 union supertype-object exclusion in `gradual_union_flows_into`.
+/// SUPERSEDED by the checked downcast for UNION SOURCES: a nullable base type (`?B` into `S $x`)
+/// is the unprovable base→derived direction, and it is now DECIDED at runtime rather than refused
+/// at compile time. The guard tests the `null` arm first (a real null reaching a `?B` source is
+/// ruled out by `Op::IsNull`, not bit-read) and then `instanceof S`, so a bare `B` throws PHP's
+/// own catchable `TypeError` instead of SIGSEGVing. Runtime coverage in
+/// `tests/codegen/oop/checked_downcast_argument.rs`.
 #[test]
-fn test_error_nullable_base_into_derived_param_stays_loud() {
-    expect_error(
+fn test_nullable_base_into_derived_param_accepted_with_runtime_guard() {
+    expect_ok(
         "<?php class B{} class S extends B{} function need(S $x){} \
          function mk(int $n): ?B { return new S(); } echo need(mk(1));",
-        "expects Object(\"S\"), got Union([Object(\"B\"), Void])",
     );
 }
 
-/// A non-nullable base|sub union (`Base|Sub`) flowing into the derived-class parameter stays loud
-/// (`B|S` into `S $x`). The `B` member is a supertype of the concrete `S` target — the unprovable
-/// base→derived direction with no runtime guard — so PHP raises a TypeError and elephc must too.
-/// Guards the round-3 union supertype-object exclusion in `gradual_union_flows_into`.
+/// SUPERSEDED for the same reason: a non-nullable `B|S` union into the derived `S $x` parameter is
+/// admitted behind the same guard, which lets the `S` member through and throws on a bare `B`.
 #[test]
-fn test_error_base_or_sub_union_into_derived_param_stays_loud() {
-    expect_error(
+fn test_base_or_sub_union_into_derived_param_accepted_with_runtime_guard() {
+    expect_ok(
         "<?php class B{} class S extends B{} function need(S $x){} \
          function mk(int $n): B|S { return new S(); } echo need(mk(1));",
-        "expects Object(\"S\"), got Union([Object(\"B\"), Object(\"S\")])",
     );
 }
 

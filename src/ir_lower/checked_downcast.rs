@@ -20,8 +20,12 @@
 //!   declared `null`/`array` arm must PASS THROUGH, not fall into the object branch; (ii) MESSAGE
 //!   SOUNDNESS — the fail block names the ACTUAL runtime type, and taking the `get_class` route
 //!   with a non-object payload yields garbage; (iii) DOMINANCE — an unbox on the ok-edge may only
-//!   be reached on an edge where the payload is provably an object. Which shapes need those tests
-//!   at all is recorded, with its proof, in `emit_guard_chain`.
+//!   be reached on an edge where the payload is provably an object. See `phase_one_tag_tests`.
+//! - A guard is only ever built out of arms PHP MATCHES rather than CONVERTS INTO. PHP's weak
+//!   mode turns a union slot into a conversion site — an int, a float, a bool or a `Stringable`
+//!   object reaching a declared `string|D` is coerced, not rejected — and no arm test can see a
+//!   conversion. `crate::types::checked_downcast::guard_is_php_faithful` is the gate that keeps
+//!   such a declaration off this chain entirely, on both halves.
 //! - OWNERSHIP IS SPLIT BY OP, never by a flag on one op. `Op::ThrowCheckedReturnTypeError`
 //!   RELEASES the mismatched value, which is sound ONLY at the return position where nothing else
 //!   owns it. A position whose caller still owns the value needs its own non-releasing op: a
@@ -35,16 +39,20 @@
 //! - THROW-PATH COST, measured: a caught argument-position `TypeError` leaks NOTHING. Looping the
 //!   mismatch 1/10/100/1000 times under `--heap-debug` gives allocs == frees at every count, zero
 //!   live blocks, and a peak of 384 live bytes that stays CONSTANT from 10 iterations on — so the
-//!   per-catch block delta is 0, not merely bounded. A future position whose throw abandons
-//!   already-lowered operands must re-measure this rather than inherit the number.
+//!   per-catch block delta is 0, not merely bounded. Re-measured for a UNION source (a boxed
+//!   payload the fail path abandons) and it holds there too. A future position whose throw
+//!   abandons already-lowered operands must re-measure this rather than inherit the number.
 
 use std::collections::HashSet;
 
-use crate::ir::{IrType, Immediate, Op, Terminator};
+use crate::ir::{Immediate, IrType, Op, PhpTypePredicate, Terminator};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::span::Span;
 use crate::types::PhpType;
-use crate::types::checked_downcast::{GuardShape, declared_guard_arms, downcast_guard_shape};
+use crate::types::checked_downcast::{
+    GuardArm, GuardPosition, GuardShape, declared_guard_arms, downcast_guard_shape,
+    guard_is_php_faithful, shape_is_guardable_at,
+};
 
 /// How the callee of a guarded call argument is spelled in the `TypeError` message.
 ///
@@ -139,34 +147,29 @@ impl DowncastPosition<'_> {
             DowncastPosition::Argument { .. } => " given",
         }
     }
+
+    /// Reduces this position to the form the shared shape matrix is expressed over.
+    fn kind(&self) -> GuardPosition {
+        match self {
+            DowncastPosition::Return { .. } => GuardPosition::Return,
+            DowncastPosition::Argument { .. } => GuardPosition::Argument,
+        }
+    }
 }
 
-/// Returns whether this lowering position emits a guard for `shape` yet.
+/// Returns whether this lowering position emits a guard for `shape` against `declared`.
 ///
-/// The shape/position matrix is staged deliberately, and this is the ONE place that records it:
-/// - `RawObject`/`RawObjectToBoxed` at the RETURN position reproduce exactly what the return
-///   guard did before this module existed.
-/// - `BoxedToRawObject` at an ARGUMENT position is the shape that turns a boxed value silently
-///   read as a raw object pointer (garbage, and a segfault as soon as the callee dispatches on
-///   it) into PHP's own catchable `TypeError`.
-/// - `BoxedToBoxed` is NOT emitted anywhere yet, and it must not be enabled without pairing it
-///   with the checker's own admission decision: a boxed value reaching a declared `string|array`
-///   slot is WEAK-MODE COERCED by PHP, not rejected, so a bare tag-test chain would throw where
-///   PHP converts. That pairing is the union-source slice of this campaign.
-/// - `RawObjectToBoxed` at an ARGUMENT position is withheld for the same reason: a `Stringable`
-///   object reaching a declared `string|D` slot is coerced by PHP, not rejected.
-fn shape_is_emittable_at(shape: GuardShape, position: &DowncastPosition<'_>) -> bool {
-    match (shape, position) {
-        (
-            GuardShape::RawObject | GuardShape::RawObjectToBoxed,
-            DowncastPosition::Return { .. },
-        ) => true,
-        (
-            GuardShape::RawObject | GuardShape::BoxedToRawObject,
-            DowncastPosition::Argument { .. },
-        ) => true,
-        _ => false,
-    }
+/// Two conditions, and NEITHER of them lives here: the shape/position matrix is
+/// `crate::types::checked_downcast::shape_is_guardable_at` and the declared-type admissibility is
+/// `guard_is_php_faithful`, both in the shared module the CHECKER also consults. A guard the
+/// checker admits but this declines is not a compile error — it is an unguarded representation
+/// change at runtime — so the decision may not be re-derived here.
+fn shape_is_emittable_at(
+    shape: GuardShape,
+    declared: &PhpType,
+    position: &DowncastPosition<'_>,
+) -> bool {
+    shape_is_guardable_at(shape, position.kind()) && guard_is_php_faithful(declared, shape)
 }
 
 /// Inserts a checked-downcast guard around `value` for the slot declared `declared`, and returns
@@ -182,10 +185,12 @@ fn shape_is_emittable_at(shape: GuardShape, position: &DowncastPosition<'_>) -> 
 /// - 0b. the declared type has a bare `object` arm. PHP's `object` accepts every object, and
 ///   `Op::InstanceOf` against the empty class name can never match — emitting one is the exact
 ///   bug this guard family shipped with once already.
-/// - 0c. the value's static class is already a proven subtype-or-equal of a declared arm.
+/// - 0c. every member of the value's static type is already covered by a declared arm, so no
+///   runtime test could fail (`source_is_proven_covered`).
 ///
-/// PHASE 1 — runtime tag tests for the declared NON-object arms, in declared order. Only a boxed
-/// source can carry a non-object payload, so these are emitted only for a boxed source.
+/// PHASE 1 — runtime tag tests for the declared NON-object arms, `null` then array then scalars,
+/// each kind in declared order. A value matching one of them is a LEGITIMATE member of the
+/// declared type and passes straight through.
 ///
 /// PHASE 2 — one `Op::InstanceOf` per declared class arm, in declared order.
 ///
@@ -208,7 +213,7 @@ pub(crate) fn emit_checked_downcast(
     let Some(shape) = downcast_guard_shape(declared, &actual) else {
         return value;
     };
-    if !shape_is_emittable_at(shape, &position) {
+    if !shape_is_emittable_at(shape, declared, &position) {
         return value;
     }
     // -- PHASE 0b --
@@ -220,24 +225,68 @@ pub(crate) fn emit_checked_downcast(
         return value;
     }
     // -- PHASE 0c --
-    if let PhpType::Object(actual_name) = &actual {
-        if candidates
-            .iter()
-            .any(|target| class_is_subtype_or_equal(ctx, actual_name, target))
-        {
-            return value;
+    if source_is_proven_covered(ctx, &actual, declared, &candidates, shape) {
+        return value;
+    }
+    emit_guard_chain(
+        ctx, value, declared, &actual, &candidates, shape, position, span,
+    )
+}
+
+/// Returns whether the value's STATIC type already proves it satisfies `declared`, so no runtime
+/// test could ever fail and the guard may emit nothing at all.
+///
+/// This is the fast path that keeps a guard at every declared boundary from taxing programs that
+/// were already correct — for a union source it is also what keeps the common `D|null` into `?D`
+/// call from paying for two runtime tests it can never fail.
+///
+/// `GuardShape::BoxedToRawObject` is deliberately excluded whatever the static type says: its
+/// ok-edge does not merely PASS the value, it re-materializes a raw object pointer out of the box
+/// (`unbox_guarded_object`), and skipping the chain would hand the consumer the box.
+fn source_is_proven_covered(
+    ctx: &LoweringContext<'_, '_>,
+    actual: &PhpType,
+    declared: &PhpType,
+    candidates: &[String],
+    shape: GuardShape,
+) -> bool {
+    /// Returns whether one member of the source type is covered by a declared arm.
+    fn member_is_covered(
+        ctx: &LoweringContext<'_, '_>,
+        member: &PhpType,
+        arms: &[GuardArm],
+        candidates: &[String],
+    ) -> bool {
+        match member {
+            PhpType::Object(name) if !name.is_empty() => candidates
+                .iter()
+                .any(|target| class_is_subtype_or_equal(ctx, name, target)),
+            PhpType::Void | PhpType::Never => arms.contains(&GuardArm::Null),
+            PhpType::Array(_) | PhpType::AssocArray { .. } => arms.contains(&GuardArm::Array),
+            _ => false,
         }
     }
-    emit_guard_chain(ctx, value, declared, &candidates, shape, position, span)
+    if shape == GuardShape::BoxedToRawObject {
+        return false;
+    }
+    let arms = declared_guard_arms(declared);
+    match actual {
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| member_is_covered(ctx, member, &arms, candidates)),
+        single => member_is_covered(ctx, single, &arms, candidates),
+    }
 }
 
 /// Emits the runtime chain: the tag tests, the `Op::InstanceOf` checks, the throwing fail path,
 /// and the ok-edge repr fixup. The first matching test continues into the ok block; falling
 /// through every test throws a catchable `\TypeError`.
+#[allow(clippy::too_many_arguments)]
 fn emit_guard_chain(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
     declared: &PhpType,
+    actual: &PhpType,
     candidates: &[String],
     shape: GuardShape,
     position: DowncastPosition<'_>,
@@ -247,23 +296,26 @@ fn emit_guard_chain(
     let ok_block = ctx.builder.create_named_block(&format!("{}.ok", prefix), Vec::new());
     let fail_block = ctx.builder.create_named_block(&format!("{}.fail", prefix), Vec::new());
 
-    // -- PHASE 1 is VACUOUS for every shape/position `shape_is_emittable_at` admits today, and
-    //    that is a proof, not an omission:
-    //    * `RawObject`/`RawObjectToBoxed` carry a raw object POINTER, so the value is an object
-    //      at runtime by construction and every declared non-object arm is statically excluded.
-    //    * `BoxedToRawObject` has a declared `codegen_repr()` of `Object(_)`, which only a plain
-    //      `PhpType::Object` produces (a union's repr is `Mixed`), so the declared type has
-    //      exactly one arm and it is an object arm.
-    //    Enabling `BoxedToBoxed`, or `RawObjectToBoxed` at an argument position, breaks both
-    //    legs and MUST add the tag tests first — see `shape_is_emittable_at`.
-    debug_assert!(
-        declared_has_no_testable_non_object_arm(declared)
-            || matches!(shape, GuardShape::RawObject | GuardShape::RawObjectToBoxed),
-        "a boxed source into a slot with non-object arms needs Phase-1 tag tests"
-    );
-
-    let total = candidates.len();
+    let tag_tests = phase_one_tag_tests(declared, actual);
+    let total = tag_tests.len() + candidates.len();
     let mut emitted = 0usize;
+
+    // -- PHASE 1 -- the declared NON-object arms, BEFORE any instanceof. Three independent
+    //    reasons, all of which bite as soon as a BOXED value can reach here:
+    //    (i)   SEMANTIC — a declared `null`/array/scalar arm is a legitimate member, and a value
+    //          matching it must pass THROUGH. `?D` receiving a real null reaches the callee as
+    //          null instead of dying on `instanceof D`.
+    //    (ii)  MESSAGE SOUNDNESS — the fail block names the ACTUAL runtime type, and it may only
+    //          take the `get_class` route once every non-object arm is excluded.
+    //    (iii) DOMINANCE — Phase 4's unbox may only be reached where the payload is an object.
+    //    This list is EMPTY for a raw-object source, which is why the guard shape a raw source
+    //    produces is byte-for-byte what it was before Phase 1 existed — see `phase_one_tag_tests`.
+    for predicate in tag_tests {
+        let matched = emit_phase_one_test(ctx, value, predicate, span);
+        emitted += 1;
+        branch_to_ok_or_next(ctx, matched, ok_block, fail_block, prefix, emitted, total);
+    }
+
     // -- PHASE 2 --
     for candidate in candidates {
         let class_data = ctx.intern_class_name(candidate);
@@ -322,16 +374,76 @@ fn branch_to_ok_or_next(
     }
 }
 
-/// Returns whether `declared` has no arm a Phase-1 runtime tag test would have to cover.
+/// One Phase-1 runtime test — the declared arms a guard decides by TAG rather than by class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TagTest {
+    /// PHP `null`. `Op::IsNull` reads tag 8 for a boxed source and probes the null container for a
+    /// raw one, so it is correct for both representations.
+    Null,
+    /// An array or scalar arm, decided by the matching `Op::TypePredicate` runtime tag.
+    Predicate(PhpTypePredicate),
+}
+
+/// Returns the Phase-1 tag tests for `declared`, in the fixed KIND order `null`, array, scalars —
+/// each kind keeping its arms' declared (source) order.
 ///
-/// Used only by the debug assertion in `emit_guard_chain` that pins the vacuous-Phase-1 proof:
-/// if a future shape lets a BOXED payload reach a slot that declares a `null`, array, or scalar
-/// arm, the guard would send a legitimate value down the fail path.
-fn declared_has_no_testable_non_object_arm(declared: &PhpType) -> bool {
-    use crate::types::checked_downcast::GuardArm;
-    declared_guard_arms(declared)
-        .iter()
-        .all(|arm| matches!(arm, GuardArm::AnyObject | GuardArm::Class(_)))
+/// The kind order is fixed rather than purely declared because the tests are not independent:
+/// `null` has to be settled before anything reads a payload, and the array tag has to be settled
+/// before the scalar tags so an array never reaches a scalar arm's comparison. Within a kind the
+/// arms are mutually exclusive, so the declared order is preserved purely to keep the emitted
+/// chain readable against the source declaration.
+///
+/// `GuardArm::AnyObject` produces no test here: a declared type carrying it never reaches the
+/// chain at all (Phase 0b returns the value untouched, because PHP's bare `object` accepts every
+/// object and `Op::InstanceOf` against the empty class name can never match).
+///
+/// A RAW OBJECT source produces NO Phase-1 test at all: the value is an object at runtime by
+/// construction, so every non-object arm is statically excluded and `Op::TypePredicate` would fold
+/// to a constant false. The `null` arm is excluded with them — a `null` reaching a declared `?D`
+/// is typed `PhpType::Void`, whose representation pairs with nothing, so it never reaches this
+/// chain in the first place. Phase 1 is exactly the part a boxed source added.
+fn phase_one_tag_tests(declared: &PhpType, actual: &PhpType) -> Vec<TagTest> {
+    if matches!(actual.codegen_repr(), PhpType::Object(_)) {
+        return Vec::new();
+    }
+    let arms = declared_guard_arms(declared);
+    let mut tests = Vec::new();
+    if arms.contains(&GuardArm::Null) {
+        tests.push(TagTest::Null);
+    }
+    if arms.contains(&GuardArm::Array) {
+        tests.push(TagTest::Predicate(PhpTypePredicate::Array));
+    }
+    for arm in &arms {
+        if let GuardArm::Scalar(predicate) = arm {
+            tests.push(TagTest::Predicate(*predicate));
+        }
+    }
+    tests
+}
+
+/// Emits one Phase-1 test and returns its boolean result.
+fn emit_phase_one_test(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    test: TagTest,
+    span: Option<Span>,
+) -> crate::ir::ValueId {
+    let (op, immediate) = match test {
+        TagTest::Null => (Op::IsNull, None),
+        TagTest::Predicate(predicate) => {
+            (Op::TypePredicate, Some(Immediate::TypePredicate(predicate)))
+        }
+    };
+    ctx.emit_value(
+        op,
+        vec![value.value],
+        immediate,
+        PhpType::Bool,
+        op.default_effects(),
+        span,
+    )
+    .value
 }
 
 /// Emits the position-appropriate throw for a value that matched no declared arm.
@@ -425,22 +537,53 @@ fn declared_accepts_any_object(ty: &PhpType) -> bool {
 
 /// Formats a declared PHP type using PHP's own type-declaration syntax, matching how a
 /// `TypeError` type-mismatch message renders it: a two-member `T|null` union (the shape nullable
-/// declarations normalize to) renders as `?T`; other unions join arms with `|` in source order;
+/// declarations normalize to) renders as `?T`; other unions render in PHP's CANONICAL arm order;
 /// everything else renders as a single type name.
+///
+/// PHP does not echo the declared order back. It renders class/interface arms first, keeping their
+/// declared order among themselves, then the built-in arms in a FIXED order of its own
+/// (`union_arm_rank`). php-8.5.6, verified against `php -n`:
+/// `array|D|null`, `D|array|null` and `null|array|D` all render `D|array|null`; `array|E|D` renders
+/// `E|D|array`; `null|bool|float|int|string|array|D` renders `D|array|string|int|float|bool|null`.
 fn format_declared_type_for_type_error(ty: &PhpType) -> String {
-    if let PhpType::Union(members) = ty {
-        if members.len() == 2 && members.iter().any(|member| matches!(member, PhpType::Void)) {
-            if let Some(non_void) = members.iter().find(|member| !matches!(member, PhpType::Void)) {
-                return format!("?{}", format_type_member(non_void));
-            }
+    let PhpType::Union(members) = ty else {
+        return format_type_member(ty);
+    };
+    if members.len() == 2 && members.iter().any(|member| matches!(member, PhpType::Void)) {
+        if let Some(non_void) = members.iter().find(|member| !matches!(member, PhpType::Void)) {
+            return format!("?{}", format_type_member(non_void));
         }
-        return members
-            .iter()
-            .map(format_type_member)
-            .collect::<Vec<_>>()
-            .join("|");
     }
-    format_type_member(ty)
+    let mut ordered: Vec<&PhpType> = members.iter().collect();
+    ordered.sort_by_key(|member| union_arm_rank(member));
+    ordered
+        .into_iter()
+        .map(format_type_member)
+        .collect::<Vec<_>>()
+        .join("|")
+}
+
+/// Returns a member's sort rank in PHP's canonical union rendering. A stable sort on it keeps the
+/// declared order within each rank, which is what makes the class arms come out in source order.
+///
+/// Only the class, array and `null` ranks are reachable from a guarded message for a BOXED source,
+/// and only those plus `int`/`float`/`bool`/`false` for a raw-object one — every other declaration
+/// is refused by `crate::types::checked_downcast::guard_is_php_faithful`. The remaining ranks are
+/// carried so the ordering stays a faithful model of PHP's rather than a special case of it.
+fn union_arm_rank(member: &PhpType) -> u8 {
+    match member {
+        PhpType::Object(name) if !name.is_empty() => 0,
+        PhpType::Object(_) => 1,
+        PhpType::Callable => 2,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => 3,
+        PhpType::Str => 4,
+        PhpType::Int => 5,
+        PhpType::Float => 6,
+        PhpType::Bool => 7,
+        PhpType::False => 8,
+        PhpType::Void => 10,
+        _ => 9,
+    }
 }
 
 /// Formats a single (non-union) `PhpType` member using PHP's type-declaration spelling.

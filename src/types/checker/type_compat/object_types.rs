@@ -533,44 +533,74 @@ impl Checker {
         /// two implementations is two predicates whose permissiveness unions, so new positions
         /// must call this rather than re-deriving the hierarchy walk.
         ///
-        /// Three conditions, all required:
+        /// Four conditions, all required:
         /// 1. `crate::types::checked_downcast::downcast_guard_shape` must find a representation
-        ///    pair a guard could bridge — the SAME function `crate::ir_lower::checked_downcast`
-        ///    consults before emitting, so acceptance cannot outrun emission.
+        ///    pair a guard could bridge, and `shape_is_guardable_at` must say `position` guards
+        ///    that pair — the SAME two functions `crate::ir_lower::checked_downcast` consults
+        ///    before emitting, so acceptance cannot outrun emission. Accepting a flow the emitter
+        ///    declines does not produce a compile error, it produces an unguarded representation
+        ///    change at runtime.
         /// 2. `expected` must offer at least one NAMED class/interface arm. A bare `object`
         ///    (`Object("")`) target is not an `instanceof` target: no chain can be built for it.
-        /// 3. `actual` must be an object the guard could plausibly narrow: a bare `object` source
-        ///    (a raw object pointer of unknown class — every named arm is testable against it), or
-        ///    a concrete `Object(B)` that is a proper ANCESTOR of some declared arm. `Mixed` and
-        ///    `Union` sources deliberately return false here: `Mixed` already flows through
-        ///    `gradual_boundary_accepts`, and union sources need the union-arm analysis that
-        ///    belongs with their own emitter work.
+        /// 3. `expected` must be a declaration PHP MATCHES rather than CONVERTS INTO, for this
+        ///    source shape (`guard_is_php_faithful`) — a declared `string|D` weak-coerces an int,
+        ///    a float, a bool or a `Stringable` object, and no arm test can see a conversion.
+        /// 4. `actual` must be a value the guard could plausibly narrow:
+        ///    - a bare `object` source (a raw object pointer of unknown class — every named arm is
+        ///      a legitimate `instanceof` target against it);
+        ///    - a concrete `Object(B)` that is a proper ANCESTOR of some declared arm;
+        ///    - a `Union` whose every member the chain can route by tag or by `instanceof`, and at
+        ///      least one of whose members could satisfy `expected`. The all-members leg is the
+        ///      load-bearing one: it is what proves the members that do NOT match are RULED OUT by
+        ///      a runtime test rather than bit-read as the wrong representation.
+        ///    `Mixed` returns false: it already flows through `gradual_boundary_accepts`, and
+        ///    widening here would double-permit it.
         ///
         /// Only meant to be tried as a fallback AFTER normal covariant acceptance
         /// (`require_compatible_arg_type`) has already failed for this `(expected, actual)` pair —
-        /// it does not special-case an `actual` that already satisfies `expected` normally.
-        pub(crate) fn checked_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
-            if crate::types::checked_downcast::downcast_guard_shape(expected, actual).is_none() {
+        /// it does not special-case an `actual` that already satisfies `expected` normally, which
+        /// is why the `Union` leg has to ask `type_accepts` about its members itself.
+        pub(crate) fn checked_downcast_guardable(
+            &self,
+            expected: &PhpType,
+            actual: &PhpType,
+            position: crate::types::checked_downcast::GuardPosition,
+        ) -> bool {
+            let Some(shape) = crate::types::checked_downcast::downcast_guard_shape(expected, actual)
+            else {
+                return false;
+            };
+            if !crate::types::checked_downcast::shape_is_guardable_at(shape, position) {
                 return false;
             }
             let declared_arms = crate::types::checked_downcast::declared_instanceof_targets(expected);
             if declared_arms.is_empty() {
                 return false;
             }
-            let PhpType::Object(actual_name) = actual else {
+            if !crate::types::checked_downcast::guard_is_php_faithful(expected, shape) {
                 return false;
-            };
-            // A bare `object` source is a raw object pointer whose class is unknown statically;
-            // every declared arm is a legitimate `instanceof` target for it, and the guard throws
-            // PHP's own `TypeError` when none matches.
-            if actual_name.is_empty() {
-                return true;
             }
-            declared_arms.iter().any(|declared_name| {
-                declared_name != actual_name
-                    && (self.is_subclass_of(declared_name, actual_name)
-                        || self.object_type_implements_interface(declared_name, actual_name))
-            })
+            match actual {
+                // A bare `object` source is a raw object pointer whose class is unknown
+                // statically; every declared arm is a legitimate `instanceof` target for it, and
+                // the guard throws PHP's own `TypeError` when none matches.
+                PhpType::Object(actual_name) if actual_name.is_empty() => true,
+                PhpType::Object(actual_name) => declared_arms.iter().any(|declared_name| {
+                    declared_name != actual_name
+                        && (self.is_subclass_of(declared_name, actual_name)
+                            || self.object_type_implements_interface(declared_name, actual_name))
+                }),
+                PhpType::Union(source_members) => {
+                    source_members
+                        .iter()
+                        .all(crate::types::checked_downcast::source_member_is_guard_routable)
+                        && source_members.iter().any(|member| {
+                            self.type_accepts(expected, member)
+                                || self.checked_downcast_guardable(expected, member, position)
+                        })
+                }
+                _ => false,
+            }
         }
 }
 

@@ -350,7 +350,11 @@ impl Checker {
                 // `IToStr`/`FToStr`/`__toString` string cast (for a `string` return) or boxes the
                 // value into a `Mixed` union return slot — so the PHP weak-mode value-boundary
                 // coercions are realized at the return boundary exactly as at a call argument.
-                if self.checked_downcast_guardable(expected, actual)
+                if self.checked_downcast_guardable(
+                    expected,
+                    actual,
+                    crate::types::checked_downcast::GuardPosition::Return,
+                )
                     || self.weak_boundary_coercion_accepts(expected, actual)
                 {
                     Ok(())

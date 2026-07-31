@@ -432,7 +432,11 @@ impl Checker {
     /// with two implementations is two predicates whose permissiveness unions — the shape that
     /// already cost this codebase a double free once.
     pub(crate) fn call_arg_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
-        self.checked_downcast_guardable(expected, actual)
+        self.checked_downcast_guardable(
+            expected,
+            actual,
+            crate::types::checked_downcast::GuardPosition::Argument,
+        )
     }
 
     /// Formats a parameter-count range as a human-readable string, e.g. `3` or `2 to 5`.

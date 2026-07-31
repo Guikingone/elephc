@@ -72,12 +72,16 @@ echo h(src(true));
     );
 }
 
-/// A union of unrelated object types into a concrete object parameter stays loud: object property
-/// access is by static offset, so a sibling class would read the wrong offset (a SIGSEGV risk).
-/// PHP raises a `TypeError` here too.
+/// SUPERSEDED by the checked downcast for UNION SOURCES: a union of unrelated object types into a
+/// concrete object parameter is accepted, because the boundary now emits a runtime guard. Property
+/// access is still by static offset — which is exactly why the guard's ok-edge re-materializes a
+/// raw object pointer with `Op::ObjectCast` — but a sibling class no longer reaches that offset:
+/// `instanceof RouteCollection` rules it out and throws PHP's own catchable `TypeError`, which is
+/// what PHP does with this program too. Runtime coverage of both arms lives in
+/// `tests/codegen/oop/checked_downcast_argument.rs`.
 #[test]
-fn test_object_union_into_sibling_object_parameter_stays_loud() {
-    expect_error(
+fn test_object_union_into_sibling_object_parameter_accepted_with_runtime_guard() {
+    expect_ok(
         r#"<?php
 class RouteCollection {}
 class Route {}
@@ -85,7 +89,6 @@ function add(RouteCollection $c): void {}
 function getIt(bool $b): RouteCollection|Route { return $b ? new RouteCollection() : new Route(); }
 add(getIt(true));
 "#,
-        "expects Object(\"RouteCollection\"), got Union([Object(\"RouteCollection\"), Object(\"Route\")])",
     );
 }
 

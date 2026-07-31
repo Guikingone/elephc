@@ -185,11 +185,17 @@ impl Checker {
     /// members).
     ///
     /// The supertype direction is deliberately excluded when both the target and the member are
-    /// object types: a union member that is a base class/interface of a concrete OBJECT target
-    /// is the unprovable base->derived direction (PHP TypeErrors, and elephc emits no runtime
-    /// instanceof guard), so it must fall through to the loud coercible check instead of
-    /// matching. Sound covariant object unions (union of subtypes into a common base) still
-    /// match via the subtype direction.
+    /// object types: a union member that is a base class/interface of a concrete OBJECT target is
+    /// the unprovable base->derived direction, so it must fall through to the loud coercible check
+    /// instead of matching here. Sound covariant object unions (union of subtypes into a common
+    /// base) still match via the subtype direction.
+    ///
+    /// That direction is no longer a dead end: at the positions that emit
+    /// `src/ir_lower/checked_downcast.rs`'s tag+instanceof chain (call arguments, returns) it is
+    /// admitted by the checked-downcast FALLBACK, `Checker::checked_downcast_guardable`, which
+    /// runs only after this predicate has said no. Widening BOTH would be two permissive branches
+    /// unioning their permissiveness — and this one also feeds positions that emit no guard at
+    /// all, so it stays exactly as strict as it is.
     fn gradual_union_flows_into(&self, expected: &PhpType, src_members: &[PhpType]) -> bool {
         // The gradual rule only loosens flows into a single concrete target. Union and Mixed
         // targets are already handled by the strict predicates that call this as a fallback.
@@ -200,9 +206,10 @@ impl Checker {
         for member in src_members {
             // The supertype direction (`type_accepts(member, expected)`) is only sound for
             // NON-object members: a union member that is a base class/interface of a concrete
-            // OBJECT target is the unprovable base->derived direction (PHP TypeErrors, and
-            // elephc emits no instanceof guard), so it must fall through to the coercible check
-            // (which is loud for objects) rather than matching.
+            // OBJECT target is the unprovable base->derived direction, so it must fall through to
+            // the coercible check (which is loud for objects) rather than matching. The guarded
+            // positions pick it up afterwards through `checked_downcast_guardable`; see this
+            // function's doc comment.
             let member_matches = self.type_accepts(expected, member)
                 || (self.type_accepts(member, expected)
                     && !matches!(
@@ -231,9 +238,19 @@ impl Checker {
     /// sentinel-return diagnostic, because a silent `false`→`0`/`""` coercion is the classic
     /// `strpos()`/`fgetc()` footgun (`0` is a valid offset).
     ///
-    /// OBJECT targets are excluded entirely (`_ => false`): elephc emits no runtime instanceof
-    /// guard at an object boundary, so a wrongly-typed extra member would be bit-read as the wrong
-    /// object (a SIGSEGV risk) and must stay loud.
+    /// OBJECT targets are excluded entirely (`_ => false`), and the reason has CHANGED. It used to
+    /// be that elephc emitted no runtime instanceof guard at an object boundary, so a wrongly-typed
+    /// extra member would be bit-read as the wrong object (a SIGSEGV risk). It now emits one —
+    /// `src/ir_lower/checked_downcast.rs` tests the declared arms by tag and by `instanceof` and
+    /// throws PHP's own catchable `TypeError` — so that precondition is gone.
+    ///
+    /// The exclusion stays for a different, narrower reason: this predicate is reached from
+    /// `require_compatible_arg_type`, which ALSO serves positions that emit no guard (property and
+    /// static-property stores), so widening it would grant permissiveness the emitter does not
+    /// back. The guarded positions get the object direction from the checked-downcast fallback
+    /// instead — `Checker::checked_downcast_guardable`, which is position-aware and consulted only
+    /// by call arguments and returns. A `false` member reaching an object target is therefore
+    /// still refused here, and still refused by the fallback whenever no guard could rule it out.
     fn gradual_other_member_coercible(&self, target: &PhpType, member: &PhpType) -> bool {
         if matches!(member, PhpType::Void | PhpType::Never | PhpType::Mixed) {
             return true;
