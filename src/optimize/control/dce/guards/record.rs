@@ -24,7 +24,7 @@ use super::super::state::{ConditionGuard, ExactGuard, GuardLiteral, GuardState, 
 ///
 /// Clears the variable from `truthy_vars`, `falsy_vars`, `bool_true_vars`,
 /// `bool_false_vars`, `exact_guards`, `excluded_guards`, `range_guards`,
-/// `relational_guards`, and any `condition_guards` that track the named variable.
+/// `integer_domain_vars`, `relational_guards`, and any `condition_guards` that track the named variable.
 /// Called when a variable is reassigned.
 pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.truthy_vars.retain(|known| known != name);
@@ -33,6 +33,7 @@ pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut Guar
     guards.bool_false_vars.retain(|known| known != name);
     guards.exact_guards.retain(|known| known.name != name);
     guards.excluded_guards.retain(|known| known.name != name);
+    guards.integer_domain_vars.retain(|known| known != name);
     guards.range_guards.retain(|known| known.name != name);
     guards.relational_guards.retain(|known| {
         let mentions_left = matches!(&known.left, RelSide::Var(v) if v == name);

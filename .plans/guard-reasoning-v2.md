@@ -48,7 +48,7 @@ guard lattice itself.
 
 Extend `src/optimize/control/dce/` so that:
 
-- integer relational guards accumulate into a per-variable **interval** fact,
+- proven-integer relational guards accumulate into a per-variable **interval** fact,
   and nested relational / strict-int / switch-case queries can be answered from
   that interval (not only from exact AST complement match);
 - pure relational / equality atoms between `Var|Lit` sides are recorded as
@@ -116,8 +116,10 @@ Add `range_guards: Vec<RangeGuard>` to `GuardState`.
 
 **Recording** (in `extend_guards`, after exact/excluded handling), when the
 condition is a pure relational `BinOp` with one `Variable` side and one
-`IntLiteral` side (either order), and the branch is taken **or** the inverse
-is total for that op:
+`IntLiteral` side (either order), and the variable already has a proven integer
+domain from an `int` parameter, an exact-int guard, or an existing range. Both
+branch polarities are then total; mixed, float, and string domains record no
+discrete interval:
 
 | Taken condition | Interval contribution |
 |---|---|
@@ -154,7 +156,9 @@ different domain); exclusions continue to work through `excluded_guards`.
 is impossible (same role excluded literals already play for single points).
 
 **Float / string relational ops:** do not create `RangeGuard`s. Keep recording
-them only as today's `condition_guards` complements when safe.
+them only as structural `condition_guards` / relational atoms when safe. In
+particular, taken-true float comparisons do not round strict bounds to adjacent
+integers, and taken-false comparisons do not synthesize a complement around NaN.
 
 ### 2. Relational / equality atoms (multi-variable)
 
@@ -180,8 +184,9 @@ Add `relational_guards: Vec<RelationalGuard>` to `GuardState`.
 **Recording gate:** both sides are `Variable` or `IntLiteral`; operator is
 relational or `===` / `!==`; condition is pure / non-throwing (same as
 `record_condition_guard`). Also record the safe complement via the existing
-`inverse_comparison_op` + `comparison_inverse_is_total` rules (refuse
-taken-false float-like cases; int relational inverses are total).
+`inverse_comparison_op` + `comparison_inverse_is_total` rules. Taken-true
+relations can always record their false complement; taken-false relational
+atoms invert only when both sides have proven integer domains, excluding NaN.
 
 **Loose `==` / `!=` between two variables:** record as `condition_guards` only
 (structural), not as `RelationalGuard`, to avoid inventing coercion theorems.
@@ -195,8 +200,10 @@ taken-false float-like cases; int relational inverses are total).
    `Var <op> n` / `n <op> Var` and discharge through the interval domain
    (or record a derived range on extend when the other side is a var).
 3. On `extend_guards` for `$y > $x` when `$x` already has exact/range int
-   facts, eagerly strengthen `$y`'s `RangeGuard` (and symmetrically). This is
-   the multi-variable → range bridge the ROADMAP wording implies.
+   facts, derive the structural `$y > int` atom. Eagerly strengthen `$y`'s
+   `RangeGuard` (and symmetrically) only when `$y` also has a proven integer
+   domain. This keeps exact substitution useful for mixed values without
+   claiming that a float such as `3.5` belongs to the discrete interval `[4,+∞)`.
 
 **Invalidation:** `clear_guards_for_name` drops every `RelationalGuard` that
 mentions the name (either side), same as `condition_guards`.
@@ -274,7 +281,9 @@ New files (or clearly named cases in a new `range_guards.rs` /
 7. **Multi-var relational + exact substitution:**
    `if ($x === 3) { if ($y > $x) { if ($y > 3) keep; if ($y <= 3) dead } }`.
 8. **Write invalidation:** assign to `$x` kills range + relational facts that
-   mention `$x`; unrelated `$y` facts remain.
+   mention `$x`; unrelated `$y` facts remain. Loop/backedge writes and
+   `foreach` key/value overwrites must be invalidated before optimizing the
+   reusable loop body.
 9. **NaN / float refusal regression:** taken-false `$f > 1.0` still must not
    assert `$f <= 1.0`; int path unchanged.
 10. **Impure / throwing condition:** call in condition still records nothing
@@ -287,7 +296,8 @@ Add `range_guards.rs` and `relational_guards.rs` (register in the guards
 (`$argc` / `$argv`) so AST constant folding does not erase the construct
 before DCE. Assert stdout and, for at least one range and one relational
 case, that a uniquely named dead marker string does not appear in the
-generated assembly.
+generated assembly. Range fixtures use typed `int` parameters and `$argc` at
+call sites so runtime opacity does not erase the explicit integer-domain proof.
 
 PHP cross-check (`ELEPHC_PHP_CHECK=1`) on the e2e fixtures that have pure PHP
 surface — optional but preferred for relational edge cases.
@@ -330,8 +340,8 @@ pub(super) struct RangeGuard { name: String, interval: IntInterval }
 // GuardState gains range_guards: Vec<RangeGuard>
 ```
 
-- [ ] Add types + default field; clear by name in `clear_guards_for_name`.
-- [ ] `cargo build` clean; commit `feat(optimize): add integer range facts to DCE GuardState`.
+- [x] Add types + default field; clear by name in `clear_guards_for_name`.
+- [x] `cargo build` clean; commit `feat(optimize): add integer range facts to DCE GuardState`.
 
 ### Task 2: Record int relational ranges in `extend_guards`
 
@@ -349,9 +359,9 @@ fn record_range_guard(guards: &mut GuardState, name: &str, contrib: IntInterval)
 // exact int recording also sets point interval
 ```
 
-- [ ] Write failing unit tests for nested `$x > 10` / `$x > 5` and `$x > 10` /
+- [x] Write failing unit tests for nested `$x > 10` / `$x > 5` and `$x > 10` /
   `$x <= 10` (the latter already passes via complements — keep as regression).
-- [ ] Run → FAIL on the transitive case; implement recording + point coupling
+- [x] Run → FAIL on the transitive case; implement recording + point coupling
   from exact int; PASS; commit `feat(optimize): record integer range guards from relational branches`.
 
 ### Task 3: Discharge ranges in `known_condition_value`
@@ -370,9 +380,9 @@ fn known_from_range(guards: &GuardState, condition: &Expr) -> Option<bool>;
 Prove nested int relational and `$x === n` / `$x !== n` when the interval
 entails a unique boolean. Do not prove loose `==`.
 
-- [ ] Failing tests for `$x >= 0` then `$x <= 0` then `$x === 1` dead /
+- [x] Failing tests for `$x >= 0` then `$x <= 0` then `$x === 1` dead /
   `$x === 0` keep; overflow refusal fixture.
-- [ ] Implement; PASS; commit `feat(optimize): prove nested conditions from integer range guards`.
+- [x] Implement; PASS; commit `feat(optimize): prove nested conditions from integer range guards`.
 
 ### Task 4: Switch + elseif consumption of ranges
 
@@ -384,12 +394,12 @@ entails a unique boolean. Do not prove loose `==`.
 - Test: unit range tests for switch / elseif; mirror patterns in
   `excluded_guards.rs` / `elseif_suffixes.rs`
 
-- [ ] Failing tests: outer `$x > 5` drops `case 0:`; elseif chain else sees
+- [x] Failing tests: outer `$x > 5` drops `case 0:`; elseif chain else sees
   `$x === 0`-equivalent via `< 0` false ∩ `> 0` false (if false-branch
   relational recording from Task 2 already intersects, assert the nested
   prune; otherwise extend false-branch interval recording carefully with
   totality rules).
-- [ ] Implement the minimum switch hook; PASS; commit `feat(optimize): prune switch int cases outside known ranges`.
+- [x] Implement the minimum switch hook; PASS; commit `feat(optimize): prune switch int cases outside known ranges`.
 
 ### Task 5: Relational atoms on `GuardState`
 
@@ -409,9 +419,9 @@ fn record_relational_guard(...);
 fn swap_rel(op: RelOp) -> RelOp; // for operand swap normalization
 ```
 
-- [ ] Failing test: `$x === $y` then `$x !== $y` pruned; write to `$x`
+- [x] Failing test: `$x === $y` then `$x !== $y` pruned; write to `$x`
   invalidates; impure condition ignored.
-- [ ] Implement record/clear/safe complement; PASS; commit `feat(optimize): record cross-variable relational guard atoms`.
+- [x] Implement record/clear/safe complement; PASS; commit `feat(optimize): record cross-variable relational guard atoms`.
 
 ### Task 6: Query atoms + exact/range substitution bridge
 
@@ -419,12 +429,12 @@ fn swap_rel(op: RelOp) -> RelOp; // for operand swap normalization
 - Modify: `src/optimize/control/dce/guards/eval.rs`, `record.rs`
 - Test: extend `relational_guards.rs`
 
-- [ ] Failing test: `$x === 3` then `$y > $x` then nested `$y <= 3` dead /
+- [x] Failing test: `$x === 3` then `$y > $x` then nested `$y <= 3` dead /
   `$y > 3` keep (requires either query-time substitution or eager range
-  strengthen on extend — prefer eager strengthen in `extend_guards` when the
-  other side becomes a concrete int interval, plus query-time structural /
-  swapped hits).
-- [ ] Implement; PASS; commit `feat(optimize): discharge relational guards via exact and range substitution`.
+  strengthen on extend — derive the substituted structural atom for any
+  domain, and strengthen the range only when the other variable is also
+  proven integer, plus query-time structural / swapped hits).
+- [x] Implement; PASS; commit `feat(optimize): discharge relational guards via exact and range substitution`.
 
 ### Task 7: Codegen e2e mirrors
 
@@ -433,10 +443,10 @@ fn swap_rel(op: RelOp) -> RelOp; // for operand swap normalization
 - Create: `tests/codegen/optimizer/dead_code_elimination/guards/relational_guards.rs`
 - Modify: guards `mod.rs` to register them
 
-- [ ] Port the highest-signal unit fixtures to `compile_and_run` with `$argc`
+- [x] Port the highest-signal unit fixtures to `compile_and_run` with `$argc`
   opacity; assert stdout + dead-marker assembly absence for one range and one
   relational case.
-- [ ] `cargo test --test codegen_tests range_guards` and
+- [x] `cargo test --test codegen_tests range_guards` and
   `… relational_guards` PASS; commit `test(optimize): e2e coverage for guard reasoning v2`.
 
 ### Task 8: Docs + ROADMAP + CHANGELOG
@@ -446,7 +456,7 @@ fn swap_rel(op: RelOp) -> RelOp; // for operand swap normalization
 - Modify: `ROADMAP.md` (Guard reasoning v2 → `[x]`)
 - Modify: `CHANGELOG.md` (`[Unreleased]`)
 
-- [ ] Update; `git diff --check`; commit `docs: guard reasoning v2 internals and ROADMAP`.
+- [x] Update; `git diff --check`; commit `docs: guard reasoning v2 internals and ROADMAP`.
 
 ## Focused verification (per implementation PR)
 
@@ -471,10 +481,11 @@ Widen only if a shared helper (`cfg.rs`, effect summaries) is touched.
 - **Ordering hazards:** Task 3 depends on 2; Task 4 depends on 3 (switch
   queries need discharge); Task 6 depends on 2+5 (substitution into ranges);
   Task 7 after unit green; Task 8 last.
-- **Soundness anchors:** reuse `comparison_inverse_is_total` for false-branch
-  complements; refuse `i64` overflow when shifting bounds; never invent float
-  intervals; invalidate on any write to a mentioned name; keep impure /
-  may-throw conditions unrecorded.
+- **Soundness anchors:** require a proven integer domain before creating a
+  discrete interval; require both relational sides to be integer before
+  inverting a taken-false atom; refuse `i64` overflow when shifting bounds;
+  never invent float/string intervals; invalidate on any write or `global`
+  rebinding of a mentioned name; keep impure / may-throw conditions unrecorded.
 - **Sibling isolation:** does not implement Exception-aware DCE v2 or
   Control-flow normalization v2; does not require EIR changes.
 - **PR hygiene:** no open PR currently implements this item (checked against

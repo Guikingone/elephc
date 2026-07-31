@@ -7,6 +7,7 @@
 //! Key details:
 //! - Runtime-unknown inputs keep the outer guards alive past AST folding; dead
 //!   marker strings must not appear in generated assembly.
+//! - Mixed int/float comparisons pin false-complement safety in the presence of NaN.
 //! - `$argc` is 1 when the compiled binary runs with no CLI arguments.
 
 use super::*;
@@ -99,4 +100,45 @@ run($argc, 9);
         !user_asm.contains("dead-relvar"),
         "dead substituted relational branch should be absent from assembly"
     );
+}
+
+/// Verifies false `$x > $y` does not imply `$x <= $y` when `$y` can be NaN.
+#[test]
+fn test_dead_code_elimination_keeps_false_relational_complement_for_nan() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_relational_nan_guard");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+function run(int $x, float $y) {
+    if ($x === 3) {
+        if ($x > $y) {
+            echo "outer";
+        } else {
+            if ($x <= $y) {
+                echo "wrong";
+            } else {
+                echo "correct";
+            }
+        }
+    }
+}
+
+run(3, NAN);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "correct");
+    assert!(user_asm.contains("wrong"));
+    assert!(user_asm.contains("correct"));
 }

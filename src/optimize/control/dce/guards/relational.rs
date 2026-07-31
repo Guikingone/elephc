@@ -7,10 +7,11 @@
 //!
 //! Key details:
 //! - Loose `==` / `!=` stay on structural `condition_guards` only (no coercion theorems).
-//! - Exact int facts on one side eagerly strengthen the other side's integer range.
+//! - Exact int facts on one side derive structural var/int atoms for the other side;
+//!   they strengthen its discrete range only when that variable is proven integer.
 //! - False-branch complements for relational ops between variables follow the same
-//!   NaN policy as condition complements: only recorded when already in an integer
-//!   domain or when the op is strict equality (total).
+//!   NaN policy as condition complements: only recorded when both sides already have
+//!   integer domains or when the op is strict equality (total).
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 
@@ -18,7 +19,10 @@ use super::super::state::{
     GuardLiteral, GuardState, IntInterval, RelOp, RelSide, RelationalGuard,
 };
 use super::eval::known_exact_guard;
-use super::range::{interval_from_relational, known_range_guard, record_range_guard};
+use super::range::{
+    has_integer_domain, interval_from_relational, known_range_guard, record_exact_int_range,
+    record_range_guard,
+};
 
 /// Converts a tracked `BinOp` into a `RelOp`.
 fn rel_op_from_binop(op: &BinOp) -> Option<RelOp> {
@@ -98,7 +102,7 @@ fn relational_inverse_is_safe(guards: &GuardState, left: &RelSide, op: RelOp, ri
     match op {
         RelOp::StrictEq | RelOp::StrictNotEq => true,
         RelOp::Lt | RelOp::Le | RelOp::Gt | RelOp::Ge => {
-            side_has_integer_domain(guards, left) || side_has_integer_domain(guards, right)
+            side_has_integer_domain(guards, left) && side_has_integer_domain(guards, right)
         }
     }
 }
@@ -107,10 +111,7 @@ fn relational_inverse_is_safe(guards: &GuardState, left: &RelSide, op: RelOp, ri
 fn side_has_integer_domain(guards: &GuardState, side: &RelSide) -> bool {
     match side {
         RelSide::Int(_) => true,
-        RelSide::Var(name) => {
-            known_range_guard(guards, name).is_some()
-                || matches!(known_exact_guard(guards, name), Some(GuardLiteral::Int(_)))
-        }
+        RelSide::Var(name) => has_integer_domain(guards, name),
     }
 }
 
@@ -171,9 +172,9 @@ fn side_exact_int(guards: &GuardState, side: &RelSide) -> Option<i64> {
     }
 }
 
-/// When one side of a holding relational atom is a concrete int, strengthen the
-/// other variable's integer range (the multi-variable → range bridge).
-fn strengthen_range_from_relational(
+/// When one side of a holding relational atom is a concrete int, derive a
+/// structural atom and strengthen an already-proven integer range when available.
+fn strengthen_from_relational(
     guards: &mut GuardState,
     left: &RelSide,
     op: RelOp,
@@ -185,35 +186,49 @@ fn strengthen_range_from_relational(
         if !relational_inverse_is_safe(guards, left, op, right) {
             return;
         }
-        strengthen_range_from_relational(guards, left, inverse_rel(op), right, true);
+        strengthen_from_relational(guards, left, inverse_rel(op), right, true);
         return;
     }
 
     match (left, right) {
         (RelSide::Var(name), _) => {
             if let Some(n) = side_exact_int(guards, right) {
-                if matches!(op, RelOp::StrictEq) {
-                    record_range_guard(guards, name, IntInterval::point(n));
-                } else if let Some(contrib) =
-                    interval_from_relational(&binop_from_rel_op(op), n, true)
-                {
-                    record_range_guard(guards, name, contrib);
-                }
+                strengthen_variable_from_exact(guards, name, op, n);
             }
         }
         (_, RelSide::Var(name)) => {
             if let Some(n) = side_exact_int(guards, left) {
-                let swapped = swap_rel(op);
-                if matches!(swapped, RelOp::StrictEq) {
-                    record_range_guard(guards, name, IntInterval::point(n));
-                } else if let Some(contrib) =
-                    interval_from_relational(&binop_from_rel_op(swapped), n, true)
-                {
-                    record_range_guard(guards, name, contrib);
-                }
+                strengthen_variable_from_exact(guards, name, swap_rel(op), n);
             }
         }
         _ => {}
+    }
+}
+
+/// Records a substituted `variable <op> int` atom and, when sound, its integer range.
+fn strengthen_variable_from_exact(
+    guards: &mut GuardState,
+    name: &str,
+    op: RelOp,
+    value: i64,
+) {
+    record_relational_guard(
+        guards,
+        RelSide::Var(name.to_string()),
+        op,
+        RelSide::Int(value),
+        true,
+    );
+
+    if matches!(op, RelOp::StrictEq) {
+        record_exact_int_range(guards, name, value);
+        return;
+    }
+    if !has_integer_domain(guards, name) {
+        return;
+    }
+    if let Some(contrib) = interval_from_relational(&binop_from_rel_op(op), value, true) {
+        record_range_guard(guards, name, contrib);
     }
 }
 
@@ -239,7 +254,7 @@ pub(super) fn extend_relational_guards(
     }
 
     record_relational_guard(guards, left.clone(), op, right.clone(), branch_taken);
-    strengthen_range_from_relational(guards, &left, op, &right, branch_taken);
+    strengthen_from_relational(guards, &left, op, &right, branch_taken);
 }
 
 /// Structural lookup of a recorded relational atom, including swapped forms.
@@ -324,6 +339,9 @@ fn known_from_substituted_var_int(
 
     match op {
         RelOp::StrictEq => {
+            if matches!((interval.lo, interval.hi), (Some(lo), Some(hi)) if lo == hi && lo == n) {
+                return Some(true);
+            }
             if interval.contains(n) {
                 None
             } else {
@@ -331,6 +349,9 @@ fn known_from_substituted_var_int(
             }
         }
         RelOp::StrictNotEq => {
+            if matches!((interval.lo, interval.hi), (Some(lo), Some(hi)) if lo == hi && lo == n) {
+                return Some(false);
+            }
             if interval.contains(n) {
                 None
             } else {

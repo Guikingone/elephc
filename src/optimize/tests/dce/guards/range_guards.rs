@@ -6,7 +6,8 @@
 //!
 //! Key details:
 //! - Covers transitive relational bounds, strict-int contradictions outside a
-//!   range, switch case pruning, overflow refusal, and write invalidation.
+//!   range, elseif refinement, switch case pruning, domain safety, overflow
+//!   refusal, and write invalidation.
 
 use super::*;
 
@@ -16,7 +17,7 @@ fn test_eliminate_dead_code_prunes_nested_if_from_transitive_range_guard() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
-            params: Vec::new(),
+            params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
@@ -61,7 +62,7 @@ fn test_eliminate_dead_code_prunes_strict_int_outside_intersected_range() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
-            params: Vec::new(),
+            params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
@@ -121,7 +122,7 @@ fn test_eliminate_dead_code_drops_switch_int_cases_outside_range() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
-            params: Vec::new(),
+            params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
@@ -174,7 +175,7 @@ fn test_eliminate_dead_code_refuses_overflowing_range_bound() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
-            params: Vec::new(),
+            params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
@@ -229,7 +230,7 @@ fn test_eliminate_dead_code_invalidates_range_guard_on_write() {
     let program = vec![Stmt::new(
         StmtKind::FunctionDecl {
             name: "main".into(),
-            params: Vec::new(),
+            params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
             param_attributes: Vec::new(),
             variadic: None,
             variadic_by_ref: false,
@@ -285,4 +286,185 @@ fn test_eliminate_dead_code_invalidates_range_guard_on_write() {
     };
     assert_eq!(nested_then, &vec![Stmt::echo(Expr::int_lit(7))]);
     assert_eq!(nested_else, &Some(vec![Stmt::echo(Expr::int_lit(8))]));
+}
+
+/// Verifies float parameters never acquire discrete integer bounds from relational guards.
+#[test]
+fn test_eliminate_dead_code_keeps_fractional_gap_branch_for_float_domain() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: vec![("x".into(), Some(TypeExpr::Float), None, false)],
+            param_attributes: vec![Vec::new()],
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::binop(Expr::var("x"), BinOp::Gt, Expr::int_lit(10)),
+                    then_body: vec![Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::binop(
+                                Expr::var("x"),
+                                BinOp::GtEq,
+                                Expr::int_lit(11),
+                            ),
+                            then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected outer if");
+    };
+    let StmtKind::If {
+        then_body: nested_then,
+        else_body: nested_else,
+        ..
+    } = &then_body[0].kind
+    else {
+        panic!("expected float-sensitive nested if to remain");
+    };
+    assert_eq!(nested_then, &vec![Stmt::echo(Expr::int_lit(7))]);
+    assert_eq!(nested_else, &Some(vec![Stmt::echo(Expr::int_lit(8))]));
+}
+
+/// Verifies cumulative false `elseif` bounds isolate zero for an integer parameter.
+#[test]
+fn test_eliminate_dead_code_uses_integer_ranges_across_elseif_false_prefix() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
+            param_attributes: vec![Vec::new()],
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::binop(Expr::var("x"), BinOp::Lt, Expr::int_lit(0)),
+                    then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                    elseif_clauses: vec![(
+                        Expr::binop(Expr::var("x"), BinOp::Gt, Expr::int_lit(0)),
+                        vec![Stmt::echo(Expr::int_lit(8))],
+                    )],
+                    else_body: Some(vec![Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::binop(
+                                Expr::var("x"),
+                                BinOp::StrictEq,
+                                Expr::int_lit(0),
+                            ),
+                            then_body: vec![Stmt::echo(Expr::int_lit(9))],
+                            elseif_clauses: Vec::new(),
+                            else_body: Some(vec![Stmt::echo(Expr::int_lit(10))]),
+                        },
+                        Span::dummy(),
+                    )]),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { else_body, .. } = &body[0].kind else {
+        panic!("expected if");
+    };
+    let StmtKind::If {
+        else_body: elseif_else,
+        ..
+    } = &else_body.as_ref().expect("expected rebuilt elseif")[0].kind
+    else {
+        panic!("expected elseif to be rebuilt as a nested if");
+    };
+    assert_eq!(elseif_else, &Some(vec![Stmt::echo(Expr::int_lit(9))]));
+}
+
+/// Verifies a `foreach` iteration variable cannot inherit the overwritten parameter's int range.
+#[test]
+fn test_eliminate_dead_code_invalidates_range_for_foreach_iteration_variable() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: vec![("x".into(), Some(TypeExpr::Int), None, false)],
+            param_attributes: vec![Vec::new()],
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: vec![Stmt::new(
+                StmtKind::If {
+                    condition: Expr::binop(Expr::var("x"), BinOp::Gt, Expr::int_lit(10)),
+                    then_body: vec![Stmt::new(
+                        StmtKind::Foreach {
+                            array: Expr::new(
+                                ExprKind::ArrayLiteral(vec![Expr::float_lit(10.5)]),
+                                Span::dummy(),
+                            ),
+                            key_var: None,
+                            value_var: "x".into(),
+                            value_by_ref: false,
+                            body: vec![Stmt::new(
+                                StmtKind::If {
+                                    condition: Expr::binop(
+                                        Expr::var("x"),
+                                        BinOp::GtEq,
+                                        Expr::int_lit(11),
+                                    ),
+                                    then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                                    elseif_clauses: Vec::new(),
+                                    else_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
+                                },
+                                Span::dummy(),
+                            )],
+                        },
+                        Span::dummy(),
+                    )],
+                    elseif_clauses: Vec::new(),
+                    else_body: None,
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[0].kind else {
+        panic!("expected outer if");
+    };
+    let StmtKind::Foreach { body, .. } = &then_body[0].kind else {
+        panic!("expected foreach");
+    };
+    assert!(matches!(body[0].kind, StmtKind::If { .. }));
 }

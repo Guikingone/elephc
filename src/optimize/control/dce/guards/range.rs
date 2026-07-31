@@ -8,10 +8,10 @@
 //! - `crate::optimize::control::dce::switches` for impossible int cases
 //!
 //! Key details:
-//! - Taken-true relational branches with an int literal establish or intersect ranges.
-//! - False-branch inverse bounds are applied only when the variable already has an
-//!   integer domain fact (exact int or an existing range), matching NaN conservatism
-//!   for unconstrained float-typed values.
+//! - Relational branches establish ranges only for variables whose integer domain is
+//!   already proven by a declaration, exact guard, or existing range.
+//! - This domain gate preserves PHP float gaps, NaN behavior, and mixed/string comparison
+//!   semantics instead of treating every relationally compared value as a discrete int.
 //! - Overflowing bound shifts (`>` at `i64::MAX`, `<` at `i64::MIN`) refuse to record.
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
@@ -114,13 +114,11 @@ pub(in crate::optimize::control::dce) fn known_range_guard<'a>(
         .map(|known| &known.interval)
 }
 
-/// Returns whether `name` already carries an integer-domain fact that makes
-/// false-branch relational inverses safe to apply.
-fn has_integer_domain(guards: &GuardState, name: &str) -> bool {
-    if known_range_guard(guards, name).is_some() {
-        return true;
-    }
-    matches!(known_exact_guard(guards, name), Some(GuardLiteral::Int(_)))
+/// Returns whether `name` carries a path-local proof that its value is an integer.
+pub(super) fn has_integer_domain(guards: &GuardState, name: &str) -> bool {
+    guards.has_integer_domain(name)
+        || known_range_guard(guards, name).is_some()
+        || matches!(known_exact_guard(guards, name), Some(GuardLiteral::Int(_)))
 }
 
 /// Intersects `contrib` into the range fact for `name`, or installs it when absent.
@@ -148,6 +146,7 @@ pub(super) fn record_range_guard(guards: &mut GuardState, name: &str, contrib: I
 /// Couples an exact integer literal fact to a point range for `name`.
 pub(super) fn record_exact_int_range(guards: &mut GuardState, name: &str, value: i64) {
     // Exact clears other facts for the name first; replace any prior range.
+    guards.record_integer_domain(name);
     guards.range_guards.retain(|known| known.name != name);
     guards.range_guards.push(RangeGuard {
         name: name.to_string(),
@@ -161,8 +160,8 @@ pub(super) fn extend_range_guards(guards: &mut GuardState, condition: &Expr, bra
         return;
     };
 
-    if !branch_taken && !has_integer_domain(guards, name) {
-        // Unconstrained false-branch relational inverses are not total under NaN.
+    if !has_integer_domain(guards, name) {
+        // A mixed/float/string value cannot soundly use a discrete integer interval.
         return;
     }
 
@@ -284,8 +283,9 @@ fn interval_entails_relational(interval: IntInterval, op: &BinOp, n: i64) -> Opt
 
 /// Proves a nested condition from integer range facts when every in-range int agrees.
 ///
-/// Strict equality is only proved **false** when `n` lies outside the interval;
-/// proving `===` true stays with `exact_guards` (float `0.0` vs int `0`).
+/// Strict equality is proved true only for a point interval equal to `n`, and
+/// false when `n` lies outside the interval. Every stored range has an integer
+/// domain proof, so point equality cannot confuse float `0.0` with int `0`.
 pub(in crate::optimize::control::dce) fn known_from_range(
     guards: &GuardState,
     condition: &Expr,
@@ -316,8 +316,11 @@ pub(in crate::optimize::control::dce) fn known_from_range(
     };
 
     let interval = *known_range_guard(guards, name)?;
+    if matches!((interval.lo, interval.hi), (Some(lo), Some(hi)) if lo == hi && lo == compared) {
+        return Some(expects_equal);
+    }
     if interval.contains(compared) {
-        // Inside the range: cannot prove === true from a range alone (float safety).
+        // A non-point interval containing the literal does not decide strict equality.
         return None;
     }
 
