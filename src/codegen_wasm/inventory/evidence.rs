@@ -48,6 +48,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::IAdd | Op::ICheckedAdd => &["integer `+`"],
         Op::ISub | Op::ICheckedSub => &["integer `-`"],
         Op::IMul | Op::ICheckedMul => &["integer `*`"],
+        Op::MixedNumericBinop => &["`+`, `-`, or `*` on operands typed only at runtime"],
         Op::IDiv => &["integer operands to PHP `/`"],
         Op::ISDiv => &["integer `intdiv()`"],
         Op::ISMod => &["integer `%`"],
@@ -153,6 +154,11 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
             &["codegen_wasm::tests::checked_integer_arithmetic_promotes_overflow_to_float"]
         }
+        Op::MixedNumericBinop => &[
+            "codegen_wasm::tests::mixed_numeric_binop_matches_php_result_typing",
+            "codegen::cli::test_cli_wasm_mixed_numeric_arithmetic_matches_php",
+            "codegen::cli::test_cli_wasm_mixed_numeric_string_diagnostics",
+        ],
         Op::IShl | Op::IShrA => {
             &["codegen_wasm::tests::integer_shifts_match_php_at_word_boundaries"]
         }
@@ -264,6 +270,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => {
             "codegen_wasm::inst::lower_checked_int_binop"
         }
+        Op::MixedNumericBinop => "codegen_wasm::inst::lower_mixed_numeric_binop",
         Op::IShl | Op::IShrA => "codegen_wasm::inst::lower_int_shift",
         Op::ISDiv => "codegen_wasm::inst::lower_signed_int_div",
         Op::ISMod => "codegen_wasm::inst::lower_signed_int_mod",
@@ -385,6 +392,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::MixedTagOf
         | Op::MixedUnbox
         | Op::ArrayToMixed
+        | Op::MixedNumericBinop
         | Op::HashToMixed => "mixed",
         Op::StrConcat | Op::ConcatReset | Op::StrLen => "string",
         Op::ArrayNew

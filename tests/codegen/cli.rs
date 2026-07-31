@@ -1625,10 +1625,10 @@ unset($values[$key]);
             ),
             "PHP {version}: {stderr}"
         );
-        assert!(
-            stderr.contains("ref-cell store value"),
-            "PHP {version}: checked arithmetic must not narrow an escaping ref cell: {stderr}"
-        );
+        // Checked arithmetic through an escaping ref cell no longer produces a shape
+        // rejection: the capture widens to `Mixed`, so the store and the loads agree and
+        // the overflow promotion survives. `test_by_ref_capture_preserves_integer_overflow_promotion`
+        // owns that behavior now.
         assert!(
             stderr.contains(
                 "float associative keys require exact profile-specific implicit-conversion diagnostics"
@@ -1640,6 +1640,155 @@ unset($values[$key]);
             "PHP {version} rejection must publish no artifact"
         );
     }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies WASM arithmetic over boxed Mixed operands matches php-src.
+///
+/// `MixedNumericBinop` carries PHP's numeric semantics for values whose type is only
+/// known at runtime: integer-overflow promotion, `bool` and `null` as integers, and the
+/// numeric-string rules, where the *form* decides the result type — `"7" + 5` is an
+/// integer while `"7.0" + 5` is a double. A string with only a numeric prefix warns and
+/// contributes that prefix; one with none is a PHP `TypeError`.
+#[test]
+fn test_cli_wasm_mixed_numeric_arithmetic_matches_php() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_numeric");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function box(mixed $v): mixed { return $v; }
+echo box(2) + 5, "\n";
+echo box(1.5) + 5, "\n";
+echo box(true) + 5, "\n";
+echo box(null) + 5, "\n";
+echo box("7") + 5, "\n";
+echo box("7.0") + 5, "\n";
+echo box("7e2") + 5, "\n";
+echo box(" 7") + 5, "\n";
+echo box("7 ") + 5, "\n";
+echo box("007") + 5, "\n";
+echo box("+7") + 5, "\n";
+echo box("-7") + 5, "\n";
+echo box(".5") + 5, "\n";
+echo box(9223372036854775807) + 5, "\n";
+echo box("9223372036854775808") + 5, "\n";
+echo box("7") * 3, "\n";
+echo box(10) - box(3), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile mixed numeric arithmetic to WASM");
+    assert!(
+        output.status.success(),
+        "mixed numeric compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run mixed numeric arithmetic under Wasmer");
+    assert!(
+        run.status.success(),
+        "mixed numeric arithmetic trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // Every line is php-src 8.5's own output for the same program.
+    let expected = concat!(
+        "7\n", "6.5\n", "6\n", "5\n", "12\n", "12\n", "705\n", "12\n", "12\n", "12\n",
+        "12\n", "-2\n", "5.5\n", "9.2233720368548E+18\n", "9.2233720368548E+18\n",
+        "21\n", "7\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    assert!(
+        run.stderr.is_empty(),
+        "well-formed operands must not diagnose: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a string carrying only a numeric prefix warns, and a non-numeric one is fatal.
+#[test]
+fn test_cli_wasm_mixed_numeric_string_diagnostics() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_numeric_diag");
+
+    let leading = dir.join("leading.php");
+    fs::write(
+        &leading,
+        "<?php\nfunction box(mixed $v): mixed { return $v; }\necho box(\"7abc\") + 5, \"\\n\";\n",
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&leading)
+        .output()
+        .expect("failed to compile the leading-numeric fixture");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(dir.join("leading.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the leading-numeric fixture");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "12\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("A non-numeric value encountered"),
+        "a numeric prefix must warn: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let fatal = dir.join("fatal.php");
+    fs::write(
+        &fatal,
+        "<?php\nfunction box(mixed $v): mixed { return $v; }\necho box(\"abc\") + 5, \"\\n\";\n",
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&fatal)
+        .output()
+        .expect("failed to compile the non-numeric fixture");
+    assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(dir.join("fatal.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the non-numeric fixture");
+    assert_eq!(
+        run.status.code(),
+        Some(255),
+        "a non-numeric operand is an uncaught TypeError: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("Unsupported operand types"),
+        "{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -1697,6 +1846,32 @@ fn test_cli_strict_types_refuses_scalar_argument_coercion() {
                     String::from_utf8_lossy(&output.stderr)
                 );
             }
+        }
+    }
+
+    // The same gate gates every typed write, not just arguments: PHP applies strict
+    // typing to a typed property assignment and to a declared return type as well.
+    let sites = [
+        ("class C { public int $v = 0; } $o = new C(); $o->v = true; echo 1;", "property"),
+        ("function f(): int { return true; } echo f();", "return type"),
+    ];
+    for (source, site) in sites {
+        for strict in [false, true] {
+            let declare = if strict { "declare(strict_types=1);" } else { "" };
+            let php_path = dir.join("main.php");
+            fs::write(&php_path, format!("<?php\n{declare}\n{source}\n")).unwrap();
+
+            let output = elephc_cli_command(&dir)
+                .arg("--check")
+                .arg(&php_path)
+                .output()
+                .expect("failed to type-check the typed-write fixture");
+            assert_eq!(
+                output.status.success(),
+                !strict,
+                "strict={strict} bool at an int {site}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
         }
     }
 

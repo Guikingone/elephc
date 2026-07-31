@@ -84,6 +84,12 @@ const WARN_SUFFIX: &[u8] = b"\n";
 const WARN_FLOAT_NOT_REPRESENTABLE_PREFIX: &[u8] = b"Warning: The float ";
 const WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX: &[u8] =
     b" is not representable as an int, cast occurred\n";
+/// Arithmetic on a string carrying only a numeric prefix warns and uses the prefix.
+const WARN_NON_NUMERIC_VALUE: &[u8] = b"Warning: A non-numeric value encountered\n";
+/// Arithmetic on a wholly non-numeric string is a PHP `TypeError`. Reported as an
+/// uncaught fatal until this target gains exception support.
+const ERR_UNSUPPORTED_OPERAND: &[u8] =
+    b"PHP Fatal error: Uncaught TypeError: Unsupported operand types\n";
 
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
@@ -116,7 +122,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + crate::ir::ARRAY_OFFSET_ON_NULL_WARNING_PHP82.len() as u32
     + crate::ir::ARRAY_OFFSET_ON_NULL_WARNING.len() as u32
     + WARN_FLOAT_NOT_REPRESENTABLE_PREFIX.len() as u32
-    + WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX.len() as u32;
+    + WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX.len() as u32
+    + WARN_NON_NUMERIC_VALUE.len() as u32
+    + ERR_UNSUPPORTED_OPERAND.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -227,6 +235,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         crate::ir::ARRAY_OFFSET_ON_NULL_WARNING.as_bytes(),
         WARN_FLOAT_NOT_REPRESENTABLE_PREFIX,
         WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX,
+        WARN_NON_NUMERIC_VALUE,
+        ERR_UNSUPPORTED_OPERAND,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -349,12 +359,14 @@ fn emit_undefined_array_key_warning_runtime(
     wm: &mut WatModule,
     offsets: &[(u32, u32)],
 ) {
-    debug_assert_eq!(offsets.len(), 7);
+    debug_assert_eq!(offsets.len(), 9);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (quote_ptr, quote_len) = offsets[1];
     let (suffix_ptr, suffix_len) = offsets[2];
     let (float_prefix_ptr, float_prefix_len) = offsets[5];
     let (float_suffix_ptr, float_suffix_len) = offsets[6];
+    let (non_numeric_ptr, non_numeric_len) = offsets[7];
+    let (operand_ptr, operand_len) = offsets[8];
     let (offset_on_null_ptr, offset_on_null_len) =
         if crate::codegen_support::runtime::array_offset_on_null_warning()
             == crate::ir::ARRAY_OFFSET_ON_NULL_WARNING_PHP82
@@ -395,6 +407,17 @@ fn emit_undefined_array_key_warning_runtime(
   (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (local.get $len))  ;; the float text itself
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_suffix_ptr}) (i32.const {float_suffix_len})))  ;; " is not representable as an int, cast occurred\n""#
     ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_non_numeric_value
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {non_numeric_ptr}) (i32.const {non_numeric_len})))"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fatal_unsupported_operand
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {operand_ptr}) (i32.const {operand_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:unsupported-operand-fatal-exit
+)"#
+    ));
     if matches!(
         crate::codegen_support::compile_php_version(),
         crate::web_prelude::PhpVersion::Php85
@@ -403,6 +426,7 @@ fn emit_undefined_array_key_warning_runtime(
         // depends on the warning helper above, which only command modules carry.
         wm.add_raw_func(super::float::RT_FLOAT_TO_INT_WARN);
     }
+    super::mixed_numeric::emit_mixed_numeric_runtime(wm);
 }
 
 /// Repeatedly invokes WASI `fd_write` until every requested byte is written.

@@ -24,8 +24,8 @@ use super::values::WasmRepr;
 use super::wat::ValType;
 use super::WasmError;
 use crate::ir::{
-    CmpPredicate, DataId, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalSlotId, Op,
-    Ownership, RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
+    CmpPredicate, DataId, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalSlotId,
+    MixedNumericOp, Op, Ownership, RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 use std::collections::HashMap;
@@ -60,6 +60,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ICheckedAdd => lower_checked_int_binop(ctx, &inst, "add"),
         Op::ICheckedSub => lower_checked_int_binop(ctx, &inst, "sub"),
         Op::ICheckedMul => lower_checked_int_binop(ctx, &inst, "mul"),
+        Op::MixedNumericBinop => lower_mixed_numeric_binop(ctx, &inst),
         Op::IBitAnd => lower_int_binop(ctx, &inst, "i64.and"),
         Op::IBitOr => lower_int_binop(ctx, &inst, "i64.or"),
         Op::IBitXor => lower_int_binop(ctx, &inst, "i64.xor"),
@@ -801,6 +802,98 @@ fn emit_runtime_failure(ctx: &mut FnCtx, failure_code: i32, reason: &str) {
 }
 
 /// Lowers PHP integer add/subtract/multiply with overflow promotion to a boxed float.
+/// Lowers `MixedNumericBinop`: PHP `+`, `-`, or `*` over two boxed Mixed operands.
+///
+/// Both operands are already `Mixed` cells, so the whole computation — operand
+/// classification, PHP's numeric-string rules, integer-overflow promotion, and boxing
+/// the result — lives in `__rt_mixed_numeric_add/sub/mul`. The helper returns an owned
+/// cell whose tag the caller observes at runtime.
+fn lower_mixed_numeric_binop(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let helper = match inst.immediate {
+        Some(Immediate::MixedNumericOp(MixedNumericOp::Add)) => "$__rt_mixed_numeric_add",
+        Some(Immediate::MixedNumericOp(MixedNumericOp::Sub)) => "$__rt_mixed_numeric_sub",
+        Some(Immediate::MixedNumericOp(MixedNumericOp::Mul)) => "$__rt_mixed_numeric_mul",
+        _ => {
+            return Err(WasmError::Unsupported(
+                "mixed numeric binop without a MixedNumericOp immediate".to_string(),
+            ));
+        }
+    };
+    let lhs = ctx.fresh_temp(ValType::I32);
+    let rhs = ctx.fresh_temp(ValType::I32);
+    let lhs_owned = emit_operand_as_mixed(ctx, operand(inst, 0)?)?;
+    ctx.fb.ins(&format!("local.set {}", lhs), "left operand cell");
+    let rhs_owned = emit_operand_as_mixed(ctx, operand(inst, 1)?)?;
+    ctx.fb.ins(&format!("local.set {}", rhs), "right operand cell");
+    ctx.fb.ins(&format!("local.get {}", lhs), "left operand cell");
+    ctx.fb.ins(&format!("local.get {}", rhs), "right operand cell");
+    ctx.fb
+        .ins(&format!("call {}", helper), "PHP arithmetic over boxed Mixed operands");
+    store_result(ctx, inst)?;
+    // Release only the cells this lowering allocated; an operand that was already a
+    // Mixed value stays owned by whoever produced it.
+    if lhs_owned {
+        ctx.fb.ins(&format!("local.get {}", lhs), "temporary left cell");
+        ctx.fb.ins("call $__rt_decref_mixed", "release the boxed left operand");
+    }
+    if rhs_owned {
+        ctx.fb.ins(&format!("local.get {}", rhs), "temporary right cell");
+        ctx.fb.ins("call $__rt_decref_mixed", "release the boxed right operand");
+    }
+    Ok(())
+}
+
+/// Pushes `value` as a boxed Mixed pointer, boxing a scalar operand when needed.
+///
+/// Returns whether a fresh cell was allocated, so the caller releases exactly what it
+/// created. `MixedNumericBinop` mixes representations freely — `$n + 3` reaches the
+/// backend as a Mixed cell and a raw `i64` — and the runtime helper takes two cells.
+fn emit_operand_as_mixed(ctx: &mut FnCtx, value: ValueId) -> Result<bool> {
+    if ctx.function.value(value).map(|v| v.ir_type) == Some(IrType::Heap(IrHeapKind::Mixed)) {
+        ctx.emit_load_value(value)?;
+        return Ok(false);
+    }
+    let php = ctx.function.value(value).map(|v| v.php_type.codegen_repr());
+    match ctx.value_repr(value)?.clone() {
+        WasmRepr::I64(local) => {
+            let tag = match php {
+                Some(PhpType::Bool) => 3,
+                Some(PhpType::Void) => 8,
+                _ => 0,
+            };
+            ctx.fb
+                .ins(&format!("i64.const {}", tag), "mixed tag (int/bool/null)");
+            ctx.fb.ins(&format!("local.get {}", local), "scalar -> lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb
+                .ins("call $__rt_mixed_from_value", "box the scalar operand");
+        }
+        WasmRepr::F64(local) => {
+            ctx.fb.ins("i64.const 2", "mixed tag (float)");
+            ctx.fb.ins(&format!("local.get {}", local), "float value");
+            ctx.fb.ins("i64.reinterpret_f64", "float bits -> lo");
+            ctx.fb.ins("i64.const 0", "hi unused");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box the float operand");
+        }
+        WasmRepr::Str { ptr, len } => {
+            ctx.fb.ins("i64.const 1", "mixed tag (string)");
+            ctx.fb
+                .ins(&format!("local.get {}", ptr), "string pointer -> lo");
+            ctx.fb.ins("i64.extend_i32_u", "widen the pointer");
+            ctx.fb.ins(&format!("local.get {}", len), "string length -> hi");
+            ctx.fb.ins("i64.extend_i32_u", "widen the length");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box the string operand");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "mixed numeric operand representation {:?}",
+                other
+            )));
+        }
+    }
+    Ok(true)
+}
+
 fn lower_checked_int_binop(
     ctx: &mut FnCtx,
     inst: &Instruction,

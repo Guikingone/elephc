@@ -4798,6 +4798,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::Release
         | Op::Move
         | Op::Borrow
+        | Op::MixedNumericBinop
         | Op::Nop => true,
         Op::ConstClassName
         | Op::ConstEnumCase
@@ -4815,7 +4816,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::ReflectionStaticPropertyInitialized
         | Op::IPow
         | Op::FPow
-        | Op::MixedNumericBinop
         | Op::StrEq
         | Op::StrCmp
         | Op::StrLooseEq

@@ -8848,11 +8848,12 @@ fn lower_closure_with_context(
                     ctx.local_type(capture).codegen_repr(),
                     PhpType::Int | PhpType::Float
                 )
+                && body_promotes_variable(body, capture)
             {
-                // A by-reference alias can be given any PHP type through the shared
-                // cell, so a narrow scalar payload is unsound. Checked arithmetic makes
-                // that reachable without any reassignment: `$n += 1` on `PHP_INT_MAX`
-                // produces a float, and an `Int` cell silently discarded the promotion.
+                // Checked arithmetic through the shared cell can promote an integer to a
+                // float — `$n += 1` on `PHP_INT_MAX` — and an `Int` payload silently
+                // discarded that. Widen only when the body actually performs such
+                // arithmetic: an alias merely reassigned keeps its narrow, cheaper cell.
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
             } else {
@@ -8927,6 +8928,78 @@ fn lower_closure_with_context(
         ctx.set_local_logical_type(capture, PhpType::Callable);
     }
     closure
+}
+
+/// Returns true when `body` performs arithmetic on `$name` that PHP can promote to float.
+///
+/// `+`, `-`, and `*` on integers overflow into a float, so a cell holding `$name` must be
+/// able to carry either. `++`/`--` and the compound assignments both reach here, the
+/// latter as an ordinary `Assign` whose value is a `BinaryOp` reading the same variable.
+/// Comparisons, concatenation, and plain reassignment cannot promote and are ignored, so
+/// a capture only widens when it must.
+fn body_promotes_variable(body: &[Stmt], name: &str) -> bool {
+    body.iter().any(|stmt| stmt_promotes_variable(stmt, name))
+}
+
+/// Returns true when one statement, or any body it owns, promotes `$name`.
+fn stmt_promotes_variable(stmt: &Stmt, name: &str) -> bool {
+    let promoting_value = |target: &str, value: &Expr| {
+        target == name && expr_promotes_variable(value, name)
+    };
+    match &stmt.kind {
+        StmtKind::Assign { name: target, value, .. } => promoting_value(target, value),
+        StmtKind::ExprStmt(expr) | StmtKind::Echo(expr) | StmtKind::Return(Some(expr)) => {
+            expr_promotes_variable(expr, name)
+        }
+        StmtKind::If {
+            condition,
+            then_body,
+            elseif_clauses,
+            else_body,
+        } => {
+            expr_promotes_variable(condition, name)
+                || body_promotes_variable(then_body, name)
+                || elseif_clauses.iter().any(|(condition, body)| {
+                    expr_promotes_variable(condition, name) || body_promotes_variable(body, name)
+                })
+                || else_body
+                    .as_ref()
+                    .is_some_and(|body| body_promotes_variable(body, name))
+        }
+        StmtKind::While { condition, body } => {
+            expr_promotes_variable(condition, name) || body_promotes_variable(body, name)
+        }
+        StmtKind::DoWhile { body, condition } => {
+            expr_promotes_variable(condition, name) || body_promotes_variable(body, name)
+        }
+        StmtKind::For { body, .. } | StmtKind::Foreach { body, .. } => {
+            body_promotes_variable(body, name)
+        }
+        StmtKind::Synthetic(body) => body_promotes_variable(body, name),
+        _ => false,
+    }
+}
+
+/// Returns true when an expression promotes `$name` through arithmetic or a step operator.
+fn expr_promotes_variable(expr: &Expr, name: &str) -> bool {
+    match &expr.kind {
+        ExprKind::PreIncrement(target)
+        | ExprKind::PostIncrement(target)
+        | ExprKind::PreDecrement(target)
+        | ExprKind::PostDecrement(target) => target == name,
+        ExprKind::BinaryOp { left, op, right } => {
+            (matches!(op, BinOp::Add | BinOp::Sub | BinOp::Mul)
+                && (reads_variable(left, name) || reads_variable(right, name)))
+                || expr_promotes_variable(left, name)
+                || expr_promotes_variable(right, name)
+        }
+        _ => false,
+    }
+}
+
+/// Returns true when an expression reads `$name` directly.
+fn reads_variable(expr: &Expr, name: &str) -> bool {
+    matches!(&expr.kind, ExprKind::Variable(target) if target == name)
 }
 
 /// Returns true when a statement body contains an `eval(...)` call.

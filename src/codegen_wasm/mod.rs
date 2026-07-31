@@ -35,6 +35,7 @@ mod inst;
 mod inst_hash;
 mod methods;
 mod mixed;
+mod mixed_numeric;
 mod npm;
 mod objects;
 mod plan;
@@ -144,8 +145,8 @@ mod tests {
     use crate::codegen::Emit;
     use crate::ir::{
         Builder, CmpPredicate, DataId, Function, FunctionParam, Immediate, IrHeapKind, IrType,
-        LocalKind, LocalSlotId, Module, Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator,
-        ValueId,
+        LocalKind, LocalSlotId, MixedNumericOp, Module, Op, Ownership, RuntimeCallTarget,
+        RuntimeFnId, Terminator, ValueId,
     };
     use crate::parser::ast::{Expr, ExprKind};
     use crate::span::Span;
@@ -5301,6 +5302,101 @@ mod tests {
         module.add_function(function);
         if let Some(output) = run_main(&module) {
             assert_eq!(output, "000222");
+        }
+    }
+
+    /// Verifies `Op::MixedNumericBinop` lowers and follows PHP's result typing.
+    ///
+    /// Both operands are boxed, so the result tag is decided at runtime: two integers
+    /// stay an integer (tag 0) unless the operation overflows, and any float operand
+    /// makes the result a double (tag 2). Echoing the tag proves the runtime helper
+    /// chose the same representation php-src does.
+    #[test]
+    fn mixed_numeric_binop_matches_php_result_typing() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            // (op, lhs, rhs as float?) -> expected tag: 0 = int, 2 = double.
+            let cases = [
+                (MixedNumericOp::Add, 10i64, false),
+                (MixedNumericOp::Sub, 10, false),
+                (MixedNumericOp::Mul, 6, false),
+                (MixedNumericOp::Add, i64::MAX, false),
+                (MixedNumericOp::Add, 10, true),
+            ];
+            for (op, lhs, rhs_is_float) in cases {
+                let lhs = builder.emit_const_i64(lhs);
+                let lhs = builder
+                    .emit(
+                        Op::MixedBox,
+                        vec![lhs],
+                        None,
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .expect("boxed left operand");
+                let rhs = if rhs_is_float {
+                    builder.emit_const_f64(0.5)
+                } else {
+                    builder.emit_const_i64(7)
+                };
+                let result = builder
+                    .emit(
+                        Op::MixedNumericBinop,
+                        vec![lhs, rhs],
+                        Some(Immediate::MixedNumericOp(op)),
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .expect("mixed numeric binop produces a mixed value");
+                let tag = builder
+                    .emit(
+                        Op::MixedTagOf,
+                        vec![result],
+                        None,
+                        IrType::I64,
+                        PhpType::Int,
+                        Ownership::NonHeap,
+                    )
+                    .expect("mixed tag produces an integer");
+                let _ = builder.emit(
+                    Op::EchoValue,
+                    vec![tag],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                let _ = builder.emit(
+                    Op::Release,
+                    vec![result],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+                let _ = builder.emit(
+                    Op::Release,
+                    vec![lhs],
+                    None,
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            }
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+        if let Some(output) = run_main(&module) {
+            // int, int, int, overflow -> double, float operand -> double
+            assert_eq!(output, "00022");
         }
     }
 

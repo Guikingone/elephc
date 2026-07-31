@@ -305,9 +305,9 @@
     },
     "op": {
       "total": 236,
-      "supported": 98,
+      "supported": 99,
       "excluded": 17,
-      "missing": 121,
+      "missing": 120,
       "rows": [
         {
           "name": "const_i64",
@@ -1264,16 +1264,23 @@
           "name": "mixed_numeric_binop",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "`+`, `-`, or `*` on operands typed only at runtime"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::inst::lower_mixed_numeric_binop",
+            "tests": [
+              "codegen_wasm::tests::mixed_numeric_binop_matches_php_result_typing",
+              "codegen::cli::test_cli_wasm_mixed_numeric_arithmetic_matches_php",
+              "codegen::cli::test_cli_wasm_mixed_numeric_string_diagnostics"
+            ]
+          }
         },
         {
           "name": "icmp",
@@ -11938,14 +11945,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 120,
+    "supported": 121,
     "excluded": 47,
-    "missing": 545,
-    "evidence_gaps": 184,
-    "row_evidence_gaps": 183,
+    "missing": 544,
+    "evidence_gaps": 183,
+    "row_evidence_gaps": 182,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "545 reachable identities lack a WASM lowerer; 183 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "544 reachable identities lack a WASM lowerer; 182 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
