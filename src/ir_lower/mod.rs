@@ -11,6 +11,7 @@
 //! - EIR is the only production backend; unsupported lowering must fail explicitly.
 
 mod builtin_datetime;
+mod checked_downcast;
 mod context;
 mod effects_lookup;
 mod expr;

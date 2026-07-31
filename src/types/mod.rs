@@ -10,6 +10,8 @@
 
 /// Type checking module.
 pub mod checker;
+/// Shared checked-downcast representation rule (checker acceptance + lowering emission).
+pub(crate) mod checked_downcast;
 /// Trait flattening and resolution.
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.

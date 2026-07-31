@@ -525,3 +525,54 @@ var_dump(maybe(false));
     );
     assert_eq!(out, "string(1) \"A\"\nNULL\n");
 }
+
+/// ZERO-DELTA PIN for the extraction of the guard chain into
+/// `crate::ir_lower::checked_downcast`: the return position's emitted shape is asserted
+/// STRUCTURALLY, op by op, not just by its observable behaviour.
+///
+/// The guard's block names, the `instance_of` test, the `cond_br` into `return_type_guard.ok`,
+/// and the RELEASING `throw_checked_return_type_error` in `return_type_guard.fail` are all part
+/// of the contract the shared emitter inherited. A relocation of this chain that changed any of
+/// them — a renamed block, a reordered test, a swapped throw op (the non-releasing
+/// `throw_checked_type_error` here would be a DOUBLE FREE the return path cannot survive) —
+/// still passes every behavioural test above, so only this one catches it.
+#[test]
+fn test_checked_downcast_return_guard_emits_the_pinned_op_sequence() {
+    let module = emit_ir(
+        r#"<?php
+class A {}
+class B extends A { public int $n = 1; }
+function mk(): A { return new B(); }
+function r(): B { $a = mk(); return $a; }
+echo r()->n;
+"#,
+    );
+    let guarded = function_ir(&module, "r()");
+    let ops: Vec<&str> = guarded
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.starts_with("return_type_guard")
+                || line.contains("instance_of")
+                || line.starts_with("cond_br")
+                || line.contains("throw_checked")
+                || *line == "unreachable"
+        })
+        .collect();
+    assert_eq!(
+        ops.len(),
+        6,
+        "unexpected guard shape in:\n{}",
+        guarded
+    );
+    assert!(ops[0].contains("instance_of"), "guard must test instance_of first: {:?}", ops);
+    assert!(ops[1].starts_with("cond_br"), "guard must branch on the test: {:?}", ops);
+    assert_eq!(ops[2], "return_type_guard.ok:", "ok block name is part of the contract: {:?}", ops);
+    assert_eq!(ops[3], "return_type_guard.fail:", "fail block name is part of the contract: {:?}", ops);
+    assert!(
+        ops[4].starts_with("throw_checked_return_type_error"),
+        "the return position MUST use the releasing throw op: {:?}",
+        ops
+    );
+    assert_eq!(ops[5], "unreachable", "the fail block must not fall through: {:?}", ops);
+}
