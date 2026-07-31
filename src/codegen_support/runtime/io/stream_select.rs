@@ -148,6 +148,26 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     emitter.instruction(&format!("cbz x13, {}", next_l));                        // null Mixed cell → skip the descriptor
     emitter.instruction("ldr x13, [x13, #8]");                                   // payload_lo of the Mixed cell is the fd
     emitter.label(&after_unbox_l);
+    // -- resolve the opaque registry handle to its backend descriptor --
+    // Array slots hold generation-packed stream handles, not raw fds, so the
+    // wrapper probe below must run on the resolved descriptor. __rt_stream_fd
+    // passes raw descriptors through unchanged, so this stays correct for
+    // transitional int arrays.
+    emitter.instruction("str x9, [sp, #2120]");                                  // spill the array pointer across the resolve call
+    emitter.instruction("str x10, [sp, #2128]");                                 // spill the section length
+    emitter.instruction("str x11, [sp, #2136]");                                 // spill the element index
+    emitter.instruction("str x4, [sp, #2144]");                                  // spill the value_type tag
+    emitter.instruction("str x12, [sp, #2152]");                                 // spill the data-region pointer
+    emitter.instruction("str x14, [sp, #2160]");                                 // spill the running pollfd index
+    emitter.instruction("mov x0, x13");                                          // opaque stream handle → descriptor lookup
+    emitter.instruction("bl __rt_stream_fd");                                    // resolve the backend descriptor through StreamState
+    emitter.instruction("mov x13, x0");                                          // adopt the resolved descriptor
+    emitter.instruction("ldr x9, [sp, #2120]");                                  // reload the array pointer
+    emitter.instruction("ldr x10, [sp, #2128]");                                 // reload the section length
+    emitter.instruction("ldr x11, [sp, #2136]");                                 // reload the element index
+    emitter.instruction("ldr x4, [sp, #2144]");                                  // reload the value_type tag
+    emitter.instruction("ldr x12, [sp, #2152]");                                 // reload the data-region pointer
+    emitter.instruction("ldr x14, [sp, #2160]");                                 // reload the running pollfd index
     // -- resolve synthetic user-wrapper fds to a real selectable fd via stream_cast --
     emitter.instruction("tst x13, #0x40000000");                                 // is this a synthetic user-wrapper descriptor?
     emitter.instruction(&format!("b.eq {}", cast_done_l));                       // ordinary OS fd → use it directly
@@ -160,7 +180,12 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
     emitter.instruction("str x14, [sp, #2160]");                                 // spill the running pollfd index
     emitter.instruction("mov x0, x13");                                          // synthetic fd → stream_cast argument
     emitter.instruction("mov x1, #3");                                          // STREAM_CAST_FOR_SELECT
-    emitter.instruction("bl __rt_user_wrapper_stream_cast");                      // resolve to the wrapper's underlying fd (or -1)
+    // stream_cast() returns a PHP resource, i.e. an opaque registry handle, so
+    // it needs the same descriptor resolution before poll() sees it. Without
+    // this poll() got a handle, reported POLLNVAL, counted it in the ready
+    // total, and then the revents & 0x7 keep-mask dropped the slot.
+    emitter.instruction("bl __rt_user_wrapper_stream_cast");                      // resolve to the wrapper's underlying stream (or -1)
+    emitter.instruction("bl __rt_stream_fd");                                    // cast result is a resource handle: resolve to its descriptor
     emitter.instruction("mov x13, x0");                                         // adopt the resolved descriptor
     emitter.instruction("ldr x9, [sp, #2120]");                                  // reload the array pointer
     emitter.instruction("ldr x10, [sp, #2128]");                                 // reload the section length
@@ -227,6 +252,30 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
     emitter.instruction(&format!("cbz x16, {}", next_l));                         // null Mixed cell → drop the slot
     emitter.instruction("ldr x16, [x16, #8]");                                   // payload_lo of the Mixed cell is the fd
     emitter.label(&after_unbox_l);
+    // -- resolve the opaque registry handle to its backend descriptor --
+    // Array slots hold generation-packed stream handles, not raw fds, so the
+    // wrapper probe below must run on the resolved descriptor. __rt_stream_fd
+    // passes raw descriptors through unchanged, so this stays correct for
+    // transitional int arrays.
+    emitter.instruction("str x9, [sp, #2120]");                                  // spill the array pointer across the resolve call
+    emitter.instruction("str x10, [sp, #2128]");                                 // spill the section length
+    emitter.instruction("str x11, [sp, #2136]");                                 // spill the source index
+    emitter.instruction("str x13, [sp, #2144]");                                 // spill the destination index
+    emitter.instruction("str x14, [sp, #2152]");                                 // spill the section offset
+    emitter.instruction("str x4, [sp, #2160]");                                  // spill the value_type tag
+    emitter.instruction("str x12, [sp, #2168]");                                 // spill the data-region pointer
+    emitter.instruction("str x15, [sp, #2176]");                                 // spill the original slot value
+    emitter.instruction("mov x0, x16");                                          // opaque stream handle → descriptor lookup
+    emitter.instruction("bl __rt_stream_fd");                                    // resolve the backend descriptor through StreamState
+    emitter.instruction("mov x16, x0");                                          // adopt the resolved descriptor
+    emitter.instruction("ldr x9, [sp, #2120]");                                  // reload the array pointer
+    emitter.instruction("ldr x10, [sp, #2128]");                                 // reload the section length
+    emitter.instruction("ldr x11, [sp, #2136]");                                 // reload the source index
+    emitter.instruction("ldr x13, [sp, #2144]");                                 // reload the destination index
+    emitter.instruction("ldr x14, [sp, #2152]");                                 // reload the section offset
+    emitter.instruction("ldr x4, [sp, #2160]");                                  // reload the value_type tag
+    emitter.instruction("ldr x12, [sp, #2168]");                                 // reload the data-region pointer
+    emitter.instruction("ldr x15, [sp, #2176]");                                 // reload the original slot value
     // -- resolve synthetic user-wrapper fds (idempotent with build) --
     emitter.instruction("tst x16, #0x40000000");                                 // is this a synthetic user-wrapper descriptor?
     emitter.instruction(&format!("b.eq {}", cast_done_l));                       // ordinary OS fd → use it directly
@@ -240,7 +289,12 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
     emitter.instruction("str x15, [sp, #2176]");                                 // spill the original slot value
     emitter.instruction("mov x0, x16");                                          // synthetic fd → stream_cast argument
     emitter.instruction("mov x1, #3");                                          // STREAM_CAST_FOR_SELECT
-    emitter.instruction("bl __rt_user_wrapper_stream_cast");                     // resolve to the wrapper's underlying fd
+    // stream_cast() returns a PHP resource, i.e. an opaque registry handle, so
+    // it needs the same descriptor resolution before poll() sees it. Without
+    // this poll() got a handle, reported POLLNVAL, counted it in the ready
+    // total, and then the revents & 0x7 keep-mask dropped the slot.
+    emitter.instruction("bl __rt_user_wrapper_stream_cast");                     // resolve to the wrapper's underlying stream
+    emitter.instruction("bl __rt_stream_fd");                                    // cast result is a resource handle: resolve to its descriptor
     emitter.instruction("mov x16, x0");                                         // adopt the resolved descriptor
     emitter.instruction("ldr x9, [sp, #2120]");                                  // reload the array pointer
     emitter.instruction("ldr x10, [sp, #2128]");                                 // reload the section length
@@ -408,6 +462,24 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     emitter.instruction(&format!("jz {}", next_l));                             // null Mixed cell → skip the descriptor
     emitter.instruction("mov rdx, QWORD PTR [rdx + 8]");                         // payload_lo of the Mixed cell is the fd
     emitter.label(&after_unbox_l);
+    // -- resolve the opaque registry handle to its backend descriptor --
+    // Array slots hold generation-packed stream handles, not raw fds, so the
+    // wrapper probe below must run on the resolved descriptor. __rt_stream_fd
+    // passes raw descriptors through unchanged, so this stays correct for
+    // transitional int arrays.
+    emitter.instruction("mov QWORD PTR [rbp - 2120], r11");                      // spill the array pointer across the resolve call
+    emitter.instruction("mov QWORD PTR [rbp - 2128], rdi");                      // spill the section length
+    emitter.instruction("mov QWORD PTR [rbp - 2136], rsi");                      // spill the element index
+    emitter.instruction("mov QWORD PTR [rbp - 2144], r12");                      // spill the value_type tag
+    emitter.instruction("mov QWORD PTR [rbp - 2152], r14");                      // spill the running pollfd index
+    emitter.instruction("mov rdi, rdx");                                         // opaque stream handle → descriptor lookup
+    emitter.instruction("call __rt_stream_fd");                                  // resolve the backend descriptor through StreamState
+    emitter.instruction("mov rdx, rax");                                         // adopt the resolved descriptor
+    emitter.instruction("mov r11, QWORD PTR [rbp - 2120]");                      // reload the array pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 2128]");                      // reload the section length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 2136]");                      // reload the element index
+    emitter.instruction("mov r12, QWORD PTR [rbp - 2144]");                      // reload the value_type tag
+    emitter.instruction("mov r14, QWORD PTR [rbp - 2152]");                      // reload the running pollfd index
     // -- resolve synthetic user-wrapper fds to a real selectable fd via stream_cast --
     emitter.instruction("test rdx, 0x40000000");                                 // is this a synthetic user-wrapper descriptor?
     emitter.instruction(&format!("jz {}", cast_done_l));                          // ordinary OS fd → use it directly
@@ -418,7 +490,13 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     emitter.instruction("mov QWORD PTR [rbp - 2152], r14");                      // spill the running pollfd index
     emitter.instruction("mov rdi, rdx");                                         // synthetic fd → stream_cast argument
     emitter.instruction("mov esi, 3");                                          // STREAM_CAST_FOR_SELECT
-    emitter.instruction("call __rt_user_wrapper_stream_cast");                   // resolve to the wrapper's underlying fd (or -1)
+    // stream_cast() returns a PHP resource, i.e. an opaque registry handle, so
+    // it needs the same descriptor resolution before poll() sees it. Without
+    // this poll() got a handle, reported POLLNVAL, counted it in the ready
+    // total, and then the revents & 0x7 keep-mask dropped the slot.
+    emitter.instruction("call __rt_user_wrapper_stream_cast");                   // resolve to the wrapper's underlying stream (or -1)
+    emitter.instruction("mov rdi, rax");                                         // cast result is a resource handle
+    emitter.instruction("call __rt_stream_fd");                                  // resolve it to its backend descriptor
     emitter.instruction("mov rdx, rax");                                         // adopt the resolved descriptor
     emitter.instruction("mov r11, QWORD PTR [rbp - 2120]");                      // reload the array pointer
     emitter.instruction("mov rdi, QWORD PTR [rbp - 2128]");                      // reload the section length
@@ -478,6 +556,28 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
     emitter.instruction(&format!("jz {}", next_l));                             // null Mixed cell → drop the slot
     emitter.instruction("mov rdx, QWORD PTR [rdx + 8]");                         // payload_lo of the Mixed cell is the fd
     emitter.label(&after_unbox_l);
+    // -- resolve the opaque registry handle to its backend descriptor --
+    // Array slots hold generation-packed stream handles, not raw fds, so the
+    // wrapper probe below must run on the resolved descriptor. __rt_stream_fd
+    // passes raw descriptors through unchanged, so this stays correct for
+    // transitional int arrays.
+    emitter.instruction("mov QWORD PTR [rbp - 2120], r11");                      // spill the array pointer across the resolve call
+    emitter.instruction("mov QWORD PTR [rbp - 2128], rdi");                      // spill the section length
+    emitter.instruction("mov QWORD PTR [rbp - 2136], rsi");                      // spill the source index
+    emitter.instruction("mov QWORD PTR [rbp - 2144], r9");                       // spill the destination index
+    emitter.instruction("mov QWORD PTR [rbp - 2152], r14");                      // spill the section offset
+    emitter.instruction("mov QWORD PTR [rbp - 2160], r12");                      // spill the value_type tag
+    emitter.instruction("mov QWORD PTR [rbp - 2168], r13");                      // spill the original slot value
+    emitter.instruction("mov rdi, rdx");                                         // opaque stream handle → descriptor lookup
+    emitter.instruction("call __rt_stream_fd");                                  // resolve the backend descriptor through StreamState
+    emitter.instruction("mov rdx, rax");                                         // adopt the resolved descriptor
+    emitter.instruction("mov r11, QWORD PTR [rbp - 2120]");                      // reload the array pointer
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 2128]");                      // reload the section length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 2136]");                      // reload the source index
+    emitter.instruction("mov r9, QWORD PTR [rbp - 2144]");                       // reload the destination index
+    emitter.instruction("mov r14, QWORD PTR [rbp - 2152]");                      // reload the section offset
+    emitter.instruction("mov r12, QWORD PTR [rbp - 2160]");                      // reload the value_type tag
+    emitter.instruction("mov r13, QWORD PTR [rbp - 2168]");                      // reload the original slot value
     // -- resolve synthetic user-wrapper fds (idempotent with build) --
     emitter.instruction("test rdx, 0x40000000");                                 // is this a synthetic user-wrapper descriptor?
     emitter.instruction(&format!("jz {}", cast_done_l));                         // ordinary OS fd → use it directly
@@ -490,7 +590,13 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
     emitter.instruction("mov QWORD PTR [rbp - 2168], r13");                      // spill the original slot value
     emitter.instruction("mov rdi, rdx");                                         // synthetic fd → stream_cast argument
     emitter.instruction("mov esi, 3");                                          // STREAM_CAST_FOR_SELECT
-    emitter.instruction("call __rt_user_wrapper_stream_cast");                   // resolve to the wrapper's underlying fd
+    // stream_cast() returns a PHP resource, i.e. an opaque registry handle, so
+    // it needs the same descriptor resolution before poll() sees it. Without
+    // this poll() got a handle, reported POLLNVAL, counted it in the ready
+    // total, and then the revents & 0x7 keep-mask dropped the slot.
+    emitter.instruction("call __rt_user_wrapper_stream_cast");                   // resolve to the wrapper's underlying stream
+    emitter.instruction("mov rdi, rax");                                         // cast result is a resource handle
+    emitter.instruction("call __rt_stream_fd");                                  // resolve it to its backend descriptor
     emitter.instruction("mov rdx, rax");                                         // adopt the resolved descriptor
     emitter.instruction("mov r11, QWORD PTR [rbp - 2120]");                      // reload the array pointer
     emitter.instruction("mov rdi, QWORD PTR [rbp - 2128]");                      // reload the section length
