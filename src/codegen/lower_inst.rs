@@ -5898,40 +5898,54 @@ fn store_method_call_result(
 ) -> Result<()> {
     if target.by_ref_return {
         if let Some(result) = inst.result {
-            if matches!(ctx.value_php_type(result)?, PhpType::Mixed | PhpType::Union(_)) {
-                if value_is_reference_bound(ctx.function, result) {
-                    return Err(CodegenIrError::unsupported(
-                        "by-reference binding (`=&`) of a by-reference-returning method reached through \
-                         instanceof-narrowed interface dispatch is only supported when the guard is a direct \
-                         `if ($x instanceof C)` on a simple variable (which ir_lower narrows); this guard shape \
-                         could not be narrowed to a concrete receiver".to_string(),
-                    ));
-                } else {
-                    let return_repr = target.return_ty.codegen_repr();
-                    emit_deref_by_ref_cell_result(ctx, &return_repr);
-                    emit_box_current_value_as_mixed(ctx.emitter, &return_repr);
-                    ctx.store_result_value(result)?;
-                }
-            } else if value_is_reference_bound(ctx.function, result) {
-                // `$x = &$obj->m()`: the downstream `BindRefCellPtr` aliases the raw ref-cell
-                // pointer, so keep it single-word and opaque.
-                ctx.store_int_result_value(result)?;
-            } else {
-                // Value read (`$x = $obj->m()`, `count($obj->m())`, …): dereference the cell to its
-                // value and take an owning (COW) reference so downstream sees a well-formed owned
-                // value, matching PHP's copy-on-read of a by-reference return. `store_result_value`
-                // only moves/stores registers (no retain), so the explicit incref establishes the
-                // shared-refcount COW relationship with the property's array; exactly one decref then
-                // balances it at `$x`'s scope end.
-                let return_repr = target.return_ty.codegen_repr();
-                emit_deref_by_ref_cell_result(ctx, &return_repr);
-                abi::emit_incref_if_refcounted(ctx.emitter, &return_repr);
-                ctx.store_result_value(result)?;
+            if matches!(ctx.value_php_type(result)?, PhpType::Mixed | PhpType::Union(_))
+                && value_is_reference_bound(ctx.function, result)
+            {
+                return Err(CodegenIrError::unsupported(
+                    "by-reference binding (`=&`) of a by-reference-returning method reached through \
+                     instanceof-narrowed interface dispatch is only supported when the guard is a direct \
+                     `if ($x instanceof C)` on a simple variable (which ir_lower narrows); this guard shape \
+                     could not be narrowed to a concrete receiver".to_string(),
+                ));
             }
+            store_by_ref_return_call_result(ctx, result, &target.return_ty)?;
         }
         return Ok(());
     }
     store_call_result(ctx, inst, &target.return_ty)
+}
+
+/// Stores the result of a call to a by-reference-returning callee.
+///
+/// Such a callee hands back a single-word reference-cell POINTER in the integer result register
+/// (see `Terminator::Return`), not a value. Keep it raw only when a `BindRefCellPtr` aliases it
+/// (`$x = &f()`), where the alias must target the real cell. Every other consumer is a value read
+/// (`$x = f()`, `count(f())`, …) and must dereference the cell, matching PHP's copy-on-read of a
+/// by-reference return — storing the pointer as if it were the value reads a raw address as data.
+///
+/// A concrete value read takes an owning (COW) reference: `store_result_value` only moves/stores
+/// registers (no retain), so the explicit incref establishes the shared-refcount relationship with
+/// the referenced property's value, and exactly one decref balances it at the local's scope end. A
+/// `Mixed`/union result is boxed instead, which already produces an owned cell.
+///
+/// Shared by the direct-call and method-call paths so `f()` and `$o->m()` agree on the convention.
+fn store_by_ref_return_call_result(
+    ctx: &mut FunctionContext<'_>,
+    result: ValueId,
+    return_ty: &PhpType,
+) -> Result<()> {
+    if value_is_reference_bound(ctx.function, result) {
+        return ctx.store_int_result_value(result);
+    }
+    let result_ty = ctx.value_php_type(result)?;
+    let return_repr = return_ty.codegen_repr();
+    emit_deref_by_ref_cell_result(ctx, &return_repr);
+    if matches!(result_ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_box_current_value_as_mixed(ctx.emitter, &return_repr);
+    } else {
+        abi::emit_incref_if_refcounted(ctx.emitter, &return_repr);
+    }
+    ctx.store_result_value(result)
 }
 
 /// Returns whether `value` is consumed by a `BindRefCellPtr` (a `$x = &…` reference bind)
@@ -6358,9 +6372,11 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             CodegenIrError::unsupported(format!("call to unknown function {}", function_name))
         })?;
     // A by-reference-returning callee hands back a single-word reference-cell pointer in the
-    // integer result register (see `Terminator::Return`); capture the flag before the mutable
-    // call-materialization borrows so the result is stored single-word, not split by type.
+    // integer result register (see `Terminator::Return`); capture the flag and the declared return
+    // type before the mutable call-materialization borrows, so the result can be stored
+    // single-word for an alias or dereferenced for a value read.
     let callee_by_ref_return = callee.flags.by_ref_return;
+    let callee_return_php_type = callee.return_php_type.clone();
     if inst.operands.len() != callee.params.len() {
         return Err(CodegenIrError::unsupported(format!(
             "call to {} with {} args for {} params",
@@ -6403,7 +6419,7 @@ fn lower_direct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resul
             );
         }
         if callee_by_ref_return {
-            ctx.store_int_result_value(result)?;
+            store_by_ref_return_call_result(ctx, result, &callee_return_php_type)?;
         } else {
             ctx.store_result_value(result)?;
         }

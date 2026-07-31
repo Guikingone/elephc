@@ -221,6 +221,56 @@ fn test_closure_bind_by_reference_return_writes_through() {
     assert_eq!(out, "RouteA\n0\n");
 }
 
+/// A by-reference return read BY VALUE must copy the referenced value, not the cell pointer.
+/// `count()` is the probe: storing the pointer as if it were the array reads a raw address as
+/// data, which prints a plausible-looking integer rather than failing.
+#[test]
+fn test_by_reference_function_return_read_by_value_copies_array() {
+    let out = compile_and_run(
+        "<?php
+        class Box { public array $items = ['a' => 1, 'b' => 2]; }
+        $g = new Box();
+        function &pick(Box $b): array { return $b->items; }
+        $copy = pick($g);
+        echo count($copy), ':', $copy['a'], \"\\n\";
+        $g->items['c'] = 3;
+        echo count($g->items), ':', count($copy), \"\\n\";",
+    );
+    assert_eq!(out, "2:1\n3:2\n");
+}
+
+/// The same by-value read of a by-reference return for a `string`, whose ABI is a `{ptr,len}`
+/// register pair. Storing the cell pointer without dereferencing feeds a garbage length to the
+/// string machinery, which exhausts the heap rather than printing a wrong value.
+#[test]
+fn test_by_reference_function_return_read_by_value_copies_string() {
+    let out = compile_and_run(
+        "<?php
+        class Box { public string $tag = 'HELLO'; }
+        $g = new Box();
+        function &pick(Box $b): string { return $b->tag; }
+        $alias = &pick($g);
+        $copy = pick($g);
+        echo $copy, ':', strlen($copy), \"\\n\";",
+    );
+    assert_eq!(out, "HELLO:5\n");
+}
+
+/// A `Closure::bind` by-reference return read BY VALUE goes through the direct-call path rather
+/// than the method-call path; both must apply the same dereference. Guards the exact shape that
+/// otherwise reads the ref-cell pointer as an array.
+#[test]
+fn test_closure_bind_by_reference_return_read_by_value_copies() {
+    let out = compile_and_run(
+        "<?php
+        class Box { public array $items = ['a' => 1, 'b' => 2]; }
+        $x = new Box();
+        $copy = \\Closure::bind(fn &() => $this->items, $x, $x)();
+        echo count($copy), ':', $copy['a'], \"\\n\";",
+    );
+    assert_eq!(out, "2:1\n");
+}
+
 /// The same Symfony `KernelTrait`/`ExtensionTrait` shape from INSIDE a method, where the
 /// closure's lexically enclosing class does not declare the property at all. `$this` must come
 /// from the bind's second argument (the loader), not the enclosing class, so both the property
