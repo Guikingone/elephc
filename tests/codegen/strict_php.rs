@@ -17,12 +17,27 @@ use crate::support::*;
 /// Compiles `source` through the CLI with `--strict-php`, runs the binary, and
 /// returns its stdout. Panics if compilation or the run fails.
 fn compile_strict_cli_and_run(source: &str) -> String {
+    compile_strict_cli_and_run_with_native(source, false)
+}
+
+/// Compiles and runs strict PHP with a verified managed-PCRE2 eval dependency.
+fn compile_strict_cli_and_run_with_managed_pcre2(source: &str) -> String {
+    compile_strict_cli_and_run_with_native(source, true)
+}
+
+/// Compiles and runs one strict-PHP fixture with optional managed-PCRE2 setup.
+fn compile_strict_cli_and_run_with_native(source: &str, managed_pcre2: bool) -> String {
     let dir = make_cli_test_dir("elephc_cli_strict");
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let compile_out = elephc_cli_command(&dir)
-        .arg("--strict-php")
+    let mut command = if managed_pcre2 {
+        elephc_cli_command_with_managed_pcre2(&dir)
+    } else {
+        elephc_cli_command(&dir)
+    };
+    let compile_out = command
+        .args(["--strict-php"])
         .arg(&php_path)
         .output()
         .expect("failed to run elephc CLI");
@@ -205,7 +220,7 @@ fn compile_strict_cli_and_run_expect_failure(source: &str) -> String {
     let php_path = dir.join("main.php");
     fs::write(&php_path, source).unwrap();
 
-    let compile_out = elephc_cli_command(&dir)
+    let compile_out = elephc_cli_command_with_managed_pcre2(&dir)
         .arg("--strict-php")
         .arg(&php_path)
         .output()
@@ -266,7 +281,7 @@ echo eval('$b = buffer_new(4); return buffer_len($b);');
 /// under strict mode: extension builtins report as missing, PHP builtins stay.
 #[test]
 fn test_strict_php_eval_introspection_matches_aot_surface() {
-    let out = compile_strict_cli_and_run(
+    let out = compile_strict_cli_and_run_with_managed_pcre2(
         r#"<?php
 $code = '$n = ' . $argc . ';
 $r = function_exists("buffer_new") ? "bufnew-yes" : "bufnew-no";
@@ -283,7 +298,7 @@ echo eval($code);
 /// flag, so the eval gating is strictly opt-in.
 #[test]
 fn test_default_mode_eval_introspection_keeps_extensions() {
-    let out = compile_cli_file_and_run(
+    let out = compile_cli_file_and_run_with_managed_pcre2(
         r#"<?php
 $code = '$n = ' . $argc . ';
 $r = function_exists("buffer_new") ? "bufnew-yes" : "bufnew-no";
@@ -301,7 +316,7 @@ echo eval($code);
 /// through to the AOT native-function table, matching the PHP interpreter.
 #[test]
 fn test_strict_php_eval_calls_user_shadowed_extension_name() {
-    let out = compile_strict_cli_and_run(
+    let out = compile_strict_cli_and_run_with_managed_pcre2(
         r#"<?php
 function ptr_get(int $x): int { return $x + 1; }
 $code = 'return ptr_get(' . (40 + $argc) . ');';
