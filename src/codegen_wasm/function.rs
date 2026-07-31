@@ -55,7 +55,10 @@ use crate::types::PhpType;
 ///    prologue, emit the dispatch loop.
 ///
 /// `str_literals` is the module-wide string-literal layout (indexed by `DataId`),
-/// used by `ConstStr` lowering to address the data segments. `closure_tag_ptrs`
+/// used by `ConstStr` lowering to address the data segments. `default_strings` is
+/// the content-keyed layout of the class property string defaults that object
+/// construction writes inline, which carry no `DataId` at the construction site
+/// (see `objects::literal_default_strings`). `closure_tag_ptrs`
 /// is the per-closure capture-tag-array base address layout (indexed by
 /// `module.closures` position), used by `ClosureNew` lowering to stamp the
 /// descriptor's `capture_tags_ptr`. `fcc_entries` is the distinct first-class
@@ -66,6 +69,7 @@ pub fn lower_function(
     module: &Module,
     function: &Function,
     str_literals: &[(u32, u32)],
+    default_strings: &std::collections::HashMap<String, (u32, u32)>,
     closure_tag_ptrs: &[u32],
     fcc_entries: &[String],
 ) -> Result<FuncBuilder> {
@@ -108,6 +112,21 @@ pub fn lower_function(
 
     // Step d: Declare the dispatch state local and the concat-base local.
     let state_local = fb.local("__state", ValType::I32);
+    let handler_local = fb.local("__handler", ValType::I32);
+    // One save slot per distinct try token, mirroring the native backend's per-token
+    // frame slot. `TryPushHandler` stows the enclosing handler here and `TryPopHandler`
+    // restores it, which is what makes nested `try` work without a runtime stack.
+    let mut handler_saves: HashMap<i64, String> = HashMap::new();
+    for inst in &function.instructions {
+        if inst.op != Op::TryPushHandler {
+            continue;
+        }
+        if let Some(Immediate::I64(token)) = inst.immediate {
+            handler_saves.entry(token).or_insert_with(|| {
+                fb.local(&format!("__handler_save{}", token), ValType::I32)
+            });
+        }
+    }
     let concat_base_local = fb.local("__concat_base", ValType::I32);
 
     // Step e: Declare local slots (slots 0..params.len() share the param locals).
@@ -137,9 +156,12 @@ pub fn lower_function(
         value_locals,
         slot_locals,
         state_local,
+        handler_local,
+        handler_saves,
         concat_base_local,
         temp_counter: 0,
         str_literals,
+        default_strings,
         closure_tag_ptrs,
         fcc_entries,
         iter_state: std::collections::HashMap::new(),
@@ -268,11 +290,82 @@ fn emit_main_argc_argv_init(ctx: &mut FnCtx) -> Result<()> {
 /// Terminators set `$__state` and `br $__dispatch` to jump between blocks, or use
 /// `return`/`proc_exit` to leave the function. Because every block body branches
 /// away, control never falls through to the next body.
+/// Name of the single PHP exception tag; its payload is the exception object pointer.
+pub(super) const EXCEPTION_TAG: &str = "__php_exc";
+
+/// Name of the global holding the exception currently being handled.
+///
+/// Mirrors the native backend's `_exc_value` symbol, which `CatchCurrent` reads.
+pub(super) const EXCEPTION_VALUE_GLOBAL: &str = "__exc_value";
+
+/// Returns whether a function participates in exception handling.
+///
+/// Only such functions pay for the `try_table` wrapper and the handler slot, so a
+/// module without `try`/`throw` emits exactly the code it did before.
+pub(super) fn uses_exceptions(function: &Function) -> bool {
+    function.instructions.iter().any(|inst| {
+        matches!(
+            inst.op,
+            Op::TryPushHandler | Op::TryPopHandler | Op::ThrowException | Op::ThrowErrorValue
+        )
+    }) || function
+        .blocks
+        .iter()
+        .any(|block| matches!(block.terminator, Some(Terminator::Throw { .. })))
+}
+
+/// Returns whether ANY function, class method or closure in the module uses exceptions.
+///
+/// This is what decides whether the module declares the exception tag and whether `main` is
+/// guarded. It deliberately spans every function list rather than `module.functions` alone: a
+/// `throw` living only inside a method or a closure body still needs the tag declared and still
+/// unwinds into `main`.
+pub(super) fn module_uses_exceptions(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .any(uses_exceptions)
+}
+
+/// Returns whether a function can catch, and so needs the `try_table` wrapper.
+///
+/// A function that only throws propagates to its caller and needs no landing pad.
+fn catches_exceptions(function: &Function) -> bool {
+    function
+        .instructions
+        .iter()
+        .any(|inst| inst.op == Op::TryPushHandler)
+}
+
 fn emit_dispatch_loop(ctx: &mut FnCtx) -> Result<()> {
     let n = ctx.function.blocks.len();
+    // `main` guards the whole program even when it contains no `catch` of its own: an exception
+    // that unwinds past it is PHP's uncaught fatal, and without a landing pad here the WASM
+    // exception would escape the module and surface as a HOST-level crash instead.
+    let catches = catches_exceptions(ctx.function)
+        || (ctx.function.flags.is_main && module_uses_exceptions(ctx.module));
+    if catches {
+        ctx.fb.ins("i32.const -1", "no handler is armed yet");
+        ctx.fb.ins(
+            &format!("local.set {}", ctx.handler_local),
+            "arm nothing until a try is entered",
+        );
+    }
 
     ctx.fb.raw("(loop $__dispatch");
     ctx.fb.comment("$__dispatch: br_table dispatch loop");
+    if catches {
+        // An EIR block is a flat `br_table` case, not a lexical region, so a `try`
+        // cannot be a nested scope. Catching instead becomes an ordinary state
+        // transition: the landing pad below reads the armed handler's catch-block
+        // index and re-dispatches, exactly like every other control transfer here.
+        ctx.fb.raw(&format!("(block $__caught (result i32)"));
+        ctx.fb.comment("$__caught: receives the thrown exception pointer");
+        ctx.fb
+            .raw(&format!("(try_table (catch ${} $__caught)", EXCEPTION_TAG));
+    }
     ctx.fb.raw("(block $__default");
     ctx.fb.comment("$__default: out-of-range dispatch state");
 
@@ -319,6 +412,60 @@ fn emit_dispatch_loop(ctx: &mut FnCtx) -> Result<()> {
         "unreachable",
         "elephc-trap:proven-invariant:dispatch-state-range $__default rejects an out-of-range dispatch state",
     );
+    if catches {
+        ctx.fb.raw(")");
+        ctx.fb.ins(
+            "unreachable",
+            "elephc-trap:proven-invariant:try-table-tail the guarded region is left only by a branch",
+        );
+        ctx.fb.raw(")");
+        // Landing pad. The tag payload is on the stack; publish it where
+        // `CatchCurrent` reads it, then resume at the armed handler's block.
+        ctx.fb.ins(
+            &format!("global.set ${}", EXCEPTION_VALUE_GLOBAL),
+            "publish the exception being handled",
+        );
+        // A frame can catch SOMEWHERE without a try being active at the throw point — the
+        // handler is `-1` outside every try, and outside `main` that means the exception
+        // belongs to the caller. Re-raising is what makes the sentinel necessary: block 0 is a
+        // legitimate handler index, so "no handler" cannot be spelled as zero.
+        ctx.fb
+            .ins(&format!("local.get {}", ctx.handler_local), "armed handler");
+        ctx.fb.ins("i32.const 0", "handler sentinel bound");
+        ctx.fb.ins("i32.lt_s", "no try is active in this frame?");
+        ctx.fb.ins("if", "unhandled here");
+        if ctx.function.flags.is_main {
+            ctx.fb
+                .ins("i32.const 10", "uncaught PHP exception diagnostic");
+            ctx.fb.ins(
+                "call $__rt_fail",
+                "report PHP's uncaught fatal and exit with status 255",
+            );
+            ctx.fb.ins(
+                "unreachable",
+                "elephc-trap:post-noreturn:uncaught-exception-exit runtime fatal helper does not return",
+            );
+        } else {
+            ctx.fb.ins(
+                &format!("global.get ${}", EXCEPTION_VALUE_GLOBAL),
+                "the exception still in flight",
+            );
+            ctx.fb.ins(
+                &format!("throw ${}", EXCEPTION_TAG),
+                "propagate it to the caller's landing pad",
+            );
+        }
+        ctx.fb.ins("end", "end unhandled check");
+        ctx.fb.ins(
+            &format!("local.get {}", ctx.handler_local),
+            "armed handler's catch block",
+        );
+        ctx.fb.ins(
+            &format!("local.set {}", ctx.state_local),
+            "resume dispatch at the catch block",
+        );
+        ctx.fb.raw("(br $__dispatch)");
+    }
     ctx.fb.raw(")");
     ctx.fb.ins(
         "unreachable",
@@ -473,7 +620,17 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator, preceding_op: Option<Op>
             Ok(())
         }
 
-        Terminator::Throw { .. } => Err(WasmError::Unsupported("throw terminator".to_string())),
+        Terminator::Throw { value } => {
+            // Raising leaves the frame, so no state transition follows: either an
+            // enclosing `try_table` in this function catches it, or it propagates to
+            // the caller's landing pad.
+            ctx.emit_load_value(*value)?;
+            ctx.fb.ins(
+                &format!("throw ${}", EXCEPTION_TAG),
+                "raise the PHP exception",
+            );
+            Ok(())
+        }
 
         Terminator::Fatal { .. } => Err(WasmError::Unsupported("fatal terminator".to_string())),
 
@@ -507,5 +664,130 @@ fn returned_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotI
             returned_local_slot(function, source)
         }
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::Target;
+    use crate::ir::{Builder, LocalKind, Ownership};
+
+    /// Verifies the exception opcodes lower to the Core WebAssembly exception forms.
+    ///
+    /// One `try_table` guards the dispatch loop, `throw` carries the exception object's pointer
+    /// on the module's single tag, and the landing pad publishes the exception where
+    /// `CatchCurrent`/`CatchBind` read it before resuming dispatch at the armed catch block.
+    /// The sentinel check is what distinguishes "no `try` is active" from "the handler is block
+    /// zero", which a plain zero-initialized handler local could not express.
+    #[test]
+    fn exception_ops_lower_to_core_wasm_forms() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("thrower".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let exception_slot = builder.add_local(
+                Some("e".to_string()),
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object("Exception".to_string()),
+                LocalKind::PhpLocal,
+            );
+            let entry = builder.create_named_block("entry", Vec::new());
+            let catch = builder.create_named_block("catch", Vec::new());
+            builder.set_entry(entry);
+
+            builder.position_at_end(entry);
+            builder
+                .emit(
+                    Op::TryPushHandler,
+                    Vec::new(),
+                    Some(Immediate::I64(catch.as_raw() as i64)),
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            // Any object-typed value will do as the payload: what is under test is the tag
+            // carrying it, not where it came from.
+            let raised = builder.emit_load_local(
+                exception_slot,
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object("Exception".to_string()),
+            );
+            builder.terminate(Terminator::Throw { value: raised });
+
+            builder.position_at_end(catch);
+            builder
+                .emit(
+                    Op::TryPopHandler,
+                    Vec::new(),
+                    Some(Immediate::I64(catch.as_raw() as i64)),
+                    IrType::Void,
+                    PhpType::Void,
+                    Ownership::NonHeap,
+                );
+            builder
+                .emit(
+                    Op::CatchCurrent,
+                    Vec::new(),
+                    None,
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object("Throwable".to_string()),
+                    Ownership::MaybeOwned,
+                )
+                .expect("read the exception in flight");
+            builder
+                .emit(
+                    Op::CatchBind,
+                    Vec::new(),
+                    None,
+                    IrType::Heap(IrHeapKind::Object),
+                    PhpType::Object("Exception".to_string()),
+                    Ownership::Owned,
+                )
+                .expect("take the exception");
+            builder.terminate(Terminator::Return { value: None });
+        }
+
+        assert!(
+            uses_exceptions(&function),
+            "a function that throws participates in exception handling"
+        );
+        assert!(
+            catches_exceptions(&function),
+            "a function arming a handler needs the try_table wrapper"
+        );
+
+        module.functions.push(function.clone());
+        let lowered = lower_function(
+            &module,
+            &function,
+            &[],
+            &Default::default(),
+            &[],
+            &[],
+        )
+        .expect("exception lowering");
+        let wat = lowered.render("  ");
+
+        assert!(
+            wat.contains(&format!("(try_table (catch ${} $__caught)", EXCEPTION_TAG)),
+            "the dispatch loop must be guarded: {wat}"
+        );
+        assert!(
+            wat.contains(&format!("throw ${}", EXCEPTION_TAG)),
+            "the raise site must throw the tag: {wat}"
+        );
+        assert!(
+            wat.contains(&format!("global.set ${}", EXCEPTION_VALUE_GLOBAL)),
+            "the landing pad must publish the exception: {wat}"
+        );
+        assert!(
+            wat.contains("i32.const -1"),
+            "the handler must start disarmed with a sentinel: {wat}"
+        );
+        assert!(
+            wat.contains("i32.lt_s"),
+            "the landing pad must distinguish an unarmed handler: {wat}"
+        );
     }
 }

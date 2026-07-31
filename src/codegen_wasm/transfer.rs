@@ -312,6 +312,24 @@ fn emit_unbox_mixed_to_concrete(
             let tag_tmp = ctx.fresh_temp(ValType::I64);
             let lo_tmp = ctx.fresh_temp(ValType::I64);
             let hi_tmp = ctx.fresh_temp(ValType::I64);
+            // A ZERO cell pointer means the slot was never written, not that it holds PHP
+            // `null` — a stored null is a real cell carrying tag 8. Slots start zeroed, and EIR
+            // releases a local's previous value before overwriting it, so the very first write
+            // to a Mixed-repr slot unboxes a slot that has never held a cell. Unboxing address
+            // zero would read a tag out of the null page and fail the check below, turning
+            // ordinary first assignment into a TypeError. Yielding the null pointer instead is
+            // exactly what the consumer expects: `__rt_decref_any` treats it as a no-op.
+            let cell_tmp = ctx.fresh_temp(ValType::I32);
+            ctx.fb
+                .ins(&format!("local.set {}", cell_tmp), "save mixed cell pointer");
+            ctx.fb
+                .ins(&format!("local.get {}", cell_tmp), "mixed cell pointer");
+            ctx.fb.ins("i32.eqz", "slot never written?");
+            ctx.fb.ins("if (result i32)", "unwritten slot yields the null pointer");
+            ctx.fb.ins("i32.const 0", "null heap pointer for an unwritten slot");
+            ctx.fb.ins("else", "the slot holds a real mixed cell");
+            ctx.fb
+                .ins(&format!("local.get {}", cell_tmp), "mixed cell to unbox");
             ctx.fb
                 .ins("call $__rt_mixed_unbox", "unbox mixed cell -> (tag, lo, hi)");
             ctx.fb
@@ -352,6 +370,7 @@ fn emit_unbox_mixed_to_concrete(
                 .ins(&format!("local.get {}", lo_tmp), "load mixed heap pointer");
             ctx.fb
                 .ins("i32.wrap_i64", "narrow payload pointer to i32");
+            ctx.fb.ins("end", "end unwritten-slot guard");
         }
         WasmRepr::Tagged { .. } | WasmRepr::Void => {
             return Err(WasmError::Unsupported(format!(
@@ -742,12 +761,16 @@ pub(super) fn emit_store_call_result(
             ctx.fb
                 .ins(&format!("local.set {}", sentinel), "capture void sentinel");
             let source_repr = WasmRepr::I64(sentinel.clone());
+            // The source is described as `I64`, not `Void`: nothing came back from the callee,
+            // but what this transfer actually carries is the i64 sentinel just materialized.
+            // Describing it as `Void` would classify a `WasmRepr::Void` (zero locals) against
+            // the destination and reject the very store this branch exists to perform.
             emit_store_temps_into_value(
                 ctx,
                 &[sentinel],
                 &source_repr,
                 PhpType::Void,
-                IrType::Void,
+                IrType::I64,
                 result,
             )?;
         } else {

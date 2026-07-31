@@ -92,6 +92,8 @@ fn test_source(identifier: &str) -> &'static str {
         include_str!("../closures.rs")
     } else if identifier.starts_with("codegen_wasm::strict::tests::") {
         include_str!("../strict.rs")
+    } else if identifier.starts_with("codegen_wasm::function::tests::") {
+        include_str!("../function.rs")
     } else if identifier.starts_with("codegen::cli::") {
         include_str!("../../../tests/codegen/cli.rs")
     } else if identifier.starts_with("ir_lower::tests::ownership::") {

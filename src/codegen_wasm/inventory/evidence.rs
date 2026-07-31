@@ -127,6 +127,12 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::Move => &["compiler-inserted ownership move"],
         Op::Borrow => &["compiler-inserted ownership borrow"],
         Op::Nop => &["compiler-inserted no-op"],
+        Op::TryPushHandler => &["entering a `try` block"],
+        Op::TryPopHandler => &["leaving a `try` block"],
+        Op::ThrowException => &["`throw`"],
+        Op::ThrowErrorValue => &["`throw` of an `Error` instance"],
+        Op::CatchCurrent => &["matching a `catch` clause against the exception in flight"],
+        Op::CatchBind => &["binding the caught exception to a `catch` variable"],
         _ => &[],
     }
 }
@@ -245,6 +251,17 @@ fn op_tests(op: Op) -> &'static [&'static str] {
             "codegen_wasm::tests::echo_string_literal_writes_to_stdout",
             "codegen_wasm::tests::echo_booleans_writes_to_stdout",
         ],
+        Op::TryPushHandler
+        | Op::TryPopHandler
+        | Op::ThrowException
+        | Op::ThrowErrorValue
+        | Op::CatchCurrent
+        | Op::CatchBind => &[
+            "codegen_wasm::function::tests::exception_ops_lower_to_core_wasm_forms",
+            "codegen::cli::test_cli_wasm_try_catch_lowers_to_core_exception_forms",
+            "codegen::cli::test_cli_wasm_try_catch_dispatch_matches_php",
+            "codegen::cli::test_cli_wasm_uncaught_exception_is_a_php_fatal",
+        ],
         _ => &[],
     }
 }
@@ -342,6 +359,11 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::AliasLocalRefCell => "codegen_wasm::refcell::lower_alias_local_ref_cell",
         Op::ReleaseLocalRefCell => "codegen_wasm::refcell::lower_release_local_ref_cell",
         Op::IterCurrentValueRef => "codegen_wasm::refcell::lower_iter_current_value_ref",
+        Op::TryPushHandler => "codegen_wasm::inst::lower_try_push_handler",
+        Op::TryPopHandler => "codegen_wasm::inst::lower_try_pop_handler",
+        Op::ThrowException | Op::ThrowErrorValue => "codegen_wasm::inst::lower_throw",
+        Op::CatchCurrent => "codegen_wasm::inst::lower_catch_current",
+        Op::CatchBind => "codegen_wasm::inst::lower_catch_bind",
         _ => panic!(
             "supported opcode {} lacks an exact WASM lowerer inventory entry",
             op.name()
@@ -432,6 +454,12 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         Op::Warn => "warn",
         Op::ThrowError => "throw_error",
         Op::Acquire | Op::Release | Op::Move | Op::Borrow | Op::Nop => "ownership",
+        Op::TryPushHandler
+        | Op::TryPopHandler
+        | Op::ThrowException
+        | Op::ThrowErrorValue
+        | Op::CatchCurrent
+        | Op::CatchBind => "exception",
         _ => "other",
     }
 }
@@ -461,6 +489,7 @@ fn evidence_for_group(group: &'static str) -> EvidenceGroup {
         | "echo"
         | "warn"
         | "throw_error"
+        | "exception"
         | "ownership" => "codegen_wasm::inst",
         "transfer_refcell" => "codegen_wasm::refcell",
         "hash" => "codegen_wasm::inst_hash",

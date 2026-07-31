@@ -51,6 +51,23 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
         runtime::emit_command_runtime(&mut wm);
     }
 
+    // PHP needs exactly one exception tag: `throw` carries the exception object's
+    // heap pointer and the catching frame decides which clause matches. Declared
+    // only when some function actually throws or catches, so a module without
+    // exceptions carries neither the tag nor the current-exception slot.
+    if super::function::module_uses_exceptions(module) {
+        wm.add_tag(wat::Tag {
+            name: super::function::EXCEPTION_TAG.to_string(),
+            params: vec![wat::ValType::I32],
+        });
+        wm.add_global(wat::Global {
+            name: super::function::EXCEPTION_VALUE_GLOBAL.to_string(),
+            ty: wat::ValType::I32,
+            mutable: true,
+            init: 0,
+        });
+    }
+
     // Lay out every interned string literal as a data segment above the runtime
     // scratch region, recording (offset, byte_len) per DataId for ConstStr. The
     // float<->string scratch region sits between the concat buffer and the string
@@ -68,6 +85,11 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             .cmp(right.as_bytes())
             .then_with(|| left_id.cmp(right_id))
     });
+    // Content -> segment, so a class property default whose bytes are already interned shares
+    // that segment instead of laying out a second copy. First `DataId` wins, which is stable
+    // because `ordered_strings` is sorted by (bytes, id).
+    let mut interned_by_content: std::collections::HashMap<&str, (u32, u32)> =
+        std::collections::HashMap::new();
     for (data_id, string) in ordered_strings {
         let bytes = string.as_bytes();
         wm.add_data(wat::DataSegment {
@@ -75,8 +97,32 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             bytes: bytes.to_vec(),
         });
         str_literals[data_id] = (cursor, bytes.len() as u32);
+        interned_by_content
+            .entry(string.as_str())
+            .or_insert((cursor, bytes.len() as u32));
         // 4-align the next literal.
         cursor = (cursor + bytes.len() as u32 + 3) & !3;
+    }
+
+    // Object construction writes property defaults inline, so a string default has no `DataId`
+    // to address — see `objects::literal_default_strings`. Lay out the ones that are not
+    // already interned and key the whole set by content for `emit_scalar_default`.
+    let mut default_strings: std::collections::HashMap<String, (u32, u32)> =
+        std::collections::HashMap::new();
+    for value in objects::literal_default_strings(&module.class_infos) {
+        if let Some(&placed) = interned_by_content.get(value.as_str()) {
+            default_strings.insert(value, placed);
+            continue;
+        }
+        let bytes = value.as_bytes().to_vec();
+        let len = bytes.len() as u32;
+        wm.add_data(wat::DataSegment {
+            offset: cursor,
+            bytes,
+        });
+        default_strings.insert(value, (cursor, len));
+        // 4-align the next literal.
+        cursor = (cursor + len + 3) & !3;
     }
 
     // Emit the per-class gc_desc data (one runtime tag byte per property) plus the
@@ -172,6 +218,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             module,
             function,
             &str_literals,
+            &default_strings,
             &closure_tag_ptrs,
             &fcc_entries,
         )?;
@@ -193,6 +240,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             module,
             function,
             &str_literals,
+            &default_strings,
             &closure_tag_ptrs,
             &fcc_entries,
         )?;
@@ -210,6 +258,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             module,
             function,
             &str_literals,
+            &default_strings,
             &closure_tag_ptrs,
             &fcc_entries,
         )?;

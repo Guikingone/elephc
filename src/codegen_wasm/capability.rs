@@ -2173,16 +2173,42 @@ fn direct_call_shape_issue(
         let Some(value) = owner.value(result) else {
             return Some("call result is missing from the value table".to_string());
         };
-        if let Some(issue) = value_transfer_shape_issue(
+        if let Some(issue) = call_result_shape_issue(
             target.function.return_type,
             target.function.return_php_type.codegen_repr(),
-            value.ir_type,
-            value.php_type.codegen_repr(),
+            value,
         ) {
             return Some(format!("result: {issue}"));
         }
     }
     None
+}
+
+/// Validates the destination a call's result value is bound to.
+///
+/// A VOID callee leaves nothing on the stack: PHP gives the call expression the value `null`,
+/// and `transfer::emit_store_call_result` materializes that as the i64 null sentinel before
+/// transferring it. The audit describes the source the same way — `I64`/`Void` rather than
+/// `Void`/`Void` — so it classifies the transfer the emitter actually performs. Describing it as
+/// a `Void` SOURCE would model a zero-component value and refuse both shapes EIR emits for a
+/// void call: the `I64`/`null` result of a statement call, and the boxed Mixed result of one
+/// whose value flows into a `mixed` slot.
+fn call_result_shape_issue(
+    return_type: IrType,
+    return_php_type: PhpType,
+    value: &crate::ir::Value,
+) -> Option<String> {
+    let (source_ir, source_php) = if return_type == IrType::Void {
+        (IrType::I64, PhpType::Void)
+    } else {
+        (return_type, return_php_type)
+    };
+    value_transfer_shape_issue(
+        source_ir,
+        source_php,
+        value.ir_type,
+        value.php_type.codegen_repr(),
+    )
 }
 
 /// Validates the exact local/value/parameter metadata behind one by-reference
@@ -2488,6 +2514,8 @@ fn object_new_shape_issue(
                 | LiteralDefaultValue::BoxedInt(_)
                 | LiteralDefaultValue::BoxedBool(_)
                 | LiteralDefaultValue::BoxedFloat(_)
+                | LiteralDefaultValue::Str(_)
+                | LiteralDefaultValue::BoxedStr(_)
         ) {
             return Some(format!(
                 "property ${property} has a non-scalar default unsupported by WASM object construction"
@@ -2515,9 +2543,16 @@ fn object_new_shape_issue(
                 .map(String::as_str)
                 .unwrap_or(class_name);
             let Some(body) = find_method_function(module, implementation, &constructor_key) else {
-                return Some(format!(
-                    "constructor body {implementation}::__construct is missing"
-                ));
+                // A Throwable's constructor has a signature but no EIR body; construction
+                // open-codes its field writes (see `objects::emit_open_coded_throwable_constructor`).
+                return throwable_constructor_shape_issue(
+                    module,
+                    function,
+                    class_name,
+                    implementation,
+                    class_info,
+                    inst,
+                );
             };
             if let Some(issue) = method_body_signature_shape_issue(
                 body,
@@ -2537,18 +2572,76 @@ fn object_new_shape_issue(
                         "constructor argument #{index} is missing from the value table"
                     ));
                 };
-                if argument.ir_type != parameter.ir_type
-                    || argument.php_type.codegen_repr() != parameter.php_type.codegen_repr()
-                {
-                    return Some(format!(
-                        "constructor argument #{index} storage {:?}/{:?} differs from parameter {:?}/{:?}",
-                        argument.ir_type,
-                        argument.php_type.codegen_repr(),
-                        parameter.ir_type,
-                        parameter.php_type.codegen_repr()
-                    ));
+                // Same contract as a direct call's arguments: identical storage copies, and a
+                // concrete value bound to a `mixed` parameter boxes. Construction pushes its
+                // arguments through `transfer::emit_push_call_argument`, so requiring exact
+                // equality here would refuse `new C("s")` for `__construct(mixed $v)` — a
+                // transfer the backend performs — while adding no safety the classifier lacks.
+                if let Some(issue) = value_transfer_shape_issue(
+                    argument.ir_type,
+                    argument.php_type.codegen_repr(),
+                    parameter.ir_type,
+                    parameter.php_type.codegen_repr(),
+                ) {
+                    return Some(format!("constructor argument #{index}: {issue}"));
                 }
             }
+        }
+    }
+    None
+}
+
+/// Validates a construction whose constructor has a signature but no EIR body.
+///
+/// That combination is legitimate for exactly one family: `Throwable`. Its constructor is part
+/// of the prelude, and both backends open-code its field writes rather than calling a body — the
+/// native one in `lower_builtin_throwable_new`, the WASM one in
+/// `objects::emit_open_coded_throwable_constructor`. Every argument is audited against the
+/// property slot it will actually be written to, so this admits no more than a real constructor
+/// call would; any other class reaching here is still refused for the missing body.
+fn throwable_constructor_shape_issue(
+    module: &Module,
+    function: &Function,
+    class_name: &str,
+    implementation: &str,
+    class_info: &crate::types::ClassInfo,
+    inst: &Instruction,
+) -> Option<String> {
+    if !super::objects::needs_open_coded_throwable_constructor(module, class_name, implementation)
+    {
+        return Some(format!(
+            "constructor body {implementation}::__construct is missing"
+        ));
+    }
+    let properties = super::objects::THROWABLE_CONSTRUCTOR_PROPERTIES;
+    if inst.operands.len() > properties.len() {
+        return Some(format!(
+            "{class_name}::__construct received {} arguments, expected at most {}",
+            inst.operands.len(),
+            properties.len()
+        ));
+    }
+    for (index, (argument, property)) in inst.operands.iter().zip(properties.iter()).enumerate() {
+        let Some(argument) = function.value(*argument) else {
+            return Some(format!(
+                "constructor argument #{index} is missing from the value table"
+            ));
+        };
+        let Some(slot) = class_info
+            .properties
+            .iter()
+            .find(|(name, _)| name == property)
+        else {
+            return Some(format!(
+                "{class_name} declares no ${property} for its inherited Throwable constructor"
+            ));
+        };
+        if let Some(issue) = property_write_shape_issue(
+            argument.ir_type,
+            &argument.php_type,
+            &slot.1.codegen_repr(),
+        ) {
+            return Some(format!("constructor argument #{index} (${property}): {issue}"));
         }
     }
     None
@@ -2869,25 +2962,44 @@ fn property_set_shape_issue(
         return None;
     };
     let property_type = property_type.codegen_repr();
+    property_write_shape_issue(
+        source.ir_type,
+        &source.php_type,
+        &property_type,
+    )
+    .map(|issue| format!("property ${property}: {issue}"))
+}
+
+/// Validates one value against the DECLARED property slot it will be written into.
+///
+/// A Mixed/Union/Iterable slot holds a Mixed cell, so the write is the ordinary boxing transfer.
+/// A concrete slot is stored raw, so it demands an exact storage match — a narrower rule than the
+/// transfer contract, and deliberately so: there is no conversion step on that path.
+/// Shared by `PropSet` and by the inherited Throwable constructor that construction open-codes,
+/// so both are audited by the rule the emitter actually implements.
+fn property_write_shape_issue(
+    source_ir: IrType,
+    source_php: &PhpType,
+    property_type: &PhpType,
+) -> Option<String> {
     if matches!(
         property_type,
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
     ) {
         return value_transfer_shape_issue(
-            source.ir_type,
-            source.php_type.codegen_repr(),
+            source_ir,
+            source_php.codegen_repr(),
             IrType::Heap(IrHeapKind::Mixed),
             PhpType::Mixed,
         )
-        .map(|issue| format!("mixed property ${property}: {issue}"));
+        .map(|issue| format!("mixed slot: {issue}"));
     }
-    let source_php = source.php_type.codegen_repr();
-    if source_php != property_type
-        || transfer::validate_storage_pair(source.ir_type, &source.php_type).is_err()
+    let source_repr = source_php.codegen_repr();
+    if &source_repr != property_type
+        || transfer::validate_storage_pair(source_ir, source_php).is_err()
     {
         return Some(format!(
-            "property ${property} value {:?}/{source_php:?} must exactly match concrete slot {property_type:?}",
-            source.ir_type
+            "value {source_ir:?}/{source_repr:?} must exactly match concrete slot {property_type:?}"
         ));
     }
     None
@@ -3089,7 +3201,16 @@ fn static_method_call_shape_issue(
     direct_method_result_shape_issue(inst, body, &signature.return_type)
 }
 
-/// Validates user-argument arity, by-reference state, and PHP parameter types.
+/// Validates user-argument arity and by-reference state against the checker-owned signature.
+///
+/// Argument STORAGE is deliberately not checked here. The signature carries PHP types but no
+/// EIR types, so the strongest thing this function could assert is PHP-type equality — which is
+/// both weaker and stricter than the real contract: weaker because it cannot see the `IrType`
+/// the callee actually receives, and stricter because a concrete argument bound to a `mixed`
+/// parameter is a legal boxing transfer, not a mismatch. Every caller follows this with a body
+/// check (`method_body_argument_shape_issue`, or the constructor loop in
+/// `object_new_shape_issue`) that has both types and applies the transfer contract, so the
+/// argument audit lives there in full rather than half here.
 fn method_signature_shape_issue(
     owner: &Function,
     arguments: &[ValueId],
@@ -3108,18 +3229,9 @@ fn method_signature_shape_issue(
             arguments.len()
         ));
     }
-    for (index, (argument, (_, expected))) in
-        arguments.iter().zip(&signature.params).enumerate()
-    {
-        let Some(value) = owner.value(*argument) else {
+    for (index, argument) in arguments.iter().enumerate() {
+        if owner.value(*argument).is_none() {
             return Some(format!("argument #{index} is missing from the value table"));
-        };
-        if value.php_type.codegen_repr() != expected.codegen_repr() {
-            return Some(format!(
-                "argument #{index} has PHP type {:?}, expected {:?}",
-                value.php_type.codegen_repr(),
-                expected.codegen_repr()
-            ));
         }
     }
     None
@@ -4677,9 +4789,9 @@ pub(super) fn terminator_is_supported(terminator: &Terminator) -> bool {
         | Terminator::CondBr { .. }
         | Terminator::Switch { .. }
         | Terminator::Return { .. }
+        | Terminator::Throw { .. }
         | Terminator::Unreachable => true,
-        Terminator::Throw { .. }
-        | Terminator::Fatal { .. }
+        Terminator::Fatal { .. }
         | Terminator::GeneratorSuspend { .. } => false,
     }
 }
@@ -4799,6 +4911,12 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::Move
         | Op::Borrow
         | Op::MixedNumericBinop
+        | Op::TryPushHandler
+        | Op::TryPopHandler
+        | Op::ThrowException
+        | Op::ThrowErrorValue
+        | Op::CatchCurrent
+        | Op::CatchBind
         | Op::Nop => true,
         Op::ConstClassName
         | Op::ConstEnumCase
@@ -4918,12 +5036,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::PrintR
         | Op::ErrorSuppressBegin
         | Op::ErrorSuppressEnd
-        | Op::ThrowException
-        | Op::ThrowErrorValue
-        | Op::TryPushHandler
-        | Op::TryPopHandler
-        | Op::CatchCurrent
-        | Op::CatchBind
         | Op::FinallyEnter
         | Op::FinallyExit
         | Op::FiberRuntimeCall

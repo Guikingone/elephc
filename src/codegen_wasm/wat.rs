@@ -56,6 +56,17 @@ pub struct FuncImport {
 }
 
 /// A module global variable.
+/// A WebAssembly exception tag, the type of a thrown payload.
+///
+/// PHP needs exactly one: every `throw` carries the exception object's heap pointer,
+/// and the catching frame decides from that object which `catch` clause matches.
+pub struct Tag {
+    /// The internal symbol name without leading '$'.
+    pub name: String,
+    /// The value types the thrown payload carries.
+    pub params: Vec<ValType>,
+}
+
 pub struct Global {
     /// The internal symbol name without leading '$'.
     pub name: String,
@@ -222,6 +233,7 @@ pub struct WatModule {
     imports: Vec<FuncImport>,
     memory: Option<(u32, Option<String>)>,
     globals: Vec<Global>,
+    tags: Vec<Tag>,
     data_segments: Vec<DataSegment>,
     functions: Vec<FuncBuilder>,
     /// Pre-written `(func ...)` s-expressions for the hand-authored WAT runtime.
@@ -246,6 +258,7 @@ impl WatModule {
             imports: Vec::new(),
             memory: None,
             globals: Vec::new(),
+            tags: Vec::new(),
             data_segments: Vec::new(),
             functions: Vec::new(),
             raw_functions: Vec::new(),
@@ -279,6 +292,12 @@ impl WatModule {
     pub fn add_global(&mut self, g: Global) {
         self.globals.push(g);
     }
+
+    /// Declares an exception tag on this module.
+    pub fn add_tag(&mut self, tag: Tag) {
+        self.tags.push(tag);
+    }
+
 
     /// Adds a data segment to this module.
     ///
@@ -393,6 +412,15 @@ impl WatModule {
                     g.init
                 );
             }
+        }
+
+        // 3b. Exception tags
+        for tag in &self.tags {
+            let _ = write!(out, "  (tag ${}", tag.name);
+            for ty in &tag.params {
+                let _ = write!(out, " (param {})", ty.as_str());
+            }
+            let _ = writeln!(out, ")");
         }
 
         // 4. Data segments

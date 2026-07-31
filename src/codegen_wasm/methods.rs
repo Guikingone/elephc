@@ -859,7 +859,7 @@ fn collect_concrete_subtree(
 /// Returns the `Function` (whose `name` is `"{impl_class}::{original_method}"`)
 /// so the caller can both form the call symbol and read the authoritative
 /// parameter/result IR types for the stub signature.
-fn find_method_function<'a>(
+pub(super) fn find_method_function<'a>(
     class_methods: &'a [Function],
     impl_class: &str,
     method_key: &str,

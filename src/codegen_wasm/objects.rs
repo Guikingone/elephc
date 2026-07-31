@@ -46,7 +46,7 @@ use super::wat::{DataSegment, Global, ValType, WatModule};
 use super::WasmError;
 use crate::codegen::{literal_default_value, LiteralDefaultValue};
 use crate::ir::{
-    DataId, Function, Immediate, Instruction, IrHeapKind, IrType, Op, Ownership, ValueDef,
+    DataId, Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, Ownership, ValueDef,
     ValueId,
 };
 use crate::names::php_symbol_key;
@@ -102,6 +102,101 @@ pub(super) fn emit_gc_desc_stub(wm: &mut WatModule) {
 /// `generate()` calls this after the string-literal data and before computing `heap_base`, so
 /// the descriptor data lives in static memory below the heap and is never overwritten by
 /// allocation.
+/// The properties an inherited Throwable constructor initializes, in constructor-argument order.
+///
+/// `Exception::__construct(string $message = "", int $code = 0, ?Throwable $previous = null)` is
+/// the signature every built-in throwable shares, and these are the three slots it writes.
+pub(super) const THROWABLE_CONSTRUCTOR_PROPERTIES: [&str; 3] = ["message", "code", "previous"];
+
+/// Returns true when constructing `class_name` must open-code the inherited Throwable
+/// constructor instead of calling one.
+///
+/// Built-in throwables carry a constructor in the checker's signature table but have NO EIR
+/// method body — the native backend open-codes the same field writes in its
+/// `lower_builtin_throwable_new`, and a user subclass declaring no constructor of its own
+/// inherits exactly that situation. Requiring the class to actually BE a Throwable is what keeps
+/// this from papering over a genuinely missing body: an ordinary class whose constructor failed
+/// to be emitted still fails loudly rather than being constructed with its arguments quietly
+/// dropped into whichever properties happen to be declared first.
+pub(super) fn needs_open_coded_throwable_constructor(
+    module: &Module,
+    class_name: &str,
+    impl_class: &str,
+) -> bool {
+    let constructor_key = php_symbol_key("__construct");
+    if super::methods::find_method_function(&module.class_methods, impl_class, &constructor_key)
+        .is_some()
+    {
+        return false;
+    }
+    is_throwable_class(module, class_name)
+}
+
+/// Returns true when `class_name` implements `Throwable`, directly or through its parents.
+///
+/// The walk is depth-bounded rather than trusting the hierarchy to be acyclic: this runs inside
+/// a backend audit, where a malformed module must produce a rejection, not a hang.
+fn is_throwable_class(module: &Module, class_name: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    for _ in 0..64 {
+        let Some(name) = current else {
+            return false;
+        };
+        let Some(class_info) = module.class_infos.get(&name) else {
+            return false;
+        };
+        if class_info
+            .interfaces
+            .iter()
+            .any(|interface| interface == "Throwable")
+        {
+            return true;
+        }
+        current = class_info.parent.clone();
+    }
+    false
+}
+
+/// Returns every distinct string a class property default will materialize, sorted by content.
+///
+/// Object construction writes property defaults INLINE rather than calling the class's
+/// `_class_propinit_*` function, so a string default reaches `emit_scalar_default` as literal
+/// text with no `DataId` behind it — the address it needs cannot come from `str_literals`.
+/// `plan_module` lays these out as their own data segments (sharing the segment of an already
+/// interned literal with the same bytes) and hands the resulting content-keyed map to every
+/// lowered function, which is what lets `emit_scalar_default` resolve a default's address.
+///
+/// A default that `literal_default_value` rejects is skipped rather than reported: the
+/// capability audit refuses that module before planning, so its data would never be addressed.
+pub(super) fn literal_default_strings(class_infos: &HashMap<String, ClassInfo>) -> Vec<String> {
+    let mut strings: Vec<String> = Vec::new();
+    for class_info in class_infos.values() {
+        for (index, default) in class_info.defaults.iter().enumerate() {
+            let Some(default) = default else {
+                continue;
+            };
+            let Some((property, property_type)) = class_info.properties.get(index) else {
+                continue;
+            };
+            let Ok(literal) = literal_default_value(
+                &format!("property ${property}"),
+                property_type,
+                &default.kind,
+                "ObjectNew",
+            ) else {
+                continue;
+            };
+            if let LiteralDefaultValue::Str(value) | LiteralDefaultValue::BoxedStr(value) = literal {
+                if !strings.contains(&value) {
+                    strings.push(value);
+                }
+            }
+        }
+    }
+    strings.sort();
+    strings
+}
+
 pub(super) fn emit_gc_desc_table(
     wm: &mut WatModule,
     class_infos: &HashMap<String, ClassInfo>,
@@ -666,12 +761,50 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
             // The ctor symbol is the same `method_symbol("<Class>::__construct")` that
             // `function::lower_function` assigns to the class-method function, so a WAT
             // `call $<symbol>` resolves it. Push the fresh object ptr (`$this`) first
-            // (deepest = first param), then each user arg via `emit_load_value` in source
-            // order — the stack bottom->top `[obj, arg0, ...]` matches params `[this, ...]`.
+            // (deepest = first param), then each user arg in source order — the stack
+            // bottom->top `[obj, arg0, ...]` matches params `[this, ...]`.
+            //
+            // Arguments go through the typed transfer layer rather than a raw
+            // `emit_load_value`, for the same reason a direct call's do: the parameter's
+            // representation is the callee's, not the argument's, so a concrete value bound to
+            // a `mixed` parameter has to be boxed here. The body's parameters are read for
+            // their `IrType`, which the checker-owned signature does not carry.
+            if needs_open_coded_throwable_constructor(ctx.module, &class_name, &impl_class) {
+                emit_open_coded_throwable_constructor(ctx, &obj, &ci, &class_name, inst)?;
+                ctx.fb.ins(&format!("local.get {}", obj), "reload object pointer for result store");
+                store_result(ctx, inst)?;
+                return Ok(());
+            }
             let ctor_symbol = method_symbol(&format!("{}::{}", impl_class, "__construct"));
+            let ctor_params: Vec<(IrType, PhpType)> = {
+                let body = super::methods::find_method_function(
+                    &ctx.module.class_methods,
+                    &impl_class,
+                    &ctor_key,
+                )
+                .ok_or_else(|| {
+                    WasmError::Unsupported(format!(
+                        "constructor body {}::__construct is missing on wasm32-wasi",
+                        impl_class
+                    ))
+                })?;
+                body.params
+                    .iter()
+                    .skip(1)
+                    .map(|param| (param.ir_type, param.php_type.codegen_repr()))
+                    .collect()
+            };
+            if ctor_params.len() != inst.operands.len() {
+                return Err(WasmError::Unsupported(format!(
+                    "constructor body {}::__construct takes {} arguments, got {}",
+                    impl_class,
+                    ctor_params.len(),
+                    inst.operands.len()
+                )));
+            }
             ctx.fb.ins(&format!("local.get {}", obj), "push $this (fresh object) as first ctor arg");
-            for &arg in inst.operands.iter() {
-                ctx.emit_load_value(arg)?;
+            for (&arg, (param_ir, param_php)) in inst.operands.iter().zip(&ctor_params) {
+                super::transfer::emit_push_call_argument(ctx, arg, *param_ir, param_php.clone())?;
             }
             ctx.fb.ins(&format!("call ${}", ctor_symbol), "call ClassName::__construct($this, ...args)");
         }
@@ -683,12 +816,14 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
     Ok(())
 }
 
-/// Writes one scalar property default into the object slot at `offset`.
+/// Writes one scalar or string property default into the object slot at `offset`.
 ///
 /// Int/Bool store the value as i64 and zero the tag word; Float stores the raw f64 bits as i64
 /// (read back by `f64.load`) and zeroes the tag; Null leaves the slot zeroed. Boxed scalar/null
-/// variants allocate an owned Mixed cell and stamp tag 7 in the property slot. Strings, arrays,
-/// and sentinels remain unsupported.
+/// variants allocate an owned Mixed cell and stamp tag 7 in the property slot. A string default
+/// resolves its bytes by content (they carry no `DataId` at a construction site) and stores an
+/// OWNED heap copy, because the slot's gc_desc tag makes the object's release path decref it.
+/// Arrays and sentinels remain unsupported.
 fn emit_scalar_default(
     ctx: &mut FnCtx,
     obj: &str,
@@ -744,6 +879,47 @@ fn emit_scalar_default(
                 value.to_bits() as i64,
                 "float",
             );
+        }
+        LiteralDefaultValue::Str(value) => {
+            // The slot owns its string exactly like a `PropSet`-written one: the gc_desc tag
+            // for a Str property is 1, so `__rt_decref_object` will release this pointer when
+            // the object dies. It must therefore be an OWNED heap copy, never the static data
+            // segment — hence the persist rather than storing the literal address directly.
+            let (ptr, len) = ctx.default_str_literal(value)?;
+            ctx.fb.ins(&format!("i32.const {}", ptr), "string default literal ptr");
+            ctx.fb.ins(&format!("i64.const {}", len), "string default literal len");
+            ctx.fb.ins("call $__rt_str_persist", "persist an owned copy (ptr,len) -> (new_ptr,new_len)");
+            let len_tmp = ctx.fresh_temp(ValType::I64);
+            let ptr_tmp = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.set {}", len_tmp), "save persisted string len");
+            ctx.fb.ins(&format!("local.set {}", ptr_tmp), "save persisted string ptr");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("local.get {}", ptr_tmp), "persisted string ptr");
+            ctx.fb.ins("i64.extend_i32_u", "widen string ptr to i64 lo");
+            ctx.fb.ins(&format!("i64.store offset={}", offset), "store string default value_lo (ptr)");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("local.get {}", len_tmp), "persisted string len");
+            ctx.fb.ins(&format!("i64.store offset={}", offset + 8), "store string default value_hi (len)");
+        }
+        LiteralDefaultValue::BoxedStr(value) => {
+            // A `mixed`/union slot holds a Mixed cell, so the string is boxed rather than
+            // stored raw. `__rt_mixed_from_value` persists its own copy for tag 1, so no
+            // separate `__rt_str_persist` is needed here.
+            let (ptr, len) = ctx.default_str_literal(value)?;
+            ctx.fb.ins("i64.const 1", "mixed string tag");
+            ctx.fb.ins(&format!("i32.const {}", ptr), "string default literal ptr");
+            ctx.fb.ins("i64.extend_i32_u", "widen string ptr to i64 lo");
+            ctx.fb.ins(&format!("i64.const {}", len), "string default literal len -> hi");
+            ctx.fb.ins("call $__rt_mixed_from_value", "box string default into a mixed cell");
+            let cell = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(&format!("local.set {}", cell), "save boxed string default cell");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins(&format!("local.get {}", cell), "boxed string default cell");
+            ctx.fb.ins("i64.extend_i32_u", "widen mixed cell pointer");
+            ctx.fb.ins(&format!("i64.store offset={}", offset), "store mixed property value_lo");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins("i64.const 7", "mixed property runtime tag");
+            ctx.fb.ins(&format!("i64.store offset={}", offset + 8), "store mixed property value_hi");
         }
         other => {
             return Err(WasmError::Unsupported(format!(
@@ -940,14 +1116,11 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
 
 /// Lowers `Op::PropSet` of a declared property slot to a direct memory store.
 ///
-/// `PropSet` is void with operands `[object, value]`. Scalar arms (Int/Bool/Float) write the
-/// value directly and zero the tag word. Refcounted arms (Str, Array/AssocArray/Object,
-/// Mixed/Union/Iterable) first release the previous slot value (null-safe via
-/// `__rt_decref_any`), then retain + persist the incoming value and store lo (as i64) plus the
-/// hi-word (runtime tag, or string length). A Mixed/Union/Iterable slot transfers an owned Mixed
-/// cell, retains an independently owned borrowed/local-loaded cell, or boxes a concrete value via
-/// `emit_box_value_into_mixed`. Non-object receivers, undeclared properties, and Resource values
-/// return `Unsupported`.
+/// `PropSet` is void with operands `[object, value]`. An undeclared property on an ADP /
+/// stdClass receiver writes through the dynamic-property hash tail; a declared one resolves its
+/// slot and hands the store to `emit_declared_property_store`, which owns the per-type
+/// release/retain rules. Non-object receivers and undeclared properties on a class without the
+/// dynamic tail return `Unsupported`.
 pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let object = operand(inst, 0)?;
     let value = operand(inst, 1)?;
@@ -969,7 +1142,64 @@ pub(super) fn lower_prop_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     let prop_type = prop_type.codegen_repr();
     let obj_ref = object_ptr_ref(ctx, object)?;
 
-    match &prop_type {
+    emit_declared_property_store(ctx, &obj_ref, offset, &prop_type, value, &property)
+}
+
+/// Open-codes the inherited Throwable constructor: each supplied argument is written into its
+/// property slot, and an omitted trailing argument leaves the property default in place.
+///
+/// This is the WASM counterpart of the native `lower_builtin_throwable_new` field writes. The
+/// stores go through `emit_declared_property_store`, so a message overwriting the `""` default
+/// releases that default's heap copy instead of leaking it — the reason this cannot simply
+/// stamp the slots.
+fn emit_open_coded_throwable_constructor(
+    ctx: &mut FnCtx,
+    obj: &str,
+    class_info: &ClassInfo,
+    class_name: &str,
+    inst: &Instruction,
+) -> Result<()> {
+    if inst.operands.len() > THROWABLE_CONSTRUCTOR_PROPERTIES.len() {
+        return Err(WasmError::Unsupported(format!(
+            "{}::__construct with {} arguments on wasm32-wasi, expected at most {}",
+            class_name,
+            inst.operands.len(),
+            THROWABLE_CONSTRUCTOR_PROPERTIES.len()
+        )));
+    }
+    for (&argument, property) in inst
+        .operands
+        .iter()
+        .zip(THROWABLE_CONSTRUCTOR_PROPERTIES.iter())
+    {
+        let (_, offset, property_type) = resolve_property_slot(class_info, property)?;
+        let property_type = property_type.codegen_repr();
+        emit_declared_property_store(ctx, obj, offset, &property_type, argument, property)?;
+    }
+    Ok(())
+}
+
+/// Writes one value into a DECLARED property slot, honoring that slot's ownership rules.
+///
+/// Shared by `PropSet` and by the inherited Throwable constructor that object construction
+/// open-codes, so both obey one set of release/retain rules rather than two that can drift.
+/// Scalar arms (Int/Bool/Float) write the value directly and zero the tag word. Refcounted
+/// arms (Str, Array/AssocArray/Object, Mixed/Union/Iterable) first release whatever the slot
+/// already holds (null-safe via `__rt_decref_any`, which is what makes this correct over a
+/// slot that a property default already populated), then retain + persist the incoming value
+/// and store lo plus the hi-word (runtime tag, or string length). A Mixed/Union/Iterable slot
+/// transfers an owned Mixed cell, retains an independently owned borrowed/local-loaded cell,
+/// or boxes a concrete value via `emit_box_value_into_mixed`. Resource values and any other
+/// declared type return `Unsupported`.
+fn emit_declared_property_store(
+    ctx: &mut FnCtx,
+    obj_ref: &str,
+    offset: usize,
+    prop_type: &PhpType,
+    value: ValueId,
+    property: &str,
+) -> Result<()> {
+    match prop_type {
         PhpType::Int | PhpType::Bool => {
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.emit_load_value(value)?;

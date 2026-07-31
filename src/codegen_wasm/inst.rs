@@ -61,6 +61,11 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ICheckedSub => lower_checked_int_binop(ctx, &inst, "sub"),
         Op::ICheckedMul => lower_checked_int_binop(ctx, &inst, "mul"),
         Op::MixedNumericBinop => lower_mixed_numeric_binop(ctx, &inst),
+        Op::TryPushHandler => lower_try_push_handler(ctx, &inst),
+        Op::TryPopHandler => lower_try_pop_handler(ctx, &inst),
+        Op::ThrowException | Op::ThrowErrorValue => lower_throw(ctx, &inst),
+        Op::CatchCurrent => lower_catch_current(ctx, &inst),
+        Op::CatchBind => lower_catch_bind(ctx, &inst),
         Op::IBitAnd => lower_int_binop(ctx, &inst, "i64.and"),
         Op::IBitOr => lower_int_binop(ctx, &inst, "i64.or"),
         Op::IBitXor => lower_int_binop(ctx, &inst, "i64.xor"),
@@ -802,6 +807,97 @@ fn emit_runtime_failure(ctx: &mut FnCtx, failure_code: i32, reason: &str) {
 }
 
 /// Lowers PHP integer add/subtract/multiply with overflow promotion to a boxed float.
+/// Returns the try token carried by a handler opcode.
+fn try_token(inst: &Instruction) -> Result<i64> {
+    match inst.immediate {
+        Some(Immediate::I64(token)) => Ok(token),
+        _ => Err(WasmError::Unsupported(format!(
+            "{} without a try-token immediate",
+            inst.op.name()
+        ))),
+    }
+}
+
+/// Lowers `TryPushHandler`: arms this `try`'s catch block for the enclosing frame.
+///
+/// The token is the catch block's index. Because an EIR block is a flat `br_table`
+/// case rather than a lexical region, arming a handler is just recording where the
+/// landing pad should resume; the enclosing handler is stowed in this token's save
+/// slot so `TryPopHandler` can restore it, which is what makes nested `try` work.
+fn lower_try_push_handler(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let token = try_token(inst)?;
+    let save = ctx
+        .handler_saves
+        .get(&token)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("try token {} has no save slot", token)))?;
+    ctx.fb
+        .ins(&format!("local.get {}", ctx.handler_local), "enclosing handler");
+    ctx.fb
+        .ins(&format!("local.set {}", save), "stow it for the matching pop");
+    ctx.fb
+        .ins(&format!("i32.const {}", token), "this try's catch block");
+    ctx.fb
+        .ins(&format!("local.set {}", ctx.handler_local), "arm the handler");
+    Ok(())
+}
+
+/// Lowers `TryPopHandler`: restores the handler armed before the matching push.
+fn lower_try_pop_handler(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let token = try_token(inst)?;
+    let save = ctx
+        .handler_saves
+        .get(&token)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("try token {} has no save slot", token)))?;
+    ctx.fb.ins(&format!("local.get {}", save), "enclosing handler");
+    ctx.fb
+        .ins(&format!("local.set {}", ctx.handler_local), "disarm this try");
+    Ok(())
+}
+
+/// Lowers `ThrowException` and `ThrowErrorValue`: raises the PHP exception tag.
+///
+/// The payload is the exception object's pointer, so a frame that catches can inspect
+/// the object to pick its matching clause. `throw` does not return, so nothing follows.
+fn lower_throw(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(
+        &format!("throw ${}", super::function::EXCEPTION_TAG),
+        "raise the PHP exception",
+    );
+    Ok(())
+}
+
+/// Lowers `CatchCurrent`: reads the exception the landing pad published.
+///
+/// Mirrors the native backend, which loads the same value from its `_exc_value` symbol.
+fn lower_catch_current(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.fb.ins(
+        &format!("global.get ${}", super::function::EXCEPTION_VALUE_GLOBAL),
+        "the exception being handled",
+    );
+    store_result(ctx, inst)
+}
+
+/// Lowers `CatchBind`: takes the exception into an owned result and clears the slot.
+///
+/// Unlike `CatchCurrent`, which only reads, binding transfers ownership to `$e`, so the
+/// runtime slot is cleared to avoid a second owner. Mirrors the native backend.
+fn lower_catch_bind(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.fb.ins(
+        &format!("global.get ${}", super::function::EXCEPTION_VALUE_GLOBAL),
+        "take the exception being handled",
+    );
+    store_result(ctx, inst)?;
+    ctx.fb.ins("i32.const 0", "no exception is in flight now");
+    ctx.fb.ins(
+        &format!("global.set ${}", super::function::EXCEPTION_VALUE_GLOBAL),
+        "clear the slot; the binding owns it",
+    );
+    Ok(())
+}
+
 /// Lowers `MixedNumericBinop`: PHP `+`, `-`, or `*` over two boxed Mixed operands.
 ///
 /// Both operands are already `Mixed` cells, so the whole computation — operand

@@ -538,7 +538,11 @@ fn has_noreturn_predecessor(
 /// Verifies the WAT location associated with one registered invariant proof.
 fn validate_invariant_site(site: &UnreachableSite) -> Result<(), String> {
     let valid_location = match site.site.as_str() {
-        "dispatch-loop-tail" | "dispatch-state-range" | "eir-unreachable" => {
+        // `try-table-tail` closes the exception-guarded region of a dispatch loop. Control
+        // leaves that region only by branching — to the landing pad on a thrown exception, or
+        // out of the loop on return — so falling off its end is unreachable for the same reason
+        // `dispatch-loop-tail` is, and it lives in exactly the same functions.
+        "dispatch-loop-tail" | "dispatch-state-range" | "eir-unreachable" | "try-table-tail" => {
             site.function.starts_with("$fn_") || site.function == "$_entry"
         }
         "hash-capacity-limit" => site.function == "$__rt_hash_zend_table_size",

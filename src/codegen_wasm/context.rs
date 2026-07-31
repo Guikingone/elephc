@@ -71,6 +71,13 @@ pub(super) struct FnCtx<'a> {
     pub(super) slot_locals: HashMap<u32, WasmRepr>,
     /// The `$__state` local holding the current block index for dispatch.
     pub(super) state_local: String,
+    /// Local holding the catch-block index of the innermost armed `try` handler.
+    ///
+    /// The landing pad copies it into `state_local` to resume dispatch inside the
+    /// catch block. Only functions that use exceptions declare it.
+    pub(super) handler_local: String,
+    /// Per-try-token save slot holding the handler that was armed on entry.
+    pub(super) handler_saves: std::collections::HashMap<i64, String>,
     /// Per-function local holding this frame's baseline value of the global
     /// `$__concat_off` cursor, captured in the prologue. `ConcatReset` restores
     /// `$__concat_off` to this so statement-boundary resets free temporaries.
@@ -80,6 +87,13 @@ pub(super) struct FnCtx<'a> {
     /// String-literal layout indexed by `DataId.as_raw()`: `(byte_offset, byte_len)`
     /// of each interned string's data segment in linear memory.
     pub(super) str_literals: &'a [(u32, u32)],
+    /// Class property STRING defaults, keyed by content rather than by `DataId`.
+    ///
+    /// Object construction writes defaults inline instead of calling the class's
+    /// `_class_propinit_*` function, so a string default arrives as literal text
+    /// with no `DataId` to address — see `objects::literal_default_strings`, which
+    /// is also what guarantees every default reachable here has an entry.
+    pub(super) default_strings: &'a HashMap<String, (u32, u32)>,
     /// Per-closure capture-tag-byte-array base address, indexed by the closure's
     /// position in `module.closures` (its `entry_index`). `0` for a no-capture
     /// closure (no tag array emitted). `ClosureNew` stamps this as the
@@ -187,6 +201,20 @@ impl<'a> FnCtx<'a> {
             .get(data_id.as_raw() as usize)
             .copied()
             .ok_or_else(|| WasmError::Unsupported(format!("unknown string literal {:?}", data_id)))
+    }
+
+    /// Resolves a class property string default's `(byte_offset, byte_len)` in linear memory.
+    ///
+    /// Returns `Err(WasmError::Unsupported)` if the content was never laid out, which can only
+    /// happen if `plan_module` and the object-construction lowering disagree about which
+    /// defaults are materializable — never for a module the capability audit admitted.
+    pub(super) fn default_str_literal(&self, value: &str) -> Result<(u32, u32)> {
+        self.default_strings.get(value).copied().ok_or_else(|| {
+            WasmError::Unsupported(format!(
+                "string property default {:?} has no data segment",
+                value
+            ))
+        })
     }
 
     /// Resolves the capture-tag-byte-array base address for the closure whose

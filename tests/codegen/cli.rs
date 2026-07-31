@@ -1976,10 +1976,6 @@ fn test_cli_wasm_rejects_unproven_object_iterator_and_global_shapes() {
     let php_path = dir.join("main.php");
     let cases = [
         (
-            r#"<?php class C { public string $name = "x"; } echo (new C())->name;"#,
-            "non-scalar default unsupported by WASM object construction",
-        ),
-        (
             r#"<?php class C { public int $value; } $c = new C(); echo $c->value;"#,
             "may be uninitialized and requires an exact PHP fatal check",
         ),
@@ -2440,6 +2436,342 @@ echo 1 + 2;
         asm.contains(".loc 1 2 "),
         "expected a .loc directive for PHP line 2: {asm}"
     );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies PHP `try`/`catch`/`throw` lowers to the Core WebAssembly exception forms.
+///
+/// The shapes asserted here are the whole of the design: one module-level `tag` carrying the
+/// exception object pointer, a `try_table` wrapping the dispatch loop, a `throw` at the raise
+/// site, and a landing pad that turns the catch into an ordinary dispatch-state transition.
+/// Asserting on the emitted WAT rather than on program output keeps this test meaningful on a
+/// machine with no exceptions-capable host installed.
+#[test]
+fn test_cli_wasm_try_catch_lowers_to_core_exception_forms() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_try_catch_forms");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Boom extends Exception {
+}
+
+function risky(int $n): void {
+    if ($n < 0) {
+        throw new Boom();
+    }
+    echo "ok\n";
+}
+
+try {
+    risky(1);
+    risky(-1);
+} catch (Boom $e) {
+    echo "caught\n";
+}
+echo "done\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile try/catch to WASM");
+    assert!(
+        output.status.success(),
+        "try/catch compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let wat = fs::read_to_string(dir.join("main.wat")).expect("missing emitted WAT");
+    assert!(
+        wat.contains("(tag $__php_exc (param i32))"),
+        "expected the PHP exception tag: {wat}"
+    );
+    assert!(
+        wat.contains("(try_table (catch $__php_exc $__caught)"),
+        "expected the dispatch loop to be guarded: {wat}"
+    );
+    assert!(
+        wat.contains("throw $__php_exc"),
+        "expected the raise site to throw the tag: {wat}"
+    );
+    assert!(
+        wat.contains("global.set $__exc_value"),
+        "expected the landing pad to publish the caught exception: {wat}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies thrown exceptions select the matching `catch` clause and reach the right frame.
+///
+/// Runs the compiled module under Node's WASI, which implements the Core WebAssembly exception
+/// proposal; the expected output is php-src's own for the same program. Skipped when no Node is
+/// installed, so `test_cli_wasm_try_catch_lowers_to_core_exception_forms` remains the assertion
+/// that always runs.
+#[test]
+fn test_cli_wasm_try_catch_dispatch_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_try_catch_dispatch");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class AlphaError extends Exception {
+}
+
+class BetaError extends Exception {
+}
+
+function pick(int $n): void {
+    if ($n === 1) {
+        throw new AlphaError();
+    }
+    if ($n === 2) {
+        throw new BetaError();
+    }
+    echo "none\n";
+}
+
+foreach ([0, 1, 2] as $n) {
+    try {
+        pick($n);
+        echo "no throw\n";
+    } catch (AlphaError $e) {
+        echo "alpha\n";
+    } catch (BetaError $e) {
+        echo "beta\n";
+    }
+}
+
+try {
+    try {
+        throw new AlphaError();
+    } catch (BetaError $e) {
+        echo "inner-wrong\n";
+    }
+} catch (AlphaError $e) {
+    echo "outer-right\n";
+}
+
+echo "end\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile catch dispatch to WASM");
+    assert!(
+        output.status.success(),
+        "catch dispatch compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run catch dispatch under Node");
+    // Node without exception support fails to compile the module rather than misbehaving;
+    // treat that as "no capable host" rather than a lowering failure.
+    if !run.status.success()
+        && String::from_utf8_lossy(&run.stderr).contains("CompileError")
+    {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        run.status.success(),
+        "catch dispatch trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5's own output for the same program.
+    let expected = concat!(
+        "none\n",
+        "no throw\n",
+        "alpha\n",
+        "beta\n",
+        "outer-right\n",
+        "end\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an exception nobody catches is PHP's fatal, not an escape into the host.
+///
+/// A WebAssembly exception that unwinds out of `_start` would surface as a host-level crash with
+/// no PHP diagnostic at all, so `main` is guarded even when it contains no `catch`. The exit
+/// status is php-src's 255. The message text is deliberately not compared: reproducing PHP's
+/// `Uncaught Exception: <message> in <file>:<line>` needs the built-in Throwable accessors,
+/// which this target does not lower yet.
+#[test]
+fn test_cli_wasm_uncaught_exception_is_a_php_fatal() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_uncaught_exception");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\necho \"before\\n\";\nthrow new Exception();\n",
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the uncaught throw to WASM");
+    assert!(
+        output.status.success(),
+        "uncaught throw compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the uncaught throw under Node");
+    if String::from_utf8_lossy(&run.stderr).contains("CompileError") {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "before\n",
+        "output before the throw must still be flushed"
+    );
+    assert_eq!(
+        run.status.code(),
+        Some(255),
+        "an uncaught PHP exception exits 255: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a class property STRING default is materialized, raw and boxed.
+///
+/// Object construction writes defaults inline rather than through the class's
+/// `_class_propinit_*` function, so a string default has no `DataId` to address at the
+/// construction site and needs its own content-keyed data segment. A `mixed` slot exercises the
+/// boxed arm, where the string becomes a Mixed cell rather than a raw (ptr, len) pair.
+#[test]
+fn test_cli_wasm_string_property_defaults_are_materialized() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_string_property_defaults");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class C {
+    public string $name = "x";
+    public mixed $tag = "boxed";
+}
+
+$c = new C();
+echo $c->name, "|", $c->tag, "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile string property defaults to WASM");
+    assert!(
+        output.status.success(),
+        "string property default compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run string property defaults under Node");
+    assert!(
+        run.status.success(),
+        "string property defaults trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // php-src 8.5's own output for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "x|boxed\n");
 
     let _ = fs::remove_dir_all(&dir);
 }

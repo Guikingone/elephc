@@ -60,6 +60,13 @@ const ERR_CALLABLE_DISPATCH: &[u8] =
     b"PHP Fatal error: Uncaught Error: Invalid callable dispatch\n";
 const ERR_MIXED_HEAP_TYPE: &[u8] =
     b"PHP Fatal error: Uncaught TypeError: Value does not match the required heap type\n";
+/// A PHP exception that reaches the top of `main` with no `catch` to receive it.
+///
+/// KNOWN DIVERGENCE: reference PHP names the class and message and prints the file, line and
+/// stack trace (`Uncaught Exception: boom in /path.php:4`). Reproducing that needs the built-in
+/// Throwable accessors, which this target does not lower yet, so the diagnostic is currently
+/// class-agnostic. The EXIT STATUS is PHP's — 255 — which is the observable most callers act on.
+const ERR_UNCAUGHT_EXCEPTION: &[u8] = b"PHP Fatal error: Uncaught exception\n";
 const ERR_METHOD_CALL_PREFIX: &[u8] =
     b"PHP Fatal error: Uncaught Error: Call to a member function ";
 const ERR_METHOD_CALL_SUFFIX: &[u8] = b"() on ";
@@ -102,6 +109,7 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_HASH_APPEND_OCCUPIED.len() as u32
     + ERR_CALLABLE_DISPATCH.len() as u32
     + ERR_MIXED_HEAP_TYPE.len() as u32
+    + ERR_UNCAUGHT_EXCEPTION.len() as u32
     + ERR_METHOD_CALL_PREFIX.len() as u32
     + ERR_METHOD_CALL_SUFFIX.len() as u32
     + PHP_TYPE_INT.len() as u32
@@ -193,8 +201,9 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
 /// Error code 1 is division by zero, 2 modulo by zero, 3 a negative shift,
 /// 4 `PHP_INT_MIN / -1` for integer division, 5 a WASI boundary failure, and
 /// 6 allocator exhaustion or arithmetic overflow, 7 an occupied saturated
-/// array append key, 8 a rejected callable dispatch, and 9 a runtime Mixed
-/// heap-kind mismatch.
+/// array append key, 8 a rejected callable dispatch, 9 a runtime Mixed
+/// heap-kind mismatch, and 10 a PHP exception that reached the top of `main`
+/// uncaught.
 /// The helper writes the selected message to stderr, exits with status 255, and
 /// ends in `unreachable` so validation does not treat `proc_exit` as returning.
 /// The same data region also owns the warning fragments used by the non-fatal
@@ -210,6 +219,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_HASH_APPEND_OCCUPIED,
         ERR_CALLABLE_DISPATCH,
         ERR_MIXED_HEAP_TYPE,
+        ERR_UNCAUGHT_EXCEPTION,
     ];
     let method_messages = [
         ERR_METHOD_CALL_PREFIX,
