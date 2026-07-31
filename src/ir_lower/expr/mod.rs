@@ -14,6 +14,7 @@ use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
     MixedNumericOp, Op, Ownership, StrBitKind, Terminator, ValueId,
 };
+use crate::ir_lower::checked_downcast::{CalleeLabel, DowncastPosition, emit_checked_downcast};
 use crate::ir_lower::context::{
     value_ir_type, ByRefPropWriteback, ClosureCapture, LoweredValue, LoweringContext,
     StaticCallableBinding,
@@ -2339,7 +2340,7 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     }
     let sig = call_signature(ctx, canonical, args);
     let operands = if is_extern || is_user_function {
-        lower_args_with_signature(ctx, sig.as_ref(), args)
+        lower_args_with_signature_labeled(ctx, sig.as_ref(), args, CalleeLabel::Named(canonical))
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
@@ -2515,7 +2516,9 @@ fn emit_builtin_call_value(
             // not accept. Mirrors main's `coerce_scalar_arg_to_param_storage`.
             let registry_signature = crate::builtins::registry::function_sig(name);
             let operands = match registry_signature.as_ref() {
-                Some(reg_sig) => coerce_operands_to_params(ctx, reg_sig, operands),
+                Some(reg_sig) => {
+                    coerce_operands_to_params(ctx, reg_sig, operands, CalleeLabel::Named(name))
+                }
                 None => operands,
             };
             let lowered = crate::builtins::semantics::lower_registry_call(
@@ -6418,16 +6421,24 @@ fn coerce_scalar_arg_to_param_storage(
     value
 }
 
-/// Normalizes reordered call operands to their declared scalar parameter storage.
+/// Normalizes reordered call operands to their declared parameter storage.
 ///
 /// Named and spread arguments are evaluated in source order and then reordered, so their
 /// int-to-float and Mixed-to-string conversions happen here in parameter order. By-reference
 /// parameters and the variadic tail remain untouched. String conversions become owned EIR
 /// values so normal alias-aware call cleanup can transfer or release them safely.
+///
+/// This is also where the call boundary's CHECKED DOWNCAST guard is emitted, before the scalar
+/// coercions (the two are disjoint: one covers object slots, the others scalar slots). The guard
+/// mirrors the checker's `Checker::call_arg_downcast_guardable` acceptance, and its ok-edge value
+/// — which for a boxed argument reaching a concrete object parameter is a freshly unboxed, owned
+/// raw object pointer — replaces the operand under the same ownership contract as the string
+/// conversions above.
 fn coerce_operands_to_params(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     mut operands: Vec<crate::ir::ValueId>,
+    callee: CalleeLabel<'_>,
 ) -> Vec<crate::ir::ValueId> {
     let regular_param_count = crate::types::call_args::regular_param_count(sig);
     let limit = operands.len().min(regular_param_count);
@@ -6435,9 +6446,33 @@ fn coerce_operands_to_params(
         if sig.ref_params.get(index).copied().unwrap_or(false) {
             continue;
         }
-        let Some((_, param_ty)) = sig.params.get(index) else {
+        let Some((param_name, param_ty)) = sig.params.get(index) else {
             continue;
         };
+        // ONLY a DECLARED parameter type is enforceable. For an undeclared parameter `param_ty` is
+        // a type elephc INFERRED, and PHP checks nothing there — guarding it would throw a
+        // `TypeError` on a program PHP runs (`function pick($x) { if ($x instanceof A) … }` infers
+        // `A`, then every non-`A` caller would be rejected at runtime). The checker gates its
+        // matching acceptance on the same bit.
+        if sig.declared_params.get(index).copied().unwrap_or(false) {
+            // The DECLARED parameter type, not its `codegen_repr()`: the guard needs the declared
+            // arms to know which classes it may test and how to spell the type in its message.
+            let guarded = emit_checked_downcast(
+                ctx,
+                LoweredValue {
+                    value: operands[index],
+                    ir_type: ctx.builder.value_type(operands[index]),
+                },
+                param_ty,
+                DowncastPosition::Argument {
+                    callee,
+                    index,
+                    param: param_name,
+                },
+                None,
+            );
+            operands[index] = guarded.value;
+        }
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
         let param_ty = param_ty.codegen_repr();
@@ -6589,21 +6624,73 @@ fn release_surplus_positional_call_operands(
     operands
 }
 
+/// Returns PHP's own spelling of a method callee in a `TypeError` message: `C::m`, where `C` is
+/// the DECLARING class, not the receiver's. PHP names the class the method is implemented in, so
+/// `Sub::m()` inherited from `K` reports `K::m()`.
+fn method_callee_label(ctx: &LoweringContext<'_, '_>, class_name: &str, method: &str) -> String {
+    let normalized = class_name.trim_start_matches('\\');
+    let method_key = php_symbol_key(method);
+    let owner = ctx
+        .classes
+        .get(normalized)
+        .and_then(|class_info| class_info.method_impl_classes.get(&method_key))
+        .map(String::as_str)
+        .unwrap_or(normalized);
+    format!("{}::{}", owner, method)
+}
+
+/// Returns the `C::m` callee label for a method call on `object`, or `None` when the receiver's
+/// class is not statically singular (a dynamic receiver has no one class to name).
+fn receiver_method_callee_label(
+    ctx: &LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+) -> Option<String> {
+    let object_ty = ctx.builder.value_php_type(object);
+    let (class_name, _) = singular_object_class(&object_ty)?;
+    Some(method_callee_label(ctx, class_name, method))
+}
+
+/// Wraps an optional resolved callee name into a `CalleeLabel`; an unresolved name degrades the
+/// message rather than suppressing the guard.
+fn callee_label_of(label: Option<&str>) -> CalleeLabel<'_> {
+    match label {
+        Some(name) => CalleeLabel::Named(name),
+        None => CalleeLabel::Unknown,
+    }
+}
+
 /// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
+///
+/// Shim for the call sites that have not been wired to name their callee yet: the checked-downcast
+/// guard is still emitted, only its `TypeError` message degrades (it drops the `F(): ` prefix).
+/// Skipping the guard instead would make checker acceptance and lowering emission disagree, and
+/// that disagreement surfaces as a wrong-representation read rather than as a compile error.
 fn lower_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
     args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    lower_args_with_signature_labeled(ctx, sig, args, CalleeLabel::Unknown)
+}
+
+/// Lowers positional call arguments, naming `callee` in any checked-downcast `TypeError` the
+/// argument boundary throws.
+fn lower_args_with_signature_labeled(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    callee: CalleeLabel<'_>,
 ) -> Vec<crate::ir::ValueId> {
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
     if crate::types::call_args::has_named_args(args) {
         let operands = lower_named_args_with_signature(ctx, sig, args);
-        return coerce_operands_to_params(ctx, sig, operands);
+        return coerce_operands_to_params(ctx, sig, operands, callee);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
-        return coerce_operands_to_params(ctx, sig, operands);
+        return coerce_operands_to_params(ctx, sig, operands, callee);
     }
     let static_spread_args = if has_static_call_spread_args(args) {
         Some(expand_static_call_spread_args(args))
@@ -6612,7 +6699,7 @@ fn lower_args_with_signature(
     };
     let args = static_spread_args.as_deref().unwrap_or(args);
     if let Some(operands) = lower_assoc_spread_only_args(ctx, sig, args) {
-        return coerce_operands_to_params(ctx, sig, operands);
+        return coerce_operands_to_params(ctx, sig, operands, callee);
     }
     if args.iter().any(is_spread_arg) {
         return lower_args(ctx, args);
@@ -6637,7 +6724,7 @@ fn lower_args_with_signature(
         // declared params, so surplus operands are dropped here, releasing any owned temporary
         // among them so a discarded fresh allocation is not leaked.
         let operands = release_surplus_positional_call_operands(ctx, operands, regular_param_count);
-        return coerce_operands_to_params(ctx, sig, operands);
+        return coerce_operands_to_params(ctx, sig, operands, callee);
     }
     let mut operands: Vec<crate::ir::ValueId> = args[..fixed_arg_count]
         .iter()
@@ -6658,7 +6745,7 @@ fn lower_args_with_signature(
         };
         operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
     }
-    coerce_operands_to_params(ctx, sig, operands)
+    coerce_operands_to_params(ctx, sig, operands, callee)
 }
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.
@@ -11608,7 +11695,13 @@ fn lower_new_object(
         );
     }
     let sig = constructor_signature(ctx, class_name).cloned();
-    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let constructor_label = method_callee_label(ctx, class_name, "__construct");
+    let mut operands = lower_args_with_signature_labeled(
+        ctx,
+        sig.as_ref(),
+        args,
+        CalleeLabel::Named(&constructor_label),
+    );
     if let (Some(sig), Some(callee_key)) = (
         sig.as_ref(),
         constructor_arity_hungry_callee_key(ctx, class_name),
@@ -12902,7 +12995,13 @@ fn lower_method_call(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
-    let mut arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let method_label = receiver_method_callee_label(ctx, object.value, dispatch_method);
+    let mut arg_values = lower_args_with_signature_labeled(
+        ctx,
+        sig.as_ref(),
+        args,
+        callee_label_of(method_label.as_deref()),
+    );
     if let (Some(sig), Some(callee_key)) = (
         sig.as_ref(),
         instance_method_arity_hungry_callee_key(ctx, object.value, dispatch_method),
@@ -15579,7 +15678,13 @@ fn lower_method_call_with_receiver(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
-    let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
+    let method_label = receiver_method_callee_label(ctx, object.value, dispatch_method);
+    let arg_values = lower_args_with_signature_labeled(
+        ctx,
+        sig.as_ref(),
+        args,
+        callee_label_of(method_label.as_deref()),
+    );
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
     let call = ctx.emit_value(
@@ -16093,7 +16198,13 @@ fn lower_static_method_call_through_object(
 
     let receiver = StaticReceiver::Named(class_name.to_string().into());
     let sig = static_method_implementation_signature(ctx, &receiver, method).cloned()?;
-    let mut visible_operands = lower_args_with_signature(ctx, Some(&sig), args);
+    let static_label = method_callee_label(ctx, class_name, method);
+    let mut visible_operands = lower_args_with_signature_labeled(
+        ctx,
+        Some(&sig),
+        args,
+        CalleeLabel::Named(&static_label),
+    );
     if let Some(callee_key) = static_method_arity_hungry_callee_key(ctx, &receiver, method) {
         func_args_intrinsics::maybe_append_hidden_argc_operand(
             ctx,
@@ -16199,7 +16310,14 @@ fn lower_static_method_call(
     let sig = static_method_implementation_signature(ctx, receiver, dispatch_method)
         .or_else(|| lexical_instance_static_call_signature(ctx, receiver, dispatch_method))
         .cloned();
-    let mut operands = lower_args_with_signature(ctx, sig.as_ref(), call_args);
+    let static_label = static_receiver_class_name(ctx, receiver)
+        .map(|class_name| method_callee_label(ctx, &class_name, dispatch_method));
+    let mut operands = lower_args_with_signature_labeled(
+        ctx,
+        sig.as_ref(),
+        call_args,
+        callee_label_of(static_label.as_deref()),
+    );
     if let (Some(sig), Some(callee_key)) = (
         sig.as_ref(),
         static_method_arity_hungry_callee_key(ctx, receiver, dispatch_method),

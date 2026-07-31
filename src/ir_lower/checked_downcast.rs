@@ -8,7 +8,8 @@
 //!
 //! Called from:
 //! - `crate::ir_lower::stmt::return_type_guard::emit_checked_downcast_return_guard` (return
-//!   position — the only position wired up so far).
+//!   position).
+//! - `crate::ir_lower::expr::coerce_operands_to_params` (call-argument position).
 //!
 //! Key details:
 //! - ONE chain for every position. The message wording and the ownership policy of the throw
@@ -31,14 +32,33 @@
 //!   `crate::types::checked_downcast::downcast_guard_shape`.
 //! - Proven-safe flows emit ZERO ops (see `PHASE 0` in `emit_checked_downcast`). That fast path
 //!   is what keeps a guard at every call boundary from taxing programs that were already correct.
+//! - THROW-PATH COST, measured: a caught argument-position `TypeError` leaks NOTHING. Looping the
+//!   mismatch 1/10/100/1000 times under `--heap-debug` gives allocs == frees at every count, zero
+//!   live blocks, and a peak of 384 live bytes that stays CONSTANT from 10 iterations on — so the
+//!   per-catch block delta is 0, not merely bounded. A future position whose throw abandons
+//!   already-lowered operands must re-measure this rather than inherit the number.
 
 use std::collections::HashSet;
 
-use crate::ir::{Immediate, Op, Terminator};
+use crate::ir::{IrType, Immediate, Op, Terminator};
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::span::Span;
 use crate::types::PhpType;
 use crate::types::checked_downcast::{GuardShape, declared_guard_arms, downcast_guard_shape};
+
+/// How the callee of a guarded call argument is spelled in the `TypeError` message.
+///
+/// `FunctionSig` carries no name, so the label is threaded from the call site. Where a call site
+/// has not been wired up yet the guard is STILL emitted and only the message degrades (it drops
+/// the `F(): ` prefix) — skipping it would let checker acceptance and lowering emission diverge,
+/// and that divergence surfaces as a wrong-representation read, not as a compile error.
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum CalleeLabel<'a> {
+    /// A resolved callee: `f` for a free function, `C::m` for a method, `{closure}` for a closure.
+    Named(&'a str),
+    /// An unresolved callee: the message drops its `F(): ` prefix.
+    Unknown,
+}
 
 /// The slot a checked downcast guards, carrying everything its `TypeError` wording needs.
 #[derive(Clone, Copy, Debug)]
@@ -47,6 +67,15 @@ pub(crate) enum DowncastPosition<'a> {
     Return {
         /// The enclosing function's PHP-visible name (`ctx.owner_name()`).
         owner: &'a str,
+    },
+    /// A call argument against the callee's declared parameter type.
+    Argument {
+        /// How to spell the callee in the message.
+        callee: CalleeLabel<'a>,
+        /// Zero-based parameter index; PHP's message numbers arguments from 1.
+        index: usize,
+        /// The declared parameter name, without its leading `$`.
+        param: &'a str,
     },
 }
 
@@ -60,23 +89,56 @@ impl DowncastPosition<'_> {
     fn block_prefix(&self) -> &'static str {
         match self {
             DowncastPosition::Return { .. } => "return_type_guard",
+            DowncastPosition::Argument { .. } => "arg_type_guard",
         }
     }
 
     /// Builds the compile-time message prefix — everything up to the runtime type name.
     ///
     /// php-8.5.6 wording, verified against `php -n`:
-    /// `F(): Return value must be of type D, ` + `<runtime type>` + ` returned`, where the
-    /// backend appends the fixed suffix.
+    /// - return: `F(): Return value must be of type D, ` + `<runtime type>` + ` returned`
+    /// - argument: `F(): Argument #N ($p) must be of type D, ` + `<runtime type>` + ` given`
+    ///
+    /// PHP additionally appends `, called in <file> on line <n>` to the ARGUMENT form when the
+    /// callee is userland. elephc does not reproduce that tail: it names the call site's file and
+    /// line, which an AOT binary would have to bake in from its compile-time path.
     fn message_prefix(&self, declared: &PhpType) -> String {
         let declared = format_declared_type_for_type_error(declared);
         match self {
             DowncastPosition::Return { owner } => {
                 format!("{}(): Return value must be of type {}, ", owner, declared)
             }
+            DowncastPosition::Argument {
+                callee: CalleeLabel::Named(callee),
+                index,
+                param,
+            } => format!(
+                "{}(): Argument #{} (${}) must be of type {}, ",
+                callee,
+                index + 1,
+                param,
+                declared
+            ),
+            DowncastPosition::Argument {
+                callee: CalleeLabel::Unknown,
+                index,
+                param,
+            } => format!(
+                "Argument #{} (${}) must be of type {}, ",
+                index + 1,
+                param,
+                declared
+            ),
         }
     }
 
+    /// Returns the fixed message tail this position appends after the runtime type name.
+    fn message_suffix(&self) -> &'static str {
+        match self {
+            DowncastPosition::Return { .. } => " returned",
+            DowncastPosition::Argument { .. } => " given",
+        }
+    }
 }
 
 /// Returns whether this lowering position emits a guard for `shape` yet.
@@ -98,6 +160,10 @@ fn shape_is_emittable_at(shape: GuardShape, position: &DowncastPosition<'_>) -> 
         (
             GuardShape::RawObject | GuardShape::RawObjectToBoxed,
             DowncastPosition::Return { .. },
+        ) => true,
+        (
+            GuardShape::RawObject | GuardShape::BoxedToRawObject,
+            DowncastPosition::Argument { .. },
         ) => true,
         _ => false,
     }
@@ -135,7 +201,7 @@ pub(crate) fn emit_checked_downcast(
     value: LoweredValue,
     declared: &PhpType,
     position: DowncastPosition<'_>,
-    span: Span,
+    span: Option<Span>,
 ) -> LoweredValue {
     let actual = ctx.builder.value_php_type(value.value);
     // -- PHASE 0a --
@@ -175,7 +241,7 @@ fn emit_guard_chain(
     candidates: &[String],
     shape: GuardShape,
     position: DowncastPosition<'_>,
-    span: Span,
+    span: Option<Span>,
 ) -> LoweredValue {
     let prefix = position.block_prefix();
     let ok_block = ctx.builder.create_named_block(&format!("{}.ok", prefix), Vec::new());
@@ -207,7 +273,7 @@ fn emit_guard_chain(
             Some(Immediate::Data(class_data)),
             PhpType::Bool,
             Op::InstanceOf.default_effects(),
-            Some(span),
+            span,
         );
         emitted += 1;
         branch_to_ok_or_next(ctx, matched.value, ok_block, fail_block, prefix, emitted, total);
@@ -218,10 +284,11 @@ fn emit_guard_chain(
     emit_mismatch_throw(ctx, value, declared, &position, span);
     ctx.builder.terminate(Terminator::Unreachable);
 
-    // -- PHASE 4 is a NO-OP for the shapes emitted today: both leave the value in the exact
-    //    representation the slot expects. A boxed source flowing into a raw-object slot does NOT,
-    //    and must unbox here before the consumer performs by-offset access on the box.
+    // -- PHASE 4 --
     ctx.builder.position_at_end(ok_block);
+    if shape == GuardShape::BoxedToRawObject {
+        return unbox_guarded_object(ctx, value, declared, span);
+    }
     value
 }
 
@@ -278,7 +345,7 @@ fn emit_mismatch_throw(
     value: LoweredValue,
     declared: &PhpType,
     position: &DowncastPosition<'_>,
-    span: Span,
+    span: Option<Span>,
 ) {
     let prefix_text = position.message_prefix(declared);
     let prefix = ctx.intern_string(&prefix_text);
@@ -289,9 +356,54 @@ fn emit_mismatch_throw(
                 vec![value.value],
                 Some(Immediate::Data(prefix)),
                 Op::ThrowCheckedReturnTypeError.default_effects(),
-                Some(span),
+                span,
             );
         }
+        DowncastPosition::Argument { .. } => {
+            let suffix_data = ctx.intern_string(position.message_suffix());
+            let suffix = ctx.emit_value(
+                Op::ConstStr,
+                Vec::new(),
+                Some(Immediate::Data(suffix_data)),
+                PhpType::Str,
+                Op::ConstStr.default_effects(),
+                span,
+            );
+            ctx.emit_void(
+                Op::ThrowCheckedTypeError,
+                vec![value.value, suffix.value],
+                Some(Immediate::Data(prefix)),
+                Op::ThrowCheckedTypeError.default_effects(),
+                span,
+            );
+        }
+    }
+}
+
+/// Re-materializes an owned raw object pointer out of the guarded box on the ok-edge.
+///
+/// Reached only for `GuardShape::BoxedToRawObject`, and only on an edge the Phase-2 tests have
+/// proven carries an object payload. `Op::ObjectCast` lowers to `__rt_object_from_mixed`, whose
+/// object arm increfs and returns the SAME instance, so the result is an OWNED ALIAS of the boxed
+/// object rather than a copy. That is what makes it safe for the consumer to keep, and it rides
+/// the same owned-temporary contract the call boundary's existing string coercions already use.
+fn unbox_guarded_object(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    declared: &PhpType,
+    span: Option<Span>,
+) -> LoweredValue {
+    let unboxed = ctx.emit_value(
+        Op::ObjectCast,
+        vec![value.value],
+        None,
+        declared.clone(),
+        Op::ObjectCast.default_effects(),
+        span,
+    );
+    LoweredValue {
+        value: unboxed.value,
+        ir_type: IrType::Heap(crate::ir::IrHeapKind::Object),
     }
 }
 

@@ -4800,6 +4800,30 @@ pub(super) fn lower_throw_checked_return_type_error(
     return_type_guard::emit_throw_checked_return_type_error(ctx, &prefix_label, prefix_len)
 }
 
+/// Lowers a checked-downcast guard mismatch at a position where the guarded value keeps its
+/// owner (a call argument): builds and throws a catchable `\TypeError` naming the mismatched
+/// value's ACTUAL runtime type, WITHOUT releasing it. Operand 0 is the mismatched value, operand
+/// 1 the message suffix string; see `crate::ir_lower::checked_downcast` for the guard chain that
+/// falls through here only when every declared arm mismatches.
+pub(super) fn lower_throw_checked_type_error(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let suffix = expect_operand(inst, 1)?;
+    let data = expect_data(inst)?;
+    let (prefix_label, prefix_len) = ctx.intern_string_data(data)?;
+    let value_ty = ctx.value_php_type(value)?;
+    return_type_guard::emit_throw_checked_type_error(
+        ctx,
+        &prefix_label,
+        prefix_len,
+        value,
+        &value_ty,
+        suffix,
+    )
+}
+
 /// Lowers dynamic `instanceof` where the target is resolved from a runtime string or object.
 pub(super) fn lower_instanceof_dynamic(
     ctx: &mut FunctionContext<'_>,

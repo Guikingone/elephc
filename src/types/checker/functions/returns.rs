@@ -340,17 +340,17 @@ impl Checker {
             Ok(()) => Ok(()),
             // Base→derived object returns (the value is statically only known to be a
             // SUPERTYPE of a declared return arm) are accepted here ONLY because
-            // `crate::ir_lower::stmt::return_type_guard` mirrors this same relaxation and
-            // always emits a runtime `instanceof` guard for it — see the checked-downcast-
-            // on-return design note on `object_return_downcast_guardable`. Genuinely unrelated
-            // classes still fail loudly below; this never widens acceptance beyond what the
-            // runtime guard can enforce.
+            // `crate::ir_lower::checked_downcast` mirrors this same relaxation and always emits
+            // a runtime `instanceof` guard for it — see the shared predicate
+            // `checked_downcast_guardable`, which every guarded position consults. Genuinely
+            // unrelated classes still fail loudly below; this never widens acceptance beyond
+            // what the runtime guard can enforce.
             Err(err) => {
                 // The return-coercion codegen (`coerce_to_return_type`) already emits the same
                 // `IToStr`/`FToStr`/`__toString` string cast (for a `string` return) or boxes the
                 // value into a `Mixed` union return slot — so the PHP weak-mode value-boundary
                 // coercions are realized at the return boundary exactly as at a call argument.
-                if self.object_return_downcast_guardable(expected, actual)
+                if self.checked_downcast_guardable(expected, actual)
                     || self.weak_boundary_coercion_accepts(expected, actual)
                 {
                     Ok(())

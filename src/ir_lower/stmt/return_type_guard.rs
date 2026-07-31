@@ -39,6 +39,6 @@ pub(crate) fn emit_checked_downcast_return_guard(
         value,
         &declared,
         DowncastPosition::Return { owner: &owner },
-        span,
+        Some(span),
     )
 }

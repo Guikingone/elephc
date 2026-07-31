@@ -440,6 +440,8 @@ impl Checker {
                         &ty,
                         arg.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
+                        // This branch is reached only through the declared type-hint resolver.
+                        true,
                     )?;
                     let specialized_ty =
                         Self::specialize_generic_array_param_hint(&declared_ty, &ty);
@@ -670,6 +672,11 @@ impl Checker {
                         &actual_ty,
                         arg.span,
                         &format!("Function '{}' parameter ${}", name, param_name),
+                        effective_sig
+                            .declared_params
+                            .get(param_idx)
+                            .copied()
+                            .unwrap_or(false),
                     )?;
                 }
             } else if let (Some(vname), Some(expected_ty)) =

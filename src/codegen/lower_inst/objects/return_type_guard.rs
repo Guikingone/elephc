@@ -1,24 +1,32 @@
 //! Purpose:
-//! Emits the target-aware assembly for `Op::ThrowCheckedReturnTypeError` — the runtime half of
-//! the checked-downcast-on-return guard (`crate::ir_lower::stmt::return_type_guard` emits the
-//! `Op::InstanceOf` chain that falls through to this op only when every declared return-type
-//! arm mismatches).
+//! Emits the target-aware assembly for the checked-downcast guards' throw ops — the runtime half
+//! of the chain `crate::ir_lower::checked_downcast` emits, entered only when every declared arm
+//! mismatched. `Op::ThrowCheckedReturnTypeError` serves the RETURN position;
+//! `Op::ThrowCheckedTypeError` serves the argument position.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::objects::lower_throw_checked_return_type_error()`.
+//! - `crate::codegen::lower_inst::objects::lower_throw_checked_type_error()`.
 //!
 //! Key details:
-//! - Builds `"<prefix><actual runtime class name> returned"` at runtime (the prefix — function
-//!   name + declared type — is a compile-time string baked by `ir_lower`; the class name is
-//!   looked up dynamically from the mismatched object's header, per the jury addendum requiring
-//!   the ACTUAL runtime class, never a static approximation) via two `__rt_concat` calls plus
-//!   `__rt_str_persist`, mirrors `objects::reflection::emit_reflection_class_argument_type_error_throw`'s
-//!   allocation/publish/unwind tail exactly (stamps `_spl_type_error_class_id`), and additionally
-//!   releases the mismatched object (it is never returned to the caller, so nothing else owns it)
-//!   before publishing the exception. Never returns.
+//! - Builds `"<prefix><actual runtime type name><suffix>"` at runtime (the prefix — callee/owner
+//!   name + declared type — is a compile-time string baked by `ir_lower`; the type name is looked
+//!   up dynamically, per the jury addendum requiring the ACTUAL runtime class, never a static
+//!   approximation) via two `__rt_concat` calls plus `__rt_str_persist`, then mirrors
+//!   `objects::reflection::emit_reflection_class_argument_type_error_throw`'s
+//!   allocation/publish/unwind tail exactly (stamps `_spl_type_error_class_id`). Never returns.
+//! - Only the RETURN op releases the mismatched object (it is never returned to the caller, so
+//!   nothing else owns it). The argument op must NOT: the caller's local still owns the value,
+//!   and releasing it there is a double free.
+//! - A BOXED source needs its own tag→name table (int/string/float/true/false/null/array/
+//!   <runtime class>/Closure). It deliberately does NOT reuse
+//!   `builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch`, whose
+//!   generic bucket maps tags 4/5/6 alike to the literal word `object` and therefore already
+//!   mis-names an ARRAY payload for the array builtins that use it.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
+use crate::ir::ValueId;
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -120,6 +128,182 @@ pub(super) fn emit_throw_checked_return_type_error(
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, result_reg); // restore the exception object
 
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0); // publish the active exception object
+    abi::emit_jump(ctx.emitter, "__rt_throw_current"); // enter the standard exception unwinder
+    Ok(())
+}
+
+/// The boxed-`Mixed` runtime tags this guard names, paired with PHP's own spelling in a
+/// `TypeError` message (php-8.5.6 verified: `int`/`string`/`float`/`true`/`false`/`null`/`array`/
+/// `<class>`/`Closure`). Tag 3 (bool) is split by its payload, and tag 6 resolves the ACTUAL
+/// runtime class, so neither appears here.
+const BOXED_TAG_NAMES: &[(i64, &str)] = &[
+    (0, "int"),
+    (1, "string"),
+    (2, "float"),
+    (4, "array"),
+    (5, "array"),
+    (8, "null"),
+    (10, "Closure"),
+];
+
+/// Builds `"<prefix><actual runtime type name><suffix>"` and throws it as a catchable
+/// `\TypeError`, WITHOUT releasing the mismatched value.
+///
+/// `value`/`value_ty` are the guarded operand and its static type: a raw object source resolves
+/// its name through `get_class`, a boxed source unboxes and dispatches on the runtime tag.
+/// `suffix` is a string operand holding the position's fixed message tail (`" given"`). Never
+/// returns.
+pub(super) fn emit_throw_checked_type_error(
+    ctx: &mut FunctionContext<'_>,
+    prefix_label: &str,
+    prefix_len: usize,
+    value: ValueId,
+    value_ty: &PhpType,
+    suffix: ValueId,
+) -> Result<()> {
+    if matches!(value_ty.codegen_repr(), PhpType::Object(_) | PhpType::Packed(_)) {
+        ctx.load_value_to_result(value)?;
+        emit_runtime_class_name_into_concat_rhs(ctx);
+        return emit_message_tail(ctx, prefix_label, prefix_len, suffix);
+    }
+    emit_boxed_type_name_into_concat_rhs(ctx, value)?;
+    emit_message_tail(ctx, prefix_label, prefix_len, suffix)
+}
+
+/// Resolves the ACTUAL runtime class of the object currently in the integer result register and
+/// leaves its `(ptr, len)` in the `__rt_concat` right-operand pair.
+fn emit_runtime_class_name_into_concat_rhs(ctx: &mut FunctionContext<'_>) {
+    super::super::builtins::types::emit_dynamic_object_class_name(ctx, "get_class");
+    let (lhs_ptr, lhs_len) = concat_lhs_regs(ctx);
+    let (rhs_ptr, rhs_len) = concat_rhs_regs(ctx);
+    move_reg_pair(ctx, rhs_ptr, rhs_len, lhs_ptr, lhs_len);
+}
+
+/// Unboxes `value` and leaves PHP's own name for its runtime payload in the `__rt_concat`
+/// right-operand pair: a static spelling for every scalar/array/null/Closure tag, and the ACTUAL
+/// runtime class for an object payload.
+fn emit_boxed_type_name_into_concat_rhs(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let object_label = ctx.next_label("checked_type_error_object");
+    let bool_label = ctx.next_label("checked_type_error_bool");
+    let true_label = ctx.next_label("checked_type_error_true");
+    let false_label = ctx.next_label("checked_type_error_false");
+    let generic_label = ctx.next_label("checked_type_error_generic");
+    let done_label = ctx.next_label("checked_type_error_name_done");
+    let tag_labels: Vec<(i64, &str, String)> = BOXED_TAG_NAMES
+        .iter()
+        .map(|(tag, name)| (*tag, *name, ctx.next_label("checked_type_error_tag")))
+        .collect();
+
+    // `__rt_mixed_unbox` leaves the runtime tag in the integer result register and the payload's
+    // low word in the first argument register — the same convention the array-family guards read.
+    let arch = ctx.emitter.target.arch;
+    let tag_reg = match arch {
+        Arch::AArch64 => "x0",
+        Arch::X86_64 => "rax",
+    };
+    ctx.load_value_to_reg(value, tag_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // tag in x0/rax, payload low word in x1/rdi
+    for (tag, _, label) in &tag_labels {
+        emit_tag_branch(ctx, tag_reg, *tag, label);
+    }
+    emit_tag_branch(ctx, tag_reg, 3, &bool_label);
+    emit_tag_branch(ctx, tag_reg, 6, &object_label);
+    abi::emit_jump(ctx.emitter, &generic_label);                                // any other tag reports the generic `object` spelling
+
+    ctx.emitter.label(&bool_label);
+    match arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x1, #0");                              // is the unboxed boolean payload false?
+            ctx.emitter.instruction(&format!("b.eq {}", false_label));
+            abi::emit_jump(ctx.emitter, &true_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // is the unboxed boolean payload false?
+            ctx.emitter.instruction(&format!("je {}", false_label));
+            abi::emit_jump(ctx.emitter, &true_label);
+        }
+    }
+
+    for (_, name, label) in &tag_labels {
+        emit_static_type_name_case(ctx, label, name, &done_label);
+    }
+    emit_static_type_name_case(ctx, &true_label, "true", &done_label);
+    emit_static_type_name_case(ctx, &false_label, "false", &done_label);
+    emit_static_type_name_case(ctx, &generic_label, "object", &done_label);
+
+    ctx.emitter.label(&object_label);
+    match arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // expose the unboxed object pointer to the class-name lookup
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // expose the unboxed object pointer to the class-name lookup
+    }
+    emit_runtime_class_name_into_concat_rhs(ctx);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits `if tag == <tag> goto <label>` for the active architecture.
+fn emit_tag_branch(ctx: &mut FunctionContext<'_>, tag_reg: &str, tag: i64, label: &str) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #{}", tag_reg, tag));     // select the boxed payload's runtime tag
+            ctx.emitter.instruction(&format!("b.eq {}", label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", tag_reg, tag));      // select the boxed payload's runtime tag
+            ctx.emitter.instruction(&format!("je {}", label));
+        }
+    }
+}
+
+/// Emits one tag case: labels it, loads the static PHP spelling into the `__rt_concat`
+/// right-operand pair, and jumps to the shared message-building tail.
+fn emit_static_type_name_case(
+    ctx: &mut FunctionContext<'_>,
+    case_label: &str,
+    name: &str,
+    done_label: &str,
+) {
+    ctx.emitter.label(case_label);
+    let (name_label, name_len) = ctx.data.add_string(name.as_bytes());
+    let (rhs_ptr, rhs_len) = concat_rhs_regs(ctx);
+    load_static_string_into(ctx, &name_label, name_len, rhs_ptr, rhs_len);
+    abi::emit_jump(ctx.emitter, done_label);
+}
+
+/// Concatenates `prefix` + the runtime type name already staged in the `__rt_concat` right-operand
+/// pair + the `suffix` string operand, then allocates, stamps, publishes and throws the
+/// `\TypeError`. Never returns.
+fn emit_message_tail(
+    ctx: &mut FunctionContext<'_>,
+    prefix_label: &str,
+    prefix_len: usize,
+    suffix: ValueId,
+) -> Result<()> {
+    let (lhs_ptr, lhs_len) = concat_lhs_regs(ctx);
+    load_static_string_into(ctx, prefix_label, prefix_len, lhs_ptr, lhs_len);
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+
+    let (rhs_ptr, rhs_len) = concat_rhs_regs(ctx);
+    ctx.load_string_value_to_regs(suffix, rhs_ptr, rhs_len)?;
+    abi::emit_call_label(ctx.emitter, "__rt_concat");
+
+    emit_persist_from_concat_result(ctx);
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    emit_alloc_type_error_header(ctx);
+    // Reload the parked message into DEDICATED scratch registers, never `string_result_regs`:
+    // on x86_64 that pair IS `(rax, rdx)`, and `rax` already holds the freshly allocated
+    // exception object pointer at this point.
+    let (ptr_reg, len_reg) = message_scratch_regs(ctx);
+    abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_store_message_fields(ctx, ptr_reg, len_reg);
+
+    let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_exc_value", 0); // publish the active exception object
     abi::emit_jump(ctx.emitter, "__rt_throw_current"); // enter the standard exception unwinder
     Ok(())

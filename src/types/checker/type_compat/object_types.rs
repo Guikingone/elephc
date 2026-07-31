@@ -523,30 +523,53 @@ pub(crate) fn type_is_gradual_object_family(ty: &PhpType) -> bool {
 }
 
 impl Checker {
-        /// Returns true if the declared return `expected` (possibly nullable/union) contains at
-        /// least one `Object(D)` arm where `actual` (a concrete `Object(B)`) is a proper ANCESTOR
-        /// of `D` — i.e. `D` is a subclass of `B`, or `D` implements `B` as an interface. This is
-        /// the "checked downcast on return" relaxation: PHP allows a function to declare a return
-        /// type narrower than a value it's statically only known to be a supertype of, deferring
-        /// the real check to a runtime `instanceof` guard. `crate::ir_lower::stmt::return_type_guard`
-        /// mirrors this exact predicate over its own class-hierarchy metadata to decide whether to
-        /// emit that guard, so the two MUST stay in lock-step: this only widens acceptance, it never
-        /// substitutes for the runtime check.
+        /// Returns true if the flow from `actual` into a slot declared `expected` is one a runtime
+        /// checked-downcast guard can enforce — the base→derived relaxation PHP itself allows,
+        /// deferring the real check to a runtime `instanceof`.
+        ///
+        /// This is the ONE source of truth for that acceptance decision, and it is consumed at
+        /// every position that emits the guard: returns (`functions::returns`), call arguments
+        /// (`functions::call_validation::call_arg_downcast_guardable`). A safety predicate with
+        /// two implementations is two predicates whose permissiveness unions, so new positions
+        /// must call this rather than re-deriving the hierarchy walk.
+        ///
+        /// Three conditions, all required:
+        /// 1. `crate::types::checked_downcast::downcast_guard_shape` must find a representation
+        ///    pair a guard could bridge — the SAME function `crate::ir_lower::checked_downcast`
+        ///    consults before emitting, so acceptance cannot outrun emission.
+        /// 2. `expected` must offer at least one NAMED class/interface arm. A bare `object`
+        ///    (`Object("")`) target is not an `instanceof` target: no chain can be built for it.
+        /// 3. `actual` must be an object the guard could plausibly narrow: a bare `object` source
+        ///    (a raw object pointer of unknown class — every named arm is testable against it), or
+        ///    a concrete `Object(B)` that is a proper ANCESTOR of some declared arm. `Mixed` and
+        ///    `Union` sources deliberately return false here: `Mixed` already flows through
+        ///    `gradual_boundary_accepts`, and union sources need the union-arm analysis that
+        ///    belongs with their own emitter work.
         ///
         /// Only meant to be tried as a fallback AFTER normal covariant acceptance
         /// (`require_compatible_arg_type`) has already failed for this `(expected, actual)` pair —
         /// it does not special-case an `actual` that already satisfies `expected` normally.
-        pub(crate) fn object_return_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
+        pub(crate) fn checked_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
+            if crate::types::checked_downcast::downcast_guard_shape(expected, actual).is_none() {
+                return false;
+            }
+            let declared_arms = crate::types::checked_downcast::declared_instanceof_targets(expected);
+            if declared_arms.is_empty() {
+                return false;
+            }
             let PhpType::Object(actual_name) = actual else {
                 return false;
             };
-            flatten_type_arms(expected).into_iter().any(|arm| match arm {
-                PhpType::Object(declared_name) => {
-                    declared_name != *actual_name
-                        && (self.is_subclass_of(&declared_name, actual_name)
-                            || self.object_type_implements_interface(&declared_name, actual_name))
-                }
-                _ => false,
+            // A bare `object` source is a raw object pointer whose class is unknown statically;
+            // every declared arm is a legitimate `instanceof` target for it, and the guard throws
+            // PHP's own `TypeError` when none matches.
+            if actual_name.is_empty() {
+                return true;
+            }
+            declared_arms.iter().any(|declared_name| {
+                declared_name != actual_name
+                    && (self.is_subclass_of(declared_name, actual_name)
+                        || self.object_type_implements_interface(declared_name, actual_name))
             })
         }
 }
@@ -629,13 +652,4 @@ impl Checker {
                 Visibility::Private => context.scope_class == declaring_class,
             }
         }
-}
-
-/// Flattens a possibly-nested `Union` into its member arms; a non-union type is a single arm.
-/// Shared by `Checker::object_return_downcast_guardable` and its `ir_lower` mirror.
-pub(crate) fn flatten_type_arms(ty: &PhpType) -> Vec<PhpType> {
-    match ty {
-        PhpType::Union(members) => members.iter().flat_map(flatten_type_arms).collect(),
-        other => vec![other.clone()],
-    }
 }

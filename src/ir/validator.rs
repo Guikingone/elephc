@@ -300,7 +300,7 @@ fn validate_instruction_immediate(
         ConstBool => require_immediate(inst_id, inst, "bool", |imm| matches!(imm, Imm::Bool(_))),
         ConstStr | ConstClassName | DataAddr | Warn | IncludeOnceMark | IncludeOnceGuard
         | FunctionVariantMark | FunctionVariantDispatch | LoadPropRefCell | LoadStaticPropRefCell
-        | BindPropRefCell | ThrowCheckedReturnTypeError | EvalLiteralCall
+        | BindPropRefCell | ThrowCheckedReturnTypeError | ThrowCheckedTypeError | EvalLiteralCall
         | EvalFunctionCallArray | EvalFunctionExists | EvalClassExists | EvalConstantExists
         | EvalConstantFetch
         | EvalStaticMethodCall
@@ -480,6 +480,9 @@ fn validate_opcode_rules(
         | GeneratorReturn | PtrCheckNonnull | ThrowCheckedReturnTypeError => {
             check_count(inst_id, inst, 1, "1")
         }
+        // TWO operands, unlike the one-operand return variant: the mismatched value plus the
+        // message suffix string the fail path appends after the runtime type name.
+        ThrowCheckedTypeError => check_count(inst_id, inst, 2, "2"),
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
         | MixedCastString => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")

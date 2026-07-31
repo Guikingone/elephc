@@ -1535,31 +1535,37 @@ fn test_error_conditional_scalar_assignment_into_object_param_stays_loud() {
 }
 
 // --- Family F boundary: object flows with no proven-subtype edge stay loud (R1-R4 revert).
-//     The return-position member of this family (R1/R2 on the return boundary) was later
-//     SUPERSEDED by the checked-downcast-on-return runtime guard (SPEC I2) and moved below;
-//     parameter positions are unaffected and still stay loud, guarded here. ---
+//     The RETURN and single-object ARGUMENT members of this family were later SUPERSEDED, each
+//     when its boundary gained the checked-downcast runtime guard. What still stays loud, and is
+//     guarded here, is every flow no guard can enforce: property stores (no emitter yet) and
+//     union sources into a concrete object target. ---
 
-/// A base-typed value flowing into a derived-class parameter stays loud (`Base`-typed value into
-/// `Sub $x`). elephc emits no runtime instanceof guard at an object boundary, so accepting a
-/// non-proven-subtype flow would be a silent miscompile; PHP raises a TypeError here, matching
-/// this loud rejection. Guards the R1/R2 revert of the base→derived gradual-object acceptance.
+/// A base-typed value flowing into a derived-class parameter (`Base`-typed value into `Sub $x`)
+/// was rejected because elephc emitted no runtime instanceof guard at that boundary, which made
+/// accepting it a silent miscompile. It now emits one, so this flow is accepted exactly the way
+/// the return-position sibling below became accepted when the return guard landed: PHP's own
+/// catchable `TypeError` fires on an actual mismatch instead of the wrong object being bit-read,
+/// and keeping the compile error would now falsely reject a program PHP runs. End-to-end
+/// coverage, including the mismatch case that DOES still throw, lives in
+/// `tests/codegen/oop/checked_downcast_argument.rs`. The property-store sibling below stays loud:
+/// that position emits no guard yet, so its acceptance would still be unenforced.
 #[test]
-fn test_error_object_base_into_derived_param_stays_loud() {
-    expect_error(
+fn test_object_base_into_derived_param_accepted_with_runtime_guard() {
+    expect_ok(
         "<?php class B{} class S extends B{} function need(S $x){} \
          function mk(int $n):B{return new S();} echo need(mk(1));",
-        "expects Object(\"S\"), got Object(\"B\")",
     );
 }
 
 /// A base/interface-typed value flowing into a derived-class typed PROPERTY stays loud (`I`-typed
-/// value into `Impl $p`). A property write, like a parameter boundary, emits NO runtime instanceof
-/// guard (unlike the RETURN boundary, which does — see `object_return_downcast_guardable`), so the
-/// static property slot offset would be used to read fields that a non-`Impl` runtime value does not
-/// have, bit-reading off-layout memory (empirically a SIGSEGV / garbage read — verified with a
-/// `mixed`-boxed sibling object reaching the slot). PHP raises a catchable TypeError here instead of
-/// crashing, so elephc must stay loud rather than accept the unguarded base->derived downcast at a
-/// property write. Locks the property-position half of the object-downcast memory-safety boundary.
+/// value into `Impl $p`). A property write emits NO runtime instanceof guard (unlike the RETURN and
+/// ARGUMENT boundaries, which do — see `Checker::checked_downcast_guardable` and
+/// `crate::ir_lower::checked_downcast`), so the static property slot offset would be used to read
+/// fields that a non-`Impl` runtime value does not have, bit-reading off-layout memory (empirically
+/// a SIGSEGV / garbage read — verified with a `mixed`-boxed sibling object reaching the slot). PHP
+/// raises a catchable TypeError here instead of crashing, so elephc must stay loud rather than
+/// accept the unguarded base->derived downcast at a property write. Locks the property-position
+/// half of the object-downcast memory-safety boundary: acceptance may only follow emission.
 #[test]
 fn test_error_base_into_derived_typed_property_stays_loud() {
     expect_error(
@@ -1585,11 +1591,10 @@ fn test_error_object_union_unrelated_member_into_param_stays_loud() {
 }
 
 /// SUPERSEDED by the checked-downcast-on-return feature (SPEC I2): a base-typed return
-/// expression flowing into a derived declared RETURN type (unlike the sibling PARAMETER-
-/// position tests above, which are unaffected and still stay loud) is now accepted, but ONLY
-/// because `crate::ir_lower::stmt::return_type_guard` always emits a runtime `instanceof`
-/// guard at the return boundary that throws a catchable `TypeError` on an actual mismatch —
-/// this is no longer a silent miscompile. See `Checker::object_return_downcast_guardable`
+/// expression flowing into a derived declared RETURN type is now accepted, but ONLY because
+/// `crate::ir_lower::checked_downcast` always emits a runtime `instanceof` guard at the return
+/// boundary that throws a catchable `TypeError` on an actual mismatch — this is no longer a
+/// silent miscompile. See `Checker::checked_downcast_guardable`
 /// (`src/types/checker/type_compat/object_types.rs`) for the checker-side relaxation and
 /// `tests/codegen/oop/checked_downcast_return.rs` for full end-to-end/guard coverage
 /// (including the negative/mismatch case, which DOES still throw at runtime). This exact

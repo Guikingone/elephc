@@ -11,6 +11,8 @@ use crate::support::*;
 
 #[path = "oop/instanceof.rs"]
 mod instanceof;
+#[path = "oop/checked_downcast_argument.rs"]
+mod checked_downcast_argument;
 #[path = "oop/checked_downcast_return.rs"]
 mod checked_downcast_return;
 #[path = "oop/traits.rs"]

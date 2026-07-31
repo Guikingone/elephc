@@ -390,27 +390,49 @@ impl Checker {
     /// Like `require_compatible_arg_type`, but additionally admits the PHP weak-mode value-boundary
     /// coercions the call-argument codegen realizes (`weak_boundary_coercion_accepts`): a concrete
     /// scalar or Stringable object into a `string` parameter, and a scalar/Stringable/union into a
-    /// boxed-`Mixed` union parameter. Used ONLY at call-argument positions whose codegen lowers
-    /// through `lower_args_with_signature` (which coerces the argument at the boundary); property
-    /// and static-property stores keep using the strict `require_compatible_arg_type` because they
-    /// emit no such coercion.
+    /// boxed-`Mixed` union parameter — plus the base→derived checked downcast
+    /// (`call_arg_downcast_guardable`). Used ONLY at call-argument positions whose codegen lowers
+    /// through `lower_args_with_signature` (which coerces the argument, and emits the downcast
+    /// guard, at the boundary); property and static-property stores keep using the strict
+    /// `require_compatible_arg_type` because they emit neither.
+    ///
+    /// `param_is_declared` is the parameter's `FunctionSig::declared_params` bit. It gates ONLY
+    /// the downcast fallback, and it must: for an UNDECLARED parameter `expected` is a type
+    /// elephc INFERRED, and PHP performs no check there at all, so enforcing it at runtime would
+    /// throw a `TypeError` on a program PHP runs (`function pick($x) { if ($x instanceof A) …}`
+    /// infers `A` and then rejects every non-`A` caller). Lowering gates its emission on the same
+    /// bit, so acceptance and enforcement stay in step.
     pub(crate) fn require_compatible_call_arg_type(
         &self,
         expected: &PhpType,
         actual: &PhpType,
         span: crate::span::Span,
         context: &str,
+        param_is_declared: bool,
     ) -> Result<(), CompileError> {
         match self.require_compatible_arg_type(expected, actual, span, context) {
             Ok(()) => Ok(()),
             Err(err) => {
-                if self.weak_boundary_coercion_accepts(expected, actual) {
+                if self.weak_boundary_coercion_accepts(expected, actual)
+                    || (param_is_declared && self.call_arg_downcast_guardable(expected, actual))
+                {
                     Ok(())
                 } else {
                     Err(err)
                 }
             }
         }
+    }
+
+    /// Returns true when a call ARGUMENT may flow into `expected` behind the runtime checked
+    /// downcast `crate::ir_lower::expr::coerce_operands_to_params` emits at this same boundary.
+    ///
+    /// Deliberately a thin delegation to the shared `checked_downcast_guardable` rather than a
+    /// second hierarchy walk: the return boundary uses the same predicate, and a safety predicate
+    /// with two implementations is two predicates whose permissiveness unions — the shape that
+    /// already cost this codebase a double free once.
+    pub(crate) fn call_arg_downcast_guardable(&self, expected: &PhpType, actual: &PhpType) -> bool {
+        self.checked_downcast_guardable(expected, actual)
     }
 
     /// Formats a parameter-count range as a human-readable string, e.g. `3` or `2 to 5`.
@@ -620,6 +642,7 @@ impl Checker {
                         &actual_ty,
                         arg.span,
                         &format!("{} parameter ${}", callee_desc, param_name),
+                        sig.declared_params.get(param_idx).copied().unwrap_or(false),
                     )?;
                 }
             } else if let (Some(vname), Some(expected_ty)) =

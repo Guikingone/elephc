@@ -635,6 +635,15 @@ pub enum Op {
     /// `" returned"` suffix complete the message, matching PHP's own return-type
     /// `TypeError` wording. Never returns (see `crate::ir_lower::stmt::return_type_guard`).
     ThrowCheckedReturnTypeError,
+    /// Constructs and throws a catchable `\TypeError` for a checked-downcast guard mismatch at a
+    /// position where the guarded value is STILL OWNED BY SOMEONE ELSE (a call argument, whose
+    /// caller-side local owns it; a property store, whose source expression does). Operands: the
+    /// mismatched value (read-only, for its runtime type name) and the message suffix string.
+    /// Immediate: a `Data` id for the compile-time message prefix. DOES NOT release the operand —
+    /// that is the whole reason this is a separate op from `ThrowCheckedReturnTypeError` rather
+    /// than a flag on it: a single op with two ownership policies is how a double free comes
+    /// back. Never returns (see `crate::ir_lower::checked_downcast`).
+    ThrowCheckedTypeError,
     ThrowError,
     ThrowErrorValue,
     TryPushHandler,
@@ -883,6 +892,11 @@ impl Op {
             // (never returned to the caller), then publishes and unwinds.
             ThrowCheckedReturnTypeError => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP | E::MAY_THROW | E::WRITES_GLOBAL
+            }
+            // Same message building and unwinding as the return variant, minus the release: the
+            // mismatched value keeps its owner, so no refcount is touched.
+            ThrowCheckedTypeError => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::MAY_THROW | E::WRITES_GLOBAL
             }
             ThrowError | ThrowErrorValue => {
                 E::MAY_THROW
@@ -1172,6 +1186,7 @@ impl Op {
             Warn => "warn",
             ThrowException => "throw_exception",
             ThrowCheckedReturnTypeError => "throw_checked_return_type_error",
+            ThrowCheckedTypeError => "throw_checked_type_error",
             ThrowError => "throw_error",
             ThrowErrorValue => "throw_error_value",
             TryPushHandler => "try_push_handler",
