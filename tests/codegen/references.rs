@@ -221,6 +221,54 @@ fn test_closure_bind_by_reference_return_writes_through() {
     assert_eq!(out, "RouteA\n0\n");
 }
 
+/// The same Symfony `KernelTrait`/`ExtensionTrait` shape from INSIDE a method, where the
+/// closure's lexically enclosing class does not declare the property at all. `$this` must come
+/// from the bind's second argument (the loader), not the enclosing class, so both the property
+/// lookup and the by-reference promotion land on `Loader::$instanceof`.
+#[test]
+fn test_closure_bind_by_reference_return_inside_method_writes_through() {
+    let out = compile_and_run(
+        "<?php
+        class Loader { public array $instanceof = []; }
+        class Kernel {
+            public function configure(): void {
+                $loader = new Loader();
+                $instanceof = &\\Closure::bind(fn &() => $this->instanceof, $loader, $loader)();
+                $instanceof[] = 'RouteA';
+                echo implode(',', $loader->instanceof), \"\\n\";
+                $instanceof = [];
+                echo count($loader->instanceof), \"\\n\";
+            }
+        }
+        (new Kernel())->configure();",
+    );
+    assert_eq!(out, "RouteA\n0\n");
+}
+
+/// The exact `ExtensionTrait::executeConfiguratorCallback` shape: the rebind target is a
+/// parameter proven by an early-exit `instanceof` guard clause rather than a local `new`. The
+/// guard's fall-through edge must carry the narrowed class into the bind, or `$this` falls back
+/// to the enclosing class and the reference binds to the wrong object.
+#[test]
+fn test_closure_bind_by_reference_return_through_early_exit_guard() {
+    let out = compile_and_run(
+        "<?php
+        class Loader { public array $instanceof = []; }
+        class Kernel {
+            public function configure(object $loader): void {
+                if (!$loader instanceof Loader) {
+                    throw new \\LogicException('Unable to create the ContainerConfigurator.');
+                }
+                $instanceof = &\\Closure::bind(fn &() => $this->instanceof, $loader, $loader)();
+                $instanceof[] = 'RouteA';
+                echo implode(',', $loader->instanceof), \"\\n\";
+            }
+        }
+        (new Kernel())->configure(new Loader());",
+    );
+    assert_eq!(out, "RouteA\n");
+}
+
 /// `$x = &$obj->prop` aliases a `string` property: the cell pointer is one word, so the
 /// write-through works despite the string ABI normally using a `{ptr,len}` register pair.
 #[test]

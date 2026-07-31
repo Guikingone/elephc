@@ -1475,6 +1475,71 @@ echo $bound();
     assert_eq!(out, "42");
 }
 
+/// Verifies `$this` is rebound from `$newThis` (argument two) and NOT from `$scope` (argument
+/// three), which governs visibility only. `A` and the unrelated scope class `D` declare
+/// different properties, and the enclosing class `K` declares neither, so reading the bound
+/// object's property proves all three candidate classes apart.
+#[test]
+fn test_closure_bind_this_comes_from_receiver_not_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public string $tag = 'A'; }
+class D { public string $other = 'D'; }
+class K {
+    public function run(): void {
+        $a = new A();
+        echo \Closure::bind(fn () => $this->tag, $a, D::class)();
+    }
+}
+(new K())->run();
+"#,
+    );
+    assert_eq!(out, "A");
+}
+
+/// Verifies the two-argument `Closure::bind($closure, $newThis)` form rebinds `$this` from
+/// inside a method. PHP keeps the closure's existing scope when `$scope` is omitted, so a
+/// public property on the new receiver stays readable.
+#[test]
+fn test_closure_bind_two_argument_form_rebinds_this_in_method() {
+    let out = compile_and_run(
+        r#"<?php
+class Loader { public string $tag = 'LOADER'; }
+class Kernel {
+    public function run(): void {
+        $x = new Loader();
+        echo \Closure::bind(fn () => $this->tag, $x)();
+    }
+}
+(new Kernel())->run();
+"#,
+    );
+    assert_eq!(out, "LOADER");
+}
+
+/// Verifies an early-exit `instanceof` guard proves the rebind target's class for the code that
+/// follows it. Both classes declare `$tag`, so an unnarrowed receiver does not fail loudly — it
+/// silently reads the enclosing `Kernel`'s value. The differing values make that legible.
+#[test]
+fn test_closure_bind_receiver_narrowed_by_early_exit_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class Loader { public string $tag = 'LOADER'; }
+class Kernel {
+    public string $tag = 'KERNEL';
+    public function run(object $x): void {
+        if (!$x instanceof Loader) {
+            throw new \LogicException('nope');
+        }
+        echo \Closure::bind(fn () => $this->tag, $x, $x)();
+    }
+}
+(new Kernel())->run(new Loader());
+"#,
+    );
+    assert_eq!(out, "LOADER");
+}
+
 /// Verifies the canonical scope-stealing pattern: a standalone closure bound to
 /// an object reads a private property (visibility is permissive once bound).
 #[test]

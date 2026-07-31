@@ -1089,7 +1089,7 @@ impl Checker {
             // closure body's protected/private access on parameters typed as the rebound scope is
             // authorized against that scope (see `bound_scope_context`). The context is active only
             // while inferring the closure literal argument.
-            let scope_ctx = self.closure_bind_scope_context(args);
+            let scope_ctx = self.closure_bind_scope_context(args, env);
             for (index, arg) in args.iter().enumerate() {
                 if index == 0 && scope_ctx.is_some() {
                     let saved = self.bound_scope_context.take();
@@ -1559,15 +1559,6 @@ impl Checker {
         }
     }
 
-    /// Builds the `BoundScopeContext` for a `Closure::bind($closure, $newThis, $scope)` call, or
-    /// `None` when the rebind does not qualify for relaxed visibility.
-    ///
-    /// Qualifies only when: the first argument is a closure literal, the (optional) third argument
-    /// resolves to a literal scope class, and the closure body is provably free of
-    /// `$this`/`self::`/`static::`/`parent::`. Parameters declared with a type equal to or a
-    /// subclass of the scope become `eligible_params`, as do untyped parameters once inference
-    /// narrows them to an object in that scope. Variables created inside the closure are also
-    /// eligible, while captured variables remain excluded.
     /// Returns whether a static call is `Closure::bind(...)` (the static form that can carry a
     /// scope-rebind argument), by receiver name and method, independent of argument count.
     pub(crate) fn is_closure_bind_static_call(
@@ -1583,12 +1574,29 @@ impl Checker {
             )
     }
 
+    /// Builds the `BoundScopeContext` for a `Closure::bind($closure, $newThis [, $scope])` call,
+    /// or `None` when the rebind does not qualify for a relaxed receiver or visibility.
+    ///
+    /// Two shapes qualify, both requiring a closure literal as the first argument.
+    ///
+    /// The `$this`-receiver shape (`fn () => $this->prop`, the single form
+    /// `crate::ir_lower::closure_bind_property_return_type` lowers) resolves the rebound receiver
+    /// from `$newThis` — PHP's second argument — and the visibility scope from `$scope`, falling
+    /// back to the lexically enclosing class when `$scope` is omitted. A receiver whose class is
+    /// not statically known yields `None`, so an unresolved rebind keeps its existing diagnostics
+    /// rather than being mistyped.
+    ///
+    /// The parameter shape requires a literal `$scope` and a body provably free of
+    /// `$this`/`self::`/`static::`/`parent::`. Parameters declared with a type equal to or a
+    /// subclass of the scope become `eligible_params`, as do untyped parameters once inference
+    /// narrows them to an object in that scope. Variables created inside the closure are also
+    /// eligible, while captured variables remain excluded.
     pub(crate) fn closure_bind_scope_context(
-        &self,
+        &mut self,
         args: &[Expr],
+        env: &TypeEnv,
     ) -> Option<crate::types::checker::BoundScopeContext> {
         let closure = args.first()?;
-        let scope_arg = args.get(2)?;
         let ExprKind::Closure {
             params,
             body,
@@ -1600,24 +1608,44 @@ impl Checker {
         else {
             return None;
         };
-        let scope_class = self.closure_bind_scope_class(scope_arg)?;
         // `Closure::bind(fn () => $this->prop, $newThis, Scope::class)`: the body uses `$this`
         // (rebound to `$newThis`) and `crate::ir_lower::closure_bind_property_return_type` lowers
         // exactly the single-`return $this->prop` shape by boxing `$newThis` as the `$this`
-        // capture. Authorize the `$this` receiver against `scope_class` for that shape only, so the
-        // checker relaxation stays in lock-step with what codegen actually compiles. Any other
+        // capture. Authorize the `$this` receiver for that shape only, so the checker relaxation
+        // stays in lock-step with what codegen actually compiles. Any other
         // `$this`/`self::`/`static::`/`parent::` body remains gated below.
         if params.is_empty()
             && closure_body_is_single_this_property_return(body)
         {
+            // PHP takes the rebound `$this` from `$newThis` (argument two). `$scope` only widens
+            // the visibility the body is checked under, so resolve the two independently instead
+            // of reading the property off the scope. `infer_type` already carries `instanceof`
+            // narrowing for the receiver local, so a guarded parameter resolves here too.
+            let this_class = args
+                .get(1)
+                .and_then(|new_this| self.infer_type(new_this, env).ok())
+                .as_ref()
+                .and_then(crate::types::checker::single_object_class_name)?;
+            // With no explicit `$scope`, PHP keeps the closure's current scope — the lexically
+            // enclosing class. Outside a class the closure is scope-less, so decline the context
+            // rather than invent a scope that would authorize non-public members.
+            let scope_class = match args.get(2) {
+                Some(scope_arg) => self.closure_bind_scope_class(scope_arg, env)?,
+                None => self.current_class.clone()?,
+            };
             return Some(crate::types::checker::BoundScopeContext {
                 scope_class,
+                this_class: Some(this_class),
                 eligible_params: std::collections::HashSet::new(),
                 declared_params: std::collections::HashSet::new(),
                 captured_variables: std::collections::HashSet::new(),
                 this_receiver_scope: true,
             });
         }
+        // The parameter-based relaxation below reasons purely about `$scope`, so it keeps
+        // requiring an explicit literal third argument.
+        let scope_arg = args.get(2)?;
+        let scope_class = self.closure_bind_scope_class(scope_arg, env)?;
         if !crate::types::checker::inference::expr::static_closure::closure_body_free_of_self_scope(
             body,
         ) {
@@ -1650,6 +1678,7 @@ impl Checker {
             .collect();
         Some(crate::types::checker::BoundScopeContext {
             scope_class,
+            this_class: None,
             eligible_params,
             declared_params,
             captured_variables,
@@ -1659,7 +1688,12 @@ impl Checker {
 
     /// Resolves a `Closure::bind` `$scope` argument (`X::class` or a class-name string literal) to a
     /// concrete class name, or `None` for a dynamic/unsupported scope expression.
-    fn closure_bind_scope_class(&self, scope_arg: &Expr) -> Option<String> {
+    ///
+    /// PHP accepts either a class name (`X::class`, a class-name string) or an OBJECT, whose
+    /// class becomes the scope — the form Symfony uses when it passes the rebind target as both
+    /// `$newThis` and `$scope`. A scope expression whose class is not statically known stays
+    /// `None` so the caller declines to build a context rather than guessing a visibility scope.
+    fn closure_bind_scope_class(&mut self, scope_arg: &Expr, env: &TypeEnv) -> Option<String> {
         match &scope_arg.kind {
             ExprKind::StringLiteral(name) => self
                 .resolve_callable_array_class_name(name.trim_start_matches('\\'))
@@ -1667,7 +1701,11 @@ impl Checker {
             ExprKind::ClassConstant { receiver } => self
                 .resolve_callable_array_static_receiver_class(receiver, scope_arg.span)
                 .ok(),
-            _ => None,
+            _ => self
+                .infer_type(scope_arg, env)
+                .ok()
+                .as_ref()
+                .and_then(crate::types::checker::single_object_class_name),
         }
     }
 

@@ -1316,6 +1316,21 @@ fn apply_condition_else_narrowing(ctx: &mut LoweringContext<'_, '_>, condition: 
         return;
     }
     if let ExprKind::Not(inner) = &condition.kind {
+        // `if (!$x instanceof A) { throw …; }` — the early-exit guard clause. The false edge of
+        // `!C` is exactly `C`'s true edge, so reuse the positive narrowing instead of falling
+        // through to the union-subtraction path below, which cannot refine a non-union local.
+        // When the guarded block diverges, `merge_local_types` carries these facts to the
+        // fall-through, which is where the guard's whole purpose lies.
+        if matches!(
+            inner.kind,
+            ExprKind::InstanceOf {
+                target: InstanceOfTarget::Name(_),
+                ..
+            }
+        ) {
+            let _ = apply_condition_then_narrowing(ctx, inner);
+            return;
+        }
         if let Some(var) = is_array_guard_local(inner) {
             // The false edge of `!is_array($x)` (i.e. `$x` proven to be an array on the
             // fall-through) keeps the concrete gradual `array<mixed>` type. Unlike the positive

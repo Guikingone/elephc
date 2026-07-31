@@ -331,30 +331,11 @@ impl Checker {
             {
                 return Ok(ty);
             }
-            // `Closure::bind(fn () => $this->prop, $newThis, Scope::class)`: the closure's `$this`
-            // is rebound to `$newThis`, so a property declared/inherited only on the rebind scope
-            // (not on the closure's lexically-enclosing class) is legitimately reachable. When such
-            // a scope rebind is active for a `$this` receiver, re-resolve the property against the
-            // scope class instead of reporting it undefined on the lexical class. The recursion
-            // terminates: the redirected call has `class_name == scope_class`, so the guard below is
-            // false and a genuinely absent property still falls to the loud `Undefined property`
-            // error on the scope class. Codegen lowers the matching shape by typing the closure
-            // body's `$this` as the bound receiver's class (see
-            // `crate::ir_lower::expr::build_bound_closure_binding`), keeping checker and codegen in
-            // lock-step.
-            if matches!(receiver.kind, ExprKind::This) {
-                if let Some(context) = self.bound_scope_context.as_ref() {
-                    if context.this_receiver_scope && context.scope_class != class_name {
-                        let scope_class = context.scope_class.clone();
-                        return self.infer_property_on_class_type(
-                            &scope_class,
-                            property,
-                            receiver,
-                            expr,
-                        );
-                    }
-                }
-            }
+            // A `Closure::bind(fn () => $this->prop, $newThis, …)` receiver needs no redirect
+            // here: `infer_this_type` already types the rebound `$this` as `$newThis`'s class, so
+            // `class_name` IS the class that must declare the property. A genuinely absent
+            // property therefore still falls through to the loud error below — now naming the
+            // bound receiver's class rather than the lexical or scope class.
             return Err(CompileError::new(
                 expr.span,
                 &format!("Undefined property: {}::{}", class_name, property),
@@ -701,6 +682,18 @@ impl Checker {
         expr: &Expr,
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
+        // Inside a `Closure::bind(fn () => $this->prop, $newThis [, $scope])` body, `$this` IS
+        // `$newThis` — not the lexically enclosing object, and not the `$scope` class, which
+        // governs visibility only. Resolve it first: the enclosing frame's own `$this` facts (a
+        // narrowing in `env`, or a static-method rejection) describe a different receiver
+        // entirely and must not leak into the rebound body. Property existence, by-reference
+        // property promotion and codegen's `build_bound_closure_binding` then all key off the
+        // same class.
+        if let Some(context) = self.bound_scope_context.as_ref() {
+            if let Some(this_class) = context.this_class.as_ref() {
+                return Ok(PhpType::Object(this_class.clone()));
+            }
+        }
         if let Some(narrowed) = env.get(Self::narrowed_this_env_key()) {
             return Ok(narrowed.clone());
         }

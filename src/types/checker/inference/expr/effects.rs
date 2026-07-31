@@ -589,7 +589,7 @@ impl Checker {
                 // runs, so the rebound-scope visibility relaxation must be applied at THIS point
                 // too — mirroring `infer_static_method_call_type_with_options`.
                 let scope_ctx = if self.is_closure_bind_static_call(receiver, method) {
-                    self.closure_bind_scope_context(&expanded_args)
+                    self.closure_bind_scope_context(&expanded_args, env)
                 } else {
                     None
                 };

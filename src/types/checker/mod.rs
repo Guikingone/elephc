@@ -360,8 +360,17 @@ impl Checker {
 /// An active `Closure::bind`/`bindTo` scope rebind while checking a gated closure literal's
 /// body — see `Checker::bound_scope_context`'s doc comment for the soundness argument.
 pub(crate) struct BoundScopeContext {
-    /// The literal `$scope` class the closure was rebound to (`X::class`'s resolved name).
+    /// The `$scope` class that governs the rebound closure's VISIBILITY: the literal third
+    /// argument (`X::class`'s resolved name) when one is supplied, otherwise the lexically
+    /// enclosing class, matching PHP's "keep the current scope" default for the two-argument
+    /// `Closure::bind($closure, $newThis)` form.
     pub(crate) scope_class: String,
+    /// The class of the object `$this` is rebound to — PHP takes it from the SECOND argument
+    /// (`$newThis`), never from `$scope`, which governs visibility only. `Some` only for the
+    /// `this_receiver_scope` shape and only when the receiver's class is statically known;
+    /// `None` leaves `$this` typed from the lexical class so an unknown receiver keeps today's
+    /// loud diagnostics instead of being silently mistyped.
+    pub(crate) this_class: Option<String>,
     /// Names of the closure's OWN declared parameters that can carry an object in the rebound
     /// scope: untyped parameters (once inference has narrowed them to such an object), plus
     /// parameters declared as `scope_class` or a subclass. `can_access_property` authorizes these
