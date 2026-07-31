@@ -576,3 +576,220 @@ echo r()->n;
     );
     assert_eq!(ops[5], "unreachable", "the fail block must not fall through: {:?}", ops);
 }
+
+// ---------------------------------------------------------------------------------------------
+// BOXED (union) sources at the return position.
+//
+// A union's codegen representation is a boxed `Mixed`, so these are the shapes whose throw path
+// cannot use `get_class` (there is no object header to read) and cannot release the value as an
+// object (the refcount word it would decrement is the cell's TAG). Both are resolved from the
+// operand's own representation in `crate::codegen::lower_inst::objects::return_type_guard`.
+//
+// Every fixture here keeps a DECLARED union return on the source function. That is load-bearing:
+// an UNDECLARED union return widens to `Mixed` and takes the gradual path instead, so a fixture
+// without one passes at the baseline too and proves nothing.
+// ---------------------------------------------------------------------------------------------
+
+/// A boxed union source flowing into a CONCRETE declared class return (`BoxedToRawObject`): the
+/// matching arm is unboxed and usable as the derived type, and the mismatching arm throws naming
+/// its ACTUAL runtime class.
+///
+/// `Coll` and `Route` are given DIFFERENT LAYOUTS on purpose — a wrong-representation read of the
+/// box would print visibly wrong values rather than something plausible.
+#[test]
+fn test_checked_downcast_return_boxed_union_into_concrete_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Coll { public int $a = 111; public int $b = 222; public int $c = 333; }
+class Route { public string $name = "route-name"; public int $port = 8080; }
+function pick(int $k): Coll|Route { return $k === 0 ? new Coll() : new Route(); }
+function want(int $k): Route { return pick($k); }
+$r = want(1);
+echo $r->name, "|", $r->port, "|";
+try { want(0); echo "NO THROW"; } catch (\TypeError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "route-name|8080|want(): Return value must be of type Route, Coll returned"
+    );
+}
+
+/// A boxed union source flowing into a NULLABLE declared return (`BoxedToBoxed`): the null arm
+/// passes through the Phase-1 tag test AS NULL, the class arm passes the `instanceof`, and the
+/// unrelated arm throws against the `?Route` spelling PHP itself renders.
+#[test]
+fn test_checked_downcast_return_boxed_union_into_nullable_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Coll { public int $a = 111; public int $b = 222; public int $c = 333; }
+class Route { public string $name = "route-name"; public int $port = 8080; }
+function pick(int $k): Coll|Route|null {
+    if ($k === 0) { return new Coll(); }
+    if ($k === 1) { return new Route(); }
+    return null;
+}
+function want(int $k): ?Route { return pick($k); }
+echo want(1)->name, "|";
+var_dump(want(2) === null);
+try { want(0); echo "NO THROW"; } catch (\TypeError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "route-name|bool(true)\nwant(): Return value must be of type ?Route, Coll returned"
+    );
+}
+
+/// A NULL payload reaching a NON-nullable declared object return must be named `null`, not
+/// misreported through a class lookup. There is no Phase-1 null arm to catch it (the declaration
+/// has none), so it falls through the `instanceof` into the throw — which is exactly where a
+/// `get_class` on a boxed cell would have read a tag word as an object header.
+#[test]
+fn test_checked_downcast_return_boxed_null_is_named_null() {
+    let out = compile_and_run(
+        r#"<?php
+class Coll { public int $a = 111; public int $b = 222; public int $c = 333; }
+class Route { public string $name = "route-name"; public int $port = 8080; }
+function pick(int $k): Coll|Route|null {
+    if ($k === 0) { return new Coll(); }
+    if ($k === 1) { return new Route(); }
+    return null;
+}
+function want(int $k): Route { return pick($k); }
+echo want(1)->port, "|";
+try { want(2); echo "NO THROW"; } catch (\TypeError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "8080|want(): Return value must be of type Route, null returned"
+    );
+}
+
+/// The `?object` source shape (a bare `object` arm plus null, boxed together): every object is a
+/// legitimate `instanceof` candidate, so the guard decides it at runtime, and the null arm is
+/// named `null`.
+#[test]
+fn test_checked_downcast_return_nullable_bare_object_source_into_concrete_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Coll { public int $a = 111; public int $b = 222; public int $c = 333; }
+class Route { public string $name = "route-name"; public int $port = 8080; }
+function pick(int $k): ?object {
+    if ($k === 0) { return new Coll(); }
+    if ($k === 1) { return new Route(); }
+    return null;
+}
+function want(int $k): Route { return pick($k); }
+echo want(1)->name, "|";
+try { want(0); echo "NO THROW"; } catch (\TypeError $e) { echo $e->getMessage(); }
+echo "|";
+try { want(2); echo "NO THROW"; } catch (\TypeError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "route-name|want(): Return value must be of type Route, Coll returned\
+         |want(): Return value must be of type Route, null returned"
+    );
+}
+
+/// A caught BOXED-source return `TypeError` must leave the heap balanced. The return position
+/// RELEASES the mismatched value (nothing else owns a value the caller never receives), and the
+/// release helper is picked by representation: `__rt_decref_mixed` for a box. Releasing a `Mixed`
+/// cell as an object would corrupt a tag word, and macOS ABSORBS the resulting double free — so
+/// the exit status alone is not evidence, the allocs/frees balance is.
+#[test]
+fn test_checked_downcast_return_boxed_throw_path_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Coll { public int $a = 111; public int $b = 222; public int $c = 333; }
+class Route { public string $name = "route-name"; public int $port = 8080; }
+function pick(int $k): Coll|Route|null {
+    if ($k === 0) { return new Coll(); }
+    if ($k === 1) { return new Route(); }
+    return null;
+}
+function want(int $k): Route { return pick($k); }
+$caught = 0;
+for ($i = 0; $i < 50; $i++) {
+    try { want(0); } catch (\TypeError $e) { $caught++; }
+    try { want(2); } catch (\TypeError $e) { $caught++; }
+}
+echo $caught;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "100");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "heap debug reported a leak on the boxed return throw path: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("live_blocks=0"),
+        "boxed return throw path left live blocks behind: {}",
+        out.stderr
+    );
+}
+
+/// STRUCTURAL PIN for the boxed return shape: a `?D` declaration must test the NULL TAG BEFORE
+/// the `instanceof`, and the fail block must still use the RELEASING return throw op.
+///
+/// Phase 1 ordering is invisible to the behavioural tests above whenever the null arm happens to
+/// be reached by a value that is not null; only asserting the emitted order catches a reordering
+/// that would send a legitimate `null` into `instanceof` (which it can never satisfy) and from
+/// there into a bogus `TypeError`.
+#[test]
+fn test_checked_downcast_return_boxed_guard_tests_null_tag_before_instanceof() {
+    let module = emit_ir(
+        r#"<?php
+class Coll { public int $a = 1; }
+class Route { public int $n = 2; }
+function pick(int $k): Coll|Route|null {
+    if ($k === 0) { return new Coll(); }
+    if ($k === 1) { return new Route(); }
+    return null;
+}
+function want(int $k): ?Route { return pick($k); }
+var_dump(want(2));
+"#,
+    );
+    let guarded = function_ir(&module, "want(");
+    let ops: Vec<&str> = guarded
+        .lines()
+        .map(str::trim)
+        .filter(|line| {
+            line.starts_with("return_type_guard")
+                || line.contains("instance_of")
+                || line.contains("is_null")
+                || line.starts_with("cond_br")
+                || line.contains("throw_checked")
+                || *line == "unreachable"
+        })
+        .collect();
+    let null_at = ops
+        .iter()
+        .position(|line| line.contains("is_null"))
+        .unwrap_or_else(|| panic!("boxed guard must emit a null tag test:\n{}", guarded));
+    let instanceof_at = ops
+        .iter()
+        .position(|line| line.contains("instance_of"))
+        .unwrap_or_else(|| panic!("boxed guard must emit an instanceof:\n{}", guarded));
+    assert!(
+        null_at < instanceof_at,
+        "the null tag test must precede the instanceof: {:?}",
+        ops
+    );
+    assert!(
+        ops.iter().any(|line| line.starts_with("throw_checked_return_type_error")),
+        "the return position MUST keep the releasing throw op: {:?}",
+        ops
+    );
+    assert!(
+        !ops.iter().any(|line| line.starts_with("throw_checked_type_error")),
+        "the non-releasing argument throw op would leak the return value: {:?}",
+        ops
+    );
+}

@@ -628,12 +628,17 @@ pub enum Op {
     Warn,
     ThrowException,
     /// Constructs and throws a catchable `\TypeError` for a checked-downcast-on-return
-    /// guard mismatch. Operand: the mismatched object value (read-only, for its runtime
-    /// class name; released as part of this op since it is never returned to the caller).
+    /// guard mismatch. Operand: the mismatched value (read-only, for its runtime type
+    /// name; released as part of this op since it is never returned to the caller).
     /// Immediate: a `Data` id for the compile-time message prefix (`"F(): Return value
-    /// must be of type D, "`); the runtime-looked-up actual class name and a fixed
+    /// must be of type D, "`); the runtime-looked-up actual type name and a fixed
     /// `" returned"` suffix complete the message, matching PHP's own return-type
     /// `TypeError` wording. Never returns (see `crate::ir_lower::stmt::return_type_guard`).
+    ///
+    /// The operand may be a raw object pointer OR a boxed `Mixed`; codegen reads its static
+    /// type to pick the type-name table (`get_class` vs the runtime-tag table) and the release
+    /// helper (`__rt_decref_object` vs `__rt_decref_mixed`). The RELEASE is unconditional either
+    /// way — that is the ownership policy this op exists to carry.
     ThrowCheckedReturnTypeError,
     /// Constructs and throws a catchable `\TypeError` for a checked-downcast guard mismatch at a
     /// position where the guarded value is STILL OWNED BY SOMEONE ELSE (a call argument, whose

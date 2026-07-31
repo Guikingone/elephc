@@ -89,16 +89,27 @@ pub(crate) enum GuardPosition {
 /// - `RawObjectToBoxed`/`BoxedToBoxed` at an ARGUMENT position: admitted, but only for a
 ///   declaration `guard_is_php_faithful` clears — see that function for the weak-mode coercion
 ///   this must not throw over.
-/// - `BoxedToRawObject`/`BoxedToBoxed` at a RETURN position: NOT guarded. The return position's
-///   throw resolves the mismatched value's name through `get_class` and RELEASES it as an object;
-///   both are wrong for a box, and generalizing them is a separate change from this matrix.
+/// - `BoxedToRawObject`/`BoxedToBoxed` at a RETURN position: admitted. These were held back while
+///   the return position's throw could only resolve a name through `get_class` and could only
+///   release as an object — both wrong for a box, and both since fixed in
+///   `crate::codegen::lower_inst::objects::return_type_guard`, which now picks the name table and
+///   the release helper from the operand's own representation. The RELEASE ITSELF stays
+///   unconditional here, because it is a property of the POSITION (a return value the caller never
+///   receives has no other owner), not of the shape.
+///
+/// Deliberately matched on the POSITION first, and exhaustively on both axes: every position that
+/// is added has to state which shapes it guards, and can only do so by pointing at an emitter that
+/// handles them. A position defaulting into someone else's row is the failure mode this exists to
+/// prevent.
 pub(crate) const fn shape_is_guardable_at(shape: GuardShape, position: GuardPosition) -> bool {
-    match (shape, position) {
-        (GuardShape::RawObject, _) => true,
-        (GuardShape::RawObjectToBoxed, _) => true,
-        (GuardShape::BoxedToRawObject, GuardPosition::Argument) => true,
-        (GuardShape::BoxedToBoxed, GuardPosition::Argument) => true,
-        (GuardShape::BoxedToRawObject | GuardShape::BoxedToBoxed, GuardPosition::Return) => false,
+    match position {
+        GuardPosition::Return | GuardPosition::Argument => matches!(
+            shape,
+            GuardShape::RawObject
+                | GuardShape::RawObjectToBoxed
+                | GuardShape::BoxedToRawObject
+                | GuardShape::BoxedToBoxed
+        ),
     }
 }
 
@@ -328,34 +339,26 @@ mod tests {
         assert_eq!(declared_guard_arms(&ty), vec![GuardArm::Class("D".to_string())]);
     }
 
-    /// A boxed source reaching a raw object slot is guarded at an argument, never at a return:
-    /// the return throw resolves its name through `get_class` and releases it as an object.
+    /// Both value positions guard all four shapes: the return throw resolves a BOXED value's name
+    /// by runtime tag and releases it as a `Mixed` cell, so the two shapes it used to decline are
+    /// emittable there now.
     #[test]
-    fn boxed_shapes_are_guarded_at_arguments_only() {
-        assert!(shape_is_guardable_at(
-            GuardShape::BoxedToRawObject,
-            GuardPosition::Argument
-        ));
-        assert!(shape_is_guardable_at(
-            GuardShape::BoxedToBoxed,
-            GuardPosition::Argument
-        ));
-        assert!(!shape_is_guardable_at(
-            GuardShape::BoxedToRawObject,
-            GuardPosition::Return
-        ));
-        assert!(!shape_is_guardable_at(
-            GuardShape::BoxedToBoxed,
-            GuardPosition::Return
-        ));
-        assert!(shape_is_guardable_at(
-            GuardShape::RawObject,
-            GuardPosition::Return
-        ));
-        assert!(shape_is_guardable_at(
-            GuardShape::RawObjectToBoxed,
-            GuardPosition::Return
-        ));
+    fn both_value_positions_guard_every_shape() {
+        for position in [GuardPosition::Return, GuardPosition::Argument] {
+            for shape in [
+                GuardShape::RawObject,
+                GuardShape::RawObjectToBoxed,
+                GuardShape::BoxedToRawObject,
+                GuardShape::BoxedToBoxed,
+            ] {
+                assert!(
+                    shape_is_guardable_at(shape, position),
+                    "{:?} must be guardable at {:?}",
+                    shape,
+                    position
+                );
+            }
+        }
     }
 
     /// `?D`, `D|E` and `D|array` are matched exactly by PHP, so an arm chain reproduces it.

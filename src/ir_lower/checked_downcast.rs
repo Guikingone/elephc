@@ -452,6 +452,11 @@ fn emit_phase_one_test(
 /// value — sound there and only there, because a return value the caller never receives has no
 /// other owner. Every other position uses `Op::ThrowCheckedTypeError`, which does not: the
 /// caller's own local still owns the argument, and releasing it here is a double free.
+///
+/// Neither op is told the source SHAPE, and neither needs to be: each reads the operand's own
+/// static type in codegen and picks its runtime-type-name table and (for the return op) its
+/// release helper from that. The ownership policy stays a property of the op, which is what keeps
+/// it a property of the position.
 fn emit_mismatch_throw(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,

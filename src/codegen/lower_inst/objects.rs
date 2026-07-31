@@ -4785,10 +4785,14 @@ pub(super) fn lower_instanceof(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers a checked-downcast-on-return guard mismatch: builds and throws a catchable
-/// `\TypeError` naming the mismatched value's ACTUAL runtime class. Delegates the target-aware
-/// message/allocation/throw sequence to `return_type_guard`; see
+/// `\TypeError` naming the mismatched value's ACTUAL runtime type, and releasing it. Delegates the
+/// target-aware message/allocation/throw sequence to `return_type_guard`; see
 /// `crate::ir_lower::stmt::return_type_guard` for the `Op::InstanceOf` chain that falls through
 /// to this op only when every declared return-type arm mismatches.
+///
+/// The operand's static type is threaded through because the emitted sequence depends on the
+/// value's REPRESENTATION: a boxed source names its runtime type by tag rather than through
+/// `get_class`, and is released as a `Mixed` cell rather than as an object.
 pub(super) fn lower_throw_checked_return_type_error(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -4796,8 +4800,15 @@ pub(super) fn lower_throw_checked_return_type_error(
     let value = expect_operand(inst, 0)?;
     let data = expect_data(inst)?;
     let (prefix_label, prefix_len) = ctx.intern_string_data(data)?;
+    let value_ty = ctx.value_php_type(value)?;
     ctx.load_value_to_result(value)?;
-    return_type_guard::emit_throw_checked_return_type_error(ctx, &prefix_label, prefix_len)
+    return_type_guard::emit_throw_checked_return_type_error(
+        ctx,
+        &prefix_label,
+        prefix_len,
+        value,
+        &value_ty,
+    )
 }
 
 /// Lowers a checked-downcast guard mismatch at a position where the guarded value keeps its

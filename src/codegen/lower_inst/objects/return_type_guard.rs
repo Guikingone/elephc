@@ -15,11 +15,15 @@
 //!   approximation) via two `__rt_concat` calls plus `__rt_str_persist`, then mirrors
 //!   `objects::reflection::emit_reflection_class_argument_type_error_throw`'s
 //!   allocation/publish/unwind tail exactly (stamps `_spl_type_error_class_id`). Never returns.
-//! - Only the RETURN op releases the mismatched object (it is never returned to the caller, so
+//! - Only the RETURN op releases the mismatched value (it is never returned to the caller, so
 //!   nothing else owns it). The argument op must NOT: the caller's local still owns the value,
-//!   and releasing it there is a double free.
+//!   and releasing it there is a double free. That split is by OP, and stays by op — but WHICH
+//!   release helper the return op emits is a REPRESENTATION choice made from the operand's own
+//!   type (`__rt_decref_object` for a raw object, `__rt_decref_mixed` for a box), which is a
+//!   different axis from the ownership policy and must not be confused with it.
 //! - A BOXED source needs its own tag→name table (int/string/float/true/false/null/array/
-//!   <runtime class>/Closure). It deliberately does NOT reuse
+//!   <runtime class>/Closure), and BOTH positions now use it — a box has no object header for
+//!   `get_class` to read. It deliberately does NOT reuse
 //!   `builtins::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch`, whose
 //!   generic bucket maps tags 4/5/6 alike to the literal word `object` and therefore already
 //!   mis-names an ARRAY payload for the array builtins that use it.
@@ -65,33 +69,54 @@ fn load_static_string_into(ctx: &mut FunctionContext<'_>, label: &str, len: usiz
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
-/// Builds `"<prefix><actual class name> returned"` and throws it as a catchable `\TypeError`.
+/// Builds `"<prefix><actual runtime type name> returned"` and throws it as a catchable
+/// `\TypeError`, RELEASING the mismatched value.
 ///
-/// On entry, the mismatched object's pointer must already be loaded in the target's integer
-/// result register (the caller — `lower_throw_checked_return_type_error` — does this via
+/// On entry, the mismatched value must already be loaded in the target's integer result register
+/// (the caller — `lower_throw_checked_return_type_error` — does this via
 /// `ctx.load_value_to_result`). `prefix_label`/`prefix_len` name the compile-time message prefix
 /// (function name + declared type, already formatted by `ir_lower`). Never returns.
+///
+/// `value`/`value_ty` are the guarded operand and its static type, and BOTH of the two things that
+/// vary with it are representation choices, not policy ones — the release itself is unconditional
+/// at this position, because a return value the caller never receives has no other owner:
+/// - THE NAME. A raw object source resolves its class through `get_class`; a BOXED source cannot,
+///   because `get_class` would read a `Mixed` cell's first word as an object header. It unboxes and
+///   dispatches on the runtime tag instead, through the same table the argument position uses — so
+///   a boxed `null` reaching a declared `D` return is named `null`, exactly as PHP names it.
+/// - THE RELEASE HELPER. `emit_decref_if_refcounted` is handed the value's own representation, so a
+///   raw object goes to `__rt_decref_object` (byte-for-byte what this emitted before a boxed source
+///   could reach it) and a box goes to `__rt_decref_mixed`. Releasing a `Mixed` cell as though it
+///   were an object would decrement a refcount word that is the cell's TAG.
 pub(super) fn emit_throw_checked_return_type_error(
     ctx: &mut FunctionContext<'_>,
     prefix_label: &str,
     prefix_len: usize,
+    value: ValueId,
+    value_ty: &PhpType,
 ) -> Result<()> {
+    let source_is_raw_object = matches!(
+        value_ty.codegen_repr(),
+        PhpType::Object(_) | PhpType::Packed(_)
+    );
     let object_reg = abi::int_result_reg(ctx.emitter);
     let (suffix_label, suffix_len) = ctx.data.add_string(b" returned");
 
-    // -- park the mismatched object pointer across the message-building/allocation calls, so
-    //    it can be released once the exception object no longer needs it --
+    // -- park the mismatched value across the message-building/allocation calls, so it can be
+    //    released once the exception object no longer needs it --
     abi::emit_push_reg(ctx.emitter, object_reg);
 
-    // -- resolve the mismatched value's ACTUAL runtime class name (never a static
-    //    approximation), then move it out of the concat lhs/output slot before it gets
-    //    overwritten by the compile-time prefix --
-    super::super::builtins::types::emit_dynamic_object_class_name(ctx, "get_class");
+    // -- resolve the mismatched value's ACTUAL runtime type name (never a static approximation),
+    //    leaving it in the concat right-operand pair before the compile-time prefix overwrites
+    //    the concat lhs/output slot --
+    if source_is_raw_object {
+        emit_runtime_class_name_into_concat_rhs(ctx);
+    } else {
+        emit_boxed_type_name_into_concat_rhs(ctx, value)?;
+    }
     let (lhs_ptr, lhs_len) = concat_lhs_regs(ctx);
-    let (rhs_ptr, rhs_len) = concat_rhs_regs(ctx);
-    move_reg_pair(ctx, rhs_ptr, rhs_len, lhs_ptr, lhs_len);
 
-    // -- prefix ("F(): Return value must be of type D, ") + actual class name --
+    // -- prefix ("F(): Return value must be of type D, ") + actual type name --
     load_static_string_into(ctx, prefix_label, prefix_len, lhs_ptr, lhs_len);
     abi::emit_call_label(ctx.emitter, "__rt_concat");
 
@@ -117,14 +142,20 @@ pub(super) fn emit_throw_checked_return_type_error(
     abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);
     emit_store_message_fields(ctx, ptr_reg, len_reg);
 
-    // -- release the mismatched object: it is never returned to the caller, so this guard
-    //    is its only owner. Park the freshly built exception object across the release call. --
+    // -- release the mismatched value: it is never returned to the caller, so this guard is its
+    //    only owner. The helper is chosen by REPRESENTATION — a box is released as a `Mixed` cell,
+    //    never as an object. Park the freshly built exception object across the release call. --
     let result_reg = abi::int_result_reg(ctx.emitter);
     let scratch = abi::temp_int_reg(ctx.emitter.target);
-    abi::emit_pop_reg(ctx.emitter, scratch); // reload the parked mismatched object pointer
+    abi::emit_pop_reg(ctx.emitter, scratch); // reload the parked mismatched value pointer
     abi::emit_push_reg(ctx.emitter, result_reg); // park the exception object
     move_reg(ctx, result_reg, scratch);
-    abi::emit_decref_if_refcounted(ctx.emitter, &PhpType::Object(String::new()));
+    let release_ty = if source_is_raw_object {
+        PhpType::Object(String::new())
+    } else {
+        PhpType::Mixed
+    };
+    abi::emit_decref_if_refcounted(ctx.emitter, &release_ty);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_pop_reg(ctx.emitter, result_reg); // restore the exception object
 
