@@ -52,13 +52,82 @@
 //!   it stays a loud compile-time error; the correct fix is either a real `proc_open`
 //!   implementation or making it `function_exists`-invisible so its guards fire (both out of
 //!   scope here).
+//!   MEASURED ADDENDUM (backtrace-family cycle): `proc_open` is not merely un-lowered, it is the
+//!   ONLY name in `CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS` whose CALL the checker itself rejects — an
+//!   exhaustive sweep compiling `<?php <name>();` for all 125 legacy catalog names produced
+//!   exactly one "Undefined function" (this one), because no per-area `check_builtin` arm claims
+//!   it and `Checker::check_builtin` therefore returns `Ok(None)`. That also rules out the
+//!   "make it `function_exists`-invisible" half of the suggested fix as a NET win on its own:
+//!   `Terminal::readFromProcess()` passes `$pipes` BY REFERENCE to `proc_open` and then reads
+//!   `$pipes[1]`/`$pipes[2]` on the next lines, so the by-ref out-parameter knowledge in
+//!   `crate::types::checker::inference::expr::by_ref_outputs` (`"proc_open" if index == 2`) is
+//!   what currently initializes `$pipes`. Late-binding the name (or dropping it from the catalog)
+//!   removes that knowledge and trades one "Undefined function" for a fresh "Undefined variable:
+//!   $pipes". Only a real implementation clears this call site without relocating the error.
 //! - The remaining non-extension-shaped undefined names surfaced by the same scan
-//!   (`debug_backtrace`, `eval`, `next`, `highlight_file`) stay OUT of scope: they are core PHP
-//!   functions elephc genuinely lacks and are called UNCONDITIONALLY (not behind a dead guard),
-//!   so keeping them a loud compile-time "Undefined function" is the honest real-gap signal —
-//!   each needs a real implementation or new runtime support (`debug_backtrace` needs runtime
-//!   call-stack metadata; `highlight_file` needs a runtime tokenizer), tracked as separate
-//!   follow-up work.
+//!   (`debug_backtrace`, `eval`, `next`, `highlight_file`, `extract`) stay OUT of scope: they are
+//!   core PHP functions elephc genuinely lacks and are called UNCONDITIONALLY (not behind a dead
+//!   guard), so keeping them a loud compile-time "Undefined function" is the honest real-gap
+//!   signal. A dedicated cycle scoped each one against `php -n` 8.5.6 and against the compiler as
+//!   it stands; the verdicts are recorded here so the next attempt starts from measurement rather
+//!   than re-derives it. In every case, adding the NAME to `CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS`
+//!   would lower the `--web` error counter while relocating the failure one floor down into the
+//!   EIR backend, where the `--web` run cannot see it (the run aborts at the checker) — the exact
+//!   false-win shape this list exists to refuse. See the tripwire tests in
+//!   `crate::types::checker::builtins::catalog`.
+//!   * `debug_backtrace` — blocked on FILE IDENTITY, not just on call-stack metadata. Every frame
+//!     PHP returns carries `file` and `line`, and five of the six Symfony call sites are built on
+//!     those two keys: `VarDumper\...\SourceContextProvider::getContext()` reads
+//!     `$trace[1]['file']`/`['line']` unqualified, while `ErrorHandler::call()`,
+//!     `ErrorHandler::cleanTrace()` and `DependencyInjection\Kernel\KernelTrait` gate each frame
+//!     on `isset($backtrace[$i]['file'], $backtrace[$i]['line'], ...)` and would skip every frame
+//!     a file-less implementation produced. (The sixth,
+//!     `DependencyInjection\ServiceLocator::createNotFoundException()`, wants `object` instead —
+//!     feasible, since `$this` is in a known slot for methods.) `crate::span::Span` is line/col
+//!     only and deliberately 16 bytes (a 32-byte span
+//!     overflowed 2 MiB test-thread stacks), the resolver inlines every `include`/`require` into
+//!     one AST, and `crate::resolver::scan_reflection_source_files` is called ONCE on the entry
+//!     file (`crate::pipeline::compile`), so a declaration from an autoloaded file has no
+//!     recorded path at all — which is why `ReflectionClass::getFileName()` returns PHP's `false`
+//!     for them and why elephc's own `--web` diagnostics print `error[LINE:COL]` with no
+//!     filename. A faithful `debug_backtrace` therefore needs, in order: (1) a complete
+//!     declaration -> file map covering included/autoloaded files, (2) a shadow stack pushed in
+//!     the callee prologue / popped in `crate::codegen_support::abi::frame`'s teardown with the
+//!     call-site line supplied by the caller, restored across the setjmp/longjmp unwind in
+//!     `crate::codegen_support::runtime::exceptions`, (3) pay-for-use gating on the
+//!     `const_introspection` model in `crate::codegen_support::runtime_features`. The dormant
+//!     `_exc_call_frame_top` chain is the pre-shaped hook (already fiber-aware, already walked by
+//!     `__rt_exception_cleanup_frames`) but is never populated: the only writer,
+//!     `lower_try_push_handler`, stores an immediate zero. `args` is out of reach regardless —
+//!     `func_get_args()` works only by rewriting the CALLEE's own signature
+//!     (`crate::types::checker::func_args_scan`), which cannot serve frames that did not opt in,
+//!     so `DEBUG_BACKTRACE_IGNORE_ARGS` semantics are the honest ceiling. Both option constants
+//!     already exist end to end (`crate::codegen_support::prescan`: `PROVIDE_OBJECT` = 1,
+//!     `IGNORE_ARGS` = 2); only the function is missing.
+//!   * `next` — the array internal-pointer family, and a trap. `reset`, `current` and `key` are
+//!     ALREADY catalog builtins with checker arms, so `function_exists()` folds `true` for them,
+//!     yet all three abort with "unsupported EIR backend feature: builtin call <name>" (verified
+//!     on `$a=[1,2]; var_dump(reset($a));` and siblings). Only `end` is lowered, and it returns
+//!     the last element without moving any pointer, because elephc arrays have no internal
+//!     pointer: the 24-byte header built by `__rt_array_new`
+//!     (`crate::codegen_support::runtime::arrays::array_new`) is length/capacity/elem_size with no
+//!     cursor field. `Filesystem\Path::getLongestCommonBasePath()` — the one call site — drives
+//!     `reset`/`next`/`key`/`current` in a single `for`, so registering `next` alone clears one
+//!     checker error and immediately fails the same function in the backend on `reset`. Real work
+//!     here is "add an internal pointer to the array representation", not "add a builtin".
+//!   * `highlight_file` — needs a PHP tokenizer AND PHP's exact colorized HTML at runtime.
+//!     elephc's lexer/parser exist only in the compiler and in the `elephc-magician` eval bridge,
+//!     which a non-`eval` program does not link; `token_get_all` is itself late-bound precisely
+//!     because elephc has no runtime tokenizer. `ErrorHandler\ErrorRenderer\HtmlErrorRenderer::
+//!     fileExcerpt()` then `preg_replace`s the `<pre><code>` wrapper off and splits the emitted
+//!     `<span>` tags, so anything short of PHP's real markup is worse than absent.
+//!   * `extract` — genuinely impossible in elephc's model, not merely unbuilt. It materializes
+//!     local variables whose NAMES are only known at runtime, and elephc rejects that class of
+//!     construct by design: `$$name = 1;` is a compile error ("Variable variables (`$$name`) are
+//!     not supported: variable names must be known at compile time"). Its lone call site,
+//!     `HtmlErrorRenderer::include()`, does `extract($context, \EXTR_SKIP)` purely to hand
+//!     variables to an `include`d template, which compounds the same problem. This one is a
+//!     documented refusal rather than deferred work.
 //!   `is_uploaded_file`/`move_uploaded_file` and `request_parse_body` were on this list for the
 //!   same reason and have since been given REAL implementations rather than late-bound throws:
 //!   `crate::upload_prelude` carries the rfc1867 upload registry the first two need (fed by the

@@ -11,6 +11,25 @@
 //!   dedicated syntax that cannot be represented by an ordinary registry call.
 //! - `LANGUAGE_CONSTRUCT_FUNCTIONS` participates in call resolution but stays
 //!   hidden from `function_exists()` and first-class callable surfaces.
+//! - CATALOG MEMBERSHIP IS A `function_exists()` PROMISE THE BACKEND MAY NOT KEEP.
+//!   `is_php_visible_builtin_function` is what `crate::optimize::function_existence` folds
+//!   `function_exists()` on, and it accepts every `CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS` entry
+//!   regardless of whether any EIR lowering exists. A measured sweep (compiling one probe per
+//!   name against the release compiler) confirmed AT LEAST 73 of the 125 legacy names abort with
+//!   "unsupported EIR backend feature: builtin call <name>" — among them `stripos`, `strtr`,
+//!   `parse_url`, `parse_str`, `preg_quote`, `strip_tags`, `substr_compare`, `strncasecmp`,
+//!   `random_bytes`, `is_countable`, `pack`/`unpack`, `http_build_query`, `set_error_handler`,
+//!   `reset`/`current`/`key`, and the whole `mb_*`/`grapheme_*`/`iconv_*` families. See
+//!   `is_prelude_overridable_builtin` below for the one case where this is deliberate and
+//!   compensated (`trigger_error`, implemented by the web prelude in PHP).
+//!   Two consequences bind anyone extending this file:
+//!   1. Adding a name here to clear an "Undefined function" diagnostic RELOCATES the failure
+//!      into the backend rather than fixing it, and `--web` cannot see the relocation because
+//!      that run aborts at the checker. A name belongs here only once its lowering exists.
+//!   2. A `!function_exists('x')` polyfill/capability guard in user code reads `true` for all 73
+//!      and therefore does NOT fire, so PHP-level fallbacks that would have worked stay dead.
+//!   The `catalog_gap_tripwires` tests below pin the specific names a current campaign was
+//!   tempted to add; they are guard rails, not a claim that the rest of the list is sound.
 
 const COMPILER_RESIDENT_BUILTIN_FUNCTIONS: &[&str] = &[
     // `buffer_new` is a catalog-name-only entry: `buffer_new<T>(len)` is parsed as
@@ -399,5 +418,92 @@ mod tests {
         assert!(is_php_visible_builtin_function("ptr_get"));
         assert!(canonical_builtin_function_name("buffer_new").is_some());
         assert!(supported_builtin_function_names().contains(&"buffer_new"));
+    }
+
+    /// Guard rails for the four core-PHP names a `--web` Symfony scan repeatedly surfaces as
+    /// "Undefined function" (`debug_backtrace`, `next`, `highlight_file`, `extract`).
+    ///
+    /// Catalog membership is only a `function_exists()` promise (see the module preamble): it
+    /// makes the checker stop reporting the name while doing nothing about the missing EIR
+    /// lowering, so adding one of these to clear the diagnostic simply moves the failure into the
+    /// backend where the `--web` run — which aborts at the checker — cannot observe it. Each
+    /// assertion below therefore fails LOUDLY the moment a name is registered, and the message
+    /// names the concrete prerequisite that must land first.
+    /// `crate::types::checker::builtins::late_bound`'s module doc carries the full evidence.
+    mod catalog_gap_tripwires {
+        use super::*;
+
+        /// `debug_backtrace()` must not become catalog-visible before elephc can attribute a
+        /// declaration to its source FILE. Every PHP frame carries `file`/`line`, and five of the
+        /// six Symfony call sites are built on those two keys; `Span` is line/col only, the
+        /// resolver inlines every include into one AST, and `scan_reflection_source_files` covers
+        /// the entry file alone.
+        #[test]
+        fn debug_backtrace_stays_absent_until_frames_are_real() {
+            assert!(
+                !is_supported_builtin_function("debug_backtrace"),
+                "debug_backtrace() needs a declaration->file map plus a real shadow stack before \
+                 it is registered; a catalog entry alone converts the checker diagnostic into an \
+                 invisible backend failure"
+            );
+        }
+
+        /// `next()` must not become catalog-visible while the array representation has no
+        /// internal pointer. Its siblings `reset`/`current`/`key` are already registered and
+        /// already fail in the backend, so `next` would clear one diagnostic and re-fail the very
+        /// same function (`Filesystem\Path::getLongestCommonBasePath()`) one floor down.
+        #[test]
+        fn next_stays_absent_while_internal_pointer_family_is_unlowered() {
+            assert!(
+                !is_supported_builtin_function("next"),
+                "next() needs an internal array pointer; registering it while reset()/current()/\
+                 key() still abort with 'unsupported EIR backend feature' only relocates the error"
+            );
+            for sibling in ["reset", "current", "key"] {
+                assert!(
+                    is_supported_builtin_function(sibling),
+                    "{sibling}() is expected to still be catalog-visible-but-unlowered; if it \
+                     gained a real lowering, re-measure the family before touching next()"
+                );
+            }
+        }
+
+        /// `highlight_file()` must not become catalog-visible before a runtime tokenizer exists.
+        /// `token_get_all` is late-bound for exactly that reason, and Symfony's
+        /// `HtmlErrorRenderer::fileExcerpt()` post-processes PHP's real `<span>` markup.
+        #[test]
+        fn highlight_file_stays_absent_until_a_runtime_tokenizer_exists() {
+            assert!(
+                !is_supported_builtin_function("highlight_file"),
+                "highlight_file() needs a runtime PHP tokenizer and PHP's exact colorized markup"
+            );
+        }
+
+        /// `extract()` must not become catalog-visible: it creates locals whose names are only
+        /// known at runtime, which elephc rejects by design (`$$name` is a compile error). This
+        /// is a refusal, not deferred work.
+        #[test]
+        fn extract_stays_absent_because_dynamic_locals_are_refused() {
+            assert!(
+                !is_supported_builtin_function("extract"),
+                "extract() requires runtime-named locals, which elephc rejects by design \
+                 (variable variables are a compile error)"
+            );
+        }
+
+        /// `proc_open` is the one legacy catalog name whose CALL the checker itself rejects (no
+        /// per-area `check_builtin` arm), while `function_exists('proc_open')` still folds true.
+        /// It stays registered because `by_ref_outputs` uses that registration to initialize the
+        /// `&$pipes` out-parameter its only call site reads; dropping it trades one diagnostic
+        /// for an "Undefined variable: $pipes".
+        #[test]
+        fn proc_open_stays_registered_for_its_by_ref_out_parameter() {
+            assert!(
+                is_php_visible_builtin_function("proc_open"),
+                "proc_open must stay catalog-visible: Console\\Terminal::readFromProcess() relies \
+                 on its by-ref $pipes out-parameter knowledge; only a real implementation clears \
+                 that call site without surfacing a new undefined-variable error"
+            );
+        }
     }
 }
