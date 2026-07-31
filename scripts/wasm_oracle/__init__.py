@@ -38,6 +38,10 @@ from .contract import (
     sha256_bytes,
     sha256_file,
 )
+from .php_src_artifact import (
+    PhpSrcRuntimeArtifact,
+    load_php_src_runtime_artifact,
+)
 
 __all__ = [
     "AGGREGATE_SCHEMA",
@@ -58,6 +62,7 @@ __all__ = [
     "Normalization",
     "OracleContract",
     "PhpSrcPin",
+    "PhpSrcRuntimeArtifact",
     "RawBytes",
     "RunKey",
     "RuntimeProvenance",
@@ -68,6 +73,7 @@ __all__ = [
     "capture_process",
     "compare_records",
     "load_capture_record",
+    "load_php_src_runtime_artifact",
     "sha256_bytes",
     "sha256_file",
 ]

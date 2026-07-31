@@ -14,9 +14,11 @@ from wasm_oracle import (
     CaptureError,
     ContractError,
     OracleContract,
+    SUPPORTED_PROFILES,
     aggregate_exact,
     aggregate_generated_suite,
     load_capture_record,
+    load_php_src_runtime_artifact,
 )
 
 
@@ -39,6 +41,22 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "contract",
         help="Validate the pinned inventory/specification contract and print it.",
+    )
+
+    php_src_build = subparsers.add_parser(
+        "validate-php-src-build",
+        help="Independently validate one published pinned php-src build.",
+    )
+    php_src_build.add_argument("--build-root", required=True, type=Path)
+    php_src_build.add_argument(
+        "--profile",
+        required=True,
+        choices=SUPPORTED_PROFILES,
+    )
+    php_src_build.add_argument(
+        "--elephc-source-commit",
+        required=True,
+        help="Exact clean Elephc commit recorded by the build set.",
     )
 
     validate = subparsers.add_parser(
@@ -123,6 +141,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         contract = OracleContract.load(arguments.repo_root)
         if arguments.command == "contract":
             _write_output(None, contract.to_dict())
+        elif arguments.command == "validate-php-src-build":
+            artifact = load_php_src_runtime_artifact(
+                arguments.build_root,
+                arguments.profile,
+                contract,
+                arguments.elephc_source_commit,
+            )
+            _write_output(None, artifact.to_dict())
         elif arguments.command == "validate-record":
             record = load_capture_record(arguments.record, contract)
             _write_output(None, record.to_dict())
