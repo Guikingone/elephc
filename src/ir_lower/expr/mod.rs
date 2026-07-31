@@ -8843,6 +8843,18 @@ fn lower_closure_with_context(
             } else if by_ref && body_contains_eval {
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
+            } else if by_ref
+                && matches!(
+                    ctx.local_type(capture).codegen_repr(),
+                    PhpType::Int | PhpType::Float
+                )
+            {
+                // A by-reference alias can be given any PHP type through the shared
+                // cell, so a narrow scalar payload is unsound. Checked arithmetic makes
+                // that reachable without any reassignment: `$n += 1` on `PHP_INT_MAX`
+                // produces a float, and an `Int` cell silently discarded the promotion.
+                ctx.set_local_type(capture, PhpType::Mixed);
+                Some(PhpType::Mixed)
             } else {
                 None
             };
