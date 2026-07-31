@@ -737,9 +737,10 @@ echo $opcache, "|", PHP_VERSION, "|", $opcache === PHP_VERSION ? "agree" : "DISA
 
 /// `eval()` sees the same version surface the compiled code does on the default profile.
 ///
-/// The eval interpreter is a separate crate with no access to `--php-version`, so it reports the
-/// default (8.5) profile. On a default-profile binary that is identical to native, which is what
-/// this asserts; `EVAL_PHP_VERSION` in the magician documents the divergence for other profiles.
+/// The eval interpreter is a separate crate that cannot read `--php-version` itself, so the
+/// compiler forwards the profile to it through `__elephc_eval_set_php_version_id`. This pins
+/// the default; `eval_follows_a_non_default_profile` pins that the forwarding is what makes it
+/// true, rather than the bridge's own default happening to agree.
 #[test]
 fn eval_sees_the_same_version_surface_on_the_default_profile() {
     let source = r#"<?php
@@ -752,4 +753,25 @@ var_dump(phpversion("json"), phpversion("nope_xyz"));');
         out,
         "8.5.0|80500|8|5|0||cli|8.5.0\nstring(5) \"8.5.0\"\nbool(false)\n"
     );
+}
+
+/// `eval()` reports the profile the BINARY was compiled for, not the bridge's own default.
+///
+/// This is the assertion the default-profile test cannot make. The eval interpreter ships as an
+/// archive linked into the produced binary and defaults to the newest profile, so a `8.5`
+/// expectation is satisfied whether or not the compiler forwards anything. Compiling at `8.2`
+/// and demanding `8.2.0` is what distinguishes a working bridge from a coincidence.
+///
+/// `PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and `PHP_EXTRA_VERSION` stay `8`, `0` and empty:
+/// they are invariant across every maintained profile, which is why the bridge does not carry
+/// them.
+#[test]
+fn eval_follows_a_non_default_profile() {
+    let source = r#"<?php
+eval('echo PHP_VERSION, "|", PHP_VERSION_ID, "|", PHP_MAJOR_VERSION, "|", PHP_MINOR_VERSION,
+      "|", PHP_RELEASE_VERSION, "|", PHP_EXTRA_VERSION, "|", phpversion(), "\n";');
+echo PHP_VERSION, "|", PHP_VERSION_ID, "|", phpversion(), "\n";
+"#;
+    let out = run_for_profile_with_managed_pcre2("elephc_eval_version_82", source, "8.2");
+    assert_eq!(out, "8.2.0|80200|8|2|0||8.2.0\n8.2.0|80200|8.2.0\n");
 }

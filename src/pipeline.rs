@@ -57,6 +57,7 @@ pub(crate) fn compile(config: CliConfig) {
         ir_opt,
         target,
         php_version,
+        php_version_provenance,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,
@@ -159,6 +160,24 @@ pub(crate) fn compile(config: CliConfig) {
     };
     let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
+
+    // Report how the PHP profile is observable in THIS program, while `ast` is still the
+    // user's own code: after include resolution, but before any compiler prelude is injected.
+    // The `--web` prelude both calls `__elephc_php_version_id()` and defines the whole session
+    // surface, so scanning any later would report every `--web` build as profile-dependent on
+    // the strength of elephc's own generated code. Silent unless the profile actually changes
+    // what this program computes.
+    crate::php_profile::report(&ast, web, php_version, php_version_provenance);
+
+    // Reject a profile the program's own syntax could never have run under. elephc's parser
+    // accepts the whole language whatever `--php-version` says, so without this a file using
+    // 8.4 property hooks compiles under `--php-version 8.2` and bakes `PHP_VERSION = "8.2.0"`
+    // into a binary its source contradicts.
+    if let Some(error) = crate::php_profile::floor_violation(&ast, php_version) {
+        crate::progress::clear();
+        errors::report(&error);
+        process::exit(1);
+    }
 
     // Snapshot the USER-declared function/class names for `opcache.preload`'s
     // `preload_statistics`, taken HERE — after include resolution but BEFORE any compiler prelude

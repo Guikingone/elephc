@@ -150,13 +150,19 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "PHP_EOL" => Some(EvalPredefinedConstant::String("\n")),
         "PHP_OS" => Some(EvalPredefinedConstant::String(eval_php_os_name())),
         // The PHP version surface. The compiler bakes these per compilation from
-        // `--php-version` / `--web` (`codegen_support::prescan::collect_constants`); the eval
-        // interpreter has no access to either flag and reports the default profile — see the
-        // `EVAL_PHP_*` constants for the divergence this implies.
-        "PHP_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_VERSION)),
-        "PHP_VERSION_ID" => Some(EvalPredefinedConstant::Int(EVAL_PHP_VERSION_ID)),
+        // `--php-version` / `--web` (`codegen_support::prescan::collect_constants`) and forwards
+        // the profile to this interpreter through `__elephc_eval_set_php_version_id`, so the
+        // three profile-dependent entries answer whatever the binary was compiled for.
+        "PHP_VERSION" => Some(EvalPredefinedConstant::String(
+            crate::eval_php_profile::eval_php_version_string(),
+        )),
+        "PHP_VERSION_ID" => Some(EvalPredefinedConstant::Int(i64::from(
+            crate::eval_php_profile::eval_php_version_id(),
+        ))),
         "PHP_MAJOR_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_MAJOR_VERSION)),
-        "PHP_MINOR_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_MINOR_VERSION)),
+        "PHP_MINOR_VERSION" => Some(EvalPredefinedConstant::Int(
+            crate::eval_php_profile::eval_php_minor_version(),
+        )),
         "PHP_RELEASE_VERSION" => Some(EvalPredefinedConstant::Int(EVAL_PHP_RELEASE_VERSION)),
         "PHP_EXTRA_VERSION" => Some(EvalPredefinedConstant::String(EVAL_PHP_EXTRA_VERSION)),
         "PHP_SAPI" => Some(EvalPredefinedConstant::String(EVAL_PHP_SAPI)),

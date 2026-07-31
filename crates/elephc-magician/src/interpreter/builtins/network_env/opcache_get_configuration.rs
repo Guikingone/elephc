@@ -33,10 +33,6 @@ use opcache_directive_table::{
     opcache_directives, opcache_version_string, DirectiveValue, OPCACHE_PRODUCT_NAME,
 };
 
-/// The `PHP_VERSION_ID` the eval interpreter reports for OPcache configuration.
-/// Fixed to the newest maintained profile (8.5), matching the native default target.
-const EVAL_OPCACHE_PHP_VERSION_ID: u32 = 80500;
-
 /// Returns whether `name` (already lowercased and unqualified) is the OPcache
 /// configuration function, so `function_exists` reports it as existing even though
 /// it is not a PHP-visible eval builtin.
@@ -79,7 +75,7 @@ pub(in crate::interpreter) fn eval_opcache_get_configuration_result(
 fn build_directives(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let entries = opcache_directives(EVAL_OPCACHE_PHP_VERSION_ID);
+    let entries = opcache_directives(crate::eval_php_profile::eval_php_version_id());
     let mut directives = values.assoc_new(entries.len())?;
     for (name, value) in &entries {
         let key = values.string(name)?;
@@ -106,7 +102,8 @@ fn build_directive_value(
 fn build_version(values: &mut impl RuntimeValueOps) -> Result<RuntimeCellHandle, EvalStatus> {
     let mut version = values.assoc_new(2)?;
     let version_key = values.string("version")?;
-    let version_value = values.string(opcache_version_string(EVAL_OPCACHE_PHP_VERSION_ID))?;
+    let spelling = opcache_version_string(crate::eval_php_profile::eval_php_version_id());
+    let version_value = values.string(spelling)?;
     version = values.array_set(version, version_key, version_value)?;
     let product_key = values.string("opcache_product_name")?;
     let product_value = values.string(OPCACHE_PRODUCT_NAME)?;

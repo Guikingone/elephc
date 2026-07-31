@@ -873,13 +873,18 @@ Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
 optional leading `\`, and `define()` cannot replace them.
 
-The eval interpreter is a separate crate with no access to `--php-version` or
-`--web`, so the version surface reports the DEFAULT profile: `PHP_VERSION`
-`"8.5.0"`, `PHP_VERSION_ID` `80500`, `PHP_SAPI` `"cli"`, `phpversion()`
-`"8.5.0"`. On a default-profile CLI binary that is identical to the compiled
-surface; a binary compiled `--php-version 8.2` or `--web` reports its own
-profile natively while `eval()` still reports the default. This is the same
-documented divergence `opcache_reset()` has in eval.
+The eval interpreter is a separate crate that cannot read `--php-version`
+itself, so the compiler forwards the profile to it: generated code sets it
+before every eval dispatch, exactly as it forwards `--strict-php`. A binary
+compiled `--php-version 8.2` therefore reports `PHP_VERSION` `"8.2.0"`,
+`PHP_VERSION_ID` `80200` and `phpversion()` `"8.2.0"` from inside `eval()`, the
+same values it reports natively. `PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and
+`PHP_EXTRA_VERSION` are invariant across the maintained profiles (`8`, `0` and
+the empty string), so they need no forwarding.
+
+`PHP_SAPI` is the one part of the surface that still diverges: it moves with
+`--web` rather than with the version, and eval reports `"cli"` inside a `--web`
+binary whose native `PHP_SAPI` is `"cli-server"`.
 
 ## Builtins available through eval
 
