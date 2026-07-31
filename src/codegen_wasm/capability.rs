@@ -2335,6 +2335,24 @@ fn method_call_shape_issue(
                         .unwrap_or_else(|| class_name.clone()),
                 )]
             };
+            // A Throwable accessor has a signature but no EIR body on either backend; the call is
+            // open-coded against the object rather than dispatched, so it is audited against the
+            // slot it reads instead of against a body that will never exist.
+            if let Some(intrinsic) = super::objects::throwable_intrinsic(
+                module,
+                &class_name,
+                &method_key,
+                &candidates,
+            ) {
+                return throwable_intrinsic_shape_issue(
+                    &class_name,
+                    &method_name,
+                    class_info,
+                    intrinsic,
+                    arguments,
+                    inst,
+                );
+            }
             for (candidate, implementation) in candidates {
                 let Some(candidate_info) = module.class_infos.get(&candidate) else {
                     return Some(format!("missing candidate class {candidate}"));
@@ -2429,6 +2447,48 @@ fn method_call_shape_issue(
                     method_name,
                 ) {
                     return Some(format!("{class_name}: {issue}"));
+                }
+                // The dispatch ladder selects one exact runtime class per arm, so a Throwable
+                // accessor is decided per candidate: a sibling that overrides it keeps its own
+                // arm and its own body.
+                if let Some(intrinsic) = super::objects::throwable_intrinsic(
+                    module,
+                    &class_name,
+                    &method_key,
+                    &[(class_name.clone(), implementation.clone())],
+                ) {
+                    if !arguments.is_empty() {
+                        return Some(format!(
+                            "{class_name}::{method_name} takes no arguments, got {}",
+                            arguments.len()
+                        ));
+                    }
+                    let storage =
+                        match super::objects::throwable_intrinsic_storage(class_info, intrinsic) {
+                            Ok(storage) => storage,
+                            Err(error) => {
+                                return Some(format!("{class_name}::{method_name}: {error}"))
+                            }
+                        };
+                    // A boxed destination is filled by `box_call_result_into_mixed`, exactly as a
+                    // real body's return would be, so the question is boxability rather than an
+                    // exact match.
+                    if boxed_result {
+                        if !mixed_method_return_is_boxable(storage.0, &storage.1) {
+                            return Some(format!(
+                                "{class_name}::{method_name} accessor result {:?}/{:?} cannot be boxed",
+                                storage.0, storage.1
+                            ));
+                        }
+                    } else if let Some(issue) = value_transfer_shape_issue(
+                        storage.0,
+                        storage.1,
+                        inst.result_type,
+                        inst.result_php_type.codegen_repr(),
+                    ) {
+                        return Some(format!("{class_name}::{method_name} result: {issue}"));
+                    }
+                    continue;
                 }
                 let Some(body) = find_method_function(module, &implementation, &method_key) else {
                     return Some(format!(
@@ -2589,6 +2649,45 @@ fn object_new_shape_issue(
         }
     }
     None
+}
+
+/// Validates one open-coded `Throwable` accessor against the storage it actually reads.
+///
+/// The property-backed accessors resolve a real slot, so they are audited exactly like the
+/// `PropGet` they lower to. The synthetic ones (`getFile`, `getLine`, `getTrace`,
+/// `getTraceAsString`) materialize a constant, so the only question is whether the destination
+/// can hold it — checked through the same transfer contract, from the storage the emitter
+/// pushes rather than from the signature's declared return type.
+fn throwable_intrinsic_shape_issue(
+    class_name: &str,
+    method_name: &str,
+    class_info: &crate::types::ClassInfo,
+    intrinsic: super::objects::ThrowableIntrinsic,
+    arguments: &[ValueId],
+    inst: &Instruction,
+) -> Option<String> {
+    if !arguments.is_empty() {
+        return Some(format!(
+            "{class_name}::{method_name} takes no arguments, got {}",
+            arguments.len()
+        ));
+    }
+    if inst.result.is_none() {
+        // A discarded accessor result is dropped by arity; nothing reaches a destination.
+        return None;
+    }
+    let (source_ir, source_php) =
+        match super::objects::throwable_intrinsic_storage(class_info, intrinsic) {
+            Ok(storage) => storage,
+            Err(error) => return Some(format!("{class_name}::{method_name}: {error}")),
+        };
+    value_transfer_shape_issue(
+        source_ir,
+        source_php,
+        inst.result_type,
+        inst.result_php_type.codegen_repr(),
+    )
+    .map(|issue| format!("{class_name}::{method_name} result: {issue}"))
 }
 
 /// Validates a construction whose constructor has a signature but no EIR body.
@@ -3025,7 +3124,7 @@ fn class_descends_from(module: &Module, class_name: &str, ancestor: &str) -> boo
 }
 
 /// Enumerates every concrete implementation required by one generated virtual stub.
-fn dynamic_method_candidates(
+pub(super) fn dynamic_method_candidates(
     module: &Module,
     receiver_class: &str,
     method_key: &str,

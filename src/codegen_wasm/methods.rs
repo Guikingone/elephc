@@ -27,6 +27,7 @@ use super::classes::{mixed_method_candidates, mixed_tag_for_php_type};
 use super::context::{FnCtx, Result};
 use super::symbols::{function_symbol, method_dispatch_symbol, method_symbol};
 use super::inst::{data_immediate, operand};
+use super::objects;
 use super::values::WasmRepr;
 use super::wat::{ValType, WatModule};
 use super::WasmError;
@@ -117,6 +118,30 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| class_name.clone());
+
+    // A Throwable accessor has a signature but no EIR body on either backend, so it is read off
+    // the object here instead of dispatched. `throwable_intrinsic` needs every class the
+    // receiver can be at run time, because an overriding subclass must keep winning.
+    if let Some(intrinsic) = throwable_intrinsic_for_call(ctx, &class_name, &method_key, dynamic)? {
+        if inst.operands.len() != 1 {
+            return Err(WasmError::Unsupported(format!(
+                "Throwable::{} with {} arguments on wasm32-wasi",
+                method_name,
+                inst.operands.len()
+            )));
+        }
+        let class_info = ci.clone();
+        let obj_ref = objects::object_ptr_ref(ctx, receiver)?;
+        objects::emit_throwable_intrinsic(ctx, &obj_ref, &class_info, intrinsic)?;
+        if let Some(r) = inst.result {
+            ctx.emit_store_value(r)?;
+        } else {
+            for _ in 0..WasmRepr::val_types(inst.result_type).len() {
+                ctx.fb.ins("drop", "discard unused Throwable accessor result");
+            }
+        }
+        return Ok(());
+    }
     let callee_symbol = if dynamic {
         let introducer = resolve_vtable_introducer(ctx, &class_name, &method_key)?;
         method_dispatch_symbol(&introducer, &method_key)
@@ -143,6 +168,38 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         }
     }
     Ok(())
+}
+
+/// Resolves the open-coded `Throwable` accessor for one method call, if any.
+///
+/// A virtual call can land on any concrete class in the introducer's subtree, so the decision
+/// uses the same candidate set the capability audit does; a non-virtual one can only reach the
+/// receiver's own implementation. Sharing `dynamic_method_candidates` with the audit is what
+/// keeps the gate and the emitter from disagreeing about which calls are open-coded.
+fn throwable_intrinsic_for_call(
+    ctx: &FnCtx,
+    class_name: &str,
+    method_key: &str,
+    dynamic: bool,
+) -> Result<Option<objects::ThrowableIntrinsic>> {
+    let candidates = if dynamic {
+        super::capability::dynamic_method_candidates(ctx.module, class_name, method_key)
+            .map_err(WasmError::Unsupported)?
+    } else {
+        let implementation = ctx
+            .module
+            .class_infos
+            .get(class_name)
+            .and_then(|class_info| class_info.method_impl_classes.get(method_key).cloned())
+            .unwrap_or_else(|| class_name.to_string());
+        vec![(class_name.to_string(), implementation)]
+    };
+    Ok(objects::throwable_intrinsic(
+        ctx.module,
+        class_name,
+        method_key,
+        &candidates,
+    ))
 }
 
 /// Returns the statically known class carried either by `Object(C)` or by the
@@ -284,27 +341,46 @@ fn emit_candidate_call(
         .class_infos
         .get(class_name)
         .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))?;
-    let callee_symbol = method_symbol(&format!("{}::{}", impl_class, method_name));
-
-    // Authoritative callee return IR type (for boxing) + PHP type (for the tag).
-    let callee_fn = find_method_function(&ctx.module.class_methods, impl_class, method_key)
-        .ok_or_else(|| WasmError::Unsupported(format!("no method {}::{}", impl_class, method_name)))?;
-    let callee_ret_ir = callee_fn.return_type;
-    let callee_ret_php = ci
-        .methods
-        .get(method_key)
-        .map(|s| s.return_type.clone())
-        .unwrap_or(PhpType::Mixed);
-
-    // Receiver (the unboxed object pointer) as `this`, then user args in order.
-    ctx.fb.ins(&format!("local.get {}", obj_local), "receiver object pointer (this)");
-    for &arg in inst.operands.iter().skip(1) {
-        ctx.emit_load_value(arg)?;
-    }
-    ctx.fb.ins(
-        &format!("call ${}", callee_symbol),
-        &format!("{}::{} (closed-world direct)", class_name, method_name),
+    // A Throwable accessor has no body to call, so this arm reads it off the receiver. The
+    // candidate is its own decision here: the ladder already selected one exact runtime class,
+    // so a sibling that overrides the method keeps its own arm and its own body.
+    let intrinsic = super::objects::throwable_intrinsic(
+        ctx.module,
+        class_name,
+        method_key,
+        &[(class_name.to_string(), impl_class.to_string())],
     );
+    let (callee_ret_ir, callee_ret_php) = if let Some(intrinsic) = intrinsic {
+        let ci = ci.clone();
+        let storage = super::objects::throwable_intrinsic_storage(&ci, intrinsic)?;
+        super::objects::emit_throwable_intrinsic(ctx, obj_local, &ci, intrinsic)?;
+        storage
+    } else {
+        let callee_symbol = method_symbol(&format!("{}::{}", impl_class, method_name));
+
+        // Authoritative callee return IR type (for boxing) + PHP type (for the tag).
+        let callee_fn = find_method_function(&ctx.module.class_methods, impl_class, method_key)
+            .ok_or_else(|| {
+                WasmError::Unsupported(format!("no method {}::{}", impl_class, method_name))
+            })?;
+        let callee_ret_ir = callee_fn.return_type;
+        let callee_ret_php = ci
+            .methods
+            .get(method_key)
+            .map(|s| s.return_type.clone())
+            .unwrap_or(PhpType::Mixed);
+
+        // Receiver (the unboxed object pointer) as `this`, then user args in order.
+        ctx.fb.ins(&format!("local.get {}", obj_local), "receiver object pointer (this)");
+        for &arg in inst.operands.iter().skip(1) {
+            ctx.emit_load_value(arg)?;
+        }
+        ctx.fb.ins(
+            &format!("call ${}", callee_symbol),
+            &format!("{}::{} (closed-world direct)", class_name, method_name),
+        );
+        (callee_ret_ir, callee_ret_php)
+    };
 
     let result_is_boxed = matches!(inst.result_php_type, PhpType::Mixed | PhpType::Union(_));
     let callee_ret_is_mixed = matches!(callee_ret_ir, IrType::Heap(IrHeapKind::Mixed));

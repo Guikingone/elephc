@@ -2775,3 +2775,119 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the built-in `Throwable` accessors answer what the NATIVE backend answers.
+///
+/// These methods carry a signature but no EIR body on either backend, so both open-code them.
+/// The comparison that matters is therefore native-vs-WASM, not WASM-vs-php-src: elephc records
+/// no per-throw file, line or backtrace, so `getFile()` is empty, `getLine()` zero,
+/// `getTraceAsString()` empty and `__toString()` the message alone — php-src reports all four
+/// differently, and a program that changed behavior once compiled for WebAssembly would be the
+/// real defect. `getPrevious()` returns `?Throwable`, so the chained call exercises the
+/// Mixed-receiver dispatch ladder rather than the direct path.
+#[test]
+fn test_cli_wasm_throwable_accessors_match_the_native_backend() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_throwable_accessors");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Wrapped extends Exception {
+}
+
+$first = new Wrapped("inner", 3);
+try {
+    throw new Exception("outer", 9, $first);
+} catch (Exception $e) {
+    echo $e->getMessage(), "|", $e->getCode(), "\n";
+    echo "[", $e->getFile(), "]", $e->getLine(), "\n";
+    echo "[", $e->getTraceAsString(), "]\n";
+    echo $e->__toString(), "\n";
+    $p = $e->getPrevious();
+    echo $p->getMessage(), "|", $p->getCode(), "\n";
+}
+echo "end\n";
+"#,
+    )
+    .unwrap();
+
+    let native = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile Throwable accessors natively");
+    assert!(
+        native.status.success(),
+        "native compilation failed: {}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    let native_run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the native Throwable accessors");
+    assert!(
+        native_run.status.success(),
+        "native run failed: {}",
+        String::from_utf8_lossy(&native_run.stderr)
+    );
+
+    let wasm = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile Throwable accessors to WASM");
+    assert!(
+        wasm.status.success(),
+        "WASM compilation failed: {}",
+        String::from_utf8_lossy(&wasm.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let wasm_run = Command::new("node")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the WASM Throwable accessors under Node");
+    if String::from_utf8_lossy(&wasm_run.stderr).contains("CompileError") {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        wasm_run.status.success(),
+        "WASM run failed: {}",
+        String::from_utf8_lossy(&wasm_run.stderr)
+    );
+
+    assert_eq!(
+        String::from_utf8_lossy(&wasm_run.stdout),
+        String::from_utf8_lossy(&native_run.stdout),
+        "the two backends must answer the Throwable accessors identically"
+    );
+    // Pinned so a change to elephc's synthetic answers has to be deliberate on both backends.
+    assert_eq!(
+        String::from_utf8_lossy(&native_run.stdout),
+        "outer|9\n[]0\n[]\nouter\ninner|3\nend\n"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -90,18 +90,6 @@ pub(super) fn emit_gc_desc_stub(wm: &mut WatModule) {
     });
 }
 
-/// Emits the per-class gc_desc data (one runtime tag byte per property), the class-indexed
-/// pointer table, and the `$__gc_desc_ptrs` / `$__gc_desc_count` globals, then returns the
-/// advanced static-data cursor.
-///
-/// Mirrors the native `_class_gc_desc_ptrs` / `_class_gc_desc_<id>` tables. Each known class id
-/// gets a descriptor of exactly `n_properties` tag bytes (a single `0x00` for an empty class,
-/// never read since `n = 0`); gap ids in `0..=max_id` point at a generous zero-filled "missing"
-/// descriptor so a freed object whose class id lands on a gap reads tag 0 (skip) for every slot
-/// without an out-of-bounds load. The pointer table is 4-aligned so its i32 entries load cleanly.
-/// `generate()` calls this after the string-literal data and before computing `heap_base`, so
-/// the descriptor data lives in static memory below the heap and is never overwritten by
-/// allocation.
 /// The properties an inherited Throwable constructor initializes, in constructor-argument order.
 ///
 /// `Exception::__construct(string $message = "", int $code = 0, ?Throwable $previous = null)` is
@@ -123,13 +111,175 @@ pub(super) fn needs_open_coded_throwable_constructor(
     class_name: &str,
     impl_class: &str,
 ) -> bool {
-    let constructor_key = php_symbol_key("__construct");
-    if super::methods::find_method_function(&module.class_methods, impl_class, &constructor_key)
-        .is_some()
+    bodyless_throwable_method(module, class_name, impl_class, &php_symbol_key("__construct"))
+}
+
+/// Returns true when `impl_class` supplies no EIR body for `method_key` and `class_name` is a
+/// Throwable, so the call must be open-coded rather than dispatched.
+fn bodyless_throwable_method(
+    module: &Module,
+    class_name: &str,
+    impl_class: &str,
+    method_key: &str,
+) -> bool {
+    if super::methods::find_method_function(&module.class_methods, impl_class, method_key).is_some()
     {
         return false;
     }
     is_throwable_class(module, class_name)
+}
+
+/// One `Throwable` accessor that has no EIR body and is open-coded at the call site.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum ThrowableIntrinsic {
+    /// `getMessage()` and `__toString()`: the `$message` slot.
+    Message,
+    /// `getCode()`: the `$code` slot.
+    Code,
+    /// `getPrevious()`: the `$previous` slot.
+    Previous,
+    /// `getFile()` and `getTraceAsString()`: the synthetic empty string.
+    EmptyString,
+    /// `getLine()`: the synthetic zero.
+    ZeroInt,
+    /// `getTrace()`: the synthetic empty array.
+    EmptyTrace,
+}
+
+/// Maps a `Throwable` accessor's method key to what it produces.
+///
+/// The four synthetic results are elephc's established behavior rather than php-src's: the
+/// compiler records no per-throw file, line or backtrace on either backend, so `getFile()` and
+/// `getTraceAsString()` answer the empty string, `getLine()` zero, and `getTrace()` an empty
+/// array — exactly what `lower_throwable_standard_method_loaded` answers natively. Keeping the
+/// two backends identical here matters more than either one being closer to php-src alone,
+/// because a program that behaves differently once compiled for WebAssembly is the failure this
+/// target is trying to avoid.
+fn throwable_intrinsic_for_key(method_key: &str) -> Option<ThrowableIntrinsic> {
+    match method_key {
+        "getmessage" | "__tostring" => Some(ThrowableIntrinsic::Message),
+        "getcode" => Some(ThrowableIntrinsic::Code),
+        "getprevious" => Some(ThrowableIntrinsic::Previous),
+        "getfile" | "gettraceasstring" => Some(ThrowableIntrinsic::EmptyString),
+        "getline" => Some(ThrowableIntrinsic::ZeroInt),
+        "gettrace" => Some(ThrowableIntrinsic::EmptyTrace),
+        _ => None,
+    }
+}
+
+/// Returns the accessor to open-code for a method call, or `None` to dispatch normally.
+///
+/// `candidates` is every concrete class the receiver can be at run time, paired with the class
+/// that implements the method for it. The accessor is open-coded only when NONE of them has a
+/// body: a subclass that overrides `getMessage()` must win, and a call that could reach both an
+/// overriding and a built-in receiver is left to fail on the built-in rather than silently
+/// answering the property for every receiver. That is stricter than the native backend, which
+/// intercepts on the class name alone and would ignore such an override.
+pub(super) fn throwable_intrinsic(
+    module: &Module,
+    class_name: &str,
+    method_key: &str,
+    candidates: &[(String, String)],
+) -> Option<ThrowableIntrinsic> {
+    let intrinsic = throwable_intrinsic_for_key(method_key)?;
+    if !candidates
+        .iter()
+        .all(|(candidate, implementation)| {
+            bodyless_throwable_method(module, candidate, implementation, method_key)
+        })
+    {
+        return None;
+    }
+    is_throwable_class(module, class_name).then_some(intrinsic)
+}
+
+/// Returns the storage an open-coded `Throwable` accessor pushes.
+///
+/// The audit checks the destination against this, and the Mixed-receiver path decides from it
+/// whether the result needs boxing — so both read the accessor's real shape rather than the
+/// signature's declared return type, which for `getPrevious()` is the wider `?Throwable`.
+pub(super) fn throwable_intrinsic_storage(
+    class_info: &ClassInfo,
+    intrinsic: ThrowableIntrinsic,
+) -> Result<(IrType, PhpType)> {
+    let property = match intrinsic {
+        ThrowableIntrinsic::Message => "message",
+        ThrowableIntrinsic::Code => "code",
+        ThrowableIntrinsic::Previous => "previous",
+        ThrowableIntrinsic::EmptyString => return Ok((IrType::Str, PhpType::Str)),
+        ThrowableIntrinsic::ZeroInt => return Ok((IrType::I64, PhpType::Int)),
+        ThrowableIntrinsic::EmptyTrace => {
+            return Ok((
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Mixed)),
+            ))
+        }
+    };
+    let (_, _, property_type) = resolve_property_slot(class_info, property)?;
+    let property_type = property_type.codegen_repr();
+    let ir = match &property_type {
+        PhpType::Str => IrType::Str,
+        PhpType::Int | PhpType::Bool => IrType::I64,
+        PhpType::Float => IrType::F64,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => IrType::Heap(IrHeapKind::Mixed),
+        PhpType::Object(_) => IrType::Heap(IrHeapKind::Object),
+        PhpType::Array(_) => IrType::Heap(IrHeapKind::Array),
+        PhpType::AssocArray { .. } => IrType::Heap(IrHeapKind::Hash),
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "${property} of type {other:?} has no wasm32-wasi accessor storage"
+            )))
+        }
+    };
+    Ok((ir, property_type))
+}
+
+/// Pushes one open-coded `Throwable` accessor's result, leaving an OWNED value on the stack.
+///
+/// The property-backed accessors go through `emit_declared_property_load`, so a message is
+/// persisted and a `$previous` chain is increfed exactly as a `PropGet` of the same slot would
+/// be — which is what keeps the caller's release correct.
+pub(super) fn emit_throwable_intrinsic(
+    ctx: &mut FnCtx,
+    obj_ref: &str,
+    class_info: &ClassInfo,
+    intrinsic: ThrowableIntrinsic,
+) -> Result<()> {
+    let property = match intrinsic {
+        ThrowableIntrinsic::Message => Some("message"),
+        ThrowableIntrinsic::Code => Some("code"),
+        ThrowableIntrinsic::Previous => Some("previous"),
+        ThrowableIntrinsic::EmptyString
+        | ThrowableIntrinsic::ZeroInt
+        | ThrowableIntrinsic::EmptyTrace => None,
+    };
+    if let Some(property) = property {
+        let (_, offset, property_type) = resolve_property_slot(class_info, property)?;
+        let property_type = property_type.codegen_repr();
+        return emit_declared_property_load(ctx, obj_ref, offset, &property_type, property);
+    }
+    match intrinsic {
+        ThrowableIntrinsic::EmptyString => {
+            // A zero-length string needs no data segment: only the length is ever read, and a
+            // null pointer is never dereferenced for it.
+            ctx.fb.ins("i32.const 0", "empty string pointer");
+            ctx.fb.ins("i64.const 0", "empty string length");
+        }
+        ThrowableIntrinsic::ZeroInt => {
+            ctx.fb.ins("i64.const 0", "synthetic line number");
+        }
+        ThrowableIntrinsic::EmptyTrace => {
+            ctx.fb.ins("i64.const 0", "empty trace capacity");
+            ctx.fb
+                .ins("i64.const 16", "default elem_size (specialized on first push)");
+            ctx.fb
+                .ins("call $__rt_array_new", "allocate the empty backtrace array");
+        }
+        ThrowableIntrinsic::Message
+        | ThrowableIntrinsic::Code
+        | ThrowableIntrinsic::Previous => unreachable!("property-backed accessors returned above"),
+    }
+    Ok(())
 }
 
 /// Returns true when `class_name` implements `Throwable`, directly or through its parents.
@@ -197,6 +347,18 @@ pub(super) fn literal_default_strings(class_infos: &HashMap<String, ClassInfo>) 
     strings
 }
 
+/// Emits the per-class gc_desc data (one runtime tag byte per property), the class-indexed
+/// pointer table, and the `$__gc_desc_ptrs` / `$__gc_desc_count` globals, then returns the
+/// advanced static-data cursor.
+///
+/// Mirrors the native `_class_gc_desc_ptrs` / `_class_gc_desc_<id>` tables. Each known class id
+/// gets a descriptor of exactly `n_properties` tag bytes (a single `0x00` for an empty class,
+/// never read since `n = 0`); gap ids in `0..=max_id` point at a generous zero-filled "missing"
+/// descriptor so a freed object whose class id lands on a gap reads tag 0 (skip) for every slot
+/// without an out-of-bounds load. The pointer table is 4-aligned so its i32 entries load cleanly.
+/// `generate()` calls this after the string-literal data and before computing `heap_base`, so
+/// the descriptor data lives in static memory below the heap and is never overwritten by
+/// allocation.
 pub(super) fn emit_gc_desc_table(
     wm: &mut WatModule,
     class_infos: &HashMap<String, ClassInfo>,
@@ -601,7 +763,7 @@ fn dynamic_property_hash_offset_for_class(
 }
 
 /// Loads the object pointer local ref for `object`, rejecting a non-pointer repr.
-fn object_ptr_ref(ctx: &FnCtx, object: ValueId) -> Result<String> {
+pub(super) fn object_ptr_ref(ctx: &FnCtx, object: ValueId) -> Result<String> {
     let repr = ctx.value_repr(object)?.clone();
     match repr {
         WasmRepr::Ptr(name) => Ok(name),
@@ -1068,7 +1230,27 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     let prop_type = prop_type.codegen_repr();
     let obj_ref = object_ptr_ref(ctx, object)?;
 
-    match &prop_type {
+    emit_declared_property_load(ctx, &obj_ref, offset, &prop_type, &property)?;
+
+    store_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Pushes one DECLARED property slot's value onto the stack as an OWNED value.
+///
+/// Shared by `PropGet` and by the Throwable accessors that method-call lowering open-codes,
+/// so both obey one set of retain rules rather than two that can drift. Scalar arms
+/// (Int/Bool/Float) load directly with no incref because they are not refcounted; a string is
+/// persisted into a fresh heap copy, and a container or Mixed cell is increfed, so every
+/// result is the caller's to release.
+fn emit_declared_property_load(
+    ctx: &mut FnCtx,
+    obj_ref: &str,
+    offset: usize,
+    prop_type: &PhpType,
+    property: &str,
+) -> Result<()> {
+    match prop_type {
         PhpType::Int | PhpType::Bool => {
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.fb.ins(&format!("i64.load offset={}", offset), "load scalar property value_lo");
@@ -1109,8 +1291,6 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
             )))
         }
     }
-
-    store_result(ctx, inst)?;
     Ok(())
 }
 

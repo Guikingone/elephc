@@ -11792,6 +11792,10 @@
       "disposition": "enforced"
     },
     {
+      "name": "throwable_intrinsic_shape_issue",
+      "disposition": "enforced"
+    },
+    {
       "name": "local_transfer_shape_issue",
       "disposition": "enforced"
     },
