@@ -14,8 +14,8 @@
 //! Key details:
 //! - Same two-step hash walk as the string variant: wrapper key on the top
 //!   hash, option key on the sub-hash.
-//! - Bool values (tag 3) widen to 0/1; int values (tag 0) pass through;
-//!   any other tag misses.
+//! - Direct or Mixed-boxed bool values widen to 0/1 and integers pass through;
+//!   any other payload shape misses.
 //! - On hit, writes `out_int_addr` with the resolved value and returns 1.
 //!   On miss, leaves `*out_int_addr` untouched and returns 0 so callers
 //!   can pre-load a default.
@@ -80,7 +80,15 @@ pub fn emit_get_int_context_option(emitter: &mut Emitter) {
     emitter.instruction("cmp x3, #0");                                          // tag 0 = int
     emitter.instruction("b.eq __rt_gico_write");                                // branch when the checked value is zero or equal
     emitter.instruction("cmp x3, #3");                                          // tag 3 = bool
-    emitter.instruction("b.ne __rt_gico_miss");                                 // branch when the checked value is nonzero or different
+    emitter.instruction("b.eq __rt_gico_write");                                // direct booleans already carry their normalized payload
+    emitter.instruction("cmp x3, #7");                                          // is the option stored as a boxed Mixed cell?
+    emitter.instruction("b.ne __rt_gico_miss");                                 // every other option shape is non-numeric here
+    emitter.instruction("mov x0, x1");                                          // pass the boxed option cell to Mixed unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // recover the runtime tag and scalar payload
+    emitter.instruction("cmp x0, #0");                                          // did the Mixed cell contain an integer?
+    emitter.instruction("b.eq __rt_gico_write");                                // accept boxed integers
+    emitter.instruction("cmp x0, #3");                                          // did the Mixed cell contain a boolean?
+    emitter.instruction("b.ne __rt_gico_miss");                                 // boxed non-int/non-bool values miss
 
     emitter.label("__rt_gico_write");
     emitter.instruction("ldr x9, [sp, #32]");                                   // out_int_addr
@@ -138,7 +146,15 @@ fn emit_get_int_context_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 0");                                          // int tag
     emitter.instruction("je __rt_gico_write_x86");                              // branch when the checked value is zero or equal
     emitter.instruction("cmp rcx, 3");                                          // bool tag
-    emitter.instruction("jne __rt_gico_miss_x86");                              // branch when the checked value is nonzero or different
+    emitter.instruction("je __rt_gico_write_x86");                              // direct booleans already carry their normalized payload
+    emitter.instruction("cmp rcx, 7");                                          // is the option stored as a boxed Mixed cell?
+    emitter.instruction("jne __rt_gico_miss_x86");                              // every other option shape is non-numeric here
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed option cell to Mixed unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // recover the runtime tag and scalar payload
+    emitter.instruction("cmp rax, 0");                                          // did the Mixed cell contain an integer?
+    emitter.instruction("je __rt_gico_write_x86");                              // accept boxed integers
+    emitter.instruction("cmp rax, 3");                                          // did the Mixed cell contain a boolean?
+    emitter.instruction("jne __rt_gico_miss_x86");                              // boxed non-int/non-bool values miss
 
     emitter.label("__rt_gico_write_x86");
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // out_int_addr

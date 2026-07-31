@@ -58,10 +58,11 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fopen_uw_scan");                                // keep scanning for the scheme marker
 
     emitter.label("__rt_fopen_uw_check_wrappers");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x10");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_fopen_uw_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "x12");
+    emitter.instruction("cmp x11, x12");                                        // checked every allocated wrapper slot?
     emitter.instruction("b.ge __rt_fopen_uw_done");                             // no registered wrapper matched
     emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
@@ -172,7 +173,31 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_fopen_uw_fail");                          // unknown class → silent fail with -1
     emitter.instruction("str x0, [sp, #32]");                                   // save the wrapper object pointer for later
 
+    // -- inject PHP's selected stream context into a declared `$context` property --
+    emitter.instruction("ldr x9, [x0]");                                        // load the wrapper class id
+    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
+    emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // load this class's wrapper vtable
+    emitter.instruction("ldr x11, [x10, #184]");                                // load slot 23's untyped context-property offset
+    emitter.instruction("cbz x11, __rt_fopen_uw_context_done");                 // wrappers without a declared context property need no injection
+    abi::emit_symbol_address(emitter, "x9", "_stream_current_context_handle");
+    emitter.instruction("ldr x1, [x9]");                                        // load the borrowed context selected by fopen lowering
+    emitter.instruction("cbz x1, __rt_fopen_uw_context_done");                  // callers outside fopen may have no selected context bridge
+    emitter.instruction("str x11, [sp, #56]");                                  // preserve the property offset across Mixed boxing
+    emitter.instruction("str x1, [sp, #40]");                                   // preserve the selected context while releasing the old property cell
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the wrapper object pointer
+    emitter.instruction("ldr x0, [x9, x11]");                                   // load the previous boxed Mixed context property
+    emitter.instruction("bl __rt_mixed_free_deep");                             // release the replaced property's owned Mixed cell
+    emitter.instruction("ldr x1, [sp, #40]");                                   // reload the selected context handle for boxing
+    emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
+    emitter.instruction("mov x2, #9");                                          // resource kind 9 = stream context
+    emitter.instruction("bl __rt_mixed_from_value");                            // box and retain the context for wrapper-object ownership
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the wrapper object pointer
+    emitter.instruction("ldr x10, [sp, #56]");                                  // reload the declared context-property offset
+    emitter.instruction("str x0, [x9, x10]");                                   // transfer the owned Mixed context cell into `$this->context`
+    emitter.label("__rt_fopen_uw_context_done");
+
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
+    emitter.instruction("ldr x0, [sp, #32]");                                   // reload the wrapper object after optional context boxing
     emitter.instruction("ldr x9, [x0]");                                        // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "x10", "_user_wrapper_vtable_ptrs");
     emitter.instruction("ldr x10, [x10, x9, lsl #3]");                          // per-class user-wrapper vtable for the resolved class
@@ -180,18 +205,13 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("cbz x11, __rt_fopen_uw_fail");                         // class did not implement stream_open → silent fail
     emitter.instruction("str x11, [sp, #48]");                                  // save stream_open ptr across the upcoming blr
 
-    // -- allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
-    emitter.instruction("mov x12, #0");                                         // start scanning from handle slot 0
-    emitter.label("__rt_fopen_uw_handle_scan");
-    emitter.instruction("cmp x12, #256");                                       // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("b.ge __rt_fopen_uw_fail");                             // table full → silent fail (obj is freed on the shared fail path)
-    emitter.instruction("ldr x13, [x10, x12, lsl #3]");                         // load slot — null means free
-    emitter.instruction("cbz x13, __rt_fopen_uw_handle_alloc");                 // free slot found
-    emitter.instruction("add x12, x12, #1");                                    // advance to the next handle slot
-    emitter.instruction("b __rt_fopen_uw_handle_scan");                         // keep scanning
-    emitter.label("__rt_fopen_uw_handle_alloc");
-    emitter.instruction("str x12, [sp, #40]");                                  // save the allocated handle slot index
+    // -- reserve a stream-handle slot, growing the table on demand --
+    // PHP places no limit on simultaneously open wrapper streams, so the only
+    // failure left is heap exhaustion, reported as -1.
+    emitter.instruction("bl __rt_user_wrapper_handles_reserve");                // x0 = free handle slot (-1 on heap exhaustion)
+    emitter.instruction("cmp x0, #0");                                          // did the reservation fail?
+    emitter.instruction("b.lt __rt_fopen_uw_fail");                             // silent fail (obj is freed on the shared fail path)
+    emitter.instruction("str x0, [sp, #40]");                                   // save the allocated handle slot index
 
     // -- call stream_open(obj, path, mode, options=0) --
     emitter.instruction("ldr x0, [sp, #32]");                                   // $this = wrapper object
@@ -211,7 +231,7 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("ldr x12, [sp, #40]");                                  // reload the handle slot index
     emitter.instruction("ldr x13, [sp, #32]");                                  // reload the wrapper object pointer
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("str x13, [x10, x12, lsl #3]");                         // _user_wrapper_handles[slot] = obj
     emitter.instruction("mov x0, #0x4000");                                     // low 16 bits of USER_WRAPPER_FD_BASE = 0x40000000
     emitter.instruction("lsl x0, x0, #16");                                     // shift into bits 30..16 to form 0x40000000
@@ -277,10 +297,11 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fopen_uw_scan_x86");                          // keep scanning for the scheme marker
 
     emitter.label("__rt_fopen_uw_check_wrappers_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
+    super::emit_load_table_base(emitter, "r10");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_fopen_uw_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "r12");
+    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_fopen_uw_done_x86");                          // no registered wrapper matched
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
@@ -380,7 +401,33 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // unknown class → silent fail with -1
     emitter.instruction("mov QWORD PTR [rsp + 32], rax");                       // save the wrapper object pointer for later
 
+    // -- inject PHP's selected stream context into a declared `$context` property --
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the wrapper class id
+    abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");
+    emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // load this class's wrapper vtable
+    emitter.instruction("mov r10, QWORD PTR [r11 + 184]");                      // load slot 23's untyped context-property offset
+    emitter.instruction("test r10, r10");                                       // does the wrapper declare an injectable context property?
+    emitter.instruction("jz __rt_fopen_uw_context_done_x86");                   // skip wrappers without the declared property
+    abi::emit_symbol_address(emitter, "r11", "_stream_current_context_handle");
+    emitter.instruction("mov rdi, QWORD PTR [r11]");                            // load the borrowed context selected by fopen lowering
+    emitter.instruction("test rdi, rdi");                                       // did this caller publish a selected context?
+    emitter.instruction("jz __rt_fopen_uw_context_done_x86");                   // callers outside fopen may have no context bridge
+    emitter.instruction("mov QWORD PTR [rsp + 56], r10");                       // preserve the property offset across Mixed boxing
+    emitter.instruction("mov QWORD PTR [rsp + 40], rdi");                       // preserve the selected context while releasing the old property cell
+    emitter.instruction("mov r11, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10]");                      // load the previous boxed Mixed context property
+    emitter.instruction("call __rt_mixed_free_deep");                           // release the replaced property's owned Mixed cell
+    emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // reload the selected context handle for boxing
+    emitter.instruction("mov rax, 9");                                          // runtime tag 9 = resource
+    emitter.instruction("mov rsi, 9");                                          // resource kind 9 = stream context
+    emitter.instruction("call __rt_mixed_from_value");                          // box and retain the context for wrapper-object ownership
+    emitter.instruction("mov r10, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
+    emitter.instruction("mov r11, QWORD PTR [rsp + 56]");                       // reload the declared context-property offset
+    emitter.instruction("mov QWORD PTR [r10 + r11], rax");                      // transfer the owned Mixed context cell into `$this->context`
+    emitter.label("__rt_fopen_uw_context_done_x86");
+
     // -- look up stream_open in the per-class user-wrapper vtable (slot 0) --
+    emitter.instruction("mov rax, QWORD PTR [rsp + 32]");                       // reload the wrapper object after optional context boxing
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // class_id stored at the head of every wrapper object
     abi::emit_symbol_address(emitter, "r11", "_user_wrapper_vtable_ptrs");      // base of the per-class user-wrapper vtable pointer table
     emitter.instruction("mov r11, QWORD PTR [r11 + r10 * 8]");                  // per-class user-wrapper vtable for the resolved class
@@ -389,19 +436,13 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_fopen_uw_fail_x86");                           // no stream_open → silent fail
     emitter.instruction("mov QWORD PTR [rsp + 48], r11");                       // save stream_open ptr across the upcoming call
 
-    // -- allocate the first free slot in _user_wrapper_handles --
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
-    emitter.instruction("xor r12, r12");                                        // start scanning from handle slot 0
-    emitter.label("__rt_fopen_uw_handle_scan_x86");
-    emitter.instruction("cmp r12, 256");                                        // does any free handle slot remain (USER_WRAPPER_HANDLES_CAP)?
-    emitter.instruction("jge __rt_fopen_uw_fail_x86");                          // table full → silent fail (obj is freed on the shared fail path)
-    emitter.instruction("mov r13, QWORD PTR [r10 + r12 * 8]");                  // load slot — null means free
-    emitter.instruction("test r13, r13");                                       // is this slot free?
-    emitter.instruction("jz __rt_fopen_uw_handle_alloc_x86");                   // free slot found
-    emitter.instruction("inc r12");                                             // advance to the next handle slot
-    emitter.instruction("jmp __rt_fopen_uw_handle_scan_x86");                   // keep scanning
-    emitter.label("__rt_fopen_uw_handle_alloc_x86");
-    emitter.instruction("mov QWORD PTR [rsp + 40], r12");                       // save the allocated handle slot index
+    // -- reserve a stream-handle slot, growing the table on demand --
+    // PHP places no limit on simultaneously open wrapper streams, so the only
+    // failure left is heap exhaustion, reported as -1.
+    emitter.instruction("call __rt_user_wrapper_handles_reserve");              // rax = free handle slot (-1 on heap exhaustion)
+    emitter.instruction("test rax, rax");                                       // did the reservation fail?
+    emitter.instruction("js __rt_fopen_uw_fail_x86");                           // silent fail (obj is freed on the shared fail path)
+    emitter.instruction("mov QWORD PTR [rsp + 40], rax");                       // save the allocated handle slot index
 
     // -- call stream_open(obj, path, mode, options=0, opened_path_addr) --
     //    The 7th int-arg (opened_path scratch address) overflows the 6-reg
@@ -430,7 +471,7 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     // -- success: store obj in the handle slot and return the synthetic fd --
     emitter.instruction("mov r12, QWORD PTR [rsp + 40]");                       // reload the handle slot index
     emitter.instruction("mov r13, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r12 * 8], r13");                  // _user_wrapper_handles[slot] = obj
     emitter.instruction("mov rax, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("or rax, r12");                                         // synthetic fd = USER_WRAPPER_FD_BASE | slot index

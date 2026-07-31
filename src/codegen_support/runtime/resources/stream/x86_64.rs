@@ -16,7 +16,7 @@ use super::super::layout::{
     STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_KIND_OFFSET,
     STREAM_BACKEND_PHAR_WRITE, STREAM_BACKEND_POPEN, STREAM_BACKEND_USER_DIRECTORY,
     STREAM_BACKEND_USER_WRAPPER, STREAM_CHUNK_SIZE_OFFSET, STREAM_CONNECT_HOST_LEN_OFFSET,
-    STREAM_CONNECT_HOST_PTR_OFFSET, STREAM_EOF_OFFSET, STREAM_FD_OFFSET,
+    STREAM_CONNECT_HOST_PTR_OFFSET, STREAM_CONTEXT_HANDLE_OFFSET, STREAM_EOF_OFFSET, STREAM_FD_OFFSET,
     STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE, STREAM_URI_LEN_OFFSET,
     STREAM_URI_PTR_OFFSET,
 };
@@ -31,8 +31,51 @@ pub(super) fn emit_stream_resources_x86_64(emitter: &mut Emitter) {
     emit_stream_eof_set(emitter);
     emit_stream_chunk_size(emitter);
     emit_stream_set_chunk_size(emitter);
+    emit_stream_attach_context(emitter);
     emit_stream_close_backend(emitter);
     emit_stream_destroy_state(emitter);
+}
+
+/// Emits context attachment with one retained owner stored on the StreamState.
+fn emit_stream_attach_context(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: attach a retained context to an opaque stream ---");
+    emitter.label_global("__rt_stream_attach_context");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable attachment frame
+    emitter.instruction("sub rsp, 32");                                         // reserve stream, context, and state spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the opaque stream handle
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the selected context handle
+    emitter.instruction("call __rt_stream_state");                              // resolve the authoritative StreamState
+    emitter.instruction("test rax, rax");                                       // did stream lookup succeed?
+    emitter.instruction("jz __rt_stream_attach_context_fail");                  // reject stale or non-stream handles
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve StreamState across context validation
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the selected context handle
+    emitter.instruction("call __rt_context_state");                             // validate that the selected handle is a live context
+    emitter.instruction("test rax, rax");                                       // did context lookup succeed?
+    emitter.instruction("jz __rt_stream_attach_context_fail");                  // reject stale or non-context handles
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the validated context handle
+    emitter.instruction("call __rt_resource_retain");                           // acquire the StreamState-owned context reference
+    emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // reload StreamState for atomic replacement
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [r9 + {}]", STREAM_CONTEXT_HANDLE_OFFSET
+    ));                                                                         // detach the previously attached context handle
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r9 + {}], rax", STREAM_CONTEXT_HANDLE_OFFSET
+    ));                                                                         // publish the newly retained context handle
+    emitter.instruction("test r10, r10");                                       // was another context owner attached?
+    emitter.instruction("jz __rt_stream_attach_context_success");               // skip release when the field was empty
+    emitter.instruction("mov rdi, r10");                                        // pass the detached context owner to registry release
+    emitter.instruction("call __rt_resource_release");                          // release the replaced context reference
+    emitter.label("__rt_stream_attach_context_success");
+    emitter.instruction("mov eax, 1");                                          // report successful context attachment
+    emitter.instruction("jmp __rt_stream_attach_context_done");                 // join the common attachment epilogue
+    emitter.label("__rt_stream_attach_context_fail");
+    emitter.instruction("xor eax, eax");                                        // report that no context was attached
+    emitter.label("__rt_stream_attach_context_done");
+    emitter.instruction("add rsp, 32");                                         // release attachment scratch storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the attachment status
 }
 
 /// Emits descriptor adoption into an owned 320-byte x86_64 stream state.
@@ -463,6 +506,18 @@ fn emit_stream_destroy_state(emitter: &mut Emitter) {
         "mov QWORD PTR [r10 + {}], 0", STREAM_CONNECT_HOST_LEN_OFFSET
     ));                                                                         // clear the detached host length
     emitter.instruction("call __rt_heap_free_safe");                            // release owned host storage when present
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload StreamState for context teardown
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [r10 + {}]", STREAM_CONTEXT_HANDLE_OFFSET
+    ));                                                                         // load the retained stream-context handle
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], 0", STREAM_CONTEXT_HANDLE_OFFSET
+    ));                                                                         // detach context ownership before nested registry cleanup
+    emitter.instruction("test rax, rax");                                       // is a context owner attached?
+    emitter.instruction("jz __rt_stream_destroy_state_context_done");           // skip release when the field is empty
+    emitter.instruction("mov rdi, rax");                                        // pass the attached context handle to registry release
+    emitter.instruction("call __rt_resource_release");                          // release the StreamState-owned context reference
+    emitter.label("__rt_stream_destroy_state_context_done");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // pass StreamState itself to the heap allocator
     emitter.instruction("call __rt_heap_free");                                 // release the owned 320-byte state allocation
     emitter.instruction("add rsp, 16");                                         // release teardown scratch storage

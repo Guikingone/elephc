@@ -7277,27 +7277,23 @@ echo "ok";
     assert_eq!(out, "ok");
 }
 
-/// A stream-context `notification` closure must fire STREAM_NOTIFY_FAILURE
-/// (code 9) when an `http://` connection is refused. Connecting to
-/// 127.0.0.1:1 (a closed port) is refused immediately, so `__rt_http_open`
-/// reaches its failure path and invokes the captured callback through its
-/// descriptor invoker (the offset-56 invoker contract). This is the
-/// deterministic, network-free end-to-end test for the whole capture →
-/// global → fire-shim → invoker → closure-body path. CONNECT (2) and
-/// COMPLETED (8) are validated against a live server during development; they
-/// share the same shim and differ only by the milestone code immediate.
+/// An explicitly supplied stream-context notifier fires STREAM_NOTIFY_CONNECT
+/// (code 2) while opening a successful loopback HTTP stream.
 #[test]
-fn test_stream_notification_callback_fires_failure_on_refused_connection() {
+fn test_stream_notification_callback_fires_connect_for_explicit_context() {
+    let (_server, port) = spawn_http_server(b"ok");
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 $ctx = stream_context_create([], ['notification' => function($code, $sev, $msg, $mc, $bt, $bm) {
-    echo "N" . $code . ";";
+    if ($code === 2) echo "N" . $code . ";";
 }]);
-$f = fopen('http://127.0.0.1:1/', 'r');
+$f = fopen('http://127.0.0.1:PHP_TEST_PORT/', 'r', false, $ctx);
 echo $f === false ? "closed" : "open";
-"#,
+fclose($f);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
-    assert_eq!(out, "N9;closed");
+    assert_eq!(out, "N2;open");
 }
 
 /// v1 captures only a literal closure / first-class-callable `notification`
@@ -7310,43 +7306,50 @@ fn test_stream_notification_string_callback_not_fired_in_v1() {
         r#"<?php
 function my_notify($code) { echo "S" . $code; }
 $ctx = stream_context_create([], ['notification' => 'my_notify']);
-$f = fopen('http://127.0.0.1:1/', 'r');
+$f = fopen('http://127.0.0.1:1/', 'r', false, $ctx);
 echo $f === false ? "ok" : "bad";
 "#,
     );
     assert_eq!(out, "ok");
 }
 
-/// A later `stream_context_create` whose params array lacks `notification`
-/// clears the global callback, so a subsequent failed `http://` open fires
-/// nothing (single-global context model). Verifies the clear-on-no-callback
-/// path in `capture_notification_callback`.
+/// An explicit empty context masks the request-default notification callback.
 #[test]
-fn test_stream_notification_callback_cleared_by_later_context() {
+fn test_stream_notification_empty_explicit_context_masks_default() {
+    let (_server, port) = spawn_http_server(b"ok");
     let out = compile_and_run(
-        r#"<?php
-$a = stream_context_create([], ['notification' => function($code) { echo "A" . $code; }]);
-$b = stream_context_create([], ['other' => 1]);
-$f = fopen('http://127.0.0.1:1/', 'r');
-echo $f === false ? "ok" : "bad";
-"#,
+        &r#"<?php
+$default = stream_context_get_default();
+stream_context_set_params($default, ['notification' => function($code) {
+    if ($code === 2) echo "default-fired";
+}]);
+$empty = stream_context_create([], ['other' => 1]);
+$f = fopen('http://127.0.0.1:PHP_TEST_PORT/', 'r', false, $empty);
+echo $f === false ? "bad" : "ok";
+fclose($f);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
     assert_eq!(out, "ok");
 }
 
-/// `stream_context_set_params` must also capture a `notification` closure into
-/// the global so a later refused `http://` open fires STREAM_NOTIFY_FAILURE.
+/// `stream_context_set_params` updates the explicitly addressed context notifier.
 #[test]
 fn test_stream_notification_callback_via_set_params() {
+    let (_server, port) = spawn_http_server(b"ok");
     let out = compile_and_run(
-        r#"<?php
+        &r#"<?php
 $ctx = stream_context_create([]);
-stream_context_set_params($ctx, ['notification' => function($code) { echo "P" . $code . ";"; }]);
-$f = fopen('http://127.0.0.1:1/', 'r');
+stream_context_set_params($ctx, ['notification' => function($code) {
+    if ($code === 2) echo "P" . $code . ";";
+}]);
+$f = fopen('http://127.0.0.1:PHP_TEST_PORT/', 'r', false, $ctx);
 echo $f === false ? "closed" : "open";
-"#,
+fclose($f);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
     );
-    assert_eq!(out, "P9;closed");
+    assert_eq!(out, "P2;open");
 }
 
 /// A userspace wrapper whose `stream_cast()` (vtable slot 10) returns a real

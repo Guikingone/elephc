@@ -345,48 +345,36 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     let filename = expect_operand(inst, 0)?;
     let mode = expect_operand(inst, 1)?;
     let filename_literal = optional_const_string_operand(ctx, filename)?;
+    begin_fopen_context_scope(ctx, inst.operands.get(3).copied())?;
     if let Some(path) = filename_literal.as_deref() {
         if path.starts_with("php://filter/") {
-            return lower_literal_php_filter_fopen(ctx, inst, path);
+            emit_literal_php_filter_fopen_result(ctx, inst, path)?;
+        } else if let Some(underlying) = path.strip_prefix("compress.zlib://") {
+            emit_literal_compress_wrapper_fopen_result(
+                ctx,
+                underlying,
+                path,
+                CompressWrapper::Zlib,
+            )?;
+        } else if let Some(underlying) = path.strip_prefix("compress.bzip2://") {
+            emit_literal_compress_wrapper_fopen_result(
+                ctx,
+                underlying,
+                path,
+                CompressWrapper::Bzip2,
+            )?;
+        } else {
+            emit_literal_fopen_result(ctx, inst, path)?;
         }
-        if let Some(fd) = php_standard_stream_fd(path).or_else(|| php_fd_stream(path)) {
-            emit_fd_result(ctx, fd);
-            box_stream_fd_or_false_result(ctx, "fopen");
-            emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
-            return store_if_result(ctx, inst);
-        }
-        if is_php_memory_stream(path) {
-            abi::emit_call_label(ctx.emitter, "__rt_tmpfile");
-            box_stream_fd_or_false_result(ctx, "fopen");
-            emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
-            return store_if_result(ctx, inst);
-        }
-        if path.starts_with("data://") {
-            return lower_literal_data_fopen(ctx, inst, path);
-        }
-        if path.starts_with("ftp://") {
-            return lower_literal_ftp_fopen(ctx, inst, path);
-        }
-        if path.starts_with("phar://") {
-            if literal_fopen_mode_is_write(ctx, mode)? {
-                return lower_literal_phar_fopen_write(ctx, inst, path);
-            }
-            return lower_literal_phar_fopen_read(ctx, inst, path);
-        }
+        finish_fopen_context_scope(ctx);
+        store_if_result(ctx, inst)?;
         if path.starts_with("http://") {
-            return lower_literal_http_fopen(ctx, inst, path);
+            publish_http_response_headers(ctx);
         }
-        if path.starts_with("compress.zlib://") {
-            return lower_literal_compress_zlib_fopen(ctx, inst, path);
-        }
-        if path.starts_with("compress.bzip2://") {
-            return lower_literal_compress_bzip2_fopen(ctx, inst, path);
-        }
+        return Ok(());
     }
-    if filename_literal.is_none() {
-        publish_dynamic_phar_function_pointers(ctx);
-        publish_dynamic_phar_write_function_pointer(ctx);
-    }
+    publish_dynamic_phar_function_pointers(ctx);
+    publish_dynamic_phar_write_function_pointer(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_to_result(ctx, filename, "fopen filename")?;
@@ -405,20 +393,282 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
         }
     }
-    // -- if a $context arg (arg 3) is passed, restore the per-handle options --
-    if inst.operands.len() > 3 {
-        let context = expect_operand(inst, 3)?;
-        restore_stream_context_from_handle(ctx, context)?;
-    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => abi::emit_push_reg_pair(ctx.emitter, "x1", "x2"),
         Arch::X86_64 => abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx"),
     }
+    emit_dynamic_fopen_result(ctx, inst)
+}
+
+/// Dispatches a runtime filename to the streaming HTTP opener or generic fopen helper.
+fn emit_dynamic_fopen_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let plain = ctx.next_label("fopen_dynamic_plain");
+    let done = ctx.next_label("fopen_dynamic_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #7");                              // is the dynamic filename long enough for http://?
+            ctx.emitter.instruction(&format!("b.lt {}", plain));                // shorter filenames use the generic opener
+            for (offset, byte) in b"http://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset)); // load one dynamic wrapper-prefix byte
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));         // compare against the canonical http:// byte
+                ctx.emitter.instruction(&format!("b.ne {}", plain));            // a different prefix uses the generic opener
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_http_open_url");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 7");                              // is the dynamic filename long enough for http://?
+            ctx.emitter.instruction(&format!("jl {}", plain));                  // shorter filenames use the generic opener
+            for (offset, byte) in b"http://".iter().enumerate() {
+                ctx.emitter.instruction(&format!(
+                    "cmp BYTE PTR [rax + {}], {}", offset, byte
+                ));                                                             // compare one byte against the canonical http:// prefix
+                ctx.emitter.instruction(&format!("jne {}", plain));             // a different prefix uses the generic opener
+            }
+            abi::emit_call_label(ctx.emitter, "__rt_http_open_url");
+        }
+    }
+    box_stream_fd_or_false_result(ctx, "fopen_http_dynamic");
+    emit_record_stream_meta_after_boxed_stashed(ctx, 1);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    finish_fopen_context_scope(ctx);
+    store_if_result(ctx, inst)?;
+    publish_http_response_headers(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&plain);
     abi::emit_call_label(ctx.emitter, "__rt_fopen_maybe_phar");
     box_stream_fd_or_false_result(ctx, "fopen");
     emit_record_stream_meta_after_boxed_stashed(ctx, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    store_if_result(ctx, inst)
+    finish_fopen_context_scope(ctx);
+    store_if_result(ctx, inst)?;
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Saves the active context bridges, selects and retains the fopen context, and publishes its state.
+fn begin_fopen_context_scope(
+    ctx: &mut FunctionContext<'_>,
+    explicit_context: Option<ValueId>,
+) -> Result<()> {
+    abi::emit_reserve_temporary_stack(ctx.emitter, 48);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // save the previously active borrowed options pointer
+            ctx.emitter.instruction("str x10, [sp, #0]");                       // preserve options for nested fopen restoration
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_notification_callback");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // save the previously active borrowed notifier descriptor
+            ctx.emitter.instruction("str x10, [sp, #8]");                       // preserve notifier state for nested fopen restoration
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_current_context_handle");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // save the previously active borrowed context handle
+            ctx.emitter.instruction("str x10, [sp, #32]");                      // preserve the active handle for nested wrapper restoration
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // save the previously active borrowed options pointer
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], r10");            // preserve options for nested fopen restoration
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_notification_callback");
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // save the previously active borrowed notifier descriptor
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r10");            // preserve notifier state for nested fopen restoration
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_current_context_handle");
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // save the previously active borrowed context handle
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 32], r10");           // preserve the active handle for nested wrapper restoration
+        }
+    }
+
+    let use_default = ctx.next_label("fopen_context_use_default");
+    let selected = ctx.next_label("fopen_context_selected");
+    match explicit_context {
+        None => abi::emit_jump(ctx.emitter, &use_default),
+        Some(context) => {
+            let raw_ty = ctx.raw_value_php_type(context)?;
+            match raw_ty {
+                PhpType::Void | PhpType::Never => {
+                    abi::emit_jump(ctx.emitter, &use_default);
+                }
+                PhpType::Resource(_) => {
+                    ctx.load_value_to_result(context)?;
+                    abi::emit_jump(ctx.emitter, &selected);
+                }
+                PhpType::Mixed | PhpType::Union(_) => {
+                    let resource_payload =
+                        ctx.next_label("fopen_context_resource_payload");
+                    ctx.load_value_to_result(context)?;
+                    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+                    match ctx.emitter.target.arch {
+                        Arch::AArch64 => {
+                            ctx.emitter.instruction("cmp x0, #8");              // does the explicit Mixed context contain null?
+                            ctx.emitter.instruction(&format!("b.eq {}", use_default)); // explicit null selects the request default
+                            ctx.emitter.instruction("cmp x0, #9");              // does the explicit Mixed context contain a resource?
+                            ctx.emitter.instruction(&format!("b.eq {}", resource_payload)); // resource payload is available in x1
+                        }
+                        Arch::X86_64 => {
+                            ctx.emitter.instruction("cmp rax, 8");              // does the explicit Mixed context contain null?
+                            ctx.emitter.instruction(&format!("je {}", use_default)); // explicit null selects the request default
+                            ctx.emitter.instruction("cmp rax, 9");              // does the explicit Mixed context contain a resource?
+                            ctx.emitter.instruction(&format!("je {}", resource_payload)); // resource payload is available in rdi
+                        }
+                    }
+                    emit_stream_type_error(ctx, "fopen");
+                    ctx.emitter.label(&resource_payload);
+                    match ctx.emitter.target.arch {
+                        Arch::AArch64 => {
+                            ctx.emitter.instruction("mov x0, x1");              // expose the unboxed context handle
+                        }
+                        Arch::X86_64 => {
+                            ctx.emitter.instruction("mov rax, rdi");            // expose the unboxed context handle
+                        }
+                    }
+                    abi::emit_jump(ctx.emitter, &selected);
+                }
+                other => {
+                    return Err(CodegenIrError::unsupported(format!(
+                        "fopen context argument PHP type {:?}",
+                        other
+                    )));
+                }
+            }
+        }
+    }
+
+    ctx.emitter.label(&use_default);
+    emit_request_default_stream_context_handle(ctx);
+    abi::emit_jump(ctx.emitter, &selected);
+
+    ctx.emitter.label(&selected);
+    let resolved_context = ctx.next_label("fopen_context_resolved");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the selected handle for attach and release
+            abi::emit_call_label(ctx.emitter, "__rt_resource_retain");
+            abi::emit_call_label(ctx.emitter, "__rt_context_state");
+            ctx.emitter.instruction(&format!("cbnz x0, {}", resolved_context)); // continue only with a live ContextState
+            emit_closed_stream_type_error(ctx, "fopen");
+            ctx.emitter.label(&resolved_context);
+            ctx.emitter.instruction("ldr x10, [x0, #0]");                       // load the selected context options pointer
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            ctx.emitter.instruction("str x10, [x9]");                           // publish options, including an explicit empty context
+            ctx.emitter.instruction("ldr x10, [x0, #16]");                      // load the selected context notifier descriptor
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_notification_callback");
+            ctx.emitter.instruction("str x10, [x9]");                           // publish notifier, including an explicit empty context
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_current_context_handle");
+            ctx.emitter.instruction("ldr x10, [sp, #16]");                      // reload the selected context handle
+            ctx.emitter.instruction("str x10, [x9]");                           // expose the borrowed handle to user-wrapper construction
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the selected handle for attach and release
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the selected handle to registry retain
+            abi::emit_call_label(ctx.emitter, "__rt_resource_retain");
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the retained handle to typed context lookup
+            abi::emit_call_label(ctx.emitter, "__rt_context_state");
+            ctx.emitter.instruction("test rax, rax");                           // did the selected handle resolve to ContextState?
+            ctx.emitter.instruction(&format!("jnz {}", resolved_context));      // continue only with a live ContextState
+            emit_closed_stream_type_error(ctx, "fopen");
+            ctx.emitter.label(&resolved_context);
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax + 0]");            // load the selected context options pointer
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // publish options, including an explicit empty context
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax + 16]");           // load the selected context notifier descriptor
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_notification_callback");
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // publish notifier, including an explicit empty context
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_current_context_handle");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 16]");           // reload the selected context handle
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // expose the borrowed handle to user-wrapper construction
+        }
+    }
+    Ok(())
+}
+
+/// Restores the prior context bridges and transfers one retained owner to a successful stream.
+fn finish_fopen_context_scope(ctx: &mut FunctionContext<'_>) {
+    let restore = ctx.next_label("fopen_context_restore");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #24]");                       // preserve the boxed fopen result across context cleanup
+            ctx.emitter.instruction("ldr x9, [x0]");                            // load the boxed fopen result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // did fopen return a stream resource?
+            ctx.emitter.instruction(&format!("b.ne {}", restore));              // false results have no StreamState to attach
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // load the opaque stream handle payload
+            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // load the selected context handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_attach_context");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");           // preserve the boxed fopen result across context cleanup
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // did fopen return a stream resource?
+            ctx.emitter.instruction(&format!("jne {}", restore));               // false results have no StreamState to attach
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // load the opaque stream handle payload
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // load the selected context handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_attach_context");
+        }
+    }
+    ctx.emitter.label(&restore);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_context_options");
+            ctx.emitter.instruction("ldr x10, [sp, #0]");                       // reload the previously active options pointer
+            ctx.emitter.instruction("str x10, [x9]");                           // restore the outer options bridge before release
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_notification_callback");
+            ctx.emitter.instruction("ldr x10, [sp, #8]");                       // reload the previously active notifier descriptor
+            ctx.emitter.instruction("str x10, [x9]");                           // restore the outer notifier bridge before release
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_current_context_handle");
+            ctx.emitter.instruction("ldr x10, [sp, #32]");                      // reload the previously active borrowed context handle
+            ctx.emitter.instruction("str x10, [x9]");                           // restore the outer wrapper context bridge
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // load the temporary selected-context owner
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // restore the boxed fopen result
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_context_options");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 0]");            // reload the previously active options pointer
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // restore the outer options bridge before release
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_notification_callback");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 8]");            // reload the previously active notifier descriptor
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // restore the outer notifier bridge before release
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_current_context_handle");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 32]");           // reload the previously active borrowed context handle
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");                 // restore the outer wrapper context bridge
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // load the temporary selected-context owner
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");           // restore the boxed fopen result
+        }
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+}
+
+/// Lazily creates the request-default context and leaves its global-owned handle in the result.
+fn emit_request_default_stream_context_handle(ctx: &mut FunctionContext<'_>) {
+    let ready = ctx.next_label("fopen_default_context_ready");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_default_context_handle");
+            ctx.emitter.instruction("ldr x0, [x9]");                            // load the request-global default context handle
+            ctx.emitter.instruction(&format!("cbnz x0, {}", ready));            // reuse the existing request default
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_default_context_handle");
+            ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                 // load the request-global default context handle
+            ctx.emitter.instruction("test rax, rax");                           // has the request default been allocated?
+            ctx.emitter.instruction(&format!("jnz {}", ready));                 // reuse the existing request default
+        }
+    }
+    clear_stream_context_options(ctx);
+    clear_stream_notification_callback(ctx);
+    emit_dynamic_stream_context_allocation(ctx, "fopen_default_context");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_default_context_handle");
+            ctx.emitter.instruction("str x0, [x9]");                            // transfer the creator reference to the request-global owner
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_default_context_handle");
+            ctx.emitter.instruction("mov QWORD PTR [r9], rax");                 // transfer the creator reference to the request-global owner
+        }
+    }
+    ctx.emitter.label(&ready);
 }
 
 /// Emits the boxed `fopen()` result for a compile-time literal path without storing it.
@@ -491,8 +741,8 @@ fn emit_runtime_fopen_literal_result(
     Ok(())
 }
 
-/// Lowers a literal `fopen("php://filter/...", ...)` by opening and filtering `resource=`.
-fn lower_literal_php_filter_fopen(
+/// Emits a literal `fopen("php://filter/...", ...)` result without storing it.
+fn emit_literal_php_filter_fopen_result(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     path: &str,
@@ -500,13 +750,13 @@ fn lower_literal_php_filter_fopen(
     let Some((mode_bits, filter_id, resource)) = parse_php_filter_url(path) else {
         emit_fd_result(ctx, -1);
         box_stream_fd_or_false_result(ctx, "fopen_php_filter");
-        return store_if_result(ctx, inst);
+        return Ok(());
     };
     emit_literal_fopen_result(ctx, inst, &resource)?;
     if mode_bits != 0 {
         emit_php_filter_table_stamps(ctx, mode_bits, filter_id);
     }
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Parses `php://filter/[read=|write=]filter/resource=path` for literal `fopen`.
@@ -566,16 +816,6 @@ fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_bits: u8, fi
             ctx.emitter.label(&done_label);
         }
     }
-}
-
-/// Lowers a literal `fopen("data://...", ...)` through an in-memory data stream.
-fn lower_literal_data_fopen(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_data_fopen_result(ctx, path)?;
-    store_if_result(ctx, inst)
 }
 
 /// Emits the boxed result for a literal `data://` stream open.
@@ -690,16 +930,6 @@ fn percent_decode_for_data_uri(input: &str) -> Vec<u8> {
     out
 }
 
-/// Lowers a literal `fopen("ftp://...", ...)` through the FTP runtime wrapper.
-fn lower_literal_ftp_fopen(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_ftp_fopen_result(ctx, path)?;
-    store_if_result(ctx, inst)
-}
-
 /// Emits the boxed result for a literal `ftp://` stream open.
 fn emit_literal_ftp_fopen_result(ctx: &mut FunctionContext<'_>, path: &str) -> Result<()> {
     match parse_ftp_url_for_fopen(path) {
@@ -762,14 +992,8 @@ fn parse_ftp_url_for_fopen(url: &str) -> Option<(String, String)> {
     ))
 }
 
-/// Lowers a literal `fopen("http://...", ...)` through the HTTP runtime wrapper.
-fn lower_literal_http_fopen(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_http_fopen_result(ctx, path)?;
-    store_if_result(ctx, inst)?;
+/// Publishes `$http_response_header` after an HTTP fopen result has been stored.
+fn publish_http_response_headers(ctx: &mut FunctionContext<'_>) {
     // -- populate $http_response_header from the last HTTP response --
     // After store_if_result, x0/rax is free. Call the helper, box the result
     // as a Mixed(array), and store it into the global slot.
@@ -794,7 +1018,6 @@ fn lower_literal_http_fopen(
             ctx.emitter.instruction("mov QWORD PTR [r9], rax");                 // store the boxed Mixed into the global
         }
     }
-    Ok(())
 }
 
 /// Emits the boxed result for a literal `http://` stream open.
@@ -921,16 +1144,6 @@ fn lower_literal_phar_file_get_contents(
     store_if_result(ctx, inst)
 }
 
-/// Lowers a literal read-mode `fopen("phar://...", ...)` through embedded entry bytes.
-fn lower_literal_phar_fopen_read(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_phar_fopen_read_result(ctx, path)?;
-    store_if_result(ctx, inst)
-}
-
 /// Emits the boxed result for a literal read-mode `phar://` stream open.
 fn emit_literal_phar_fopen_read_result(ctx: &mut FunctionContext<'_>, path: &str) -> Result<()> {
     match crate::codegen::phar_stream::extract_phar_entry(path) {
@@ -960,16 +1173,6 @@ fn emit_literal_phar_fopen_read_result(ctx: &mut FunctionContext<'_>, path: &str
     box_stream_fd_or_false_result(ctx, "fopen_phar");
     emit_record_stream_meta_after_boxed_literal(ctx, 5, path);
     Ok(())
-}
-
-/// Lowers a literal write-mode `fopen("phar://...", ...)` through the PHAR writer.
-fn lower_literal_phar_fopen_write(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    emit_literal_phar_fopen_write_result(ctx, path)?;
-    store_if_result(ctx, inst)
 }
 
 /// Emits the boxed stream result for a literal write-mode `phar://` stream open.
@@ -1946,13 +2149,17 @@ pub(crate) fn lower_stream_get_meta_data(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_get_wrappers()` to the static built-in wrapper list.
+/// Lowers `stream_get_wrappers()` to the static built-in wrapper list, then
+/// appends user-registered scheme names via the `__rt_stream_get_wrappers`
+/// runtime helper.
 pub(crate) fn lower_stream_get_wrappers(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_get_wrappers", 0)?;
     emit_static_string_array(ctx, crate::types::stream_constants::STREAM_WRAPPERS);
+    // -- append user-registered scheme names from the runtime registration table --
+    abi::emit_call_label(ctx.emitter, "__rt_stream_get_wrappers");
     store_if_result(ctx, inst)
 }
 
@@ -2206,30 +2413,6 @@ fn emit_bzip2_decompress_attach_in_place(ctx: &mut FunctionContext<'_>) {
     }
 }
 
-/// Lowers `fopen("compress.zlib://<path>", ...)` for a compile-time literal path.
-/// Opens the underlying file read-only and attaches the `zlib.inflate` filter so
-/// reads see decompressed bytes; an empty or unopenable path boxes PHP false.
-fn lower_literal_compress_zlib_fopen(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    let underlying = path.strip_prefix("compress.zlib://").unwrap_or("");
-    emit_literal_compress_wrapper_fopen(ctx, inst, underlying, path, CompressWrapper::Zlib)
-}
-
-/// Lowers `fopen("compress.bzip2://<path>", ...)` for a compile-time literal path.
-/// Opens the underlying file read-only and attaches the `bzip2.decompress` filter
-/// so reads see decompressed bytes; an empty or unopenable path boxes PHP false.
-fn lower_literal_compress_bzip2_fopen(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    let underlying = path.strip_prefix("compress.bzip2://").unwrap_or("");
-    emit_literal_compress_wrapper_fopen(ctx, inst, underlying, path, CompressWrapper::Bzip2)
-}
-
 /// Selects which read-direction decompressor a `compress.*://` fopen wrapper attaches.
 #[derive(Clone, Copy)]
 enum CompressWrapper {
@@ -2241,9 +2424,8 @@ enum CompressWrapper {
 /// decompressor so subsequent reads see plain bytes, boxing the filtered
 /// descriptor as a resource. An empty path, or a failed open, boxes PHP false —
 /// matching PHP's `compress.zlib://` / `compress.bzip2://` wrapper behavior.
-fn emit_literal_compress_wrapper_fopen(
+fn emit_literal_compress_wrapper_fopen_result(
     ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
     underlying: &str,
     full_uri: &str,
     kind: CompressWrapper,
@@ -2251,7 +2433,7 @@ fn emit_literal_compress_wrapper_fopen(
     if underlying.is_empty() {
         emit_fd_result(ctx, -1);
         box_stream_fd_or_false_result(ctx, "fopen");
-        return store_if_result(ctx, inst);
+        return Ok(());
     }
     let (path_label, path_len) = ctx.data.add_string(underlying.as_bytes());
     let (mode_label, mode_len) = ctx.data.add_string(b"r");
@@ -2300,7 +2482,7 @@ fn emit_literal_compress_wrapper_fopen(
     ctx.emitter.label(&false_label);
     box_stream_fd_or_false_result(ctx, "fopen");
     ctx.emitter.label(&done_label);
-    store_if_result(ctx, inst)
+    Ok(())
 }
 
 /// Lowers `stream_filter_append($stream, "convert.iconv.<from>/<to>", ...)`.
@@ -3794,7 +3976,8 @@ fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("lsl w9, w9, #16");                         // form the synthetic wrapper fd base 0x40000000
             ctx.emitter.instruction("cmp x0, x9");                              // test whether the backend is below the wrapper range
             ctx.emitter.instruction(&format!("b.lo {}", native_label));         // native descriptors use the state-aware passthru helper
-            ctx.emitter.instruction("add x10, x9, #256");                       // bound the 256 active wrapper slots
+            crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "x10");
+            ctx.emitter.instruction("add x10, x9, x10");                        // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
             ctx.emitter.instruction("cmp x0, x10");                             // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));        // stream wrapper backends through the userspace read loop
             ctx.emitter.label(&native_label);
@@ -3837,7 +4020,8 @@ fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov r9d, 0x40000000");                     // materialize USER_WRAPPER_FD_BASE for synthetic handles
             ctx.emitter.instruction("cmp rax, r9");                             // test whether this stream is a userspace-wrapper handle
             ctx.emitter.instruction(&format!("jb {}", native_label));           // native descriptors use the state-aware passthru helper
-            ctx.emitter.instruction("lea r10, [r9 + 256]");                     // bound the 256 active wrapper slots
+            crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "r10");
+            ctx.emitter.instruction("add r10, r9");                             // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
             ctx.emitter.instruction("cmp rax, r10");                            // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("jb {}", wrapper_label));          // stream wrapper backends through the userspace read loop
             ctx.emitter.label(&native_label);
@@ -8386,7 +8570,8 @@ fn lower_stream_copy_seek(
             ctx.emitter.instruction("lsl w9, w9, #16");                         // form the synthetic wrapper fd base 0x40000000
             ctx.emitter.instruction("cmp x0, x9");                              // test whether the source is a synthetic wrapper fd
             ctx.emitter.instruction(&format!("b.lo {}", native_success));       // descriptors below the wrapper range use native lseek
-            ctx.emitter.instruction("add x10, x9, #256");                       // bound the 256 active wrapper slots
+            crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "x10");
+            ctx.emitter.instruction("add x10, x9, x10");                        // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
             ctx.emitter.instruction("cmp x0, x10");                             // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("b.lo {}", wrap_seek));            // dispatch wrapper backends to stream_seek
             ctx.emitter.label(&native_success);
@@ -8414,7 +8599,8 @@ fn lower_stream_copy_seek(
             ctx.emitter.instruction("mov r9d, 0x40000000");                     // materialize USER_WRAPPER_FD_BASE for synthetic handles
             ctx.emitter.instruction("cmp rdi, r9");                             // test whether the source is a synthetic wrapper fd
             ctx.emitter.instruction(&format!("jb {}", native_success));         // descriptors below the wrapper range use native lseek
-            ctx.emitter.instruction("lea r10, [r9 + 256]");                     // bound the 256 active wrapper slots
+            crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "r10");
+            ctx.emitter.instruction("add r10, r9");                             // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
             ctx.emitter.instruction("cmp rdi, r10");                            // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("jb {}", wrap_seek));              // dispatch wrapper backends to stream_seek
             ctx.emitter.label(&native_success);
@@ -9539,7 +9725,8 @@ fn lower_fseek_aarch64(
     ctx.emitter.instruction("lsl w9, w9, #16");                                 // form the synthetic wrapper fd base 0x40000000
     ctx.emitter.instruction("cmp x0, x9");                                      // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("b.lo {}", success_label));                // descriptors below the wrapper range use native lseek
-    ctx.emitter.instruction("add x10, x9, #256");                               // bound the 256 active wrapper slots
+    crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "x10");
+    ctx.emitter.instruction("add x10, x9, x10");                        // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     ctx.emitter.instruction("cmp x0, x10");                                     // is the backend above the wrapper range?
     ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));                // dispatch wrapper backends to stream_seek
     ctx.emitter.label(success_label);
@@ -9584,7 +9771,8 @@ fn lower_fseek_x86_64(
     ctx.emitter.instruction("mov r9d, 0x40000000");                             // materialize USER_WRAPPER_FD_BASE for synthetic handles
     ctx.emitter.instruction("cmp rdi, r9");                                     // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("jb {}", success_label));                  // descriptors below the wrapper range use native lseek
-    ctx.emitter.instruction("lea r10, [r9 + 256]");                             // bound the 256 active wrapper slots
+    crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "r10");
+    ctx.emitter.instruction("add r10, r9");                             // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     ctx.emitter.instruction("cmp rdi, r10");                                    // is the backend above the wrapper range?
     ctx.emitter.instruction(&format!("jb {}", wrapper_label));                  // dispatch wrapper backends to stream_seek
     ctx.emitter.label(success_label);
@@ -9620,7 +9808,8 @@ fn lower_rewind_aarch64(
     ctx.emitter.instruction("lsl w9, w9, #16");                                 // form the synthetic wrapper fd base 0x40000000
     ctx.emitter.instruction("cmp x0, x9");                                      // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("b.lo {}", success_label));                // descriptors below the wrapper range use native lseek
-    ctx.emitter.instruction("add x10, x9, #256");                               // bound the 256 active wrapper slots
+    crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "x10");
+    ctx.emitter.instruction("add x10, x9, x10");                        // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     ctx.emitter.instruction("cmp x0, x10");                                     // is the backend above the wrapper range?
     ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));                // dispatch wrapper backends to stream_seek
     ctx.emitter.label(success_label);
@@ -9665,7 +9854,8 @@ fn lower_rewind_x86_64(
     ctx.emitter.instruction("mov r9d, 0x40000000");                             // materialize USER_WRAPPER_FD_BASE for synthetic handles
     ctx.emitter.instruction("cmp rdi, r9");                                     // test whether this stream is a userspace-wrapper handle
     ctx.emitter.instruction(&format!("jb {}", success_label));                  // descriptors below the wrapper range use native lseek
-    ctx.emitter.instruction("lea r10, [r9 + 256]");                             // bound the 256 active wrapper slots
+    crate::codegen_support::runtime::io::emit_load_handles_cap(ctx.emitter, "r10");
+    ctx.emitter.instruction("add r10, r9");                             // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     ctx.emitter.instruction("cmp rdi, r10");                                    // is the backend above the wrapper range?
     ctx.emitter.instruction(&format!("jb {}", wrapper_label));                  // dispatch wrapper backends to stream_seek
     ctx.emitter.label(success_label);

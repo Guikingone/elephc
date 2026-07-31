@@ -74,8 +74,8 @@ pub fn emit_user_wrapper_fclose(emitter: &mut Emitter) {
     emitter.label("__rt_uwfclose_clear");
     // -- free the handle slot so the synthetic fd cannot be reused stale --
     emitter.instruction("ldr x0, [sp, #16]");                                   // reload the synthetic file descriptor
-    emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = fd & 0x3f, the handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = fd - USER_WRAPPER_FD_BASE, the handle slot index
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("str xzr, [x10, x9, lsl #3]");                          // clear the freed handle slot
     emitter.instruction("mov x0, #1");                                          // fclose() on a wrapper always reports success
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
@@ -103,8 +103,8 @@ fn emit_user_wrapper_fclose_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uwfclose_clear_x86");
     // -- free the handle slot so the synthetic fd cannot be reused stale --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the synthetic file descriptor
-    emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = fd & 0x3f, the handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = fd - USER_WRAPPER_FD_BASE, the handle slot index
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov QWORD PTR [r10 + r9 * 8], 0");                     // clear the freed handle slot
     emitter.instruction("mov eax, 1");                                          // fclose() on a wrapper always reports success
     emitter.instruction("add rsp, 16");                                         // release the helper frame
@@ -796,7 +796,7 @@ fn emit_aarch64_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
 /// (cleared after fclose) jumps to `missing_label`.
 fn emit_aarch64_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emit_aarch64_slot_from_fd(emitter, "x0", "x9");                             // x9 = handle slot index
-    abi::emit_symbol_address(emitter, "x10", "_user_wrapper_handles");
+    super::emit_load_handles_base(emitter, "x10");
     emitter.instruction("ldr x0, [x10, x9, lsl #3]");                           // obj = _user_wrapper_handles[slot]
     emitter.instruction(&format!("cbz x0, {}", missing_label));                 // slot empty (already fclose'd or never registered): take the fallback
 }
@@ -824,7 +824,7 @@ fn emit_x86_slot_from_fd(emitter: &mut Emitter, src: &str, dst: &str) {
 /// jumps to `missing_label`.
 fn emit_x86_handle_lookup(emitter: &mut Emitter, missing_label: &str) {
     emit_x86_slot_from_fd(emitter, "rdi", "r9");                                // r9 = handle slot index
-    abi::emit_symbol_address(emitter, "r10", "_user_wrapper_handles");          // handle table base
+    super::emit_load_handles_base(emitter, "r10");          // handle table base
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = _user_wrapper_handles[slot]
     emitter.instruction("test rdi, rdi");                                       // is the slot empty?
     emitter.instruction(&format!("jz {}", missing_label));                      // slot empty: take the fallback

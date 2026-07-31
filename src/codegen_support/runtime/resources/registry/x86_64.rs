@@ -600,12 +600,13 @@ fn emit_registry_request_reset(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable request-reset frame
     emitter.instruction("sub rsp, 64");                                         // reserve aligned scan scratch storage
-    abi::emit_symbol_address(emitter, "r9", "_stream_default_context_handle");
-    emitter.instruction("mov QWORD PTR [r9], 0");                               // detach the request-global default handle before its slot is recycled
     abi::emit_symbol_address(emitter, "r9", "_stream_context_options");
     emitter.instruction("mov QWORD PTR [r9], 0");                               // clear the borrowed options bridge before request-owned states are destroyed
     abi::emit_symbol_address(emitter, "r9", "_stream_notification_callback");
     emitter.instruction("mov QWORD PTR [r9], 0");                               // clear the borrowed notifier bridge before descriptor teardown
+    abi::emit_symbol_address(emitter, "r9", "_stream_current_context_handle");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // clear the borrowed wrapper-context handle before teardown
+    emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // phase zero releases streams before their attached contexts
     emitter.instruction("call __rt_resource_registry_init");                    // make standard persistent slots available
     emitter.instruction("test rax, rax");                                       // did lazy registry initialization succeed?
     emitter.instruction("jz __rt_resource_registry_request_reset_done");        // tolerate registry allocation failure
@@ -630,6 +631,13 @@ fn emit_registry_request_reset(emitter: &mut Emitter) {
         "cmp QWORD PTR [r11 + {}], 0", SLOT_KIND_OFFSET
     ));                                                                         // is the current slot free?
     emitter.instruction("je __rt_resource_registry_request_reset_next");        // skip free slots
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // is this the stream-first reset phase?
+    emitter.instruction("jne __rt_resource_registry_request_reset_kind_ready"); // phase one releases every remaining resource kind
+    emitter.instruction(&format!(
+        "cmp QWORD PTR [r11 + {}], {}", SLOT_KIND_OFFSET, RESOURCE_KIND_STREAM
+    ));                                                                         // is this a stream during the stream-first phase?
+    emitter.instruction("jne __rt_resource_registry_request_reset_next");       // preserve contexts until all streams are destroyed
+    emitter.label("__rt_resource_registry_request_reset_kind_ready");
     emitter.instruction(&format!(
         "mov r10, QWORD PTR [r11 + {}]", SLOT_FLAGS_OFFSET
     ));                                                                         // load resource persistence flags
@@ -664,6 +672,13 @@ fn emit_registry_request_reset(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_resource_registry_request_reset_scan");       // continue searching for request-owned resources
 
     emitter.label("__rt_resource_registry_request_reset_advance");
+    emitter.instruction("cmp QWORD PTR [rbp - 16], 0");                         // did the stream-first phase just complete?
+    emitter.instruction("jne __rt_resource_registry_request_reset_epoch");      // phase one completed all remaining resources
+    emitter.instruction("mov QWORD PTR [rbp - 16], 1");                         // advance to context and remaining-resource teardown
+    abi::emit_symbol_address(emitter, "r9", "_stream_default_context_handle");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // detach the default owner only after attached streams released it
+    emitter.instruction("jmp __rt_resource_registry_request_reset_restart");    // rescan from the beginning for contexts and other resources
+    emitter.label("__rt_resource_registry_request_reset_epoch");
     abi::emit_symbol_address(emitter, "r9", "_resource_registry_epoch");
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the completed request epoch
     emitter.instruction("add r10, 1");                                          // advance allocation ownership to the next request

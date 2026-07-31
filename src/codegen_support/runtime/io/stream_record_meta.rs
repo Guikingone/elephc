@@ -15,7 +15,7 @@ use crate::codegen_support::runtime::resources::layout::{
     STREAM_BACKEND_USER_WRAPPER, STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_FLAG_IS_URL,
     STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET,
 };
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Emits `__rt_stream_record_meta(handle, wrapper_id, uri_ptr, uri_len) -> handle`.
 ///
@@ -222,9 +222,10 @@ fn emit_user_wrapper_uri_flags_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: resolve user-wrapper definition flags for a URI ---");
     emitter.label("__rt_user_wrapper_uri_flags");
     emitter.instruction("mov x2, #0");                                          // start at wrapper definition slot zero
-    abi::emit_symbol_address(emitter, "x3", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x3");
     emitter.label("__rt_user_wrapper_uri_flags_scan");
-    emitter.instruction("cmp x2, #64");                                         // did lookup exhaust every definition slot?
+    super::emit_load_table_cap(emitter, "x4");
+    emitter.instruction("cmp x2, x4");                                         // did lookup exhaust every allocated definition slot?
     emitter.instruction("b.hs __rt_user_wrapper_uri_flags_miss");               // no registered scheme matched the URI
     emitter.instruction("add x4, x3, x2, lsl #5");                              // address the next 32-byte definition slot
     emitter.instruction("ldr x5, [x4]");                                        // load the registered protocol pointer
@@ -246,7 +247,7 @@ fn emit_user_wrapper_uri_flags_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x7, x7, #1");                                      // advance the protocol comparison index
     emitter.instruction("b __rt_user_wrapper_uri_flags_cmp");                   // compare the remaining protocol bytes
     emitter.label("__rt_user_wrapper_uri_flags_match");
-    abi::emit_symbol_address(emitter, "x3", "_user_wrapper_flags");
+    super::emit_load_flags_base(emitter, "x3");
     emitter.instruction("ldr x0, [x3, x2, lsl #3]");                            // return the matching definition flags
     emitter.instruction("ret");                                                 // return definition flags to metadata publication
     emitter.label("__rt_user_wrapper_uri_flags_next");
@@ -263,9 +264,10 @@ fn emit_user_wrapper_uri_flags_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: resolve user-wrapper definition flags for a URI ---");
     emitter.label("__rt_user_wrapper_uri_flags");
     emitter.instruction("xor r8d, r8d");                                        // start at wrapper definition slot zero
-    abi::emit_symbol_address(emitter, "r9", "_user_wrappers");
+    super::emit_load_table_base(emitter, "r9");
     emitter.label("__rt_user_wrapper_uri_flags_scan_x86");
-    emitter.instruction("cmp r8, 64");                                          // did lookup exhaust every definition slot?
+    super::emit_load_table_cap(emitter, "r11");
+    emitter.instruction("cmp r8, r11");                                          // did lookup exhaust every allocated definition slot?
     emitter.instruction("jae __rt_user_wrapper_uri_flags_miss_x86");            // no registered scheme matched the URI
     emitter.instruction("mov r11, r8");                                         // copy the definition slot for scaling
     emitter.instruction("shl r11, 5");                                          // convert the slot index to a 32-byte offset
@@ -289,7 +291,7 @@ fn emit_user_wrapper_uri_flags_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc rdx");                                             // advance the protocol comparison index
     emitter.instruction("jmp __rt_user_wrapper_uri_flags_cmp_x86");             // compare the remaining protocol bytes
     emitter.label("__rt_user_wrapper_uri_flags_match_x86");
-    abi::emit_symbol_address(emitter, "r9", "_user_wrapper_flags");
+    super::emit_load_flags_base(emitter, "r9");
     emitter.instruction("mov rax, QWORD PTR [r9 + r8 * 8]");                    // return the matching definition flags
     emitter.instruction("ret");                                                 // return definition flags to metadata publication
     emitter.label("__rt_user_wrapper_uri_flags_next_x86");

@@ -87,10 +87,11 @@ fn emit_user_wrapper_path_op_aarch64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uwpo_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x10");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwpo_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "x12");
+    emitter.instruction("cmp x11, x12");                                        // checked every allocated wrapper slot?
     emitter.instruction("b.ge __rt_uwpo_false");                                // no registered wrapper matched the scheme → false
     emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
@@ -196,10 +197,11 @@ fn emit_user_wrapper_path_op_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwpo_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
+    super::emit_load_table_base(emitter, "r10");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwpo_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "r12");
+    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_uwpo_false_x86");                             // no registered wrapper matched the scheme → false
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32
@@ -330,10 +332,11 @@ fn emit_user_wrapper_rename_aarch64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (x9=scheme len) --
     emitter.label("__rt_uwrn_check");
-    abi::emit_symbol_address(emitter, "x10", "_user_wrappers");
+    super::emit_load_table_base(emitter, "x10");
     emitter.instruction("mov x11, #0");                                         // wrapper slot index
     emitter.label("__rt_uwrn_slot");
-    emitter.instruction("cmp x11, #64");                                        // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "x12");
+    emitter.instruction("cmp x11, x12");                                        // checked every allocated wrapper slot?
     emitter.instruction("b.ge __rt_uwrn_false");                                // no registered wrapper matched the scheme → false
     emitter.instruction("add x12, x10, x11, lsl #5");                           // slot base = table + index * 32
     emitter.instruction("ldr x13, [x12]");                                      // stored protocol pointer
@@ -437,10 +440,11 @@ fn emit_user_wrapper_rename_linux_x86_64(emitter: &mut Emitter) {
 
     // -- match the scheme against the registered-wrapper table (r9=scheme len) --
     emitter.label("__rt_uwrn_check_x86");
-    abi::emit_symbol_address(emitter, "r10", "_user_wrappers");                 // wrapper table base
+    super::emit_load_table_base(emitter, "r10");                 // wrapper table base
     emitter.instruction("xor r11, r11");                                        // wrapper slot index
     emitter.label("__rt_uwrn_slot_x86");
-    emitter.instruction("cmp r11, 64");                                         // checked every wrapper slot (USER_WRAPPER_REGISTRATIONS_CAP)?
+    super::emit_load_table_cap(emitter, "r12");
+    emitter.instruction("cmp r11, r12");                                         // checked every allocated wrapper slot?
     emitter.instruction("jge __rt_uwrn_false_x86");                             // no registered wrapper matched the scheme → false
     emitter.instruction("mov r12, r11");                                        // copy the slot index for scaling
     emitter.instruction("shl r12, 5");                                          // slot offset = index * 32

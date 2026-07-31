@@ -51,7 +51,10 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("lsl w9, w9, #16");                                     // form 0x40000000 in w9
     emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
     emitter.instruction("b.lo __rt_stream_get_line_loop");                      // native descriptors use the byte-read loop below
-    emitter.instruction("add x10, x9, #256");                                   // bound the 256 active wrapper slots
+    // The wrapper fd range ends at the allocated handle capacity, not a
+    // fixed 256: a slot beyond the bound would be misread as a native fd.
+    super::emit_load_handles_cap(emitter, "x10");
+    emitter.instruction("add x10, x9, x10");                                    // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     emitter.instruction("cmp x0, x10");                                         // is the backend above the wrapper range?
     emitter.instruction("b.lo __rt_sgl_wrapper_entry");                         // wrappers read via the feof-gated stream_read loop below
 
@@ -215,7 +218,10 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rax, r9");                                         // is this a synthetic user-wrapper fd?
     emitter.instruction("jb __rt_stream_get_line_loop_x86");                    // native descriptors use the byte-read loop below
-    emitter.instruction("lea r10, [r9 + 256]");                                 // bound the 256 active wrapper slots
+    // The wrapper fd range ends at the allocated handle capacity, not a
+    // fixed 256: a slot beyond the bound would be misread as a native fd.
+    super::emit_load_handles_cap(emitter, "r10");
+    emitter.instruction("add r10, r9");                                         // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     emitter.instruction("cmp rax, r10");                                        // is the backend above the wrapper range?
     emitter.instruction("jb __rt_sgl_wrapper_entry_x86");                       // wrappers read via the feof-gated stream_read loop below
 

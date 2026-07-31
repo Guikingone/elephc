@@ -591,12 +591,13 @@ fn emit_registry_request_reset(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // reserve scan state and a saved frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // preserve the caller frame and link register
     emitter.instruction("add x29, sp, #48");                                    // establish a stable request-reset frame
-    abi::emit_symbol_address(emitter, "x9", "_stream_default_context_handle");
-    emitter.instruction("str xzr, [x9]");                                       // detach the request-global default handle before its slot is recycled
     abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
     emitter.instruction("str xzr, [x9]");                                       // clear the borrowed options bridge before request-owned states are destroyed
     abi::emit_symbol_address(emitter, "x9", "_stream_notification_callback");
     emitter.instruction("str xzr, [x9]");                                       // clear the borrowed notifier bridge before descriptor teardown
+    abi::emit_symbol_address(emitter, "x9", "_stream_current_context_handle");
+    emitter.instruction("str xzr, [x9]");                                       // clear the borrowed wrapper-context handle before teardown
+    emitter.instruction("str xzr, [sp, #8]");                                   // phase zero releases streams before their attached contexts
     emitter.instruction("bl __rt_resource_registry_init");                      // make standard persistent slots available
     emitter.instruction("cbz x0, __rt_resource_registry_request_reset_done");   // tolerate registry allocation failure
 
@@ -618,6 +619,11 @@ fn emit_registry_request_reset(emitter: &mut Emitter) {
         "ldr x13, [x12, #{}]", SLOT_KIND_OFFSET
     ));                                                                         // load the slot kind
     emitter.instruction("cbz x13, __rt_resource_registry_request_reset_next");  // skip free slots
+    emitter.instruction("ldr x14, [sp, #8]");                                   // load the current reset phase
+    emitter.instruction("cbnz x14, __rt_resource_registry_request_reset_kind_ready"); // phase one releases every remaining resource kind
+    emitter.instruction(&format!("cmp x13, #{}", RESOURCE_KIND_STREAM));        // is this a stream during the stream-first phase?
+    emitter.instruction("b.ne __rt_resource_registry_request_reset_next");      // preserve contexts until all streams are destroyed
+    emitter.label("__rt_resource_registry_request_reset_kind_ready");
     emitter.instruction(&format!(
         "ldr x13, [x12, #{}]", SLOT_FLAGS_OFFSET
     ));                                                                         // load resource persistence flags
@@ -653,6 +659,14 @@ fn emit_registry_request_reset(emitter: &mut Emitter) {
     emitter.instruction("b __rt_resource_registry_request_reset_scan");         // continue searching for request-owned resources
 
     emitter.label("__rt_resource_registry_request_reset_advance");
+    emitter.instruction("ldr x10, [sp, #8]");                                   // load the completed reset phase
+    emitter.instruction("cbnz x10, __rt_resource_registry_request_reset_epoch"); // phase one completed all remaining resources
+    emitter.instruction("mov x10, #1");                                         // advance from stream teardown to context teardown
+    emitter.instruction("str x10, [sp, #8]");                                   // publish the remaining-resource phase
+    abi::emit_symbol_address(emitter, "x9", "_stream_default_context_handle");
+    emitter.instruction("str xzr, [x9]");                                       // detach the default owner only after attached streams released it
+    emitter.instruction("b __rt_resource_registry_request_reset_restart");      // rescan from the beginning for contexts and other resources
+    emitter.label("__rt_resource_registry_request_reset_epoch");
     abi::emit_symbol_address(emitter, "x9", "_resource_registry_epoch");
     emitter.instruction("ldr x10, [x9]");                                       // load the completed request epoch
     emitter.instruction("add x10, x10, #1");                                    // advance allocation ownership to the next request

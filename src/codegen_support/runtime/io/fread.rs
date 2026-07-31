@@ -54,7 +54,10 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("lsl w9, w9, #16");                                     // shift into bits 30..16 to form 0x40000000
     emitter.instruction("cmp x0, x9");                                          // is the backend below the wrapper range?
     emitter.instruction("b.lo __rt_fread_real_fd");                             // native descriptors continue to the syscall path
-    emitter.instruction("add x10, x9, #256");                                   // bound the 256 active wrapper slots
+    // The wrapper fd range ends at the allocated handle capacity, not a
+    // fixed 256: a slot beyond the bound would be misread as a native fd.
+    super::emit_load_handles_cap(emitter, "x10");
+    emitter.instruction("add x10, x9, x10");                                    // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     emitter.instruction("cmp x0, x10");                                         // is the backend above the wrapper range?
     emitter.instruction("b.hs __rt_fread_real_fd");                             // non-wrapper synthetic backends stay on the native path
     emitter.instruction("ldr x1, [sp, #8]");                                    // reload the requested byte count for stream_read
@@ -196,7 +199,10 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9d, 0x40000000");                                 // materialize USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rax, r9");                                         // is the backend below the wrapper range?
     emitter.instruction("jb __rt_fread_real_fd_x86");                           // native descriptors continue to libc read
-    emitter.instruction("lea r10, [r9 + 256]");                                 // bound the 256 active wrapper slots
+    // The wrapper fd range ends at the allocated handle capacity, not a
+    // fixed 256: a slot beyond the bound would be misread as a native fd.
+    super::emit_load_handles_cap(emitter, "r10");
+    emitter.instruction("add r10, r9");                                         // wrapper range end = USER_WRAPPER_FD_BASE + handle capacity
     emitter.instruction("cmp rax, r10");                                        // is the backend above the wrapper range?
     emitter.instruction("jae __rt_fread_real_fd_x86");                          // non-wrapper synthetic backends stay on the native path
     emitter.instruction("mov rdi, rax");                                        // pass the synthetic backend descriptor to stream_read

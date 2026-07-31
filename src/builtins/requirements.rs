@@ -80,7 +80,9 @@ pub fn file_put_contents_requirements(
 pub fn fopen_requirements(input: &BuiltinRequirementInput<'_>) -> Vec<BuiltinRequirement> {
     let Some(ExprKind::StringLiteral(filename)) = input.args.first().map(|arg| &arg.kind) else {
         return vec![
+            BuiltinRequirement::Bridge("elephc_tls"),
             BuiltinRequirement::Bridge("elephc_phar"),
+            BuiltinRequirement::Bridge("elephc_crypto"),
             BuiltinRequirement::SystemLibrary("z"),
             BuiltinRequirement::SystemLibrary("bz2"),
         ];
@@ -198,6 +200,25 @@ mod tests {
         assert_eq!(
             stream_filter_requirements(&input(&zlib_filter)),
             vec![BuiltinRequirement::SystemLibrary("z")]
+        );
+    }
+
+    /// Verifies a runtime `fopen` path conservatively links every reachable wrapper dependency.
+    #[test]
+    fn dynamic_fopen_requirements_cover_tls_phar_crypto_and_compression() {
+        let dynamic = [Expr::new(
+            ExprKind::Variable("path".to_string()),
+            Span::dummy(),
+        )];
+        assert_eq!(
+            fopen_requirements(&input(&dynamic)),
+            vec![
+                BuiltinRequirement::Bridge("elephc_tls"),
+                BuiltinRequirement::Bridge("elephc_phar"),
+                BuiltinRequirement::Bridge("elephc_crypto"),
+                BuiltinRequirement::SystemLibrary("z"),
+                BuiltinRequirement::SystemLibrary("bz2"),
+            ]
         );
     }
 }

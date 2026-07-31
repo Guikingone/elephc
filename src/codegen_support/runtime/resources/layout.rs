@@ -111,6 +111,9 @@ pub(crate) const STREAM_EOF_OFFSET: i64 = 56;
 /// Byte offset reserved for backend-specific auxiliary state.
 pub(crate) const STREAM_BACKEND_AUX_OFFSET: i64 = 64;
 
+/// Byte offset of the retained stream-context registry handle.
+pub(crate) const STREAM_CONTEXT_HANDLE_OFFSET: i64 = 80;
+
 /// Byte offset of the PHP-visible stream chunk size, or zero for the 8192-byte default.
 pub(crate) const STREAM_CHUNK_SIZE_OFFSET: i64 = 144;
 
@@ -166,6 +169,8 @@ const _: () = {
     assert!(STREAM_CONNECT_HOST_LEN_OFFSET == STREAM_CONNECT_HOST_PTR_OFFSET + 8);
     assert!(STREAM_EOF_OFFSET > STREAM_FD_OFFSET);
     assert!(STREAM_BACKEND_AUX_OFFSET == STREAM_EOF_OFFSET + 8);
+    assert!(STREAM_CONTEXT_HANDLE_OFFSET > STREAM_BACKEND_AUX_OFFSET);
+    assert!(STREAM_CONTEXT_HANDLE_OFFSET < STREAM_CHUNK_SIZE_OFFSET);
     assert!(STREAM_EOF_OFFSET < STREAM_CHUNK_SIZE_OFFSET);
     assert!(STREAM_CHUNK_SIZE_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(CONTEXT_STATE_SIZE == 32);

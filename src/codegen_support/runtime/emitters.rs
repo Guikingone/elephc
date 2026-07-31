@@ -421,6 +421,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_http(emitter);
     io::emit_https(emitter);
     io::emit_fsockopen(emitter);
+    io::emit_user_wrappers_reserve(emitter);
+    io::emit_user_wrapper_handles_reserve(emitter);
     io::emit_stream_wrapper_register(emitter);
     io::emit_stream_wrapper_unregister(emitter);
     io::emit_stream_socket_server(emitter);
@@ -441,6 +443,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_rewinddir(emitter);
     io::emit_stream_get_meta_data(emitter);
     io::emit_stream_get_filters(emitter);
+    io::emit_stream_get_wrappers(emitter);
     io::emit_get_http_response_headers(emitter);
     io::emit_stream_record_meta(emitter);
     io::emit_gethostname(emitter);
@@ -572,6 +575,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_phar_write(emitter);
     io::emit_phar_read(emitter);
     io::emit_file_get_contents_url(emitter);
+    io::emit_http_open_url(emitter);
     io::emit_fputcsv(emitter);
     io::emit_basename(emitter);
     io::emit_dirname(emitter);

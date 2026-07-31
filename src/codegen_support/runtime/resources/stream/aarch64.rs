@@ -16,7 +16,7 @@ use super::super::layout::{
     STREAM_BACKEND_GLOB_DIRECTORY, STREAM_BACKEND_KIND_OFFSET,
     STREAM_BACKEND_PHAR_WRITE, STREAM_BACKEND_POPEN, STREAM_BACKEND_USER_DIRECTORY,
     STREAM_BACKEND_USER_WRAPPER, STREAM_CHUNK_SIZE_OFFSET, STREAM_CONNECT_HOST_LEN_OFFSET,
-    STREAM_CONNECT_HOST_PTR_OFFSET, STREAM_EOF_OFFSET, STREAM_FD_OFFSET,
+    STREAM_CONNECT_HOST_PTR_OFFSET, STREAM_CONTEXT_HANDLE_OFFSET, STREAM_EOF_OFFSET, STREAM_FD_OFFSET,
     STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE, STREAM_URI_LEN_OFFSET,
     STREAM_URI_PTR_OFFSET,
 };
@@ -31,8 +31,47 @@ pub(super) fn emit_stream_resources_aarch64(emitter: &mut Emitter) {
     emit_stream_eof_set(emitter);
     emit_stream_chunk_size(emitter);
     emit_stream_set_chunk_size(emitter);
+    emit_stream_attach_context(emitter);
     emit_stream_close_backend(emitter);
     emit_stream_destroy_state(emitter);
+}
+
+/// Emits context attachment with one retained owner stored on the StreamState.
+fn emit_stream_attach_context(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: attach a retained context to an opaque stream ---");
+    emitter.label_global("__rt_stream_attach_context");
+    emitter.instruction("sub sp, sp, #48");                                     // reserve stream, context, state, and saved-frame slots
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // preserve the caller frame and link register
+    emitter.instruction("add x29, sp, #32");                                    // establish a stable attachment frame
+    emitter.instruction("stp x0, x1, [sp, #0]");                                // preserve the stream and context handles
+    emitter.instruction("bl __rt_stream_state");                                // resolve the authoritative StreamState
+    emitter.instruction("cbz x0, __rt_stream_attach_context_fail");             // reject stale or non-stream handles
+    emitter.instruction("str x0, [sp, #16]");                                   // preserve StreamState across context validation
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the selected context handle
+    emitter.instruction("bl __rt_context_state");                               // validate that the selected handle is a live context
+    emitter.instruction("cbz x0, __rt_stream_attach_context_fail");             // reject stale or non-context handles
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the validated context handle
+    emitter.instruction("bl __rt_resource_retain");                             // acquire the StreamState-owned context reference
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload StreamState for atomic replacement
+    emitter.instruction(&format!(
+        "ldr x10, [x9, #{}]", STREAM_CONTEXT_HANDLE_OFFSET
+    ));                                                                         // detach the previously attached context handle
+    emitter.instruction(&format!(
+        "str x0, [x9, #{}]", STREAM_CONTEXT_HANDLE_OFFSET
+    ));                                                                         // publish the newly retained context handle
+    emitter.instruction("cbz x10, __rt_stream_attach_context_success");         // skip release when no context was attached
+    emitter.instruction("mov x0, x10");                                         // pass the detached context owner to registry release
+    emitter.instruction("bl __rt_resource_release");                            // release the replaced context reference
+    emitter.label("__rt_stream_attach_context_success");
+    emitter.instruction("mov x0, #1");                                          // report successful context attachment
+    emitter.instruction("b __rt_stream_attach_context_done");                   // join the common attachment epilogue
+    emitter.label("__rt_stream_attach_context_fail");
+    emitter.instruction("mov x0, #0");                                          // report that no context was attached
+    emitter.label("__rt_stream_attach_context_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore the caller frame and link register
+    emitter.instruction("add sp, sp, #48");                                     // release attachment scratch storage
+    emitter.instruction("ret");                                                 // return the attachment status
 }
 
 /// Emits descriptor adoption into an owned 320-byte stream state.
@@ -442,6 +481,16 @@ fn emit_stream_destroy_state(emitter: &mut Emitter) {
         "str xzr, [x9, #{}]", STREAM_CONNECT_HOST_LEN_OFFSET
     ));                                                                         // clear the detached host length
     emitter.instruction("bl __rt_heap_free_safe");                              // release owned host storage when present
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload StreamState for context teardown
+    emitter.instruction(&format!(
+        "ldr x0, [x9, #{}]", STREAM_CONTEXT_HANDLE_OFFSET
+    ));                                                                         // load the retained stream-context handle
+    emitter.instruction(&format!(
+        "str xzr, [x9, #{}]", STREAM_CONTEXT_HANDLE_OFFSET
+    ));                                                                         // detach context ownership before nested registry cleanup
+    emitter.instruction("cbz x0, __rt_stream_destroy_state_context_done");      // skip release when no context is attached
+    emitter.instruction("bl __rt_resource_release");                            // release the StreamState-owned context reference
+    emitter.label("__rt_stream_destroy_state_context_done");
     emitter.instruction("ldr x0, [sp, #0]");                                    // pass StreamState itself to the heap allocator
     emitter.instruction("bl __rt_heap_free");                                   // release the owned 320-byte state allocation
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore the caller frame and link register

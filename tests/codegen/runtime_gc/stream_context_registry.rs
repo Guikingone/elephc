@@ -369,3 +369,63 @@ echo "done";
         "context-owned options, params, and notifiers must not add persistent live allocations"
     );
 }
+
+/// Verifies stream attachment retains a temporary context and `fclose` releases that owner.
+#[test]
+fn test_stream_context_registry_fopen_attachment_releases_on_close() {
+    let baseline = compile_and_run_with_gc_stats(
+        r#"<?php
+stream_context_get_default();
+function exercise_unattached_context(int $index): void {
+    $context = stream_context_create(
+        ["http" => ["method" => "POST", "header" => "X-Test: " . $index]],
+        ["notification" => function ($code) use ($index) { echo ""; }],
+    );
+    unset($context);
+    $stream = fopen("php://memory", "r+");
+    fwrite($stream, "x");
+    fclose($stream);
+    unset($stream);
+}
+
+for ($index = 0; $index < 32; $index++) {
+    exercise_unattached_context($index);
+}
+echo "done";
+"#,
+    );
+    assert!(baseline.success, "baseline failed: {}", baseline.stderr);
+    assert_eq!(baseline.stdout, "done");
+
+    let exercised = compile_and_run_with_gc_stats(
+        r#"<?php
+stream_context_get_default();
+function exercise_attached_context(int $index): void {
+    $context = stream_context_create(
+        ["http" => ["method" => "POST", "header" => "X-Test: " . $index]],
+        ["notification" => function ($code) use ($index) { echo ""; }],
+    );
+    $stream = fopen("php://memory", "r+", false, $context);
+    unset($context);
+    fwrite($stream, "x");
+    fclose($stream);
+    unset($stream);
+}
+
+for ($index = 0; $index < 32; $index++) {
+    exercise_attached_context($index);
+}
+echo "done";
+"#,
+    );
+    assert!(exercised.success, "program failed: {}", exercised.stderr);
+    assert_eq!(exercised.stdout, "done");
+
+    let (baseline_allocs, baseline_frees) = parse_gc_stats(&baseline.stderr);
+    let (context_allocs, context_frees) = parse_gc_stats(&exercised.stderr);
+    assert_eq!(
+        context_allocs.saturating_sub(context_frees),
+        baseline_allocs.saturating_sub(baseline_frees),
+        "destroying the stream must release its attached context without adding persistent live children"
+    );
+}

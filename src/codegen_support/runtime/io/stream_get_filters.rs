@@ -106,6 +106,7 @@ fn emit_stream_get_filters_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_array_push_str");                            // append the name; rax = possibly grown array
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                         // save the updated array pointer
     emitter.label("__rt_sgf_next_x");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");                        // reload the slot index: rcx is caller-saved and __rt_array_push_str may clobber it
     emitter.instruction("inc rcx");                                             // advance to the next slot
     emitter.instruction("mov QWORD PTR [rbp - 24], rcx");                        // save the updated slot index
     emitter.instruction("jmp __rt_sgf_loop_x");                                 // continue scanning

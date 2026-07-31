@@ -849,19 +849,32 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fgc_url_slash\n_fgc_url_slash:\n    .ascii \"/\"\n");
     out.push_str(".comm _https_resp_buf, 1048576, 3\n");
     out.push_str(".comm _fsockopen_addr, 512, 3\n");
-    // _user_wrappers: USER_WRAPPER_REGISTRATIONS_CAP = 64 scheme→class
-    // registrations, each entry 32 bytes (protocol_ptr/len + class_ptr/len).
-    // Slot is free when protocol_ptr is null. 64 × 32 = 2048 bytes.
-    out.push_str(".comm _user_wrappers, 2048, 3\n");
+    // _user_wrappers_ptr: heap base of the scheme→class registration table, or
+    // zero before the first registration. Each entry is 32 bytes
+    // (protocol_ptr/len + class_ptr/len); a slot is free when protocol_ptr is
+    // null. PHP imposes no limit on registered wrappers, so the table grows by
+    // doubling through `__rt_user_wrappers_reserve` instead of exposing a fixed
+    // capacity — Gate 1 forbids PHP-visible fixed capacities.
+    out.push_str(".comm _user_wrappers_ptr, 8, 3\n");
+    // _user_wrappers_cap: number of allocated 32-byte slots, zero until the
+    // table is first reserved. Every scan bounds itself on this value.
+    out.push_str(".comm _user_wrappers_cap, 8, 3\n");
     // Registration flags are definition-scoped and copied into each StreamState
     // at open time, so later unregister/reregister operations cannot mutate a
-    // live stream instance's STREAM_IS_URL behavior.
-    out.push_str(".comm _user_wrapper_flags, 512, 3\n");
-    // _user_wrapper_handles: USER_WRAPPER_HANDLES_CAP = 256 active stream-handle
-    // slots, each storing the wrapper object pointer keyed by synthetic fd
-    // `USER_WRAPPER_FD_BASE + slot_index`. Slot is free when the stored pointer
-    // is null. 256 slots × 8 bytes = 2048 bytes.
-    out.push_str(".comm _user_wrapper_handles, 2048, 3\n");
+    // live stream instance's STREAM_IS_URL behavior. Grown alongside
+    // _user_wrappers_ptr so slot indices stay aligned between the two.
+    out.push_str(".comm _user_wrapper_flags_ptr, 8, 3\n");
+    // _user_wrapper_handles_ptr: heap base of the active stream-handle table, or
+    // zero before the first wrapper stream is opened. Each 8-byte slot stores the
+    // wrapper object pointer keyed by synthetic fd `USER_WRAPPER_FD_BASE +
+    // slot_index`; a slot is free when the stored pointer is null. PHP places no
+    // limit on simultaneously open wrapper streams, so the table grows by
+    // doubling through `__rt_user_wrapper_handles_reserve` rather than exposing a
+    // fixed capacity — Gate 1 forbids PHP-visible fixed capacities.
+    out.push_str(".comm _user_wrapper_handles_ptr, 8, 3\n");
+    // _user_wrapper_handles_cap: number of allocated handle slots, zero until the
+    // table is first reserved.
+    out.push_str(".comm _user_wrapper_handles_cap, 8, 3\n");
     // _user_wrapper_drain_buf: 1 MiB accumulation buffer for the codegen-level
     // feof-gated read loop emitted by stream_get_contents on a wrapper fd.
     // Each fread chunk is copied here, building one contiguous result. Drains
@@ -906,6 +919,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _stream_default_context_handle: process/request-global owner of the
     // lazily allocated default ContextState registry handle.
     out.push_str(".comm _stream_default_context_handle, 8, 3\n");
+    // _stream_current_context_handle: borrowed handle selected by the active
+    // stream opener for user-wrapper `$this->context` injection.
+    out.push_str(".comm _stream_current_context_handle, 8, 3\n");
     // _http_resp_header_end: byte offset of the body start within
     // _http_resp_buf, set by __rt_http_open after the CRLFCRLF scan.
     out.push_str(".comm _http_resp_header_end, 8, 3\n");

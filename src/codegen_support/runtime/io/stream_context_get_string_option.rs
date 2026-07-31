@@ -15,7 +15,8 @@
 //! Key details:
 //! - Two nested `__rt_hash_get` calls walk the structure: outer hash
 //!   keyed by wrapper, sub-hash keyed by option name.
-//! - Non-string entries (any tag other than 1) are treated as missing.
+//! - Direct strings and strings boxed by `stream_context_set_option()` are
+//!   accepted; every other value shape is treated as missing.
 //! - The output addresses receive the raw ptr + len pair on hit; they
 //!   are left untouched on miss so callers can pre-load a fallback
 //!   default into them.
@@ -77,8 +78,15 @@ pub fn emit_get_string_context_option(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #24]");                                   // opt_len
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=lo, x2=hi, x3=tag
     emitter.instruction("cbz x0, __rt_gsco_miss");                              // branch when the checked value is zero or equal
-    emitter.instruction("cmp x3, #1");                                          // require string tag
-    emitter.instruction("b.ne __rt_gsco_miss");                                 // branch when the checked value is nonzero or different
+    emitter.instruction("cmp x3, #1");                                          // is this a direct string option?
+    emitter.instruction("b.eq __rt_gsco_write");                                // direct strings already expose pointer and length
+    emitter.instruction("cmp x3, #7");                                          // is the option stored as a boxed Mixed cell?
+    emitter.instruction("b.ne __rt_gsco_miss");                                 // every other option shape is not a string
+    emitter.instruction("mov x0, x1");                                          // pass the boxed option cell to Mixed unboxing
+    emitter.instruction("bl __rt_mixed_unbox");                                 // recover tag plus string pointer and length
+    emitter.instruction("cmp x0, #1");                                          // did the Mixed cell contain a string?
+    emitter.instruction("b.ne __rt_gsco_miss");                                 // boxed non-strings do not satisfy this lookup
+    emitter.label("__rt_gsco_write");
 
     // -- write (ptr, len) through the caller's output addresses --
     emitter.instruction("ldr x9, [sp, #32]");                                   // out_ptr_addr
@@ -138,8 +146,16 @@ fn emit_get_string_context_option_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=lo, rsi=hi, rcx=tag
     emitter.instruction("test rax, rax");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gsco_miss_x86");                               // branch when the checked value is zero or equal
-    emitter.instruction("cmp rcx, 1");                                          // compare runtime values for the next branch
-    emitter.instruction("jne __rt_gsco_miss_x86");                              // branch when the checked value is nonzero or different
+    emitter.instruction("cmp rcx, 1");                                          // is this a direct string option?
+    emitter.instruction("je __rt_gsco_write_x86");                              // direct strings already expose pointer and length
+    emitter.instruction("cmp rcx, 7");                                          // is the option stored as a boxed Mixed cell?
+    emitter.instruction("jne __rt_gsco_miss_x86");                              // every other option shape is not a string
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed option cell to Mixed unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // recover tag plus string pointer and length
+    emitter.instruction("cmp rax, 1");                                          // did the Mixed cell contain a string?
+    emitter.instruction("jne __rt_gsco_miss_x86");                              // boxed non-strings do not satisfy this lookup
+    emitter.instruction("mov rsi, rdx");                                        // normalize the unboxed string length to the direct lookup ABI
+    emitter.label("__rt_gsco_write_x86");
 
     // -- write through output addresses --
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // out_ptr_addr

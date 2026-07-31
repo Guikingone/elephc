@@ -33,3 +33,9 @@ mod stream_registry;
 mod stream_backend_registry;
 #[path = "runtime_gc/stream_context_registry.rs"]
 mod stream_context_registry;
+#[path = "runtime_gc/stream_filter_registry.rs"]
+mod stream_filter_registry;
+#[path = "runtime_gc/stream_tls_registry.rs"]
+mod stream_tls_registry;
+#[path = "runtime_gc/user_wrapper_registry.rs"]
+mod user_wrapper_registry;

@@ -522,7 +522,7 @@ pub(crate) fn emit_runtime_data_user(
     out.push_str("    .quad 0\n");
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _user_wrapper_vtable_missing\n_user_wrapper_vtable_missing:\n");
-    for _ in 0..USER_WRAPPER_VTABLE_SLOTS {
+    for _ in 0..USER_WRAPPER_VTABLE_TOTAL_SLOTS {
         out.push_str("    .quad 0\n");
     }
     out.push_str("    .p2align 3\n");
@@ -2063,12 +2063,17 @@ fn class_uses_dynamic_property_tail(class_name: &str, class_info: &ClassInfo) ->
 /// 21 dir_closedir, 22 dir_rewinddir. Slots whose dispatch is not yet wired are
 /// still emitted (zero when the class does not declare the method); the runtime
 /// only reaches a slot when the corresponding builtin routes to it.
-/// Each slot is either a method-symbol pointer (when the class declares the
-/// method publicly) or zero. The stat methods must be declared WITHOUT a
-/// return type (or `: mixed`) so their associative stat array round-trips as a
-/// boxed Mixed cell — a `: array` return is integer-keyed and rejects the
-/// string keys (`size`, `mode`, ...) PHP stat arrays use.
+/// Each method slot is either a method-symbol pointer (when the class declares
+/// the method publicly) or zero. Slot 23 stores the byte offset of a `mixed`
+/// `context` property for PHP's user-wrapper context injection. The stat
+/// methods must be declared WITHOUT a return type (or `: mixed`) so their
+/// associative stat array round-trips as a boxed Mixed cell — a `: array`
+/// return is integer-keyed and rejects the string keys (`size`, `mode`, ...)
+/// PHP stat arrays use.
 pub(crate) const USER_WRAPPER_VTABLE_SLOTS: usize = 23;
+
+/// Wrapper method slots plus the `context` property-offset metadata slot.
+const USER_WRAPPER_VTABLE_TOTAL_SLOTS: usize = USER_WRAPPER_VTABLE_SLOTS + 1;
 
 /// The number of fixed-slot stream-filter methods recorded per class in
 /// `_user_filter_vtable_<class_id>` (Phase 10 tier 3). Slot order:
@@ -2224,6 +2229,16 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
             out.push_str("    .quad 0\n");
         }
     }
+    let context_offset = class_info
+        .properties
+        .iter()
+        .find(|(property, php_type)| {
+            property == "context" && matches!(php_type, PhpType::Mixed)
+        })
+        .and_then(|(property, _)| class_info.property_offsets.get(property))
+        .copied()
+        .unwrap_or(0);
+    out.push_str(&format!("    .quad {}\n", context_offset));
 }
 
 /// Emits the per-class callable-method name table and count for __invoke support.

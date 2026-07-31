@@ -71,6 +71,7 @@ mod tests {
         assert_eq!(layout::RESOURCE_SLOT_SIZE, 64);
         assert_eq!(layout::STREAM_STATE_SIZE, 320);
         assert_eq!(layout::STREAM_FD_OFFSET, 16);
+        assert_eq!(layout::STREAM_CONTEXT_HANDLE_OFFSET, 80);
         assert_eq!(layout::CONTEXT_STATE_SIZE, 32);
         assert_eq!(layout::CONTEXT_OPTIONS_OFFSET, 0);
         assert_eq!(layout::CONTEXT_PARAMS_OFFSET, 8);
@@ -105,6 +106,51 @@ mod tests {
             assert!(
                 options < notifier && notifier < state,
                 "{target:?} emitted ContextState teardown out of order"
+            );
+        }
+    }
+
+    /// Verifies request reset clears borrowed bridges, destroys streams first, then drops the default context owner.
+    #[test]
+    fn request_reset_preserves_contexts_until_stream_teardown_finishes() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_resource_runtime(&mut emitter);
+            let asm = emitter.output();
+            let reset = &asm[asm
+                .find("__rt_resource_registry_request_reset:")
+                .expect("request reset label")..asm
+                .find("__rt_resource_mark_closing:")
+                .expect("next resource helper label")];
+            let options = reset
+                .find("_stream_context_options")
+                .expect("borrowed options bridge clear");
+            let notifier = reset
+                .find("_stream_notification_callback")
+                .expect("borrowed notifier bridge clear");
+            let current = reset
+                .find("_stream_current_context_handle")
+                .expect("borrowed wrapper context clear");
+            let stream_phase = reset
+                .find("__rt_resource_registry_request_reset_kind_ready")
+                .expect("stream-kind phase guard");
+            let default_context = reset
+                .find("_stream_default_context_handle")
+                .expect("default context owner detach");
+            let epoch = reset
+                .find("_resource_registry_epoch")
+                .expect("request epoch advance");
+            assert!(
+                options < notifier
+                    && notifier < current
+                    && current < stream_phase
+                    && stream_phase < default_context
+                    && default_context < epoch,
+                "{target:?} emitted request reset phases out of order"
             );
         }
     }

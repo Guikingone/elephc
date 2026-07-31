@@ -21,7 +21,7 @@ mod exceptions;
 mod fibers;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
-mod io;
+pub(crate) mod io;
 mod objects;
 mod pointers;
 mod resource_ids;
