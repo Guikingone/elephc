@@ -3023,6 +3023,8 @@ $a = [1, 2, 3];
 echo count($a), "\n";
 $h = ['x' => 1, 'y' => 2];
 echo count($h), "\n";
+$e = [];
+echo array_is_list($a) ? "list" : "not", "|", array_is_list($e) ? "list" : "not", "\n";
 "#,
     )
     .unwrap();
@@ -3079,6 +3081,7 @@ process.exitCode = wasi.start(instance);
         "0|0|0|0\n",
         "3\n",
         "2\n",
+        "list|list\n",
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
     assert!(

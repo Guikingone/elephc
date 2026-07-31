@@ -220,7 +220,7 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             &["codegen_wasm::closures::tests::array_reduce_lowering_boxes_mixed_result"][..],
         ),
         RuntimeFnId::Abs | RuntimeFnId::Floor | RuntimeFnId::Ceil | RuntimeFnId::Sqrt
-        | RuntimeFnId::Count => (
+        | RuntimeFnId::Count | RuntimeFnId::ArrayIsList => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
             &[

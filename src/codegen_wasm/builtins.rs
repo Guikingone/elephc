@@ -86,6 +86,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Ceil
             | RuntimeFnId::Sqrt
             | RuntimeFnId::Count
+            | RuntimeFnId::ArrayIsList
     )
 }
 
@@ -97,6 +98,9 @@ pub(super) fn direct_builtin_shape_issue(
 ) -> Option<String> {
     if target == RuntimeFnId::Count {
         return count_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::ArrayIsList {
+        return array_is_list_shape_issue(function, call);
     }
     let [operand] = call.operands.as_slice() else {
         return Some(format!(
@@ -184,6 +188,9 @@ pub(super) fn lower_direct_builtin(
     if target == RuntimeFnId::Count {
         return lower_count(ctx, inst);
     }
+    if target == RuntimeFnId::ArrayIsList {
+        return lower_array_is_list(ctx, inst);
+    }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
     let Some((_, instruction)) = direct_builtin(target, &operand_php) else {
@@ -218,6 +225,57 @@ fn lower_int_abs(ctx: &mut FnCtx, inst: &Instruction, argument: crate::ir::Value
     ctx.fb.ins("i64.xor", "conditionally invert the argument");
     ctx.fb.ins(&format!("local.get {}", mask), "the sign mask again");
     ctx.fb.ins("i64.sub", "add one back for a negative argument");
+    store_result(ctx, inst)
+}
+
+/// Validates `array_is_list($array)` against the one operand whose answer is known statically.
+///
+/// This backend's `Heap(Array)` IS the contiguous representation: its keys are `0..n-1` in order
+/// by construction, which is exactly PHP's definition of a list, and an empty array qualifies.
+/// A `Heap(Hash)` carries arbitrary keys and would need a real scan, so it is refused rather
+/// than answered from the representation.
+fn array_is_list_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected one array operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("array operand is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::Heap(IrHeapKind::Array)
+        || !matches!(value.php_type.codegen_repr(), PhpType::Array(_))
+    {
+        return Some(format!(
+            "expected a statically typed indexed array, got {:?}/{:?}",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::I64
+        || call.result_php_type.codegen_repr() != PhpType::Bool
+    {
+        return Some(format!(
+            "result {:?}/{:?} is not the expected I64/Bool",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Lowers `array_is_list($indexed)` to the constant true its representation guarantees.
+///
+/// The operand is still evaluated and dropped: it may be a call whose side effects PHP performs
+/// before answering, and discarding the expression rather than the value would skip them.
+fn lower_array_is_list(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb
+        .ins("drop", "the answer follows from the representation, not the contents");
+    ctx.fb
+        .ins("i64.const 1", "an indexed array is a list by construction");
     store_result(ctx, inst)
 }
 
@@ -331,6 +389,29 @@ mod tests {
             PhpType::Int,
         );
         assert_eq!(verdict(&counted, RuntimeFnId::Count), None);
+        let listed = call_with(
+            RuntimeFnId::ArrayIsList,
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+            IrType::I64,
+            PhpType::Bool,
+        );
+        assert_eq!(verdict(&listed, RuntimeFnId::ArrayIsList), None);
+        let hashed = call_with(
+            RuntimeFnId::ArrayIsList,
+            IrType::Heap(IrHeapKind::Hash),
+            PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(PhpType::Int),
+            },
+            IrType::I64,
+            PhpType::Bool,
+        );
+        assert!(
+            verdict(&hashed, RuntimeFnId::ArrayIsList).is_some(),
+            "a hash needs a real scan, not an answer from the representation"
+        );
+
         let scalar_count = call_with(
             RuntimeFnId::Count,
             IrType::I64,

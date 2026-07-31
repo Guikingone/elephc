@@ -4447,7 +4447,8 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Floor
         | RuntimeFnId::Ceil
         | RuntimeFnId::Sqrt
-        | RuntimeFnId::Count => true,
+        | RuntimeFnId::Count
+        | RuntimeFnId::ArrayIsList => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4467,7 +4468,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayIntersect
         | RuntimeFnId::ArrayIntersectAssoc
         | RuntimeFnId::ArrayIntersectKey
-        | RuntimeFnId::ArrayIsList
         | RuntimeFnId::ArrayKeyExists
         | RuntimeFnId::ArrayKeyFirst
         | RuntimeFnId::ArrayKeyLast
