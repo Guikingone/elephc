@@ -513,10 +513,42 @@ fn emit_var_dump_resource(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"resource(");
     abi::emit_pop_reg(ctx.emitter, result_reg);
+    // Retain a second copy of the handle: the id lookup consumes it, but the
+    // type label needs the registry kind. The label used to be a hardcoded
+    // "stream", so a context printed `of type (stream)` where PHP prints
+    // `of type (stream-context)` — even though `get_resource_type()` was right.
+    abi::emit_push_reg(ctx.emitter, result_reg);
     abi::emit_call_label(ctx.emitter, "__rt_resource_id_of");
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     emit_write_current_string(ctx);
-    emit_write_literal(ctx, b") of type (stream)\n");
+    emit_write_literal(ctx, b") of type (");
+    abi::emit_pop_reg(ctx.emitter, result_reg);
+    let context_label = ctx.next_label("var_dump_resource_context");
+    let done_label = ctx.next_label("var_dump_resource_type_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+            ctx.emitter.instruction("cmp x0, #2");                              // registry kind 2 identifies stream contexts
+            ctx.emitter.instruction(&format!("b.eq {}", context_label));        // contexts use PHP's stream-context label
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the handle to registry kind lookup
+            abi::emit_call_label(ctx.emitter, "__rt_resource_kind_if_open");
+            ctx.emitter.instruction("cmp rax, 2");                              // registry kind 2 identifies stream contexts
+            ctx.emitter.instruction(&format!("je {}", context_label));          // contexts use PHP's stream-context label
+        }
+    }
+    // A closed or stale handle reports kind 0 and keeps the plain stream label,
+    // matching the existing var_dump behaviour for released descriptors.
+    emit_write_literal(ctx, b"stream");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
+    }
+    ctx.emitter.label(&context_label);
+    emit_write_literal(ctx, b"stream-context");
+    ctx.emitter.label(&done_label);
+    emit_write_literal(ctx, b")\n");
     Ok(())
 }
 
