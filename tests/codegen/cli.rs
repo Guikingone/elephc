@@ -1644,6 +1644,65 @@ unset($values[$key]);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `declare(strict_types=1)` suppresses PHP's scalar argument coercions.
+///
+/// PHP performs no scalar coercion at a typed parameter under strict typing, with one
+/// documented exception: an `int` argument still widens to a `float` parameter. Without
+/// the directive the same calls are legal coercive conversions. Verified against the
+/// pinned php-src CLIs, which raise `TypeError` for exactly the rejected pairs.
+#[test]
+fn test_cli_strict_types_refuses_scalar_argument_coercion() {
+    let dir = make_cli_test_dir("elephc_cli_strict_types_coercion");
+
+    // (parameter type, argument, admitted under strict typing)
+    let cases = [
+        ("int", "true", false),
+        ("float", "true", false),
+        ("bool", "1", false),
+        ("float", "1", true),
+        ("int", "1", true),
+    ];
+
+    for (param_ty, argument, strict_admits) in cases {
+        for strict in [false, true] {
+            let declare = if strict { "declare(strict_types=1);" } else { "" };
+            let php_path = dir.join("main.php");
+            fs::write(
+                &php_path,
+                format!(
+                    "<?php\n{declare}\nfunction sink({param_ty} $x): {param_ty} {{ return $x; }}\necho sink({argument});\n"
+                ),
+            )
+            .unwrap();
+
+            let output = elephc_cli_command(&dir)
+                .arg("--check")
+                .arg(&php_path)
+                .output()
+                .expect("failed to type-check the coercion fixture");
+
+            // Coercive mode admits every pair; strict mode admits only widening.
+            let expected = !strict || strict_admits;
+            assert_eq!(
+                output.status.success(),
+                expected,
+                "strict={strict} {param_ty} <- {argument}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            if !expected {
+                assert!(
+                    String::from_utf8_lossy(&output.stderr)
+                        .contains("strict_types=1 performs no coercion"),
+                    "strict={strict} {param_ty} <- {argument} must name the cause: {}",
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }
+        }
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies the explicit `(int)` float cast matches each pinned php-src profile.
 ///
 /// Requirement H (`PHP-WASM-NUM-004`). The value is PHP's modulo-2^64 result on every
