@@ -202,7 +202,17 @@ impl Checker {
                     // read `$u`). `or_insert` only DEFINES a currently-undefined variable — it never
                     // overwrites an existing type, so the flow-sensitive narrowing threaded through
                     // `chain_env` for variables that already existed does not leak to the outer scope.
+                    //
+                    // Synthetic narrowing keys are the exception that argument does not cover: a
+                    // member-path fact (`\x01prop\x01$this->application`) is absent from the outer
+                    // environment *by construction*, so `or_insert` would INSERT it and the chain's
+                    // narrowing would outlive the `if` it was proved in — the statement checker's
+                    // save/restore then faithfully restores the already-leaked type. Skip them; a
+                    // genuine member fact is re-derived per branch by `guard_narrowing`.
                     for (var, ty) in chain_env {
+                        if Self::is_synthetic_narrowing_key(&var) {
+                            continue;
+                        }
                         env.entry(var).or_insert(ty);
                     }
                     Ok(PhpType::Bool)

@@ -110,3 +110,148 @@ fn test_and_narrowing_does_not_leak_past_chain() {
          }",
     );
 }
+
+/// Reaching the body of an `if (A || B)` proves at least one disjunct true, so a binding EVERY
+/// disjunct constrains takes the union of their guard-true types. `Cc` is ruled out, so `$v->n` —
+/// declared on `Aa` and `Bb` but not on `Cc` — resolves. Before this narrowing existed the union
+/// stayed `Aa|Bb|Cc` and the access reported "Undefined property: Cc::n".
+#[test]
+fn test_or_chain_body_narrows_to_union_of_disjuncts() {
+    expect_ok(
+        "<?php \
+         class Aa { public string $n = 'A'; } \
+         class Bb { public string $n = 'B'; } \
+         class Cc { public string $z = 'C'; } \
+         function good(Aa|Bb|Cc $v): string { \
+             if ($v instanceof Aa || $v instanceof Bb) { return $v->n; } \
+             return 'cc'; \
+         }",
+    );
+}
+
+/// The `||` body union is admitted only when EVERY disjunct constrains the binding. Here the second
+/// disjunct is an unrelated boolean, so reaching the body proves nothing about `$v` and the access
+/// must still be rejected against the full declared union.
+#[test]
+fn test_or_chain_body_narrowing_requires_every_disjunct() {
+    expect_error(
+        "<?php \
+         class Aa { public string $n = 'A'; } \
+         class Bb { public string $other = 'B'; } \
+         function bad(Aa|Bb $v, bool $ok): string { \
+             if ($ok || $v instanceof Aa) { return $v->n; } \
+             return 'x'; \
+         }",
+        "Undefined property: Bb::n",
+    );
+}
+
+/// Falling past an `if (A && B)` proves `!A || !B`, representable here because both conjuncts
+/// constrain `$s`: the fall-through type is `Sess|null`, so the later `null` test leaves `Sess` and
+/// `$s->tag` resolves. This is Symfony `Request::getSession`'s shape. Before the `&&` complement
+/// existed `$s` rejoined to its declared `Sess|Other|null` and the access reported
+/// "Undefined property: Other::tag".
+#[test]
+fn test_and_chain_fall_through_narrows_when_every_conjunct_constrains() {
+    expect_ok(
+        "<?php \
+         class Sess { public string $tag = 'S'; } \
+         class Other { public string $other = 'O'; } \
+         function pick(Sess|Other|null $s): string { \
+             if (!$s instanceof Sess && null !== $s) { return 'other'; } \
+             if ($s === null) { return 'null'; } \
+             return $s->tag; \
+         }",
+    );
+}
+
+/// The `&&` fall-through complement is admitted only when EVERY conjunct constrains the binding.
+/// `$flag` constrains nothing, so `$s` keeps its declared union past the `if`.
+#[test]
+fn test_and_chain_fall_through_narrowing_requires_every_conjunct() {
+    expect_error(
+        "<?php \
+         class Sess { public string $tag = 'S'; } \
+         class Other { public string $other = 'O'; } \
+         function bad(Sess|Other|null $s, bool $flag): string { \
+             if (!$s instanceof Sess && $flag) { return 'x'; } \
+             return $s->tag; \
+         }",
+        "Undefined property: Other::tag",
+    );
+}
+
+/// A chain complement may persist past the `if` only when no clause falls through. Here the body
+/// falls through, so the path that ran it also reaches the following statement and `$s` must rejoin
+/// to its declared union.
+#[test]
+fn test_and_chain_complement_dropped_when_body_falls_through() {
+    expect_error(
+        "<?php \
+         class Sess { public string $tag = 'S'; } \
+         class Other { public string $other = 'O'; } \
+         function bad(Sess|Other|null $s): string { \
+             if (!$s instanceof Sess && null !== $s) { echo 'other'; } \
+             return $s->tag; \
+         }",
+        "Undefined property: Other::tag",
+    );
+}
+
+/// A chain complement marks the construct as having applied a guard, which makes the post-`if`
+/// restore keep the accumulated complement for an else-less chain whose every clause diverges.
+/// This is the all-diverging shape: clause 1 contributes the `&&` complement, clause 2 diverges
+/// without constraining anything, and `$s->tag` past the chain must see `Sess`.
+#[test]
+fn test_all_diverging_chain_keeps_accumulated_complement() {
+    expect_ok(
+        "<?php \
+         class Sess { public string $tag = 'S'; } \
+         class Other { public string $other = 'O'; } \
+         function f(Sess|Other|null $s, int $n): string { \
+             if (!$s instanceof Sess && null !== $s) { return 'a'; } \
+             elseif ($n < 0) { return 'b'; } \
+             if ($s === null) { return 'null'; } \
+             return $s->tag; \
+         }",
+    );
+}
+
+/// Keeping the complement skips the post-`if` restore loop wholesale, so this pins that nothing
+/// ELSE leaks through the skipped restore. `$t` is narrowed to `Aa` only inside clause 2's body by
+/// the `&&` then-side; that narrowing is undone at the body's end and must not survive, because a
+/// chain where only one conjunct constrains `$t` proves nothing about it on the fall-through edge.
+#[test]
+fn test_all_diverging_chain_does_not_leak_then_side_narrowing() {
+    expect_error(
+        "<?php \
+         class Sess { public string $tag = 'S'; } \
+         class Other { public string $other = 'O'; } \
+         class Aa { public string $n = 'A'; } \
+         class Bb { public string $z = 'B'; } \
+         function h(Sess|Other|null $s, Aa|Bb $t, bool $flag): string { \
+             if (!$s instanceof Sess && null !== $s) { return 'a'; } \
+             elseif ($t instanceof Aa && $flag) { return 'b'; } \
+             if ($s === null) { return 'n'; } \
+             return $s->tag . $t->n; \
+         }",
+        "Undefined property: Bb::n",
+    );
+}
+
+/// The De Morgan complement of a diverging single-clause `if (A || B)` is applied exactly once.
+/// The clause loop now persists it on the fall-through edge, and the post-join single-clause block
+/// that used to do the same work is suppressed, so the disjuncts' guard-false types are never
+/// derived a second time against an already-narrowed environment. `$x` is `Foo` after the `if`.
+#[test]
+fn test_or_chain_diverging_complement_applied_once() {
+    expect_ok(
+        "<?php \
+         class Foo { public string $name = 'F'; } \
+         class Bar { public string $other = 'B'; } \
+         function f(Foo|Bar|null $x, bool $b): string { \
+             if (!$x instanceof Foo || $b) { return 'a'; } \
+             return $x->name; \
+         }",
+    );
+}

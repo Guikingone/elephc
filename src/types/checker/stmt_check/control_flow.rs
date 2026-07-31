@@ -122,6 +122,19 @@ fn collect_condition_assigned_vars(cond: &Expr, out: &mut Vec<String>) {
     }
 }
 
+/// Records a variable's pre-`if` type the first time the chain touches it, so the post-`if`
+/// restore (and the branch-union join) has the un-narrowed type to fall back to. Later touches are
+/// ignored: by then `env` already carries an accumulated complement from an earlier clause.
+fn remember_pre_if_type(
+    saved_vars: &mut Vec<(String, Option<PhpType>)>,
+    var: &str,
+    env: &TypeEnv,
+) {
+    if !saved_vars.iter().any(|(existing, _)| existing == var) {
+        saved_vars.push((var.to_string(), env.get(var).cloned()));
+    }
+}
+
 /// Returns true when `ty` carries an object member: an `Object`, or a union with an object member.
 /// The post-`if` branch-union join is scoped to object-bearing variables because the dead-member
 /// staleness it fixes is an object member-access concern; a scalar/`Mixed` local (e.g. an
@@ -462,6 +475,11 @@ impl Checker {
                 // so each one can be restored after the construct.
                 let mut saved_vars: Vec<(String, Option<PhpType>)> = Vec::new();
                 let mut applied_any_guard = false;
+                // Set when the clause loop already persisted a top-level `||` condition's De Morgan
+                // complement on the fall-through edge, so the single-clause block after the join
+                // does not apply the same narrowing a second time against an already-narrowed
+                // environment.
+                let mut or_complement_applied = false;
                 let track_single_guard_convergence =
                     clauses.len() == 1 && else_body.is_none();
                 let mut single_guard_then_exit: Option<(String, PhpType, bool)> = None;
@@ -505,9 +523,7 @@ impl Checker {
                     if let Some(guard) = self.guard_narrowing(cond, env)? {
                         applied_any_guard = true;
                         // Remember the variable's pre-`if` type the first time we narrow it.
-                        if !saved_vars.iter().any(|(v, _)| v == &guard.var) {
-                            saved_vars.push((guard.var.clone(), env.get(&guard.var).cloned()));
-                        }
+                        remember_pre_if_type(&mut saved_vars, &guard.var, env);
 
                         // Check the guarded body with the "then" type.
                         let saved = env.get(&guard.var).cloned();
@@ -564,15 +580,18 @@ impl Checker {
                         }
                     } else {
                         // A pure `&&` condition can prove several independent facts in its
-                        // true branch. Its false-side complement is disjunctive and cannot be
-                        // represented by this environment, so narrow only while checking the
-                        // body and leave the fallthrough environment unchanged.
+                        // true branch. Its false-side complement is a disjunction, which this
+                        // environment can represent only when every conjunct constrains the same
+                        // binding (`and_chain_else_narrowings`); a top-level `||` condition
+                        // contributes its De Morgan complement to the same fall-through edge.
+                        // Anything else leaves the fall-through environment unchanged.
                         let narrowings = self.and_chain_then_narrowings(cond, env);
                         let saved: Vec<(String, Option<PhpType>)> = narrowings
                             .iter()
                             .map(|(var, _)| (var.clone(), env.get(var).cloned()))
                             .collect();
                         for (var, then_ty) in &narrowings {
+                            remember_pre_if_type(&mut saved_vars, var, env);
                             env.insert(var.clone(), then_ty.clone());
                         }
                         let (body_errors, overwrites, final_assignment) =
@@ -594,6 +613,22 @@ impl Checker {
                         }
                         for (var, original) in &saved {
                             restore_narrowed_var(env, var, original);
+                        }
+                        // Falling past this clause proves its condition false. A `&&` chain whose
+                        // conjuncts all constrain one binding, and a top-level `||` chain, both
+                        // have a false edge this environment can represent, so persist it for the
+                        // remaining clauses, the `else` body, and — when no clause falls through —
+                        // the statements after the `if`.
+                        let mut complements = self.and_chain_else_narrowings(cond, env);
+                        let or_complements = self.or_chain_complement_narrowings(cond, env);
+                        or_complement_applied |= !or_complements.is_empty();
+                        complements.extend(or_complements);
+                        if !complements.is_empty() {
+                            applied_any_guard = true;
+                        }
+                        for (var, else_ty) in complements {
+                            remember_pre_if_type(&mut saved_vars, &var, env);
+                            env.insert(var, else_ty);
                         }
                     }
                 }
@@ -758,8 +793,16 @@ impl Checker {
                 // afterward. Gated on a body that cannot fall through (the only way past the `if` is
                 // with the condition false) and on there being no elseif/else clause — a
                 // fall-through clause would leave another path to the following code.
+                //
+                // Skipped when the clause loop already persisted the same complement: with no
+                // `elseif` the loop's only clause *is* this `if`, so re-deriving the disjuncts'
+                // guard-false facts here would run them against an environment they have already
+                // narrowed. That second pass is not guaranteed to be a no-op — a guard whose
+                // false type is computed from the receiver's current type would be applied twice —
+                // so the duplicate is removed rather than assumed idempotent.
                 if else_body.is_none()
                     && elseif_clauses.is_empty()
+                    && !or_complement_applied
                     && self.body_cannot_fall_through(then_body)
                 {
                     for (var, then_ty) in self.or_chain_complement_narrowings(condition, env) {

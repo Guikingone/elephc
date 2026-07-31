@@ -258,13 +258,24 @@ impl Checker {
         }
     }
 
+    /// Returns whether a `TypeEnv` key holds a synthetic narrowing fact rather than a PHP variable.
+    ///
+    /// Both `narrowed_property_env_key` and `narrowed_this_env_key` prefix their key with the
+    /// `\x01` sigil, which cannot occur in a PHP variable name. Every consumer that decides whether
+    /// an environment entry belongs to the variable namespace (purging member facts after a
+    /// potential mutation, surfacing a cloned chain environment back to an outer scope) shares this
+    /// one predicate so the two never drift apart.
+    pub(crate) fn is_synthetic_narrowing_key(key: &str) -> bool {
+        key.starts_with('\u{1}')
+    }
+
     /// Drops every synthetic property narrowing from the environment. Called after effects that
     /// may write a property (property assignments, any call — a callee can mutate the object),
     /// and at loop-body entry (a later iteration may observe an earlier iteration's write), so a
     /// stale narrowing never survives a potential mutation. Variable narrowings are unaffected —
     /// visible assignments already update those bindings directly.
     pub(crate) fn purge_property_narrowings(env: &mut TypeEnv) {
-        env.retain(|key, _| !key.starts_with('\u{1}'));
+        env.retain(|key, _| !Self::is_synthetic_narrowing_key(key));
     }
 
     /// Drops synthetic property narrowings rooted at one local variable after that local is
@@ -395,7 +406,15 @@ impl Checker {
             }
             match self.guard_narrowing(cond, env) {
                 Ok(Some(g)) => vec![(g.var, g.then_ty, false)],
-                Ok(None) | Err(_) => vec![],
+                // A `||` sub-condition is not a single guard, but its body edge still proves the
+                // union of its disjuncts' guard-true facts (`$v instanceof stdClass ||
+                // $v instanceof ArrayObject` inside a `&&` chain, as Yaml's `Inline::dump` writes
+                // it). Fold that union in as an ordinary chain fact.
+                Ok(None) | Err(_) => self
+                    .or_chain_then_narrowings(cond, env)
+                    .into_iter()
+                    .map(|(var, then_ty)| (var, then_ty, false))
+                    .collect(),
             }
         }
     }
@@ -430,6 +449,92 @@ impl Checker {
                 }
                 None => narrowings.push((guard.var, guard.else_ty)),
             }
+        }
+        narrowings
+    }
+
+    /// Collects the receiver narrowings that hold *inside* the body of an `if (A || B || …)`.
+    ///
+    /// The dual of [`Self::or_chain_complement_narrowings`]: reaching the body proves at least one
+    /// disjunct was true, so a binding's in-body type is the UNION of the guard-true facts its
+    /// disjuncts prove. A binding that only *some* disjuncts constrain gets no fact at all — the
+    /// remaining disjuncts leave it at its declared type, and unioning that back in would say
+    /// nothing. Returns an empty vector when the condition is not a top-level `||` chain, so a
+    /// caller may invoke it unconditionally.
+    ///
+    /// Conjunct/disjunct guards whose receiver is an in-condition assignment are refused: their
+    /// binding's value depends on which operands short-circuit, so a per-disjunct fact computed
+    /// against the pre-condition environment would not describe it.
+    pub(crate) fn or_chain_then_narrowings(
+        &mut self,
+        condition: &Expr,
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        if !matches!(&condition.kind, ExprKind::BinaryOp { op: BinOp::Or, .. }) {
+            return Vec::new();
+        }
+        let mut disjuncts: Vec<&Expr> = Vec::new();
+        collect_or_operands(condition, &mut disjuncts);
+        self.short_circuit_edge_narrowings(&disjuncts, env, true)
+    }
+
+    /// Collects the receiver narrowings that hold on the fall-through edge of an
+    /// `if (A && B && …)`.
+    ///
+    /// The dual of [`Self::and_chain_then_narrowings`]: the false edge of a `&&` chain is the
+    /// disjunction `!A || !B || …`, which this environment can represent only when every conjunct
+    /// constrains the SAME binding — then the fall-through type is the union of the per-conjunct
+    /// guard-false facts. `Request::getSession`'s `!$s instanceof S && null !== $s` is the shape
+    /// this recovers: falling through proves `$s` is either a `SessionInterface` or null, so the
+    /// callable arm the chain ruled out no longer survives the `if`. A binding that only some
+    /// conjuncts constrain gets no fact, leaving it at its pre-`if` type.
+    pub(crate) fn and_chain_else_narrowings(
+        &mut self,
+        condition: &Expr,
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        if !matches!(&condition.kind, ExprKind::BinaryOp { op: BinOp::And, .. }) {
+            return Vec::new();
+        }
+        let mut conjuncts: Vec<&Expr> = Vec::new();
+        collect_and_operands(condition, &mut conjuncts);
+        self.short_circuit_edge_narrowings(&conjuncts, env, false)
+    }
+
+    /// Unions the per-operand guard facts of a short-circuit chain into the facts that hold on the
+    /// edge reached when *any* operand decides the chain.
+    ///
+    /// `then_side` selects which half of each operand's guard to take: the guard-true type for the
+    /// `||` body edge, the guard-false type for the `&&` fall-through edge. Only a binding every
+    /// operand constrains yields a fact, because an unconstrained operand admits the binding's full
+    /// declared type. Each operand is evaluated against the chain's entry environment, so the
+    /// result is an over-approximation of the reachable states — sound for narrowing.
+    fn short_circuit_edge_narrowings(
+        &mut self,
+        operands: &[&Expr],
+        env: &TypeEnv,
+        then_side: bool,
+    ) -> Vec<(String, PhpType)> {
+        if !operands.iter().all(|operand| guard_receiver_is_stable_binding(operand)) {
+            return Vec::new();
+        }
+        let mut facts: Vec<(String, Vec<PhpType>)> = Vec::new();
+        for operand in operands {
+            let Ok(Some(guard)) = self.guard_narrowing(operand, env) else {
+                continue;
+            };
+            let edge_ty = if then_side { guard.then_ty } else { guard.else_ty };
+            match facts.iter().position(|(var, _)| *var == guard.var) {
+                Some(index) => facts[index].1.push(edge_ty),
+                None => facts.push((guard.var, vec![edge_ty])),
+            }
+        }
+        let mut narrowings = Vec::new();
+        for (var, members) in facts {
+            if members.len() != operands.len() {
+                continue;
+            }
+            narrowings.push((var, self.normalize_union_type(members)));
         }
         narrowings
     }
@@ -596,6 +701,45 @@ impl Checker {
             .and_then(|canonical| self.functions.get(&canonical))
             .map(|sig| sig.return_type == PhpType::Never)
             .unwrap_or(false)
+    }
+}
+
+/// Flattens a left-associative `&&` chain into its conjunct operands in source order. A non-`&&`
+/// expression is a single conjunct. Used to distribute De Morgan's law over the fall-through edge
+/// of an `if (A && B) {…}`.
+fn collect_and_operands<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+    if let ExprKind::BinaryOp {
+        left,
+        op: BinOp::And,
+        right,
+    } = &expr.kind
+    {
+        collect_and_operands(left, out);
+        collect_and_operands(right, out);
+    } else {
+        out.push(expr);
+    }
+}
+
+/// Returns whether a short-circuit operand's guard receiver is a stable binding rather than an
+/// in-condition assignment.
+///
+/// `guard_env_key` deliberately keys an assignment guard (`false === $parts = parse_url($dsn)`) on
+/// its assignment target, which is right for a single guard but wrong for a chain edge: whether
+/// that assignment ran at all depends on which earlier operand short-circuited, so a fact computed
+/// against the pre-chain environment would not describe the binding. An operand that is not a
+/// recognized guard at all is fine — it simply contributes no fact.
+fn guard_receiver_is_stable_binding(operand: &Expr) -> bool {
+    let inner = match &operand.kind {
+        ExprKind::Not(inner) => inner.as_ref(),
+        _ => operand,
+    };
+    if matches!(inner.kind, ExprKind::Assignment { .. }) {
+        return false;
+    }
+    match guard_receiver_and_type(inner) {
+        Some((receiver, _, _)) => !matches!(receiver.kind, ExprKind::Assignment { .. }),
+        None => true,
     }
 }
 
