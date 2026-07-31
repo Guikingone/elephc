@@ -1305,8 +1305,20 @@ fn lower_ftoi(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// Routes raw IEEE-754 bits through the centralized runtime helper so finite
 /// out-of-range values use PHP's modulo-2^64 result instead of WebAssembly's
 /// saturating conversion. The helper also maps NaN and infinities to zero.
+/// Under the PHP 8.5 profile the diagnosing variant runs instead: it emits the
+/// unrepresentable-float warning first and then returns the identical value.
 fn emit_float_to_php_int(ctx: &mut FnCtx) {
     ctx.fb.ins("i64.reinterpret_f64", "float bits for PHP int cast");
+    if matches!(
+        crate::codegen_support::compile_php_version(),
+        crate::web_prelude::PhpVersion::Php85
+    ) {
+        ctx.fb.ins(
+            "call $__rt_float_to_int_warn",
+            "apply PHP 8.5 float-to-int semantics with its diagnostic",
+        );
+        return;
+    }
     ctx.fb
         .ins("call $__rt_float_to_int", "apply PHP 64-bit float-to-int semantics");
 }

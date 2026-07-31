@@ -1594,12 +1594,10 @@ unset($values[$key]);
             "PHP {version} must reject diagnostic-sensitive float conversions"
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        assert!(
-            stderr.contains(
-                "float-to-int casts require exact profile-specific out-of-range diagnostics"
-            ),
-            "PHP {version}: {stderr}"
-        );
+        // The explicit `(int)` cast now carries its exact PHP 8.5 diagnostic and is
+        // admitted, so this fixture no longer produces a float-to-int issue. The
+        // implicit coercion stays rejected but the checker refuses it earlier, so no
+        // PHP source in this fixture can reach that capability message.
         assert!(
             stderr.contains(
                 "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
@@ -1641,6 +1639,97 @@ unset($values[$key]);
             !dir.join("main.wat").exists() && !dir.join("main.wasm").exists(),
             "PHP {version} rejection must publish no artifact"
         );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the explicit `(int)` float cast matches each pinned php-src profile.
+///
+/// Requirement H (`PHP-WASM-NUM-004`). The value is PHP's modulo-2^64 result on every
+/// profile, so `(int) 1.0e20` is the mandatory regression. The diagnostic is version
+/// dependent: PHP 8.5 alone warns, and only for values no integer can represent. That
+/// predicate is about range and finiteness, never integrality, so `1.9` stays silent
+/// on every profile while `NAN` and `INF` warn on 8.5.
+#[test]
+fn test_cli_wasm_explicit_float_to_int_cast_matches_php_profiles() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_float_to_int_cast");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function float_value(float $value): float {
+    return $value;
+}
+echo (int) float_value(1.0e20); echo "\n";
+echo (int) float_value(-1.0e20); echo "\n";
+echo (int) float_value(1.9); echo "\n";
+echo (int) float_value(-1.9); echo "\n";
+echo (int) float_value(NAN); echo "\n";
+echo (int) float_value(INF); echo "\n";
+"#,
+    )
+    .unwrap();
+
+    // Values are identical on every profile; only the diagnostics differ.
+    let expected_stdout =
+        "7766279631452241920\n-7766279631452241920\n1\n-1\n0\n0\n";
+    let warning = "is not representable as an int, cast occurred";
+
+    for version in ["8.2", "8.3", "8.4", "8.5"] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile the float cast to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} float cast compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the float cast under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} float cast trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected_stdout,
+            "PHP {version} float cast values must match php-src"
+        );
+
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        if version == "8.5" {
+            // 1.0e20, -1.0e20, NAN and INF are unrepresentable; 1.9 and -1.9 are not.
+            assert_eq!(
+                stderr.matches(warning).count(),
+                4,
+                "PHP {version} must warn once per unrepresentable value: {stderr}"
+            );
+            assert!(
+                stderr.contains("Warning: The float 1.0E+20 "),
+                "PHP {version} must render the float exactly as PHP prints it: {stderr}"
+            );
+        } else {
+            assert!(
+                stderr.is_empty(),
+                "PHP {version} must not diagnose the cast: {stderr}"
+            );
+        }
     }
 
     let _ = fs::remove_dir_all(&dir);

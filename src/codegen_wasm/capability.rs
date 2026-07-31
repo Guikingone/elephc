@@ -1052,9 +1052,10 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
         && source_php == PhpType::Float
         && target == IrType::I64
         && result_php == PhpType::Int
+        && !explicit
     {
         return Some(
-            "float-to-int casts require exact profile-specific out-of-range diagnostics"
+            "implicit float-to-int casts require exact profile-specific out-of-range diagnostics"
                 .to_string(),
         );
     }
@@ -1077,6 +1078,11 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
         }
         (IrType::I64, IrType::F64) => {
             source_php == PhpType::Int && result_php == PhpType::Float
+        }
+        // Only the explicit `(int)` cast is admitted: the implicit coercion is
+        // rejected above because its diagnostics differ from this one.
+        (IrType::F64, IrType::I64) => {
+            explicit && source_php == PhpType::Float && result_php == PhpType::Int
         }
         (IrType::Heap(IrHeapKind::Mixed), _) if exact_mixed_scalar => true,
         _ => false,
@@ -7611,9 +7617,11 @@ mod tests {
             assert!(cast_issue(&implicit).is_some());
         }
 
-        for immediate in [
-            Immediate::CastTarget(IrType::I64),
-            Immediate::ExplicitCastTarget(IrType::I64),
+        // The explicit `(int)` cast is admitted (its 8.5 diagnostic is implemented);
+        // the implicit coercion keeps its own, different diagnostics and stays out.
+        for (immediate, admitted) in [
+            (Immediate::CastTarget(IrType::I64), false),
+            (Immediate::ExplicitCastTarget(IrType::I64), true),
         ] {
             let mut function =
                 Function::new("float_cast_boundary".to_string(), IrType::Void, PhpType::Void);
@@ -7633,7 +7641,7 @@ mod tests {
                 );
                 builder.terminate(Terminator::Return { value: None });
             }
-            assert!(cast_issue(&function).is_some());
+            assert_eq!(cast_issue(&function).is_none(), admitted);
         }
     }
 

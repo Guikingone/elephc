@@ -79,6 +79,11 @@ const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
 const WARN_UNDEFINED_ARRAY_KEY_PREFIX: &[u8] = b"Warning: Undefined array key ";
 const WARN_QUOTE: &[u8] = b"\"";
 const WARN_SUFFIX: &[u8] = b"\n";
+/// PHP 8.5 alone diagnoses a float whose value no integer can represent. The
+/// rendered float sits between the two fragments, formatted by `__rt_ftoa`.
+const WARN_FLOAT_NOT_REPRESENTABLE_PREFIX: &[u8] = b"Warning: The float ";
+const WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX: &[u8] =
+    b" is not representable as an int, cast occurred\n";
 
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
@@ -109,7 +114,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_QUOTE.len() as u32
     + WARN_SUFFIX.len() as u32
     + crate::ir::ARRAY_OFFSET_ON_NULL_WARNING_PHP82.len() as u32
-    + crate::ir::ARRAY_OFFSET_ON_NULL_WARNING.len() as u32;
+    + crate::ir::ARRAY_OFFSET_ON_NULL_WARNING.len() as u32
+    + WARN_FLOAT_NOT_REPRESENTABLE_PREFIX.len() as u32
+    + WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -218,6 +225,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_SUFFIX,
         crate::ir::ARRAY_OFFSET_ON_NULL_WARNING_PHP82.as_bytes(),
         crate::ir::ARRAY_OFFSET_ON_NULL_WARNING.as_bytes(),
+        WARN_FLOAT_NOT_REPRESENTABLE_PREFIX,
+        WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -340,10 +349,12 @@ fn emit_undefined_array_key_warning_runtime(
     wm: &mut WatModule,
     offsets: &[(u32, u32)],
 ) {
-    debug_assert_eq!(offsets.len(), 5);
+    debug_assert_eq!(offsets.len(), 7);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (quote_ptr, quote_len) = offsets[1];
     let (suffix_ptr, suffix_len) = offsets[2];
+    let (float_prefix_ptr, float_prefix_len) = offsets[5];
+    let (float_suffix_ptr, float_suffix_len) = offsets[6];
     let (offset_on_null_ptr, offset_on_null_len) =
         if crate::codegen_support::runtime::array_offset_on_null_warning()
             == crate::ir::ARRAY_OFFSET_ON_NULL_WARNING_PHP82
@@ -374,6 +385,24 @@ fn emit_undefined_array_key_warning_runtime(
         r#"(func $__rt_warn_array_offset_on_null
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {offset_on_null_ptr}) (i32.const {offset_on_null_len})))"#
     ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_float_not_representable (param $bits i64)
+  (local $ptr i32) (local $len i32)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_prefix_ptr}) (i32.const {float_prefix_len}))  ;; "Warning: The float "
+  (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 768) (i32.add (global.get $__float_scratch) (i32.const 4096)))  ;; render the offending float exactly as PHP prints it
+  (local.set $len)                                                ;; ftoa returns (ptr, len): pop the length first
+  (local.set $ptr)                                                ;; then the pointer
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (local.get $len))  ;; the float text itself
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_suffix_ptr}) (i32.const {float_suffix_len})))  ;; " is not representable as an int, cast occurred\n""#
+    ));
+    if matches!(
+        crate::codegen_support::compile_php_version(),
+        crate::web_prelude::PhpVersion::Php85
+    ) {
+        // Registered here, not in `emit_float_runtime`: the diagnosing conversion
+        // depends on the warning helper above, which only command modules carry.
+        wm.add_raw_func(super::float::RT_FLOAT_TO_INT_WARN);
+    }
 }
 
 /// Repeatedly invokes WASI `fd_write` until every requested byte is written.

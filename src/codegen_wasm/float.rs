@@ -58,6 +58,31 @@ const RT_FLOAT_TO_INT: &str = r#"(func $__rt_float_to_int (param $bits i64) (res
     (else (i64.sub (i64.const 0) (local.get $magnitude)))))         ;; apply sign with wrapping subtraction
 "#;
 
+/// Converts raw binary64 bits to a PHP integer, diagnosing unrepresentable values.
+///
+/// PHP 8.5 alone warns when an explicit `(int)` cast cannot represent the float; 8.2
+/// through 8.4 are silent. Measured against the pinned php-src CLIs, the predicate is
+/// purely about range and finiteness — integrality plays no part, so `(int) 1.5e18`
+/// and `(int) 0.5` stay silent while `(int) 1.0e20` warns. The boundary is inclusive
+/// at `PHP_INT_MIN` and exclusive at 2^63, which is the first double above
+/// `PHP_INT_MAX`: `-9223372036854775808.0` is silent and one ulp below it warns.
+/// The returned value is always `__rt_float_to_int`'s, so warning never alters it.
+///
+/// Registered by the command runtime rather than `emit_float_runtime`, because it
+/// calls `__rt_warn_float_not_representable`, which only main-bearing modules carry.
+pub(super) const RT_FLOAT_TO_INT_WARN: &str =
+    r#"(func $__rt_float_to_int_warn (param $bits i64) (result i64)
+  (local $f f64)
+  (local.set $f (f64.reinterpret_i64 (local.get $bits)))          ;; inspect the value, not its bits
+  (if (i32.or
+        (f64.ne (local.get $f) (local.get $f))                    ;; NaN is never representable
+        (i32.or
+          (f64.lt (local.get $f) (f64.const -9223372036854775808))  ;; below PHP_INT_MIN (covers -INF)
+          (f64.ge (local.get $f) (f64.const 9223372036854775808)))) ;; at or above 2^63 (covers +INF)
+    (then (call $__rt_warn_float_not_representable (local.get $bits))))  ;; PHP 8.5 diagnostic
+  (call $__rt_float_to_int (local.get $bits)))                    ;; value is unaffected by the warning
+"#;
+
 /// Decomposes an IEEE-754 binary64 (raw i64 bits) into four results, in order:
 /// sign (i32 0/1), integer mantissa (i64), signed base-2 exponent (i32), and a class
 /// code (i32: 0 finite non-zero, 1 infinity, 2 NaN, 3 zero). Magnitude = mantissa *
