@@ -172,7 +172,11 @@ pub(super) fn extend_range_guards(guards: &mut GuardState, condition: &Expr, bra
 }
 
 /// Evaluates whether every integer in `interval` agrees on `op` against `n`.
-fn interval_entails_relational(interval: IntInterval, op: &BinOp, n: i64) -> Option<bool> {
+pub(super) fn interval_entails_relational(
+    interval: IntInterval,
+    op: &BinOp,
+    n: i64,
+) -> Option<bool> {
     match (interval.lo, interval.hi, op) {
         (Some(lo), Some(hi), _) if lo > hi => None,
         (Some(lo), Some(hi), op) if lo == hi => Some(match op {

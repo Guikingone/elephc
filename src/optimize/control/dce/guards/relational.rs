@@ -15,13 +15,11 @@
 
 use crate::parser::ast::{BinOp, Expr, ExprKind};
 
-use super::super::state::{
-    GuardLiteral, GuardState, IntInterval, RelOp, RelSide, RelationalGuard,
-};
+use super::super::state::{GuardLiteral, GuardState, RelOp, RelSide, RelationalGuard};
 use super::eval::known_exact_guard;
 use super::range::{
-    has_integer_domain, interval_from_relational, known_range_guard, record_exact_int_range,
-    record_range_guard,
+    has_integer_domain, interval_entails_relational, interval_from_relational, known_range_guard,
+    record_exact_int_range, record_range_guard,
 };
 
 /// Converts a tracked `BinOp` into a `RelOp`.
@@ -359,66 +357,7 @@ fn known_from_substituted_var_int(
             }
         }
         RelOp::Lt | RelOp::Le | RelOp::Gt | RelOp::Ge => {
-            interval_entails_for_rel(interval, op, n)
+            interval_entails_relational(interval, &binop_from_rel_op(op), n)
         }
-    }
-}
-
-/// Interval entailment for `RelOp` against an int literal (mirrors range.rs).
-fn interval_entails_for_rel(interval: IntInterval, op: RelOp, n: i64) -> Option<bool> {
-    match (interval.lo, interval.hi, op) {
-        (Some(lo), Some(hi), _) if lo > hi => None,
-        (Some(lo), Some(hi), op) if lo == hi => Some(match op {
-            RelOp::Lt => lo < n,
-            RelOp::Le => lo <= n,
-            RelOp::Gt => lo > n,
-            RelOp::Ge => lo >= n,
-            _ => return None,
-        }),
-        (Some(lo), Some(hi), RelOp::Lt) => {
-            if hi < n {
-                Some(true)
-            } else if lo >= n {
-                Some(false)
-            } else {
-                None
-            }
-        }
-        (Some(lo), Some(hi), RelOp::Le) => {
-            if hi <= n {
-                Some(true)
-            } else if lo > n {
-                Some(false)
-            } else {
-                None
-            }
-        }
-        (Some(lo), Some(hi), RelOp::Gt) => {
-            if lo > n {
-                Some(true)
-            } else if hi <= n {
-                Some(false)
-            } else {
-                None
-            }
-        }
-        (Some(lo), Some(hi), RelOp::Ge) => {
-            if lo >= n {
-                Some(true)
-            } else if hi < n {
-                Some(false)
-            } else {
-                None
-            }
-        }
-        (Some(lo), None, RelOp::Gt) if lo > n => Some(true),
-        (Some(lo), None, RelOp::Ge) if lo >= n => Some(true),
-        (Some(lo), None, RelOp::Lt) if lo >= n => Some(false),
-        (Some(lo), None, RelOp::Le) if lo > n => Some(false),
-        (None, Some(hi), RelOp::Lt) if hi < n => Some(true),
-        (None, Some(hi), RelOp::Le) if hi <= n => Some(true),
-        (None, Some(hi), RelOp::Gt) if hi <= n => Some(false),
-        (None, Some(hi), RelOp::Ge) if hi < n => Some(false),
-        _ => None,
     }
 }
