@@ -338,10 +338,6 @@ fn known_from_substituted_var_int(
             }
         }
         RelOp::Lt | RelOp::Le | RelOp::Gt | RelOp::Ge => {
-            use super::range::int_relational_guard;
-            // Rebuild a synthetic condition discharge via interval_entails through
-            // known_from_range by constructing a temporary expression.
-            let _ = int_relational_guard;
             interval_entails_for_rel(interval, op, n)
         }
     }
