@@ -59,6 +59,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_SUBSTR);
     wm.add_raw_func(RT_STR_REPEAT);
     wm.add_raw_func(RT_STR_FIND);
+    wm.add_raw_func(RT_STR_RFIND);
     wm.add_raw_func(RT_PAD_BYTE);
     wm.add_raw_func(RT_STR_PAD);
     wm.add_raw_func(RT_STR_REPLACE);
@@ -1758,6 +1759,27 @@ const RT_HTML_PUT: &str = r#"(func $__rt_html_put (param $out i32) (param $w i32
   (i32.add (local.get $w) (i32.const 5)))
 "#;
 
+/// `__rt_str_rfind`: the LAST index of a needle in a haystack, or -1 when it is absent.
+///
+/// Scanning runs from the last offset that could still fit the needle down to zero, so overlapping
+/// matches resolve to the rightmost one — `strrpos("aaa", "aa")` is 1, not 0. An empty needle
+/// starts the scan at `hlen` and matches immediately, which is why `strrpos("abcabc", "")` is 6:
+/// the position just past the end.
+const RT_STR_RFIND: &str = r#"(func $__rt_str_rfind (param $hptr i32) (param $hlen i64) (param $nptr i32) (param $nlen i64) (result i64)
+  (local $at i64)                                                 ;; candidate start offset
+  (if (i64.gt_s (local.get $nlen) (local.get $hlen))
+    (then (return (i64.const -1))))                               ;; cannot fit anywhere
+  (local.set $at (i64.sub (local.get $hlen) (local.get $nlen)))   ;; the rightmost offset that fits
+  (block $none (loop $scan
+    (if (i32.wrap_i64 (call $__rt_str_region_eq
+          (local.get $hptr) (local.get $nptr) (local.get $nlen) (local.get $at)))
+      (then (return (local.get $at))))                            ;; rightmost match wins
+    (br_if $none (i64.le_s (local.get $at) (i64.const 0)))         ;; offset zero was the last try
+    (local.set $at (i64.sub (local.get $at) (i64.const 1)))       ;; walk left
+    (br $scan)))
+  (i64.const -1))                                                 ;; absent
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -2029,6 +2051,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Substr
             | RuntimeFnId::StrRepeat
             | RuntimeFnId::Strpos
+            | RuntimeFnId::Strrpos
             | RuntimeFnId::Strstr
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrReplace
@@ -2110,7 +2133,7 @@ pub(super) fn direct_builtin_shape_issue(
     if target == RuntimeFnId::StrRepeat {
         return str_repeat_shape_issue(function, call);
     }
-    if target == RuntimeFnId::Strpos {
+    if matches!(target, RuntimeFnId::Strpos | RuntimeFnId::Strrpos) {
         return string_search_shape_issue(function, call, target);
     }
     if target == RuntimeFnId::Strstr {
@@ -2323,6 +2346,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Strpos {
         return lower_string_search(ctx, inst);
+    }
+    if target == RuntimeFnId::Strrpos {
+        return lower_string_rsearch(ctx, inst);
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);
@@ -2800,6 +2826,36 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         ctx.fb.ins("i32.const 0", "no length: run to the end");
     }
     ctx.fb.ins("call $__rt_str_substr", "own the selected bytes");
+    store_result(ctx, inst)
+}
+
+/// Lowers `strrpos` in its two-argument form, boxing PHP's `int|false`.
+///
+/// Only the two-argument form is admitted. The three-argument form's `$offset` has a rule of its
+/// own that is NOT the mirror of `strpos`'s — a negative offset there bounds where the match may
+/// START, counted from the end — so it is refused rather than assumed symmetrical.
+fn lower_string_rsearch(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let found = ctx.fb.local("__rfind_at", super::wat::ValType::I64);
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb
+        .ins("call $__rt_str_rfind", "last offset, or -1 when absent");
+    ctx.fb
+        .ins(&format!("local.set {found}"), "spill the scan result");
+    ctx.fb.ins(&format!("local.get {found}"), "scan result");
+    ctx.fb.ins("i64.const 0", "the absent sentinel is negative");
+    ctx.fb.ins("i64.lt_s", "was the needle absent?");
+    ctx.fb.ins("if (result i32)", "int|false travels as a Mixed cell");
+    ctx.fb.ins("i64.const 3", "mixed tag (bool)");
+    ctx.fb.ins("i64.const 0", "the value false");
+    ctx.fb.ins("i64.const 0", "hi unused");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box PHP's false");
+    ctx.fb.ins("else", "the needle was found");
+    ctx.fb.ins("i64.const 0", "mixed tag (int)");
+    ctx.fb.ins(&format!("local.get {found}"), "the byte offset");
+    ctx.fb.ins("i64.const 0", "hi unused");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box the offset");
+    ctx.fb.ins("end", "end int|false selection");
     store_result(ctx, inst)
 }
 
@@ -3990,6 +4046,20 @@ mod tests {
         );
         let call = bad_flag.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&bad_flag, call, RuntimeFnId::Strstr).is_some());
+
+        // `strrpos` answers the same tagged cell, and scans from the right.
+        let last = shaped_call(
+            RuntimeFnId::Strrpos,
+            &[str_arg.clone(), str_arg.clone()],
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        let call = last.instructions.last().expect("the probe emitted a call");
+        assert_eq!(direct_builtin_shape_issue(&last, call, RuntimeFnId::Strrpos), None);
+        assert!(
+            RT_STR_RFIND.contains("(local.set $at (i64.sub (local.get $hlen) (local.get $nlen)))"),
+            "the scan starts at the rightmost offset that still fits"
+        );
 
         // Only the two-argument form is lowered; the offset form has its own ValueError contract.
         let with_offset = shaped_call(

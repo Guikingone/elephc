@@ -263,13 +263,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
             ][..],
         ),
-        RuntimeFnId::Strpos | RuntimeFnId::Strstr => (
+        RuntimeFnId::Strpos | RuntimeFnId::Strrpos | RuntimeFnId::Strstr => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
             &[
                 "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
                 "codegen::cli::test_cli_wasm_strpos_and_tagged_strict_equality_match_php",
                 "codegen::cli::test_cli_wasm_strstr_matches_php",
+                "codegen::cli::test_cli_wasm_strrpos_matches_php",
             ][..],
         ),
         RuntimeFnId::Chr | RuntimeFnId::Ord => (

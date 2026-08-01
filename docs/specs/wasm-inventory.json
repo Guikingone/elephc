@@ -5033,9 +5033,9 @@
     },
     "runtime_fn": {
       "total": 437,
-      "supported": 43,
+      "supported": 44,
       "excluded": 29,
-      "missing": 365,
+      "missing": 364,
       "rows": [
         {
           "name": "array_all",
@@ -10776,7 +10776,8 @@
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_strpos_and_tagged_strict_equality_match_php",
-              "codegen::cli::test_cli_wasm_strstr_matches_php"
+              "codegen::cli::test_cli_wasm_strstr_matches_php",
+              "codegen::cli::test_cli_wasm_strrpos_matches_php"
             ]
           }
         },
@@ -10784,7 +10785,7 @@
           "name": "strrpos",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "strrpos(...)"
           ],
@@ -10792,7 +10793,16 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
+              "codegen::cli::test_cli_wasm_strpos_and_tagged_strict_equality_match_php",
+              "codegen::cli::test_cli_wasm_strstr_matches_php",
+              "codegen::cli::test_cli_wasm_strrpos_matches_php"
+            ]
+          }
         },
         {
           "name": "strstr",
@@ -10812,7 +10822,8 @@
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_strpos_and_tagged_strict_equality_match_php",
-              "codegen::cli::test_cli_wasm_strstr_matches_php"
+              "codegen::cli::test_cli_wasm_strstr_matches_php",
+              "codegen::cli::test_cli_wasm_strrpos_matches_php"
             ]
           }
         },
@@ -12504,14 +12515,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 181,
+    "supported": 182,
     "excluded": 47,
-    "missing": 484,
+    "missing": 483,
     "evidence_gaps": 177,
     "row_evidence_gaps": 176,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "484 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "483 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
