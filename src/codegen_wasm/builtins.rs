@@ -58,6 +58,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_TRIM);
     wm.add_raw_func(RT_STR_SUBSTR);
     wm.add_raw_func(RT_STR_REPEAT);
+    wm.add_raw_func(RT_STR_FIND);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -842,6 +843,44 @@ const RT_STR_REPEAT: &str = r#"(func $__rt_str_repeat (param $ptr i32) (param $l
   (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
 "#;
 
+/// `__rt_str_find`: the index of a needle in a haystack, or -1 when it is absent.
+///
+/// `$fold` lowercases ASCII letters on both sides, which is the only difference between `strpos`
+/// and `stripos`. An EMPTY needle matches at 0 — `strpos("abc", "")` is 0, not false — and a
+/// needle longer than the haystack cannot match. The -1 sentinel is what the caller turns into
+/// PHP's `false`, and it is unambiguous because a real index is never negative.
+const RT_STR_FIND: &str = r#"(func $__rt_str_find (param $hptr i32) (param $hlen i64) (param $nptr i32) (param $nlen i64) (param $fold i32) (result i64)
+  (local $at i64)                                                 ;; candidate start offset
+  (local $i i64)                                                  ;; cursor within the needle
+  (local $x i32)                                                  ;; haystack byte
+  (local $y i32)                                                  ;; needle byte
+  (local.set $at (i64.const 0))                                   ;; start at the beginning
+  (block $none (loop $scan
+    (br_if $none (i64.gt_s (i64.add (local.get $at) (local.get $nlen)) (local.get $hlen)))
+    (local.set $i (i64.const 0))                                  ;; compare the needle here
+    (block $mismatch
+      (block $matched (loop $bytes
+        (br_if $matched (i64.ge_s (local.get $i) (local.get $nlen)))  ;; an empty needle matches at once
+        (local.set $x (i32.load8_u (i32.add (local.get $hptr)
+          (i32.wrap_i64 (i64.add (local.get $at) (local.get $i))))))
+        (local.set $y (i32.load8_u (i32.add (local.get $nptr) (i32.wrap_i64 (local.get $i)))))
+        (if (local.get $fold)
+          (then
+            (if (i32.and (i32.ge_u (local.get $x) (i32.const 65))
+                         (i32.le_u (local.get $x) (i32.const 90)))
+              (then (local.set $x (i32.add (local.get $x) (i32.const 32)))))  ;; A-Z -> a-z
+            (if (i32.and (i32.ge_u (local.get $y) (i32.const 65))
+                         (i32.le_u (local.get $y) (i32.const 90)))
+              (then (local.set $y (i32.add (local.get $y) (i32.const 32)))))))
+        (br_if $mismatch (i32.ne (local.get $x) (local.get $y)))  ;; this offset is out
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))     ;; i++
+        (br $bytes)))
+      (return (local.get $at)))                                   ;; every needle byte matched
+    (local.set $at (i64.add (local.get $at) (i64.const 1)))       ;; try the next offset
+    (br $scan)))
+  (i64.const -1))                                                 ;; absent
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -1112,6 +1151,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Rtrim
             | RuntimeFnId::Substr
             | RuntimeFnId::StrRepeat
+            | RuntimeFnId::Strpos
     )
 }
 
@@ -1185,6 +1225,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::StrRepeat {
         return str_repeat_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Strpos {
+        return string_search_shape_issue(function, call, target);
     }
     if matches!(
         target,
@@ -1372,6 +1415,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::StrRepeat {
         return lower_str_repeat(ctx, inst);
+    }
+    if target == RuntimeFnId::Strpos {
+        return lower_string_search(ctx, inst);
     }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
@@ -1821,6 +1867,88 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     ctx.fb.ins("call $__rt_str_substr", "own the selected bytes");
     store_result(ctx, inst)
+}
+
+/// Lowers `strpos` in its two-argument form.
+///
+/// The scan helper takes a case-folding flag because `stripos`, `strrpos` and `strstr` all want
+/// the same search with one knob changed; only `strpos` is registered as a distinct runtime
+/// identity today, so this passes the case-sensitive setting.
+///
+/// PHP's result is `int|false`, which EIR carries as a `Mixed` cell, so the two outcomes are
+/// boxed under different tags: an index under the int tag and a miss under the BOOL tag holding
+/// zero, which is exactly `false`. Returning 0 under the int tag instead would make
+/// `strpos($h, $n) === false` answer wrong for a match at the start — the classic PHP trap this
+/// distinction exists to serve.
+fn lower_string_search(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let found = ctx.fb.local("__find_at", super::wat::ValType::I64);
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins(
+        "i32.const 0",
+        "strpos is case-sensitive",
+    );
+    ctx.fb
+        .ins("call $__rt_str_find", "first offset, or -1 when absent");
+    ctx.fb
+        .ins(&format!("local.set {found}"), "spill the scan result");
+    ctx.fb.ins(&format!("local.get {found}"), "scan result");
+    ctx.fb.ins("i64.const 0", "the absent sentinel is negative");
+    ctx.fb.ins("i64.lt_s", "was the needle absent?");
+    ctx.fb.ins("if (result i32)", "int|false travels as a Mixed cell");
+    ctx.fb.ins("i64.const 3", "mixed tag (bool)");
+    ctx.fb.ins("i64.const 0", "the value false");
+    ctx.fb.ins("i64.const 0", "hi unused");
+    ctx.fb
+        .ins("call $__rt_mixed_from_value", "box PHP's false");
+    ctx.fb.ins("else", "the needle was found");
+    ctx.fb.ins("i64.const 0", "mixed tag (int)");
+    ctx.fb.ins(&format!("local.get {found}"), "the byte offset");
+    ctx.fb.ins("i64.const 0", "hi unused");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box the offset");
+    ctx.fb.ins("end", "end int|false selection");
+    store_result(ctx, inst)
+}
+
+/// Validates `strpos` and `stripos`: two strings in, PHP's `int|false` Mixed out.
+///
+/// Only the two-argument form is admitted. The three-argument form has to validate `$offset`
+/// against the haystack and raise a `ValueError` naming the called function when it does not fit,
+/// which is a different contract rather than a default, so it is refused rather than guessed.
+fn string_search_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let [haystack, needle] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected a haystack and a needle with no offset, got {} operands",
+            call.operands.len()
+        ));
+    };
+    for operand in [haystack, needle] {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+            return Some(format!(
+                "expected a string operand, got {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Heap(IrHeapKind::Mixed)
+        || call.result_php_type.codegen_repr() != PhpType::Mixed
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the Mixed cell PHP's int|false needs",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
 }
 
 /// The `__rt_fail` code PHP's negative-`str_repeat` `ValueError` reports under.
@@ -2595,6 +2723,37 @@ mod tests {
         );
         let call = bad_count.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&bad_count, call, RuntimeFnId::StrRepeat).is_some());
+
+        // `strpos` answers PHP's `int|false`, which only a runtime-tagged Mixed cell can carry.
+        let searched = shaped_call(
+            RuntimeFnId::Strpos,
+            &[str_arg.clone(), str_arg.clone()],
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        let call = searched.instructions.last().expect("the probe emitted a call");
+        assert_eq!(
+            direct_builtin_shape_issue(&searched, call, RuntimeFnId::Strpos),
+            None
+        );
+        // An Int result would lose the difference between a match at offset 0 and a miss.
+        let as_int = shaped_call(
+            RuntimeFnId::Strpos,
+            &[str_arg.clone(), str_arg.clone()],
+            IrType::I64,
+            PhpType::Int,
+        );
+        let call = as_int.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&as_int, call, RuntimeFnId::Strpos).is_some());
+        // Only the two-argument form is lowered; the offset form has its own ValueError contract.
+        let with_offset = shaped_call(
+            RuntimeFnId::Strpos,
+            &[str_arg.clone(), str_arg.clone(), int_arg.clone()],
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        let call = with_offset.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&with_offset, call, RuntimeFnId::Strpos).is_some());
 
         for target in [RuntimeFnId::Strcmp, RuntimeFnId::Strcasecmp] {
             let ok = shaped_call(

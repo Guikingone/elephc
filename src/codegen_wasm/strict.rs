@@ -12,8 +12,12 @@
 //!   resources must not collapse into integers for strict comparison.
 //! - Strings are compared by length and raw bytes, including embedded NUL and
 //!   invalid UTF-8; operands remain borrowed.
-//! - Mixed, unions, tagged scalars, containers, callables, resources, pointers,
-//!   and packed values remain outside this deliberately narrow batch.
+//! - A runtime-tagged `Mixed` cell is comparable against a CONCRETE value: the
+//!   cell's tag decides the type, and the concrete side is never an array, so
+//!   this never needs PHP's deep element-wise array identity. Two Mixed cells
+//!   are refused for exactly that reason.
+//! - Unions, tagged scalars, containers, callables, resources, pointers, and
+//!   packed values remain outside this deliberately narrow batch.
 
 use super::context::{FnCtx, Result};
 use super::inst::{operand, store_result};
@@ -31,6 +35,38 @@ pub(super) enum StrictValueKind {
     Float,
     Str,
     Object,
+    /// A runtime-tagged `Mixed` cell, comparable against a CONCRETE side only.
+    ///
+    /// A builtin whose PHP result is `int|false` — `strpos` most visibly — hands back one of
+    /// these, and the whole point of the idiom `strpos($h, $n) === false` is that it separates a
+    /// match at offset 0 from a miss. Answering it needs the cell's runtime tag, not its storage.
+    MixedCell,
+}
+
+/// Returns the runtime Mixed tag a concrete strict kind boxes under.
+///
+/// These mirror `inst::lower_mixed_box` exactly; a divergence would make `===` compare a value
+/// against the wrong tag and answer false where PHP answers true.
+fn mixed_tag_for(kind: StrictValueKind) -> Option<i64> {
+    Some(match kind {
+        StrictValueKind::Int => 0,
+        StrictValueKind::Str => 1,
+        StrictValueKind::Float => 2,
+        StrictValueKind::Bool => 3,
+        StrictValueKind::Object => 6,
+        StrictValueKind::Null => 8,
+        StrictValueKind::MixedCell => return None,
+    })
+}
+
+/// Returns whether a strict comparison of these two kinds is lowered.
+///
+/// A `Mixed` cell is comparable against any concrete kind, because a tag mismatch settles the
+/// answer and the concrete side is never an array — so this never needs PHP's deep element-wise
+/// array identity. Two Mixed cells are NOT admitted for exactly that reason: both could be
+/// arrays, and answering that correctly is a different problem.
+pub(super) fn strict_pair_is_supported(lhs: StrictValueKind, rhs: StrictValueKind) -> bool {
+    !(lhs == StrictValueKind::MixedCell && rhs == StrictValueKind::MixedCell)
 }
 
 /// Classifies one exact EIR/PHP/ownership shape for strict comparison.
@@ -64,6 +100,14 @@ pub(super) fn classify_strict_value(
             | Ownership::MaybeOwned
             | Ownership::Persistent,
         ) => Some(StrictValueKind::Object),
+        (
+            IrType::Heap(IrHeapKind::Mixed),
+            _,
+            Ownership::Owned
+            | Ownership::Borrowed
+            | Ownership::MaybeOwned
+            | Ownership::Persistent,
+        ) => Some(StrictValueKind::MixedCell),
         _ => None,
     }
 }
@@ -103,6 +147,59 @@ pub(super) fn lower_strict_compare(ctx: &mut FnCtx, inst: &Instruction) -> Resul
         ))
     })?;
     let negated = inst.op == Op::StrictNotEq;
+
+    // A runtime-tagged cell against a concrete value: the cell's TAG decides the type, so this
+    // cannot take the "different kinds are unequal" shortcut below — a Mixed holding an int is
+    // strictly equal to an int.
+    if lhs_kind == StrictValueKind::MixedCell || rhs_kind == StrictValueKind::MixedCell {
+        if lhs_kind == rhs_kind {
+            return Err(WasmError::Unsupported(
+                "strict comparison of two Mixed cells".to_string(),
+            ));
+        }
+        let (cell, concrete, concrete_kind) = if lhs_kind == StrictValueKind::MixedCell {
+            (lhs, rhs, rhs_kind)
+        } else {
+            (rhs, lhs, lhs_kind)
+        };
+        let tag = mixed_tag_for(concrete_kind).ok_or_else(|| {
+            WasmError::Unsupported("strict comparison against an untagged shape".to_string())
+        })?;
+        ctx.emit_load_value(cell)?;
+        ctx.fb
+            .ins(&format!("i64.const {tag}"), "the concrete side's runtime tag");
+        match concrete_kind {
+            StrictValueKind::Null => {
+                ctx.fb.ins("i64.const 0", "null carries no payload");
+                ctx.fb.ins("i64.const 0", "hi unused");
+            }
+            StrictValueKind::Float => {
+                ctx.emit_load_value(concrete)?;
+                ctx.fb
+                    .ins("i64.reinterpret_f64", "float bits -> lo");
+                ctx.fb.ins("i64.const 0", "hi unused");
+            }
+            StrictValueKind::Str => {
+                ctx.emit_load_value(concrete)?;
+                // The loaded string is (ptr, len); the pointer has to widen under the length.
+                ctx.fb.ins("call $__rt_str_pair_to_mixed_args", "(ptr,len) -> (lo,hi)");
+            }
+            StrictValueKind::Object => {
+                ctx.emit_load_value(concrete)?;
+                ctx.fb.ins("i64.extend_i32_u", "object pointer -> lo");
+                ctx.fb.ins("i64.const 0", "hi unused");
+            }
+            _ => {
+                ctx.emit_load_value(concrete)?;
+                ctx.fb.ins("i64.const 0", "hi unused");
+            }
+        }
+        ctx.fb.ins(
+            "call $__rt_strict_mixed_scalar",
+            "compare a tagged cell against a concrete value",
+        );
+        return finish_i32_boolean(ctx, inst, negated);
+    }
 
     if lhs_kind != rhs_kind {
         ctx.fb.ins(
@@ -153,6 +250,11 @@ pub(super) fn lower_strict_compare(ctx: &mut FnCtx, inst: &Instruction) -> Resul
             );
             finish_i32_boolean(ctx, inst, false)
         }
+        // Handled above: a Mixed cell never reaches the same-kind path, because a pair of them
+        // is refused and a mixed/concrete pair returns before this match.
+        StrictValueKind::MixedCell => Err(WasmError::Unsupported(
+            "strict comparison of two Mixed cells".to_string(),
+        )),
     }
 }
 
@@ -186,8 +288,67 @@ const RT_STRICT_STR_EQ: &str = r#"(func $__rt_strict_str_eq
 "#;
 
 /// Registers the borrowed, length-delimited strict string comparison runtime.
+/// `__rt_str_pair_to_mixed_args`: reshapes a loaded `(ptr, len)` string into `(lo, hi)`.
+///
+/// A string reaches the stack as an i32 pointer under an i64 length, which is the wrong order
+/// and the wrong width for the `(lo, hi)` pair the Mixed comparison takes. Doing the swap in a
+/// helper keeps the caller from needing two scratch locals at every comparison site.
+const RT_STR_PAIR_TO_MIXED_ARGS: &str = r#"(func $__rt_str_pair_to_mixed_args (param $ptr i32) (param $len i64) (result i64) (result i64)
+  (i64.extend_i32_u (local.get $ptr))                             ;; lo: the pointer, widened
+  (local.get $len))                                               ;; hi: the length
+"#;
+
+/// `__rt_strict_mixed_scalar`: PHP's `===` between a tagged Mixed cell and a concrete value.
+///
+/// The cell's runtime TAG decides the type, so a tag mismatch is the answer — which is also what
+/// makes this correct without implementing PHP's deep array identity: the concrete side is never
+/// an array, so a cell holding one simply mismatches. Floats compare as FLOATS rather than as
+/// bits, because `NAN === NAN` is false and `0.0 === -0.0` is true, and neither survives a bit
+/// comparison. Objects compare by pointer identity, which is what PHP's `===` means for them.
+///
+/// Null compares on its TAG alone. PHP has exactly one null, and this backend does not agree with
+/// itself on a payload for it: an unboxed null literal carries the `0x7fff_ffff_ffff_fffe`
+/// sentinel while an absent cell unboxes to zero. Comparing payloads there answered false for
+/// `$mixed === null` depending only on how the null had arrived.
+const RT_STRICT_MIXED_SCALAR: &str = r#"(func $__rt_strict_mixed_scalar (param $cell i32) (param $want i64) (param $lo i64) (param $hi i64) (result i32)
+  (local $tag i64)                                                ;; the cell's runtime tag
+  (local $clo i64)                                                ;; the cell's payload
+  (local $chi i64)                                                ;; the cell's second word
+  ;; Walk nested (tag 7) cells inline rather than calling `__rt_mixed_unbox`: this helper ships
+  ;; with the strict runtime, which a module carries without necessarily carrying the Mixed one.
+  (if (i32.eqz (local.get $cell))
+    (then (local.set $tag (i64.const 8)))                         ;; an absent cell is PHP's null
+    (else
+      (block $found (loop $walk
+        (local.set $tag (i64.load (local.get $cell)))
+        (br_if $found (i64.ne (local.get $tag) (i64.const 7)))    ;; not a forwarding cell
+        (local.set $cell (i32.wrap_i64 (i64.load (i32.add (local.get $cell) (i32.const 8)))))
+        (if (i32.eqz (local.get $cell))
+          (then (local.set $tag (i64.const 8)) (br $found)))      ;; a nested null is still null
+        (br $walk)))
+      (if (i32.eqz (local.get $cell))
+        (then (local.set $tag (i64.const 8)))
+        (else
+          (local.set $clo (i64.load (i32.add (local.get $cell) (i32.const 8))))
+          (local.set $chi (i64.load (i32.add (local.get $cell) (i32.const 16))))))))
+  (if (i64.ne (local.get $tag) (local.get $want))
+    (then (return (i32.const 0))))                                ;; a different type is never identical
+  (if (i64.eq (local.get $tag) (i64.const 8))                     ;; null: the tag IS the whole value
+    (then (return (i32.const 1))))                                ;; PHP has exactly one null
+  (if (i64.eq (local.get $tag) (i64.const 1))                     ;; string: compare the bytes
+    (then (return (call $__rt_strict_str_eq
+      (i32.wrap_i64 (local.get $clo)) (local.get $chi)
+      (i32.wrap_i64 (local.get $lo)) (local.get $hi)))))
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; float: compare as a float
+    (then (return (f64.eq (f64.reinterpret_i64 (local.get $clo))
+                          (f64.reinterpret_i64 (local.get $lo))))))
+  (i64.eq (local.get $clo) (local.get $lo)))                      ;; int, bool, object identity
+"#;
+
 pub(super) fn emit_strict_runtime(module: &mut WatModule) {
     module.add_raw_func(RT_STRICT_STR_EQ);
+    module.add_raw_func(RT_STR_PAIR_TO_MIXED_ARGS);
+    module.add_raw_func(RT_STRICT_MIXED_SCALAR);
 }
 
 #[cfg(test)]
@@ -218,6 +379,85 @@ mod tests {
             .output()
             .map(|output| output.status.success())
             .unwrap_or(false)
+    }
+
+    /// Verifies the Mixed tags this module compares against match what boxing writes.
+    ///
+    /// `===` against a runtime-tagged cell decides the TYPE from the cell's tag, so these
+    /// constants have to be the same ones `inst::lower_mixed_box` stamps. A drift would make a
+    /// comparison answer false for a value PHP calls identical, silently and only at runtime.
+    #[test]
+    fn concrete_strict_kinds_map_to_the_tags_boxing_writes() {
+        for (kind, tag) in [
+            (StrictValueKind::Int, 0),
+            (StrictValueKind::Str, 1),
+            (StrictValueKind::Float, 2),
+            (StrictValueKind::Bool, 3),
+            (StrictValueKind::Object, 6),
+            (StrictValueKind::Null, 8),
+        ] {
+            assert_eq!(mixed_tag_for(kind), Some(tag), "{kind:?} boxes under tag {tag}");
+        }
+        // A cell has no tag of its own to compare against: it IS the tagged side.
+        assert_eq!(mixed_tag_for(StrictValueKind::MixedCell), None);
+
+        let boxing = include_str!("inst.rs");
+        for (tag, comment) in [
+            (2, "mixed tag (float)"),
+            (1, "mixed tag (string)"),
+        ] {
+            assert!(
+                boxing.contains(&format!("i64.const {tag}\", \"{comment}")),
+                "boxing must still stamp tag {tag} for {comment}"
+            );
+        }
+    }
+
+    /// Verifies a pair of Mixed cells is refused while a Mixed/concrete pair is admitted.
+    ///
+    /// Two cells could both hold arrays, whose PHP identity is a deep element-wise comparison
+    /// this does not implement. One cell against a concrete value never can, because the
+    /// concrete side is never an array — a tag mismatch settles it.
+    #[test]
+    fn two_mixed_cells_are_refused_but_a_concrete_side_is_not() {
+        assert!(!strict_pair_is_supported(
+            StrictValueKind::MixedCell,
+            StrictValueKind::MixedCell
+        ));
+        for concrete in [
+            StrictValueKind::Int,
+            StrictValueKind::Bool,
+            StrictValueKind::Null,
+            StrictValueKind::Float,
+            StrictValueKind::Str,
+            StrictValueKind::Object,
+        ] {
+            assert!(strict_pair_is_supported(StrictValueKind::MixedCell, concrete));
+            assert!(strict_pair_is_supported(concrete, StrictValueKind::MixedCell));
+        }
+    }
+
+    /// Verifies the tagged comparison treats floats and null the way PHP does, not the way bits do.
+    ///
+    /// `NAN === NAN` is false and `0.0 === -0.0` is true, so a float has to be compared as a
+    /// float; comparing the payload words would get both backwards. Null compares on its tag
+    /// alone because this backend represents an unboxed null literal with a sentinel and an
+    /// absent cell with zero, so a payload comparison would depend on how the null arrived.
+    #[test]
+    fn tagged_comparison_uses_float_semantics_and_a_tag_only_null() {
+        assert!(
+            RT_STRICT_MIXED_SCALAR.contains("f64.eq (f64.reinterpret_i64 (local.get $clo))"),
+            "a float must compare as a float, not as its bits"
+        );
+        assert!(
+            RT_STRICT_MIXED_SCALAR
+                .contains("(if (i64.eq (local.get $tag) (i64.const 8))                     ;; null: the tag IS the whole value"),
+            "null compares on its tag alone"
+        );
+        // Self-contained: this ships with the strict runtime, which a module carries without
+        // necessarily carrying the Mixed one. The name may appear in a comment explaining why
+        // the walk is inline; what must not appear is a CALL to it.
+        assert!(!RT_STRICT_MIXED_SCALAR.contains("call $__rt_mixed_unbox"));
     }
 
     /// Builds, validates, and invokes the strict-string runtime driver.

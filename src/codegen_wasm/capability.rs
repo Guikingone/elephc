@@ -1295,6 +1295,7 @@ fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option
             inst.result_ownership
         ));
     }
+    let mut kinds = Vec::with_capacity(2);
     for (side, value_id) in [("lhs", lhs), ("rhs", rhs)] {
         let Some(value) = function.value(*value_id) else {
             return Some(format!(
@@ -1303,13 +1304,11 @@ fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option
                 side
             ));
         };
-        if super::strict::classify_strict_value(
+        let Some(kind) = super::strict::classify_strict_value(
             value.ir_type,
             &value.php_type,
             value.ownership,
-        )
-        .is_none()
-        {
+        ) else {
             return Some(format!(
                 "{} rejects {} shape {:?}/{:?}/{:?}",
                 inst.op.name(),
@@ -1318,7 +1317,18 @@ fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option
                 value.php_type,
                 value.ownership
             ));
-        }
+        };
+        kinds.push(kind);
+    }
+    // Each side being admissible is not enough: two runtime-tagged cells could both hold arrays,
+    // whose identity is PHP's deep element-wise comparison rather than anything this lowers.
+    if !super::strict::strict_pair_is_supported(kinds[0], kinds[1]) {
+        return Some(format!(
+            "{} rejects the pair {:?}/{:?}",
+            inst.op.name(),
+            kinds[0],
+            kinds[1]
+        ));
     }
     None
 }
@@ -4482,7 +4492,8 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Ltrim
         | RuntimeFnId::Rtrim
         | RuntimeFnId::Substr
-        | RuntimeFnId::StrRepeat => true,
+        | RuntimeFnId::StrRepeat
+        | RuntimeFnId::Strpos => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4824,7 +4835,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
         | RuntimeFnId::StrSplit
-        | RuntimeFnId::Strpos
         | RuntimeFnId::Strrpos
         | RuntimeFnId::Strstr
         | RuntimeFnId::SubstrReplace
@@ -8061,12 +8071,36 @@ mod tests {
                 );
             }
 
-            for invalid in [
-                (
-                    IrType::Heap(IrHeapKind::Mixed),
-                    PhpType::Mixed,
-                    Ownership::Owned,
+            // A runtime-tagged Mixed cell against a CONCRETE value is admitted: the cell's tag
+            // decides the type and the concrete side is never an array, so this never needs
+            // PHP's deep array identity. Two of them are still refused for exactly that reason.
+            assert_eq!(
+                shape_issue(
+                    op,
+                    vec![
+                        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned),
+                        (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                    ],
+                    None,
+                    (IrType::I64, PhpType::Bool, Ownership::NonHeap)
                 ),
+                None
+            );
+            assert!(
+                shape_issue(
+                    op,
+                    vec![
+                        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned),
+                        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned),
+                    ],
+                    None,
+                    (IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                )
+                .is_some(),
+                "two Mixed cells could both be arrays"
+            );
+
+            for invalid in [
                 (
                     IrType::TaggedScalar,
                     PhpType::TaggedScalar,

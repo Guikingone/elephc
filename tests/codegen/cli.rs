@@ -3651,6 +3651,123 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `strpos` and PHP's `===` against a runtime-tagged value.
+///
+/// These belong in one test because neither is usable without the other: `strpos` answers
+/// `int|false`, which EIR carries as a tagged `Mixed` cell, and the whole point of the idiom
+/// `strpos($h, $n) === false` is that it separates a match at OFFSET ZERO from a miss. Boxing the
+/// miss as an int zero, or comparing the cell by storage rather than by tag, gets that backwards.
+///
+/// The tagged comparison is then exercised against every concrete type it admits. The float cases
+/// are the ones a bit-for-bit payload comparison fails: `NAN === NAN` is false and
+/// `0.0 === -0.0` is true. `null` is the other, because an unboxed null literal carries a
+/// sentinel while an absent cell reads as zero, so only the tag can decide it.
+#[test]
+fn test_cli_wasm_strpos_and_tagged_strict_equality_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_strpos_strict");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function f(string $h, string $n): void {
+    $p = strpos($h, $n);
+    if ($p === false) { echo "F"; } else { echo "@"; echo $p; }
+    echo "|";
+}
+f("abcabc","b"); f("abcabc","z"); f("abcabc",""); f("","a"); f("",""); echo "\n";
+f("abcabc","B"); f("aXbXc","X"); f("abcabc","bc"); f("abcabc","abcabc"); f("abcabc","abcabcd"); echo "\n";
+f("abc","a"); f("abc","c"); f("aaa","aa"); f("\x00\x01\x02","\x01"); f("h\xc3\xa9llo","\xc3\xa9"); echo "\n";
+function g(string $h, string $n): void { echo strpos($h, $n) !== false ? "Y" : "N"; }
+g("abc","a"); g("abc","z"); g("abc",""); echo "\n";
+function probe(mixed $m): void {
+    echo $m === 1 ? "i1" : "-";
+    echo $m === "a" ? "sa" : "-";
+    echo $m === true ? "T" : "-";
+    echo $m === null ? "N" : "-";
+    echo $m === 1.5 ? "f" : "-";
+    echo $m === 0 ? "i0" : "-";
+    echo $m === false ? "F" : "-";
+    echo $m === "" ? "se" : "-";
+    echo $m !== 1 ? "!i1" : "==";
+    echo "|";
+}
+probe(1); probe("a"); probe(true); probe(null); probe(1.5); probe(0); probe(false); probe(""); probe(1.0); probe("A");
+echo "\n";
+function edge(mixed $m): void {
+    echo $m === 0.0 ? "z" : "-";
+    echo $m === -0.0 ? "nz" : "-";
+    echo $m === NAN ? "nan" : "-";
+    echo $m === INF ? "inf" : "-";
+    echo $m === PHP_INT_MAX ? "max" : "-";
+    echo "|";
+}
+edge(0.0); edge(-0.0); edge(NAN); edge(INF); edge(PHP_INT_MAX); edge(0);
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile strpos and tagged equality to WASM");
+    assert!(
+        output.status.success(),
+        "strpos/tagged equality compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run strpos and tagged equality under Node");
+    assert!(
+        run.status.success(),
+        "strpos/tagged equality trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "@1|F|@0|F|@0|\n",
+            "F|@1|@1|@0|F|\n",
+            "@0|@2|@0|@1|@1|\n",
+            "YNY\n",
+            "i1-------==|-sa------!i1|--T-----!i1|---N----!i1|----f---!i1|-----i0--!i1|------F-!i1|-------se!i1|--------!i1|--------!i1|\n",
+            "znz---|znz---|-----|---inf-|----max|-----|\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `str_repeat` answers like php-src and RAISES php-src's ValueError.
 ///
 /// PHP does not clamp a negative `$times` to zero, it raises a `ValueError` an ordinary `catch`
