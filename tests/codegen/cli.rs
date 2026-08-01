@@ -3651,6 +3651,114 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `htmlspecialchars` under PHP 8.1+ defaults, invalid UTF-8 included.
+///
+/// The defaults are `ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401`, so BOTH quote styles are
+/// escaped — `'` becomes `&#039;` rather than passing through as it did before 8.1 — and invalid
+/// UTF-8 is replaced with U+FFFD instead of making the call return the empty string. NUL and the
+/// control bytes are valid UTF-8 and pass through untouched.
+///
+/// The substitution span is the subtle part and is WIDER than the usual "maximal subpart": a
+/// valid lead absorbs following bytes up to what it announced, stopping only at a byte that could
+/// START a sequence. So `"\xc2\xc0"` is ONE replacement while `"\xc2\xc2"` is two, and a byte
+/// that can never lead stands alone, making `"\xc0\x80"` two and `"\xf5\x80\x80\x80"` four.
+/// A plain continuation-byte test gets 102 byte pairs wrong and passes this sample set anyway,
+/// which is why the rule was settled by sweeping every pair rather than by these cases.
+#[test]
+fn test_cli_wasm_htmlspecialchars_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_htmlspecialchars");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function h(string $s): void { echo bin2hex(htmlspecialchars($s)), "\n"; }
+h(""); h("abc"); h("<a href=\"x\">"); h("a&b"); h("it's"); h("<>&\"'");
+h("h\xc3\xa9llo"); h("\xff\xfe"); h("a\xffb"); h("\x00\x01"); h("&amp;");
+h("\xc3"); h("\xc3\x28"); h("\xe2\x82"); h("\xe2\x82\x28"); h("\xf0\x9f"); h("\xf0\x9f\x92"); h("\xf0\x9f\x92\xa9");
+h("\xc0\x80"); h("\xed\xa0\x80"); h("\xf5\x80\x80\x80"); h("\xc2\x80"); h("\xe0\x80\x80"); h("\xf4\x90\x80\x80");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile htmlspecialchars to WASM");
+    assert!(
+        output.status.success(),
+        "htmlspecialchars compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run htmlspecialchars under Node");
+    assert!(
+        run.status.success(),
+        "htmlspecialchars trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "\n",
+            "616263\n",
+            "266c743b6120687265663d2671756f743b782671756f743b2667743b\n",
+            "6126616d703b62\n",
+            "697426233033393b73\n",
+            "266c743b2667743b26616d703b2671756f743b26233033393b\n",
+            "68c3a96c6c6f\n",
+            "efbfbdefbfbd\n",
+            "61efbfbd62\n",
+            "0001\n",
+            "26616d703b616d703b\n",
+            "efbfbd\n",
+            "efbfbd28\n",
+            "efbfbd\n",
+            "efbfbd28\n",
+            "efbfbd\n",
+            "efbfbd\n",
+            "f09f92a9\n",
+            "efbfbdefbfbd\n",
+            "efbfbd\n",
+            "efbfbdefbfbdefbfbdefbfbd\n",
+            "c280\n",
+            "efbfbd\n",
+            "efbfbd\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `md5` reproduces php-src, block boundaries included.
 ///
 /// MD5 shares SHA-1's padding SHAPE but reads and writes every word LITTLE-endian, which is the

@@ -67,6 +67,10 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_MD5_K);
     wm.add_raw_func(RT_MD5_S);
     wm.add_raw_func(RT_MD5_HEX);
+    wm.add_raw_func(RT_UTF8_SEQ_LEN);
+    wm.add_raw_func(RT_UTF8_BAD_SPAN);
+    wm.add_raw_func(RT_HTML_PUT);
+    wm.add_raw_func(RT_HTMLSPECIALCHARS);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -1574,6 +1578,186 @@ const RT_MD5_HEX: &str = r#"(func $__rt_md5_hex (param $ptr i32) (param $len i64
   (local.get $out) (i64.const 32))                                ;; owned 32-character digest
 "#;
 
+/// `__rt_utf8_seq_len`: the length of a VALID UTF-8 sequence at `$p`, or 0 when there is none.
+///
+/// Rejects what the encoding forbids rather than only what is structurally short: overlong forms
+/// (`C0`/`C1`, `E0 80`, `F0 80`), UTF-16 surrogates (`ED A0`..`ED BF`), and anything above
+/// U+10FFFF (`F4 90`.., `F5`..`FF`). A caller that gets 0 is looking at an invalid sequence.
+const RT_UTF8_SEQ_LEN: &str = r#"(func $__rt_utf8_seq_len (param $ptr i32) (param $len i64) (param $p i64) (result i32)
+  (local $b i32) (local $c1 i32) (local $c2 i32) (local $c3 i32) (local $need i32)
+  (local.set $b (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $p)))))
+  (if (i32.lt_u (local.get $b) (i32.const 128))
+    (then (return (i32.const 1))))                                ;; plain ASCII
+  (if (i32.lt_u (local.get $b) (i32.const 0xC2))
+    (then (return (i32.const 0))))                                ;; stray continuation, or overlong C0/C1
+  (local.set $need (i32.const 2))
+  (if (i32.ge_u (local.get $b) (i32.const 0xE0)) (then (local.set $need (i32.const 3))))
+  (if (i32.ge_u (local.get $b) (i32.const 0xF0)) (then (local.set $need (i32.const 4))))
+  (if (i32.gt_u (local.get $b) (i32.const 0xF4))
+    (then (return (i32.const 0))))                                ;; above U+10FFFF
+  (if (i64.gt_s (i64.add (local.get $p) (i64.extend_i32_u (local.get $need))) (local.get $len))
+    (then (return (i32.const 0))))                                ;; truncated at the end of input
+  (local.set $c1 (i32.load8_u (i32.add (local.get $ptr)
+    (i32.wrap_i64 (i64.add (local.get $p) (i64.const 1))))))
+  (if (i32.ne (i32.and (local.get $c1) (i32.const 0xC0)) (i32.const 0x80))
+    (then (return (i32.const 0))))                                ;; not a continuation byte
+  (if (i32.eq (local.get $b) (i32.const 0xE0))
+    (then (if (i32.lt_u (local.get $c1) (i32.const 0xA0)) (then (return (i32.const 0))))))  ;; overlong
+  (if (i32.eq (local.get $b) (i32.const 0xED))
+    (then (if (i32.ge_u (local.get $c1) (i32.const 0xA0)) (then (return (i32.const 0))))))  ;; surrogate
+  (if (i32.eq (local.get $b) (i32.const 0xF0))
+    (then (if (i32.lt_u (local.get $c1) (i32.const 0x90)) (then (return (i32.const 0))))))  ;; overlong
+  (if (i32.eq (local.get $b) (i32.const 0xF4))
+    (then (if (i32.ge_u (local.get $c1) (i32.const 0x90)) (then (return (i32.const 0))))))  ;; above U+10FFFF
+  (if (i32.ge_u (local.get $need) (i32.const 3))
+    (then
+      (local.set $c2 (i32.load8_u (i32.add (local.get $ptr)
+        (i32.wrap_i64 (i64.add (local.get $p) (i64.const 2))))))
+      (if (i32.ne (i32.and (local.get $c2) (i32.const 0xC0)) (i32.const 0x80))
+        (then (return (i32.const 0))))))
+  (if (i32.eq (local.get $need) (i32.const 4))
+    (then
+      (local.set $c3 (i32.load8_u (i32.add (local.get $ptr)
+        (i32.wrap_i64 (i64.add (local.get $p) (i64.const 3))))))
+      (if (i32.ne (i32.and (local.get $c3) (i32.const 0xC0)) (i32.const 0x80))
+        (then (return (i32.const 0))))))
+  (local.get $need))                                              ;; a whole valid sequence
+"#;
+
+/// `__rt_utf8_bad_span`: how many bytes an INVALID sequence at `$p` consumes.
+///
+/// PHP replaces one span with a single U+FFFD, not one per byte, and the span is WIDER than the
+/// usual "maximal subpart": a valid lead absorbs following bytes, up to what it announced,
+/// stopping only at a byte that could START a sequence — ASCII, or a lead in `C2`..`F4`. So a
+/// byte that can never lead is absorbed too, which is why `"\xc2\xc0"` yields ONE replacement
+/// while `"\xc2\xc2"` yields two. A byte that is not a valid lead at all stands alone, which is
+/// why `"\xc0\x80"` yields two and `"\xf5\x80\x80\x80"` yields four.
+///
+/// Measured over every byte pair across the lead and continuation boundaries; a plain
+/// continuation-byte test gets 102 of those pairs wrong.
+const RT_UTF8_BAD_SPAN: &str = r#"(func $__rt_utf8_bad_span (param $ptr i32) (param $len i64) (param $p i64) (result i64)
+  (local $b i32) (local $need i32) (local $span i64) (local $next i32)
+  (local.set $b (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $p)))))
+  (if (i32.or (i32.lt_u (local.get $b) (i32.const 0xC2)) (i32.gt_u (local.get $b) (i32.const 0xF4)))
+    (then (return (i64.const 1))))                                ;; never a lead byte: it stands alone
+  (local.set $need (i32.const 2))
+  (if (i32.ge_u (local.get $b) (i32.const 0xE0)) (then (local.set $need (i32.const 3))))
+  (if (i32.ge_u (local.get $b) (i32.const 0xF0)) (then (local.set $need (i32.const 4))))
+  (local.set $span (i64.const 1))                                 ;; the lead byte itself
+  (block $end (loop $follow
+    (br_if $end (i64.ge_s (local.get $span) (i64.extend_i32_u (local.get $need))))
+    (br_if $end (i64.ge_s (i64.add (local.get $p) (local.get $span)) (local.get $len)))
+    (local.set $next (i32.load8_u (i32.add (local.get $ptr)
+      (i32.wrap_i64 (i64.add (local.get $p) (local.get $span))))))
+    (br_if $end (i32.lt_u (local.get $next) (i32.const 128)))     ;; ASCII can start a sequence
+    (br_if $end (i32.and (i32.ge_u (local.get $next) (i32.const 0xC2))
+                         (i32.le_u (local.get $next) (i32.const 0xF4))))  ;; so can a valid lead
+    (local.set $span (i64.add (local.get $span) (i64.const 1)))   ;; anything else belongs to the bad span
+    (br $follow)))
+  (local.get $span))                                              ;; the maximal subpart
+"#;
+
+/// `__rt_htmlspecialchars`: PHP's `htmlspecialchars` under its 8.1+ default flags.
+///
+/// The defaults are `ENT_QUOTES | ENT_SUBSTITUTE | ENT_HTML401`, which means BOTH quote styles
+/// are escaped — `'` becomes `&#039;`, not left alone as it was before 8.1 — and invalid UTF-8 is
+/// replaced with U+FFFD rather than making the whole call return the empty string. Control bytes
+/// and NUL are valid UTF-8 and pass through untouched.
+///
+/// Worst case is six output bytes per input byte, which `&quot;` and `&#039;` both reach.
+const RT_HTMLSPECIALCHARS: &str = r#"(func $__rt_htmlspecialchars (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32) (local $i i64) (local $w i32) (local $b i32) (local $n i32) (local $span i64)
+  (local.set $out (call $__rt_str_alloc (i64.mul (local.get $len) (i64.const 6))))
+  (local.set $i (i64.const 0))
+  (local.set $w (i32.const 0))
+  (block $end (loop $scan
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))
+    (local.set $b (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (if (i32.eq (local.get $b) (i32.const 38))                    ;; &
+      (then
+        (local.set $w (call $__rt_html_put (local.get $out) (local.get $w) (i32.const 0)))
+        (local.set $i (i64.add (local.get $i) (i64.const 1))))
+      (else (if (i32.eq (local.get $b) (i32.const 60))            ;; <
+        (then
+          (local.set $w (call $__rt_html_put (local.get $out) (local.get $w) (i32.const 1)))
+          (local.set $i (i64.add (local.get $i) (i64.const 1))))
+        (else (if (i32.eq (local.get $b) (i32.const 62))          ;; >
+          (then
+            (local.set $w (call $__rt_html_put (local.get $out) (local.get $w) (i32.const 2)))
+            (local.set $i (i64.add (local.get $i) (i64.const 1))))
+          (else (if (i32.eq (local.get $b) (i32.const 34))        ;; "
+            (then
+              (local.set $w (call $__rt_html_put (local.get $out) (local.get $w) (i32.const 3)))
+              (local.set $i (i64.add (local.get $i) (i64.const 1))))
+            (else (if (i32.eq (local.get $b) (i32.const 39))      ;; '
+              (then
+                (local.set $w (call $__rt_html_put (local.get $out) (local.get $w) (i32.const 4)))
+                (local.set $i (i64.add (local.get $i) (i64.const 1))))
+              (else
+                (local.set $n (call $__rt_utf8_seq_len (local.get $ptr) (local.get $len) (local.get $i)))
+                (if (local.get $n)
+                  (then                                           ;; a valid sequence: copy it whole
+                    (block $cend (loop $copy
+                      (br_if $cend (i32.eqz (local.get $n)))
+                      (i32.store8 (i32.add (local.get $out) (local.get $w))
+                        (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+                      (local.set $w (i32.add (local.get $w) (i32.const 1)))
+                      (local.set $i (i64.add (local.get $i) (i64.const 1)))
+                      (local.set $n (i32.sub (local.get $n) (i32.const 1)))
+                      (br $copy))))
+                  (else                                           ;; one U+FFFD per maximal subpart
+                    (local.set $span (call $__rt_utf8_bad_span (local.get $ptr) (local.get $len) (local.get $i)))
+                    (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 0xEF))
+                    (i32.store8 offset=1 (i32.add (local.get $out) (local.get $w)) (i32.const 0xBF))
+                    (i32.store8 offset=2 (i32.add (local.get $out) (local.get $w)) (i32.const 0xBD))
+                    (local.set $w (i32.add (local.get $w) (i32.const 3)))
+                    (local.set $i (i64.add (local.get $i) (local.get $span)))))))))))))))
+    (br $scan)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))
+"#;
+
+/// `__rt_html_put`: writes one HTML entity and returns the advanced cursor.
+///
+/// Selected by index rather than by byte so the caller's dispatch stays a flat comparison chain:
+/// 0 `&amp;`, 1 `&lt;`, 2 `&gt;`, 3 `&quot;`, 4 `&#039;`.
+const RT_HTML_PUT: &str = r#"(func $__rt_html_put (param $out i32) (param $w i32) (param $which i32) (result i32)
+  (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 38))   ;; every entity opens with &
+  (local.set $w (i32.add (local.get $w) (i32.const 1)))
+  (if (i32.eqz (local.get $which))
+    (then                                                          ;; amp;
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 97))
+      (i32.store8 offset=1 (i32.add (local.get $out) (local.get $w)) (i32.const 109))
+      (i32.store8 offset=2 (i32.add (local.get $out) (local.get $w)) (i32.const 112))
+      (i32.store8 offset=3 (i32.add (local.get $out) (local.get $w)) (i32.const 59))
+      (return (i32.add (local.get $w) (i32.const 4)))))
+  (if (i32.eq (local.get $which) (i32.const 1))
+    (then                                                          ;; lt;
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 108))
+      (i32.store8 offset=1 (i32.add (local.get $out) (local.get $w)) (i32.const 116))
+      (i32.store8 offset=2 (i32.add (local.get $out) (local.get $w)) (i32.const 59))
+      (return (i32.add (local.get $w) (i32.const 3)))))
+  (if (i32.eq (local.get $which) (i32.const 2))
+    (then                                                          ;; gt;
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 103))
+      (i32.store8 offset=1 (i32.add (local.get $out) (local.get $w)) (i32.const 116))
+      (i32.store8 offset=2 (i32.add (local.get $out) (local.get $w)) (i32.const 59))
+      (return (i32.add (local.get $w) (i32.const 3)))))
+  (if (i32.eq (local.get $which) (i32.const 3))
+    (then                                                          ;; quot;
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 113))
+      (i32.store8 offset=1 (i32.add (local.get $out) (local.get $w)) (i32.const 117))
+      (i32.store8 offset=2 (i32.add (local.get $out) (local.get $w)) (i32.const 111))
+      (i32.store8 offset=3 (i32.add (local.get $out) (local.get $w)) (i32.const 116))
+      (i32.store8 offset=4 (i32.add (local.get $out) (local.get $w)) (i32.const 59))
+      (return (i32.add (local.get $w) (i32.const 5)))))
+  (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 35))   ;; #039;
+  (i32.store8 offset=1 (i32.add (local.get $out) (local.get $w)) (i32.const 48))
+  (i32.store8 offset=2 (i32.add (local.get $out) (local.get $w)) (i32.const 51))
+  (i32.store8 offset=3 (i32.add (local.get $out) (local.get $w)) (i32.const 57))
+  (i32.store8 offset=4 (i32.add (local.get $out) (local.get $w)) (i32.const 59))
+  (i32.add (local.get $w) (i32.const 5)))
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -1851,6 +2035,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Crc32
             | RuntimeFnId::Sha1
             | RuntimeFnId::Md5
+            | RuntimeFnId::Htmlspecialchars
     )
 }
 
@@ -1940,7 +2125,10 @@ pub(super) fn direct_builtin_shape_issue(
     if target == RuntimeFnId::Crc32 {
         return crc32_shape_issue(function, call);
     }
-    if matches!(target, RuntimeFnId::Sha1 | RuntimeFnId::Md5) {
+    if matches!(
+        target,
+        RuntimeFnId::Sha1 | RuntimeFnId::Md5 | RuntimeFnId::Htmlspecialchars
+    ) {
         return trim_shape_issue(function, call, target)
             .or_else(|| (call.operands.len() != 1).then(|| {
                 format!("{target:?} takes exactly one string, got {}", call.operands.len())
@@ -2158,6 +2346,11 @@ pub(super) fn lower_direct_builtin(
     if target == RuntimeFnId::Md5 {
         ctx.emit_load_value(operand(inst, 0)?)?;
         ctx.fb.ins("call $__rt_md5_hex", "32-character lowercase digest");
+        return store_result(ctx, inst);
+    }
+    if target == RuntimeFnId::Htmlspecialchars {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb.ins("call $__rt_htmlspecialchars", "escape under PHP 8.1+ default flags");
         return store_result(ctx, inst);
     }
     let argument = operand(inst, 0)?;
@@ -3701,6 +3894,31 @@ mod tests {
                 && RT_SHA1_HEX.contains("(i32.const 0xCA62C1D6)"),
             "the four round constants must all be present"
         );
+
+        // `htmlspecialchars` escapes BOTH quote styles under PHP 8.1+ defaults.
+        let escaped = shaped_call(
+            RuntimeFnId::Htmlspecialchars,
+            &[str_arg.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = escaped.instructions.last().expect("the probe emitted a call");
+        assert_eq!(
+            direct_builtin_shape_issue(&escaped, call, RuntimeFnId::Htmlspecialchars),
+            None
+        );
+        // `&#039;` is the ENT_QUOTES default since 8.1; leaving `'` alone would be the 8.0 rule.
+        assert!(RT_HTML_PUT.contains("(i32.const 35)"), "the numeric entity for an apostrophe");
+        // The bad-span rule stops at a byte that could START a sequence, not at a non-continuation:
+        // a plain continuation test gets 102 byte pairs wrong.
+        assert!(
+            RT_UTF8_BAD_SPAN.contains("(i32.ge_u (local.get $next) (i32.const 0xC2))")
+                && RT_UTF8_BAD_SPAN.contains("(i32.le_u (local.get $next) (i32.const 0xF4))"),
+            "a valid lead terminates the bad span; a never-valid byte is absorbed"
+        );
+        // Surrogates and overlong forms are rejected, not just structurally short sequences.
+        assert!(RT_UTF8_SEQ_LEN.contains("(i32.const 0xED)"), "surrogate exclusion");
+        assert!(RT_UTF8_SEQ_LEN.contains("(i32.const 0xC2)"), "C0/C1 are overlong");
 
         // `md5` answers a 32-character digest, half sha1's width.
         let md5 = shaped_call(
