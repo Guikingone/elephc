@@ -3651,6 +3651,89 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `str_replace` and `crc32` reproduce php-src.
+///
+/// `str_replace` scans left to right, NON-overlapping, and never rescans what it wrote — which is
+/// what makes `str_replace("a", "ab", "a")` answer `"ab"` instead of looping, and
+/// `str_replace("ab", "ba", "abab")` answer `"baba"`. An EMPTY search matches nothing and returns
+/// the subject, php-src's own guard against that loop. `crc32` is checked against the standard
+/// IEEE 802.3 vectors, including the quick-brown-fox one, and answers PHP's UNSIGNED 32-bit
+/// value rather than a sign-extended one.
+#[test]
+fn test_cli_wasm_str_replace_and_crc32_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_str_replace_crc32");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function r(string $se, string $rp, string $su): void { echo "[", str_replace($se, $rp, $su), "]|"; }
+r("a","b","aaa"); r("aa","b","aaaa"); r("aa","b","aaa"); r("","x","abc"); r("a","","aaa"); r("abc","x","abcabc"); echo "\n";
+r("a","aa","aaa"); r("x","y","abc"); r("a","b",""); r("ab","ba","abab"); r("a","ab","a"); r("\x00","X","a\x00b"); echo "\n";
+r("\xc3\xa9","E","h\xc3\xa9llo"); r("ll","LL","hello"); r("o","0","foo bar boo"); echo "\n";
+function c(string $s): void { echo crc32($s), "|"; }
+c(""); c("a"); c("abc"); c("hello world"); c("\x00\x01\xff"); c("The quick brown fox jumps over the lazy dog"); echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile str_replace/crc32 to WASM");
+    assert!(
+        output.status.success(),
+        "str_replace/crc32 compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run str_replace/crc32 under Node");
+    assert!(
+        run.status.success(),
+        "str_replace/crc32 trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected: Vec<u8> = [
+        b"[bbb]|[bb]|[ba]|[abc]|[]|[xx]|\n".as_slice(),
+        b"[aaaaaa]|[abc]|[]|[baba]|[ab]|[aXb]|\n".as_slice(),
+        b"[hEllo]|[heLLo]|[f00 bar b00]|\n".as_slice(),
+        b"0|3904355907|891568578|222957957|3411544030|1095738169|\n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `str_pad` reproduces php-src, including where it does NOT raise.
 ///
 /// The empty-pad `ValueError` fires only when padding is actually needed: `str_pad("abc", 2, "")`

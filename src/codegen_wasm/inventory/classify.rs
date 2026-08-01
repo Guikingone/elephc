@@ -244,7 +244,9 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::Rtrim
         | RuntimeFnId::Substr
         | RuntimeFnId::StrRepeat
-        | RuntimeFnId::StrPad => (
+        | RuntimeFnId::StrPad
+        | RuntimeFnId::StrReplace
+        | RuntimeFnId::Crc32 => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
             &[
@@ -252,6 +254,7 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
                 "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
                 "codegen::cli::test_cli_wasm_str_pad_matches_php",
+                "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
             ][..],
         ),
         RuntimeFnId::Strpos | RuntimeFnId::Strstr => (

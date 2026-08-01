@@ -4495,7 +4495,9 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StrRepeat
         | RuntimeFnId::Strpos
         | RuntimeFnId::Strstr
-        | RuntimeFnId::StrPad => true,
+        | RuntimeFnId::StrPad
+        | RuntimeFnId::StrReplace
+        | RuntimeFnId::Crc32 => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4799,7 +4801,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::SplObjectHash
         | RuntimeFnId::SplObjectId
         | RuntimeFnId::Chop
-        | RuntimeFnId::Crc32
         | RuntimeFnId::CtypeAlnum
         | RuntimeFnId::CtypeAlpha
         | RuntimeFnId::CtypeDigit
@@ -4834,7 +4835,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Sprintf
         | RuntimeFnId::Sscanf
         | RuntimeFnId::StrIreplace
-        | RuntimeFnId::StrReplace
         | RuntimeFnId::StrSplit
         | RuntimeFnId::Strrpos
         | RuntimeFnId::SubstrReplace

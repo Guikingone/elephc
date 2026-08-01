@@ -61,6 +61,8 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_FIND);
     wm.add_raw_func(RT_PAD_BYTE);
     wm.add_raw_func(RT_STR_PAD);
+    wm.add_raw_func(RT_STR_REPLACE);
+    wm.add_raw_func(RT_CRC32);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -1056,6 +1058,83 @@ const RT_STR_PAD: &str = r#"(func $__rt_str_pad (param $ptr i32) (param $len i64
   (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
 "#;
 
+/// `__rt_str_replace`: owns a copy with every occurrence of a needle replaced.
+///
+/// Scanning is left to right and NON-overlapping, and the replacement is never rescanned — which
+/// is what makes `str_replace("a", "ab", "a")` answer `"ab"` rather than looping. An EMPTY needle
+/// matches nothing and returns the subject unchanged, which is php-src's guard against exactly
+/// that loop. The reservation is `slen * (rlen + 1)`, which bounds the worst case of a
+/// single-byte needle replaced by a longer string at every position.
+const RT_STR_REPLACE: &str = r#"(func $__rt_str_replace (param $sptr i32) (param $slen i64) (param $nptr i32) (param $nlen i64) (param $rptr i32) (param $rlen i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; subject cursor
+  (local $j i64)                                                  ;; needle/replacement cursor
+  (local $w i32)                                                  ;; destination cursor
+  (if (i64.le_s (local.get $nlen) (i64.const 0))
+    (then (return (call $__rt_str_persist (local.get $sptr) (local.get $slen)))))  ;; empty needle matches nothing
+  (local.set $out
+    (call $__rt_str_alloc
+      (i64.mul (local.get $slen) (i64.add (local.get $rlen) (i64.const 1)))))
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $scan
+    (br_if $end (i64.ge_s (local.get $i) (local.get $slen)))      ;; whole subject consumed
+    (if (i32.and
+          (i64.le_s (i64.add (local.get $i) (local.get $nlen)) (local.get $slen))
+          (i32.wrap_i64 (call $__rt_str_region_eq
+            (local.get $sptr) (local.get $nptr) (local.get $nlen) (local.get $i))))
+      (then
+        (local.set $j (i64.const 0))                              ;; write the replacement
+        (block $rend (loop $rcopy
+          (br_if $rend (i64.ge_s (local.get $j) (local.get $rlen)))
+          (i32.store8 (i32.add (local.get $out) (local.get $w))
+            (i32.load8_u (i32.add (local.get $rptr) (i32.wrap_i64 (local.get $j)))))
+          (local.set $w (i32.add (local.get $w) (i32.const 1)))   ;; w++
+          (local.set $j (i64.add (local.get $j) (i64.const 1)))   ;; j++
+          (br $rcopy)))
+        (local.set $i (i64.add (local.get $i) (local.get $nlen)))) ;; skip the match, never rescan
+      (else
+        (i32.store8 (i32.add (local.get $out) (local.get $w))
+          (i32.load8_u (i32.add (local.get $sptr) (i32.wrap_i64 (local.get $i)))))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))     ;; w++
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))))   ;; i++
+    (br $scan)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
+/// `__rt_crc32`: PHP's `crc32`, the reflected IEEE 802.3 polynomial.
+///
+/// Computed bitwise rather than through a 256-entry table: eight shifts per byte cost a little
+/// time but keep a module that calls this from carrying a kilobyte of static data. PHP's result
+/// is the UNSIGNED 32-bit value, which on a 64-bit build is a positive int — so the final
+/// complement is masked rather than sign-extended.
+const RT_CRC32: &str = r#"(func $__rt_crc32 (param $ptr i32) (param $len i64) (result i64)
+  (local $crc i32)                                                ;; running remainder
+  (local $i i64)                                                  ;; byte cursor
+  (local $k i32)                                                  ;; bit counter
+  (local.set $crc (i32.const -1))                                 ;; 0xFFFFFFFF
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $end (loop $bytes
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every byte folded in
+    (local.set $crc
+      (i32.xor (local.get $crc)
+        (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i))))))
+    (local.set $k (i32.const 0))                                  ;; eight bits per byte
+    (block $bend (loop $bits
+      (br_if $bend (i32.ge_u (local.get $k) (i32.const 8)))
+      (local.set $crc
+        (i32.xor
+          (i32.shr_u (local.get $crc) (i32.const 1))
+          (i32.and (i32.const 0xEDB88320)
+                   (i32.sub (i32.const 0) (i32.and (local.get $crc) (i32.const 1))))))
+      (local.set $k (i32.add (local.get $k) (i32.const 1)))       ;; k++
+      (br $bits)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $bytes)))
+  (i64.and (i64.extend_i32_u (i32.xor (local.get $crc) (i32.const -1)))
+           (i64.const 0xFFFFFFFF)))                               ;; PHP's unsigned 32-bit result
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -1329,6 +1408,8 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Strpos
             | RuntimeFnId::Strstr
             | RuntimeFnId::StrPad
+            | RuntimeFnId::StrReplace
+            | RuntimeFnId::Crc32
     )
 }
 
@@ -1411,6 +1492,12 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::StrPad {
         return str_pad_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::StrReplace {
+        return str_replace_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Crc32 {
+        return crc32_shape_issue(function, call);
     }
     if matches!(
         target,
@@ -1607,6 +1694,14 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::StrPad {
         return lower_str_pad(ctx, inst);
+    }
+    if target == RuntimeFnId::StrReplace {
+        return lower_str_replace(ctx, inst);
+    }
+    if target == RuntimeFnId::Crc32 {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb.ins("call $__rt_crc32", "reflected IEEE 802.3 remainder");
+        return store_result(ctx, inst);
     }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
@@ -2133,6 +2228,83 @@ fn string_search_shape_issue(
     {
         return Some(format!(
             "{target:?} result {:?}/{:?} is not the Mixed cell PHP's int|false needs",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Lowers `str_replace` in its all-string, three-argument form.
+///
+/// PHP also accepts arrays for any of the three arguments and an optional by-reference `$count`,
+/// which are different operations rather than defaults, so only the string form is admitted.
+fn lower_str_replace(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 2)?)?;
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb
+        .ins("call $__rt_str_replace", "own the rewritten bytes");
+    store_result(ctx, inst)
+}
+
+/// Validates `str_replace`: three strings in, a string out.
+fn str_replace_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [search, replace, subject] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected a search, a replacement and a subject, got {} operands",
+            call.operands.len()
+        ));
+    };
+    for operand in [search, replace, subject] {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+            return Some(format!(
+                "str_replace takes strings, got {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "str_replace result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates `crc32`: one string in, an integer out.
+fn crc32_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [subject] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected one string operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*subject) else {
+        return Some("operand is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+        return Some(format!(
+            "crc32 takes a string, got {:?}/{:?}",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::I64
+        || call.result_php_type.codegen_repr() != PhpType::Int
+    {
+        return Some(format!(
+            "crc32 result {:?}/{:?} is not the expected I64/Int",
             call.result_type,
             call.result_php_type.codegen_repr()
         ));
@@ -3035,6 +3207,45 @@ mod tests {
         );
         let call = as_int.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&as_int, call, RuntimeFnId::Strpos).is_some());
+        // `str_replace` takes three strings; an array form is a different operation.
+        let ok = shaped_call(
+            RuntimeFnId::StrReplace,
+            &[str_arg.clone(), str_arg.clone(), str_arg.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = ok.instructions.last().expect("the probe emitted a call");
+        assert_eq!(
+            direct_builtin_shape_issue(&ok, call, RuntimeFnId::StrReplace),
+            None
+        );
+        let with_count = shaped_call(
+            RuntimeFnId::StrReplace,
+            &[str_arg.clone(), str_arg.clone(), str_arg.clone(), int_arg.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = with_count.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&with_count, call, RuntimeFnId::StrReplace).is_some());
+
+        // `crc32` answers an int, and PHP's is the UNSIGNED 32-bit value.
+        let hashed = shaped_call(
+            RuntimeFnId::Crc32,
+            &[str_arg.clone()],
+            IrType::I64,
+            PhpType::Int,
+        );
+        let call = hashed.instructions.last().expect("the probe emitted a call");
+        assert_eq!(direct_builtin_shape_issue(&hashed, call, RuntimeFnId::Crc32), None);
+        assert!(
+            RT_CRC32.contains("(i64.const 0xFFFFFFFF)"),
+            "the result is masked to 32 bits, not sign-extended"
+        );
+        assert!(
+            RT_CRC32.contains("(i32.const 0xEDB88320)"),
+            "PHP uses the reflected IEEE 802.3 polynomial"
+        );
+
         // `strstr` answers `string|false` through the same tagged cell, in BOTH arities.
         for arity in 2..=3 {
             let mut operands = vec![str_arg.clone(), str_arg.clone()];

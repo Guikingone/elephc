@@ -5033,9 +5033,9 @@
     },
     "runtime_fn": {
       "total": 437,
-      "supported": 38,
+      "supported": 40,
       "excluded": 29,
-      "missing": 370,
+      "missing": 368,
       "rows": [
         {
           "name": "array_all",
@@ -9899,7 +9899,7 @@
           "name": "crc32",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "crc32(...)"
           ],
@@ -9907,7 +9907,17 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
+            ]
+          }
         },
         {
           "name": "ctype_alnum",
@@ -10268,7 +10278,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10305,7 +10316,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10419,7 +10431,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10542,7 +10555,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10565,7 +10579,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10573,7 +10588,7 @@
           "name": "str_replace",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "str_replace(...)"
           ],
@@ -10581,7 +10596,17 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
+            ]
+          }
         },
         {
           "name": "str_split",
@@ -10638,7 +10663,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10661,7 +10687,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10742,7 +10769,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10779,7 +10807,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10802,7 +10831,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -10825,7 +10855,8 @@
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
               "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
               "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
-              "codegen::cli::test_cli_wasm_str_pad_matches_php"
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php"
             ]
           }
         },
@@ -12395,14 +12426,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 176,
+    "supported": 178,
     "excluded": 47,
-    "missing": 489,
+    "missing": 487,
     "evidence_gaps": 177,
     "row_evidence_gaps": 176,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "489 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "487 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
