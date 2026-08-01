@@ -64,6 +64,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_FIND);
     wm.add_raw_func(RT_STR_RFIND);
     wm.add_raw_func(RT_IMPLODE);
+    wm.add_raw_func(RT_IMPLODE_OWNED);
     wm.add_raw_func(RT_EXPLODE);
     wm.add_raw_func(RT_STR_SPLIT);
     wm.add_raw_func(RT_WORDWRAP);
@@ -2668,6 +2669,89 @@ const RT_FMT_FLOAT: &str = r#"(func $__rt_fmt_float (param $bits i64) (param $pr
     (local.get $signch) (local.get $width) (local.get $pad) (local.get $left)))
 "#;
 
+/// `__rt_implode_owned`: joins an array whose elements must be CONVERTED to strings first.
+///
+/// `$kind` selects the conversion: 0 renders an integer slot, 1 casts a boxed `Mixed` cell. PHP
+/// converts each element with the same rule as an explicit `(string)` cast — measured element by
+/// element — so the Mixed arm reuses `__rt_mixed_cast_string` rather than inventing one.
+///
+/// Both conversions PRODUCE an owned block, so each piece is released once copied; skipping that
+/// would leak one string per element. The string-element case has no conversion and no ownership
+/// to manage, which is why it keeps its own simpler helper.
+///
+/// Two passes over a scratch table rather than repeated concatenation: converting once and
+/// remembering `(pointer, length)` keeps this linear, where pairwise appending would copy the
+/// accumulated prefix again for every element.
+const RT_IMPLODE_OWNED: &str = r#"(func $__rt_implode_owned (param $array i32) (param $gptr i32) (param $glen i64) (param $kind i32) (result i32) (result i64)
+  (local $n i64) (local $i i64) (local $j i64) (local $total i64)
+  (local $table i32) (local $eptr i32) (local $elen i64) (local $out i32) (local $w i32)
+  (local.set $n (i64.load (local.get $array)))
+  (local.set $table (call $__rt_heap_alloc
+    (i32.add (i32.const 8) (i32.wrap_i64 (i64.mul (local.get $n) (i64.const 16))))))
+  (local.set $total (i64.const 0))
+  (local.set $i (i64.const 0))
+  (block $me (loop $ml                                            ;; cast once, remember the piece
+    (br_if $me (i64.ge_s (local.get $i) (local.get $n)))
+    (if (local.get $kind)
+      (then
+        ;; a Mixed-cell array has 16-byte slots (value_type 7) with the cell pointer at
+        ;; slot+0 — NOT the 8-byte stride __rt_array_get_int walks
+        (call $__rt_mixed_cast_string
+          (i32.wrap_i64 (i64.load (i32.add (i32.add (local.get $array) (i32.const 24))
+                                           (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16)))))))
+        (local.set $elen (i64.extend_i32_u))                       ;; the cast answers an i32 length
+        (local.set $eptr))
+      (else
+        (call $__rt_fmt_int (call $__rt_array_get_int (local.get $array) (local.get $i))
+              (i32.const 0) (i64.const 0) (i32.const 32) (i32.const 0))  ;; plain decimal, no field
+        (local.set $elen)
+        (local.set $eptr)))
+    (i32.store (i32.add (local.get $table) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16))))
+               (local.get $eptr))
+    (i64.store offset=8 (i32.add (local.get $table)
+                                 (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16))))
+               (local.get $elen))
+    (local.set $total (i64.add (local.get $total) (local.get $elen)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $ml)))
+  (if (i64.gt_s (local.get $n) (i64.const 0))
+    (then (local.set $total (i64.add (local.get $total)
+      (i64.mul (i64.sub (local.get $n) (i64.const 1)) (local.get $glen))))))
+  (local.set $out (call $__rt_str_alloc (local.get $total)))
+  (local.set $w (i32.const 0))
+  (local.set $i (i64.const 0))
+  (block $we (loop $wl
+    (br_if $we (i64.ge_s (local.get $i) (local.get $n)))
+    (if (i64.gt_s (local.get $i) (i64.const 0))
+      (then                                                       ;; glue goes BETWEEN, not after
+        (local.set $j (i64.const 0))
+        (block $ge (loop $gl
+          (br_if $ge (i64.ge_s (local.get $j) (local.get $glen)))
+          (i32.store8 (i32.add (local.get $out) (local.get $w))
+            (i32.load8_u (i32.add (local.get $gptr) (i32.wrap_i64 (local.get $j)))))
+          (local.set $w (i32.add (local.get $w) (i32.const 1)))
+          (local.set $j (i64.add (local.get $j) (i64.const 1)))
+          (br $gl)))))
+    (local.set $eptr (i32.load (i32.add (local.get $table)
+      (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16))))))
+    (local.set $elen (i64.load offset=8 (i32.add (local.get $table)
+      (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16))))))
+    (local.set $j (i64.const 0))
+    (block $ee (loop $el
+      (br_if $ee (i64.ge_s (local.get $j) (local.get $elen)))
+      (i32.store8 (i32.add (local.get $out) (local.get $w))
+        (i32.load8_u (i32.add (local.get $eptr) (i32.wrap_i64 (local.get $j)))))
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))
+      (local.set $j (i64.add (local.get $j) (i64.const 1)))
+      (br $el)))
+    (if (local.get $eptr)
+      (then (call $__rt_heap_free (local.get $eptr))))            ;; the cast owned it; release it
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $wl)))
+  (call $__rt_heap_free (local.get $table))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -3958,9 +4042,34 @@ fn explode_shape_issue(function: &Function, call: &Instruction) -> Option<String
 /// coercing elements would need the per-tag conversions this backend keeps fail-closed, and
 /// admitting the shorter form would mean inventing an empty glue with no literal behind it.
 fn lower_implode(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 1)?)?;
+    let array = operand(inst, 1)?;
+    // A string element needs no conversion; an int or a Mixed cell does, and the converted
+    // piece is owned so the shared helper releases it.
+    let element_kind = match ctx.function.value(array).map(|v| &v.php_type) {
+        Some(PhpType::Array(element)) => match **element {
+            PhpType::Int => Some(0),
+            PhpType::Mixed => Some(1),
+            _ => None,
+        },
+        _ => None,
+    };
+    ctx.emit_load_value(array)?;
     ctx.emit_load_value(operand(inst, 0)?)?;
-    ctx.fb.ins("call $__rt_implode", "join the elements with the glue");
+    match element_kind {
+        Some(kind) => {
+            ctx.fb.ins(
+                &format!("i32.const {kind}"),
+                "0 renders an int slot, 1 casts a Mixed cell",
+            );
+            ctx.fb.ins(
+                "call $__rt_implode_owned",
+                "each element converts as an explicit (string) cast would",
+            );
+        }
+        None => {
+            ctx.fb.ins("call $__rt_implode", "join the elements with the glue");
+        }
+    }
     store_result(ctx, inst)
 }
 
@@ -3996,9 +4105,18 @@ fn implode_shape_issue(function: &Function, call: &Instruction) -> Option<String
     // `Never` is admitted alongside it because it is the type of an array proven to have no
     // elements — `implode(",", [])` — where the element read never happens and the answer is the
     // empty string. Refusing it would reject a shape whose result cannot be got wrong.
+    //
+    // `Mixed` elements are admitted through a different helper: PHP converts each with the same
+    // rule as an explicit `(string)` cast, measured element by element, so the conversion is one
+    // this backend already implements exactly. That is what makes `implode(",", array_slice(…))`
+    // reachable, since a slice always answers `array<mixed>`.
     if !matches!(
         &array_value.php_type,
-        PhpType::Array(element) if matches!(**element, PhpType::Str | PhpType::Never)
+        PhpType::Array(element)
+            if matches!(
+                **element,
+                PhpType::Str | PhpType::Never | PhpType::Int | PhpType::Mixed
+            )
     ) {
         return Some(format!(
             "implode elements must be exactly string, got {:?}",
@@ -5324,8 +5442,27 @@ mod tests {
         );
         let call = empty.instructions.last().expect("the probe emitted a call");
         assert_eq!(direct_builtin_shape_issue(&probe_module(), &empty, call, RuntimeFnId::Implode), None);
-        // An int or Mixed element is a DIFFERENT slot layout, not a coercion this can do.
+        // Int and Mixed elements are CONVERTED — PHP applies the same rule as an explicit
+        // `(string)` cast, so they go through the owning helper rather than being refused.
         for element in [PhpType::Int, PhpType::Mixed] {
+            let converted = shaped_call(
+                RuntimeFnId::Implode,
+                &[
+                    str_arg.clone(),
+                    (IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(element.clone()))),
+                ],
+                IrType::Str,
+                PhpType::Str,
+            );
+            let call = converted.instructions.last().expect("the probe emitted a call");
+            assert_eq!(
+                direct_builtin_shape_issue(&probe_module(), &converted, call, RuntimeFnId::Implode),
+                None,
+                "an array of {element:?} converts element by element"
+            );
+        }
+        // A float or bool slot has neither a (pointer, length) layout nor a conversion here.
+        for element in [PhpType::Float, PhpType::Bool] {
             let wrong = shaped_call(
                 RuntimeFnId::Implode,
                 &[
@@ -5338,7 +5475,7 @@ mod tests {
             let call = wrong.instructions.last().expect("the probe emitted a call");
             assert!(
                 direct_builtin_shape_issue(&probe_module(), &wrong, call, RuntimeFnId::Implode).is_some(),
-                "an array of {element:?} is not readable as (pointer, length) slots"
+                "an array of {element:?} has no lowered element conversion"
             );
         }
 
