@@ -2821,6 +2821,13 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let array = operand(inst, 0)?;
     let value = operand(inst, 1)?;
     let value_repr = ctx.value_repr(value)?.clone();
+    // EIR pushes RAW scalars into an `array<mixed>` — that is what a heterogeneous
+    // literal like `[1, "a", 2.5]` emits — and leaves the boxing to the backend, the
+    // way the native one does. Dispatching on the source repr alone would send those
+    // to the int/string helpers and write the wrong slot layout.
+    if array_stores_mixed_cells(ctx, array) && !matches!(value_repr, WasmRepr::Ptr(_)) {
+        return push_boxed_scalar(ctx, inst, array, value, &value_repr);
+    }
     match value_repr {
         WasmRepr::I64(_) => {
             ctx.emit_load_value(array)?;
@@ -2885,6 +2892,112 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
         }
     }
+    Ok(())
+}
+
+/// Returns whether this array operand stores boxed Mixed cells (`value_type` 7).
+fn array_stores_mixed_cells(ctx: &FnCtx, array: ValueId) -> bool {
+    matches!(
+        ctx.function.value(array).map(|v| v.php_type.codegen_repr()),
+        Some(PhpType::Array(element)) if *element == PhpType::Mixed
+    )
+}
+
+/// Appends a raw scalar to a Mixed-cell array by boxing it at the push site.
+///
+/// The tag comes from the operand's PHP type — `Void` is EIR's `const_null` — and the
+/// payload is the cell's `(lo, hi)` pair: a string puts its pointer in `lo` and its length
+/// in `hi`, every other scalar leaves `hi` zero.
+///
+/// `__rt_mixed_from_value` hands back a cell with one reference and PERSISTS string bytes;
+/// `__rt_array_push_mixed` stores the cell BORROWED. So this transfers its single reference
+/// to the array and must NOT incref — unlike the already-boxed path, whose operand the EIR
+/// releases afterwards. The array's `__rt_array_free_deep` releases every cell.
+fn push_boxed_scalar(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    array: ValueId,
+    value: ValueId,
+    value_repr: &WasmRepr,
+) -> Result<()> {
+    let php = ctx
+        .function
+        .value(value)
+        .map(|v| v.php_type.codegen_repr())
+        .unwrap_or(PhpType::Mixed);
+    let cell = ctx.fresh_temp(ValType::I32);
+    match value_repr {
+        WasmRepr::I64(_) => {
+            let tag = match php {
+                PhpType::Int => 0,
+                PhpType::Bool | PhpType::False => 3,
+                PhpType::Void => 8,
+                other => {
+                    return Err(WasmError::Unsupported(format!(
+                        "array_push boxes no tag for {other:?}"
+                    )))
+                }
+            };
+            ctx.fb.ins(&format!("i64.const {tag}"), "scalar tag");
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins("i64.const 0", "no high payload");
+        }
+        WasmRepr::F64(_) => {
+            ctx.fb.ins("i64.const 2", "float tag");
+            ctx.emit_load_value(value)?;
+            ctx.fb
+                .ins("i64.reinterpret_f64", "the cell carries the float's bits");
+            ctx.fb.ins("i64.const 0", "no high payload");
+        }
+        WasmRepr::Str { .. } => {
+            // The pointer and length arrive in that order, but the cell wants the tag
+            // first — so park them before composing the call.
+            let ptr = ctx.fresh_temp(ValType::I32);
+            let len = ctx.fresh_temp(ValType::I64);
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(&format!("local.set {}", len), "string length");
+            ctx.fb.ins(&format!("local.set {}", ptr), "string pointer");
+            ctx.fb.ins("i64.const 1", "string tag");
+            ctx.fb.ins(
+                &format!("(i64.extend_i32_u (local.get {}))", ptr),
+                "pointer payload",
+            );
+            ctx.fb.ins(&format!("local.get {}", len), "length payload");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "array_push boxes no {other:?} into a mixed cell"
+            )))
+        }
+    }
+    ctx.fb.ins(
+        "call $__rt_mixed_from_value",
+        "box the scalar (one reference, handed to the array)",
+    );
+    ctx.fb.ins(&format!("local.set {}", cell), "boxed element");
+    ctx.emit_load_value(array)?;
+    ctx.fb
+        .ins(&format!("local.get {}", cell), "mixed cell pointer");
+    ctx.fb.ins(
+        "call $__rt_array_push_mixed",
+        "append into a value_type-7 array (may reallocate)",
+    );
+    // Deliberately NOT stamp_bool_array_result_type: pushing a bool would restamp the
+    // array's value_type to 3 (scalar), and `__rt_array_free_deep` would then skip the
+    // child loop and leak every cell. The bool lives INSIDE its cell here; the array's
+    // value_type 7 that `__rt_array_push_mixed` writes is the correct one.
+    ctx.emit_store_value(array)?;
+    if let Some(slot) = value_source_slot(ctx, array) {
+        let array_ref = ctx.value_repr(array)?.local_refs();
+        let slot_ref = ctx.slot_repr(slot)?.local_refs();
+        if array_ref.len() == 1 && slot_ref.len() == 1 {
+            ctx.fb
+                .ins(&format!("local.get {}", array_ref[0]), "reallocated array pointer");
+            ctx.fb
+                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
+        }
+    }
+    let _ = inst;
     Ok(())
 }
 

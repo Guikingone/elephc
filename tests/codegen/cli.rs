@@ -5055,6 +5055,203 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a HETEROGENEOUS array literal — the thing that makes `array<mixed>` reachable at all.
+///
+/// EIR pushes RAW scalars into an `array<mixed>`; there is no boxing instruction, so the backend
+/// boxes at the push site the way the native one does. Each scalar gets its exact cell tag (int 0,
+/// string 1, float 2, bool 3, and `PhpType::Void` — EIR's `const_null` — 8), and `implode` then
+/// converts each cell with the same rule as an explicit `(string)` cast, which is what php-src
+/// does element by element.
+///
+/// The reads matter as much as the writes: a Mixed-cell array has 16-byte slots with the cell
+/// pointer at slot+0, NOT the 8-byte stride the int accessor walks — reading it wrong silently
+/// yields every other element interleaved with nulls rather than trapping. `count` is in here to
+/// prove the array's `value_type` survives the build.
+#[test]
+fn test_cli_wasm_heterogeneous_array_literal_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_literal");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function j(string $g, array $a): void { echo "[", implode($g, $a), "]|"; }
+function c(array $a): void { echo count($a), ":", implode(",", $a), "|"; }
+j(",", [1, "a", 2.5, true, null]);
+j("", [0, "", false, -0.0]);
+j("::", [PHP_INT_MAX, "s", PHP_INT_MIN, 0.1, 1e100, -1e-7]);
+j("+", ["\x00\xff", 7, "\n", 1.5]);
+echo "\n";
+c([1, true]); c([true, false, 0]); c([null, true, "x"]); c([false, null]);
+j(";", [1, "b", 2.0, null]); j(";", [1, "b", 2.0, null]);
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile a heterogeneous literal to WASM");
+    assert!(
+        output.status.success(),
+        "heterogeneous literal compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the heterogeneous literal under Node");
+    assert!(
+        run.status.success(),
+        "heterogeneous literal trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected: Vec<u8> = [
+        b"[1,a,2.5,1,]|[0-0]|".as_slice(),
+        b"[9223372036854775807::s::-9223372036854775808::0.1::1.0E+100::-1.0E-7]|".as_slice(),
+        b"[\x00\xff+7+\n+1.5]|\n".as_slice(),
+        b"2:1,1|3:1,,0|3:,1,x|2:,|[1;b;2;]|[1;b;2;]|\n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Proves a Mixed-cell array RELEASES its cells, by watching the module's memory not grow.
+///
+/// This is a negative control, not a smoke test: the boxed elements were leaking entirely and the
+/// program still printed the right answer, because nothing on the output path reads the array's
+/// `value_type`. Only `__rt_array_free_deep` does — and pushing a bool used to restamp that field
+/// to 3 (scalar), which made the deep free skip its child loop and drop every cell on the floor.
+///
+/// The measurement subtracts the module's DECLARED initial memory, so it isolates runtime growth
+/// from the constant data a longer program carries. A bool is in the literal on purpose: it is the
+/// element that triggered the restamp.
+#[test]
+fn test_cli_wasm_mixed_cell_array_releases_its_cells() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_leak");
+    let php_path = dir.join("main.php");
+    let mut src = String::from(
+        "<?php\nfunction j(array $a): void { if (count($a) === 99) { echo \"x\"; } }\n",
+    );
+    // Unrolled: a counting `for` loop does not compile on this target yet.
+    for i in 0..2000 {
+        src.push_str(&format!(
+            "j([{i}, \"abcdefghij\", 2.5, true, null]);\n"
+        ));
+    }
+    src.push_str("echo \"ok\\n\";\n");
+    fs::write(&php_path, src).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the mixed-cell leak probe");
+    assert!(
+        output.status.success(),
+        "leak probe compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(readFileSync(process.argv[2])),
+  wasi.getImportObject(),
+);
+const code = wasi.start(instance);
+console.error(`pages=${instance.exports.memory.buffer.byteLength / 65536}`);
+process.exitCode = code;
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the leak probe under Node");
+    assert!(
+        run.status.success(),
+        "leak probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"ok\n");
+
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let final_pages: usize = stderr
+        .split("pages=")
+        .nth(1)
+        .and_then(|rest| rest.trim().parse().ok())
+        .expect("the runner reported the final page count");
+
+    // The declared initial size is the static baseline; anything above it is runtime growth.
+    let wat_output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to emit the leak probe's WAT");
+    assert!(wat_output.status.success());
+    let wat = fs::read_to_string(dir.join("main.wat")).expect("the WAT was written");
+    let initial_pages: usize = wat
+        .split("(memory (export \"memory\") ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|n| n.trim().parse().ok())
+        .expect("the module declares its initial memory");
+
+    assert_eq!(
+        final_pages, initial_pages,
+        "2000 boxed 5-element arrays grew memory from {initial_pages} to {final_pages} pages: \
+         the cells are not being released"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

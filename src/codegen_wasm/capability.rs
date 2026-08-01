@@ -1336,13 +1336,16 @@ fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option
 /// Validates indexed-array write storage against the helper selected by WASM.
 ///
 /// The current runtime has exact layouts only for int/bool-like and string
-/// arrays. `ArrayPush` additionally supports an already-boxed Mixed/Union cell;
-/// it does not box a concrete value for a Mixed destination.
+/// arrays. `ArrayPush` additionally supports an already-boxed Mixed/Union cell,
+/// and BOXES a concrete scalar when the destination stores Mixed cells — which is
+/// what a heterogeneous array literal emits, since EIR pushes raw scalars into an
+/// `array<mixed>` and leaves the boxing to the backend. `ArraySet` has no boxing
+/// setter yet, so it still refuses that.
 fn array_store_shape_issue(
     function: &Function,
     inst: &Instruction,
     value_index: usize,
-    allow_mixed_cell: bool,
+    is_push: bool,
 ) -> Option<String> {
     let Some(array) = inst.operands.first().and_then(|id| function.value(*id)) else {
         return Some("array write source is missing from the value table".to_string());
@@ -1400,17 +1403,26 @@ fn array_store_shape_issue(
         ) => true,
         (PhpType::Void | PhpType::Never, IrType::Str, PhpType::Str) => true,
         (PhpType::Mixed, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)
-            if allow_mixed_cell =>
+            if is_push =>
         {
             true
         }
+        // A raw scalar boxed into a Mixed cell at the push site. Each of these has an
+        // exact tag and payload; a heap container has neither, so it stays refused.
+        (
+            PhpType::Mixed,
+            IrType::I64,
+            PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void,
+        ) if is_push => true,
+        (PhpType::Mixed, IrType::F64, PhpType::Float) if is_push => true,
+        (PhpType::Mixed, IrType::Str, PhpType::Str) if is_push => true,
         (
             PhpType::Void | PhpType::Never,
             IrType::Heap(IrHeapKind::Mixed),
             PhpType::Mixed,
-        ) if allow_mixed_cell => true,
+        ) if is_push => true,
         (PhpType::Union(_), IrType::Heap(IrHeapKind::Union), PhpType::Union(_))
-            if allow_mixed_cell =>
+            if is_push =>
         {
             element == source_php
         }
