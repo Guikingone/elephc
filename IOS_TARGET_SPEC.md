@@ -166,11 +166,15 @@ ld -arch arm64 -dylib -o libfoo.dylib foo.o <cache>/runtime-*.o \
    -platform_version ios-simulator <min> <sdk>
 ```
 
-Load into a SwiftUI simulator app, call `elephc_init()` then an `int`-returning `#[Export]`.
+Automated as `scripts/ios-relink-spike.sh`. It compiles a PHP file with both export return shapes, assembles the emitted assembly, relinks against the iOS SDK, then builds a C host for the simulator triple and runs it through `simctl spawn` — so the spike ends in an actual call into compiled PHP rather than in a well-formed file. No Xcode project needed.
 
-**Accept:** the call returns the correct value in the simulator.
-**Prereq:** full Xcode. Command Line Tools alone carry no iOS SDK.
-**Purpose:** kill or validate the premise for half a day, before any investment.
+**Everything except the SDK swap is already proven.** The identical chain — isolated runtime cache, `as -arch arm64`, hand-rolled `ld` of user object plus runtime object, `dlopen` and call — was run end to end against the *macOS* SDK and returned `42 hi iOS 6`, exercising the int export, the string export and `elephc_free`. The only untested variables that remain are `-syslibroot` and `-platform_version`.
+
+An isolated `XDG_CACHE_HOME` matters more than it looks: the runtime object's cache key encodes the program's runtime feature set, so the shared cache holds several candidates and a "newest match" glob would silently link the wrong one.
+
+**Accept:** `./scripts/ios-relink-spike.sh` prints `42 hi iOS 6` from inside a booted simulator.
+**Prereq:** full Xcode. Command Line Tools alone carry no iOS SDK; the script detects this and says so instead of falling back to the macOS SDK.
+**Purpose:** kill or validate the premise in one command, before any investment.
 
 ### Lot 1 — `Str` return on `#[Export]`
 Allow `PhpType::Str` in `is_v1_return_type`, implement C-ABI marshaling, settle ownership so `elephc_free` stops being a stub.
