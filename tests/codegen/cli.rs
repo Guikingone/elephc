@@ -3651,6 +3651,116 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `md5` reproduces php-src, block boundaries included.
+///
+/// MD5 shares SHA-1's padding SHAPE but reads and writes every word LITTLE-endian, which is the
+/// single biggest difference between them and the usual way a port of one into the other goes
+/// wrong: a digest that is byte-reversed per word still looks like a plausible hash. The digest
+/// bytes come out low-first within each word for the same reason. Lengths either side of every
+/// boundary the padding rule turns on are covered, as they are for sha1.
+#[test]
+fn test_cli_wasm_md5_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_md5");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function h(string $s): void { echo md5($s), "\n"; }
+h("");
+h("a");
+h("abc");
+h("message digest");
+h("The quick brown fox jumps over the lazy dog");
+h("\x00\x01\xff");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile md5 to WASM");
+    assert!(
+        output.status.success(),
+        "md5 compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run md5 under Node");
+    assert!(
+        run.status.success(),
+        "md5 trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own digests, which are the published RFC 1321 test vectors.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "d41d8cd98f00b204e9800998ecf8427e\n",
+            "0cc175b9c0f1b6a831c399e269772661\n",
+            "900150983cd24fb0d6963f7d28e17f72\n",
+            "f96b697d7cb7938d525a2f31aaf161d0\n",
+            "9e107d9d372bb6826bd81d3542a419d6\n",
+            "ffbb8cd5a232b7d906904533e9609f48\n",
+            "eced9e0b81ef2bba605cbc5e2e76a1d0\n",
+            "ef1772b6dff9a122358552954ad0df65\n",
+            "3b0c8ac703f828b04c6c197006d17218\n",
+            "652b906d60af96844ebd21b674f35e93\n",
+            "b06521f39153d618550606be297466d5\n",
+            "014842d480b571495a4a0363793f7367\n",
+            "c743a45e0d2e6a95cb859adae0248435\n",
+            "8a7bd0732ed6a28ce75f6dabc90e1613\n",
+            "5f61c0ccad4cac44c75ff505e1f1e537\n",
+            "020406e1d05cdc2aa287641f7ae2cc39\n",
+            "e510683b3f5ffe4093d021808bc6ff70\n",
+            "887f30b43b2867f4a9accceee7d16e6c\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `sha1` reproduces php-src, block boundaries included.
 ///
 /// Every SHA-1 word is BIG-endian, which is where an implementation usually diverges, and the

@@ -647,6 +647,12 @@ fn supported_lowerer_paths_resolve_to_backend_functions() {
 
 /// Verifies producer and execution-mode evidence is carried by rows rather
 /// than being hidden inside the supported-only payload.
+///
+/// Both dispositions are checked, because that is the whole claim: a row that is still a gap
+/// names the PHP that reaches it just as a lowered one does. Using only a missing row would let
+/// the evidence quietly move into the supported payload, and using only a supported row would
+/// let it disappear from gaps — which is where it matters most, since a gap with no producer is
+/// a gap nobody can act on.
 #[test]
 fn row_level_producers_and_execution_modes_are_revision_honest() {
     let array_map = runtime_fn_row(RuntimeFnId::ArrayMap);
@@ -654,9 +660,14 @@ fn row_level_producers_and_execution_modes_are_revision_honest() {
     assert_eq!(array_map.execution_modes, ["command", "npm"]);
 
     let md5 = runtime_fn_row(RuntimeFnId::Md5);
-    assert_eq!(md5.disposition, Disposition::Missing);
+    assert_eq!(md5.disposition, Disposition::Supported);
     assert_eq!(md5.producers, ["md5(...)"]);
     assert_eq!(md5.execution_modes, ["command", "npm"]);
+
+    let gzcompress = runtime_fn_row(RuntimeFnId::Gzcompress);
+    assert_eq!(gzcompress.disposition, Disposition::Missing);
+    assert_eq!(gzcompress.producers, ["gzcompress(...)"]);
+    assert_eq!(gzcompress.execution_modes, ["command", "npm"]);
 
     for row in ir_type_representatives().into_iter().map(ir_type_row) {
         assert!(!row.producers.is_empty(), "{} lacks a producer", row.name);

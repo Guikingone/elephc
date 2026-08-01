@@ -4498,7 +4498,8 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
         | RuntimeFnId::Crc32
-        | RuntimeFnId::Sha1 => true,
+        | RuntimeFnId::Sha1
+        | RuntimeFnId::Md5 => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4829,7 +4830,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Long2ip
         | RuntimeFnId::MbEregMatch
         | RuntimeFnId::MbStrlen
-        | RuntimeFnId::Md5
         | RuntimeFnId::NumberFormat
         | RuntimeFnId::Printf
         | RuntimeFnId::Sprintf
