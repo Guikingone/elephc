@@ -604,6 +604,20 @@ impl Target {
         }
     }
 
+    /// Returns whether this target's sandbox forbids `fork`, which makes every
+    /// process-spawning builtin unusable.
+    ///
+    /// iOS apps run sandboxed with no ability to spawn a child process at all —
+    /// `system`, `popen` and friends exist as symbols in libSystem but always
+    /// fail. Compiling a call to one is therefore a mistake worth reporting at
+    /// build time rather than shipping as a runtime surprise.
+    pub fn forbids_process_spawn(&self) -> bool {
+        matches!(
+            self.apple_variant,
+            AppleVariant::IOS | AppleVariant::IOSSimulator
+        )
+    }
+
     /// Returns the OS component of the Apple compiler triple, as reported by
     /// `clang -dumpmachine` — `arm64-apple-darwin` versus `arm64-apple-ios`.
     /// Native-dependency toolchain validation compares against this.

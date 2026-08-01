@@ -220,6 +220,73 @@ int main(void) {
 }
 "#;
 
+/// Verifies that every process-spawning builtin is refused at compile time for
+/// an iOS target, and still accepted for macOS.
+///
+/// These functions exist as libSystem symbols on iOS and link happily, then fail
+/// at run time inside the sandbox, which forbids `fork`. Catching that at build
+/// time is the whole point, so the test asserts on the diagnostic rather than on
+/// the exit status alone: it must name the builtin, name the target, and carry a
+/// source position.
+///
+/// `proc_open` and its family are absent from this list because they do not
+/// exist in the compiler at all. Whenever they are added they must adopt the
+/// same guard.
+#[test]
+fn test_process_spawning_builtins_are_refused_for_ios_targets() {
+    let dir = make_test_dir("elephc_ios_capability");
+
+    for (builtin, source) in [
+        ("system", r#"<?php system("ls");"#),
+        ("passthru", r#"<?php passthru("ls");"#),
+        ("exec", r#"<?php exec("ls");"#),
+        ("shell_exec", r#"<?php shell_exec("ls");"#),
+        ("popen", r#"<?php popen("ls", "r");"#),
+        ("pclose", r#"<?php pclose(popen("ls", "r"));"#),
+    ] {
+        let php = dir.join("spawn.php");
+        fs::write(&php, source).unwrap();
+
+        let refused = elephc_command(&dir)
+            .args(["--target", "ios-arm64", "--emit", "staticlib", "spawn.php"])
+            .output()
+            .expect("failed to run elephc");
+        assert!(
+            !refused.status.success(),
+            "{builtin} must not compile for iOS"
+        );
+        let message = String::from_utf8_lossy(&refused.stderr);
+        // `pclose` wraps `popen`, whose argument is evaluated first, so the
+        // reported builtin is the inner one -- either name proves the gate ran.
+        assert!(
+            message.contains(&format!("{builtin}()")) || message.contains("popen()"),
+            "{builtin}: diagnostic must name the builtin, got: {message}"
+        );
+        assert!(
+            message.contains("ios-arm64"),
+            "{builtin}: diagnostic must name the target, got: {message}"
+        );
+        assert!(
+            message.contains("error["),
+            "{builtin}: diagnostic must carry a source position, got: {message}"
+        );
+
+        // The same source stays valid for the host target: this is a target
+        // capability gate, not a removal of the builtin.
+        let accepted = elephc_command(&dir)
+            .args(["--emit", "staticlib", "spawn.php"])
+            .output()
+            .expect("failed to run elephc");
+        assert!(
+            accepted.status.success(),
+            "{builtin} must still compile for the host:\n{}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+    }
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Verifies `--emit staticlib`: the archive links directly into a host binary,
 /// with no `dlopen` and no runtime symbol resolution involved.
 ///
