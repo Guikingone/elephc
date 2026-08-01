@@ -8,7 +8,7 @@ sidebar:
 ## array_replace()
 
 ```php
-function array_replace(array $array, ...$replacements): mixed
+function array_replace(array $array, ...$replacements): array
 ```
 
 Replaces elements from passed arrays into the first array.
@@ -17,7 +17,7 @@ Replaces elements from passed arrays into the first array.
 - `$array` (`array`)
 - `...$replacements` — variadic: collects excess arguments into `$replacements`.
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

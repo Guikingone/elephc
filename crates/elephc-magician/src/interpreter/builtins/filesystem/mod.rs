@@ -168,6 +168,7 @@ pub(in crate::interpreter) use flock::{eval_builtin_flock, eval_flock_result};
 pub(in crate::interpreter) use fsockopen::{
     eval_builtin_fsockopen_call, eval_fsockopen_with_error_result,
 };
+pub(in crate::interpreter) use stream_socket_client::eval_builtin_stream_socket_client_call;
 pub(in crate::interpreter) use stream_select::{
     eval_builtin_stream_select_call, eval_stream_select_result,
 };

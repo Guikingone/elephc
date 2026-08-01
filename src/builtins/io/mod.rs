@@ -28,6 +28,8 @@
 //!   migrated from `src/types/checker/builtins/io/files.rs` (io batch C2).
 //! - `pathinfo` owns the relocated `pathinfo_static_flag_value` helper (was in io/paths.rs).
 //! - `stat_support` holds `stat_result_type` shared by stat/lstat/fstat check hooks.
+//! - `connect_error_params` holds `check_connect_error_params`, shared by the socket-connect
+//!   check hooks (fsockopen, pfsockopen, stream_socket_client).
 //! - `touch` owns the relocated `check_touch` helper (was in io/files.rs).
 //! - Add `pub mod <name>;` here for every new io builtin home.
 
@@ -148,6 +150,7 @@ pub mod rewinddir;
 pub mod rmdir;
 pub mod scandir;
 pub mod stat;
+pub(crate) mod connect_error_params;
 pub(crate) mod stat_support;
 pub mod stream_bucket_append;
 pub mod stream_bucket_make_writeable;

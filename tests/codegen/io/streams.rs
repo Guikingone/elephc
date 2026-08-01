@@ -3009,6 +3009,45 @@ fn test_stream_socket_client_rejects_closed_port() {
     assert_eq!(out, "bool(true)\n");
 }
 
+/// Verifies compiled PHP output for stream socket client refused sets error.
+#[test]
+fn test_stream_socket_client_refused_sets_error() {
+    // A refused connection returns false and fills the by-reference error outputs. The
+    // pre-set sentinels are deliberately distinctive so an *unwritten* slot reads back as
+    // "errno-UNWRITTEN" / "SENTINEL_UNWRITTEN" rather than as a plausible value — a plain
+    // `$errno !== 0` check would pass even if nothing were stored. Four arguments mirror
+    // Symfony's var-dumper call site, which passes a timeout after the two out-params.
+    let out = compile_and_run(
+        r#"<?php
+$errno = 999888;
+$errstr = "SENTINEL_UNWRITTEN";
+$s = stream_socket_client("tcp://127.0.0.1:1", $errno, $errstr, 3);
+echo ($s === false) ? "false" : "resource";
+echo "|" . ($errno === 999888 ? "errno-UNWRITTEN" : ($errno !== 0 ? "errno-set" : "errno-zero"));
+echo "|" . $errstr;
+"#,
+    );
+    assert_eq!(out, "false|errno-set|Connection refused");
+}
+
+/// Verifies compiled PHP output for stream socket client success clears error.
+#[test]
+fn test_stream_socket_client_success_clears_error() {
+    // PHP writes the out-params on success too, zeroing the code and emptying the message.
+    let _server = spawn_tcp_server(54995, b"data over stream_socket_client");
+    let out = compile_and_run(
+        r#"<?php
+$errno = 999888;
+$errstr = "SENTINEL_UNWRITTEN";
+$cli = stream_socket_client("tcp://127.0.0.1:54995", $errno, $errstr, 3);
+echo ($cli === false) ? "FAIL" : "ok";
+echo "|errno=" . $errno;
+echo "|errstr=[" . $errstr . "]";
+"#,
+    );
+    assert_eq!(out, "ok|errno=0|errstr=[]");
+}
+
 /// Verifies compiled PHP output for stream socket accept exchanges data.
 #[test]
 fn test_stream_socket_accept_exchanges_data() {

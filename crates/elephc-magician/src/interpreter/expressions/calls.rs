@@ -68,6 +68,9 @@ pub(in crate::interpreter) fn eval_call(
     if matches!(name, "fsockopen" | "pfsockopen") {
         return eval_builtin_fsockopen_call(args, context, scope, values);
     }
+    if name == "stream_socket_client" {
+        return eval_builtin_stream_socket_client_call(args, context, scope, values);
+    }
     if let Some(result) = eval_date_procedural_alias_call(name, args, context, scope, values)? {
         return Ok(result);
     }

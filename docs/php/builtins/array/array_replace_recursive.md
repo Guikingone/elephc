@@ -8,7 +8,7 @@ sidebar:
 ## array_replace_recursive()
 
 ```php
-function array_replace_recursive(array $array, ...$replacements): mixed
+function array_replace_recursive(array $array, ...$replacements): array
 ```
 
 Replaces elements from passed arrays into the first array recursively.
@@ -17,7 +17,7 @@ Replaces elements from passed arrays into the first array recursively.
 - `$array` (`array`)
 - `...$replacements` — variadic: collects excess arguments into `$replacements`.
 
-**Returns**: `mixed`
+**Returns**: `array`
 
 ## Availability
 

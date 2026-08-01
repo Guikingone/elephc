@@ -1112,7 +1112,23 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
             vec![null_lit(), int_lit(-1)],
         )),
         "stream_socket_server" => Some(fixed(&["address"])),
-        "stream_socket_client" => Some(fixed(&["address"])),
+        "stream_socket_client" => {
+            let mut sig = optional(
+                &[
+                    "address",
+                    "error_code",
+                    "error_message",
+                    "timeout",
+                    "flags",
+                    "context",
+                ],
+                1,
+                vec![null_lit(), null_lit(), null_lit(), int_lit(4), null_lit()],
+            );
+            sig.ref_params[1] = true;
+            sig.ref_params[2] = true;
+            Some(sig)
+        }
         "stream_socket_accept" => {
             let mut sig = optional(
                 &["socket", "timeout", "peer_name"],

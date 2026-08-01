@@ -2391,12 +2391,19 @@ pub(crate) fn lower_stream_socket_server(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_socket_client(address)` and records the connected host for TLS defaults.
+/// Lowers `stream_socket_client(address, &error_code?, &error_message?, timeout?, flags?,
+/// context?)` and records the connected host for TLS defaults.
+///
+/// The by-reference `$error_code` / `$error_message` out-params sit at operands 1 and 2 — two
+/// positions earlier than `fsockopen`'s — and are written by the shared
+/// [`store_socket_error_outputs`] emitter. The trailing `timeout`, `flags` and `context`
+/// arguments are accepted for signature parity but not forwarded: `__rt_stream_socket_client`
+/// takes only the address, so it always performs a blocking connect with the default flags.
 pub(crate) fn lower_stream_socket_client(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "stream_socket_client", 1)?;
+    ensure_arg_count_between(inst, "stream_socket_client", 1, 6)?;
     let address = expect_operand(inst, 0)?;
     load_string_to_result(ctx, address, "stream_socket_client address")?;
     match ctx.emitter.target.arch {
@@ -2426,6 +2433,7 @@ pub(crate) fn lower_stream_socket_client(
             abi::emit_call_label(ctx.emitter, "__rt_stash_connect_host");
         }
     }
+    store_socket_error_outputs(ctx, inst, 1, 2)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_client");
     store_if_result(ctx, inst)
 }
@@ -3672,7 +3680,7 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fsockopen");
-    store_fsockopen_error_outputs(ctx, inst)?;
+    store_socket_error_outputs(ctx, inst, 2, 3)?;
     box_stream_fd_or_false_result(ctx, "fsockopen");
     store_if_result(ctx, inst)
 }
@@ -6578,18 +6586,30 @@ fn store_recvfrom_address(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resu
     Ok(())
 }
 
-/// Stores local `$errno` and `$errstr` outputs for `fsockopen`.
-fn store_fsockopen_error_outputs(
+/// Stores the by-reference error-code and error-message outputs of a socket-connect builtin.
+///
+/// Shared by `fsockopen` and `stream_socket_client`, which agree on the emitted semantics but
+/// disagree on where the out-params sit in the argument list: `fsockopen(host, port, &code,
+/// &message, timeout)` puts them at operands 2 and 3, while `stream_socket_client(address, &code,
+/// &message, timeout, flags, context)` puts them at operands 1 and 2. Callers therefore pass the
+/// operand indices rather than the helper hardcoding one convention.
+///
+/// Must be invoked while the raw connect result is still live in the result register (`x0` /
+/// `rax`) — before the fd is boxed — because the outcome sign selects between the success values
+/// (`0` / `""`) and the failure values (`ECONNREFUSED` / `"Connection refused"`).
+fn store_socket_error_outputs(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    errno_index: usize,
+    errstr_index: usize,
 ) -> Result<()> {
-    let errno_slot = if inst.operands.len() >= 3 {
-        source_load_local_slot(ctx, expect_operand(inst, 2)?)?
+    let errno_slot = if inst.operands.len() > errno_index {
+        source_load_local_slot(ctx, expect_operand(inst, errno_index)?)?
     } else {
         None
     };
-    let errstr_slot = if inst.operands.len() >= 4 {
-        source_load_local_slot(ctx, expect_operand(inst, 3)?)?
+    let errstr_slot = if inst.operands.len() > errstr_index {
+        source_load_local_slot(ctx, expect_operand(inst, errstr_index)?)?
     } else {
         None
     };
@@ -6602,7 +6622,7 @@ fn store_fsockopen_error_outputs(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
-            ctx.emitter.instruction("cmp x0, #0");                              // test whether the fsockopen connection succeeded
+            ctx.emitter.instruction("cmp x0, #0");                              // test whether the socket connection succeeded
             ctx.emitter.instruction("mov x9, #0");                              // success error code is zero
             ctx.emitter.instruction(&format!("mov x10, #{}", econnrefused));    // failure error code is ECONNREFUSED
             ctx.emitter.instruction("csel x9, x9, x10, ge");                    // choose the error code for the connection outcome
@@ -6630,7 +6650,7 @@ fn store_fsockopen_error_outputs(
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
-            ctx.emitter.instruction("cmp rax, 0");                              // test whether the fsockopen connection succeeded
+            ctx.emitter.instruction("cmp rax, 0");                              // test whether the socket connection succeeded
             ctx.emitter.instruction(&format!("mov r9, {}", econnrefused));      // failure error code is ECONNREFUSED
             ctx.emitter.instruction("mov r10, 0");                              // success error code is zero without clobbering compare flags
             ctx.emitter.instruction("cmovge r9, r10");                          // choose the error code for the connection outcome

@@ -440,7 +440,17 @@ fn test_error_stream_socket_server_wrong_args() {
 fn test_error_stream_socket_client_wrong_args() {
     expect_error(
         "<?php stream_socket_client();",
-        "stream_socket_client() takes exactly 1 argument",
+        "stream_socket_client() takes 1 to 6 arguments",
+    );
+}
+
+/// Verifies that a non-variable `$error_code` argument is rejected, as PHP requires an lvalue
+/// for the by-reference out-param.
+#[test]
+fn test_error_stream_socket_client_error_code_not_variable() {
+    expect_error(
+        r#"<?php stream_socket_client("tcp://127.0.0.1:1", 0);"#,
+        "stream_socket_client() parameter $error_code must be passed a variable",
     );
 }
 
