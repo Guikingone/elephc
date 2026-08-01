@@ -1,0 +1,6 @@
+*.s
+*.o
+*.so
+*.dylib
+ViewProtocol
+ViewProtocol.app/

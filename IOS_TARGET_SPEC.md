@@ -182,13 +182,28 @@ Allow `PhpType::Str` in `is_v1_return_type`, implement C-ABI marshaling, settle 
 **Accept:** an exported PHP function returns a string to a C caller; the buffer is released through `elephc_free`; no leak under the existing GC-stats tooling; round-trip covered by a test naming the export.
 **Blocked by:** nothing platform-related. Needs a working cargo build.
 
-### Lot 2 — View-protocol spike, on macOS
-SwiftUI app on **macOS**, linking an elephc `.dylib`, calling `#[Export] function render(): string` returning a serialized view tree that Swift renders natively.
+### Lot 2 — View-protocol spike, on macOS ✅ done
+Delivered as `examples/swiftui-view-protocol/`. A native macOS app whose entire interface is decided by compiled PHP: `render_view(): string` returns a serialized view tree, `dispatch(string $action): string` returns the next one after an event, and Swift knows four node types and nothing else.
 
-Proves the UI answer with today's toolchain, with iOS entirely out of the picture. This is the package that de-risks the *product*; Lot 0 de-risks the *platform*.
+It needs **only the Command Line Tools** — `swiftc` ships with them and SwiftUI is a system framework — so there is no Xcode install and no `.xcodeproj` in the loop. `run.sh` compiles both sides, assembles and ad-hoc-signs a `.app`.
 
-**Accept:** a native SwiftUI view tree driven end-to-end by compiled PHP.
-**Depends on:** Lot 1.
+Why this shape is the one that fits AOT: a template engine must *evaluate itself* on the device, which requires a PHP runtime there; a tree *generator* compiles once and ships as machine code. It is the single corner of the UI problem where being ahead-of-time costs nothing.
+
+Two findings worth carrying to the iOS host:
+
+- **`ElephcStr` must be a C type.** Swift rejects a Swift-declared struct in a `@convention(c)` signature — only a C type carries the guarantee that the value rides the platform's aggregate-return registers. Hence `elephc_abi.h` and `-import-objc-header`. The same constraint applies to any Swift host, on any Apple platform.
+- **`@main` needs `-parse-as-library`**, or swiftc treats the file as a script.
+
+**Accept — met.** `--selftest` runs the round trip headlessly, so the example is verifiable without a display:
+
+```
+initial=nothing yet after++=2 items after-=one item reset=nothing yet
+PASS: the view tree, the string ABI and PHP-side state all round-trip
+```
+
+That asserts more than rendering: the tree decodes into a typed model with the expected shape, a string crosses in both directions, `elephc_free` runs on every returned buffer, and the counter's state persists in the loaded library's own memory across host calls — `counter()` uses a function `static`, and Swift holds no counter at all.
+
+**Depended on:** Lot 1. Nothing here is macOS-specific; the same library and protocol drive a UIKit or SwiftUI host on iOS once that target links.
 
 ### Lot 3 — `Target` Apple variant, then `Emit::Staticlib`
 The enabling refactor (§5), then the delivery form.
