@@ -41,6 +41,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
     wm.add_raw_func(RT_ARRAY_SLICE);
+    wm.add_raw_func(RT_RANGE_INT);
     wm.add_raw_func(RT_ARRAY_GET_INT);
     wm.add_raw_func(RT_ARRAY_GET_TAGGED_INT);
     wm.add_raw_func(RT_ARRAY_GET_MIXED_BOOL);
@@ -573,6 +574,42 @@ const RT_ARRAY_SLICE: &str = r#"(func $__rt_array_slice (param $src i32) (param 
             (select (i64.load (i32.add (local.get $slot) (i32.const 8))) (i64.const 0)
                     (i64.eq (local.get $esz) (i64.const 16))))))))
     (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $next)))
+  (local.get $out))
+"#;
+
+/// `__rt_range_int`: PHP's two-argument `range` over integers.
+///
+/// The step form does not exist here — the front-end rejects any arity but two — so the step is
+/// always 1 and the direction comes from the operands: `range(5, 1)` counts DOWN. A single-element
+/// range is `range(n, n)`, which is why the count is the span PLUS one.
+///
+/// The span is computed with wrapping arithmetic and then checked: a range spanning more than
+/// `i64::MAX` elements cannot have its count represented at all, so it asks for a layout
+/// `__rt_checked_layout` is guaranteed to reject, which raises the same deterministic
+/// out-of-memory PHP raises for a range that large.
+const RT_RANGE_INT: &str = r#"(func $__rt_range_int (param $start i64) (param $end i64) (result i32)
+  (local $span i64)
+  (local $count i64)
+  (local $step i64)
+  (local $out i32)
+  (local $v i64)
+  (local.set $step (i64.const 1))
+  (local.set $span (i64.sub (local.get $end) (local.get $start)))
+  (if (i64.lt_s (local.get $end) (local.get $start))         ;; descending range
+    (then
+      (local.set $step (i64.const -1))
+      (local.set $span (i64.sub (local.get $start) (local.get $end)))))
+  (if (i64.ge_u (local.get $span) (i64.const 9223372036854775807))  ;; the count would not fit
+    (then (drop (call $__rt_checked_layout (i64.const -1) (i64.const 8) (i64.const 24)))))  ;; raises OOM
+  (local.set $count (i64.add (local.get $span) (i64.const 1)))
+  (local.set $out (call $__rt_array_new (local.get $count) (i64.const 8)))
+  (local.set $v (local.get $start))
+  (block $done (loop $next
+    (br_if $done (i64.eqz (local.get $count)))
+    (local.set $out (call $__rt_array_push_int (local.get $out) (local.get $v)))
+    (local.set $v (i64.add (local.get $v) (local.get $step)))
+    (local.set $count (i64.sub (local.get $count) (i64.const 1)))
     (br $next)))
   (local.get $out))
 "#;

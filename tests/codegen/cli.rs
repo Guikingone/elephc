@@ -5865,6 +5865,86 @@ const MERGE_EXPECTED: &str = r##"5:1,2,3,4,5|2:1,2|3:3,4,5|0:|3:xx,y,z|3:1.5,2.5
 xx,y;1,x,2.5
 "##;
 
+/// Verifies `range` over integers, in both directions and at the i64 boundaries.
+///
+/// Only the two-bound form exists — the front-end rejects every other arity — so the step is
+/// always 1 and the DIRECTION comes from the operands: `range(5, 1)` counts down. A single-element
+/// range is `range(n, n)`, which is why the count is the span plus one.
+///
+/// `PHP_INT_MIN`/`PHP_INT_MAX` bounds are here because the span is computed with wrapping
+/// arithmetic: a range spanning more than `i64::MAX` elements cannot have its count represented,
+/// and asks for a layout the allocator is guaranteed to reject rather than looping forever.
+#[test]
+fn test_cli_wasm_range_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_range");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, RANGE_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the range probe");
+    assert!(
+        output.status.success(),
+        "range compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the range probe under Node");
+    assert!(
+        run.status.success(),
+        "range probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), RANGE_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The `range` probe program: both directions, single-element, and the i64 boundaries.
+const RANGE_SOURCE: &str = r##"<?php
+function p(array $r): void { echo count($r), ":", implode(",", $r), "|"; }
+p(range(1, 5)); p(range(5, 1)); p(range(0, 0)); p(range(-3, 2)); p(range(2, -3));
+p(range(-1, -1)); p(range(100, 97)); p(range(PHP_INT_MAX - 2, PHP_INT_MAX));
+p(range(PHP_INT_MIN, PHP_INT_MIN + 2)); p(range(PHP_INT_MAX, PHP_INT_MAX - 3));
+foreach (range(1, 4) as $n) { echo $n, "."; }
+echo "|"; p(range(1, 5)); echo "\n";
+"##;
+
+/// php-src 8.5.6's own output for `RANGE_SOURCE`.
+const RANGE_EXPECTED: &str = r##"5:1,2,3,4,5|5:5,4,3,2,1|1:0|6:-3,-2,-1,0,1,2|6:2,1,0,-1,-2,-3|1:-1|4:100,99,98,97|3:9223372036854775805,9223372036854775806,9223372036854775807|3:-9223372036854775808,-9223372036854775807,-9223372036854775806|4:9223372036854775807,9223372036854775806,9223372036854775805,9223372036854775804|1.2.3.4.|5:1,2,3,4,5|
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

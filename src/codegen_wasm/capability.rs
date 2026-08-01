@@ -4547,6 +4547,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Implode
         | RuntimeFnId::ArraySlice
         | RuntimeFnId::ArrayMerge
+        | RuntimeFnId::Range
         | RuntimeFnId::Explode
         | RuntimeFnId::StrSplit
         | RuntimeFnId::Wordwrap
@@ -4602,7 +4603,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Ksort
         | RuntimeFnId::Natcasesort
         | RuntimeFnId::Natsort
-        | RuntimeFnId::Range
         | RuntimeFnId::Rsort
         | RuntimeFnId::Shuffle
         | RuntimeFnId::Sort

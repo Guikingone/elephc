@@ -5903,7 +5903,7 @@
           "name": "range",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "range(...)"
           ],
@@ -5911,7 +5911,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::range_admits_only_two_integer_bounds",
+              "codegen::cli::test_cli_wasm_range_matches_php"
+            ],
+            "notes": "Two-bound integer form, which is all the front-end admits; the direction comes from the operands. A span too large to count asks for a layout __rt_checked_layout rejects, raising the deterministic out-of-memory PHP raises."
+          }
         },
         {
           "name": "rsort",
@@ -12795,14 +12803,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 191,
+    "supported": 192,
     "excluded": 47,
-    "missing": 474,
+    "missing": 473,
     "evidence_gaps": 176,
     "row_evidence_gaps": 175,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "474 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "473 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

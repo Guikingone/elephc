@@ -3040,6 +3040,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Implode
             | RuntimeFnId::ArraySlice
             | RuntimeFnId::ArrayMerge
+            | RuntimeFnId::Range
             | RuntimeFnId::Explode
             | RuntimeFnId::StrSplit
             | RuntimeFnId::Wordwrap
@@ -3138,6 +3139,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::ArrayMerge {
         return array_merge_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Range {
+        return range_shape_issue(function, call);
     }
     if target == RuntimeFnId::Explode {
         return explode_shape_issue(function, call);
@@ -3370,6 +3374,15 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::ArraySlice {
         return lower_array_slice(ctx, inst);
+    }
+    if target == RuntimeFnId::Range {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.emit_load_value(operand(inst, 1)?)?;
+        ctx.fb.ins(
+            "call $__rt_range_int",
+            "count from start to end inclusive, in whichever direction",
+        );
+        return store_result(ctx, inst);
     }
     if target == RuntimeFnId::ArrayMerge {
         ctx.emit_load_value(operand(inst, 0)?)?;
@@ -4147,6 +4160,30 @@ fn lower_array_slice(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "copy the window into a fresh mixed-cell array",
     );
     store_result(ctx, inst)
+}
+
+/// Validates `range`: two integer bounds. The step form does not exist — the front-end rejects
+/// any arity but two — and a float or string bound is a different result element type.
+fn range_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [start, end] = call.operands.as_slice() else {
+        return Some(format!(
+            "range takes two bounds, got {} operands",
+            call.operands.len()
+        ));
+    };
+    for (operand, side) in [(start, "start"), (end, "end")] {
+        let Some(value) = function.value(*operand) else {
+            return Some(format!("range {side} is missing from the value table"));
+        };
+        if value.ir_type != IrType::I64 || value.php_type.codegen_repr() != PhpType::Int {
+            return Some(format!(
+                "range {side} is {:?}/{:?}, expected I64/Int",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    None
 }
 
 /// Validates `array_merge`: two indexed arrays whose element types agree with the result.
@@ -5277,6 +5314,40 @@ mod tests {
     }
 
     /// Builds a `RuntimeCall` probe with an arbitrary operand list.
+    /// `range` here is the two-bound integer form only: the front-end rejects every other arity
+    /// with "range() takes exactly 2 arguments", so there is no step to validate and no float or
+    /// string bound to widen.
+    #[test]
+    fn range_admits_only_two_integer_bounds() {
+        let int_arg = (IrType::I64, PhpType::Int);
+        let probe = |operands: Vec<(IrType, PhpType)>| {
+            let function = shaped_call(
+                RuntimeFnId::Range,
+                &operands,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+            );
+            let call = function
+                .instructions
+                .last()
+                .expect("the probe emitted a call")
+                .clone();
+            direct_builtin_shape_issue(&probe_module(), &function, &call, RuntimeFnId::Range)
+        };
+
+        assert_eq!(probe(vec![int_arg.clone(), int_arg.clone()]), None);
+        assert!(probe(vec![int_arg.clone()]).is_some(), "range needs both bounds");
+        assert!(
+            probe(vec![int_arg.clone(), int_arg.clone(), int_arg.clone()]).is_some(),
+            "the step form does not reach this target"
+        );
+        assert!(
+            probe(vec![(IrType::F64, PhpType::Float), int_arg.clone()]).is_some(),
+            "a float bound produces float elements"
+        );
+        assert!(probe(vec![int_arg.clone(), (IrType::Str, PhpType::Str)]).is_some());
+    }
+
     /// `array_merge` clones the left and appends the right, so both operands must agree on slot
     /// layout — which they do, because EIR widens each with `Op::ArrayToMixed` when they differ.
     /// An empty operand carries no elements, so its type never has to agree.
