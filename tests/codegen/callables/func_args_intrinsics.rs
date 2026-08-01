@@ -279,3 +279,56 @@ echo plain(1, 2);
     );
     assert_eq!(out, "3");
 }
+
+/// An interface declaration inherited through an ABSTRACT class is not an implementation.
+///
+/// `ClassInfo::methods` carries the bodyless declaration that `abstract class B implements I`
+/// inherits from `I`, with no `method_impl_classes` entry. Counting that declaration as a
+/// second "implementation" used to make `func_args_scan`'s closed-world gate reject the
+/// whole shape, even though `C::start` is the only body dispatch can reach. php-verified
+/// with `php -n`: both call forms print the same as below.
+#[test]
+fn test_func_args_intrinsic_in_method_declared_by_interface_via_abstract_class() {
+    let out = compile_and_run(
+        r#"<?php
+interface StyleContract {
+    public function startBar(int $max = 0): void;
+}
+abstract class BaseStyle implements StyleContract {
+    public function tag(): string { return 'base'; }
+}
+class RealStyle extends BaseStyle {
+    public function startBar(int $max = 0): void
+    {
+        $format = \func_num_args() > 1 ? func_get_arg(1) : 'default';
+        echo $max, "/", $format, ";";
+    }
+}
+$style = new RealStyle();
+$style->startBar(5);
+$style->startBar(5, 'custom');
+"#,
+    );
+    assert_eq!(out, "5/default;5/custom;");
+}
+
+/// Same shape for a STATIC method: an abstract sibling class carrying an unrelated static
+/// method must not perturb the closed-world gate for a uniquely implemented one.
+#[test]
+fn test_func_args_intrinsic_in_static_method_with_abstract_sibling() {
+    let out = compile_and_run(
+        r#"<?php
+abstract class MakerBase {
+    public static function describe(): string { return 'base'; }
+}
+class Maker extends MakerBase {
+    public static function build(int $n = 0): string
+    {
+        return 'n=' . \func_num_args();
+    }
+}
+echo Maker::build(1, 2);
+"#,
+    );
+    assert_eq!(out, "n=2");
+}

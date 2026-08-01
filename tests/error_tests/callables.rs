@@ -701,3 +701,52 @@ bad(new K());
         "Undefined method for first-class callable: K::nope",
     );
 }
+
+/// Negative control for `func_args_scan`'s closed-world gate: a genuine polymorphic OVERRIDE
+/// (two real bodies behind one method name) must STILL be refused. A receiver typed as the
+/// base class can dispatch to either body at runtime and only one of them expects the hidden
+/// arity-count operand, so accepting this would be a silent ABI mismatch, not a fix. Guards
+/// the gate against being widened past "exactly one implementation".
+#[test]
+fn test_error_func_num_args_in_overriding_method_stays_refused() {
+    expect_error(
+        r#"<?php
+abstract class BarBase {
+    public function render(int $max = 0): string { return "base:$max"; }
+}
+class BarChild extends BarBase {
+    public function render(int $max = 0): string
+    {
+        $format = \func_num_args() > 1 ? func_get_arg(1) : 'def';
+        return "child:$max:$format";
+    }
+}
+echo (new BarChild())->render(3);
+"#,
+        "does not support in methods",
+    );
+}
+
+/// Negative control for the same gate on the NAME-GLOBAL axis: two unrelated classes sharing
+/// a method name, one arity-hungry, must stay refused. `crate::ir_lower::expr`'s
+/// `instance_method_arity_hungry_callee_key` resolves a gradual receiver by method NAME
+/// alone, so name-global uniqueness is a lockstep invariant of the marking rule.
+#[test]
+fn test_error_func_num_args_name_shared_with_unrelated_class_stays_refused() {
+    expect_error(
+        r#"<?php
+class Unrelated {
+    public function grab(): array { return ['plain']; }
+}
+class Adapter {
+    public function grab(): array
+    {
+        return [0 < \func_num_args() ? 'raw' : 'cooked'];
+    }
+}
+echo implode(',', (new Unrelated())->grab());
+echo implode(',', (new Adapter())->grab(true));
+"#,
+        "does not support in methods",
+    );
+}

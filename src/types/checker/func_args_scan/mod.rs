@@ -369,9 +369,22 @@ pub(crate) fn mark_func_args_functions(
 
 /// Returns whether every class exposing `method_key` dispatches to `owner`.
 ///
-/// This is intentionally global rather than descendant-only: a `Mixed` receiver dispatches
-/// by method name across unrelated classes, so mixing one hidden-argc implementation with
-/// one ordinary implementation would make its call operand layout ambiguous.
+/// This is intentionally global rather than descendant-only: a `Mixed`/interface receiver
+/// dispatches by method NAME in `crate::ir_lower::expr`'s
+/// `instance_method_arity_hungry_callee_key` fallback, so mixing one hidden-argc
+/// implementation with one ordinary implementation would make its call operand layout
+/// ambiguous. That name-only fallback is a lockstep invariant of this predicate: relaxing
+/// the rule to a descendant-only one without changing the fallback would silently append
+/// (or omit) the hidden argc operand on a dynamically dispatched call.
+///
+/// A class that merely *declares* `method_key` without a body — an interface member, or an
+/// abstract class that inherited an interface/abstract declaration it does not implement —
+/// is NOT an implementation and is skipped. `ClassInfo::methods` carries such declarations
+/// (see `crate::types::checker::schema::classes::methods`, which removes the
+/// `method_impl_classes` entry for an abstract method while keeping the signature), and
+/// counting them as distinct implementations used to reject the extremely common
+/// `interface I { m(); } abstract class B implements I {} class C extends B { m() {...} }`
+/// shape even though `C::m` is the only body dispatch can ever reach.
 fn method_has_one_closed_world_implementation(
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
     owner: &str,
@@ -379,7 +392,7 @@ fn method_has_one_closed_world_implementation(
     is_static: bool,
 ) -> bool {
     let mut implementations = HashSet::new();
-    for (class_name, class_info) in classes {
+    for class_info in classes.values() {
         let (signatures, implementation_classes) = if is_static {
             (
                 &class_info.static_methods,
@@ -391,18 +404,25 @@ fn method_has_one_closed_world_implementation(
         if !signatures.contains_key(method_key) {
             continue;
         }
-        implementations.insert(
-            implementation_classes
-                .get(method_key)
-                .cloned()
-                .unwrap_or_else(|| class_name.clone()),
-        );
+        let Some(implementation) = implementation_classes.get(method_key) else {
+            continue;
+        };
+        implementations.insert(implementation.clone());
     }
     implementations.len() == 1 && implementations.contains(owner)
 }
 
 /// Adds the synthetic variadic tail to the owning method signature and every inherited
 /// signature copy that still dispatches to that implementation.
+///
+/// Deliberately does NOT relax the bodyless DECLARATION copies (an interface member, or an
+/// abstract class that inherited a declaration it does not implement), even though the
+/// closed-world gate has proven every dispatch reaches `owner`. Measured: relaxing them makes
+/// the checker accept `$abstractTyped->m($declared, $extra)` while codegen still sizes the
+/// call's operand list from the RECEIVER-typed declaration, producing
+/// `unsupported EIR backend feature: method call to Base::m with 4 operands for 3 ABI params`
+/// — a checker/backend split. Supporting an abstract- or interface-typed receiver needs the
+/// hidden argc threaded through the declaration's ABI as well, not just its arity.
 fn relax_method_implementation_signatures(
     classes: &mut std::collections::HashMap<String, crate::types::ClassInfo>,
     owner: &str,
