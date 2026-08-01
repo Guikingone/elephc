@@ -3651,6 +3651,96 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `str_pad` reproduces php-src, including where it does NOT raise.
+///
+/// The empty-pad `ValueError` fires only when padding is actually needed: `str_pad("abc", 2, "")`
+/// answers `"abc"` rather than raising, so the guard tests the target length as well as the pad.
+/// A target at or below the current length — including a negative one — returns the subject
+/// untouched. The default pad is a single space, synthesized rather than interned, so a module
+/// that never calls the two-argument form carries no segment for it.
+#[test]
+fn test_cli_wasm_str_pad_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_str_pad");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function p2(string $s, int $n): void { echo "[", str_pad($s, $n), "]|"; }
+function p3(string $s, int $n, string $p): void { echo "[", str_pad($s, $n, $p), "]|"; }
+p2("ab", 5); p2("ab", 1); p2("ab", 2); p2("ab", 0); p2("ab", -3); p2("", 4); echo "\n";
+p3("ab", 7, "xy"); p3("ab", 8, "xyz"); p3("a", 6, "12"); p3("abc", 4, "xy"); p3("abc", 3, ""); p3("abc", 2, ""); echo "\n";
+p3("", 3, "ab"); p3("abc", 5, " "); p3("h\xc3\xa9", 6, "\x00\x01"); echo "\n";
+function guard(string $s, int $n, string $p): void {
+    try { echo "[", str_pad($s, $n, $p), "]"; } catch (\ValueError $e) { echo "V:", $e->getMessage(); }
+    echo "|";
+}
+guard("abc", 5, ""); guard("abc", 2, ""); echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile str_pad to WASM");
+    assert!(
+        output.status.success(),
+        "str_pad compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run str_pad under Node");
+    if !run.status.success() && String::from_utf8_lossy(&run.stderr).contains("CompileError") {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        run.status.success(),
+        "the caught ValueError still killed the program: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected: Vec<u8> = [
+        b"[ab   ]|[ab]|[ab]|[ab]|[ab]|[    ]|\n".as_slice(),
+        b"[abxyxyx]|[abxyzxyz]|[a12121]|[abcx]|[abc]|[abc]|\n".as_slice(),
+        b"[aba]|[abc  ]|[h\xc3\xa9\x00\x01\x00]|\n".as_slice(),
+        b"[V:str_pad(): Argument #3 ($pad_string) must not be empty|[abc]|\n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `strstr` reproduces php-src in both arities, including its `string|false`.
 ///
 /// The result is a REGION of the haystack — from the match to the end, or from the start up to

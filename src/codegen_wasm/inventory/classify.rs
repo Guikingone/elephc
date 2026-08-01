@@ -243,13 +243,15 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::Ltrim
         | RuntimeFnId::Rtrim
         | RuntimeFnId::Substr
-        | RuntimeFnId::StrRepeat => (
+        | RuntimeFnId::StrRepeat
+        | RuntimeFnId::StrPad => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
             &[
                 "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
                 "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
                 "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
+                "codegen::cli::test_cli_wasm_str_pad_matches_php",
             ][..],
         ),
         RuntimeFnId::Strpos | RuntimeFnId::Strstr => (

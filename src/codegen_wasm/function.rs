@@ -349,9 +349,9 @@ pub(super) fn raises_runtime_error(function: &Function) -> bool {
             inst.immediate,
             Some(Immediate::RuntimeCall(
                 RuntimeCallTarget::Function(
-                    RuntimeFnId::Intdiv | RuntimeFnId::StrRepeat
+                    RuntimeFnId::Intdiv | RuntimeFnId::StrRepeat | RuntimeFnId::StrPad
                 ) | RuntimeCallTarget::ProfiledFunction {
-                    target: RuntimeFnId::Intdiv | RuntimeFnId::StrRepeat,
+                    target: RuntimeFnId::Intdiv | RuntimeFnId::StrRepeat | RuntimeFnId::StrPad,
                     ..
                 }
             ))

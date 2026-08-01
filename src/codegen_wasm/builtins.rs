@@ -59,6 +59,8 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_SUBSTR);
     wm.add_raw_func(RT_STR_REPEAT);
     wm.add_raw_func(RT_STR_FIND);
+    wm.add_raw_func(RT_PAD_BYTE);
+    wm.add_raw_func(RT_STR_PAD);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -992,6 +994,68 @@ fn strstr_shape_issue(function: &Function, call: &Instruction) -> Option<String>
     None
 }
 
+/// `__rt_str_pad`: owns a copy padded to `$target` bytes, cycling the pad string.
+///
+/// `$mode` is PHP's `STR_PAD_*`: 0 left, 1 right, 2 both. When both sides pad, the LEFT side gets
+/// the smaller half — `str_pad("ab", 7, "xyz", STR_PAD_BOTH)` is `xyabxyz`, two on the left and
+/// three on the right. Each side cycles the pad string from ITS OWN start, which is why the right
+/// side there is `xyz` and not a continuation of the left. A target at or below the current
+/// length returns the string unchanged, and the caller has already refused an empty pad string in
+/// the only case where PHP does.
+/// `__rt_pad_byte`: the pad byte at cycle position `$i`, defaulting to a space.
+///
+/// A null `$pptr` is PHP's default `" "` pad. Resolving it here rather than interning a one-byte
+/// data segment keeps a module that never calls the two-argument form byte-identical.
+const RT_PAD_BYTE: &str = r#"(func $__rt_pad_byte (param $pptr i32) (param $plen i64) (param $i i64) (result i32)
+  (if (i32.eqz (local.get $pptr))
+    (then (return (i32.const 32))))                               ;; the default pad is a space
+  (i32.load8_u (i32.add (local.get $pptr)
+    (i32.wrap_i64 (i64.rem_s (local.get $i) (local.get $plen))))))  ;; cycle through the pad
+"#;
+
+const RT_STR_PAD: &str = r#"(func $__rt_str_pad (param $ptr i32) (param $len i64) (param $target i64) (param $pptr i32) (param $plen i64) (param $mode i32) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $total i64)                                              ;; bytes of padding to add
+  (local $left i64)                                               ;; bytes on the left
+  (local $i i64)                                                  ;; write cursor
+  (local $w i32)                                                  ;; destination cursor
+  (if (i64.le_s (local.get $target) (local.get $len))
+    (then (return (call $__rt_str_persist (local.get $ptr) (local.get $len)))))  ;; nothing to add
+  (local.set $total (i64.sub (local.get $target) (local.get $len)))
+  (local.set $left (i64.const 0))                                 ;; STR_PAD_RIGHT adds nothing left
+  (if (i32.eqz (local.get $mode))
+    (then (local.set $left (local.get $total))))                  ;; STR_PAD_LEFT adds it all
+  (if (i32.eq (local.get $mode) (i32.const 2))
+    (then (local.set $left (i64.div_s (local.get $total) (i64.const 2)))))  ;; BOTH: the left half rounds down
+  (local.set $out (call $__rt_str_alloc (local.get $target)))
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $lend (loop $lpad
+    (br_if $lend (i64.ge_s (local.get $i) (local.get $left)))     ;; left padding written
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (call $__rt_pad_byte (local.get $pptr) (local.get $plen) (local.get $i)))  ;; cycle the pad
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))         ;; w++
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $lpad)))
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $send (loop $scopy
+    (br_if $send (i64.ge_s (local.get $i) (local.get $len)))      ;; subject copied
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))         ;; w++
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $scopy)))
+  (local.set $i (i64.const 0))                                    ;; i = 0, restarting the pad cycle
+  (block $rend (loop $rpad
+    (br_if $rend (i64.ge_s (i64.add (local.get $left) (local.get $i)) (local.get $total)))
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (call $__rt_pad_byte (local.get $pptr) (local.get $plen) (local.get $i)))  ;; cycle from its own start
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))         ;; w++
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $rpad)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -1264,6 +1328,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::StrRepeat
             | RuntimeFnId::Strpos
             | RuntimeFnId::Strstr
+            | RuntimeFnId::StrPad
     )
 }
 
@@ -1343,6 +1408,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Strstr {
         return strstr_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::StrPad {
+        return str_pad_shape_issue(function, call);
     }
     if matches!(
         target,
@@ -1536,6 +1604,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);
+    }
+    if target == RuntimeFnId::StrPad {
+        return lower_str_pad(ctx, inst);
     }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
@@ -2062,6 +2133,107 @@ fn string_search_shape_issue(
     {
         return Some(format!(
             "{target:?} result {:?}/{:?} is not the Mixed cell PHP's int|false needs",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// The `__rt_fail` code PHP's empty-pad `str_pad` `ValueError` reports under.
+const STR_PAD_EMPTY_FAILURE_CODE: i32 = 12;
+
+/// Lowers `str_pad` in its two- and three-argument forms.
+///
+/// PHP refuses an empty `$pad_string` — but ONLY when padding is actually needed. `str_pad("abc",
+/// 2, "")` answers `"abc"` rather than raising, so the guard tests the target length as well as
+/// the pad, and raises through the same path the other builtin ValueErrors take.
+///
+/// The four-argument form stays refused: it validates `$pad_type` eagerly, raising even when no
+/// padding is needed and even when the pad string is also invalid, which is a different contract
+/// with its own message rather than a default for this one.
+fn lower_str_pad(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let target = ctx.fb.local("__pad_target", super::wat::ValType::I64);
+    let sptr = ctx.fb.local("__pad_sptr", super::wat::ValType::I32);
+    let slen = ctx.fb.local("__pad_slen", super::wat::ValType::I64);
+    let pptr = ctx.fb.local("__pad_pptr", super::wat::ValType::I32);
+    let plen = ctx.fb.local("__pad_plen", super::wat::ValType::I64);
+
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(&format!("local.set {slen}"), "spill subject length");
+    ctx.fb.ins(&format!("local.set {sptr}"), "spill subject pointer");
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins(&format!("local.set {target}"), "spill the target length");
+    if inst.operands.len() == 3 {
+        ctx.emit_load_value(operand(inst, 2)?)?;
+        ctx.fb.ins(&format!("local.set {plen}"), "spill pad length");
+        ctx.fb.ins(&format!("local.set {pptr}"), "spill pad pointer");
+    } else {
+        // A null pad pointer means PHP's default single space. Synthesizing it in the helper
+        // costs one branch and keeps a module that never pads from carrying a data segment.
+        ctx.fb.ins("i32.const 0", "null pad pointer selects the default space");
+        ctx.fb.ins(&format!("local.set {pptr}"), "spill pad pointer");
+        ctx.fb.ins("i64.const 1", "the default pad is one byte");
+        ctx.fb.ins(&format!("local.set {plen}"), "spill pad length");
+    }
+
+    if inst.operands.len() == 3 {
+        ctx.fb.ins(&format!("local.get {plen}"), "pad length");
+        ctx.fb.ins("i64.eqz", "an empty pad string?");
+        ctx.fb.ins(&format!("local.get {target}"), "target length");
+        ctx.fb.ins(&format!("local.get {slen}"), "subject length");
+        ctx.fb.ins("i64.gt_s", "is padding actually needed?");
+        ctx.fb.ins("i32.and", "PHP raises only when both hold");
+        ctx.fb.ins("if", "str_pad() rejects an empty pad it would have to use");
+        super::inst::emit_runtime_failure(
+            ctx,
+            STR_PAD_EMPTY_FAILURE_CODE,
+            "str_pad() empty pad string",
+        );
+        ctx.fb.ins("end", "end empty-pad guard");
+    }
+
+    ctx.fb.ins(&format!("local.get {sptr}"), "subject pointer");
+    ctx.fb.ins(&format!("local.get {slen}"), "subject length");
+    ctx.fb.ins(&format!("local.get {target}"), "target length");
+    ctx.fb.ins(&format!("local.get {pptr}"), "pad pointer, or 0 for the default space");
+    ctx.fb.ins(&format!("local.get {plen}"), "pad length");
+    ctx.fb.ins("i32.const 1", "STR_PAD_RIGHT");
+    ctx.fb.ins("call $__rt_str_pad", "own the padded bytes");
+    store_result(ctx, inst)
+}
+
+/// Validates `str_pad`: a subject, an integer length, and optionally a pad string.
+fn str_pad_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    if !matches!(call.operands.len(), 2 | 3) {
+        return Some(format!(
+            "expected a subject, a length and an optional pad, got {} operands",
+            call.operands.len()
+        ));
+    }
+    for (index, operand) in call.operands.iter().enumerate() {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        let (want_ir, want_php) = if index == 1 {
+            (IrType::I64, PhpType::Int)
+        } else {
+            (IrType::Str, PhpType::Str)
+        };
+        if value.ir_type != want_ir || value.php_type.codegen_repr() != want_php {
+            return Some(format!(
+                "str_pad operand {index} is {:?}/{:?}, expected {want_ir:?}/{want_php:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "str_pad result {:?}/{:?} is not the expected Str/Str",
             call.result_type,
             call.result_php_type.codegen_repr()
         ));
@@ -2944,6 +3116,41 @@ mod tests {
         }
         // The bytes are read UNSIGNED, which is what makes strcmp("\xff", "\x01") 254 and not -2.
         assert!(!RT_STR_CMP.contains("i32.load8_s"));
+    }
+
+    /// Verifies every builtin that RAISES is also declared as raising.
+    ///
+    /// `function::raises_runtime_error` is what makes the module lay out an error's message, and
+    /// `emit_runtime_failure` silently falls back to the deterministic fatal when the message is
+    /// absent. So a builtin added to the catchable catalogue but not to that predicate compiles,
+    /// runs, and reports the right text — while no `catch` ever receives it. That failure is
+    /// invisible unless the test catches the error rather than just reading stderr, which is
+    /// exactly how it was found.
+    #[test]
+    fn builtins_that_raise_are_declared_as_raising() {
+        let str_arg = (IrType::Str, PhpType::Str);
+        let int_arg = (IrType::I64, PhpType::Int);
+        for (target, operands) in [
+            (RuntimeFnId::StrRepeat, vec![str_arg.clone(), int_arg.clone()]),
+            (
+                RuntimeFnId::StrPad,
+                vec![str_arg.clone(), int_arg.clone(), str_arg.clone()],
+            ),
+        ] {
+            let probe = shaped_call(target, &operands, IrType::Str, PhpType::Str);
+            assert!(
+                crate::codegen_wasm::function::raises_runtime_error(&probe),
+                "{target:?} raises a PHP error, so its message must be laid out"
+            );
+        }
+        // A builtin with no failure mode must NOT drag the error messages into every module.
+        let quiet = shaped_call(
+            RuntimeFnId::Ucfirst,
+            &[(IrType::Str, PhpType::Str)],
+            IrType::Str,
+            PhpType::Str,
+        );
+        assert!(!crate::codegen_wasm::function::raises_runtime_error(&quiet));
     }
 
     /// Verifies the two url codecs differ exactly where php-src says they do.
