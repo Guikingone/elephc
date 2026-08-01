@@ -484,9 +484,17 @@ impl Checker {
                     clauses.len() == 1 && else_body.is_none();
                 let mut single_guard_then_exit: Option<(String, PhpType, bool)> = None;
                 let mut branch_overwrites = Vec::new();
-                // Exit environment of every branch that can fall through past the `if`, recorded only
-                // when there is an explicit `else` (so every reaching path is one of these branches).
-                // The post-`if` type of a joined variable is the union of its type across them.
+                // Exit environment of every branch that can fall through past the `if`. The post-`if`
+                // type of a joined variable is the union of its type across them, which is precise
+                // only when every path reaching the following code is one of the recorded snapshots.
+                //
+                // With an explicit `else` those are exactly the branch bodies. Without one, the
+                // implicit false edge also reaches, so it is recorded too — as the accumulated
+                // complement env, which is what a value satisfying no condition actually carries.
+                // A single guard with no `else` is excluded: `single_guard_then_exit` below already
+                // computes that same two-path union and additionally refines it when the false edge
+                // is impossible, so re-deriving it here would only widen it back.
+                let record_branch_exits = else_body.is_some() || clauses.len() > 1;
                 let mut branch_exit_snapshots: Vec<TypeEnv> = Vec::new();
                 // Variables bound inside a clause condition (`if (!$x = f())`). Their condition type
                 // otherwise persists past the construct even when a later branch reassigns them, so
@@ -559,7 +567,7 @@ impl Checker {
                                     ));
                                 }
                             }
-                            if else_body.is_some() {
+                            if record_branch_exits {
                                 branch_exit_snapshots.push(snapshot_branch_exit(
                                     env,
                                     &overwrites,
@@ -602,7 +610,7 @@ impl Checker {
                             );
                         errors.extend(body_errors);
                         if !self.body_cannot_fall_through(body) {
-                            if else_body.is_some() {
+                            if record_branch_exits {
                                 branch_exit_snapshots.push(snapshot_branch_exit(
                                     env,
                                     &overwrites,
@@ -651,6 +659,13 @@ impl Checker {
                         branch_overwrites.push(overwrites);
                     }
                 } else {
+                    // The implicit false edge reaches the code after the `if` carrying the
+                    // accumulated complement — the type a value satisfying no clause condition
+                    // actually has. Recording it as a reaching path keeps the union below sound
+                    // for a chain that has no `else`.
+                    if record_branch_exits {
+                        branch_exit_snapshots.push(env.clone());
+                    }
                     // The implicit false edge performs no unconditional overwrite.
                     branch_overwrites.push(BTreeMap::new());
                 }
@@ -706,9 +721,10 @@ impl Checker {
                         }
                     }
 
-                    // With an explicit `else`, every path that reaches the code after the `if` is one
-                    // of the recorded branch exits (a clause body that falls through, or the `else`
-                    // body — a clause that diverges via `return`/`continue`/`throw` records nothing).
+                    // Every path that reaches the code after the `if` is one of the recorded branch
+                    // exits: a clause body that falls through, the `else` body, or — for a chain
+                    // with no `else` — the implicit false edge carrying the accumulated complement
+                    // (a clause that diverges via `return`/`continue`/`throw` records nothing).
                     // A variable that a branch *reassigns* therefore has, after the `if`, the union of
                     // its type across those reaching branches. This is the precise flow join, scoped
                     // to variables that are both (a) narrowed by a guard or bound in a clause
