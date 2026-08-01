@@ -129,6 +129,122 @@ int main(int argc, char **argv) {
 }
 "#;
 
+const STRING_RETURN_PHP: &str = r#"<?php
+#[Export]
+function greet(string $name): string {
+    return "Hello, " . $name;
+}
+
+#[Export]
+function echo_back(string $s): string {
+    return $s;
+}
+
+#[Export]
+function fixed_label(): string {
+    return "fixed";
+}
+"#;
+
+const STRING_RETURN_HOST_C: &str = r#"
+#include <dlfcn.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stddef.h>
+#include <string.h>
+
+typedef struct { const char *ptr; size_t len; } elephc_str;
+
+int main(int argc, char **argv) {
+    if (argc != 2) return 1;
+    void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+    if (!lib) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 2; }
+    int32_t (*init)(void) = (int32_t (*)(void))dlsym(lib, "elephc_init");
+    void (*shutdown)(void) = (void (*)(void))dlsym(lib, "elephc_shutdown");
+    void (*efree)(void *) = (void (*)(void *))dlsym(lib, "elephc_free");
+    elephc_str (*greet)(const char *, size_t) =
+        (elephc_str (*)(const char *, size_t))dlsym(lib, "greet");
+    elephc_str (*echo_back)(const char *, size_t) =
+        (elephc_str (*)(const char *, size_t))dlsym(lib, "echo_back");
+    elephc_str (*fixed_label)(void) = (elephc_str (*)(void))dlsym(lib, "fixed_label");
+    if (!init || !shutdown || !efree || !greet || !echo_back || !fixed_label) {
+        fprintf(stderr, "dlsym failed\n"); return 3;
+    }
+    if (init() != 0) return 4;
+
+    /* Buffer owned by the host: the string it returns must NOT come back as the
+       same pointer, or `elephc_free` below would be freeing host memory. */
+    char mine[] = "world";
+
+    elephc_str g = greet(mine, 5);
+    elephc_str e = echo_back(mine, 5);
+    elephc_str f = fixed_label();
+
+    printf("%.*s %zu %.*s %zu %.*s %zu %d\n",
+           (int)g.len, g.ptr, g.len,
+           (int)e.len, e.ptr, e.len,
+           (int)f.len, f.ptr, f.len,
+           (e.ptr == mine) ? 1 : 0);
+
+    efree((void *)g.ptr);
+    efree((void *)e.ptr);
+    efree((void *)f.ptr);
+    efree(NULL);
+    shutdown();
+    return 0;
+}
+"#;
+
+/// Verifies the string-return half of the export ABI end to end.
+///
+/// Covers the three provenances that reach a `return` differently, because each
+/// exercises a different part of the contract:
+/// - `greet` concatenates, so lowering already treats the result as scratch and
+///   persists it — the ordinary path;
+/// - `fixed_label` returns a literal, which lives in `.rodata` and would be
+///   illegal to `elephc_free` unless the export forces a persist;
+/// - `echo_back` returns its parameter, the dangerous case: without the forced
+///   persist the host would get back *its own* pointer and then free it.
+///
+/// The host asserts that last point directly (`e.ptr == mine` must be 0), which
+/// is what makes this a test of ownership rather than of string contents. It
+/// also frees every returned pointer plus a `NULL`, so a mis-wired
+/// `elephc_free` shows up as a crash rather than passing quietly.
+#[test]
+fn test_cdylib_string_returns_transfer_ownership_to_the_host() {
+    let dir = make_test_dir("elephc_cdylib_strret");
+    fs::write(dir.join("strret.php"), STRING_RETURN_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "cdylib", "strret.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "cdylib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let lib_path = dir.join(shared_lib_name("strret"));
+    let host = compile_c_host(&dir, STRING_RETURN_HOST_C, "strhost");
+    let run = Command::new(&host)
+        .arg(&lib_path)
+        .output()
+        .expect("failed to run the C host");
+    assert!(
+        run.status.success(),
+        "C host run failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Hello, world 12 world 5 fixed 5 0\n"
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Verifies the full cdylib path on the host target: `--emit cdylib` produces
 /// a conventionally named shared library, a C host can dlopen it, resolve the
 /// lifecycle entry points plus both `#[Export]` trampolines, and the exported
