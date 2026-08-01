@@ -220,11 +220,13 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             &["codegen_wasm::closures::tests::array_reduce_lowering_boxes_mixed_result"][..],
         ),
         RuntimeFnId::Abs | RuntimeFnId::Floor | RuntimeFnId::Ceil | RuntimeFnId::Sqrt
-        | RuntimeFnId::Count | RuntimeFnId::ArrayIsList => (
+        | RuntimeFnId::Count | RuntimeFnId::ArrayIsList | RuntimeFnId::ArrayKeys
+        | RuntimeFnId::ArrayValues | RuntimeFnId::InArray => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
             &[
                 "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
+                "codegen_wasm::builtins::tests::in_array_is_admitted_only_when_strict_is_literally_true",
                 "codegen::cli::test_cli_wasm_direct_builtins_match_php",
             ][..],
         ),

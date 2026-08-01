@@ -87,7 +87,27 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Sqrt
             | RuntimeFnId::Count
             | RuntimeFnId::ArrayIsList
+            | RuntimeFnId::ArrayKeys
+            | RuntimeFnId::ArrayValues
+            | RuntimeFnId::InArray
     )
+}
+
+/// Returns whether `value` is an indexed array whose slots this module can read directly.
+///
+/// Everything in the array family below reads raw i64 slots, which is what an `array<int>`
+/// stores. A string or mixed element array uses a different slot width and carries refcounted
+/// payloads, so it is not served here rather than being read at the wrong stride.
+///
+/// `array<never>` is admitted alongside `array<int>`: it is the type of the empty array literal,
+/// and an array that provably holds nothing is read at no stride at all — every operation here
+/// answers from its length, which is zero.
+fn indexed_int_array(value: &crate::ir::Value) -> bool {
+    value.ir_type == IrType::Heap(IrHeapKind::Array)
+        && matches!(
+            value.php_type.codegen_repr(),
+            PhpType::Array(element) if matches!(*element, PhpType::Int | PhpType::Never)
+        )
 }
 
 /// Validates one direct builtin's operand and result storage before planning.
@@ -101,6 +121,12 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::ArrayIsList {
         return array_is_list_shape_issue(function, call);
+    }
+    if matches!(target, RuntimeFnId::ArrayKeys | RuntimeFnId::ArrayValues) {
+        return indexed_array_result_shape_issue(function, call, target);
+    }
+    if target == RuntimeFnId::InArray {
+        return in_array_shape_issue(function, call);
     }
     let [operand] = call.operands.as_slice() else {
         return Some(format!(
@@ -191,6 +217,15 @@ pub(super) fn lower_direct_builtin(
     if target == RuntimeFnId::ArrayIsList {
         return lower_array_is_list(ctx, inst);
     }
+    if target == RuntimeFnId::ArrayKeys {
+        return lower_array_keys(ctx, inst);
+    }
+    if target == RuntimeFnId::ArrayValues {
+        return lower_array_values(ctx, inst);
+    }
+    if target == RuntimeFnId::InArray {
+        return lower_in_array(ctx, inst);
+    }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
     let Some((_, instruction)) = direct_builtin(target, &operand_php) else {
@@ -279,6 +314,140 @@ fn lower_array_is_list(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
+/// Validates `array_keys($list)` and `array_values($list)`, which both answer a fresh
+/// `array<int>` built from an `array<int>`.
+///
+/// `array_keys` of a list is `[0, 1, ..., n-1]` because its keys ARE its positions, and
+/// `array_values` of a list is a copy because re-indexing a list changes nothing. Both facts
+/// hold only for the indexed representation, so a hash operand is refused.
+fn indexed_array_result_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected one array operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("array operand is missing from the value table".to_string());
+    };
+    if !indexed_int_array(value) {
+        return Some(format!(
+            "expected a statically typed array<int>, got {:?}/{:?}",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Heap(IrHeapKind::Array)
+        || !matches!(
+            call.result_php_type.codegen_repr(),
+            PhpType::Array(element) if matches!(*element, PhpType::Int | PhpType::Never)
+        )
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the expected Heap(Array)/array<int>",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates `in_array($needle, $haystack, true)` against the one comparison the scan performs.
+///
+/// The third argument must be the literal `true`: PHP's LOOSE form applies type juggling that an
+/// identity comparison over raw slots does not, so admitting a runtime-valued or absent `$strict`
+/// would answer the wrong question whenever it turned out to be false.
+fn in_array_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [needle, haystack, strict] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected needle, haystack and an explicit strict flag, got {} operands",
+            call.operands.len()
+        ));
+    };
+    let Some(needle) = function.value(*needle) else {
+        return Some("needle is missing from the value table".to_string());
+    };
+    if needle.ir_type != IrType::I64 || needle.php_type.codegen_repr() != PhpType::Int {
+        return Some(format!(
+            "expected an int needle, got {:?}/{:?}",
+            needle.ir_type,
+            needle.php_type.codegen_repr()
+        ));
+    }
+    let Some(haystack) = function.value(*haystack) else {
+        return Some("haystack is missing from the value table".to_string());
+    };
+    if !indexed_int_array(haystack) {
+        return Some(format!(
+            "expected a statically typed array<int> haystack, got {:?}/{:?}",
+            haystack.ir_type,
+            haystack.php_type.codegen_repr()
+        ));
+    }
+    if !literal_true(function, *strict) {
+        return Some("only the strict form is lowered; $strict must be the literal true".to_string());
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::I64
+        || call.result_php_type.codegen_repr() != PhpType::Bool
+    {
+        return Some(format!(
+            "result {:?}/{:?} is not the expected I64/Bool",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Returns whether `value` is the constant `true`, following ownership forwarding.
+fn literal_true(function: &Function, value: crate::ir::ValueId) -> bool {
+    let Some(defined) = function.value(value) else {
+        return false;
+    };
+    let crate::ir::ValueDef::Instruction { inst, .. } = defined.def else {
+        return false;
+    };
+    let Some(defining) = function.instruction(inst) else {
+        return false;
+    };
+    defining.op == crate::ir::Op::ConstBool
+        && matches!(defining.immediate, Some(crate::ir::Immediate::Bool(true)))
+}
+
+/// Lowers `array_keys($list)` to the positional key array its representation implies.
+fn lower_array_keys(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb
+        .ins("call $__rt_array_index_keys", "keys of a list are its positions");
+    store_result(ctx, inst)
+}
+
+/// Lowers `array_values($list)` to a shallow clone.
+///
+/// Re-indexing a list changes nothing, so the values are the source's in order; the clone is
+/// what makes the result an independent owned array rather than an alias of the source.
+fn lower_array_values(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb
+        .ins("call $__rt_array_clone_shallow", "values of a list are the list itself");
+    store_result(ctx, inst)
+}
+
+/// Lowers strict `in_array($needle, $haystack, true)` to an identity scan.
+fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb
+        .ins("call $__rt_array_contains_int", "strict in_array over raw i64 slots");
+    store_result(ctx, inst)
+}
+
 /// Lowers `count($array)` to the container header's element count at `[ptr + 0]`.
 fn lower_count(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
@@ -332,6 +501,69 @@ mod tests {
             .last()
             .expect("the probe emitted a call");
         direct_builtin_shape_issue(function, call, target)
+    }
+
+    /// Builds `in_array($needle, $haystack, $strict)` with the given strict operand.
+    fn in_array_call(strict_is_literal_true: bool) -> Function {
+        let mut function = Function::new("probe".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let needle_slot = builder.add_local(
+                Some("n".to_string()),
+                IrType::I64,
+                PhpType::Int,
+                crate::ir::LocalKind::PhpLocal,
+            );
+            let haystack_slot = builder.add_local(
+                Some("a".to_string()),
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+                crate::ir::LocalKind::PhpLocal,
+            );
+            let needle = builder.emit_load_local(needle_slot, IrType::I64, PhpType::Int);
+            let haystack = builder.emit_load_local(
+                haystack_slot,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+            );
+            let strict = if strict_is_literal_true {
+                builder.emit_const_bool(true)
+            } else {
+                builder.emit_const_bool(false)
+            };
+            builder.emit(
+                Op::RuntimeCall,
+                vec![needle, haystack, strict],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::InArray,
+                ))),
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            );
+            builder.terminate(crate::ir::Terminator::Return { value: None });
+        }
+        function
+    }
+
+    /// Verifies `in_array` is lowered only in its STRICT form.
+    ///
+    /// PHP's loose comparison applies type juggling that an identity scan over raw slots does
+    /// not perform, so a `$strict` that is not the literal `true` has to be refused rather than
+    /// answered with the wrong comparison.
+    #[test]
+    fn in_array_is_admitted_only_when_strict_is_literally_true() {
+        let strict = in_array_call(true);
+        assert_eq!(verdict(&strict, RuntimeFnId::InArray), None);
+
+        let loose = in_array_call(false);
+        assert!(
+            verdict(&loose, RuntimeFnId::InArray).is_some(),
+            "the loose form needs PHP's juggling rules, which this scan does not implement"
+        );
     }
 
     /// Verifies each inline builtin admits exactly the storage its lowering can emit.
@@ -411,6 +643,31 @@ mod tests {
             verdict(&hashed, RuntimeFnId::ArrayIsList).is_some(),
             "a hash needs a real scan, not an answer from the representation"
         );
+
+        // The array family reads raw i64 slots, so it accepts `array<int>` and the empty
+        // `array<never>`, and nothing else.
+        for target in [RuntimeFnId::ArrayKeys, RuntimeFnId::ArrayValues] {
+            let ok = call_with(
+                target,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+            );
+            assert_eq!(verdict(&ok, target), None, "{target:?} over array<int>");
+
+            let stringly = call_with(
+                target,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Str)),
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Str)),
+            );
+            assert!(
+                verdict(&stringly, target).is_some(),
+                "{target:?} must not read string slots at the integer stride"
+            );
+        }
 
         let scalar_count = call_with(
             RuntimeFnId::Count,

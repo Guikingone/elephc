@@ -3025,6 +3025,14 @@ $h = ['x' => 1, 'y' => 2];
 echo count($h), "\n";
 $e = [];
 echo array_is_list($a) ? "list" : "not", "|", array_is_list($e) ? "list" : "not", "\n";
+function arrays(array $xs, int $n): void {
+    $v = array_values($xs);
+    $k = array_keys($xs);
+    $v[0] = 99;
+    echo in_array($n, $xs, true) ? "y" : "n", "|", count($k), "|", $k[1], "|", $xs[0], ",", $v[0], "\n";
+}
+arrays([7, 8, 9], 8);
+arrays([7, 8, 9], 5);
 "#,
     )
     .unwrap();
@@ -3082,6 +3090,8 @@ process.exitCode = wasi.start(instance);
         "3\n",
         "2\n",
         "list|list\n",
+        "y|3|1|7,99\n",
+        "n|3|1|7,99\n",
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
     assert!(

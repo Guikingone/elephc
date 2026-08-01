@@ -4448,7 +4448,10 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Ceil
         | RuntimeFnId::Sqrt
         | RuntimeFnId::Count
-        | RuntimeFnId::ArrayIsList => true,
+        | RuntimeFnId::ArrayIsList
+        | RuntimeFnId::ArrayKeys
+        | RuntimeFnId::ArrayValues
+        | RuntimeFnId::InArray => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4471,7 +4474,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayKeyExists
         | RuntimeFnId::ArrayKeyFirst
         | RuntimeFnId::ArrayKeyLast
-        | RuntimeFnId::ArrayKeys
         | RuntimeFnId::ArrayMerge
         | RuntimeFnId::ArrayMergeRecursive
         | RuntimeFnId::ArrayMultisort
@@ -4492,11 +4494,9 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayUintersect
         | RuntimeFnId::ArrayUnique
         | RuntimeFnId::ArrayUnshift
-        | RuntimeFnId::ArrayValues
         | RuntimeFnId::ArrayWalkRecursive
         | RuntimeFnId::Arsort
         | RuntimeFnId::Asort
-        | RuntimeFnId::InArray
         | RuntimeFnId::Krsort
         | RuntimeFnId::Ksort
         | RuntimeFnId::Natcasesort

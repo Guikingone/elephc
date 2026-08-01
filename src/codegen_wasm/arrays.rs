@@ -50,6 +50,8 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_ARRAY);
     wm.add_raw_func(RT_ARRAY_UNION);
+    wm.add_raw_func(RT_ARRAY_INDEX_KEYS);
+    wm.add_raw_func(RT_ARRAY_CONTAINS_INT);
 }
 
 /// `__rt_array_new`: allocates an indexed array with `capacity` slots of
@@ -73,6 +75,52 @@ const RT_ARRAY_NEW: &str = r#"(func $__rt_array_new (param $capacity i64) (param
   (i64.store (i32.add (local.get $arr) (i32.const 8)) (local.get $capacity))    ;; capacity
   (i64.store (i32.add (local.get $arr) (i32.const 16)) (local.get $elem_size))  ;; elem_size
   (local.get $arr))                                                              ;; return the new array pointer
+"#;
+
+/// `__rt_array_index_keys`: builds `[0, 1, ..., n-1]` for an indexed array of length `n`.
+///
+/// This is `array_keys()` over a list: its keys ARE the positions, so the result depends only on
+/// the source length and never reads a payload slot. The result is a fresh owned array of raw
+/// i64 slots, which is what `array<int>` uses.
+const RT_ARRAY_INDEX_KEYS: &str = r#"(func $__rt_array_index_keys (param $array i32) (result i32)
+  (local $len i64)
+  (local $new i32)
+  (local $i i64)
+  (local.set $len (i64.load (local.get $array)))                 ;; length @ A+0
+  (local.set $new (call $__rt_array_new (local.get $len) (i64.const 8)))  ;; exact capacity, raw i64 slots
+  (i64.store (local.get $new) (local.get $len))                  ;; the result holds one key per element
+  (local.set $i (i64.const 0))                                   ;; i = 0
+  (block $end (loop $fill
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))      ;; stop after the last position
+    (i64.store
+      (i32.add (i32.add (local.get $new) (i32.const 24))
+               (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8))))
+      (local.get $i))                                            ;; slot i holds the key i
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
+    (br $fill)))
+  (local.get $new))                                              ;; owned result
+"#;
+
+/// `__rt_array_contains_int`: strict `in_array()` over an indexed array of raw i64 slots.
+///
+/// Returns 1 as soon as a slot equals the needle, 0 after the last element. Only STRICT
+/// comparison is served: PHP's loose form applies type juggling this identity comparison does
+/// not perform, so the caller admits the strict form alone.
+const RT_ARRAY_CONTAINS_INT: &str = r#"(func $__rt_array_contains_int (param $array i32) (param $needle i64) (result i64)
+  (local $len i64)
+  (local $i i64)
+  (local.set $len (i64.load (local.get $array)))                 ;; length @ A+0
+  (local.set $i (i64.const 0))                                   ;; i = 0
+  (block $end (loop $scan
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))      ;; exhausted without a match
+    (if (i64.eq
+          (i64.load (i32.add (i32.add (local.get $array) (i32.const 24))
+                             (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8)))))
+          (local.get $needle))
+      (then (return (i64.const 1))))                             ;; identical element found
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
+    (br $scan)))
+  (i64.const 0))                                                 ;; no element is identical
 "#;
 
 /// `__rt_array_grow`: allocates a double-capacity array (min 8), copies the live
