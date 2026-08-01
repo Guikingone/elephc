@@ -37,6 +37,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_PUSH_INT);
     wm.add_raw_func(RT_ARRAY_PUSH_STR);
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
+    wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
     wm.add_raw_func(RT_ARRAY_GET_INT);
     wm.add_raw_func(RT_ARRAY_GET_TAGGED_INT);
     wm.add_raw_func(RT_ARRAY_GET_MIXED_BOOL);
@@ -414,6 +415,46 @@ const RT_ARRAY_PUSH_MIXED: &str = r#"(func $__rt_array_push_mixed (param $array 
   (i64.store (i32.add (local.get $slot) (i32.const 8)) (i64.const 0))  ;; slot+8 unused (0)
   (i64.store (local.get $array) (i64.add (local.get $alen) (i64.const 1)))  ;; length++
   (local.get $array))                                       ;; return the (possibly new) array
+"#;
+
+/// `__rt_array_widen_to_mixed`: copies a concrete-element array into a fresh Mixed-cell one.
+///
+/// A `mixed` destination is a `value_type`-7 array of boxed cells, which is a DIFFERENT layout
+/// from the int (8-byte slots), bool (8-byte) and string (16-byte) arrays this target
+/// specializes — so handing one over where the other is expected is a real conversion, not a
+/// pointer copy. `$tag` is the cell tag every element gets (0 int, 1 string, 3 bool) and `$esz`
+/// the source slot stride; a 16-byte source slot carries a (pointer, length) pair, so its second
+/// word becomes the cell's `hi` payload.
+///
+/// The result is a FRESH array with one reference. `__rt_mixed_from_value` persists string bytes
+/// and `__rt_array_push_mixed` stores each cell borrowed, so the new array owns every cell and
+/// `__rt_array_free_deep` releases them. Copying also gives PHP's by-value array parameter
+/// semantics for free: mutating the callee's copy cannot reach the caller's array.
+const RT_ARRAY_WIDEN_TO_MIXED: &str = r#"(func $__rt_array_widen_to_mixed (param $src i32) (param $tag i64) (param $esz i64) (result i32)
+  (local $len i64)
+  (local $i i64)
+  (local $slot i32)
+  (local $out i32)
+  (local $lo i64)
+  (local $hi i64)
+  (if (i32.eqz (local.get $src))
+    (then (return (call $__rt_array_new (i64.const 0) (i64.const 16)))))  ;; null source -> empty
+  (local.set $len (i64.load (local.get $src)))              ;; source length
+  (local.set $out (call $__rt_array_new (local.get $len) (i64.const 16)))  ;; 16B slots for cells
+  (local.set $i (i64.const 0))                              ;; i = 0
+  (block $end (loop $next
+    (br_if $end (i64.ge_u (local.get $i) (local.get $len)))  ;; stop past the last element
+    (local.set $slot (i32.add (i32.add (local.get $src) (i32.const 24))
+                              (i32.wrap_i64 (i64.mul (local.get $i) (local.get $esz)))))  ;; slot = S+24+i*esz
+    (local.set $lo (i64.load (local.get $slot)))            ;; payload lo (scalar, or string pointer)
+    (local.set $hi (i64.const 0))                           ;; scalars have no high payload
+    (if (i64.eq (local.get $esz) (i64.const 16))
+      (then (local.set $hi (i64.load (i32.add (local.get $slot) (i32.const 8))))))  ;; string length
+    (local.set $out (call $__rt_array_push_mixed (local.get $out)
+      (call $__rt_mixed_from_value (local.get $tag) (local.get $lo) (local.get $hi))))  ;; box + append
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))   ;; i++
+    (br $next)))
+  (local.get $out))                                          ;; the fresh mixed-cell array
 "#;
 
 /// `__rt_array_ensure_unique`: the copy-on-write split point. Returns the array

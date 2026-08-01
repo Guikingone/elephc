@@ -5401,6 +5401,94 @@ process.exitCode = code;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies an `array<T>` handed to an `array<mixed>` parameter is CONVERTED, not reinterpreted.
+///
+/// This target specializes array storage per element type — int and bool arrays use 8-byte slots,
+/// string arrays 16-byte (pointer, length) pairs, and `mixed` a `value_type`-7 array of boxed
+/// cells. So passing one where another is expected is a real element-wise conversion; treating it
+/// as a pointer copy would read the wrong slot layout without trapping. An empty literal's
+/// `array<never>` widens too: there is nothing to convert.
+///
+/// The conversion allocates, and the callee only borrows, so the call site frees the copy
+/// afterwards — withheld when the callee's declared return is itself an array, since a returned
+/// value moves out without an incref.
+#[test]
+fn test_cli_wasm_array_widens_to_mixed_parameter() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_array_widen");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function j(string $g, array $a): void { echo count($a), "[", implode($g, $a), "]|"; }
+j(",", [1, "a", 2.5, true, null]);
+j(",", ["x", "y", "z"]);
+j("-", [1, 2, 3]);
+j("", []);
+j(",", [true, false, true]);
+j("|", ["only"]);
+j(",", [7]);
+j("::", ["a", "", "b"]);
+j(",", [1, "mix", 2]);
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the array-widening probe");
+    assert!(
+        output.status.success(),
+        "array-widening compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the array-widening probe under Node");
+    assert!(
+        run.status.success(),
+        "array-widening probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(
+        run.stdout,
+        b"5[1,a,2.5,1,]|3[x,y,z]|3[1-2-3]|0[]|3[1,,1]|1[only]|1[7]|3[a::::b]|3[1,mix,2]|\n"
+            .to_vec()
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

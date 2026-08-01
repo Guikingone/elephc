@@ -406,7 +406,7 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // Mixed cells are unboxed for concrete parameters.
     let mut temp_cells: Vec<TempCell> = Vec::new();
     let mut slot_to_cell: HashMap<u32, usize> = HashMap::new();
-    let mut boxed_args: Vec<String> = Vec::new();
+    let mut boxed_args: Vec<(String, IrType)> = Vec::new();
     for (&arg, (param_ir, param_php, by_ref, _)) in inst.operands.iter().zip(&params) {
         if *by_ref {
             push_by_ref_arg(ctx, arg, &mut temp_cells, &mut slot_to_cell)?;
@@ -436,33 +436,45 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         writeback_temp_cell(ctx, cell)?;
     }
 
-    // Release each Mixed cell the argument boxing allocated. EIR emits no boxing instruction
-    // and so no matching release: the cell exists only because this target represents a
-    // `mixed` parameter as a heap cell, and the callee borrows it. Skipping this leaks one
-    // cell per call — silently, since nothing on the output path observes it.
+    // Release each heap value the argument conversion allocated — a boxed Mixed cell, or an
+    // array widened to `array<mixed>`. EIR asked for neither and so emits no matching release:
+    // they exist only because this target specializes parameter layouts, and the callee borrows
+    // them. Skipping this leaks one per call — silently, since nothing on the output path
+    // observes them.
     //
-    // Measured escape routes for a borrowed cell: copying it into a callee local and handing
-    // it to a further call are both safe (neither takes ownership), and pushing it into a
-    // container increfs. RETURNING it is not — `Terminator::Return` MOVES the value out
-    // without increfing, so a callee that can hand the cell back keeps its cells. That is
-    // narrower than it sounds: it only withholds the release from callees whose declared
-    // return is itself a Mixed cell.
-    if !matches!(
-        callee_return_type,
-        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union)
-    ) {
-        release_boxed_arguments(ctx, &boxed_args);
-    }
+    // Measured escape routes for a borrowed value: copying it into a callee local and handing it
+    // to a further call are both safe (neither takes ownership), and pushing it into a container
+    // increfs. RETURNING it is not — `Terminator::Return` MOVES the value out without increfing,
+    // so a callee that can hand it back keeps it. The withholding is per-temporary and matched on
+    // KIND, since only a return of the same kind can alias.
+    release_boxed_arguments(ctx, &boxed_args, callee_return_type);
 
     Ok(())
 }
 
-/// Frees the Mixed cells synthesized for a call's arguments, after the call has returned.
-fn release_boxed_arguments(ctx: &mut FnCtx, boxed_args: &[String]) {
-    for cell in boxed_args {
+/// Frees the heap values synthesized for a call's arguments, after the call has returned.
+///
+/// Skips any temporary the callee's declared return could BE: a returned value moves out without
+/// an incref, so freeing it here would leave the caller holding a dead pointer.
+fn release_boxed_arguments(
+    ctx: &mut FnCtx,
+    boxed_args: &[(String, IrType)],
+    callee_return_type: IrType,
+) {
+    for (temp, kind) in boxed_args {
+        let may_be_returned = match kind {
+            IrType::Heap(IrHeapKind::Mixed) => matches!(
+                callee_return_type,
+                IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union)
+            ),
+            other => callee_return_type == *other,
+        };
+        if may_be_returned {
+            continue;
+        }
         ctx.fb.ins(
-            &format!("(call $__rt_decref_any (local.get {}))", cell),
-            "free the Mixed cell boxed for this argument",
+            &format!("(call $__rt_decref_any (local.get {}))", temp),
+            "free the heap value synthesized for this argument",
         );
     }
 }

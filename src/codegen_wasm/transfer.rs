@@ -40,6 +40,26 @@ pub(super) enum TransferKind {
     BoxMixed,
     /// A runtime Mixed cell is converted to a concrete destination.
     UnboxMixed,
+    /// A concrete-element array is copied into a fresh Mixed-cell array.
+    ///
+    /// `tag` is the cell tag every element gets and `elem_size` the source slot stride.
+    WidenArrayToMixed { tag: i64, elem_size: i64 },
+}
+
+/// Returns the cell tag and source slot stride for widening an `array<T>` to `array<mixed>`.
+///
+/// Only the element types this target has a concrete array layout for can be widened. `Void` is
+/// what `Never` — the element type of a literal `[]` — normalizes to: there is nothing to convert,
+/// so the tag and stride are never read. A float element has no lowered array storage at all, so
+/// it is not listed here.
+fn array_widen_shape(element: &PhpType) -> Option<(i64, i64)> {
+    Some(match element.codegen_repr() {
+        PhpType::Int => (0, 8),
+        PhpType::Str => (1, 16),
+        PhpType::Bool => (3, 8),
+        PhpType::Void => (0, 8),
+        _ => return None,
+    })
 }
 
 /// Returns true when an EIR/PHP pair is realized as a runtime Mixed cell pointer.
@@ -93,6 +113,10 @@ fn reprs_match_for_copy(
             // Concrete heap pointers are bit-compatible only when their EIR
             // storage kinds agree. Cross-kind pointer reinterpretation requires
             // an explicit lowering path instead of a count-only copy.
+            //
+            // Two indexed arrays whose ELEMENTS differ are not bit-compatible either: this
+            // target specializes slot width and value_type per element type, so that pair is
+            // a widening conversion (handled below), never a copy.
             source_ir == dest_ir && source_php == dest_php
         }
         _ => false,
@@ -152,6 +176,26 @@ pub(super) fn classify_transfer(
             "unboxing a Mixed cell to {:?} ({:?}) is not supported on wasm32-wasi",
             dest_ir, dest_php
         )));
+    }
+    // An `array<T>` handed to an `array<mixed>` destination is a real element-wise conversion.
+    if source_ir == IrType::Heap(IrHeapKind::Array)
+        && dest_ir == IrType::Heap(IrHeapKind::Array)
+        && dest_php == PhpType::Array(Box::new(PhpType::Mixed))
+        && source_php != dest_php
+    {
+        let PhpType::Array(element) = &source_php else {
+            return Err(WasmError::Unsupported(format!(
+                "widening {:?} to array<mixed> is not supported on wasm32-wasi",
+                source_php
+            )));
+        };
+        let (tag, elem_size) = array_widen_shape(element).ok_or_else(|| {
+            WasmError::Unsupported(format!(
+                "widening an array of {:?} to array<mixed> is not supported on wasm32-wasi",
+                element
+            ))
+        })?;
+        return Ok(TransferKind::WidenArrayToMixed { tag, elem_size });
     }
     if reprs_match_for_copy(
         &source_repr,
@@ -389,7 +433,8 @@ fn emit_unbox_mixed_to_concrete(
 /// For identical representations this is a plain component-wise copy. For a
 /// Mixed-cell destination this boxes (or moves) the value via
 /// `__rt_mixed_from_value`.  Unsupported conversions return `WasmError`.
-/// Returns the local holding a Mixed cell this conversion ALLOCATED, when it allocated one.
+/// Returns the local holding a heap value this conversion ALLOCATED, with its EIR kind, when it
+/// allocated one.
 /// Callers that hand the value to an owner (a value, a slot) ignore it; a call argument, which
 /// the callee only borrows, must release it after the call.
 fn convert_temps_to_dest(
@@ -401,7 +446,7 @@ fn convert_temps_to_dest(
     dest_repr: &WasmRepr,
     dest_ir: IrType,
     dest_php: PhpType,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, IrType)>> {
     match classify_transfer(source_ir, source_php.clone(), dest_ir, dest_php.clone())? {
         TransferKind::Copy => {
             for name in source_temps {
@@ -417,6 +462,25 @@ fn convert_temps_to_dest(
             source_php,
             source_ir,
         ),
+        TransferKind::WidenArrayToMixed { tag, elem_size } => {
+            ctx.fb.ins(
+                &format!("local.get {}", source_temps[0]),
+                "source array pointer",
+            );
+            ctx.fb.ins(&format!("i64.const {tag}"), "cell tag for every element");
+            ctx.fb
+                .ins(&format!("i64.const {elem_size}"), "source slot stride");
+            ctx.fb.ins(
+                "call $__rt_array_widen_to_mixed",
+                "copy into a fresh owned mixed-cell array",
+            );
+            let widened = ctx.fresh_temp(ValType::I32);
+            ctx.fb.ins(
+                &format!("local.tee {}", widened),
+                "remember the widened array so its creator can free it",
+            );
+            Ok(Some((widened, IrType::Heap(IrHeapKind::Array))))
+        }
         TransferKind::UnboxMixed => {
             emit_unbox_mixed_to_concrete(ctx, source_temps, dest_repr, dest_ir, &dest_php)?;
             Ok(None)
@@ -437,7 +501,7 @@ fn emit_box_temps_into_mixed(
     source_repr: &WasmRepr,
     source_php: PhpType,
     source_ir: IrType,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, IrType)>> {
     let tag = mixed_box_tag(&source_php, source_ir)?;
     ctx.fb
         .ins(&format!("i64.const {}", tag), "mixed boxing tag");
@@ -495,7 +559,7 @@ fn emit_box_temps_into_mixed(
         &format!("local.tee {}", cell),
         "remember the boxed cell so its creator can free it",
     );
-    Ok(Some(cell))
+    Ok(Some((cell, IrType::Heap(IrHeapKind::Mixed))))
 }
 
 /// Stores a stack-captured value into a destination EIR value, applying any
@@ -599,7 +663,8 @@ fn repr_for_ir(ir: IrType) -> WasmRepr {
 /// Applies concrete-to-Mixed boxing or Mixed-to-concrete unboxing as needed so
 /// the operand stack matches the callee's declared parameter signature.
 ///
-/// Returns the local holding a Mixed cell the boxing allocated, if any. The callee BORROWS its
+/// Returns the local holding a heap value the conversion allocated, with its EIR kind, if any.
+/// The callee BORROWS its
 /// parameter (`own=maybe_owned`, and the EIR release stays with the caller's original value), so
 /// that cell has no other owner and the call site must free it once the call returns.
 pub(super) fn emit_push_call_argument(
@@ -607,7 +672,7 @@ pub(super) fn emit_push_call_argument(
     arg: ValueId,
     param_ir: IrType,
     param_php: PhpType,
-) -> Result<Option<String>> {
+) -> Result<Option<(String, IrType)>> {
     let source_repr = ctx.value_repr(arg)?.clone();
     let (source_php, source_ir) = ctx
         .function

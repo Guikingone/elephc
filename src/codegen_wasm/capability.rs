@@ -871,7 +871,11 @@ fn value_transfer_shape_issue(
             )
         }
         Ok(transfer::TransferKind::UnboxMixed) => None,
-        Ok(transfer::TransferKind::Copy | transfer::TransferKind::BoxMixed) => None,
+        Ok(
+            transfer::TransferKind::Copy
+            | transfer::TransferKind::BoxMixed
+            | transfer::TransferKind::WidenArrayToMixed { .. },
+        ) => None,
         Err(error) => Some(error.to_string()),
     }
 }
