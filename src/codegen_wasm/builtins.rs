@@ -2515,10 +2515,10 @@ const RT_FMT_FLOAT: &str = r#"(func $__rt_fmt_float (param $bits i64) (param $pr
   (local $keep i64) (local $klen i64) (local $i i64) (local $first i32) (local $up i32)
   (local $rest i64) (local $carry i64) (local $intlen i64) (local $w i32) (local $signch i32)
   (local.set $scratch (call $__rt_heap_alloc
-    (i32.add (i32.const 2048) (i32.wrap_i64 (i64.mul (local.get $prec) (i64.const 2))))))
+    (i32.add (i32.const 2112) (i32.wrap_i64 (i64.mul (local.get $prec) (i64.const 2))))))
   (local.set $big (local.get $scratch))                           ;; 80 limbs, must start zeroed
-  (local.set $dbuf (i32.add (local.get $scratch) (i32.const 640)))
-  (local.set $kept (i32.add (local.get $scratch) (i32.const 1408)))
+  (local.set $dbuf (i32.add (local.get $scratch) (i32.const 640)))   ;; 792 bytes: see __rt_f64_digits
+  (local.set $kept (i32.add (local.get $scratch) (i32.const 1440)))  ;; past dbuf's 640+792
   (local.set $i (i64.const 0))
   (block $ze (loop $zl                                            ;; zero the bignum limbs
     (br_if $ze (i64.ge_s (local.get $i) (i64.const 640)))
@@ -2526,7 +2526,7 @@ const RT_FMT_FLOAT: &str = r#"(func $__rt_fmt_float (param $bits i64) (param $pr
     (local.set $i (i64.add (local.get $i) (i64.const 1)))
     (br $zl)))
   (call $__rt_f64_digits (local.get $bits) (local.get $big) (i32.const 80)
-        (local.get $dbuf) (i32.const 768))
+        (local.get $dbuf) (i32.const 792))
   (local.set $p) (local.set $ndigits) (local.set $digptr)
   (local.set $class) (local.set $sign)
   (if (i32.eq (local.get $class) (i32.const 1))                   ;; infinity ignores the field
@@ -2683,6 +2683,7 @@ const RT_FMT_FLOAT: &str = r#"(func $__rt_fmt_float (param $bits i64) (param $pr
 /// remembering `(pointer, length)` keeps this linear, where pairwise appending would copy the
 /// accumulated prefix again for every element.
 const RT_IMPLODE_OWNED: &str = r#"(func $__rt_implode_owned (param $array i32) (param $gptr i32) (param $glen i64) (param $kind i32) (result i32) (result i64)
+  (local $cell i32)
   (local $n i64) (local $i i64) (local $j i64) (local $total i64)
   (local $table i32) (local $eptr i32) (local $elen i64) (local $out i32) (local $w i32)
   (local.set $n (i64.load (local.get $array)))

@@ -233,7 +233,18 @@ const RT_U32_TO_9DIGITS: &str = r#"(func $__rt_u32_to_9digits (param $value i32)
 /// decimal digits most-significant-first and `p` is the fractional digit count. For
 /// non-finite/zero inputs (`class != 0`) it returns no digits. `$big` must be a
 /// pre-zeroed buffer of `$nlimbs` limbs large enough to hold `J` (80 limbs covers every
-/// double), and `$dbuf` must be at least 768 bytes (the smallest subnormal has 751 digits).
+/// double), and `$dbuf` must be at least 792 bytes.
+///
+/// That bound is the CHUNK count, not the digit count: the loop reserves a full 9 bytes per
+/// chunk and writes leftwards from `$dmax`, so the buffer has to cover `ceil(digits/9)*9`.
+/// The worst case is `p == 1074` (every subnormal, and the smallest normals): `5^1074` has 751
+/// digits and the mantissa up to 16, so `J` has at most 767 — 86 chunks, 774 bytes. 792 is the
+/// next multiple of 9 above that with headroom.
+///
+/// ★ Undersizing does NOT trap. `$wp` goes negative, the chunks are written BEFORE `$dbuf`, and
+/// the leading-zero strip compares `$start` with `i32.ge_u` — where a negative `$start` reads as
+/// a huge unsigned value, so the strip exits at once and the zeros survive into the output
+/// (`1e-308` printed as `0.0000001E-301`).
 const RT_F64_DIGITS: &str = r#"(func $__rt_f64_digits (param $bits i64) (param $big i32) (param $nlimbs i32) (param $dbuf i32) (param $dmax i32) (result i32 i32 i32 i32 i32)
   (local $sign i32) (local $mant i64) (local $exp2 i32) (local $class i32)
   (local $p i32) (local $wp i32) (local $rem i64) (local $start i32)
@@ -1577,7 +1588,7 @@ mod tests {
         format!(
             r#"(func $t (export "t") (result i64)
   (local $sign i32) (local $class i32) (local $digptr i32) (local $ndig i32) (local $p i32)
-  (call $__rt_f64_digits (i64.const {bits_hex}) (i32.const 1024) (i32.const 80) (i32.const 2048) (i32.const 768))
+  (call $__rt_f64_digits (i64.const {bits_hex}) (i32.const 1024) (i32.const 80) (i32.const 2048) (i32.const 792))
   (local.set $p)
   (local.set $ndig)
   (local.set $digptr)
@@ -1956,7 +1967,7 @@ mod tests {
         format!(
             r#"(func $t (export "t") (result i64)
   (local $ptr i32) (local $len i32) (local $i i32) (local $h i64)
-  (call $__rt_ftoa (i64.const {bits_hex}) (i32.const 1024) (i32.const 80) (i32.const 2048) (i32.const 768) (i32.const 4096))
+  (call $__rt_ftoa (i64.const {bits_hex}) (i32.const 1024) (i32.const 80) (i32.const 2048) (i32.const 792) (i32.const 4096))
   (local.set $len)
   (local.set $ptr)
   (local.set $h (i64.const 0))

@@ -315,7 +315,7 @@ const RT_MIXED_CAST_STRING: &str = r#"(func $__rt_mixed_cast_string (param $ptr 
       (return (local.get $pptr) (i32.wrap_i64 (local.get $plen)))))     ;; return the owned string copy
   (if (i64.eq (local.get $tag) (i64.const 2))                           ;; tag 2 = float
     (then
-      (call $__rt_ftoa (local.get $lo) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 768) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096, returns (ptr,len)
+      (call $__rt_ftoa (local.get $lo) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096, returns (ptr,len)
       (local.set $ilen)                                                 ;; pop ftoa length (result 1, on top)
       (local.set $iptr)                                                 ;; pop ftoa pointer (result 0)
       (call $__rt_str_persist (local.get $iptr) (i64.extend_i32_u (local.get $ilen))) ;; own a persisted copy of the formatted text
@@ -365,7 +365,7 @@ const RT_MIXED_CAST_STRING_REF: &str = r#"(func $__rt_mixed_cast_string_ref (par
       (return (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi))))) ;; return borrowed source cell string (ptr,len)
   (if (i64.eq (local.get $tag) (i64.const 2))                           ;; tag 2 = float
     (then
-      (call $__rt_ftoa (local.get $lo) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 768) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096, returns (ptr,len)
+      (call $__rt_ftoa (local.get $lo) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096, returns (ptr,len)
       (local.set $ilen)                                                 ;; pop ftoa length (result 1, on top)
       (local.set $iptr)                                                 ;; pop ftoa pointer (result 0)
       (return (local.get $iptr) (local.get $ilen))))                    ;; return borrowed scratch text

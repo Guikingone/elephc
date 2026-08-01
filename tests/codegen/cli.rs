@@ -5489,6 +5489,90 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the smallest magnitudes render exactly, where the digit buffer used to overflow.
+///
+/// `__rt_f64_digits` writes 9-byte chunks LEFTWARDS from the end of its buffer, so the buffer has
+/// to cover `ceil(digits/9)*9`, not the digit count. The worst case is `p == 1074`, where `J` has
+/// up to 767 digits — 86 chunks, 774 bytes — and the buffer was sized 768.
+///
+/// Undersizing did not trap: the cursor went negative, the chunks landed BEFORE the buffer, and
+/// the leading-zero strip compared a negative start with `i32.ge_u`, read it as a huge unsigned
+/// value and exited at once. `1e-308` printed as `0.0000001E-301` — right value, unnormalized —
+/// and the leading zeros then ate the 14 significant digits.
+#[test]
+fn test_cli_wasm_smallest_floats_render_like_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_tiny_floats");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function s(mixed $m): void { echo implode("", [$m]), "|"; }
+s(1e-307); s(1.5e-307); s(1e-308); s(1.5e-308); s(2.2e-308); s(5e-308);
+s(1e-309); s(1.5e-309); s(2.2e-309); s(5e-309); s(9.99e-309);
+s(1e-310); s(1e-320); s(5e-324); s(2.2250738585072014e-308);
+s(PHP_FLOAT_MIN); s(PHP_FLOAT_MAX); s(PHP_FLOAT_EPSILON);
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the tiny-float probe");
+    assert!(
+        output.status.success(),
+        "tiny-float compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the tiny-float probe under Node");
+    assert!(
+        run.status.success(),
+        "tiny-float probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected = concat!(
+        "1.0E-307|1.5E-307|1.0E-308|1.5E-308|2.2E-308|5.0E-308|",
+        "1.0E-309|1.5E-309|2.2E-309|5.0E-309|9.99E-309|",
+        "1.0E-310|9.9998886718268E-321|4.9406564584125E-324|2.2250738585072E-308|",
+        "2.2250738585072E-308|1.7976931348623E+308|2.2204460492503E-16|\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

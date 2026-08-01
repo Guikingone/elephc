@@ -452,7 +452,7 @@ fn emit_undefined_array_key_warning_runtime(
         r#"(func $__rt_warn_float_not_representable (param $bits i64)
   (local $ptr i32) (local $len i32)
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_prefix_ptr}) (i32.const {float_prefix_len}))  ;; "Warning: The float "
-  (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 768) (i32.add (global.get $__float_scratch) (i32.const 4096)))  ;; render the offending float exactly as PHP prints it
+  (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096)))  ;; render the offending float exactly as PHP prints it
   (local.set $len)                                                ;; ftoa returns (ptr, len): pop the length first
   (local.set $ptr)                                                ;; then the pointer
   (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (local.get $len))  ;; the float text itself
@@ -754,7 +754,7 @@ const RT_ECHO_F64: &str = r#"(func $__rt_echo_f64 (param $v f64)
   (local $ptr i32)                                          ;; formatted text pointer (from __rt_ftoa)
   (local $len i32)                                          ;; formatted text length (from __rt_ftoa)
   (local.set $bits (i64.reinterpret_f64 (local.get $v)))    ;; f64 value -> raw bits for __rt_ftoa
-  (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 768) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096 -> (ptr,len)
+  (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096))) ;; format into scratch+4096 -> (ptr,len)
   (local.set $len)                                          ;; pop ftoa length (result 1, on top)
   (local.set $ptr)                                          ;; pop ftoa pointer (result 0)
   (call $__rt_wasi_write_or_fail (i32.const 1) (local.get $ptr) (local.get $len))) ;; write to stdout"#;
