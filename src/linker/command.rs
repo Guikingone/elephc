@@ -13,7 +13,7 @@ use std::ffi::OsString;
 use std::path::Path;
 use std::process::{self, Command};
 
-use crate::codegen::platform::{Platform, Target};
+use crate::codegen::platform::{AppleVariant, Platform, Target};
 use crate::codegen::Emit;
 use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan, LinuxLinkMode};
 
@@ -105,6 +105,20 @@ pub(super) fn run_tool(name: &str, command: &mut Command) {
     }
 }
 
+/// Returns the minimum-OS version recorded in `-platform_version`.
+///
+/// macOS keeps its long-standing behaviour of reporting the SDK version as the
+/// deployment floor, so existing binaries are unaffected. iOS cannot: its SDK
+/// versions run far ahead of any sensible floor, and recording one would refuse
+/// to load on every device below it. `13.0` is the oldest release the arm64-only
+/// backend can target anyway.
+fn apple_min_os_version<'a>(target: Target, sdk_version: &'a str) -> &'a str {
+    match target.apple_variant {
+        AppleVariant::MacOS => sdk_version,
+        AppleVariant::IOS | AppleVariant::IOSSimulator => "13.0",
+    }
+}
+
 /// Renders the existing direct-`ld` macOS command shape from a typed plan.
 fn render_macos_command(
     target: Target,
@@ -143,8 +157,8 @@ fn render_macos_command(
         OsString::from("-syslibroot"),
         OsString::from(sdk.path),
         OsString::from("-platform_version"),
-        OsString::from("macos"),
-        OsString::from(sdk.version),
+        OsString::from(target.apple_platform_name()),
+        OsString::from(apple_min_os_version(target, sdk.version)),
         OsString::from(sdk.version),
     ]);
 

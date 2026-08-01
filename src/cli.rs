@@ -93,7 +93,8 @@ Output modes:
   --emit KIND             Output kind: executable (default) | cdylib
 
 Target:
-  --target TARGET         macos-aarch64 | linux-aarch64 | linux-x86_64 (default: host)
+  --target TARGET         macos-aarch64 | ios-arm64 | ios-sim-arm64 |
+                          linux-aarch64 | linux-x86_64 (default: host)
   --php-version VERSION   8.2 | 8.3 | 8.4 | 8.5 (default: 8.5)
 
 Codegen:

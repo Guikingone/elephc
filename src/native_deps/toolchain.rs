@@ -187,7 +187,9 @@ fn validate_tuple(target: Target, tuple: &str, host: bool) -> Result<String, Nat
         Arch::X86_64 => lower.starts_with("x86_64-"),
     };
     let os_ok = match target.platform {
-        Platform::MacOS => lower.contains("apple") && lower.contains("darwin"),
+        // An iOS cross compiler reports `arm64-apple-ios`, never `darwin`, so
+        // matching on a fixed "darwin" here rejected every iOS toolchain.
+        Platform::MacOS => lower.contains("apple") && lower.contains(target.apple_triple_os()),
         Platform::Linux => lower.contains("linux"),
         Platform::Windows => false,
     };
@@ -196,7 +198,7 @@ fn validate_tuple(target: Target, tuple: &str, host: bool) -> Result<String, Nat
     }
     let arch = match target.arch { Arch::AArch64 => "aarch64", Arch::X86_64 => "x86_64" };
     match target.platform {
-        Platform::MacOS => Ok(format!("{arch}-apple-darwin")),
+        Platform::MacOS => Ok(format!("{arch}-apple-{}", target.apple_triple_os())),
         Platform::Linux => {
             let environment = if lower.contains("musl") {
                 "musl"

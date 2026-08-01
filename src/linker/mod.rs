@@ -146,8 +146,12 @@ pub(crate) fn link_with_plan(
         .map(|prepared| &prepared.plan)
         .unwrap_or(&resolved.plan);
 
-    let sdk_path = (target.platform == Platform::MacOS).then(sdk::macos_sdk_path);
-    let sdk_version = (target.platform == Platform::MacOS).then(sdk::macos_sdk_version);
+    // The SDK is selected by the target's Apple variant, not by the host: an
+    // iOS build resolves the iOS SDK even though it runs on macOS.
+    let apple_sdk = target.apple_sdk_name();
+    let sdk_path = (target.platform == Platform::MacOS).then(|| sdk::macos_sdk_path(apple_sdk));
+    let sdk_version =
+        (target.platform == Platform::MacOS).then(|| sdk::macos_sdk_version(apple_sdk));
     let mac_sdk = sdk_path
         .as_deref()
         .zip(sdk_version.as_deref())
