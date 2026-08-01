@@ -106,6 +106,8 @@ const ERR_UNSUPPORTED_OPERAND: &[u8] =
 const ERR_STR_REPEAT_NEGATIVE: &[u8] = b"PHP Fatal error: Uncaught ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n";
 /// `str_pad()` with an empty pad string is a PHP `ValueError` when padding is actually needed.
 const ERR_STR_PAD_EMPTY: &[u8] = b"PHP Fatal error: Uncaught ValueError: str_pad(): Argument #3 ($pad_string) must not be empty\n";
+/// `explode()` with an empty separator is a PHP `ValueError`; without it the split loops.
+const ERR_EXPLODE_EMPTY_SEP: &[u8] = b"PHP Fatal error: Uncaught ValueError: explode(): Argument #1 ($separator) must not be empty\n";
 /// `chr()` outside `[0, 255]` still answers, wrapping modulo 256, but is deprecated since 8.5.
 const DEPRECATED_CHR_RANGE: &[u8] = b"Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256\n";
 /// `ord()` on anything but exactly one byte still answers, but is deprecated since 8.5.
@@ -126,6 +128,7 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_UNCAUGHT_EXCEPTION.len() as u32
     + ERR_STR_REPEAT_NEGATIVE.len() as u32
     + ERR_STR_PAD_EMPTY.len() as u32
+    + ERR_EXPLODE_EMPTY_SEP.len() as u32
     + ERR_METHOD_CALL_PREFIX.len() as u32
     + ERR_METHOD_CALL_SUFFIX.len() as u32
     + PHP_TYPE_INT.len() as u32
@@ -243,6 +246,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_UNCAUGHT_EXCEPTION,
         ERR_STR_REPEAT_NEGATIVE,
         ERR_STR_PAD_EMPTY,
+        ERR_EXPLODE_EMPTY_SEP,
     ];
     let method_messages = [
         ERR_METHOD_CALL_PREFIX,
@@ -766,7 +770,7 @@ mod tests {
 
     use super::{
         emit_common_runtime, ERR_DIV_ZERO, ERR_INTDIV_OVERFLOW, ERR_MOD_ZERO, ERR_NEG_SHIFT,
-        ERR_STR_PAD_EMPTY, ERR_STR_REPEAT_NEGATIVE,
+        ERR_EXPLODE_EMPTY_SEP, ERR_STR_PAD_EMPTY, ERR_STR_REPEAT_NEGATIVE,
         RT_ARGV, RT_ECHO_BOOL, RT_ECHO_F64, RT_ECHO_I64, RT_ECHO_STR, RT_WASI_WRITE_OR_FAIL,
     };
     use super::super::heap::emit_heap_runtime;
@@ -791,6 +795,7 @@ mod tests {
             (4, ERR_INTDIV_OVERFLOW),
             (11, ERR_STR_REPEAT_NEGATIVE),
             (12, ERR_STR_PAD_EMPTY),
+            (13, ERR_EXPLODE_EMPTY_SEP),
         ];
         for (code, class_name, message) in CATCHABLE_RUNTIME_ERRORS {
             let (_, fatal) = fatals

@@ -61,6 +61,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_FIND);
     wm.add_raw_func(RT_STR_RFIND);
     wm.add_raw_func(RT_IMPLODE);
+    wm.add_raw_func(RT_EXPLODE);
     wm.add_raw_func(RT_PAD_BYTE);
     wm.add_raw_func(RT_STR_PAD);
     wm.add_raw_func(RT_STR_REPLACE);
@@ -904,9 +905,9 @@ const RT_STR_FIND: &str = r#"(func $__rt_str_find (param $hptr i32) (param $hlen
 /// An empty needle matches at 0, which is why `strstr("abcdef", "")` is the whole string and its
 /// `before` form is empty.
 fn lower_strstr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let found = ctx.fb.local("__strstr_at", super::wat::ValType::I64);
-    let hptr = ctx.fb.local("__strstr_hptr", super::wat::ValType::I32);
-    let hlen = ctx.fb.local("__strstr_hlen", super::wat::ValType::I64);
+    let found = ctx.fresh_temp(super::wat::ValType::I64);
+    let hptr = ctx.fresh_temp(super::wat::ValType::I32);
+    let hlen = ctx.fresh_temp(super::wat::ValType::I64);
     ctx.emit_load_value(operand(inst, 0)?)?;
     ctx.fb.ins(&format!("local.set {hlen}"), "spill haystack length");
     ctx.fb.ins(&format!("local.set {hptr}"), "spill haystack pointer");
@@ -1842,6 +1843,39 @@ const RT_IMPLODE: &str = r#"(func $__rt_implode (param $array i32) (param $gptr 
   (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
 "#;
 
+/// `__rt_explode`: splits a string on a separator into a freshly built indexed string array.
+///
+/// Scanning is left to right and non-overlapping. Every separator produces a boundary, so a
+/// leading or trailing one yields an EMPTY element rather than being trimmed away, and the tail
+/// after the last separator is always pushed — which is why `explode(",", "")` is `[""]`, one
+/// empty element, and never the empty array. The caller has already refused an empty separator,
+/// which is what would otherwise make this loop forever.
+///
+/// `__rt_array_push_str` may reallocate, so its result is threaded back rather than discarded.
+const RT_EXPLODE: &str = r#"(func $__rt_explode (param $sptr i32) (param $slen i64) (param $pptr i32) (param $plen i64) (result i32)
+  (local $arr i32)                                                ;; the array being built
+  (local $i i64)                                                  ;; scan cursor
+  (local $start i64)                                              ;; start of the current piece
+  (local.set $arr (call $__rt_array_new (i64.const 4) (i64.const 16)))  ;; specialized on first push
+  (local.set $i (i64.const 0))
+  (local.set $start (i64.const 0))
+  (block $end (loop $scan
+    (br_if $end (i64.gt_s (i64.add (local.get $i) (local.get $plen)) (local.get $slen)))
+    (if (i32.wrap_i64 (call $__rt_str_region_eq
+          (local.get $sptr) (local.get $pptr) (local.get $plen) (local.get $i)))
+      (then
+        (local.set $arr (call $__rt_array_push_str (local.get $arr)
+          (i32.add (local.get $sptr) (i32.wrap_i64 (local.get $start)))
+          (i64.sub (local.get $i) (local.get $start))))           ;; the piece before this separator
+        (local.set $i (i64.add (local.get $i) (local.get $plen))) ;; skip it, never rescan
+        (local.set $start (local.get $i)))
+      (else (local.set $i (i64.add (local.get $i) (i64.const 1)))))
+    (br $scan)))
+  (call $__rt_array_push_str (local.get $arr)
+    (i32.add (local.get $sptr) (i32.wrap_i64 (local.get $start)))
+    (i64.sub (local.get $slen) (local.get $start))))              ;; the tail is always an element
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -2115,6 +2149,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Strpos
             | RuntimeFnId::Strrpos
             | RuntimeFnId::Implode
+            | RuntimeFnId::Explode
             | RuntimeFnId::Strstr
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrReplace
@@ -2201,6 +2236,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Implode {
         return implode_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Explode {
+        return explode_shape_issue(function, call);
     }
     if target == RuntimeFnId::Strstr {
         return strstr_shape_issue(function, call);
@@ -2418,6 +2456,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Implode {
         return lower_implode(ctx, inst);
+    }
+    if target == RuntimeFnId::Explode {
+        return lower_explode(ctx, inst);
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);
@@ -2898,6 +2939,73 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
+/// The `__rt_fail` code PHP's empty-separator `explode` `ValueError` reports under.
+const EXPLODE_EMPTY_SEP_FAILURE_CODE: i32 = 13;
+
+/// Lowers `explode` in its two-argument form.
+///
+/// PHP refuses an empty separator outright — unlike `str_pad`'s empty pad, which only raises when
+/// it would be used — because there is no split it could mean and the scan would not advance. The
+/// `$limit` form is refused: a positive limit caps the count with the remainder in the last
+/// element, a negative one drops elements from the END, and zero behaves as one, which is three
+/// different rules rather than a default.
+fn lower_explode(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let pptr = ctx.fresh_temp(super::wat::ValType::I32);
+    let plen = ctx.fresh_temp(super::wat::ValType::I64);
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(&format!("local.set {plen}"), "spill separator length");
+    ctx.fb.ins(&format!("local.set {pptr}"), "spill separator pointer");
+    ctx.fb.ins(&format!("local.get {plen}"), "separator length");
+    ctx.fb.ins("i64.eqz", "an empty separator?");
+    ctx.fb.ins("if", "explode() has no split an empty separator could mean");
+    super::inst::emit_runtime_failure(
+        ctx,
+        EXPLODE_EMPTY_SEP_FAILURE_CODE,
+        "explode() empty separator",
+    );
+    ctx.fb.ins("end", "end empty-separator guard");
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins(&format!("local.get {pptr}"), "separator pointer");
+    ctx.fb.ins(&format!("local.get {plen}"), "separator length");
+    ctx.fb.ins("call $__rt_explode", "split into a fresh indexed array");
+    store_result(ctx, inst)
+}
+
+/// Validates `explode`: a separator and a subject string, an indexed string array out.
+fn explode_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [separator, subject] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected a separator and a subject with no limit, got {} operands",
+            call.operands.len()
+        ));
+    };
+    for operand in [separator, subject] {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+            return Some(format!(
+                "explode takes strings, got {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none() || call.result_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "explode result {:?} is not an indexed array",
+            call.result_type
+        ));
+    }
+    if !matches!(&call.result_php_type, PhpType::Array(element) if **element == PhpType::Str) {
+        return Some(format!(
+            "explode must produce exactly array<string>, got {:?}",
+            call.result_php_type
+        ));
+    }
+    None
+}
+
 /// Lowers `implode` over an indexed array of strings.
 ///
 /// PHP also accepts an array of ints or mixed values, joining their string coercions, and a
@@ -2971,7 +3079,7 @@ fn implode_shape_issue(function: &Function, call: &Instruction) -> Option<String
 /// own that is NOT the mirror of `strpos`'s — a negative offset there bounds where the match may
 /// START, counted from the end — so it is refused rather than assumed symmetrical.
 fn lower_string_rsearch(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let found = ctx.fb.local("__rfind_at", super::wat::ValType::I64);
+    let found = ctx.fresh_temp(super::wat::ValType::I64);
     ctx.emit_load_value(operand(inst, 0)?)?;
     ctx.emit_load_value(operand(inst, 1)?)?;
     ctx.fb
@@ -3007,7 +3115,7 @@ fn lower_string_rsearch(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// `strpos($h, $n) === false` answer wrong for a match at the start — the classic PHP trap this
 /// distinction exists to serve.
 fn lower_string_search(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let found = ctx.fb.local("__find_at", super::wat::ValType::I64);
+    let found = ctx.fresh_temp(super::wat::ValType::I64);
     ctx.emit_load_value(operand(inst, 0)?)?;
     ctx.emit_load_value(operand(inst, 1)?)?;
     ctx.fb.ins(
@@ -3167,11 +3275,11 @@ const STR_PAD_EMPTY_FAILURE_CODE: i32 = 12;
 /// padding is needed and even when the pad string is also invalid, which is a different contract
 /// with its own message rather than a default for this one.
 fn lower_str_pad(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let target = ctx.fb.local("__pad_target", super::wat::ValType::I64);
-    let sptr = ctx.fb.local("__pad_sptr", super::wat::ValType::I32);
-    let slen = ctx.fb.local("__pad_slen", super::wat::ValType::I64);
-    let pptr = ctx.fb.local("__pad_pptr", super::wat::ValType::I32);
-    let plen = ctx.fb.local("__pad_plen", super::wat::ValType::I64);
+    let target = ctx.fresh_temp(super::wat::ValType::I64);
+    let sptr = ctx.fresh_temp(super::wat::ValType::I32);
+    let slen = ctx.fresh_temp(super::wat::ValType::I64);
+    let pptr = ctx.fresh_temp(super::wat::ValType::I32);
+    let plen = ctx.fresh_temp(super::wat::ValType::I64);
 
     ctx.emit_load_value(operand(inst, 0)?)?;
     ctx.fb.ins(&format!("local.set {slen}"), "spill subject length");
@@ -3266,7 +3374,7 @@ const STR_REPEAT_NEGATIVE_FAILURE_CODE: i32 = 11;
 /// treatment division by zero gets. The count is spilled to a local because the guard reads it
 /// before the helper consumes it.
 fn lower_str_repeat(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let times = ctx.fb.local("__repeat_times", super::wat::ValType::I64);
+    let times = ctx.fresh_temp(super::wat::ValType::I64);
     ctx.emit_load_value(operand(inst, 1)?)?;
     ctx.fb
         .ins(&format!("local.set {times}"), "spill the repeat count");
@@ -4183,6 +4291,24 @@ mod tests {
         let call = bad_flag.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&bad_flag, call, RuntimeFnId::Strstr).is_some());
 
+        // `explode` produces exactly array<string>; a limit argument is a different contract.
+        let split = shaped_call(
+            RuntimeFnId::Explode,
+            &[str_arg.clone(), str_arg.clone()],
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+        );
+        let call = split.instructions.last().expect("the probe emitted a call");
+        assert_eq!(direct_builtin_shape_issue(&split, call, RuntimeFnId::Explode), None);
+        let with_limit = shaped_call(
+            RuntimeFnId::Explode,
+            &[str_arg.clone(), str_arg.clone(), int_arg.clone()],
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+        );
+        let call = with_limit.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&with_limit, call, RuntimeFnId::Explode).is_some());
+
         // `implode` reads an array, so its element type is part of the contract.
         let str_array = (IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Str)));
         let joined = shaped_call(
@@ -4305,6 +4431,7 @@ mod tests {
         let int_arg = (IrType::I64, PhpType::Int);
         for (target, operands) in [
             (RuntimeFnId::StrRepeat, vec![str_arg.clone(), int_arg.clone()]),
+            (RuntimeFnId::Explode, vec![str_arg.clone(), str_arg.clone()]),
             (
                 RuntimeFnId::StrPad,
                 vec![str_arg.clone(), int_arg.clone(), str_arg.clone()],

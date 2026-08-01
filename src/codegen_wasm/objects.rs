@@ -1001,7 +1001,7 @@ fn emit_object_allocation(
 /// of `main` uncaught, so one table pins both halves of the behaviour together: the class a
 /// `catch` clause matches, and the fatal text printed when no clause matches. `runtime.rs`'s
 /// `ERR_*` strings are the second half and must keep naming these same classes and messages.
-pub(super) const CATCHABLE_RUNTIME_ERRORS: [(i32, &str, &str); 6] = [
+pub(super) const CATCHABLE_RUNTIME_ERRORS: [(i32, &str, &str); 7] = [
     (1, "DivisionByZeroError", "Division by zero"),
     (2, "DivisionByZeroError", "Modulo by zero"),
     (3, "ArithmeticError", "Bit shift by negative number"),
@@ -1019,6 +1019,11 @@ pub(super) const CATCHABLE_RUNTIME_ERRORS: [(i32, &str, &str); 6] = [
         12,
         "ValueError",
         "str_pad(): Argument #3 ($pad_string) must not be empty",
+    ),
+    (
+        13,
+        "ValueError",
+        "explode(): Argument #1 ($separator) must not be empty",
     ),
 ];
 

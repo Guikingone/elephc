@@ -4152,6 +4152,186 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `explode` builds php-src's array, empty pieces included.
+///
+/// Every separator is a boundary, so a leading or trailing one yields an EMPTY element rather
+/// than being trimmed, and the tail after the last separator is always pushed — which is why
+/// `explode(",", "")` is `[""]`, one empty element, and never the empty array. The results are
+/// read back through `implode`, so a wrong element COUNT shows up as well as wrong contents.
+///
+/// An empty separator raises php-src's ValueError outright, unlike `str_pad`'s empty pad which
+/// only raises when it would be used: there is no split it could mean, and the scan would not
+/// advance. The `$limit` form is refused — a positive limit caps the count with the remainder in
+/// the last element, a negative one drops from the END, and zero behaves as one.
+#[test]
+fn test_cli_wasm_explode_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_explode");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function e(string $sep, string $s): void { echo "[", implode("|", explode($sep, $s)), "]"; }
+e(",", "a,b,c"); e(",", "a"); e(",", ""); e(",", ",a"); e(",", "a,"); echo "\n";
+e(",", ",,"); e("--", "a--b"); e(",", "a,,b"); e("ab", "1ab2ab3"); e("\x00", "a\x00b"); echo "\n";
+function guard(string $sep, string $s): void {
+    try { echo "[", implode("|", explode($sep, $s)), "]"; } catch (\ValueError $x) { echo "V:", $x->getMessage(); }
+}
+guard("", "abc"); echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("compilation failed to run");
+    assert!(
+        output.status.success(),
+        "compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run under Node");
+    if !run.status.success() && String::from_utf8_lossy(&run.stderr).contains("CompileError") {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        run.status.success(),
+        "trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected: Vec<u8> = [
+        b"[a|b|c][a][][|a][a|]\n".as_slice(),
+        b"[||][a|b][a||b][1|2|3][a|b]\n".as_slice(),
+        b"[V:explode(): Argument #1 ($separator) must not be empty\n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a builtin that needs scratch locals can be called TWICE in one function.
+///
+/// Each of these lowerings spills operands it has to read more than once. Naming those locals
+/// made two calls in the same function declare the same local twice, which WebAssembly rejects —
+/// so the module failed to assemble rather than answering wrongly. Every earlier test happened to
+/// call each builtin once per function and missed it entirely; this one calls each of them twice.
+#[test]
+fn test_cli_wasm_scratch_using_builtins_survive_repeated_calls() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_builtin_twice");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function all(string $a, string $b): void {
+    echo str_repeat($a, 2), "|", str_repeat($b, 3), "|";
+    echo str_pad($a, 5, "-"), "|", str_pad($b, 6, "."), "|";
+    $p = strpos($a, "x"); $q = strpos($b, "y");
+    echo $p === false ? "F" : "@", $q === false ? "F" : "@", "|";
+    $r = strrpos($a, "x"); $t = strrpos($b, "y");
+    echo $r === false ? "F" : "@", $t === false ? "F" : "@", "|";
+    $u = strstr($a, "x"); $v = strstr($b, "y", true);
+    echo $u === false ? "F" : "S", $v === false ? "F" : "S", "|";
+    echo implode(",", explode("-", $a)), "|", implode(":", explode("-", $b)), "\n";
+}
+all("xa-xb", "cy-dy");
+all("no", "ne");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("compilation failed to run");
+    assert!(
+        output.status.success(),
+        "compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run under Node");
+    if !run.status.success() && String::from_utf8_lossy(&run.stderr).contains("CompileError") {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        run.status.success(),
+        "trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected: Vec<u8> = [
+        b"xa-xbxa-xb|cy-dycy-dycy-dy|xa-xb|cy-dy.|@@|@@|SS|xa,xb|cy:dy\n".as_slice(),
+        b"nono|nenene|no---|ne....|FF|FF|FF|no|ne\n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `implode` joins an indexed string array the way php-src does.
 ///
 /// This is the first builtin on this target that READS an array, so the shape contract is

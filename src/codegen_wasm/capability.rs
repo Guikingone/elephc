@@ -4496,6 +4496,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Strpos
         | RuntimeFnId::Strrpos
         | RuntimeFnId::Implode
+        | RuntimeFnId::Explode
         | RuntimeFnId::Strstr
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
@@ -4810,7 +4811,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::CtypeAlpha
         | RuntimeFnId::CtypeDigit
         | RuntimeFnId::CtypeSpace
-        | RuntimeFnId::Explode
         | RuntimeFnId::GraphemeStrrev
         | RuntimeFnId::Gzcompress
         | RuntimeFnId::Gzdeflate
