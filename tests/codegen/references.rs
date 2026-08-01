@@ -2827,3 +2827,86 @@ fn test_ref_alias_array_element_nonzero_index() {
     );
     assert_eq!(out, "99");
 }
+
+/// A `mixed &$p` callee may store ANY PHP type through the reference, so a caller local whose
+/// frame storage is a narrow scalar must be widened to Mixed storage BEFORE the call.
+///
+/// Every arm below has the callee write back a type DIFFERENT from the caller local's original
+/// one — the shape that previously stored the raw unboxed payload word into a slot still typed as
+/// the old scalar. Before the widening, `int`-sourced arms surfaced a written string as a raw
+/// heap POINTER (`int(4335338248)`) and a written float as its IEEE bit pattern
+/// (`int(4612811918334230528)`), while `bool`- and null-sourced arms dropped the callee's write
+/// entirely. The distinctive `777777`/`4242`/`2.5` sentinels keep an unwritten or wrongly-written
+/// slot legible rather than plausible. Values match `php -n` exactly.
+#[test]
+fn test_by_ref_mixed_param_writes_back_a_different_type_to_a_scalar_local() {
+    let out = compile_and_run(
+        r#"<?php
+function wb_null(mixed &$v): void { $v = null; }
+function wb_int(mixed &$v): void { $v = 4242; }
+function wb_str(mixed &$v): void { $v = "WRITTEN"; }
+function wb_float(mixed &$v): void { $v = 2.5; }
+
+$a = 777777; wb_null($a);  var_dump($a);
+$b = 777777; wb_str($b);   var_dump($b);
+$c = 777777; wb_float($c); var_dump($c);
+$d = true;   wb_int($d);   var_dump($d);
+$e = true;   wb_str($e);   var_dump($e);
+$f = 1.5;    wb_int($f);   var_dump($f);
+$g = 1.5;    wb_str($g);   var_dump($g);
+$h = null;   wb_str($h);   var_dump($h);
+$i = null;   wb_int($i);   var_dump($i);
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nstring(7) \"WRITTEN\"\nfloat(2.5)\nint(4242)\nstring(7) \"WRITTEN\"\nint(4242)\nstring(7) \"WRITTEN\"\nstring(7) \"WRITTEN\"\nint(4242)\n"
+    );
+}
+
+/// The same widening must happen for an INSTANCE METHOD's `mixed &$p` (the `bindParam` shape),
+/// which reaches the by-reference materializer through a different call-lowering path than a
+/// free function.
+#[test]
+fn test_by_ref_mixed_method_param_writes_back_a_different_type_to_a_scalar_local() {
+    let out = compile_and_run(
+        r#"<?php
+class RefBinder {
+    public function bind(mixed &$v): void { $v = "BOUND"; }
+    public function clear(mixed &$v): void { $v = null; }
+}
+$o = new RefBinder();
+$x = 777777; $o->bind($x);  var_dump($x);
+$y = 777777; $o->clear($y); var_dump($y);
+"#,
+    );
+    assert_eq!(out, "string(5) \"BOUND\"\nNULL\n");
+}
+
+/// A UNION-typed receiver (`Stmt|bool`, the `PDO::prepare()` shape) routes the call through the
+/// receiver-REGISTER materializer, which rejects any non-empty by-reference writeback set outright
+/// ("receiver-register method call with scalar-to-mixed by-reference writebacks"). Widening the
+/// caller local ahead of the call leaves that set EMPTY, so the rejection no longer applies and
+/// the callee writes straight through the caller's own Mixed cell.
+#[test]
+fn test_by_ref_mixed_param_through_union_typed_receiver_writes_back() {
+    let out = compile_and_run(
+        r#"<?php
+class UnionRefStmt {
+    public function bindParam(string $name, mixed &$variable): bool {
+        $variable = "BOUND:" . $name;
+        return true;
+    }
+}
+function prepare_stmt(bool $ok): UnionRefStmt|bool {
+    if ($ok) { return new UnionRefStmt(); }
+    return false;
+}
+$stmt = prepare_stmt(true);
+$id = 123;
+$stmt->bindParam(':id', $id);
+var_dump($id);
+"#,
+    );
+    assert_eq!(out, "string(9) \"BOUND::id\"\n");
+}

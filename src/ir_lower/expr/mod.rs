@@ -6286,6 +6286,9 @@ fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    if let Some(value) = lower_by_ref_mixed_scalar_arg_with_signature(ctx, sig, index, arg) {
+        return value;
+    }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
@@ -6577,6 +6580,84 @@ fn lower_by_ref_array_element_arg_with_signature(
         )
         .expect("array_elem_addr produces a value");
     Some(value)
+}
+
+/// Widens a NON-REFCOUNTED scalar local's frame storage to `Mixed` before it is passed to a
+/// declared `mixed &$p` by-reference parameter. A refcounted source (`string`) is deliberately
+/// left to codegen's existing loud rejection; see the exclusion list below for why.
+///
+/// A `mixed &$p` callee may store ANY PHP type through the reference, but a caller local whose
+/// frame storage is a concrete scalar (`int`/`bool`/`float`/`string`, or the statically-null
+/// `void`/`never`) has no room for a type tag. Codegen's fallback for that shape — box the scalar
+/// into a temporary Mixed cell, call, then unbox the callee's result back into the narrow slot
+/// (`plan_ref_arg_writebacks`) — cannot represent a type CHANGE: it stores the raw unboxed
+/// payload word into a slot still typed as the old scalar. A written string therefore lands as a
+/// raw heap pointer, a written float as its IEEE bit pattern, and a written null as its sentinel
+/// word, while a `bool`/null-typed slot drops the callee's write entirely.
+///
+/// The checker already models the correct outcome: `by_ref_param_needs_storage_promotion`
+/// promotes such a caller variable to `Mixed` for the rest of the flow. This lowering step is the
+/// storage half of that same promotion, so the two layers agree. Boxing the local once, here,
+/// makes the caller's OWN slot the Mixed cell the callee writes through, so no temporary cell and
+/// no writeback are needed at all: `plan_ref_arg_writebacks` then sees an already-`Mixed` source
+/// and skips it, which is the path that already matches PHP exactly.
+///
+/// The gate mirrors the checker's promotion rule: only a DECLARED parameter promotes. An
+/// undeclared `&$v` parameter carries a type elephc merely INFERRED, which the checker does not
+/// promote against, so widening there would desynchronize the layers instead of aligning them.
+///
+/// Deliberately NOT widened here, keeping codegen's existing loud rejection:
+/// - a `string` (or any other REFCOUNTED) source. Widening is a storeback, and `store_local`
+///   widens the slot to `Mixed` BEFORE running its own release-previous-occupant step, so that
+///   release would load the slot's raw string as a `Mixed` cell and drop it on the floor
+///   (measured: one 48-byte block leaked per widened string local). Releasing the occupant
+///   beforehand instead makes `store_local`'s own release fire on freed storage — a double free,
+///   which this platform absorbs silently. A correct fix needs a release-before-widen storeback
+///   that the current context helpers do not express, so a refcounted source keeps its existing
+///   LOUD `unsupported` error rather than gaining a silent leak. This costs nothing in
+///   correctness terms: a rejected compile was never a wrong answer, whereas every source repr
+///   widened above was previously miscompiled SILENTLY.
+/// - non-scalar storage (array/hash/object/callable/resource), for the same ownership reason;
+///   the array case additionally has its own dedicated widening in
+///   `lower_by_ref_array_arg_with_signature`.
+/// - a ref-bound local, where widening the slot mid-function would break earlier loads that
+///   already read it at the narrow width (see `store_local`'s ref-bound widening carve-out).
+fn lower_by_ref_mixed_scalar_arg_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    index: usize,
+    arg: &Expr,
+) -> Option<crate::ir::ValueId> {
+    if !sig.ref_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    if !sig.declared_params.get(index).copied().unwrap_or(false) {
+        return None;
+    }
+    let (_, param_ty) = sig.params.get(index)?;
+    if param_ty.codegen_repr() != PhpType::Mixed {
+        return None;
+    }
+    let ExprKind::Variable(name) = &arg.kind else {
+        return None;
+    };
+    if !ctx.has_local_slot(name) || ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    if !matches!(
+        ctx.local_type(name).codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void | PhpType::Never
+    ) {
+        return None;
+    }
+    let local = ctx.load_local(name, Some(arg.span));
+    let boxed = ctx.box_value_as_mixed(local, PhpType::Mixed, Some(arg.span));
+    // The plain assignment path, not `store_mutated_local`: this is semantically `$v = <boxed $v>`,
+    // so the slot must ACQUIRE the fresh cell (making it the owner that scope-exit cleanup
+    // releases) and release its previous occupant. `store_mutated_local` skips the acquire — it is
+    // for in-place mutations that transfer an existing owner — which would leak the new cell.
+    ctx.store_local(name, boxed, PhpType::Mixed, Some(arg.span));
+    Some(ctx.load_local(name, Some(arg.span)).value)
 }
 
 /// Returns true when a local array must be converted before a by-reference call.
