@@ -233,7 +233,13 @@ Target strings follow the existing dual convention (short `platform-arch` plus a
 
 Includes the native-dependency path: `native_deps/toolchain.rs` `validate_tuple` currently **rejects** an iOS cross-compiler outright, and `native_deps/catalog.rs` `supported_targets` must list the iOS strings before pcre2/zlib can be built for the target.
 
-**Accept:** `--target ios-arm64 --emit staticlib` produces a `.a` that links cleanly in an Xcode project.
+**Accept — met, minus the SDK.** `--emit staticlib` produces a `lib<stem>.a` carrying the user object, the runtime object and a symbol index; a C host links it directly — no `dlopen` — and runs. That link succeeding into a PIE executable is what proves the non-PIC decision above.
+
+`--target ios-arm64` runs the **entire** pipeline and assembles a real runtime object, cached under its own key alongside `macos-aarch64` (86 of those coexist without collision). Only the final link stops, on the absent SDK, with a diagnostic that names the SDK and points at full Xcode rather than looping back to `xcode-select --install`.
+
+What is left for Lot 3 is therefore one command on a machine with Xcode, not more code.
+
+Deliberately left for a real consumer: `native_deps/catalog.rs` `supported_targets` still lists no iOS strings, so pcre2/zlib cannot yet be built for the target. The toolchain validator no longer rejects an iOS triple, which was the blocking half.
 
 ### Lot 4 — Capability gating
 Six builtins depend on `fork`/`exec` and are unusable in the iOS sandbox. `proc_open` and its family are **not** in this list — they do not exist in the compiler at all (zero occurrences in `src/`); the note to carry forward is that whenever they are added, they must ship with the gate from day one.
