@@ -1218,6 +1218,30 @@ fn test_error_ref_dynamic_property_on_mixed_receiver_unsupported() {
     );
 }
 
+/// A dynamic-named property reference on a class whose reference-eligible properties disagree on
+/// their type loud-errors instead of silently miscompiling. The runtime-name dispatch selects one
+/// slot but the bound local has a single static type, so dereferencing an `array<string, string>`
+/// cell through an `array<int>` alias reads garbage — previously this widened to `Mixed` and
+/// produced wrong values with no diagnostic at all.
+#[test]
+fn test_error_ref_dynamic_property_heterogeneous_candidates_unsupported() {
+    expect_error(
+        "<?php class Bag { public $a = [1, 2]; public $b = ['x' => 'y']; }
+        $o = new Bag(); $n = 'a'; $r = &$o->$n; echo $r[0];",
+        "share one type",
+    );
+}
+
+/// Reference assignment INTO a dynamic property (`$obj->$name = &$v`) needs a concrete receiver
+/// class to enumerate promotable slots, so an untyped receiver is a loud, deferred error.
+#[test]
+fn test_error_ref_assign_into_dynamic_property_on_mixed_receiver_unsupported() {
+    expect_error(
+        "<?php function f($obj, string $n, $v) { $obj->$n = &$v; }",
+        "Reference assignment into a dynamic property is only supported on a statically-typed object receiver",
+    );
+}
+
 /// SLICE 2 (local): the reference SOURCE for a local array-element reference must be a plain
 /// variable (`&$x`). Aliasing an array element (`$a[] = &$b[$j]`) is a follow-up slice and is
 /// rejected loudly rather than silently value-copied.

@@ -365,16 +365,110 @@ pub(super) fn check_ref_assign(
     Ok(())
 }
 
+/// Returns the type shared by every candidate, or `None` when they disagree.
+///
+/// A reference cell is dereferenced through exactly ONE static shape — the bound local (or the
+/// aliased source local) has a single type — so a candidate set whose members disagree cannot be
+/// dispatched safely: selecting a `Str` slot and dereferencing it as an array reads garbage.
+fn homogeneous_candidate_type(candidates: &[(String, PhpType)]) -> Option<PhpType> {
+    let (_, first) = candidates.first()?;
+    candidates
+        .iter()
+        .all(|(_, ty)| ty == first)
+        .then(|| first.clone())
+}
+
+/// Returns the array-typed subset of a class's declared properties.
+///
+/// This is the historical candidate set for a DYNAMIC-named reference. It stays available as a
+/// fallback for classes whose declared properties do not all share one type but whose runtime
+/// names are array properties in practice (`$this->{$type.'Passes'}`).
+fn array_typed_candidates(candidates: &[(String, PhpType)]) -> Vec<(String, PhpType)> {
+    candidates
+        .iter()
+        .filter(|(_, ty)| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
+        .cloned()
+        .collect()
+}
+
+/// Resolves the reference-eligible declared properties of a DYNAMIC-named property reference
+/// (`&$obj->$name`) and returns them with the single type every candidate shares.
+///
+/// The runtime name is unknown at compile time, so the WIDEST sound candidate set is preferred:
+/// when every declared property of the receiver class shares one type, all of them are candidates
+/// and the runtime-name dispatch covers every name the program can produce. Property TYPE, not
+/// property kind, is the real constraint — a class whose properties are all `Str` is perfectly
+/// representable (the static-name arm has always handled `Str` reference cells), which is why the
+/// historical "at least one array-typed property" rule was too tight.
+///
+/// When the declared properties disagree, the array-typed subset is retained as a fallback so
+/// mixed-shape classes that only ever select an array property keep working. Residual gap: a
+/// runtime name that selects a property outside the chosen candidate set has no dispatch arm and
+/// fatals at runtime ("Cannot take reference to undefined dynamic property"). Heterogeneity
+/// WITHIN the chosen set is unrepresentable and is a loud, deferred error rather than the silent
+/// miscompile the previous widen-to-`Mixed` produced.
+fn dynamic_reference_property_candidates(
+    checker: &Checker,
+    class: &str,
+    span: Span,
+) -> Result<(Vec<(String, PhpType)>, PhpType), CompileError> {
+    let declared: Vec<(String, PhpType)> = checker
+        .classes
+        .get(class)
+        .map(|info| info.properties.to_vec())
+        .unwrap_or_default();
+    if declared.is_empty() {
+        return Err(CompileError::new(
+            span,
+            "Reference to a dynamic property requires the object to declare at least one property",
+        ));
+    }
+    if let Some(ty) = homogeneous_candidate_type(&declared) {
+        return Ok((declared, ty));
+    }
+    let arrays = array_typed_candidates(&declared);
+    if let Some(ty) = homogeneous_candidate_type(&arrays) {
+        return Ok((arrays, ty));
+    }
+    let first = &declared[0];
+    let clash = declared
+        .iter()
+        .find(|(_, ty)| *ty != first.1)
+        .unwrap_or(first);
+    Err(CompileError::new(
+        span,
+        &format!(
+            "Reference to a dynamic property requires the reference-eligible properties of {} to share one type, but ${} is {} and ${} is {}",
+            class, first.0, first.1, clash.0, clash.1,
+        ),
+    ))
+}
+
+/// Promotes every dynamic-reference candidate of `class` to a reference property program-wide.
+///
+/// Reuses the same `reference_property_promotions` mechanism the static `PropertyAccess` arm
+/// uses, so each candidate slot holds a ref-cell for the object's lifetime and codegen can emit
+/// a runtime-name dispatch that loads a cell pointer from whichever slot the name selects.
+fn promote_dynamic_reference_candidates(
+    checker: &mut Checker,
+    class: &str,
+    candidates: &[(String, PhpType)],
+) {
+    for (property, _) in candidates {
+        checker
+            .reference_property_promotions
+            .insert((class.to_string(), property.clone()));
+    }
+}
+
 /// Type-checks a reference alias whose source is a DYNAMIC-named property (`$x = &$this->$name`).
 ///
-/// The runtime property name is unknown at compile time, so any array-typed declared property of
-/// the receiver class could be the target. Every such candidate is promoted to a reference
-/// property program-wide (reusing the same `reference_property_promotions` mechanism the static
-/// `PropertyAccess` arm uses), so each candidate holds a ref-cell and its reads/writes stay
-/// ref-correct regardless of which name is selected at runtime. The target local is typed to the
-/// candidates' common element type, or `Mixed` when they are heterogeneous, and marked as
-/// by-reference storage. A non-object (`Mixed`/`Union`/unknown) receiver is a loud, deferred error
-/// rather than a silent miscompile.
+/// Every reference-eligible property of the receiver class (see
+/// `dynamic_reference_property_candidates`) is promoted to a reference property, so each candidate
+/// holds a ref-cell and its reads/writes stay ref-correct regardless of which name is selected at
+/// runtime. The target local is typed to the candidates' shared type and marked as by-reference
+/// storage. A non-object (`Mixed`/`Union`/unknown) receiver is a loud, deferred error rather than
+/// a silent miscompile.
 fn check_ref_assign_dynamic_property(
     checker: &mut Checker,
     target: &str,
@@ -389,43 +483,8 @@ fn check_ref_assign_dynamic_property(
             "Reference to a dynamic property is only supported on a statically-typed object receiver",
         ));
     };
-    // Collect the class's array-typed declared properties — the candidates the static arm would
-    // have accepted. A single machine-word ref-cell cannot represent a multi-word (string) slot,
-    // so only array-typed properties are reference-eligible for the runtime-name path.
-    let candidates: Vec<(String, PhpType)> = checker
-        .classes
-        .get(&class)
-        .map(|info| {
-            info.properties
-                .iter()
-                .filter(|(_, ty)| {
-                    matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. })
-                })
-                .cloned()
-                .collect()
-        })
-        .unwrap_or_default();
-    if candidates.is_empty() {
-        return Err(CompileError::new(
-            span,
-            "Reference to a dynamic property requires the object to declare at least one array-typed property",
-        ));
-    }
-    // Promote every candidate program-wide via the same mechanism the static `PropertyAccess`
-    // arm uses, so each candidate slot holds a ref-cell for the object's lifetime.
-    for (property, _) in &candidates {
-        checker
-            .reference_property_promotions
-            .insert((class.clone(), property.clone()));
-    }
-    // Type the target to the candidates' common element type, widening to `Mixed` when the
-    // array-typed candidates are heterogeneous.
-    let first_ty = candidates[0].1.clone();
-    let target_ty = if candidates.iter().all(|(_, ty)| *ty == first_ty) {
-        first_ty
-    } else {
-        PhpType::Mixed
-    };
+    let (candidates, target_ty) = dynamic_reference_property_candidates(checker, &class, span)?;
+    promote_dynamic_reference_candidates(checker, &class, &candidates);
     // The target of a reference-alias is a plain variable, mirroring the static arm's storage
     // restriction (enforced by the `RefAssign` parser producing a `target: String`).
     env.insert(target.to_string(), target_ty);
@@ -515,6 +574,10 @@ pub(super) fn check_ref_assign_to_target(
             }
             Ok(())
         }
+        // `$obj->$name = &$src`: the DYNAMIC-named counterpart of the `PropertyAccess` arm above.
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            check_ref_assign_to_dynamic_property(checker, object, property, source, span, env)
+        }
         ExprKind::ArrayAccess { array, .. } => match &array.kind {
             // `self::$a[$dir] = &self::$a[$k]`: aliasing an element of a static-property array.
             // The dedicated helper resolves + validates both operands and de-packs the container.
@@ -539,6 +602,78 @@ pub(super) fn check_ref_assign_to_target(
             "Reference assignment target must be a variable, array element, or object property",
         )),
     }
+}
+
+/// Type-checks `$obj->$name = &$src`: a reference assignment INTO a DYNAMIC-named property.
+///
+/// PHP defines this as `$obj->$name = $src; $src = &$obj->$name;` — the value is written into the
+/// property first, then the source aliases the property's cell, so mutating either side is visible
+/// through the other. Because the runtime name selects the slot, every reference-eligible property
+/// of the receiver class (see `dynamic_reference_property_candidates`) is promoted to a reference
+/// property and codegen dispatches on the name.
+///
+/// A plain-variable source is the reverse bind: the property keeps OWNING its cell (the object
+/// frees it at destruction) and the local merely borrows it, so the candidates are deliberately
+/// NOT recorded as `reference_property_rebind_targets` — that flag suppresses the destructor free
+/// and would leak every property of the class. A property source is the forward bind: the target
+/// slot is overwritten with the source's cell pointer, so the source is promoted and the
+/// candidates are marked so the destructor does not free a cell owned elsewhere.
+fn check_ref_assign_to_dynamic_property(
+    checker: &mut Checker,
+    object: &Expr,
+    property: &Expr,
+    source: &Expr,
+    span: Span,
+    env: &mut TypeEnv,
+) -> Result<(), CompileError> {
+    let object_ty = checker.infer_type(object, env)?;
+    let Some(class) = crate::types::checker::single_object_class_name(&object_ty) else {
+        return Err(CompileError::new(
+            span,
+            "Reference assignment into a dynamic property is only supported on a statically-typed object receiver",
+        ));
+    };
+    // Walk the name expression so its own diagnostics (undefined variable, bad operand) fire.
+    checker.infer_type(property, env)?;
+    let (candidates, target_ty) = dynamic_reference_property_candidates(checker, &class, span)?;
+    promote_dynamic_reference_candidates(checker, &class, &candidates);
+    match &source.kind {
+        // Reverse bind: the local aliases the property's own cell.
+        ExprKind::Variable(source_name) => {
+            if !env.contains_key(source_name) {
+                return Err(CompileError::new(
+                    span,
+                    &format!("Undefined variable: ${}", source_name),
+                ));
+            }
+            env.insert(source_name.clone(), target_ty);
+            checker.active_ref_params.insert(source_name.clone());
+            clear_callable_metadata(checker, source_name);
+        }
+        // Forward bind: the source property's cell is shared into the selected slot.
+        ExprKind::PropertyAccess {
+            object: src_object,
+            property: src_property,
+        } => {
+            let src_object_ty = checker.infer_type(src_object, env)?;
+            if let Some(src_class) =
+                crate::types::checker::single_object_class_name(&src_object_ty)
+            {
+                checker
+                    .reference_property_promotions
+                    .insert((src_class, src_property.clone()));
+            }
+            for (candidate, _) in &candidates {
+                checker
+                    .reference_property_rebind_targets
+                    .insert((class.clone(), candidate.clone()));
+            }
+        }
+        _ => {
+            checker.infer_type(source, env)?;
+        }
+    }
+    Ok(())
 }
 
 /// Type-checks an append reference-assignment target (`$a[] = &$var`, `$a[$k][] = &$var`, or the

@@ -2177,7 +2177,7 @@ fn non_local_assignment_stmt_kind(target: &Expr, value: &Expr) -> Option<StmtKin
 }
 
 /// Lowers a runtime-name property write (`$object->{$property} = $value`).
-fn lower_dynamic_property_assign(
+pub(crate) fn lower_dynamic_property_assign(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
     property: &Expr,
@@ -12309,9 +12309,15 @@ pub(crate) fn lower_ref_assign_dynamic_property(
     ctx.bind_local_ref_cell_ptr(target, cell_ptr, value_type, Some(span));
 }
 
-/// Returns the element type a `$x = &$obj->$name` reference cell holds for a statically-typed
-/// object receiver: the common type of the receiver class's array-typed declared properties (the
-/// checker's promotion candidates), or `Mixed` when they are heterogeneous or the class is unknown.
+/// Returns the type a `$x = &$obj->$name` reference cell holds for a statically-typed object
+/// receiver: the single type shared by the checker's promotion candidates, or `Mixed` when the
+/// class is unknown.
+///
+/// Mirrors the candidate selection in
+/// `checker::stmt_check::assignments::locals::dynamic_reference_property_candidates`: the widest
+/// sound set is every declared property when they all share one type, otherwise the array-typed
+/// subset. The checker has already rejected a receiver where neither set is homogeneous, so the
+/// type resolved here describes every cell the runtime-name dispatch can select.
 fn dynamic_ref_property_cell_type(
     ctx: &LoweringContext<'_, '_>,
     object_ty: &PhpType,
@@ -12323,18 +12329,23 @@ fn dynamic_ref_property_cell_type(
     let Some(class_info) = ctx.classes.get(normalized) else {
         return PhpType::Mixed;
     };
-    let mut candidate: Option<PhpType> = None;
-    for (_, ty) in &class_info.properties {
-        if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-            continue;
-        }
-        match &candidate {
-            None => candidate = Some(ty.clone()),
-            Some(existing) if existing == ty => {}
-            Some(_) => return PhpType::Mixed,
-        }
+    let shared = |candidates: &[(String, PhpType)]| -> Option<PhpType> {
+        let (_, first) = candidates.first()?;
+        candidates
+            .iter()
+            .all(|(_, ty)| ty == first)
+            .then(|| first.clone())
+    };
+    if let Some(ty) = shared(&class_info.properties) {
+        return ty;
     }
-    candidate.unwrap_or(PhpType::Mixed)
+    let arrays: Vec<(String, PhpType)> = class_info
+        .properties
+        .iter()
+        .filter(|(_, ty)| matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }))
+        .cloned()
+        .collect();
+    shared(&arrays).unwrap_or(PhpType::Mixed)
 }
 
 /// Lowers `$obj->prop = &$src->q`: stores the source property's reference-cell pointer

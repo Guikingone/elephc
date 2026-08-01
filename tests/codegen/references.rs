@@ -1166,6 +1166,118 @@ fn test_ref_dynamic_property_heap_clean() {
     );
 }
 
+/// `$obj->$name = &$value` (reference assignment INTO a DYNAMIC-named property) aliases the
+/// source local to the runtime-selected property slot, so a later write to the local is visible
+/// through the property and a write through the property is visible in the local — matching
+/// `php -n`, which defines the form as `$obj->$name = $value; $value = &$obj->$name;`.
+#[test]
+fn test_ref_assign_into_dynamic_property_aliases_source() {
+    let out = compile_and_run(
+        "<?php
+        class Bag { public $slot = 'init'; }
+        $o = new Bag(); $name = 'slot'; $value = 'BOUND';
+        $o->$name = &$value;
+        echo $o->slot, \"\\n\";
+        $value = 'MUTATED';
+        echo $o->slot, \"\\n\";
+        $o->slot = 'VIA_PROP';
+        echo $value, \"\\n\";",
+    );
+    assert_eq!(out, "BOUND\nMUTATED\nVIA_PROP\n");
+}
+
+/// The runtime name selects WHICH slot the reference binds to: two different names on the same
+/// class bind two different locals to two different property slots, and each alias writes
+/// through independently.
+#[test]
+fn test_ref_assign_into_dynamic_property_selects_runtime_name() {
+    let out = compile_and_run(
+        "<?php
+        class Bag { public $p = 'p0'; public $q = 'q0'; }
+        $o = new Bag();
+        $n1 = 'p'; $n2 = 'q';
+        $v1 = 'V_ONE'; $v2 = 'V_TWO';
+        $o->$n1 = &$v1;
+        $o->$n2 = &$v2;
+        echo $o->p, ',', $o->q, \"\\n\";
+        $v1 = 'V_ONE_MUT'; $v2 = 'V_TWO_MUT';
+        echo $o->p, ',', $o->q, \"\\n\";
+        $o->p = 'BACK_P';
+        echo $v1, \"\\n\";",
+    );
+    assert_eq!(out, "V_ONE,V_TWO\nV_ONE_MUT,V_TWO_MUT\nBACK_P\n");
+}
+
+/// A class whose declared properties are all `int` is reference-eligible for the dynamic-name
+/// path. The historical rule admitted only ARRAY-typed properties, which rejected this shape even
+/// though the static-name arm has always handled scalar reference cells.
+#[test]
+fn test_ref_assign_into_dynamic_property_scalar_property_class() {
+    let out = compile_and_run(
+        "<?php
+        class Bag { public $n = 0; public $m = 0; }
+        $o = new Bag(); $k = 'n'; $v = 4242;
+        $o->$k = &$v;
+        echo $o->n, \"\\n\";
+        $v = 777;
+        echo $o->n, \"\\n\";
+        $o->n = 31337;
+        echo $v, \"\\n\";",
+    );
+    assert_eq!(out, "4242\n777\n31337\n");
+}
+
+/// A class that mixes an object property with array properties keeps the historical array-typed
+/// candidate subset, so the `PassConfig::addPass()` shape (`$this->{$type.'Passes'}`) still
+/// resolves even though the class as a whole is not type-homogeneous.
+#[test]
+fn test_ref_assign_dynamic_property_array_subset_fallback() {
+    let out = compile_and_run(
+        "<?php
+        class PassConfig {
+            private stdClass $mergePass;
+            private array $afterRemovingPasses = [];
+            private array $optimizationPasses = [];
+            public function __construct() { $this->mergePass = new stdClass; }
+            public function addPass(string $type, int $pass): void {
+                $property = $type.'Passes';
+                $passes = &$this->$property;
+                $passes[] = $pass;
+            }
+            public function n(): int { return count($this->afterRemovingPasses); }
+        }
+        $pc = new PassConfig();
+        $pc->addPass('afterRemoving', 11);
+        $pc->addPass('afterRemoving', 22);
+        echo $pc->n();",
+    );
+    assert_eq!(out, "2");
+}
+
+/// Reference assignment INTO a dynamic property is heap-balanced, including when the same slot is
+/// REBOUND to a second source: the property keeps owning its cell (the source local only borrows
+/// it), so nothing is double-freed and nothing leaks.
+///
+/// The asserted output deliberately depends on the ALIAS (the final read follows a write made
+/// through the rebound local), so the test cannot pass if the reference bind is dropped and only
+/// the value write survives.
+#[test]
+fn test_ref_assign_into_dynamic_property_rebind_heap_clean() {
+    assert_ref_array_element_heap_clean(
+        "<?php
+        class Bag { public $slot = 'init'; }
+        $o = new Bag(); $n = 'slot';
+        $a = 'SENTINEL_AAAA'; $b = 'SENTINEL_BBBB';
+        $o->$n = &$a;
+        echo $o->slot, ',';
+        $o->$n = &$b;
+        echo $o->slot, ',';
+        $b = 'REBOUND_MUT';
+        echo $o->slot;",
+        "SENTINEL_AAAA,SENTINEL_BBBB,REBOUND_MUT",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // SLICE 2/3 — reference-bind a STATIC-PROPERTY array element
 // (`self::$a[$dir] = &self::$a[$k]`, the DebugClassLoader.php:795 gate).

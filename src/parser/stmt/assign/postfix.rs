@@ -157,8 +157,8 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
 }
 
 /// Parses reference assignment into a complex lvalue (`$obj->prop = &$src`,
-/// `$arr[$k] = &$src`, or an append `$arr[] = &$src` / `$arr[$k][] = &$src`) after
-/// the leading `&` has been detected.
+/// `$obj->$name = &$src`, `$arr[$k] = &$src`, or an append `$arr[] = &$src` /
+/// `$arr[$k][] = &$src`) after the leading `&` has been detected.
 ///
 /// `lhs_expr` is the already-parsed target lvalue. When `append` is `true`, `lhs_expr`
 /// is the CONTAINER (a `Variable`, `ArrayAccess`, `PropertyAccess`, or
@@ -206,7 +206,9 @@ fn parse_postfix_ref_assign(
     } else {
         matches!(
             lhs_expr.kind,
-            ExprKind::PropertyAccess { .. } | ExprKind::ArrayAccess { .. }
+            ExprKind::PropertyAccess { .. }
+                | ExprKind::DynamicPropertyAccess { .. }
+                | ExprKind::ArrayAccess { .. }
         )
     };
     if !target_shape_ok {

@@ -749,6 +749,8 @@ pub(super) fn reference_element_type(container: &PhpType) -> PhpType {
 ///   target property's owned cell, then the source local is aliased to that cell (reverse
 ///   bind), matching `$obj->prop = $src; $src = &$obj->prop;`. This keeps the cell owned by
 ///   the object (freed at destruction) while the local borrows it, avoiding a double free.
+/// - `$obj->$name = &$src` (DYNAMIC-named target): the same reverse bind, but the slot is chosen
+///   by a runtime-name dispatch across the promoted candidate properties.
 /// - Array-element targets are rejected by the checker; lowering only evaluates the source
 ///   for side effects to stay total.
 fn lower_ref_assign_to_target(
@@ -779,6 +781,21 @@ fn lower_ref_assign_to_target(
                 lower_property_assign(ctx, object, property, source, span);
             }
         },
+        // `$obj->$name = &$src`: the DYNAMIC-named counterpart of the `PropertyAccess` arm. PHP
+        // defines it as `$obj->$name = $src; $src = &$obj->$name;`, which is exactly the two-step
+        // emitted here: the runtime-name write stores the value into whichever promoted slot the
+        // name selects, then the source local is rebound to that slot's cell (reverse bind). A
+        // non-variable source has no local to rebind, so only the value write is emitted.
+        ExprKind::DynamicPropertyAccess { object, property } => {
+            crate::ir_lower::expr::lower_dynamic_property_assign(
+                ctx, object, property, source, span,
+            );
+            if let ExprKind::Variable(source_name) = &source.kind {
+                crate::ir_lower::expr::lower_ref_assign_dynamic_property(
+                    ctx, source_name, target, span,
+                );
+            }
+        }
         // `self::$a[$dir] = &self::$a[$k]`: aliasing a static-property array element. The checker has
         // validated both operands (same static array) and de-packed the property to a hash type.
         ExprKind::ArrayAccess { array, index }
