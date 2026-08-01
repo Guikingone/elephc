@@ -3515,6 +3515,121 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies base64 and url coding reproduce php-src, tolerant decoding included.
+///
+/// The samples pin what separates these from a textbook implementation. `urlencode` folds a
+/// space to `+` and percent-encodes `~`, while `rawurlencode` does the opposite on both;
+/// percent-encoding is UPPERCASE hex. Decoding never fails: `"a%2"` and `"a%zz"` keep a literal
+/// `%`. One-argument `base64_decode` is non-strict, so `"YWJj="`, `"YW Jj"` and `"YWJj\n"` all
+/// give `abc`, `"YWJ"` gives `ab`, and `"!!!!"` gives the empty string. Every result goes through
+/// `bin2hex` where its bytes are not already printable ASCII.
+#[test]
+fn test_cli_wasm_base64_and_url_coding_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_codecs");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function t(string $s): void {
+    echo bin2hex($s), "|", urlencode($s), "|", rawurlencode($s), "|",
+         bin2hex(urldecode($s)), "|", bin2hex(rawurldecode($s)), "|",
+         base64_encode($s), "|", bin2hex(base64_decode($s)), "\n";
+}
+t("");
+t("a");
+t("ab");
+t("abc");
+t("abcd");
+t("a b+c~d.e_f-g");
+t("h\xc3\xa9llo");
+t("\x00\x01\xff");
+t("a%2");
+t("a%zz");
+t("%C3%A9");
+t("YWJj");
+t("YWJj=");
+t("YW Jj");
+t("YWJ");
+t("!!!!");
+t("Hello, World!");
+t("\n\r\t");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the codecs to WASM");
+    assert!(
+        output.status.success(),
+        "codec compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the codecs under Node");
+    assert!(
+        run.status.success(),
+        "codecs trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "||||||\n",
+            "61|a|a|61|61|YQ==|\n",
+            "6162|ab|ab|6162|6162|YWI=|69\n",
+            "616263|abc|abc|616263|616263|YWJj|69b7\n",
+            "61626364|abcd|abcd|61626364|61626364|YWJjZA==|69b71d\n",
+            "6120622b637e642e655f662d67|a+b%2Bc%7Ed.e_f-g|a%20b%2Bc~d.e_f-g|61206220637e642e655f662d67|6120622b637e642e655f662d67|YSBiK2N+ZC5lX2YtZw==|69bf9c75e7e0\n",
+            "68c3a96c6c6f|h%C3%A9llo|h%C3%A9llo|68c3a96c6c6f|68c3a96c6c6f|aMOpbGxv|865968\n",
+            "0001ff|%00%01%FF|%00%01%FF|0001ff|0001ff|AAH/|\n",
+            "612532|a%252|a%252|612532|612532|YSUy|6b\n",
+            "61257a7a|a%25zz|a%25zz|61257a7a|61257a7a|YSV6eg==|6b3c\n",
+            "254333254139|%25C3%25A9|%25C3%25A9|c3a9|c3a9|JUMzJUE5|0b703d\n",
+            "59574a6a|YWJj|YWJj|59574a6a|59574a6a|WVdKag==|616263\n",
+            "59574a6a3d|YWJj%3D|YWJj%3D|59574a6a3d|59574a6a3d|WVdKaj0=|616263\n",
+            "5957204a6a|YW+Jj|YW%20Jj|5957204a6a|5957204a6a|WVcgSmo=|616263\n",
+            "59574a|YWJ|YWJ|59574a|59574a|WVdK|6162\n",
+            "21212121|%21%21%21%21|%21%21%21%21|21212121|21212121|ISEhIQ==|\n",
+            "48656c6c6f2c20576f726c6421|Hello%2C+World%21|Hello%2C%20World%21|48656c6c6f2c20576f726c6421|48656c6c6f2c20576f726c6421|SGVsbG8sIFdvcmxkIQ==|1de965a16a2b95\n",
+            "0a0d09|%0A%0D%09|%0A%0D%09|0a0d09|0a0d09|Cg0J|\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a string literal reaches the module as PHP BYTES, not as Rust's UTF-8.
 ///
 /// A PHP string is a byte string while a Rust `String` must be valid UTF-8, so the lexer carries

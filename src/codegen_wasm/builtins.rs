@@ -34,6 +34,13 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_STR_ADDSLASHES);
     wm.add_raw_func(RT_STR_STRIPSLASHES);
     wm.add_raw_func(RT_STR_NL2BR);
+    wm.add_raw_func(RT_HEX_DIGIT_VALUE);
+    wm.add_raw_func(RT_STR_URL_ENCODE);
+    wm.add_raw_func(RT_STR_URL_DECODE);
+    wm.add_raw_func(RT_B64_CHAR);
+    wm.add_raw_func(RT_B64_VALUE);
+    wm.add_raw_func(RT_STR_BASE64_ENCODE);
+    wm.add_raw_func(RT_STR_BASE64_DECODE);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -267,11 +274,262 @@ const RT_STR_NL2BR: &str = r#"(func $__rt_str_nl2br (param $ptr i32) (param $len
   (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
 "#;
 
+/// `__rt_hex_digit_value`: the value of one ASCII hex digit, or -1 for any other byte.
+///
+/// Both cases are accepted, which is what makes `urldecode("%aB")` and `urldecode("%Ab")` agree
+/// with php-src. The -1 sentinel is what lets a caller distinguish "not hex" from the digit zero.
+const RT_HEX_DIGIT_VALUE: &str = r#"(func $__rt_hex_digit_value (param $c i32) (result i32)
+  (if (i32.and (i32.ge_u (local.get $c) (i32.const 48))
+               (i32.le_u (local.get $c) (i32.const 57)))
+    (then (return (i32.sub (local.get $c) (i32.const 48)))))     ;; 0-9
+  (if (i32.and (i32.ge_u (local.get $c) (i32.const 65))
+               (i32.le_u (local.get $c) (i32.const 70)))
+    (then (return (i32.sub (local.get $c) (i32.const 55)))))     ;; A-F
+  (if (i32.and (i32.ge_u (local.get $c) (i32.const 97))
+               (i32.le_u (local.get $c) (i32.const 102)))
+    (then (return (i32.sub (local.get $c) (i32.const 87)))))     ;; a-f
+  (i32.const -1))                                                ;; not a hex digit
+"#;
+
+/// `__rt_str_url_encode`: owns the percent-encoded form of a string.
+///
+/// `$raw` selects `rawurlencode` over `urlencode`. Measured over all 256 bytes against php-src:
+/// both leave `A-Z a-z 0-9 - . _` alone, `rawurlencode` additionally leaves `~`, and `urlencode`
+/// alone maps a space to `+`. Everything else becomes `%` and two UPPERCASE hex digits. Worst
+/// case is three output bytes per input byte.
+const RT_STR_URL_ENCODE: &str = r#"(func $__rt_str_url_encode (param $ptr i32) (param $len i64) (param $raw i32) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor
+  (local $byte i32)                                               ;; current source byte
+  (local $nib i32)                                                ;; nibble being written
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out (call $__rt_str_alloc (i64.mul (local.get $len) (i64.const 3))))
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $enc
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every byte examined
+    (local.set $byte (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (if (i32.or
+          (i32.or
+            (i32.and (i32.ge_u (local.get $byte) (i32.const 48))
+                     (i32.le_u (local.get $byte) (i32.const 57)))  ;; 0-9
+            (i32.or
+              (i32.and (i32.ge_u (local.get $byte) (i32.const 65))
+                       (i32.le_u (local.get $byte) (i32.const 90)))  ;; A-Z
+              (i32.and (i32.ge_u (local.get $byte) (i32.const 97))
+                       (i32.le_u (local.get $byte) (i32.const 122))))) ;; a-z
+          (i32.or
+            (i32.or (i32.eq (local.get $byte) (i32.const 45))
+                    (i32.eq (local.get $byte) (i32.const 46)))    ;; - and .
+            (i32.or (i32.eq (local.get $byte) (i32.const 95))
+                    (i32.and (local.get $raw)
+                             (i32.eq (local.get $byte) (i32.const 126)))))) ;; _ and raw-only ~
+      (then
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $byte))
+        (local.set $w (i32.add (local.get $w) (i32.const 1))))    ;; unreserved byte passes through
+      (else
+        (if (i32.and (i32.eqz (local.get $raw))
+                     (i32.eq (local.get $byte) (i32.const 32)))   ;; urlencode alone folds space
+          (then
+            (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 43))  ;; +
+            (local.set $w (i32.add (local.get $w) (i32.const 1))))
+          (else
+            (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 37))  ;; %
+            (local.set $w (i32.add (local.get $w) (i32.const 1)))
+            (local.set $nib (i32.shr_u (local.get $byte) (i32.const 4)))
+            (i32.store8 (i32.add (local.get $out) (local.get $w))
+              (i32.add (local.get $nib)
+                (select (i32.const 48) (i32.const 55)
+                        (i32.lt_u (local.get $nib) (i32.const 10)))))  ;; 0-9 else A-F
+            (local.set $w (i32.add (local.get $w) (i32.const 1)))
+            (local.set $nib (i32.and (local.get $byte) (i32.const 15)))
+            (i32.store8 (i32.add (local.get $out) (local.get $w))
+              (i32.add (local.get $nib)
+                (select (i32.const 48) (i32.const 55)
+                        (i32.lt_u (local.get $nib) (i32.const 10)))))  ;; 0-9 else A-F
+            (local.set $w (i32.add (local.get $w) (i32.const 1)))))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $enc)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
+/// `__rt_str_url_decode`: owns the percent-decoded form of a string.
+///
+/// `$plus` selects `urldecode` over `rawurldecode`, which differ only in whether `+` becomes a
+/// space. Decoding is TOLERANT and never fails: a `%` without two hex digits after it stays a
+/// literal `%`, which is what php-src does for `"a%2"` and `"a%zz"`. Never grows.
+const RT_STR_URL_DECODE: &str = r#"(func $__rt_str_url_decode (param $ptr i32) (param $len i64) (param $plus i32) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor
+  (local $byte i32)                                               ;; current source byte
+  (local $hi i32)                                                 ;; high hex digit value
+  (local $lo i32)                                                 ;; low hex digit value
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out (call $__rt_str_alloc (local.get $len)))        ;; never grows
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $dec
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every byte examined
+    (local.set $byte (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (local.set $hi (i32.const -1))                                ;; assume no escape here
+    (if (i32.and (i32.eq (local.get $byte) (i32.const 37))        ;; a percent
+                 (i64.le_s (i64.add (local.get $i) (i64.const 3)) (local.get $len)))
+      (then
+        (local.set $hi (call $__rt_hex_digit_value
+          (i32.load8_u (i32.add (local.get $ptr)
+                                (i32.wrap_i64 (i64.add (local.get $i) (i64.const 1)))))))
+        (local.set $lo (call $__rt_hex_digit_value
+          (i32.load8_u (i32.add (local.get $ptr)
+                                (i32.wrap_i64 (i64.add (local.get $i) (i64.const 2)))))))
+        (if (i32.or (i32.lt_s (local.get $hi) (i32.const 0))
+                    (i32.lt_s (local.get $lo) (i32.const 0)))
+          (then (local.set $hi (i32.const -1))))))                ;; not both hex: stay literal
+    (if (i32.ge_s (local.get $hi) (i32.const 0))
+      (then
+        (i32.store8 (i32.add (local.get $out) (local.get $w))
+          (i32.or (i32.shl (local.get $hi) (i32.const 4)) (local.get $lo)))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))     ;; w++
+        (local.set $i (i64.add (local.get $i) (i64.const 3))))    ;; consume %HH
+      (else
+        (i32.store8 (i32.add (local.get $out) (local.get $w))
+          (select (i32.const 32) (local.get $byte)
+                  (i32.and (local.get $plus)
+                           (i32.eq (local.get $byte) (i32.const 43))))) ;; urldecode folds + to space
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))     ;; w++
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))))   ;; i++
+    (br $dec)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
+/// `__rt_b64_char`: the base64 alphabet character for a 6-bit value.
+///
+/// Arithmetic rather than a data segment: the four runs are contiguous, so each is one offset.
+const RT_B64_CHAR: &str = r#"(func $__rt_b64_char (param $v i32) (result i32)
+  (if (i32.lt_u (local.get $v) (i32.const 26))
+    (then (return (i32.add (local.get $v) (i32.const 65)))))      ;; 0-25  -> A-Z
+  (if (i32.lt_u (local.get $v) (i32.const 52))
+    (then (return (i32.add (local.get $v) (i32.const 71)))))      ;; 26-51 -> a-z
+  (if (i32.lt_u (local.get $v) (i32.const 62))
+    (then (return (i32.sub (local.get $v) (i32.const 4)))))       ;; 52-61 -> 0-9
+  (select (i32.const 47) (i32.const 43)
+          (i32.eq (local.get $v) (i32.const 63))))                ;; 62 -> + , 63 -> /
+"#;
+
+/// `__rt_b64_value`: the 6-bit value of one base64 character, or -1 for any other byte.
+///
+/// The -1 sentinel is what makes non-strict decoding possible: php-src's one-argument
+/// `base64_decode` SKIPS every byte outside the alphabet, padding and whitespace included.
+const RT_B64_VALUE: &str = r#"(func $__rt_b64_value (param $c i32) (result i32)
+  (if (i32.and (i32.ge_u (local.get $c) (i32.const 65))
+               (i32.le_u (local.get $c) (i32.const 90)))
+    (then (return (i32.sub (local.get $c) (i32.const 65)))))      ;; A-Z
+  (if (i32.and (i32.ge_u (local.get $c) (i32.const 97))
+               (i32.le_u (local.get $c) (i32.const 122)))
+    (then (return (i32.sub (local.get $c) (i32.const 71)))))      ;; a-z
+  (if (i32.and (i32.ge_u (local.get $c) (i32.const 48))
+               (i32.le_u (local.get $c) (i32.const 57)))
+    (then (return (i32.add (local.get $c) (i32.const 4)))))       ;; 0-9
+  (if (i32.eq (local.get $c) (i32.const 43)) (then (return (i32.const 62))))  ;; +
+  (if (i32.eq (local.get $c) (i32.const 47)) (then (return (i32.const 63))))  ;; /
+  (i32.const -1))                                                 ;; outside the alphabet
+"#;
+
+/// `__rt_str_base64_encode`: owns the base64 form of a string, padded to a multiple of four.
+///
+/// The final group is padded with `=` to a full quartet, which is what php-src emits. Output is
+/// exactly four characters per three input bytes, rounded up.
+const RT_STR_BASE64_ENCODE: &str = r#"(func $__rt_str_base64_encode (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor
+  (local $left i64)                                               ;; bytes left in this group
+  (local $acc i32)                                                ;; the 24-bit group
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out
+    (call $__rt_str_alloc
+      (i64.mul (i64.div_s (i64.add (local.get $len) (i64.const 2)) (i64.const 3))
+               (i64.const 4))))                                   ;; four chars per three bytes
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $enc
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every group emitted
+    (local.set $left (i64.sub (local.get $len) (local.get $i)))   ;; bytes remaining
+    (local.set $acc
+      (i32.shl (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i))))
+               (i32.const 16)))                                   ;; first byte of the group
+    (if (i64.ge_s (local.get $left) (i64.const 2))
+      (then (local.set $acc (i32.or (local.get $acc)
+        (i32.shl (i32.load8_u (i32.add (local.get $ptr)
+                                       (i32.wrap_i64 (i64.add (local.get $i) (i64.const 1)))))
+                 (i32.const 8))))))                               ;; second byte when present
+    (if (i64.ge_s (local.get $left) (i64.const 3))
+      (then (local.set $acc (i32.or (local.get $acc)
+        (i32.load8_u (i32.add (local.get $ptr)
+                              (i32.wrap_i64 (i64.add (local.get $i) (i64.const 2)))))))))
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (call $__rt_b64_char (i32.and (i32.shr_u (local.get $acc) (i32.const 18)) (i32.const 63))))
+    (i32.store8 offset=1 (i32.add (local.get $out) (local.get $w))
+      (call $__rt_b64_char (i32.and (i32.shr_u (local.get $acc) (i32.const 12)) (i32.const 63))))
+    (i32.store8 offset=2 (i32.add (local.get $out) (local.get $w))
+      (select
+        (call $__rt_b64_char (i32.and (i32.shr_u (local.get $acc) (i32.const 6)) (i32.const 63)))
+        (i32.const 61)
+        (i64.ge_s (local.get $left) (i64.const 2))))              ;; = pads a one-byte tail
+    (i32.store8 offset=3 (i32.add (local.get $out) (local.get $w))
+      (select
+        (call $__rt_b64_char (i32.and (local.get $acc) (i32.const 63)))
+        (i32.const 61)
+        (i64.ge_s (local.get $left) (i64.const 3))))              ;; = pads a two-byte tail
+    (local.set $w (i32.add (local.get $w) (i32.const 4)))         ;; one quartet written
+    (local.set $i (i64.add (local.get $i) (i64.const 3)))         ;; next group
+    (br $enc)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
+/// `__rt_str_base64_decode`: owns the base64-decoded bytes of a string, php-src's tolerant way.
+///
+/// One-argument `base64_decode` is non-strict: every byte outside the alphabet is SKIPPED rather
+/// than rejected, padding, whitespace and punctuation alike, and a trailing group of fewer than
+/// eight accumulated bits is discarded. So `"YWJj="`, `"YW Jj"` and `"YWJj\n"` all decode to
+/// `abc`, `"YWJ"` decodes to `ab`, and `"!!!!"` and `"a"` both decode to the empty string —
+/// measured against php-src. Six bits per input byte means the source length is a safe bound.
+const RT_STR_BASE64_DECODE: &str = r#"(func $__rt_str_base64_decode (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor
+  (local $v i32)                                                  ;; value of the current char
+  (local $acc i32)                                                ;; accumulated bits
+  (local $bits i32)                                               ;; how many bits are accumulated
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out (call $__rt_str_alloc (local.get $len)))        ;; 6 bits in, 8 bits out: never grows
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (local.set $acc (i32.const 0))                                  ;; empty bit accumulator
+  (local.set $bits (i32.const 0))                                 ;; no bits yet
+  (block $end (loop $dec
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every byte examined
+    (local.set $v (call $__rt_b64_value
+      (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i))))))
+    (if (i32.ge_s (local.get $v) (i32.const 0))                   ;; anything else is skipped
+      (then
+        (local.set $acc (i32.or (i32.shl (local.get $acc) (i32.const 6)) (local.get $v)))
+        (local.set $bits (i32.add (local.get $bits) (i32.const 6)))
+        (if (i32.ge_u (local.get $bits) (i32.const 8))
+          (then
+            (local.set $bits (i32.sub (local.get $bits) (i32.const 8)))
+            (i32.store8 (i32.add (local.get $out) (local.get $w))
+              (i32.and (i32.shr_u (local.get $acc) (local.get $bits)) (i32.const 255)))
+            (local.set $w (i32.add (local.get $w) (i32.const 1)))))))  ;; a whole byte is ready
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $dec)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; leftover bits are discarded
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
-/// Admitted so far: the exact same-length BYTE transforms, plus the re-encoders whose rules are
-/// pure byte arithmetic (hex expansion, backslash escaping, line-break tagging). Still out are
-/// base64 and url coding, and the html entity decoders, which need a table.
+/// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
+/// arithmetic (hex expansion, backslash escaping, line-break tagging), and base64 and url coding,
+/// whose alphabets are contiguous enough to compute rather than tabulate. Still out are the html
+/// entity decoders, which need a real named-entity table, and `hex2bin`, whose PHP result is
+/// `string|false` rather than the `string` this family's signature promises.
 pub(super) fn unary_string_is_supported(target: UnaryStringRuntime) -> bool {
     matches!(
         target,
@@ -282,6 +540,12 @@ pub(super) fn unary_string_is_supported(target: UnaryStringRuntime) -> bool {
             | UnaryStringRuntime::AddSlashes
             | UnaryStringRuntime::StripSlashes
             | UnaryStringRuntime::NlToBr
+            | UnaryStringRuntime::UrlEncode
+            | UnaryStringRuntime::RawUrlEncode
+            | UnaryStringRuntime::UrlDecode
+            | UnaryStringRuntime::RawUrlDecode
+            | UnaryStringRuntime::Base64Encode
+            | UnaryStringRuntime::Base64Decode
     )
 }
 
@@ -357,6 +621,34 @@ pub(super) fn lower_unary_string(
         UnaryStringRuntime::NlToBr => {
             ctx.fb
                 .ins("call $__rt_str_nl2br", "insert a break tag before each line break");
+        }
+        UnaryStringRuntime::UrlEncode => {
+            ctx.fb.ins("i32.const 0", "urlencode folds a space to a plus");
+            ctx.fb
+                .ins("call $__rt_str_url_encode", "percent-encode the reserved bytes");
+        }
+        UnaryStringRuntime::RawUrlEncode => {
+            ctx.fb.ins("i32.const 1", "rawurlencode keeps a tilde and encodes a space");
+            ctx.fb
+                .ins("call $__rt_str_url_encode", "percent-encode the reserved bytes");
+        }
+        UnaryStringRuntime::UrlDecode => {
+            ctx.fb.ins("i32.const 1", "urldecode reads a plus as a space");
+            ctx.fb
+                .ins("call $__rt_str_url_decode", "percent-decode tolerantly");
+        }
+        UnaryStringRuntime::RawUrlDecode => {
+            ctx.fb.ins("i32.const 0", "rawurldecode keeps a plus literal");
+            ctx.fb
+                .ins("call $__rt_str_url_decode", "percent-decode tolerantly");
+        }
+        UnaryStringRuntime::Base64Encode => {
+            ctx.fb
+                .ins("call $__rt_str_base64_encode", "encode with padding to a quartet");
+        }
+        UnaryStringRuntime::Base64Decode => {
+            ctx.fb
+                .ins("call $__rt_str_base64_decode", "decode skipping non-alphabet bytes");
         }
         other => {
             return Err(WasmError::Unsupported(format!(
@@ -1323,6 +1615,12 @@ mod tests {
             UnaryStringRuntime::AddSlashes,
             UnaryStringRuntime::StripSlashes,
             UnaryStringRuntime::NlToBr,
+            UnaryStringRuntime::UrlEncode,
+            UnaryStringRuntime::RawUrlEncode,
+            UnaryStringRuntime::UrlDecode,
+            UnaryStringRuntime::RawUrlDecode,
+            UnaryStringRuntime::Base64Encode,
+            UnaryStringRuntime::Base64Decode,
         ] {
             assert!(unary_string_is_supported(target), "{target:?} is lowered");
             let ok = unary_string_call(target, IrType::Str, PhpType::Str);
@@ -1337,12 +1635,40 @@ mod tests {
             );
         }
 
-        // Base64 and url coding still need their own alphabets, and the html decoders a table.
-        assert!(!unary_string_is_supported(UnaryStringRuntime::Base64Encode));
-        assert!(!unary_string_is_supported(UnaryStringRuntime::UrlEncode));
+        // The html decoders need a real named-entity table, and `hex2bin` returns `string|false`
+        // in PHP rather than the `string` this family's signature promises.
         assert!(!unary_string_is_supported(
             UnaryStringRuntime::HtmlEntityDecode
         ));
+        assert!(!unary_string_is_supported(UnaryStringRuntime::HexToBin));
+    }
+
+    /// Verifies the two url codecs differ exactly where php-src says they do.
+    ///
+    /// `urlencode` and `rawurlencode` share one helper and are told apart by a flag, so the
+    /// difference is one branch rather than two implementations. Those two branches are the whole
+    /// contract between them — a space folding to `+`, and `~` counting as unreserved — and this
+    /// reads both back out of the emitted helper rather than trusting the call sites.
+    #[test]
+    fn url_codecs_differ_only_in_space_and_tilde() {
+        assert!(
+            RT_STR_URL_ENCODE.contains("(i32.eq (local.get $byte) (i32.const 32))"),
+            "urlencode folds a space to a plus"
+        );
+        assert!(
+            RT_STR_URL_ENCODE.contains("(i32.eq (local.get $byte) (i32.const 126))"),
+            "rawurlencode alone leaves a tilde unreserved"
+        );
+        assert!(
+            RT_STR_URL_DECODE.contains("(i32.eq (local.get $byte) (i32.const 43))"),
+            "urldecode alone reads a plus as a space"
+        );
+        // Percent-encoding is uppercase: 55 is 'A' - 10, where a lowercase table would use 87.
+        assert!(RT_STR_URL_ENCODE.contains("(i32.const 55)"));
+        assert!(!RT_STR_URL_ENCODE.contains("(i32.const 87)"));
+        // ...and hex DECODING accepts both cases, so it needs the lowercase offset as well.
+        assert!(RT_HEX_DIGIT_VALUE.contains("(i32.const 55)"));
+        assert!(RT_HEX_DIGIT_VALUE.contains("(i32.const 87)"));
     }
 
     /// Verifies every lowered unary string transform reserves enough room for its own output.
