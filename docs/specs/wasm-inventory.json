@@ -11685,15 +11685,15 @@
     },
     "unary_string": {
       "total": 15,
-      "supported": 3,
+      "supported": 7,
       "excluded": 0,
-      "missing": 12,
+      "missing": 8,
       "rows": [
         {
           "name": "string.add_slashes",
           "family": "unary_string",
           "enum_name": "UnaryStringRuntime",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "addslashes(...)"
           ],
@@ -11701,7 +11701,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP string transform reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_unary_string",
+            "tests": [
+              "codegen_wasm::builtins::tests::unary_string_transforms_admit_only_strings",
+              "codegen::cli::test_cli_wasm_unary_string_transforms_match_php"
+            ]
+          }
         },
         {
           "name": "string.base64_decode",
@@ -11735,7 +11742,7 @@
           "name": "string.bin_to_hex",
           "family": "unary_string",
           "enum_name": "UnaryStringRuntime",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "bin2hex(...)"
           ],
@@ -11743,7 +11750,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP string transform reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_unary_string",
+            "tests": [
+              "codegen_wasm::builtins::tests::unary_string_transforms_admit_only_strings",
+              "codegen::cli::test_cli_wasm_unary_string_transforms_match_php"
+            ]
+          }
         },
         {
           "name": "string.hex_to_bin",
@@ -11777,7 +11791,7 @@
           "name": "string.nl_to_br",
           "family": "unary_string",
           "enum_name": "UnaryStringRuntime",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "nl2br(...)"
           ],
@@ -11785,7 +11799,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP string transform reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_unary_string",
+            "tests": [
+              "codegen_wasm::builtins::tests::unary_string_transforms_admit_only_strings",
+              "codegen::cli::test_cli_wasm_unary_string_transforms_match_php"
+            ]
+          }
         },
         {
           "name": "string.raw_url_decode",
@@ -11819,7 +11840,7 @@
           "name": "string.strip_slashes",
           "family": "unary_string",
           "enum_name": "UnaryStringRuntime",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "stripslashes(...)"
           ],
@@ -11827,7 +11848,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP string transform reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_unary_string",
+            "tests": [
+              "codegen_wasm::builtins::tests::unary_string_transforms_admit_only_strings",
+              "codegen::cli::test_cli_wasm_unary_string_transforms_match_php"
+            ]
+          }
         },
         {
           "name": "string.reverse",
@@ -12189,14 +12217,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 150,
+    "supported": 154,
     "excluded": 47,
-    "missing": 515,
+    "missing": 511,
     "evidence_gaps": 178,
     "row_evidence_gaps": 177,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "515 reachable identities lack a WASM lowerer; 177 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "511 reachable identities lack a WASM lowerer; 177 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

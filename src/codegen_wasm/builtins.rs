@@ -29,6 +29,11 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_STR_CONTAINS);
     wm.add_raw_func(RT_STR_MAP_CASE);
     wm.add_raw_func(RT_STR_REVERSE);
+    wm.add_raw_func(RT_STR_ALLOC);
+    wm.add_raw_func(RT_STR_BIN2HEX);
+    wm.add_raw_func(RT_STR_ADDSLASHES);
+    wm.add_raw_func(RT_STR_STRIPSLASHES);
+    wm.add_raw_func(RT_STR_NL2BR);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -85,17 +90,198 @@ const RT_STR_REVERSE: &str = r#"(func $__rt_str_reverse (param $ptr i32) (param 
   (local.get $out) (local.get $olen))                             ;; owned result
 "#;
 
+/// `__rt_str_alloc`: reserves an owned kind-1 string block of `bytes` capacity.
+///
+/// A re-encoding transform cannot size its result before it runs, so it reserves the worst case
+/// here and returns the length it actually produced. The block stays at its reserved size, which
+/// costs slack rather than correctness: a PHP string is the `(ptr, len)` pair, and the header the
+/// release path reads is the reservation. `__rt_checked_layout` is what rejects a negative or
+/// wasm32-overflowing size before the allocation rather than after.
+const RT_STR_ALLOC: &str = r#"(func $__rt_str_alloc (param $bytes i64) (result i32)
+  (local $new i32)                                                ;; reserved block
+  (local.set $new
+    (call $__rt_heap_alloc
+      (call $__rt_checked_layout
+        (local.get $bytes)
+        (i64.const 1)
+        (i64.const 0))))                                          ;; checked byte count -> block
+  (i64.store (i32.sub (local.get $new) (i32.const 8)) (i64.const 1)) ;; stamp header kind = 1 (string)
+  (local.get $new))                                               ;; reserved string block
+"#;
+
+/// `__rt_str_bin2hex`: owns the lowercase hex expansion of a string's bytes.
+///
+/// `bin2hex` is total and exactly doubles the length: every byte becomes its high then low
+/// nibble as `0-9a-f`. The digit map is arithmetic rather than a table because `'a' - 10` is 87.
+const RT_STR_BIN2HEX: &str = r#"(func $__rt_str_bin2hex (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor
+  (local $byte i32)                                               ;; current source byte
+  (local $nib i32)                                                ;; nibble being written
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out (call $__rt_str_alloc (i64.mul (local.get $len) (i64.const 2))))
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $hex
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every byte expanded
+    (local.set $byte (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (local.set $nib (i32.shr_u (local.get $byte) (i32.const 4)))  ;; high nibble first
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (i32.add (local.get $nib)
+        (select (i32.const 48) (i32.const 87)
+                (i32.lt_u (local.get $nib) (i32.const 10)))))     ;; 0-9 else a-f
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))         ;; w++
+    (local.set $nib (i32.and (local.get $byte) (i32.const 15)))   ;; low nibble
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (i32.add (local.get $nib)
+        (select (i32.const 48) (i32.const 87)
+                (i32.lt_u (local.get $nib) (i32.const 10)))))     ;; 0-9 else a-f
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))         ;; w++
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $hex)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
+/// `__rt_str_addslashes`: owns a copy with PHP's four escaped bytes backslash-prefixed.
+///
+/// `addslashes` escapes exactly `'`, `"`, `\` and NUL, and NUL becomes the two characters
+/// `\0` rather than a backslash plus a zero byte — measured against php-src, where
+/// `"\x00"` comes back as the bytes `5c 30`. Every other byte, including UTF-8 continuation
+/// bytes, passes through untouched. Worst case is two output bytes per input byte.
+const RT_STR_ADDSLASHES: &str = r#"(func $__rt_str_addslashes (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor
+  (local $byte i32)                                               ;; current source byte
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out (call $__rt_str_alloc (i64.mul (local.get $len) (i64.const 2))))
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $esc
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every byte examined
+    (local.set $byte (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (if (i32.or
+          (i32.eqz (local.get $byte))
+          (i32.or
+            (i32.eq (local.get $byte) (i32.const 39))
+            (i32.or
+              (i32.eq (local.get $byte) (i32.const 34))
+              (i32.eq (local.get $byte) (i32.const 92)))))        ;; NUL, ' , " or backslash
+      (then
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 92))  ;; leading backslash
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))     ;; w++
+        (i32.store8 (i32.add (local.get $out) (local.get $w))
+          (select (i32.const 48) (local.get $byte)
+                  (i32.eqz (local.get $byte))))                   ;; NUL escapes to the digit zero
+        (local.set $w (i32.add (local.get $w) (i32.const 1))))    ;; w++
+      (else
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $byte))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))))   ;; w++
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $esc)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
+/// `__rt_str_stripslashes`: owns a copy with one level of backslash escaping removed.
+///
+/// It is NOT the inverse of a C unescape: `\n` yields the letter `n`, not a newline. Only `\0`
+/// is special, producing a NUL byte. A backslash consumes the byte after it whatever that is
+/// (so `\\` yields one backslash), and a trailing lone backslash is dropped. Measured against
+/// php-src, including `\\0` yielding a backslash followed by the digit zero.
+const RT_STR_STRIPSLASHES: &str = r#"(func $__rt_str_stripslashes (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor
+  (local $byte i32)                                               ;; current source byte
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out (call $__rt_str_alloc (local.get $len)))        ;; never grows
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $strip
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every byte examined
+    (local.set $byte (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (if (i32.eq (local.get $byte) (i32.const 92))                 ;; a backslash escapes what follows
+      (then
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))     ;; consume the backslash
+        (if (i64.lt_s (local.get $i) (local.get $len))            ;; a trailing lone backslash is dropped
+          (then
+            (local.set $byte (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+            (i32.store8 (i32.add (local.get $out) (local.get $w))
+              (select (i32.const 0) (local.get $byte)
+                      (i32.eq (local.get $byte) (i32.const 48)))) ;; \0 alone becomes a NUL byte
+            (local.set $w (i32.add (local.get $w) (i32.const 1))) ;; w++
+            (local.set $i (i64.add (local.get $i) (i64.const 1)))))) ;; consume the escaped byte
+      (else
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $byte))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))     ;; w++
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))))   ;; i++
+    (br $strip)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
+/// `__rt_str_nl2br`: owns a copy with `<br />` inserted BEFORE each line break.
+///
+/// The break itself is kept, which is what `nl2br` does — it inserts rather than replaces. A
+/// `\r\n` or `\n\r` pair counts as ONE break and both bytes survive after the single tag;
+/// `\n\n` is two breaks. Measured against php-src, whose default XHTML form is `<br />`.
+/// Worst case is seven output bytes per input byte, when every byte is a lone break.
+const RT_STR_NL2BR: &str = r#"(func $__rt_str_nl2br (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor
+  (local $byte i32)                                               ;; current source byte
+  (local $next i32)                                               ;; byte after a line break
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out (call $__rt_str_alloc (i64.mul (local.get $len) (i64.const 7))))
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $scan
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; every byte examined
+    (local.set $byte (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (if (i32.or (i32.eq (local.get $byte) (i32.const 10))
+                (i32.eq (local.get $byte) (i32.const 13)))        ;; a line feed or carriage return
+      (then
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 60))   ;; <
+        (i32.store8 offset=1 (i32.add (local.get $out) (local.get $w)) (i32.const 98))  ;; b
+        (i32.store8 offset=2 (i32.add (local.get $out) (local.get $w)) (i32.const 114)) ;; r
+        (i32.store8 offset=3 (i32.add (local.get $out) (local.get $w)) (i32.const 32))  ;; space
+        (i32.store8 offset=4 (i32.add (local.get $out) (local.get $w)) (i32.const 47))  ;; /
+        (i32.store8 offset=5 (i32.add (local.get $out) (local.get $w)) (i32.const 62))  ;; >
+        (local.set $w (i32.add (local.get $w) (i32.const 6)))     ;; the six tag bytes
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $byte)) ;; keep the break
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))     ;; w++
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))     ;; i++
+        (if (i64.lt_s (local.get $i) (local.get $len))
+          (then
+            (local.set $next (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+            (if (i32.and
+                  (i32.or (i32.eq (local.get $next) (i32.const 10))
+                          (i32.eq (local.get $next) (i32.const 13)))
+                  (i32.ne (local.get $next) (local.get $byte)))   ;; the OTHER break byte pairs with it
+              (then
+                (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $next))
+                (local.set $w (i32.add (local.get $w) (i32.const 1)))  ;; w++
+                (local.set $i (i64.add (local.get $i) (i64.const 1)))))))) ;; the pair is one break
+      (else
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $byte))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))     ;; w++
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))))   ;; i++
+    (br $scan)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
-/// The three admitted here are exact BYTE transforms of the same length. The rest of the family
-/// re-encodes (base64, url, hex, html), which changes the length and needs its own allocation
-/// and escaping rules.
+/// Admitted so far: the exact same-length BYTE transforms, plus the re-encoders whose rules are
+/// pure byte arithmetic (hex expansion, backslash escaping, line-break tagging). Still out are
+/// base64 and url coding, and the html entity decoders, which need a table.
 pub(super) fn unary_string_is_supported(target: UnaryStringRuntime) -> bool {
     matches!(
         target,
         UnaryStringRuntime::StrToUpper
             | UnaryStringRuntime::StrToLower
             | UnaryStringRuntime::StrReverse
+            | UnaryStringRuntime::BinToHex
+            | UnaryStringRuntime::AddSlashes
+            | UnaryStringRuntime::StripSlashes
+            | UnaryStringRuntime::NlToBr
     )
 }
 
@@ -155,6 +341,22 @@ pub(super) fn lower_unary_string(
         UnaryStringRuntime::StrReverse => {
             ctx.fb
                 .ins("call $__rt_str_reverse", "reverse the bytes");
+        }
+        UnaryStringRuntime::BinToHex => {
+            ctx.fb
+                .ins("call $__rt_str_bin2hex", "expand each byte to two hex digits");
+        }
+        UnaryStringRuntime::AddSlashes => {
+            ctx.fb
+                .ins("call $__rt_str_addslashes", "escape quotes, backslash and NUL");
+        }
+        UnaryStringRuntime::StripSlashes => {
+            ctx.fb
+                .ins("call $__rt_str_stripslashes", "remove one level of backslash escaping");
+        }
+        UnaryStringRuntime::NlToBr => {
+            ctx.fb
+                .ins("call $__rt_str_nl2br", "insert a break tag before each line break");
         }
         other => {
             return Err(WasmError::Unsupported(format!(
@@ -1117,6 +1319,10 @@ mod tests {
             UnaryStringRuntime::StrToUpper,
             UnaryStringRuntime::StrToLower,
             UnaryStringRuntime::StrReverse,
+            UnaryStringRuntime::BinToHex,
+            UnaryStringRuntime::AddSlashes,
+            UnaryStringRuntime::StripSlashes,
+            UnaryStringRuntime::NlToBr,
         ] {
             assert!(unary_string_is_supported(target), "{target:?} is lowered");
             let ok = unary_string_call(target, IrType::Str, PhpType::Str);
@@ -1131,9 +1337,55 @@ mod tests {
             );
         }
 
-        // The re-encoding half of the family changes the length and is not lowered yet.
+        // Base64 and url coding still need their own alphabets, and the html decoders a table.
         assert!(!unary_string_is_supported(UnaryStringRuntime::Base64Encode));
         assert!(!unary_string_is_supported(UnaryStringRuntime::UrlEncode));
+        assert!(!unary_string_is_supported(
+            UnaryStringRuntime::HtmlEntityDecode
+        ));
+    }
+
+    /// Verifies every lowered unary string transform reserves enough room for its own output.
+    ///
+    /// A re-encoder allocates a worst case up front and reports the length it actually wrote, so
+    /// a reservation smaller than the expansion would corrupt the heap block after it rather
+    /// than fail visibly. Each factor is read back out of the emitted helper so a helper whose
+    /// escaping grows without its reservation growing cannot pass.
+    #[test]
+    fn re_encoding_helpers_reserve_their_worst_case_expansion() {
+        for (helper, factor, transform) in [
+            (RT_STR_BIN2HEX, 2, "bin2hex writes two hex digits per byte"),
+            (
+                RT_STR_ADDSLASHES,
+                2,
+                "addslashes writes a backslash before an escaped byte",
+            ),
+            (
+                RT_STR_NL2BR,
+                7,
+                "nl2br writes a six-byte tag before a kept break",
+            ),
+        ] {
+            assert!(
+                helper.contains(&format!(
+                    "(call $__rt_str_alloc (i64.mul (local.get $len) (i64.const {factor})))"
+                )),
+                "{transform}, so it must reserve {factor} bytes per input byte:\n{helper}"
+            );
+        }
+        // stripslashes only ever removes bytes, so the source length is already its worst case.
+        assert!(RT_STR_STRIPSLASHES.contains("(call $__rt_str_alloc (local.get $len))"));
+        for helper in [
+            RT_STR_BIN2HEX,
+            RT_STR_ADDSLASHES,
+            RT_STR_STRIPSLASHES,
+            RT_STR_NL2BR,
+        ] {
+            assert!(
+                helper.contains("(i64.extend_i32_u (local.get $w))"),
+                "a re-encoder returns what it WROTE, not what it reserved:\n{helper}"
+            );
+        }
     }
 
     /// Verifies `in_array` is lowered only in its STRICT form.

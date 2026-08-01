@@ -3422,6 +3422,99 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the LENGTH-CHANGING string transforms reproduce php-src byte for byte.
+///
+/// Each result is printed through `bin2hex` so a wrong byte cannot hide behind a terminal's
+/// rendering, and the samples pin the edges that separate these from a naive implementation:
+/// `addslashes` escapes NUL to the two characters `\0`; `stripslashes` turns `\0` into a NUL
+/// byte but `\n` into the letter n, and drops a trailing lone backslash; `nl2br` keeps the break
+/// it tags and treats `\r\n` as one. Raw high bytes are included because they are exactly what a
+/// data segment written from Rust's UTF-8 rather than the PHP bytes would corrupt.
+#[test]
+fn test_cli_wasm_re_encoding_string_transforms_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_re_encoding_strings");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function t(string $s): void {
+    echo bin2hex($s), "|", bin2hex(addslashes($s)), "|", bin2hex(stripslashes($s)), "|", bin2hex(nl2br($s)), "\n";
+}
+t("");
+t("abc");
+t("a'b\"c\\d");
+t("x\ny\r\nz\rw");
+t("\n\r");
+t("\x00\x01\xff");
+t("\\0");
+t("a\\");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the re-encoding transforms to WASM");
+    assert!(
+        output.status.success(),
+        "re-encoding transform compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the re-encoding transforms under Node");
+    assert!(
+        run.status.success(),
+        "re-encoding transforms trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "|||\n",
+            "616263|616263|616263|616263\n",
+            "61276222635c64|615c27625c22635c5c64|612762226364|61276222635c64\n",
+            "780a790d0a7a0d77|780a790d0a7a0d77|780a790d0a7a0d77|783c6272202f3e0a793c6272202f3e0d0a7a3c6272202f3e0d77\n",
+            "0a0d|0a0d|0a0d|3c6272202f3e0a0d\n",
+            "0001ff|5c3001ff|0001ff|0001ff\n",
+            "5c30|5c5c30|00|5c30\n",
+            "615c|615c5c|61|615c\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a string literal reaches the module as PHP BYTES, not as Rust's UTF-8.
 ///
 /// A PHP string is a byte string while a Rust `String` must be valid UTF-8, so the lexer carries
