@@ -389,6 +389,9 @@ fn emit_unbox_mixed_to_concrete(
 /// For identical representations this is a plain component-wise copy. For a
 /// Mixed-cell destination this boxes (or moves) the value via
 /// `__rt_mixed_from_value`.  Unsupported conversions return `WasmError`.
+/// Returns the local holding a Mixed cell this conversion ALLOCATED, when it allocated one.
+/// Callers that hand the value to an owner (a value, a slot) ignore it; a call argument, which
+/// the callee only borrows, must release it after the call.
 fn convert_temps_to_dest(
     ctx: &mut FnCtx,
     source_temps: &[String],
@@ -398,14 +401,14 @@ fn convert_temps_to_dest(
     dest_repr: &WasmRepr,
     dest_ir: IrType,
     dest_php: PhpType,
-) -> Result<()> {
+) -> Result<Option<String>> {
     match classify_transfer(source_ir, source_php.clone(), dest_ir, dest_php.clone())? {
         TransferKind::Copy => {
             for name in source_temps {
                 ctx.fb
                     .ins(&format!("local.get {}", name), "copy value component");
             }
-            Ok(())
+            Ok(None)
         }
         TransferKind::BoxMixed => emit_box_temps_into_mixed(
             ctx,
@@ -415,20 +418,26 @@ fn convert_temps_to_dest(
             source_ir,
         ),
         TransferKind::UnboxMixed => {
-            emit_unbox_mixed_to_concrete(ctx, source_temps, dest_repr, dest_ir, &dest_php)
+            emit_unbox_mixed_to_concrete(ctx, source_temps, dest_repr, dest_ir, &dest_php)?;
+            Ok(None)
         }
     }
 }
 
 /// Boxes the value described by `source_temps` into a fresh owned Mixed cell via
 /// `__rt_mixed_from_value`, leaving the i32 cell pointer on the operand stack.
+///
+/// Also parks the pointer in a local and returns its name. The cell is an artefact of THIS
+/// backend — EIR emits no boxing instruction and therefore no matching release — so whoever
+/// creates it owns it. A call argument is borrowed by the callee, so the call site is the
+/// only place that can free it.
 fn emit_box_temps_into_mixed(
     ctx: &mut FnCtx,
     source_temps: &[String],
     source_repr: &WasmRepr,
     source_php: PhpType,
     source_ir: IrType,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let tag = mixed_box_tag(&source_php, source_ir)?;
     ctx.fb
         .ins(&format!("i64.const {}", tag), "mixed boxing tag");
@@ -481,7 +490,12 @@ fn emit_box_temps_into_mixed(
 
     ctx.fb
         .ins("call $__rt_mixed_from_value", "box into owned mixed cell");
-    Ok(())
+    let cell = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(
+        &format!("local.tee {}", cell),
+        "remember the boxed cell so its creator can free it",
+    );
+    Ok(Some(cell))
 }
 
 /// Stores a stack-captured value into a destination EIR value, applying any
@@ -584,12 +598,16 @@ fn repr_for_ir(ir: IrType) -> WasmRepr {
 ///
 /// Applies concrete-to-Mixed boxing or Mixed-to-concrete unboxing as needed so
 /// the operand stack matches the callee's declared parameter signature.
+///
+/// Returns the local holding a Mixed cell the boxing allocated, if any. The callee BORROWS its
+/// parameter (`own=maybe_owned`, and the EIR release stays with the caller's original value), so
+/// that cell has no other owner and the call site must free it once the call returns.
 pub(super) fn emit_push_call_argument(
     ctx: &mut FnCtx,
     arg: ValueId,
     param_ir: IrType,
     param_php: PhpType,
-) -> Result<()> {
+) -> Result<Option<String>> {
     let source_repr = ctx.value_repr(arg)?.clone();
     let (source_php, source_ir) = ctx
         .function

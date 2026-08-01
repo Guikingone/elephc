@@ -893,10 +893,26 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
                 )));
             }
             ctx.fb.ins(&format!("local.get {}", obj), "push $this (fresh object) as first ctor arg");
+            let mut boxed_args: Vec<String> = Vec::new();
             for (&arg, (param_ir, param_php)) in inst.operands.iter().zip(&ctor_params) {
-                super::transfer::emit_push_call_argument(ctx, arg, *param_ir, param_php.clone())?;
+                if let Some(cell) = super::transfer::emit_push_call_argument(
+                    ctx,
+                    arg,
+                    *param_ir,
+                    param_php.clone(),
+                )? {
+                    boxed_args.push(cell);
+                }
             }
             ctx.fb.ins(&format!("call ${}", ctor_symbol), "call ClassName::__construct($this, ...args)");
+            // The constructor borrows its parameters, so the cells boxed for them have no
+            // other owner (see `release_boxed_arguments` in `inst`).
+            for cell in &boxed_args {
+                ctx.fb.ins(
+                    &format!("(call $__rt_decref_any (local.get {}))", cell),
+                    "free the Mixed cell boxed for this constructor argument",
+                );
+            }
         }
     }
 

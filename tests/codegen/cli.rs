@@ -5252,6 +5252,155 @@ process.exitCode = code;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Proves a `mixed` ARGUMENT's boxed cell is freed, and that freeing it does not break aliasing.
+///
+/// This target represents a `mixed` parameter as a heap cell, so passing a concrete scalar has to
+/// box one. EIR never asked for that box and so emits no matching release: the cell has exactly
+/// one owner, the call site, and every such call used to leak 32 bytes — invisibly, since the
+/// program still printed the right answer.
+///
+/// The release is withheld from callees whose declared return is itself a Mixed cell, because
+/// `Terminator::Return` MOVES a value out without increfing: such a callee can hand the very cell
+/// back. The other escape routes are safe and are exercised here — copying into a callee local and
+/// forwarding to a further call both borrow, and a container push increfs.
+#[test]
+fn test_cli_wasm_boxed_mixed_argument_is_released() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_boxed_arg");
+
+    // Aliasing first: a callee that hands its parameter back must still answer correctly.
+    let alias_path = dir.join("alias.php");
+    fs::write(
+        &alias_path,
+        r#"<?php
+function id(mixed $x): mixed { return $x; }
+function pick(mixed $a, mixed $b): mixed { return $b; }
+function copy_local(mixed $x): void { $y = $x; if ($y === "zz") { echo "q"; } }
+function forward(mixed $x): void { copy_local($x); }
+echo (id("hello") === "hello") ? "y" : "n";
+echo (id(42) === 42) ? "y" : "n";
+echo (id(2.5) === 2.5) ? "y" : "n";
+echo (id(null) === null) ? "y" : "n";
+echo (id(true) === true) ? "y" : "n";
+echo (pick(1, "b") === "b") ? "y" : "n";
+copy_local("hello"); forward("hello"); forward(7);
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let runner_src = r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(readFileSync(process.argv[2])),
+  wasi.getImportObject(),
+);
+const code = wasi.start(instance);
+console.error(`pages=${instance.exports.memory.buffer.byteLength / 65536}`);
+process.exitCode = code;
+"#;
+    let runner = dir.join("run.mjs");
+    fs::write(&runner, runner_src).unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&alias_path)
+        .output()
+        .expect("failed to compile the aliasing probe");
+    assert!(
+        compile.status.success(),
+        "aliasing probe compilation failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let alias_run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("alias.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the aliasing probe under Node");
+    assert!(
+        alias_run.status.success(),
+        "aliasing probe trapped: {}",
+        String::from_utf8_lossy(&alias_run.stderr)
+    );
+    // php-src 8.5.6's own bytes.
+    assert_eq!(alias_run.stdout, b"yyyyyy\n");
+
+    // Then the release itself, watched as runtime memory growth.
+    let leak_path = dir.join("leak.php");
+    let mut src = String::from(
+        "<?php\nfunction m(mixed $x): void { if ($x === \"zz\") { echo \"y\"; } }\n",
+    );
+    // Unrolled: a counting `for` loop does not compile on this target yet.
+    for i in 0..1000 {
+        src.push_str(&format!("m({i}); m(\"abcdefghij\"); m(2.5); m(null); m(true);\n"));
+    }
+    src.push_str("echo \"ok\\n\";\n");
+    fs::write(&leak_path, src).unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&leak_path)
+        .output()
+        .expect("failed to compile the boxed-argument leak probe");
+    assert!(
+        compile.status.success(),
+        "leak probe compilation failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let wat_output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg("--emit-asm")
+        .arg(&leak_path)
+        .output()
+        .expect("failed to emit the leak probe's WAT");
+    assert!(wat_output.status.success());
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("leak.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the leak probe under Node");
+    assert!(
+        run.status.success(),
+        "leak probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(run.stdout, b"ok\n");
+
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    let final_pages: usize = stderr
+        .split("pages=")
+        .nth(1)
+        .and_then(|rest| rest.trim().parse().ok())
+        .expect("the runner reported the final page count");
+    let wat = fs::read_to_string(dir.join("leak.wat")).expect("the WAT was written");
+    let initial_pages: usize = wat
+        .split("(memory (export \"memory\") ")
+        .nth(1)
+        .and_then(|rest| rest.split(')').next())
+        .and_then(|n| n.trim().parse().ok())
+        .expect("the module declares its initial memory");
+
+    assert_eq!(
+        final_pages, initial_pages,
+        "5000 boxed `mixed` arguments grew memory from {initial_pages} to {final_pages} pages: \
+         the boxed cells are not being released"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

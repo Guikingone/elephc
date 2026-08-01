@@ -406,11 +406,14 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // Mixed cells are unboxed for concrete parameters.
     let mut temp_cells: Vec<TempCell> = Vec::new();
     let mut slot_to_cell: HashMap<u32, usize> = HashMap::new();
+    let mut boxed_args: Vec<String> = Vec::new();
     for (&arg, (param_ir, param_php, by_ref, _)) in inst.operands.iter().zip(&params) {
         if *by_ref {
             push_by_ref_arg(ctx, arg, &mut temp_cells, &mut slot_to_cell)?;
-        } else {
-            transfer::emit_push_call_argument(ctx, arg, *param_ir, param_php.clone())?;
+        } else if let Some(cell) =
+            transfer::emit_push_call_argument(ctx, arg, *param_ir, param_php.clone())?
+        {
+            boxed_args.push(cell);
         }
     }
 
@@ -433,7 +436,35 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         writeback_temp_cell(ctx, cell)?;
     }
 
+    // Release each Mixed cell the argument boxing allocated. EIR emits no boxing instruction
+    // and so no matching release: the cell exists only because this target represents a
+    // `mixed` parameter as a heap cell, and the callee borrows it. Skipping this leaks one
+    // cell per call — silently, since nothing on the output path observes it.
+    //
+    // Measured escape routes for a borrowed cell: copying it into a callee local and handing
+    // it to a further call are both safe (neither takes ownership), and pushing it into a
+    // container increfs. RETURNING it is not — `Terminator::Return` MOVES the value out
+    // without increfing, so a callee that can hand the cell back keeps its cells. That is
+    // narrower than it sounds: it only withholds the release from callees whose declared
+    // return is itself a Mixed cell.
+    if !matches!(
+        callee_return_type,
+        IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union)
+    ) {
+        release_boxed_arguments(ctx, &boxed_args);
+    }
+
     Ok(())
+}
+
+/// Frees the Mixed cells synthesized for a call's arguments, after the call has returned.
+fn release_boxed_arguments(ctx: &mut FnCtx, boxed_args: &[String]) {
+    for cell in boxed_args {
+        ctx.fb.ins(
+            &format!("(call $__rt_decref_any (local.get {}))", cell),
+            "free the Mixed cell boxed for this argument",
+        );
+    }
 }
 
 /// A temp ref cell synthesized for a by-ref argument whose source is a fresh local.
