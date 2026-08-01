@@ -59,7 +59,7 @@ pub struct Target { pub platform: Platform, pub arch: Arch }  // :36
 
 ### Rejected: `Platform::IOS`
 
-Measured cost: **67 `Platform::MacOS =>` match arms across 54 files**. Every one would grow an iOS arm returning a value *identical* to macOS — same syscall numbers, same `O_NONBLOCK`, same `SOL_SOCKET`, same Mach-O conventions. Pure churn, and it turns every future OS constant into a four-way match.
+Measured cost: **~181 `Platform::MacOS` match arms across 54 files**. Every one would grow an iOS arm returning a value *identical* to macOS — same syscall numbers, same `O_NONBLOCK`, same `SOL_SOCKET`, same Mach-O conventions. Pure churn, and it turns every future OS constant into a four-way match.
 
 ### Adopted: a variant field on `Target`
 
@@ -68,11 +68,39 @@ pub enum AppleVariant { MacOS, IOS, IOSSimulator }
 pub struct Target { platform: Platform, arch: Arch, apple_variant: AppleVariant }
 ```
 
-`Platform::MacOS` keeps answering every ABI and constant question correctly and for free. Only the linker and a small set of capability gates read the variant.
+`Platform::MacOS` keeps answering every ABI and constant question correctly and for free. Only the linker, the native-dependency toolchain and a small set of capability gates read the variant.
 
-Measured cost: **71 literal `Target { … }` constructions** to migrate. Mechanical; `Target::new` is the single constructor, so most sites can route through it.
+**Measured cost — much lower than a field addition usually implies.** There are **zero literal `Target { … }` constructions** in the tree. Every `Target` is built through one of three constructors, and only **7 of their 131 call sites are production code**:
 
-**Open point** — `Target` is `Copy + PartialEq` and the runtime object cache encodes the target in its filename. A third field must be reflected in that cache key, or a macOS build and an iOS build will collide on the same cached runtime object. To be confirmed against `src/runtime_cache.rs` before Lot 3.
+| Constructor | Total | Production | Production sites |
+|---|---|---|---|
+| `Target::new` | 100 | **1** | `codegen_support/abi/registers.rs:198` |
+| `Target::parse` | 7 | **2** | `cli.rs:530`, `native_deps/cli.rs:98` |
+| `Target::detect_host` | 24 | **4** | `cli.rs:222`, `native_deps/toolchain.rs:106`, `native_deps/recipes/{pcre2.rs:44,zlib.rs:37}` |
+
+The remaining 124 sites are tests. Adding a field with a sensible default is therefore a contained change, not a sweep.
+
+Further confirmation of the decision: `Target::supports_current_backend()` (`platform/target.rs:602`) matches only on `(Platform, Arch)`, and `(MacOS, AArch64)` is **already `true`**. The central gate at `pipeline.rs:409` needs no change at all. The rejected `Platform::IOS` route would have forced it open.
+
+### Where the variant must actually be read
+
+`Target` derives `Copy, PartialEq, Eq` but **not `Hash`**, and is never a map key. The real serialization surface is `as_str()` / `Display`, and it is wider than first assumed — three distinct persisted keys would collide between a macOS and an iOS build if the variant is not encoded:
+
+- `runtime_cache.rs:152` `runtime_cache_file_name()` — the cached runtime object filename;
+- `native_deps/receipt.rs:24-40` `ArtifactReceipt` — a `Serialize`/`Deserialize` JSON persisted to disk with a `target: String` field fed from `as_str()`;
+- `native_deps/catalog.rs:124-133` `ensure_target()` — per-package static `supported_targets` lists.
+
+Sites that must branch on the variant:
+
+| Site | Why |
+|---|---|
+| `linker/sdk.rs:16-29` `macos_sdk_path()` | runs `xcrun --show-sdk-path` with no `--sdk`, resolving the default (macOS) SDK |
+| `linker/sdk.rs:53-68` `macos_sdk_version()` | hardcodes `--sdk macosx`, falls back to `"15.0"` |
+| `linker/command.rs:108-164` `render_macos_command` | hardcodes `-platform_version macos <v> <v>`, reusing one version for both min-OS and SDK |
+| `native_deps/toolchain.rs:183-214` `validate_tuple` | requires the compiler's `-dumpmachine` triple to contain **both** `apple` and `darwin`, and synthesises `"{arch}-apple-darwin"`. An iOS cross-compiler reports `arm64-apple-ios` — **this check rejects it today** |
+| `cli.rs:96`, `Target::parse` error arm | user-visible target lists |
+
+Sites that must keep seeing plain "macOS" — no variant reading, because XNU and Mach-O are identical on arm64: every `Platform::MacOS =>` syscall number / struct offset / errno / flag constant in `impl Platform`; `php_os_name()` → `"Darwin"` (correct for iOS too); `extern_symbol()` and `darwin_arch_name()`; `assembler_cmd()`/`linker_cmd()` staying `as`/`ld`; `runtime_cache.rs:96-98`; `linker/mod.rs` `dsymutil` / `archive_dedup` / Homebrew paths.
 
 ## 6. The blocking gap — `#[Export]` cannot return a string
 
@@ -123,10 +151,18 @@ Proves the UI answer with today's toolchain, with iOS entirely out of the pictur
 ### Lot 3 — `Target` Apple variant, then `Emit::Staticlib`
 The enabling refactor (§5), then the delivery form. A staticlib reuses the cdylib PIC path wholesale — iOS mandates PIE — so only the final archiving step differs, and `ar`/`ranlib` already exist in the linker for bridge staticlibs.
 
+Target strings follow the existing dual convention (short `platform-arch` plus an LLVM-style triple): `ios-arm64` / `aarch64-apple-ios`, and `ios-sim-arm64` / `aarch64-apple-ios-simulator`. `test_target_parse` (`platform/mod.rs:27-40`) and the shared integration fixture `tests/codegen/support/platform.rs:14-21` extend with them.
+
+Includes the native-dependency path: `native_deps/toolchain.rs` `validate_tuple` currently **rejects** an iOS cross-compiler outright, and `native_deps/catalog.rs` `supported_targets` must list the iOS strings before pcre2/zlib can be built for the target.
+
 **Accept:** `--target ios-arm64 --emit staticlib` produces a `.a` that links cleanly in an Xcode project.
 
 ### Lot 4 — Capability gating
 `exec`, `shell_exec`, `system`, `passthru`, `popen`, `pclose`, `proc_open` are unusable in the iOS sandbox — no `fork`. They must fail **at compile time** with a targeted diagnostic, never silently at runtime.
+
+Model to follow: the WASM backend's `capability.rs` (on `feat/wasm-target`) uses **exhaustive matches with no `_` arm**, so a newly added enum variant cannot compile until its support status is decided, and `validate_module` aggregates every violation into one error naming collection / function / block / instruction before planning begins.
+
+What `main` has today is the weaker shape and should not be copied: `Platform::Windows => panic!(…)` repeated ~20 times across `impl Platform`, a runtime trap that only fires when a path actually executes.
 
 **Accept:** compiling a script that calls any of them for an iOS target yields a clear compile error naming the builtin and the reason.
 
@@ -144,7 +180,8 @@ Worth doing on its own merits as Darwin debt. **Not a prerequisite** for proving
 
 ## 9. Risks and open questions
 
-1. **Runtime-object cache key** must incorporate the Apple variant (§5) or macOS and iOS builds collide.
+1. **Three persisted keys** must incorporate the Apple variant (§5) — the runtime-object cache filename, the `ArtifactReceipt` JSON, and the native-dependency catalog — or macOS and iOS builds collide silently on shared state.
+1b. **Native dependencies are a second front.** `native_deps/` builds pcre2 and zlib from source per target; its toolchain validator rejects a non-`darwin` Apple triple today. Any PHP program reaching PCRE or zlib on iOS depends on this path, so it cannot be deferred past Lot 3.
 2. **String ownership model** (Lot 1) is an ABI commitment. Options — return `ptr+len` and require `elephc_free`, versus copy into a caller-supplied buffer — must be weighed against the actual internal string representation and refcounting before choosing.
 3. **Static vs dynamic delivery.** A `.a` avoids the embedded-framework signing dance entirely. A `.dylib` in an app bundle must live under `Frameworks/` and be signed separately. Lot 3 chooses static for that reason; revisit only if a consumer needs dynamic loading.
 4. **Simulator vs device divergence.** The simulator is arm64 on Apple Silicon but is *not* the device: it uses a different platform load command and a host kernel. Lot 0 passing on the simulator does not by itself prove the device path.
