@@ -18,7 +18,10 @@ use super::context::{FnCtx, Result};
 use super::wat::WatModule;
 use super::inst::{operand, store_result};
 use super::WasmError;
-use crate::ir::{Function, Instruction, IrHeapKind, IrType, RuntimeFnId, UnaryStringRuntime};
+use crate::ir::{
+    Function, Immediate, Instruction, IrHeapKind, IrType, Module, Op, RuntimeFnId,
+    UnaryStringRuntime,
+};
 use crate::types::PhpType;
 
 /// Registers the WAT helpers the builtins in this module call.
@@ -64,6 +67,9 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_EXPLODE);
     wm.add_raw_func(RT_STR_SPLIT);
     wm.add_raw_func(RT_WORDWRAP);
+    wm.add_raw_func(RT_FMT_PAD);
+    wm.add_raw_func(RT_FMT_INT);
+    wm.add_raw_func(RT_FMT_STR);
     wm.add_raw_func(RT_PAD_BYTE);
     wm.add_raw_func(RT_STR_PAD);
     wm.add_raw_func(RT_STR_REPLACE);
@@ -1954,6 +1960,500 @@ const RT_WORDWRAP: &str = r#"(func $__rt_wordwrap (param $ptr i32) (param $len i
   (local.get $out) (local.get $olen))                             ;; owned result, same length
 "#;
 
+/// One piece of a `sprintf` format that has been resolved at COMPILE time.
+///
+/// The format is required to be a literal, so the parse happens once here rather than becoming a
+/// format interpreter in the emitted module. That is the whole point of doing this in an AOT
+/// compiler: a call whose format is known becomes a fixed sequence of appends.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum FormatPiece {
+    /// A contiguous run of the FORMAT's own bytes, given as an offset and length into it.
+    ///
+    /// Referencing the source rather than copying means the run needs no data segment of its
+    /// own: the format literal is already laid out, so a run is a slice of it. `%%` is emitted
+    /// as a one-byte run pointing at the first `%` of the pair, which is what keeps every run
+    /// contiguous even though the pair collapses.
+    Literal { offset: usize, length: usize },
+    /// One conversion, with its argument already resolved to a zero-based index.
+    Conversion {
+        argument: usize,
+        conversion: u8,
+        left: bool,
+        plus: bool,
+        pad: u8,
+        width: usize,
+        precision: Option<usize>,
+    },
+}
+
+/// Parses a `sprintf` format into pieces, or explains why this backend will not lower it.
+///
+/// The admitted subset is `%%`, `%d`, `%s` and `%f` with php-src's flags, width and precision.
+/// Every rule here was measured against php-src 8.5.6 rather than taken from C:
+///
+/// - the LAST padding flag wins, so `%'x03d` pads with zeros and `%0'x3d` pads with `x`;
+/// - `-` cancels a ZERO pad on `%d` and `%f` but NOT on `%s`, and never cancels an explicit
+///   `'X` — `%-08d` is space-padded while `%-03s` is zero-padded;
+/// - the space flag is IGNORED by PHP, unlike C.
+///
+/// `-` together with `0` on `%f` is refused rather than reproduced: php-src loses the precision
+/// there (`%-08.2f` of 1.5 gives "1.500000"), which is a quirk this target should not bake in.
+pub(super) fn parse_sprintf_format(
+    format: &[u8],
+    argument_count: usize,
+) -> std::result::Result<Vec<FormatPiece>, String> {
+    let mut pieces = Vec::new();
+    let mut run_start = 0usize;
+    let mut next_positional = 0usize;
+    let mut i = 0usize;
+    while i < format.len() {
+        if format[i] != b'%' {
+            i += 1;
+            continue;
+        }
+        if i > run_start {
+            pieces.push(FormatPiece::Literal {
+                offset: run_start,
+                length: i - run_start,
+            });
+        }
+        let percent = i;
+        i += 1;
+        if i >= format.len() {
+            return Err("format ends with a lone '%'".to_string());
+        }
+        if format[i] == b'%' {
+            pieces.push(FormatPiece::Literal {
+                offset: percent,
+                length: 1,
+            });
+            i += 1;
+            run_start = i;
+            continue;
+        }
+        // An explicit `N$` argument selector, which may repeat an argument.
+        let start = i;
+        let mut digits = 0usize;
+        while i < format.len() && format[i].is_ascii_digit() {
+            digits = digits * 10 + usize::from(format[i] - b'0');
+            i += 1;
+        }
+        let mut argument = None;
+        if i > start && i < format.len() && format[i] == b'$' {
+            if digits == 0 {
+                return Err("argument numbers start at 1".to_string());
+            }
+            argument = Some(digits - 1);
+            i += 1;
+        } else {
+            i = start;
+        }
+
+        let mut left = false;
+        let mut plus = false;
+        let mut pad = b' ';
+        let mut zero_flag = false;
+        loop {
+            if i >= format.len() {
+                return Err("format ends inside a conversion".to_string());
+            }
+            match format[i] {
+                b'-' => left = true,
+                b'+' => plus = true,
+                b'0' => {
+                    pad = b'0';
+                    zero_flag = true;
+                }
+                b'\'' => {
+                    i += 1;
+                    if i >= format.len() {
+                        return Err("a padding flag needs the character after it".to_string());
+                    }
+                    pad = format[i];
+                    zero_flag = false;
+                }
+                _ => break,
+            }
+            i += 1;
+        }
+
+        let mut width = 0usize;
+        while i < format.len() && format[i].is_ascii_digit() {
+            width = width * 10 + usize::from(format[i] - b'0');
+            i += 1;
+        }
+        let mut precision = None;
+        if i < format.len() && format[i] == b'.' {
+            i += 1;
+            let mut value = 0usize;
+            while i < format.len() && format[i].is_ascii_digit() {
+                value = value * 10 + usize::from(format[i] - b'0');
+                i += 1;
+            }
+            precision = Some(value);
+        }
+        if i >= format.len() {
+            return Err("format ends before its conversion character".to_string());
+        }
+        let conversion = format[i];
+        i += 1;
+        if !matches!(conversion, b'd' | b's' | b'f') {
+            return Err(format!(
+                "conversion '%{}' is outside the lowered subset (%%, %d, %s, %f)",
+                conversion as char
+            ));
+        }
+        if left && zero_flag && conversion == b'f' {
+            return Err(
+                "'-' with '0' on %f loses the precision in php-src; refused rather than copied"
+                    .to_string(),
+            );
+        }
+        // Left-justifying cancels a zero pad on the numeric conversions only.
+        if left && pad == b'0' && matches!(conversion, b'd' | b'f') {
+            pad = b' ';
+        }
+        let argument = match argument {
+            Some(explicit) => explicit,
+            None => {
+                let next = next_positional;
+                next_positional += 1;
+                next
+            }
+        };
+        if argument >= argument_count {
+            return Err(format!(
+                "format wants argument #{} but {argument_count} were passed",
+                argument + 1
+            ));
+        }
+        run_start = i;
+        pieces.push(FormatPiece::Conversion {
+            argument,
+            conversion,
+            left,
+            plus,
+            pad,
+            width,
+            precision,
+        });
+    }
+    if format.len() > run_start {
+        pieces.push(FormatPiece::Literal {
+            offset: run_start,
+            length: format.len() - run_start,
+        });
+    }
+    Ok(pieces)
+}
+
+/// `__rt_fmt_pad`: places a rendered body inside its field width, sign included.
+///
+/// The two padding characters behave differently, which is measured php-src behaviour rather
+/// than a choice: ZEROS go AFTER the sign — `%05d` of -7 is `-0007` — while spaces and an
+/// explicit `'X` go BEFORE it, so `%'x8.2f` of -1.5 is `xxx-1.50`. `$sign` is 0 when there is
+/// none, otherwise the character to emit.
+const RT_FMT_PAD: &str = r#"(func $__rt_fmt_pad (param $bptr i32) (param $blen i64) (param $sign i32) (param $width i64) (param $pad i32) (param $left i32) (result i32) (result i64)
+  (local $signed i64)                                             ;; body length plus any sign
+  (local $total i64)                                              ;; final field length
+  (local $fill i64)                                               ;; padding characters to add
+  (local $out i32)                                                ;; owned result block
+  (local $w i32)                                                  ;; write cursor
+  (local $i i64)                                                  ;; copy cursor
+  (local.set $signed (i64.add (local.get $blen)
+    (i64.extend_i32_u (i32.ne (local.get $sign) (i32.const 0)))))
+  (local.set $total (local.get $signed))
+  (if (i64.gt_s (local.get $width) (local.get $total))
+    (then (local.set $total (local.get $width))))                 ;; a shorter width never truncates
+  (local.set $fill (i64.sub (local.get $total) (local.get $signed)))
+  (local.set $out (call $__rt_str_alloc (local.get $total)))
+  (local.set $w (i32.const 0))
+  (if (i32.and (i32.eqz (local.get $left)) (i32.ne (local.get $pad) (i32.const 48)))
+    (then                                                         ;; spaces and 'X precede the sign
+      (block $e1 (loop $l1
+        (br_if $e1 (i64.le_s (local.get $fill) (i64.const 0)))
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $pad))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))
+        (local.set $fill (i64.sub (local.get $fill) (i64.const 1)))
+        (br $l1)))))
+  (if (i32.ne (local.get $sign) (i32.const 0))
+    (then
+      (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $sign))
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))))
+  (if (i32.and (i32.eqz (local.get $left)) (i32.eq (local.get $pad) (i32.const 48)))
+    (then                                                         ;; zeros follow the sign
+      (block $e2 (loop $l2
+        (br_if $e2 (i64.le_s (local.get $fill) (i64.const 0)))
+        (i32.store8 (i32.add (local.get $out) (local.get $w)) (i32.const 48))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))
+        (local.set $fill (i64.sub (local.get $fill) (i64.const 1)))
+        (br $l2)))))
+  (local.set $i (i64.const 0))
+  (block $e3 (loop $l3
+    (br_if $e3 (i64.ge_s (local.get $i) (local.get $blen)))
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (i32.load8_u (i32.add (local.get $bptr) (i32.wrap_i64 (local.get $i)))))
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $l3)))
+  (block $e4 (loop $l4                                            ;; left-justified padding trails
+    (br_if $e4 (i64.le_s (local.get $fill) (i64.const 0)))
+    (i32.store8 (i32.add (local.get $out) (local.get $w)) (local.get $pad))
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))
+    (local.set $fill (i64.sub (local.get $fill) (i64.const 1)))
+    (br $l4)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))
+"#;
+
+/// `__rt_fmt_int`: renders `%d` — decimal digits, an optional sign, then the field.
+///
+/// The digits are produced without a sign so `__rt_fmt_pad` can place it, which is what makes
+/// `%05d` of -7 come out as `-0007` rather than `000-7`. `PHP_INT_MIN` is negated in UNSIGNED
+/// space, where its magnitude is representable.
+const RT_FMT_INT: &str = r#"(func $__rt_fmt_int (param $value i64) (param $plus i32) (param $width i64) (param $pad i32) (param $left i32) (result i32) (result i64)
+  (local $mag i64)                                                ;; magnitude, sign removed
+  (local $sign i32)                                               ;; the sign character, or 0
+  (local $digits i32)                                             ;; scratch for the digits
+  (local $n i32)                                                  ;; digit count
+  (local $w i32)                                                  ;; back-to-front cursor
+  (local.set $sign (i32.const 0))
+  (if (i64.lt_s (local.get $value) (i64.const 0))
+    (then
+      (local.set $sign (i32.const 45))                             ;; '-'
+      (local.set $mag (i64.sub (i64.const 0) (local.get $value)))) ;; wraps only at PHP_INT_MIN,
+    (else                                                          ;; whose unsigned form is right
+      (local.set $mag (local.get $value))
+      (if (local.get $plus) (then (local.set $sign (i32.const 43)))))) ;; '+'
+  (local.set $digits (call $__rt_str_alloc (i64.const 24)))       ;; an i64 needs at most 20
+  (local.set $w (i32.const 24))
+  (block $end (loop $emit
+    (local.set $w (i32.sub (local.get $w) (i32.const 1)))
+    (i32.store8 (i32.add (local.get $digits) (local.get $w))
+      (i32.add (i32.const 48)
+        (i32.wrap_i64 (i64.rem_u (local.get $mag) (i64.const 10)))))
+    (local.set $mag (i64.div_u (local.get $mag) (i64.const 10)))
+    (br_if $end (i64.eqz (local.get $mag)))                       ;; zero still emits one digit
+    (br $emit)))
+  (local.set $n (i32.sub (i32.const 24) (local.get $w)))
+  (call $__rt_fmt_pad (i32.add (local.get $digits) (local.get $w))
+    (i64.extend_i32_u (local.get $n)) (local.get $sign)
+    (local.get $width) (local.get $pad) (local.get $left)))
+"#;
+
+/// `__rt_fmt_str`: renders `%s` — the string, truncated by any precision, then the field.
+///
+/// A precision TRUNCATES rather than pads, so `%.2s` of "abcdef" is "ab"; `$has_prec` tells an
+/// absent precision from an explicit `.0`, which yields the empty string.
+const RT_FMT_STR: &str = r#"(func $__rt_fmt_str (param $ptr i32) (param $len i64) (param $prec i64) (param $has_prec i32) (param $width i64) (param $pad i32) (param $left i32) (result i32) (result i64)
+  (if (i32.and (local.get $has_prec) (i64.lt_s (local.get $prec) (local.get $len)))
+    (then (local.set $len (local.get $prec))))                    ;; precision cuts, never extends
+  (call $__rt_fmt_pad (local.get $ptr) (local.get $len) (i32.const 0)
+    (local.get $width) (local.get $pad) (local.get $left)))
+"#;
+
+/// Recovers a `sprintf` format's literal bytes, or `None` when it is not a literal.
+///
+/// The whole design rests on this: a known format is parsed once at compile time, so the module
+/// carries a fixed sequence of appends instead of a format interpreter. A computed format has no
+/// such sequence and is refused.
+fn sprintf_literal_format(
+    function: &Function,
+    module: &Module,
+    value: crate::ir::ValueId,
+) -> Option<Vec<u8>> {
+    let defined = function.value(value)?;
+    let crate::ir::ValueDef::Instruction { inst, .. } = defined.def else {
+        return None;
+    };
+    let defining = function.instruction(inst)?;
+    if defining.op != Op::ConstStr {
+        return None;
+    }
+    let Some(Immediate::Data(id)) = defining.immediate else {
+        return None;
+    };
+    let interned = module.data.strings.get(id.as_raw() as usize)?;
+    Some(crate::string_bytes::literal_bytes(interned))
+}
+
+/// Resolves the data segment the literal format was laid out in.
+fn sprintf_format_segment(ctx: &FnCtx, value: crate::ir::ValueId) -> Result<(u32, u32)> {
+    let defined = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| WasmError::Unsupported("sprintf format value is missing".to_string()))?;
+    let crate::ir::ValueDef::Instruction { inst, .. } = defined.def else {
+        return Err(WasmError::Unsupported(
+            "sprintf format is not a literal".to_string(),
+        ));
+    };
+    let defining = ctx.function.instruction(inst).ok_or_else(|| {
+        WasmError::Unsupported("sprintf format has no defining instruction".to_string())
+    })?;
+    let Some(Immediate::Data(id)) = defining.immediate else {
+        return Err(WasmError::Unsupported(
+            "sprintf format is not a data literal".to_string(),
+        ));
+    };
+    ctx.str_literals
+        .get(id.as_raw() as usize)
+        .copied()
+        .ok_or_else(|| WasmError::Unsupported("sprintf format has no data segment".to_string()))
+}
+
+/// Lowers `sprintf` with a literal format into a fixed sequence of appends.
+fn lower_sprintf(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let format_value = operand(inst, 0)?;
+    let format = sprintf_literal_format(ctx.function, ctx.module, format_value)
+        .ok_or_else(|| WasmError::Unsupported("sprintf format is not a literal".to_string()))?;
+    let pieces = parse_sprintf_format(&format, inst.operands.len() - 1)
+        .map_err(|why| WasmError::Unsupported(format!("sprintf format: {why}")))?;
+    // Every literal run is a slice of the format's own data segment, so its address is that
+    // segment's base plus the run's offset. No run needs a segment of its own.
+    let format_base = sprintf_format_segment(ctx, format_value)?.0;
+
+    let acc_ptr = ctx.fresh_temp(super::wat::ValType::I32);
+    let acc_len = ctx.fresh_temp(super::wat::ValType::I64);
+    // Start from the empty string so a format with no pieces still yields one, and so every
+    // piece below is an ordinary append rather than a special first case.
+    ctx.fb.ins("i32.const 0", "empty accumulator pointer");
+    ctx.fb.ins(&format!("local.set {acc_ptr}"), "accumulator");
+    ctx.fb.ins("i64.const 0", "empty accumulator length");
+    ctx.fb.ins(&format!("local.set {acc_len}"), "accumulator length");
+
+    for piece in &pieces {
+        ctx.fb.ins(&format!("local.get {acc_ptr}"), "accumulated so far");
+        ctx.fb.ins(&format!("local.get {acc_len}"), "accumulated length");
+        match piece {
+            FormatPiece::Literal { offset, length } => {
+                ctx.fb.ins(
+                    &format!("i32.const {}", format_base + *offset as u32),
+                    "a run of the format's own bytes",
+                );
+                ctx.fb.ins(&format!("i64.const {length}"), "its byte length");
+            }
+            FormatPiece::Conversion {
+                argument,
+                conversion,
+                left,
+                plus,
+                pad,
+                width,
+                precision,
+            } => {
+                let value = operand(inst, argument + 1)?;
+                match conversion {
+                    b'd' => {
+                        ctx.emit_load_value(value)?;
+                        ctx.fb.ins(
+                            &format!("i32.const {}", i32::from(*plus)),
+                            "does a positive value carry a plus?",
+                        );
+                        ctx.fb.ins(&format!("i64.const {width}"), "field width");
+                        ctx.fb.ins(&format!("i32.const {pad}"), "padding character");
+                        ctx.fb
+                            .ins(&format!("i32.const {}", i32::from(*left)), "left-justified?");
+                        ctx.fb.ins("call $__rt_fmt_int", "render %d");
+                    }
+                    b's' => {
+                        ctx.emit_load_value(value)?;
+                        ctx.fb.ins(
+                            &format!("i64.const {}", precision.unwrap_or(0)),
+                            "precision, when one was written",
+                        );
+                        ctx.fb.ins(
+                            &format!("i32.const {}", i32::from(precision.is_some())),
+                            "an absent precision is not a zero one",
+                        );
+                        ctx.fb.ins(&format!("i64.const {width}"), "field width");
+                        ctx.fb.ins(&format!("i32.const {pad}"), "padding character");
+                        ctx.fb
+                            .ins(&format!("i32.const {}", i32::from(*left)), "left-justified?");
+                        ctx.fb.ins("call $__rt_fmt_str", "render %s");
+                    }
+                    other => {
+                        return Err(WasmError::Unsupported(format!(
+                            "sprintf conversion %{}",
+                            *other as char
+                        )))
+                    }
+                }
+            }
+        }
+        ctx.fb.ins("call $__rt_concat", "append this piece");
+        ctx.fb.ins(&format!("local.set {acc_len}"), "new length");
+        ctx.fb.ins(&format!("local.set {acc_ptr}"), "new accumulator");
+    }
+    ctx.fb.ins(&format!("local.get {acc_ptr}"), "the formatted string");
+    ctx.fb.ins(&format!("local.get {acc_len}"), "its length");
+    store_result(ctx, inst)
+}
+
+/// Validates `sprintf`: a LITERAL format whose conversions match the argument types.
+fn sprintf_shape_issue(
+    function: &Function,
+    module: &Module,
+    call: &Instruction,
+) -> Option<String> {
+    let Some(format_value) = call.operands.first() else {
+        return Some("sprintf needs a format".to_string());
+    };
+    let Some(format) = sprintf_literal_format(function, module, *format_value) else {
+        return Some(
+            "only a LITERAL format is lowered; a computed one would need a format interpreter"
+                .to_string(),
+        );
+    };
+    let pieces = match parse_sprintf_format(&format, call.operands.len() - 1) {
+        Ok(pieces) => pieces,
+        Err(why) => return Some(format!("sprintf format: {why}")),
+    };
+    for piece in &pieces {
+        let FormatPiece::Conversion {
+            argument,
+            conversion,
+            ..
+        } = piece
+        else {
+            continue;
+        };
+        // `%f` needs the exact-digit rounding this batch does not carry yet.
+        if *conversion == b'f' {
+            return Some("sprintf %f is not lowered yet".to_string());
+        }
+        let Some(value) = function.value(call.operands[argument + 1]) else {
+            return Some("argument is missing from the value table".to_string());
+        };
+        let (want_ir, want_php) = if *conversion == b'd' {
+            (IrType::I64, PhpType::Int)
+        } else {
+            (IrType::Str, PhpType::Str)
+        };
+        // PHP coerces an argument to the conversion's type; that coercion carries its own
+        // diagnostics, so an exact match is required rather than converted here.
+        if value.ir_type != want_ir || value.php_type.codegen_repr() != want_php {
+            return Some(format!(
+                "%{} wants {want_ir:?}/{want_php:?}, argument #{} is {:?}/{:?}",
+                *conversion as char,
+                argument + 1,
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "sprintf result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -2230,6 +2730,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Explode
             | RuntimeFnId::StrSplit
             | RuntimeFnId::Wordwrap
+            | RuntimeFnId::Sprintf
             | RuntimeFnId::Strstr
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrReplace
@@ -2259,6 +2760,7 @@ fn indexed_int_array(value: &crate::ir::Value) -> bool {
 
 /// Validates one direct builtin's operand and result storage before planning.
 pub(super) fn direct_builtin_shape_issue(
+    module: &Module,
     function: &Function,
     call: &Instruction,
     target: RuntimeFnId,
@@ -2325,6 +2827,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Wordwrap {
         return wordwrap_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Sprintf {
+        return sprintf_shape_issue(function, module, call);
     }
     if target == RuntimeFnId::Strstr {
         return strstr_shape_issue(function, call);
@@ -2551,6 +3056,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Wordwrap {
         return lower_wordwrap(ctx, inst);
+    }
+    if target == RuntimeFnId::Sprintf {
+        return lower_sprintf(ctx, inst);
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);
@@ -3968,7 +4476,7 @@ mod tests {
             .instructions
             .last()
             .expect("the probe emitted a call");
-        direct_builtin_shape_issue(function, call, target)
+        direct_builtin_shape_issue(&probe_module(), function, call, target)
     }
 
     /// Builds `in_array($needle, $haystack, $strict)` with the given strict operand.
@@ -4140,7 +4648,7 @@ mod tests {
             PhpType::Str,
         );
         let call = chr.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&chr, call, RuntimeFnId::Chr), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &chr, call, RuntimeFnId::Chr), None);
 
         let ord = scalar_conversion_call(
             RuntimeFnId::Ord,
@@ -4150,7 +4658,7 @@ mod tests {
             PhpType::Int,
         );
         let call = ord.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&ord, call, RuntimeFnId::Ord), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &ord, call, RuntimeFnId::Ord), None);
 
         // Each refuses the other's operand typing, and both refuse a juggled one.
         let swapped = scalar_conversion_call(
@@ -4161,7 +4669,7 @@ mod tests {
             PhpType::Str,
         );
         let call = swapped.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&swapped, call, RuntimeFnId::Chr).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &swapped, call, RuntimeFnId::Chr).is_some());
 
         let juggled = scalar_conversion_call(
             RuntimeFnId::Ord,
@@ -4171,7 +4679,7 @@ mod tests {
             PhpType::Int,
         );
         let call = juggled.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&juggled, call, RuntimeFnId::Ord).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &juggled, call, RuntimeFnId::Ord).is_some());
 
         // A wrong RESULT typing is refused too: `chr` cannot answer an int.
         let bad_result = scalar_conversion_call(
@@ -4182,7 +4690,7 @@ mod tests {
             PhpType::Int,
         );
         let call = bad_result.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&bad_result, call, RuntimeFnId::Chr).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &bad_result, call, RuntimeFnId::Chr).is_some());
     }
 
     /// Verifies the PHP 8.5 deprecations are the ONLY thing the profile changes about chr/ord.
@@ -4282,7 +4790,7 @@ mod tests {
         ] {
             let ok = shaped_call(target, &[str_arg.clone()], IrType::Str, PhpType::Str);
             let call = ok.instructions.last().expect("the probe emitted a call");
-            assert_eq!(direct_builtin_shape_issue(&ok, call, target), None);
+            assert_eq!(direct_builtin_shape_issue(&probe_module(), &ok, call, target), None);
 
             let two = shaped_call(
                 target,
@@ -4292,7 +4800,7 @@ mod tests {
             );
             let call = two.instructions.last().expect("the probe emitted a call");
             assert!(
-                direct_builtin_shape_issue(&two, call, target).is_some(),
+                direct_builtin_shape_issue(&probe_module(), &two, call, target).is_some(),
                 "{target:?} takes one string"
             );
         }
@@ -4303,14 +4811,14 @@ mod tests {
                 let ok = shaped_call(target, &operands, IrType::Str, PhpType::Str);
                 let call = ok.instructions.last().expect("the probe emitted a call");
                 assert_eq!(
-                    direct_builtin_shape_issue(&ok, call, target),
+                    direct_builtin_shape_issue(&probe_module(), &ok, call, target),
                     None,
                     "{target:?} accepts {arity} operand(s)"
                 );
             }
             let three = shaped_call(target, &vec![str_arg.clone(); 3], IrType::Str, PhpType::Str);
             let call = three.instructions.last().expect("the probe emitted a call");
-            assert!(direct_builtin_shape_issue(&three, call, target).is_some());
+            assert!(direct_builtin_shape_issue(&probe_module(), &three, call, target).is_some());
         }
 
         for arity in 2..=3 {
@@ -4319,7 +4827,7 @@ mod tests {
             let ok = shaped_call(RuntimeFnId::Substr, &operands, IrType::Str, PhpType::Str);
             let call = ok.instructions.last().expect("the probe emitted a call");
             assert_eq!(
-                direct_builtin_shape_issue(&ok, call, RuntimeFnId::Substr),
+                direct_builtin_shape_issue(&probe_module(), &ok, call, RuntimeFnId::Substr),
                 None,
                 "substr accepts {arity} operands"
             );
@@ -4332,7 +4840,7 @@ mod tests {
             PhpType::Str,
         );
         let call = bad_offset.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&bad_offset, call, RuntimeFnId::Substr).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &bad_offset, call, RuntimeFnId::Substr).is_some());
 
         // `str_repeat` takes a subject and a count, and refuses a string where the count goes.
         let ok = shaped_call(
@@ -4343,7 +4851,7 @@ mod tests {
         );
         let call = ok.instructions.last().expect("the probe emitted a call");
         assert_eq!(
-            direct_builtin_shape_issue(&ok, call, RuntimeFnId::StrRepeat),
+            direct_builtin_shape_issue(&probe_module(), &ok, call, RuntimeFnId::StrRepeat),
             None
         );
         let bad_count = shaped_call(
@@ -4353,7 +4861,7 @@ mod tests {
             PhpType::Str,
         );
         let call = bad_count.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&bad_count, call, RuntimeFnId::StrRepeat).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &bad_count, call, RuntimeFnId::StrRepeat).is_some());
 
         // `strpos` answers PHP's `int|false`, which only a runtime-tagged Mixed cell can carry.
         let searched = shaped_call(
@@ -4364,7 +4872,7 @@ mod tests {
         );
         let call = searched.instructions.last().expect("the probe emitted a call");
         assert_eq!(
-            direct_builtin_shape_issue(&searched, call, RuntimeFnId::Strpos),
+            direct_builtin_shape_issue(&probe_module(), &searched, call, RuntimeFnId::Strpos),
             None
         );
         // An Int result would lose the difference between a match at offset 0 and a miss.
@@ -4375,7 +4883,7 @@ mod tests {
             PhpType::Int,
         );
         let call = as_int.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&as_int, call, RuntimeFnId::Strpos).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &as_int, call, RuntimeFnId::Strpos).is_some());
         // `str_replace` takes three strings; an array form is a different operation.
         let ok = shaped_call(
             RuntimeFnId::StrReplace,
@@ -4385,7 +4893,7 @@ mod tests {
         );
         let call = ok.instructions.last().expect("the probe emitted a call");
         assert_eq!(
-            direct_builtin_shape_issue(&ok, call, RuntimeFnId::StrReplace),
+            direct_builtin_shape_issue(&probe_module(), &ok, call, RuntimeFnId::StrReplace),
             None
         );
         let with_count = shaped_call(
@@ -4395,7 +4903,7 @@ mod tests {
             PhpType::Str,
         );
         let call = with_count.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&with_count, call, RuntimeFnId::StrReplace).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &with_count, call, RuntimeFnId::StrReplace).is_some());
 
         // `sha1` answers a 40-character hex string from exactly one string.
         let digest = shaped_call(
@@ -4405,7 +4913,7 @@ mod tests {
             PhpType::Str,
         );
         let call = digest.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&digest, call, RuntimeFnId::Sha1), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &digest, call, RuntimeFnId::Sha1), None);
         // The digest is fixed-width, and every SHA-1 word is big-endian.
         assert!(RT_SHA1_HEX.contains("(local.get $out) (i64.const 40)"));
         assert!(
@@ -4423,7 +4931,7 @@ mod tests {
         );
         let call = escaped.instructions.last().expect("the probe emitted a call");
         assert_eq!(
-            direct_builtin_shape_issue(&escaped, call, RuntimeFnId::Htmlspecialchars),
+            direct_builtin_shape_issue(&probe_module(), &escaped, call, RuntimeFnId::Htmlspecialchars),
             None
         );
         // `&#039;` is the ENT_QUOTES default since 8.1; leaving `'` alone would be the 8.0 rule.
@@ -4447,7 +4955,7 @@ mod tests {
             PhpType::Str,
         );
         let call = md5.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&md5, call, RuntimeFnId::Md5), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &md5, call, RuntimeFnId::Md5), None);
         assert!(RT_MD5_HEX.contains("(local.get $out) (i64.const 32)"));
         // The K table is what the algorithm cannot compute: WebAssembly has no `sin`.
         assert!(RT_MD5_K.contains("(i32.const 0xd76aa478)"), "K[0]");
@@ -4471,7 +4979,7 @@ mod tests {
             PhpType::Int,
         );
         let call = hashed.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&hashed, call, RuntimeFnId::Crc32), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &hashed, call, RuntimeFnId::Crc32), None);
         assert!(
             RT_CRC32.contains("(i64.const 0xFFFFFFFF)"),
             "the result is masked to 32 bits, not sign-extended"
@@ -4495,7 +5003,7 @@ mod tests {
             );
             let call = ok.instructions.last().expect("the probe emitted a call");
             assert_eq!(
-                direct_builtin_shape_issue(&ok, call, RuntimeFnId::Strstr),
+                direct_builtin_shape_issue(&probe_module(), &ok, call, RuntimeFnId::Strstr),
                 None,
                 "strstr accepts {arity} operands"
             );
@@ -4508,7 +5016,7 @@ mod tests {
             PhpType::Mixed,
         );
         let call = bad_flag.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&bad_flag, call, RuntimeFnId::Strstr).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &bad_flag, call, RuntimeFnId::Strstr).is_some());
 
         // `wordwrap` takes an optional width; a custom break or cut flag is a different path.
         for arity in 1..=2 {
@@ -4519,7 +5027,7 @@ mod tests {
             let wrapped = shaped_call(RuntimeFnId::Wordwrap, &operands, IrType::Str, PhpType::Str);
             let call = wrapped.instructions.last().expect("the probe emitted a call");
             assert_eq!(
-                direct_builtin_shape_issue(&wrapped, call, RuntimeFnId::Wordwrap),
+                direct_builtin_shape_issue(&probe_module(), &wrapped, call, RuntimeFnId::Wordwrap),
                 None,
                 "wordwrap accepts {arity} operand(s)"
             );
@@ -4531,7 +5039,7 @@ mod tests {
             PhpType::Str,
         );
         let call = with_break.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&with_break, call, RuntimeFnId::Wordwrap).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &with_break, call, RuntimeFnId::Wordwrap).is_some());
         // The fast path never changes the length: it replaces a space, it does not insert.
         assert!(
             RT_WORDWRAP.contains("(local.get $out) (local.get $olen)"),
@@ -4552,7 +5060,7 @@ mod tests {
             );
             let call = cut.instructions.last().expect("the probe emitted a call");
             assert_eq!(
-                direct_builtin_shape_issue(&cut, call, RuntimeFnId::StrSplit),
+                direct_builtin_shape_issue(&probe_module(), &cut, call, RuntimeFnId::StrSplit),
                 None,
                 "str_split accepts {arity} operand(s)"
             );
@@ -4566,7 +5074,7 @@ mod tests {
             PhpType::Array(Box::new(PhpType::Str)),
         );
         let call = split.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&split, call, RuntimeFnId::Explode), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &split, call, RuntimeFnId::Explode), None);
         let with_limit = shaped_call(
             RuntimeFnId::Explode,
             &[str_arg.clone(), str_arg.clone(), int_arg.clone()],
@@ -4574,7 +5082,7 @@ mod tests {
             PhpType::Array(Box::new(PhpType::Str)),
         );
         let call = with_limit.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&with_limit, call, RuntimeFnId::Explode).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &with_limit, call, RuntimeFnId::Explode).is_some());
 
         // `implode` reads an array, so its element type is part of the contract.
         let str_array = (IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Str)));
@@ -4585,7 +5093,7 @@ mod tests {
             PhpType::Str,
         );
         let call = joined.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&joined, call, RuntimeFnId::Implode), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &joined, call, RuntimeFnId::Implode), None);
         // A provably empty array is fine: the element read never happens.
         let empty = shaped_call(
             RuntimeFnId::Implode,
@@ -4597,7 +5105,7 @@ mod tests {
             PhpType::Str,
         );
         let call = empty.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&empty, call, RuntimeFnId::Implode), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &empty, call, RuntimeFnId::Implode), None);
         // An int or Mixed element is a DIFFERENT slot layout, not a coercion this can do.
         for element in [PhpType::Int, PhpType::Mixed] {
             let wrong = shaped_call(
@@ -4611,7 +5119,7 @@ mod tests {
             );
             let call = wrong.instructions.last().expect("the probe emitted a call");
             assert!(
-                direct_builtin_shape_issue(&wrong, call, RuntimeFnId::Implode).is_some(),
+                direct_builtin_shape_issue(&probe_module(), &wrong, call, RuntimeFnId::Implode).is_some(),
                 "an array of {element:?} is not readable as (pointer, length) slots"
             );
         }
@@ -4624,7 +5132,7 @@ mod tests {
             PhpType::Mixed,
         );
         let call = last.instructions.last().expect("the probe emitted a call");
-        assert_eq!(direct_builtin_shape_issue(&last, call, RuntimeFnId::Strrpos), None);
+        assert_eq!(direct_builtin_shape_issue(&probe_module(), &last, call, RuntimeFnId::Strrpos), None);
         assert!(
             RT_STR_RFIND.contains("(local.set $at (i64.sub (local.get $hlen) (local.get $nlen)))"),
             "the scan starts at the rightmost offset that still fits"
@@ -4638,7 +5146,7 @@ mod tests {
             PhpType::Mixed,
         );
         let call = with_offset.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&with_offset, call, RuntimeFnId::Strpos).is_some());
+        assert!(direct_builtin_shape_issue(&probe_module(), &with_offset, call, RuntimeFnId::Strpos).is_some());
 
         for target in [RuntimeFnId::Strcmp, RuntimeFnId::Strcasecmp] {
             let ok = shaped_call(
@@ -4648,7 +5156,7 @@ mod tests {
                 PhpType::Int,
             );
             let call = ok.instructions.last().expect("the probe emitted a call");
-            assert_eq!(direct_builtin_shape_issue(&ok, call, target), None);
+            assert_eq!(direct_builtin_shape_issue(&probe_module(), &ok, call, target), None);
 
             // A comparison answers an int, never a bool: PHP's result is a byte distance.
             let as_bool = shaped_call(
@@ -4658,7 +5166,7 @@ mod tests {
                 PhpType::Bool,
             );
             let call = as_bool.instructions.last().expect("the probe emitted a call");
-            assert!(direct_builtin_shape_issue(&as_bool, call, target).is_some());
+            assert!(direct_builtin_shape_issue(&probe_module(), &as_bool, call, target).is_some());
         }
     }
 
@@ -4719,6 +5227,84 @@ mod tests {
             PhpType::Str,
         );
         assert!(!crate::codegen_wasm::function::raises_runtime_error(&quiet));
+    }
+
+    /// An empty module for shape checks that do not depend on module data.
+    ///
+    /// Only `sprintf` reads the module — it recovers its literal format from the interned
+    /// strings — and no probe here builds one, so an empty module is the honest stand-in.
+    fn probe_module() -> Module {
+        Module::new(crate::codegen_support::platform::Target::wasm())
+    }
+
+    /// Verifies the format parser applies php-src's flag rules, not C's.
+    ///
+    /// Every expectation here was measured against php-src 8.5.6 before the parser was written,
+    /// and each is a place C and PHP disagree — so a parser transcribed from the C manual would
+    /// pass a naive test and fail these.
+    #[test]
+    fn sprintf_format_parser_follows_php_flag_rules() {
+        use FormatPiece::{Conversion, Literal};
+        let conv = |p: &FormatPiece| match p {
+            Conversion { left, plus, pad, width, precision, argument, conversion } => {
+                (*left, *plus, *pad, *width, *precision, *argument, *conversion)
+            }
+            other => panic!("expected a conversion, got {other:?}"),
+        };
+
+        // The LAST padding flag wins: `%'x03d` pads with zeros, `%0'x3d` pads with x.
+        assert_eq!(conv(&parse_sprintf_format(b"%'x03d", 1).unwrap()[0]).2, b'0');
+        assert_eq!(conv(&parse_sprintf_format(b"%0'x3d", 1).unwrap()[0]).2, b'x');
+
+        // `-` cancels a ZERO pad on the numeric conversions but NOT on %s, and never cancels
+        // an explicit `'X`. Measured: `%-08d` is spaces, `%-03s` is zeros, `%'x-3d` is x.
+        assert_eq!(conv(&parse_sprintf_format(b"%-08d", 1).unwrap()[0]).2, b' ');
+        assert_eq!(conv(&parse_sprintf_format(b"%-03s", 1).unwrap()[0]).2, b'0');
+        assert_eq!(conv(&parse_sprintf_format(b"%'x-3d", 1).unwrap()[0]).2, b'x');
+
+        // `%%` becomes a one-byte run pointing at the FIRST `%`, so every run stays a
+        // contiguous slice of the format and needs no segment of its own.
+        assert_eq!(
+            parse_sprintf_format(b"a%%b", 0).unwrap(),
+            vec![
+                Literal { offset: 0, length: 1 },
+                Literal { offset: 1, length: 1 },
+                Literal { offset: 3, length: 1 },
+            ]
+        );
+        assert_eq!(
+            parse_sprintf_format(b"%%", 0).unwrap(),
+            vec![Literal { offset: 0, length: 1 }]
+        );
+
+        // An explicit argument number is zero-based here and may repeat.
+        let repeated = parse_sprintf_format(b"%1$s%1$s", 1).unwrap();
+        assert_eq!(conv(&repeated[0]).5, 0);
+        assert_eq!(conv(&repeated[1]).5, 0);
+        // Positional arguments advance independently of explicit ones.
+        let mixed = parse_sprintf_format(b"%s%d", 2).unwrap();
+        assert_eq!(conv(&mixed[0]).5, 0);
+        assert_eq!(conv(&mixed[1]).5, 1);
+
+        // Width and precision, including an empty precision meaning zero.
+        let sized = conv(&parse_sprintf_format(b"%8.2f", 1).unwrap()[0]);
+        assert_eq!((sized.3, sized.4), (8, Some(2)));
+        assert_eq!(conv(&parse_sprintf_format(b"%.s", 1).unwrap()[0]).4, Some(0));
+
+        // Refused rather than guessed.
+        for (format, why) in [
+            (&b"%x"[..], "a conversion outside the subset"),
+            (&b"%-08.2f"[..], "php-src loses the precision for '-' with '0' on %f"),
+            (&b"%"[..], "a lone trailing percent"),
+            (&b"%d"[..], "more conversions than arguments"),
+        ] {
+            let count = if format == b"%d" { 0 } else { 1 };
+            assert!(
+                parse_sprintf_format(format, count).is_err(),
+                "{why} must be refused: {}",
+                String::from_utf8_lossy(format)
+            );
+        }
     }
 
     /// Verifies the two url codecs differ exactly where php-src says they do.

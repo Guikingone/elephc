@@ -4286,6 +4286,98 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `sprintf` reproduces php-src's formatting, which is NOT C's.
+///
+/// The format is required to be a LITERAL, so it is parsed once at compile time and the module
+/// carries a fixed sequence of appends rather than a format interpreter — which is what an AOT
+/// compiler should do with a format it already knows. A computed format is refused by the audit.
+///
+/// Three rules here are php-src's and not C's, each measured before the parser was written:
+/// the LAST padding flag wins, so `%'x03d` pads with zeros while `%0'x3d` pads with `x`; `-`
+/// cancels a ZERO pad on `%d` but NOT on `%s`, so `%-08d` is space-padded while `%-03s` is
+/// zero-padded; and zeros go AFTER the sign while spaces go before it, making `%05d` of -7
+/// come out `-0007`.
+#[test]
+fn test_cli_wasm_sprintf_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_sprintf");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function d(int $n): void { echo "[", sprintf("%d", $n), "][", sprintf("%5d", $n), "][", sprintf("%-5d", $n), "][", sprintf("%05d", $n), "][", sprintf("%+d", $n), "]\n"; }
+function s(string $v): void { echo "[", sprintf("%s", $v), "][", sprintf("%5s", $v), "][", sprintf("%-5s", $v), "][", sprintf("%.2s", $v), "][", sprintf("%05s", $v), "]\n"; }
+d(0); d(7); d(-7); d(12345);
+s(""); s("ab"); s("abcdef");
+echo sprintf("a%%b"), "|", sprintf("%s-%d", "x", 5), "|", sprintf("%2\$s %1\$s", "world", "hello"), "|", sprintf("%1\$s%1\$s", "ab"), "\n";
+echo sprintf("literal"), "|", sprintf("%d%%", 50), "|", sprintf("[%5s|%-5d]", "ab", 7), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile sprintf to WASM");
+    assert!(
+        output.status.success(),
+        "sprintf compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run sprintf under Node");
+    assert!(
+        run.status.success(),
+        "sprintf trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "[0][    0][0    ][00000][+0]\n",
+            "[7][    7][7    ][00007][+7]\n",
+            "[-7][   -7][-7   ][-0007][-7]\n",
+            "[12345][12345][12345][12345][+12345]\n",
+            "[][     ][     ][][00000]\n",
+            "[ab][   ab][ab   ][ab][000ab]\n",
+            "[abcdef][abcdef][abcdef][ab][abcdef]\n",
+            "a%b|x-5|hello world|abab\n",
+            "literal|50%|[   ab|7    ]\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `wordwrap` reproduces php-src's in-place line breaking.
 ///
 /// The transform REPLACES a space with the break rather than inserting one, so the result has the

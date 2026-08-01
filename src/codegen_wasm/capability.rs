@@ -3636,7 +3636,7 @@ fn runtime_function_shape_issue(
     target: RuntimeFnId,
 ) -> Option<String> {
     if super::builtins::is_direct_builtin(target) {
-        return super::builtins::direct_builtin_shape_issue(function, call, target);
+        return super::builtins::direct_builtin_shape_issue(module, function, call, target);
     }
     match target {
         RuntimeFnId::GetClass => get_class_shape_issue(function, call),
@@ -4499,6 +4499,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Explode
         | RuntimeFnId::StrSplit
         | RuntimeFnId::Wordwrap
+        | RuntimeFnId::Sprintf
         | RuntimeFnId::Strstr
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
@@ -4835,7 +4836,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::MbStrlen
         | RuntimeFnId::NumberFormat
         | RuntimeFnId::Printf
-        | RuntimeFnId::Sprintf
         | RuntimeFnId::Sscanf
         | RuntimeFnId::StrIreplace
         | RuntimeFnId::SubstrReplace
