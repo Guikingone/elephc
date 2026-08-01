@@ -2304,6 +2304,28 @@ fn sprintf_format_segment(ctx: &FnCtx, value: crate::ir::ValueId) -> Result<(u32
 
 /// Lowers `sprintf` with a literal format into a fixed sequence of appends.
 fn lower_sprintf(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    emit_formatted_string(ctx, inst)?;
+    store_result(ctx, inst)
+}
+
+/// Lowers `printf`: the same formatting, written to stdout, answering the BYTE count.
+///
+/// PHP returns the number of BYTES written rather than characters, so `printf("h\xc3\xa9")`
+/// answers 3. The length is already on the stack from the shared builder, which is why this is
+/// the same work as `sprintf` plus one write.
+fn lower_printf(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let length = ctx.fresh_temp(super::wat::ValType::I64);
+    emit_formatted_string(ctx, inst)?;
+    ctx.fb
+        .ins(&format!("local.tee {length}"), "keep the byte count to answer with");
+    ctx.fb.ins("call $__rt_echo_str", "write the formatted bytes");
+    ctx.fb
+        .ins(&format!("local.get {length}"), "PHP answers the byte count");
+    store_result(ctx, inst)
+}
+
+/// Builds the formatted string, leaving `(pointer, length)` on the stack.
+fn emit_formatted_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let format_value = operand(inst, 0)?;
     let format = sprintf_literal_format(ctx.function, ctx.module, format_value)
         .ok_or_else(|| WasmError::Unsupported("sprintf format is not a literal".to_string()))?;
@@ -2405,7 +2427,7 @@ fn lower_sprintf(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     ctx.fb.ins(&format!("local.get {acc_ptr}"), "the formatted string");
     ctx.fb.ins(&format!("local.get {acc_len}"), "its length");
-    store_result(ctx, inst)
+    Ok(())
 }
 
 /// Validates `sprintf`: a LITERAL format whose conversions match the argument types.
@@ -2413,6 +2435,7 @@ fn sprintf_shape_issue(
     function: &Function,
     module: &Module,
     call: &Instruction,
+    target: RuntimeFnId,
 ) -> Option<String> {
     let Some(format_value) = call.operands.first() else {
         return Some("sprintf needs a format".to_string());
@@ -2456,12 +2479,18 @@ fn sprintf_shape_issue(
             ));
         }
     }
+    // `printf` writes the string and answers its BYTE count; `sprintf` answers the string.
+    let (want_ir, want_php) = if target == RuntimeFnId::Printf {
+        (IrType::I64, PhpType::Int)
+    } else {
+        (IrType::Str, PhpType::Str)
+    };
     if call.result.is_none()
-        || call.result_type != IrType::Str
-        || call.result_php_type.codegen_repr() != PhpType::Str
+        || call.result_type != want_ir
+        || call.result_php_type.codegen_repr() != want_php
     {
         return Some(format!(
-            "sprintf result {:?}/{:?} is not the expected Str/Str",
+            "{target:?} result {:?}/{:?} is not the expected {want_ir:?}/{want_php:?}",
             call.result_type,
             call.result_php_type.codegen_repr()
         ));
@@ -2916,6 +2945,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::StrSplit
             | RuntimeFnId::Wordwrap
             | RuntimeFnId::Sprintf
+            | RuntimeFnId::Printf
             | RuntimeFnId::Strstr
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrReplace
@@ -3013,8 +3043,8 @@ pub(super) fn direct_builtin_shape_issue(
     if target == RuntimeFnId::Wordwrap {
         return wordwrap_shape_issue(function, call);
     }
-    if target == RuntimeFnId::Sprintf {
-        return sprintf_shape_issue(function, module, call);
+    if matches!(target, RuntimeFnId::Sprintf | RuntimeFnId::Printf) {
+        return sprintf_shape_issue(function, module, call, target);
     }
     if target == RuntimeFnId::Strstr {
         return strstr_shape_issue(function, call);
@@ -3244,6 +3274,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Sprintf {
         return lower_sprintf(ctx, inst);
+    }
+    if target == RuntimeFnId::Printf {
+        return lower_printf(ctx, inst);
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);

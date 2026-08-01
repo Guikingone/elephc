@@ -4286,6 +4286,96 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `printf` writes the formatted bytes and answers their COUNT.
+///
+/// It is `sprintf` plus one write, and shares the same builder, so the interesting part is the
+/// return value: PHP answers the number of BYTES, not characters, which `printf("h\xc3\xa9")`
+/// pins at 3 rather than 2.
+#[test]
+fn test_cli_wasm_printf_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_printf");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function p(int $n, string $s, float $x): void {
+    $a = printf("%d-%s|%.2f\n", $n, $s, $x);
+    echo "ret=", $a, "\n";
+}
+p(42, "ab", 1.5); p(-7, "", 2.675);
+$b = printf("literal\n"); echo "ret=", $b, "\n";
+$c = printf(""); echo "ret=", $c, "\n";
+$d = printf("h\xc3\xa9"); echo "|ret=", $d, "\n";
+$e = printf("%05d|%-5s|%+.1f\n", 7, "x", -2.25); echo "ret=", $e, "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile printf to WASM");
+    assert!(
+        output.status.success(),
+        "printf compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run printf under Node");
+    assert!(
+        run.status.success(),
+        "printf trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "42-ab|1.50\n",
+            "ret=11\n",
+            "-7-|2.67\n",
+            "ret=9\n",
+            "literal\n",
+            "ret=8\n",
+            "ret=0\n",
+            "hé|ret=3\n",
+            "00007|x    |-2.2\n",
+            "ret=17\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `sprintf`'s `%f` rounds the EXACT binary value with ties-to-even.
 ///
 /// This is C's rule and NOT `number_format`'s, which is the distinction worth pinning:

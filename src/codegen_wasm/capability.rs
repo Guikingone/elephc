@@ -4500,6 +4500,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StrSplit
         | RuntimeFnId::Wordwrap
         | RuntimeFnId::Sprintf
+        | RuntimeFnId::Printf
         | RuntimeFnId::Strstr
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
@@ -4835,7 +4836,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::MbEregMatch
         | RuntimeFnId::MbStrlen
         | RuntimeFnId::NumberFormat
-        | RuntimeFnId::Printf
         | RuntimeFnId::Sscanf
         | RuntimeFnId::StrIreplace
         | RuntimeFnId::SubstrReplace
