@@ -57,6 +57,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_TRIM_MATCHES);
     wm.add_raw_func(RT_STR_TRIM);
     wm.add_raw_func(RT_STR_SUBSTR);
+    wm.add_raw_func(RT_STR_REPEAT);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -813,6 +814,34 @@ const RT_STR_SUBSTR: &str = r#"(func $__rt_str_substr (param $ptr i32) (param $l
   (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
 "#;
 
+/// `__rt_str_repeat`: owns a string repeated a non-negative number of times.
+///
+/// The caller has already refused a negative count, so this only has to handle 0 — which yields
+/// the empty string, not a failure — and the ordinary case. `__rt_checked_layout` inside
+/// `__rt_str_alloc` is what rejects a product that would overflow wasm32 rather than wrapping.
+const RT_STR_REPEAT: &str = r#"(func $__rt_str_repeat (param $ptr i32) (param $len i64) (param $times i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $i i64)                                                  ;; source cursor within one copy
+  (local $left i64)                                               ;; copies still to write
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $out (call $__rt_str_alloc (i64.mul (local.get $len) (local.get $times))))
+  (local.set $left (local.get $times))                            ;; every copy still pending
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $done (loop $copies
+    (br_if $done (i64.le_s (local.get $left) (i64.const 0)))      ;; zero copies is the empty string
+    (local.set $i (i64.const 0))                                  ;; restart at the source
+    (block $end (loop $bytes
+      (br_if $end (i64.ge_s (local.get $i) (local.get $len)))     ;; one whole copy written
+      (i32.store8 (i32.add (local.get $out) (local.get $w))
+        (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))       ;; w++
+      (local.set $i (i64.add (local.get $i) (i64.const 1)))       ;; i++
+      (br $bytes)))
+    (local.set $left (i64.sub (local.get $left) (i64.const 1)))   ;; one fewer copy to go
+    (br $copies)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -1082,6 +1111,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Ltrim
             | RuntimeFnId::Rtrim
             | RuntimeFnId::Substr
+            | RuntimeFnId::StrRepeat
     )
 }
 
@@ -1152,6 +1182,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Substr {
         return substr_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::StrRepeat {
+        return str_repeat_shape_issue(function, call);
     }
     if matches!(
         target,
@@ -1336,6 +1369,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Substr {
         return lower_substr(ctx, inst);
+    }
+    if target == RuntimeFnId::StrRepeat {
+        return lower_str_repeat(ctx, inst);
     }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
@@ -1785,6 +1821,76 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     ctx.fb.ins("call $__rt_str_substr", "own the selected bytes");
     store_result(ctx, inst)
+}
+
+/// The `__rt_fail` code PHP's negative-`str_repeat` `ValueError` reports under.
+const STR_REPEAT_NEGATIVE_FAILURE_CODE: i32 = 11;
+
+/// Lowers `str_repeat`, refusing a negative count the way PHP does.
+///
+/// PHP does not clamp a negative `$times` to zero: it raises a `ValueError`, which an ordinary
+/// `catch` receives. The guard therefore goes through the shared runtime-failure path so it is
+/// RAISED where the module can catch it and reported as a fatal where it cannot — the same
+/// treatment division by zero gets. The count is spilled to a local because the guard reads it
+/// before the helper consumes it.
+fn lower_str_repeat(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let times = ctx.fb.local("__repeat_times", super::wat::ValType::I64);
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb
+        .ins(&format!("local.set {times}"), "spill the repeat count");
+    ctx.fb
+        .ins(&format!("local.get {times}"), "repeat count");
+    ctx.fb.ins("i64.const 0", "PHP's lower bound");
+    ctx.fb.ins("i64.lt_s", "negative count?");
+    ctx.fb.ins("if", "str_repeat() rejects a negative count");
+    super::inst::emit_runtime_failure(
+        ctx,
+        STR_REPEAT_NEGATIVE_FAILURE_CODE,
+        "str_repeat() negative count",
+    );
+    ctx.fb.ins("end", "end negative-count guard");
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb
+        .ins(&format!("local.get {times}"), "the validated repeat count");
+    ctx.fb
+        .ins("call $__rt_str_repeat", "own the repeated bytes");
+    store_result(ctx, inst)
+}
+
+/// Validates `str_repeat`: a string subject and an integer count.
+fn str_repeat_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [subject, times] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected a subject and a count, got {} operands",
+            call.operands.len()
+        ));
+    };
+    for (operand, want_ir, want_php) in [
+        (subject, IrType::Str, PhpType::Str),
+        (times, IrType::I64, PhpType::Int),
+    ] {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if value.ir_type != want_ir || value.php_type.codegen_repr() != want_php {
+            return Some(format!(
+                "str_repeat operand is {:?}/{:?}, expected {want_ir:?}/{want_php:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "str_repeat result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
 }
 
 /// Validates `trim`, `ltrim` and `rtrim`: a string, and optionally a charlist string.
@@ -2468,6 +2574,27 @@ mod tests {
         );
         let call = bad_offset.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&bad_offset, call, RuntimeFnId::Substr).is_some());
+
+        // `str_repeat` takes a subject and a count, and refuses a string where the count goes.
+        let ok = shaped_call(
+            RuntimeFnId::StrRepeat,
+            &[str_arg.clone(), int_arg.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = ok.instructions.last().expect("the probe emitted a call");
+        assert_eq!(
+            direct_builtin_shape_issue(&ok, call, RuntimeFnId::StrRepeat),
+            None
+        );
+        let bad_count = shaped_call(
+            RuntimeFnId::StrRepeat,
+            &[str_arg.clone(), str_arg.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = bad_count.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&bad_count, call, RuntimeFnId::StrRepeat).is_some());
 
         for target in [RuntimeFnId::Strcmp, RuntimeFnId::Strcasecmp] {
             let ok = shaped_call(

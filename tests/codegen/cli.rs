@@ -3651,6 +3651,89 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `str_repeat` answers like php-src and RAISES php-src's ValueError.
+///
+/// PHP does not clamp a negative `$times` to zero, it raises a `ValueError` an ordinary `catch`
+/// receives — so this is the first builtin on this target whose failure is a PHP exception rather
+/// than a machine guard, and it reuses the raise path the arithmetic errors already take. A count
+/// of zero is NOT a failure: it answers the empty string.
+#[test]
+fn test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_str_repeat");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function r(string $s, int $n): string { return str_repeat($s, $n); }
+echo bin2hex(r("ab", 0)), "|", bin2hex(r("ab", 1)), "|", bin2hex(r("ab", 3)), "|", bin2hex(r("", 5)), "|", bin2hex(r("a", 7)), "\n";
+try { echo bin2hex(r("a", -1)), "\n"; } catch (\ValueError $e) { echo "caught|", get_class($e), "|", $e->getMessage(), "\n"; }
+echo "end\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile str_repeat to WASM");
+    assert!(
+        output.status.success(),
+        "str_repeat compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run str_repeat under Node");
+    if !run.status.success() && String::from_utf8_lossy(&run.stderr).contains("CompileError") {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        run.status.success(),
+        "the caught ValueError still killed the program: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "|6162|616261626162||61616161616161\n",
+            "caught|ValueError|str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n",
+            "end\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `chr` and `ord` reproduce php-src, including the values PHP does not reject.
 ///
 /// PHP does not refuse an out-of-range `chr`: it constrains the argument with `% 256`, bringing a

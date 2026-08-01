@@ -794,7 +794,7 @@ fn emit_zero_divisor_guard(
 ///
 /// The native backend currently raises only for the two `intdiv` guards and computes a raw
 /// machine result for the other three, so this target is the more faithful of the two here.
-fn emit_runtime_failure(ctx: &mut FnCtx, failure_code: i32, reason: &str) {
+pub(super) fn emit_runtime_failure(ctx: &mut FnCtx, failure_code: i32, reason: &str) {
     let has_main = ctx.module.functions.iter().any(|f| f.flags.is_main);
     if has_main {
         if let Some((class_name, message)) = super::objects::catchable_runtime_error(failure_code)

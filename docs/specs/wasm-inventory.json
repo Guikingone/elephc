@@ -5033,9 +5033,9 @@
     },
     "runtime_fn": {
       "total": 437,
-      "supported": 34,
+      "supported": 35,
       "excluded": 29,
-      "missing": 374,
+      "missing": 373,
       "rows": [
         {
           "name": "array_all",
@@ -10266,7 +10266,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -10301,7 +10302,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -10413,7 +10415,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -10535,7 +10538,7 @@
           "name": "str_repeat",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "str_repeat(...)"
           ],
@@ -10543,7 +10546,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
+            ]
+          }
         },
         {
           "name": "str_replace",
@@ -10612,7 +10623,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -10633,7 +10645,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -10696,7 +10709,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -10731,7 +10745,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -10752,7 +10767,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -10773,7 +10789,8 @@
             "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
             "tests": [
               "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
-              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php"
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error"
             ]
           }
         },
@@ -12343,14 +12360,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 172,
+    "supported": 173,
     "excluded": 47,
-    "missing": 493,
+    "missing": 492,
     "evidence_gaps": 177,
     "row_evidence_gaps": 176,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "493 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "492 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

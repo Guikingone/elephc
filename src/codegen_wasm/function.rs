@@ -348,11 +348,12 @@ pub(super) fn raises_runtime_error(function: &Function) -> bool {
         ) || matches!(
             inst.immediate,
             Some(Immediate::RuntimeCall(
-                RuntimeCallTarget::Function(RuntimeFnId::Intdiv)
-                    | RuntimeCallTarget::ProfiledFunction {
-                        target: RuntimeFnId::Intdiv,
-                        ..
-                    }
+                RuntimeCallTarget::Function(
+                    RuntimeFnId::Intdiv | RuntimeFnId::StrRepeat
+                ) | RuntimeCallTarget::ProfiledFunction {
+                    target: RuntimeFnId::Intdiv | RuntimeFnId::StrRepeat,
+                    ..
+                }
             ))
         )
     })
