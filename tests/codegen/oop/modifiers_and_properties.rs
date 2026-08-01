@@ -581,6 +581,35 @@ var_dump($b->v);
     assert_eq!(out, "array(1) {\n  [0]=>\n  string(1) \"x\"\n}\n");
 }
 
+/// An indexed write to a `mixed` property covers both halves of PHP's rule (`php -n` 8.5.6
+/// verified): a `null` payload auto-vivifies into a fresh array, and a payload that already
+/// holds an array is extended in place. Both go through `__rt_mixed_array_set` via the runtime
+/// property-array-set fallback, whose `PhpType::Object(_)` arm resolves the inline slot with
+/// `known_class_mixed_property_offset` — the emitter behind the checker's `PhpType::Mixed`
+/// acceptance in `updated_array_property_assign_type`. Symfony shape: `ExceptionCaster.php:166`
+/// writes `$frame->value['arguments']` where `Stub::$value` is declared `mixed`.
+#[test]
+fn test_mixed_property_indexed_write_vivifies_null_and_extends_array() {
+    let out = compile_and_run(
+        r#"<?php
+class Box {
+    public mixed $v = null;
+}
+$b = new Box();
+$b->v["k"] = 1;
+var_dump($b->v);
+$c = new Box();
+$c->v = ["a" => 10];
+$c->v["b"] = 20;
+var_dump($c->v);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(1) {\n  [\"k\"]=>\n  int(1)\n}\narray(2) {\n  [\"a\"]=>\n  int(10)\n  [\"b\"]=>\n  int(20)\n}\n"
+    );
+}
+
 /// Campaign H1 PART C: an indexed write to a `true`-valued `array|bool` property does NOT
 /// vivify (PHP fatals "Cannot use a scalar value as an array"; elephc DEFERS the fatal per the
 /// JURY ADDENDUM and keeps the pre-existing silent-drop behavior — documented divergence). The

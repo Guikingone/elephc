@@ -646,6 +646,8 @@ fn updated_array_property_push_type(
 ///   for untyped properties.
 /// - For `AssocArray`: merges the key type with the index type and merges the value type with
 ///   the assigned value, preserving declared-type constraints.
+/// - For `Mixed`: accepts the write and keeps the property `Mixed` (boxed-cell storage, mutated
+///   in place by `__rt_mixed_array_set`, which also performs PHP's null/false auto-vivification).
 fn updated_array_property_assign_type(
     checker: &Checker,
     prop_ty: &PhpType,
@@ -720,6 +722,18 @@ fn updated_array_property_assign_type(
                 key: Box::new(merged_key),
                 value: Box::new(merged_value),
             })
+        }
+        PhpType::Mixed => {
+            // A `mixed`-typed property is a boxed runtime cell, exactly the representation
+            // `__rt_mixed_array_set` mutates: it inserts into a cell already holding an array and
+            // auto-vivifies a `null`/`false` payload into a fresh one, which is PHP's own rule
+            // (`php -n`: writing `$stub->value['k']` both extends an existing array and vivifies a
+            // null property). Lowering reaches that writer through the runtime property-array-set
+            // fallback in `ir_lower::stmt`, whose `PhpType::Object(_)` arm resolves the inline slot
+            // via `known_class_mixed_property_offset` — which admits precisely the properties whose
+            // `codegen_repr()` is `Mixed`, i.e. this arm. The property keeps its `Mixed` type: the
+            // cell's runtime tag, not a static type, records that it now holds an array.
+            Ok(prop_ty.clone())
         }
         PhpType::Union(members) if array_family_bool_void_union_accepts_write(members) => {
             // e.g. `array|false` (PHP's deprecated-but-working auto-conversion of `false` to
