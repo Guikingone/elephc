@@ -1339,7 +1339,7 @@ fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option
 
 /// Validates indexed-array write storage against the helper selected by WASM.
 ///
-/// The current runtime has exact layouts only for int/bool-like and string
+/// The current runtime has exact layouts only for int/bool-like, float and string
 /// arrays. `ArrayPush` additionally supports an already-boxed Mixed/Union cell,
 /// and BOXES a concrete scalar when the destination stores Mixed cells — which is
 /// what a heterogeneous array literal emits, since EIR pushes raw scalars into an
@@ -1400,11 +1400,14 @@ fn array_store_shape_issue(
             PhpType::Int | PhpType::Bool | PhpType::False,
         ) => element == source_php,
         (PhpType::Str, IrType::Str, PhpType::Str) => true,
+        // A float shares the int slot width; the array's value_type 2 records which it is.
+        (PhpType::Float, IrType::F64, PhpType::Float) => true,
         (
             PhpType::Void | PhpType::Never,
             IrType::I64,
             PhpType::Int | PhpType::Bool | PhpType::False,
         ) => true,
+        (PhpType::Void | PhpType::Never, IrType::F64, PhpType::Float) => true,
         (PhpType::Void | PhpType::Never, IrType::Str, PhpType::Str) => true,
         (PhpType::Mixed, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)
             if is_push =>

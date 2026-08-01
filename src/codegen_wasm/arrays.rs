@@ -36,6 +36,8 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_GROW);
     wm.add_raw_func(RT_ARRAY_PUSH_INT);
     wm.add_raw_func(RT_ARRAY_PUSH_STR);
+    wm.add_raw_func(RT_ARRAY_PUSH_FLOAT);
+    wm.add_raw_func(RT_ARRAY_GET_FLOAT);
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
     wm.add_raw_func(RT_ARRAY_GET_INT);
@@ -275,6 +277,48 @@ const RT_ARRAY_PUSH_INT: &str = r#"(func $__rt_array_push_int (param $array i32)
   (i64.store (local.get $slot) (local.get $value))          ;; write element
   (i64.store (local.get $array) (i64.add (local.get $len) (i64.const 1)))  ;; length++
   (local.get $array))                                                            ;; return the (possibly new) array
+"#;
+
+/// `__rt_array_push_float`: appends a float, shaping an empty array to 8-byte slots stamped
+/// `value_type` 2, and growing capacity when full. Returns the (possibly new) array.
+///
+/// A float shares the int slot width — the payload is the f64's bits — so this mirrors
+/// `__rt_array_push_int` byte for byte apart from the stamp. The stamp is what tells a runtime
+/// tag observer (and the native layout this is byte-identical to) that the payload is a float
+/// rather than an integer; `__rt_array_free_deep` treats both as scalars and frees directly.
+const RT_ARRAY_PUSH_FLOAT: &str = r#"(func $__rt_array_push_float (param $array i32) (param $value f64) (result i32)
+  (local $len i64)
+  (local $cap i64)
+  (local $slot i32)
+  (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as a float array
+    (then
+      (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 8))  ;; elem_size = 8
+      (i64.store (i32.sub (local.get $array) (i32.const 8))
+                 (i64.or (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const -32513)) (i64.const 512)))))  ;; value_type = 2 (float; 2 << 8 = 512)
+  (local.set $len (i64.load (local.get $array)))            ;; length
+  (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))  ;; capacity
+  (if (i64.ge_s (local.get $len) (local.get $cap))          ;; full -> grow
+    (then (local.set $array (call $__rt_array_grow (local.get $array)))))        ;; update array pointer after grow
+  (local.set $len (i64.load (local.get $array)))            ;; reload length (grow preserves it)
+  (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $len) (i64.const 8)))))  ;; slot = A+24+len*8
+  (f64.store (local.get $slot) (local.get $value))          ;; write element
+  (i64.store (local.get $array) (i64.add (local.get $len) (i64.const 1)))  ;; length++
+  (local.get $array))                                                            ;; return the (possibly new) array
+"#;
+
+/// `__rt_array_get_float`: reads the f64 element at `index`.
+///
+/// A miss answers NaN rather than the int path's null sentinel: every bit pattern is a valid
+/// float, so there is no spare value to reserve, and the callers that need to tell "missing" from
+/// "present" read through the boxed accessor instead.
+const RT_ARRAY_GET_FLOAT: &str = r#"(func $__rt_array_get_float (param $array i32) (param $index i64) (result f64)
+  (local $len i64)
+  (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> NaN
+    (then (return (f64.const nan))))
+  (local.set $len (i64.load (local.get $array)))            ;; length
+  (if (i64.ge_s (local.get $index) (local.get $len))        ;; out of bounds -> NaN
+    (then (return (f64.const nan))))
+  (f64.load (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8))))))  ;; slot[index]
 "#;
 
 /// `__rt_array_get_int`: reads the i64 element at `index`, returning the PHP null

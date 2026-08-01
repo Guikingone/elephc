@@ -5573,6 +5573,90 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies an array of FLOAT elements, which had no lowered storage at all.
+///
+/// A float shares the int slot width — the payload is the f64's bits — so this is
+/// `__rt_array_push_int` plus the `value_type` 2 stamp that records which it is, matching the
+/// native layout this is byte-identical to. `implode` renders each element with the same rule as
+/// an explicit `(string)` cast, which for a float only `__rt_mixed_cast_string` knows, so a float
+/// slot is boxed into a throwaway tag-2 cell and cast through it.
+#[test]
+fn test_cli_wasm_float_element_arrays_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_float_array");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function j(string $g, array $a): void { echo count($a), "[", implode($g, $a), "]|"; }
+j(",", [1.0, 100.0, 0.5, 1e15, 1e16, 1e-5]);
+j("-", [2.5]);
+j(",", [0.1, -0.0, 1e100, -1e-7, 3.14159265358979]);
+j("", [1.5, 2.5]);
+j(",", [INF, -INF, NAN]);
+j(",", [PHP_FLOAT_EPSILON, PHP_FLOAT_MAX, PHP_FLOAT_MIN]);
+j(",", [1.5, 2.5]);
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the float-array probe");
+    assert!(
+        output.status.success(),
+        "float-array compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the float-array probe under Node");
+    assert!(
+        run.status.success(),
+        "float-array probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected = concat!(
+        "6[1,100,0.5,1.0E+15,1.0E+16,1.0E-5]|1[2.5]|",
+        "5[0.1,-0,1.0E+100,-1.0E-7,3.1415926535898]|2[1.52.5]|",
+        "3[INF,-INF,NAN]|",
+        "3[2.2204460492503E-16,1.7976931348623E+308,2.2250738585072E-308]|2[1.5,2.5]|\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

@@ -2878,6 +2878,14 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb
                 .ins("call $__rt_array_push_int", "append int (may reallocate)");
         }
+        WasmRepr::F64(_) => {
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(
+                "call $__rt_array_push_float",
+                "append float into a value_type-2 array (may reallocate)",
+            );
+        }
         WasmRepr::Str { .. } => {
             ctx.emit_load_value(array)?;
             ctx.emit_load_value(value)?; // string pointer (i32) + length (i64)
