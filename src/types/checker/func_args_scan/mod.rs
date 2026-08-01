@@ -238,6 +238,52 @@ pub(crate) fn call_has_dynamic_spread(args: &[crate::parser::ast::Expr]) -> bool
     })
 }
 
+/// Returns the marked `"Class::method"` key of the arity-hungry implementation named
+/// `method` when exactly ONE marked key carries that name — the checker-side mirror of
+/// `crate::ir_lower::expr`'s `instance_method_arity_hungry_callee_key` name-only fallback,
+/// including its "give up when ambiguous" rule.
+///
+/// For an ordinary method the lookup is EXACT rather than merely conservative:
+/// `method_has_one_closed_world_implementation` only marks a method when its name resolves
+/// to a single implementation program-wide, so at most one marked key can ever end with
+/// `"::<method_key>"` and no unmarked class shares the name with a different ABI.
+/// Constructors are marked WITHOUT that gate, so several `"::__construct"` keys can be
+/// marked at once; returning `None` then is not a hole but the same answer lowering gives —
+/// it appends no hidden operand for an ambiguous name either, so no `panic!` is reachable.
+/// (Measured: `ContainerBuilder.php:1195`'s `$tryProxy->__construct(...$arguments)` on a
+/// gradual receiver is exactly this case, and rejecting it would be a false positive.)
+pub(crate) fn marked_method_key_for_name(marked: &HashSet<String>, method: &str) -> Option<String> {
+    let suffix = format!("::{}", crate::names::php_symbol_key(method));
+    let mut candidates = marked
+        .iter()
+        .filter(|candidate| candidate.ends_with(&suffix));
+    let candidate = candidates.next()?.clone();
+    candidates.next().is_none().then_some(candidate)
+}
+
+/// Returns the marked `"Class::method"` key a SINGULAR `class_name` receiver would dispatch
+/// to, mirroring `crate::ir_lower::expr`'s `instance_method_arity_hungry_callee_key` singular
+/// branch (which resolves the implementation through `ClassInfo::method_impl_classes` before
+/// consulting the marked set). Needed alongside `marked_method_key_for_name` because that
+/// name-only rule abstains on an ambiguous name, while lowering still resolves — and appends
+/// the hidden operand for — a statically typed receiver.
+pub(crate) fn marked_method_key_for_receiver_class(
+    marked: &HashSet<String>,
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    class_name: &str,
+    method: &str,
+) -> Option<String> {
+    let method_key = crate::names::php_symbol_key(method);
+    let class_info = classes.get(class_name)?;
+    let implementation = class_info
+        .method_impl_classes
+        .get(&method_key)
+        .map(String::as_str)
+        .unwrap_or(class_name);
+    let key = format!("{}::{}", implementation, method_key);
+    marked.contains(&key).then_some(key)
+}
+
 /// Builds the `CompileError` for a call into an arity-hungry function/method with a
 /// dynamic-length spread argument (see `call_has_dynamic_spread`) — the caller-visible
 /// counterpart of `crate::ir_lower::expr::func_args_intrinsics`'s defense-in-depth panic.

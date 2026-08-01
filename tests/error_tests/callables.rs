@@ -702,6 +702,44 @@ bad(new K());
     );
 }
 
+/// Same gate as `test_error_func_num_args_dynamic_spread`, on the METHOD call path.
+///
+/// Before this gate existed the method path had no caller-visible check at all and reached
+/// `crate::ir_lower::expr::func_args_intrinsics::compute_static_passed_count`'s
+/// defense-in-depth `panic!`, aborting the compiler with exit 101 instead of reporting a
+/// diagnostic. `php -n` runs the shape (`n=3`), so this is a documented elephc limitation,
+/// not PHP-invalid input.
+#[test]
+fn test_error_func_num_args_dynamic_spread_into_method() {
+    expect_error(
+        r#"<?php
+class Only {
+    public function tally(int $a = 0): void { echo func_num_args(); }
+}
+$dynamic = [1, 2, 3];
+(new Only())->tally(...$dynamic);
+"#,
+        "cannot be called with a dynamic-length spread",
+    );
+}
+
+/// The constructor form of the same gate. Constructors are marked arity-hungry without the
+/// closed-world name check (they are direct allocation targets), so this path resolves the
+/// exact `"<impl>::__construct"` key from the allocated class rather than matching on name.
+#[test]
+fn test_error_func_num_args_dynamic_spread_into_constructor() {
+    expect_error(
+        r#"<?php
+class Ctor {
+    public function __construct(int $a = 0) { echo func_num_args(); }
+}
+$dynamic = [1, 2];
+new Ctor(...$dynamic);
+"#,
+        "cannot be called with a dynamic-length spread",
+    );
+}
+
 /// Negative control for `func_args_scan`'s closed-world gate: a genuine polymorphic OVERRIDE
 /// (two real bodies behind one method name) must STILL be refused. A receiver typed as the
 /// base class can dispatch to either body at runtime and only one of them expects the hidden

@@ -22,6 +22,54 @@ use super::super::super::Checker;
 use super::super::syntactic::wider_type_syntactic;
 
 impl Checker {
+    /// Rejects a dynamic-length spread (`...$runtimeArray`) argument passed to a method that
+    /// calls `func_num_args()`/`func_get_args()`/`func_get_arg()`.
+    ///
+    /// The hidden trailing arity-count operand
+    /// (`crate::types::checker::func_args_scan::HIDDEN_ARGC_PARAM_NAME`) is a COMPILE-TIME
+    /// constant computed from the call site's argument list, so a spread whose element count
+    /// is only known at runtime cannot supply it. Free functions were already gated in
+    /// `crate::types::checker::functions::resolution::check_function_call`; without the same
+    /// gate here the method path reached
+    /// `crate::ir_lower::expr::func_args_intrinsics::compute_static_passed_count`'s
+    /// defense-in-depth `panic!` and aborted the whole compiler with exit 101 instead of
+    /// reporting a diagnostic.
+    /// `receiver_class` is the statically resolved singular receiver class, when the call site
+    /// has one; it makes the check exact for a constructor invoked explicitly as
+    /// `$typed->__construct(...)`, whose name alone is ambiguous.
+    pub(crate) fn reject_dynamic_spread_into_arity_hungry_method(
+        &self,
+        method: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+        receiver_class: Option<&str>,
+    ) -> Result<(), CompileError> {
+        use super::super::super::func_args_scan;
+        if !func_args_scan::call_has_dynamic_spread(args) {
+            return Ok(());
+        }
+        let marked_key = receiver_class
+            .and_then(|class_name| {
+                func_args_scan::marked_method_key_for_receiver_class(
+                    &self.func_args_functions,
+                    &self.classes,
+                    class_name,
+                    method,
+                )
+            })
+            .or_else(|| {
+                func_args_scan::marked_method_key_for_name(&self.func_args_functions, method)
+            });
+        let Some(marked_key) = marked_key else {
+            return Ok(());
+        };
+        let class_name = marked_key.split("::").next().unwrap_or(marked_key.as_str());
+        Err(func_args_scan::dynamic_spread_call_error(
+            &format!("Method '{}::{}'", class_name, method),
+            span,
+        ))
+    }
+
     /// Infers the type of a method call expression (`$obj->method(...)`).
     ///
     /// Dispatches to `infer_method_call_on_class_type` for `Object` types,
@@ -40,6 +88,12 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.reject_dynamic_spread_into_arity_hungry_method(
+            method,
+            args,
+            expr.span,
+            singular_receiver_class(&obj_ty).as_deref(),
+        )?;
         if let PhpType::Object(class_name) = &obj_ty {
             if self.interfaces.contains_key(class_name) {
                 return self
@@ -404,6 +458,12 @@ impl Checker {
         env: &TypeEnv,
     ) -> Result<PhpType, CompileError> {
         let obj_ty = self.infer_type(object, env)?;
+        self.reject_dynamic_spread_into_arity_hungry_method(
+            method,
+            args,
+            expr.span,
+            singular_receiver_class(&obj_ty).as_deref(),
+        )?;
         // Gradual `Mixed` receiver: unknown runtime class → unknown return type. The `?->`
         // null branch is subsumed by `Mixed`. Args were already inferred by the
         // assignment-effects caller (same contract as the plain `->` Mixed path).
@@ -1035,6 +1095,7 @@ impl Checker {
         env: &TypeEnv,
         allow_by_ref_spread: bool,
     ) -> Result<PhpType, CompileError> {
+        self.reject_dynamic_spread_into_arity_hungry_method(method, args, expr.span, None)?;
         let parent_call = matches!(receiver, StaticReceiver::Parent);
         let self_call = matches!(receiver, StaticReceiver::Self_);
         let resolved_class_name = match receiver {
@@ -1844,6 +1905,27 @@ fn spread_source_keeps_runtime_keys(expr: &Expr, env: &TypeEnv) -> bool {
             crate::types::checker::infer_expr_type_syntactic(expr),
             PhpType::AssocArray { .. } | PhpType::Iterable
         ),
+    }
+}
+
+/// Returns the single object class a receiver type resolves to, or `None` for a gradual
+/// (`Mixed`) or multi-class receiver.
+///
+/// Mirrors `crate::ir_lower::expr`'s `singular_object_class`, which decides the same question
+/// when lowering resolves a method call's concrete implementation: a `?Foo`/`Foo|false` union
+/// still dispatches on one class, so it counts as singular here too.
+fn singular_receiver_class(receiver_ty: &PhpType) -> Option<String> {
+    match receiver_ty {
+        PhpType::Object(class_name) => Some(class_name.clone()),
+        PhpType::Union(members) => {
+            let mut classes = members.iter().filter_map(|member| match member {
+                PhpType::Object(class_name) => Some(class_name.clone()),
+                _ => None,
+            });
+            let class_name = classes.next()?;
+            classes.all(|other| other == class_name).then_some(class_name)
+        }
+        _ => None,
     }
 }
 

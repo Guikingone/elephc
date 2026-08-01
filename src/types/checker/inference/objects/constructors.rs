@@ -33,6 +33,45 @@ enum ReflectionParameterTarget {
 }
 
 impl Checker {
+    /// Rejects `new Class(...$runtimeArray)` when `Class`'s constructor implementation calls
+    /// `func_num_args()`/`func_get_args()`/`func_get_arg()`.
+    ///
+    /// Constructors are marked arity-hungry WITHOUT the closed-world name gate (they are
+    /// direct allocation targets, never name-dispatched), so unlike the instance/static method
+    /// path this resolves the exact `"<impl>::__construct"` key through the allocated class's
+    /// own implementation metadata instead of matching on the method name. Same reason as
+    /// `Checker::reject_dynamic_spread_into_arity_hungry_method`: the hidden trailing
+    /// arity-count operand is a compile-time constant a runtime-sized spread cannot supply.
+    fn reject_dynamic_spread_into_arity_hungry_constructor(
+        &self,
+        class_name: &str,
+        args: &[Expr],
+        span: crate::span::Span,
+    ) -> Result<(), CompileError> {
+        use super::super::super::func_args_scan;
+        if !func_args_scan::call_has_dynamic_spread(args) {
+            return Ok(());
+        }
+        let Some(class_info) = self.classes.get(class_name) else {
+            return Ok(());
+        };
+        let implementation = class_info
+            .method_impl_classes
+            .get("__construct")
+            .map(String::as_str)
+            .unwrap_or(class_name);
+        if !self
+            .func_args_functions
+            .contains(&format!("{}::__construct", implementation))
+        {
+            return Ok(());
+        }
+        Err(func_args_scan::dynamic_spread_call_error(
+            &format!("Constructor '{}::__construct'", implementation),
+            span,
+        ))
+    }
+
     /// Infers the type of a `new Class(...)` expression.
     ///
     /// Errors on enums, interfaces, abstract classes, or undefined classes.
@@ -99,6 +138,11 @@ impl Checker {
             self.validate_reflection_owner_constructor(&class_name, args, expr, env)?;
             return Ok(PhpType::Object(class_name));
         }
+        self.reject_dynamic_spread_into_arity_hungry_constructor(
+            class_name.as_str(),
+            args,
+            expr.span,
+        )?;
         if let Some(class_info) = self.classes.get(class_name.as_str()) {
             if class_info.is_abstract {
                 return Err(CompileError::new(
