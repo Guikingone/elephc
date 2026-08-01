@@ -3038,6 +3038,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Strpos
             | RuntimeFnId::Strrpos
             | RuntimeFnId::Implode
+            | RuntimeFnId::ArraySlice
             | RuntimeFnId::Explode
             | RuntimeFnId::StrSplit
             | RuntimeFnId::Wordwrap
@@ -3130,6 +3131,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Implode {
         return implode_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::ArraySlice {
+        return array_slice_shape_issue(function, call);
     }
     if target == RuntimeFnId::Explode {
         return explode_shape_issue(function, call);
@@ -3359,6 +3363,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Implode {
         return lower_implode(ctx, inst);
+    }
+    if target == RuntimeFnId::ArraySlice {
+        return lower_array_slice(ctx, inst);
     }
     if target == RuntimeFnId::Explode {
         return lower_explode(ctx, inst);
@@ -4085,6 +4092,121 @@ fn lower_implode(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
     store_result(ctx, inst)
+}
+
+/// Lowers `array_slice` over a list, answering a fresh `array<mixed>`.
+///
+/// The offset/length rules are `substr`'s exactly (verified on 52 pairs against php-src), and
+/// live in `__rt_array_slice` so the clamping that keeps `PHP_INT_MIN` from wrapping an i64 sits
+/// next to the arithmetic it protects. The element shape decides whether a source slot is boxed
+/// or, for a Mixed-cell source, shared with an incref.
+fn lower_array_slice(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let array = operand(inst, 0)?;
+    let element = match ctx.function.value(array).map(|v| v.php_type.codegen_repr()) {
+        Some(PhpType::Array(element)) => *element,
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "array_slice takes an indexed array, got {other:?}"
+            )))
+        }
+    };
+    let (tag, elem_size) = array_slice_element_shape(&element).ok_or_else(|| {
+        WasmError::Unsupported(format!("array_slice has no element copy for {element:?}"))
+    })?;
+    ctx.emit_load_value(array)?;
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    match inst.operands.len() {
+        3 => {
+            ctx.emit_load_value(operand(inst, 2)?)?;
+            ctx.fb.ins("i32.const 1", "a length was given");
+        }
+        _ => {
+            ctx.fb.ins("i64.const 0", "unused length");
+            ctx.fb.ins("i32.const 0", "no length: slice runs to the end");
+        }
+    }
+    ctx.fb
+        .ins(&format!("i64.const {tag}"), "element cell tag (negative: share the cell)");
+    ctx.fb
+        .ins(&format!("i64.const {elem_size}"), "source slot stride");
+    ctx.fb.ins(
+        "call $__rt_array_slice",
+        "copy the window into a fresh mixed-cell array",
+    );
+    store_result(ctx, inst)
+}
+
+/// Returns the cell tag and source slot stride for slicing an array, or `None` when this target
+/// has no lowered layout for that element type.
+///
+/// A NEGATIVE tag marks a source whose slots already hold cells: `__rt_array_slice` shares those
+/// with an incref instead of copying a payload.
+fn array_slice_element_shape(element: &PhpType) -> Option<(i64, i64)> {
+    Some(match element.codegen_repr() {
+        PhpType::Int => (0, 8),
+        PhpType::Str => (1, 16),
+        PhpType::Float => (2, 8),
+        PhpType::Bool => (3, 8),
+        PhpType::Mixed => (-1, 16),
+        // `Void` is what `Never` — the element type of a literal `[]` — normalizes to. There is
+        // nothing to copy, so the tag and stride are never read.
+        PhpType::Void => (0, 8),
+        _ => return None,
+    })
+}
+
+/// Validates `array_slice`'s shape: an indexed array, an int offset, and an optional int length.
+///
+/// The `preserve_keys` form is NOT lowered: it answers a hash whose keys are the source's
+/// positions, which is a different result type from the reindexed list this produces.
+fn array_slice_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let (array, offset, length) = match call.operands.as_slice() {
+        [array, offset] => (array, offset, None),
+        [array, offset, length] => (array, offset, Some(length)),
+        other => {
+            return Some(format!(
+                "array_slice takes an array, an offset and an optional length, got {} operands",
+                other.len()
+            ))
+        }
+    };
+    let Some(array_value) = function.value(*array) else {
+        return Some("array is missing from the value table".to_string());
+    };
+    if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "array_slice takes an indexed array, got {:?}",
+            array_value.ir_type
+        ));
+    }
+    let PhpType::Array(element) = array_value.php_type.codegen_repr() else {
+        return Some(format!(
+            "array_slice takes an indexed array, got {:?}",
+            array_value.php_type.codegen_repr()
+        ));
+    };
+    if array_slice_element_shape(&element).is_none() {
+        return Some(format!(
+            "array_slice has no lowered element copy for {:?}",
+            element
+        ));
+    }
+    for (operand, what) in [Some(offset), length].into_iter().zip(["offset", "length"]) {
+        let Some(operand) = operand else { continue };
+        let Some(value) = function.value(*operand) else {
+            return Some(format!("array_slice {what} is missing from the value table"));
+        };
+        if value.ir_type != IrType::I64
+            || !matches!(value.php_type.codegen_repr(), PhpType::Int)
+        {
+            return Some(format!(
+                "array_slice {what} is {:?}/{:?}, expected I64/Int",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    None
 }
 
 /// Validates `implode`: a glue string and an indexed array of strings, a string out.
@@ -5088,6 +5210,95 @@ mod tests {
     }
 
     /// Builds a `RuntimeCall` probe with an arbitrary operand list.
+    /// `array_slice` copies the window into a fresh `array<mixed>`, so it admits every element
+    /// type this target has a slot layout for — including `Mixed`, whose cells it shares rather
+    /// than copies. The `preserve_keys` form answers a hash and stays refused, as does a
+    /// non-integer offset.
+    #[test]
+    fn array_slice_admits_its_lowered_windows_only() {
+        let array_of = |element: PhpType| {
+            (
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(element)),
+            )
+        };
+        let int_arg = (IrType::I64, PhpType::Int);
+
+        for element in [
+            PhpType::Int,
+            PhpType::Str,
+            PhpType::Float,
+            PhpType::Bool,
+            PhpType::Mixed,
+            PhpType::Never,
+        ] {
+            for operands in [
+                vec![array_of(element.clone()), int_arg.clone()],
+                vec![array_of(element.clone()), int_arg.clone(), int_arg.clone()],
+            ] {
+                let probe = shaped_call(
+                    RuntimeFnId::ArraySlice,
+                    &operands,
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Mixed)),
+                );
+                let call = probe.instructions.last().expect("the probe emitted a call");
+                assert_eq!(
+                    direct_builtin_shape_issue(
+                        &probe_module(),
+                        &probe,
+                        call,
+                        RuntimeFnId::ArraySlice
+                    ),
+                    None,
+                    "an array of {element:?} sliced with {} bounds",
+                    operands.len() - 1
+                );
+            }
+        }
+
+        // The four-operand `preserve_keys` form answers a hash, not a reindexed list.
+        let preserve = shaped_call(
+            RuntimeFnId::ArraySlice,
+            &[
+                array_of(PhpType::Int),
+                int_arg.clone(),
+                int_arg.clone(),
+                (IrType::I64, PhpType::Bool),
+            ],
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+        let call = preserve.instructions.last().expect("the probe emitted a call");
+        assert!(
+            direct_builtin_shape_issue(&probe_module(), &preserve, call, RuntimeFnId::ArraySlice)
+                .is_some(),
+            "preserve_keys is a different result type and is not lowered"
+        );
+
+        // A string offset is a coercion this lowerer does not perform.
+        let string_offset = shaped_call(
+            RuntimeFnId::ArraySlice,
+            &[array_of(PhpType::Int), (IrType::Str, PhpType::Str)],
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Mixed)),
+        );
+        let call = string_offset
+            .instructions
+            .last()
+            .expect("the probe emitted a call");
+        assert!(
+            direct_builtin_shape_issue(
+                &probe_module(),
+                &string_offset,
+                call,
+                RuntimeFnId::ArraySlice
+            )
+            .is_some(),
+            "array_slice takes an integer offset"
+        );
+    }
+
     fn shaped_call(
         target: RuntimeFnId,
         operands: &[(IrType, PhpType)],

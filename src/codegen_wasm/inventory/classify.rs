@@ -209,6 +209,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             &["codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220"]
                 [..],
         ),
+        RuntimeFnId::ArraySlice => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::array_slice_admits_its_lowered_windows_only",
+                "codegen::cli::test_cli_wasm_array_slice_matches_php",
+            ][..],
+        ),
         RuntimeFnId::Usort => (
             "codegen_wasm::inst",
             "codegen_wasm::inst::lower_user_sort",
@@ -647,6 +655,7 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "hash_key_diagnostic_issue",
         "hash_store_value_diagnostic_issue",
         "array_to_hash_shape_issue",
+        "array_to_mixed_shape_issue",
         "direct_call_shape_issue",
         "by_ref_source_shape_issue",
         "method_call_shape_issue",

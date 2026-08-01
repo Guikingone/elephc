@@ -5657,6 +5657,120 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `array_slice` over a list, whose offset/length rules are `substr`'s exactly.
+///
+/// Validated as a MODEL first: a transcription of `substr`'s clamping was checked against php-src
+/// on 52 offset/length pairs before any WAT was written, and matched all 52. A negative offset
+/// counts from the end and floors at 0, an offset at or past the end gives an empty result, a
+/// negative length drops that many from the end, and a length is clamped so the window never runs
+/// past the end or backwards.
+///
+/// `PHP_INT_MIN` is in here because both bounds have to be clamped into `[-n, n]` BEFORE any
+/// arithmetic — negating `PHP_INT_MIN` wraps an i64, and the clamp is what makes the rest safe.
+#[test]
+fn test_cli_wasm_array_slice_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_array_slice");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, PHP_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the array_slice probe");
+    assert!(
+        output.status.success(),
+        "array_slice compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the array_slice probe under Node");
+    assert!(
+        run.status.success(),
+        "array_slice probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), PHP_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The `array_slice` probe program: every boundary of the offset/length rules.
+const PHP_SOURCE: &str = r##"<?php
+$s = [10,20,30,40,50];
+$v0 = array_slice($s, -9); echo count($v0), ":", implode(",", $v0), "|";
+$v1 = array_slice($s, -5); echo count($v1), ":", implode(",", $v1), "|";
+$v2 = array_slice($s, -1); echo count($v2), ":", implode(",", $v2), "|";
+$v3 = array_slice($s, 0); echo count($v3), ":", implode(",", $v3), "|";
+$v4 = array_slice($s, 1); echo count($v4), ":", implode(",", $v4), "|";
+$v5 = array_slice($s, 4); echo count($v5), ":", implode(",", $v5), "|";
+$v6 = array_slice($s, 5); echo count($v6), ":", implode(",", $v6), "|";
+$v7 = array_slice($s, 9); echo count($v7), ":", implode(",", $v7), "|";
+$v8 = array_slice($s, -6, -6); echo count($v8), ":", implode(",", $v8), "|";
+$v9 = array_slice($s, -6, -1); echo count($v9), ":", implode(",", $v9), "|";
+$v10 = array_slice($s, -6, 0); echo count($v10), ":", implode(",", $v10), "|";
+$v11 = array_slice($s, -6, 1); echo count($v11), ":", implode(",", $v11), "|";
+$v12 = array_slice($s, -6, 3); echo count($v12), ":", implode(",", $v12), "|";
+$v13 = array_slice($s, -6, 7); echo count($v13), ":", implode(",", $v13), "|";
+$v14 = array_slice($s, -1, -6); echo count($v14), ":", implode(",", $v14), "|";
+$v15 = array_slice($s, -1, -1); echo count($v15), ":", implode(",", $v15), "|";
+$v16 = array_slice($s, -1, 0); echo count($v16), ":", implode(",", $v16), "|";
+$v17 = array_slice($s, -1, 1); echo count($v17), ":", implode(",", $v17), "|";
+$v18 = array_slice($s, -1, 3); echo count($v18), ":", implode(",", $v18), "|";
+$v19 = array_slice($s, -1, 7); echo count($v19), ":", implode(",", $v19), "|";
+$v20 = array_slice($s, 0, -6); echo count($v20), ":", implode(",", $v20), "|";
+$v21 = array_slice($s, 0, -1); echo count($v21), ":", implode(",", $v21), "|";
+$v22 = array_slice($s, 0, 0); echo count($v22), ":", implode(",", $v22), "|";
+$v23 = array_slice($s, 0, 1); echo count($v23), ":", implode(",", $v23), "|";
+$v24 = array_slice($s, 0, 3); echo count($v24), ":", implode(",", $v24), "|";
+$v25 = array_slice($s, 0, 7); echo count($v25), ":", implode(",", $v25), "|";
+$v26 = array_slice($s, 2, -6); echo count($v26), ":", implode(",", $v26), "|";
+$v27 = array_slice($s, 2, -1); echo count($v27), ":", implode(",", $v27), "|";
+$v28 = array_slice($s, 2, 0); echo count($v28), ":", implode(",", $v28), "|";
+$v29 = array_slice($s, 2, 1); echo count($v29), ":", implode(",", $v29), "|";
+$v30 = array_slice($s, 2, 3); echo count($v30), ":", implode(",", $v30), "|";
+$v31 = array_slice($s, 2, 7); echo count($v31), ":", implode(",", $v31), "|";
+$v32 = array_slice($s, PHP_INT_MIN); echo count($v32), ":", implode(",", $v32), "|";
+$v33 = array_slice($s, PHP_INT_MAX); echo count($v33), ":", implode(",", $v33), "|";
+$v34 = array_slice($s, 0, PHP_INT_MIN); echo count($v34), ":", implode(",", $v34), "|";
+$v35 = array_slice($s, 0, PHP_INT_MAX); echo count($v35), ":", implode(",", $v35), "|";
+$v36 = array_slice($s, PHP_INT_MIN, PHP_INT_MAX); echo count($v36), ":", implode(",", $v36), "|";
+echo "\n";
+"##;
+
+/// php-src 8.5.6's own output for `PHP_SOURCE`.
+const PHP_EXPECTED: &str = r##"5:10,20,30,40,50|5:10,20,30,40,50|1:50|5:10,20,30,40,50|4:20,30,40,50|1:50|0:|0:|0:|4:10,20,30,40|0:|1:10|3:10,20,30|5:10,20,30,40,50|0:|0:|0:|1:50|1:50|1:50|0:|4:10,20,30,40|0:|1:10|3:10,20,30|5:10,20,30,40,50|0:|2:30,40|0:|1:30|3:30,40,50|3:30,40,50|5:10,20,30,40,50|0:|0:|5:10,20,30,40,50|5:10,20,30,40,50|
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

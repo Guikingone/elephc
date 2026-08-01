@@ -49,6 +49,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ConstStr => lower_const_str(ctx, &inst),
         Op::StrLen => lower_strlen(ctx, &inst),
         Op::StrPersist => lower_str_persist(ctx, &inst),
+        Op::ArrayToMixed => lower_array_to_mixed(ctx, &inst),
         Op::StrConcat => lower_str_concat(ctx, &inst),
         Op::Nop => lower_nop(ctx),
         Op::ConcatReset => lower_concat_reset(ctx),
@@ -2854,6 +2855,34 @@ fn emit_undefined_array_index_warning_if_null(
     );
     ctx.fb.ins("end", "continue with the stored null result");
     Ok(())
+}
+
+/// Lowers `Op::ArrayToMixed`: EIR's own `array<T>` -> `array<mixed>` widening.
+///
+/// EIR emits this where a concrete array is stored somewhere typed `array<mixed>`, and marks the
+/// result `own=owned` — so unlike the call-argument conversion, which synthesizes a temporary the
+/// call site has to free, this result is an EIR value the EIR releases itself.
+fn lower_array_to_mixed(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let source = operand(inst, 0)?;
+    let element = match ctx.function.value(source).map(|v| v.php_type.codegen_repr()) {
+        Some(PhpType::Array(element)) => *element,
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "array_to_mixed takes an indexed array, got {other:?}"
+            )))
+        }
+    };
+    let (tag, elem_size) = super::transfer::array_widen_shape(&element).ok_or_else(|| {
+        WasmError::Unsupported(format!("array_to_mixed has no element copy for {element:?}"))
+    })?;
+    ctx.emit_load_value(source)?;
+    ctx.fb.ins(&format!("i64.const {tag}"), "cell tag for every element");
+    ctx.fb.ins(&format!("i64.const {elem_size}"), "source slot stride");
+    ctx.fb.ins(
+        "call $__rt_array_widen_to_mixed",
+        "copy into a fresh owned mixed-cell array",
+    );
+    store_result(ctx, inst)
 }
 
 /// Lowers `Op::ArrayPush`. Appends via the runtime (which may reallocate) and

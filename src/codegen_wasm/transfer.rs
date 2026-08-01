@@ -51,7 +51,7 @@ pub(super) enum TransferKind {
 /// Only the element types this target has a concrete array layout for can be widened. `Void` is
 /// what `Never` — the element type of a literal `[]` — normalizes to: there is nothing to convert,
 /// so the tag and stride are never read.
-fn array_widen_shape(element: &PhpType) -> Option<(i64, i64)> {
+pub(super) fn array_widen_shape(element: &PhpType) -> Option<(i64, i64)> {
     Some(match element.codegen_repr() {
         PhpType::Int => (0, 8),
         PhpType::Str => (1, 16),

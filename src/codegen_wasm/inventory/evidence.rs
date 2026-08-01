@@ -365,6 +365,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::AliasLocalRefCell => "codegen_wasm::refcell::lower_alias_local_ref_cell",
         Op::ReleaseLocalRefCell => "codegen_wasm::refcell::lower_release_local_ref_cell",
         Op::IterCurrentValueRef => "codegen_wasm::refcell::lower_iter_current_value_ref",
+        Op::ArrayToMixed => "codegen_wasm::inst::lower_array_to_mixed",
         Op::TryPushHandler => "codegen_wasm::inst::lower_try_push_handler",
         Op::TryPopHandler => "codegen_wasm::inst::lower_try_pop_handler",
         Op::ThrowException | Op::ThrowErrorValue => "codegen_wasm::inst::lower_throw",

@@ -444,6 +444,7 @@ fn check_instruction_shape(
         Op::IsTruthy => truthiness_shape_issue(function, inst),
         Op::ArraySet => array_store_shape_issue(function, inst, 2, false),
         Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
+        Op::ArrayToMixed => array_to_mixed_shape_issue(function, inst),
         Op::IterStart => iter_start_shape_issue(function, inst),
         Op::IterCurrentValueRef => iter_current_value_ref_shape_issue(function, inst),
         Op::ArrayGet | Op::ArrayGetSilent => {
@@ -1332,6 +1333,35 @@ fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option
             inst.op.name(),
             kinds[0],
             kinds[1]
+        ));
+    }
+    None
+}
+
+/// Validates `Op::ArrayToMixed`: an indexed array whose element type has a lowered copy.
+///
+/// This is EIR's own widening instruction, which it emits when a concrete array is stored where
+/// `array<mixed>` is expected. It shares `__rt_array_widen_to_mixed` with the call-argument
+/// conversion; unlike that one, the result is an EIR value the EIR itself releases.
+fn array_to_mixed_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let Some(source) = inst.operands.first().and_then(|id| function.value(*id)) else {
+        return Some("array_to_mixed source is missing from the value table".to_string());
+    };
+    if source.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "array_to_mixed takes an indexed array, got {:?}",
+            source.ir_type
+        ));
+    }
+    let PhpType::Array(element) = source.php_type.codegen_repr() else {
+        return Some(format!(
+            "array_to_mixed takes an indexed array, got {:?}",
+            source.php_type.codegen_repr()
+        ));
+    };
+    if super::transfer::array_widen_shape(&element).is_none() {
+        return Some(format!(
+            "array_to_mixed has no lowered element copy for {element:?}"
         ));
     }
     None
@@ -4515,6 +4545,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Strpos
         | RuntimeFnId::Strrpos
         | RuntimeFnId::Implode
+        | RuntimeFnId::ArraySlice
         | RuntimeFnId::Explode
         | RuntimeFnId::StrSplit
         | RuntimeFnId::Wordwrap
@@ -4559,7 +4590,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayReplaceRecursive
         | RuntimeFnId::ArraySearch
         | RuntimeFnId::ArrayShift
-        | RuntimeFnId::ArraySlice
         | RuntimeFnId::ArraySplice
         | RuntimeFnId::ArrayUdiff
         | RuntimeFnId::ArrayUintersect
@@ -5020,6 +5050,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::StrConcat
         | Op::StrLen
         | Op::StrPersist
+        | Op::ArrayToMixed
         | Op::ConcatReset
         | Op::ArrayNew
         | Op::HashNew
@@ -5109,7 +5140,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::ResourceToStr
         | Op::InvokerRefArg
         | Op::MixedUnbox
-        | Op::ArrayToMixed
         | Op::HashToMixed
         | Op::MixedCastBool
         | Op::MixedCastInt

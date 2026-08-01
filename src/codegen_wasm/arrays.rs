@@ -40,6 +40,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_GET_FLOAT);
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
+    wm.add_raw_func(RT_ARRAY_SLICE);
     wm.add_raw_func(RT_ARRAY_GET_INT);
     wm.add_raw_func(RT_ARRAY_GET_TAGGED_INT);
     wm.add_raw_func(RT_ARRAY_GET_MIXED_BOOL);
@@ -499,6 +500,79 @@ const RT_ARRAY_WIDEN_TO_MIXED: &str = r#"(func $__rt_array_widen_to_mixed (param
     (local.set $i (i64.add (local.get $i) (i64.const 1)))   ;; i++
     (br $next)))
   (local.get $out))                                          ;; the fresh mixed-cell array
+"#;
+
+/// `__rt_array_slice`: PHP's `array_slice` over a LIST, answering a fresh `array<mixed>`.
+///
+/// The offset/length rules are byte-for-byte `substr`'s, verified on 52 offset/length pairs
+/// against php-src: a negative offset counts from the end and floors at 0, an offset at or past
+/// the end gives an empty result, a negative length drops that many from the end, and a length is
+/// clamped so the window never runs past the end or backwards.
+///
+/// Both bounds are CLAMPED into `[-n, n]` before any arithmetic, so `PHP_INT_MIN` as a length
+/// cannot wrap an i64 — negating it would.
+///
+/// `$tag` selects how a source slot becomes a cell: 0/1/2/3 box the payload with that tag (an
+/// `$esz` of 16 means the slot is a (pointer, length) pair), and a NEGATIVE tag means the slot
+/// already holds a cell, which is shared with an incref rather than copied. Sharing is sound only
+/// while cells are immutable once stored, which is true as long as no lowered setter rewrites one
+/// in place.
+const RT_ARRAY_SLICE: &str = r#"(func $__rt_array_slice (param $src i32) (param $off i64) (param $len i64) (param $has_len i32) (param $tag i64) (param $esz i64) (result i32)
+  (local $n i64)
+  (local $start i64)
+  (local $end i64)
+  (local $i i64)
+  (local $slot i32)
+  (local $out i32)
+  (local $cell i32)
+  (if (i32.eqz (local.get $src))
+    (then (return (call $__rt_array_new (i64.const 0) (i64.const 16)))))  ;; null source -> empty
+  (local.set $n (i64.load (local.get $src)))                ;; source length
+  ;; clamp the offset into [-n, n] so the arithmetic below cannot wrap
+  (if (i64.lt_s (local.get $off) (i64.sub (i64.const 0) (local.get $n)))
+    (then (local.set $off (i64.sub (i64.const 0) (local.get $n)))))
+  (if (i64.gt_s (local.get $off) (local.get $n))
+    (then (local.set $off (local.get $n))))
+  (local.set $start (local.get $off))
+  (if (i64.lt_s (local.get $start) (i64.const 0))           ;; negative offset counts from the end
+    (then (local.set $start (i64.add (local.get $n) (local.get $start)))))
+  (if (i64.lt_s (local.get $start) (i64.const 0))
+    (then (local.set $start (i64.const 0))))                ;; and floors at the first element
+  (local.set $end (local.get $n))                           ;; no length -> to the end
+  (if (local.get $has_len)
+    (then
+      ;; clamp the length into [-n, n] for the same reason
+      (if (i64.lt_s (local.get $len) (i64.sub (i64.const 0) (local.get $n)))
+        (then (local.set $len (i64.sub (i64.const 0) (local.get $n)))))
+      (if (i64.gt_s (local.get $len) (local.get $n))
+        (then (local.set $len (local.get $n))))
+      (if (i64.lt_s (local.get $len) (i64.const 0))
+        (then (local.set $end (i64.add (local.get $n) (local.get $len))))   ;; drop |len| from the end
+        (else (local.set $end (i64.add (local.get $start) (local.get $len)))))
+      (if (i64.gt_s (local.get $end) (local.get $n))
+        (then (local.set $end (local.get $n))))))
+  (if (i64.lt_s (local.get $end) (local.get $start))        ;; never run backwards
+    (then (local.set $end (local.get $start))))
+  (local.set $out (call $__rt_array_new (i64.sub (local.get $end) (local.get $start)) (i64.const 16)))
+  (local.set $i (local.get $start))
+  (block $done (loop $next
+    (br_if $done (i64.ge_s (local.get $i) (local.get $end)))
+    (local.set $slot (i32.add (i32.add (local.get $src) (i32.const 24))
+                              (i32.wrap_i64 (i64.mul (local.get $i) (local.get $esz)))))
+    (if (i64.lt_s (local.get $tag) (i64.const 0))
+      (then                                                 ;; the slot already holds a cell
+        (local.set $cell (i32.wrap_i64 (i64.load (local.get $slot))))
+        (call $__rt_incref (local.get $cell))               ;; both arrays own it now
+        (local.set $out (call $__rt_array_push_mixed (local.get $out) (local.get $cell))))
+      (else                                                 ;; box the payload with its tag
+        (local.set $out (call $__rt_array_push_mixed (local.get $out)
+          (call $__rt_mixed_from_value (local.get $tag)
+            (i64.load (local.get $slot))
+            (select (i64.load (i32.add (local.get $slot) (i32.const 8))) (i64.const 0)
+                    (i64.eq (local.get $esz) (i64.const 16))))))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $next)))
+  (local.get $out))
 "#;
 
 /// `__rt_array_ensure_unique`: the copy-on-write split point. Returns the array

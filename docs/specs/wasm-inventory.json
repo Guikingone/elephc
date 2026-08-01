@@ -1788,16 +1788,22 @@
           "name": "array_to_mixed",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "storing a concrete array where array<mixed> is expected"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::inst::lower_array_to_mixed",
+            "tests": [
+              "codegen::cli::test_cli_wasm_array_slice_matches_php"
+            ],
+            "notes": "Copies each element into a boxed cell via __rt_array_widen_to_mixed, shared with the call-argument conversion. Float elements included; a nested array or object element has no lowered copy."
+          }
         },
         {
           "name": "hash_to_mixed",
@@ -5597,7 +5603,7 @@
           "name": "array_slice",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "array_slice(...)"
           ],
@@ -5605,7 +5611,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::array_slice_admits_its_lowered_windows_only",
+              "codegen::cli::test_cli_wasm_array_slice_matches_php"
+            ],
+            "notes": "List form only, reindexed: the offset/length rules are substr's exactly, validated as a model against php-src on 52 offset/length pairs before lowering. The preserve_keys form answers a hash and is not lowered."
+          }
         },
         {
           "name": "array_splice",
@@ -12613,6 +12627,10 @@
       "disposition": "enforced"
     },
     {
+      "name": "array_to_mixed_shape_issue",
+      "disposition": "enforced"
+    },
+    {
       "name": "direct_call_shape_issue",
       "disposition": "enforced"
     },
@@ -12769,14 +12787,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 188,
+    "supported": 190,
     "excluded": 47,
-    "missing": 477,
-    "evidence_gaps": 177,
-    "row_evidence_gaps": 176,
+    "missing": 475,
+    "evidence_gaps": 176,
+    "row_evidence_gaps": 175,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "477 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "475 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
