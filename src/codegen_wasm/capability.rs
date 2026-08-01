@@ -4472,7 +4472,16 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StrStartsWith
         | RuntimeFnId::StrEndsWith
         | RuntimeFnId::Chr
-        | RuntimeFnId::Ord => true,
+        | RuntimeFnId::Ord
+        | RuntimeFnId::Ucfirst
+        | RuntimeFnId::Lcfirst
+        | RuntimeFnId::Ucwords
+        | RuntimeFnId::Strcmp
+        | RuntimeFnId::Strcasecmp
+        | RuntimeFnId::Trim
+        | RuntimeFnId::Ltrim
+        | RuntimeFnId::Rtrim
+        | RuntimeFnId::Substr => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4801,15 +4810,12 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::InetNtop
         | RuntimeFnId::InetPton
         | RuntimeFnId::Ip2long
-        | RuntimeFnId::Lcfirst
         | RuntimeFnId::Long2ip
-        | RuntimeFnId::Ltrim
         | RuntimeFnId::MbEregMatch
         | RuntimeFnId::MbStrlen
         | RuntimeFnId::Md5
         | RuntimeFnId::NumberFormat
         | RuntimeFnId::Printf
-        | RuntimeFnId::Rtrim
         | RuntimeFnId::Sha1
         | RuntimeFnId::Sprintf
         | RuntimeFnId::Sscanf
@@ -4818,16 +4824,10 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StrRepeat
         | RuntimeFnId::StrReplace
         | RuntimeFnId::StrSplit
-        | RuntimeFnId::Strcasecmp
-        | RuntimeFnId::Strcmp
         | RuntimeFnId::Strpos
         | RuntimeFnId::Strrpos
         | RuntimeFnId::Strstr
-        | RuntimeFnId::Substr
         | RuntimeFnId::SubstrReplace
-        | RuntimeFnId::Trim
-        | RuntimeFnId::Ucfirst
-        | RuntimeFnId::Ucwords
         | RuntimeFnId::Vprintf
         | RuntimeFnId::Vsprintf
         | RuntimeFnId::Wordwrap

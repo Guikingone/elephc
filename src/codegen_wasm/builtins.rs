@@ -51,6 +51,12 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_B64_VALUE);
     wm.add_raw_func(RT_STR_BASE64_ENCODE);
     wm.add_raw_func(RT_STR_BASE64_DECODE);
+    wm.add_raw_func(RT_STR_CASE_EDGE);
+    wm.add_raw_func(RT_STR_UCWORDS);
+    wm.add_raw_func(RT_STR_CMP);
+    wm.add_raw_func(RT_TRIM_MATCHES);
+    wm.add_raw_func(RT_STR_TRIM);
+    wm.add_raw_func(RT_STR_SUBSTR);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -589,6 +595,224 @@ fn str_chr_ord(diagnoses: bool) -> (String, String) {
     )
 }
 
+/// `__rt_str_case_edge`: owns a copy with only the FIRST byte case-mapped.
+///
+/// `$upper` selects `ucfirst` over `lcfirst`. Only an ASCII letter moves — `héllo` keeps its
+/// `0xc3 0xa9` — and the empty string comes back empty rather than failing.
+const RT_STR_CASE_EDGE: &str = r#"(func $__rt_str_case_edge (param $ptr i32) (param $len i64) (param $upper i32) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $olen i64)                                               ;; persisted length
+  (local $byte i32)                                               ;; the first byte
+  (call $__rt_str_persist (local.get $ptr) (local.get $len))      ;; own a copy to edit in place
+  (local.set $olen)                                               ;; persisted length
+  (local.set $out)                                                ;; persisted pointer
+  (if (i64.gt_s (local.get $olen) (i64.const 0))                  ;; the empty string is unchanged
+    (then
+      (local.set $byte (i32.load8_u (local.get $out)))
+      (if (local.get $upper)
+        (then
+          (if (i32.and (i32.ge_u (local.get $byte) (i32.const 97))
+                       (i32.le_u (local.get $byte) (i32.const 122)))
+            (then (i32.store8 (local.get $out) (i32.sub (local.get $byte) (i32.const 32))))))
+        (else
+          (if (i32.and (i32.ge_u (local.get $byte) (i32.const 65))
+                       (i32.le_u (local.get $byte) (i32.const 90)))
+            (then (i32.store8 (local.get $out) (i32.add (local.get $byte) (i32.const 32)))))))))
+  (local.get $out) (local.get $olen))                             ;; owned result
+"#;
+
+/// `__rt_str_ucwords`: owns a copy with the first ASCII letter after each delimiter upper-cased.
+///
+/// PHP's default delimiter set is exactly space, tab, newline, carriage return, form feed and
+/// VERTICAL TAB — measured, which is why `\x0b` starts a word here but `-`, `_` and `.` do not.
+/// Two delimiters in a row do not skip a word: the byte after each one is a word start.
+const RT_STR_UCWORDS: &str = r#"(func $__rt_str_ucwords (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $olen i64)                                               ;; persisted length
+  (local $i i64)                                                  ;; cursor
+  (local $byte i32)                                               ;; current byte
+  (local $start i32)                                              ;; is this byte a word start?
+  (call $__rt_str_persist (local.get $ptr) (local.get $len))      ;; own a copy to edit in place
+  (local.set $olen)                                               ;; persisted length
+  (local.set $out)                                                ;; persisted pointer
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (local.set $start (i32.const 1))                                ;; the first byte starts a word
+  (block $end (loop $scan
+    (br_if $end (i64.ge_s (local.get $i) (local.get $olen)))      ;; every byte visited
+    (local.set $byte (i32.load8_u (i32.add (local.get $out) (i32.wrap_i64 (local.get $i)))))
+    (if (local.get $start)
+      (then
+        (if (i32.and (i32.ge_u (local.get $byte) (i32.const 97))
+                     (i32.le_u (local.get $byte) (i32.const 122)))
+          (then (i32.store8 (i32.add (local.get $out) (i32.wrap_i64 (local.get $i)))
+                            (i32.sub (local.get $byte) (i32.const 32)))))))  ;; a-z -> A-Z
+    (local.set $start
+      (i32.or
+        (i32.or (i32.eq (local.get $byte) (i32.const 32))         ;; space
+                (i32.eq (local.get $byte) (i32.const 9)))         ;; tab
+        (i32.or
+          (i32.or (i32.eq (local.get $byte) (i32.const 10))       ;; line feed
+                  (i32.eq (local.get $byte) (i32.const 13)))      ;; carriage return
+          (i32.or (i32.eq (local.get $byte) (i32.const 12))       ;; form feed
+                  (i32.eq (local.get $byte) (i32.const 11))))))   ;; vertical tab
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $scan)))
+  (local.get $out) (local.get $olen))                             ;; owned result
+"#;
+
+/// `__rt_str_cmp`: PHP's `strcmp` / `strcasecmp` result for two byte strings.
+///
+/// The two halves of the answer follow DIFFERENT rules, which is the whole subtlety here and was
+/// measured rather than assumed: a byte mismatch yields the raw UNSIGNED difference
+/// (`strcmp("ABC", "abc")` is -32 and `strcmp("\xff", "\x01")` is 254), while a pure length
+/// difference is normalized to -1 or 1 (`strcmp("abcd", "a")` is 1, not 3). `$fold` lowercases
+/// ASCII letters before comparing, so `strcasecmp("Z", "a")` is 25 — the distance between the
+/// FOLDED bytes, not the original ones.
+const RT_STR_CMP: &str = r#"(func $__rt_str_cmp (param $aptr i32) (param $alen i64) (param $bptr i32) (param $blen i64) (param $fold i32) (result i64)
+  (local $i i64)                                                  ;; cursor
+  (local $shortest i64)                                           ;; bytes both strings have
+  (local $x i32)                                                  ;; byte from the left
+  (local $y i32)                                                  ;; byte from the right
+  (local.set $shortest
+    (select (local.get $alen) (local.get $blen)
+            (i64.lt_s (local.get $alen) (local.get $blen))))      ;; min(alen, blen)
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $end (loop $cmp
+    (br_if $end (i64.ge_s (local.get $i) (local.get $shortest)))  ;; common prefix exhausted
+    (local.set $x (i32.load8_u (i32.add (local.get $aptr) (i32.wrap_i64 (local.get $i)))))
+    (local.set $y (i32.load8_u (i32.add (local.get $bptr) (i32.wrap_i64 (local.get $i)))))
+    (if (local.get $fold)
+      (then
+        (if (i32.and (i32.ge_u (local.get $x) (i32.const 65))
+                     (i32.le_u (local.get $x) (i32.const 90)))
+          (then (local.set $x (i32.add (local.get $x) (i32.const 32)))))  ;; A-Z -> a-z
+        (if (i32.and (i32.ge_u (local.get $y) (i32.const 65))
+                     (i32.le_u (local.get $y) (i32.const 90)))
+          (then (local.set $y (i32.add (local.get $y) (i32.const 32)))))))
+    (if (i32.ne (local.get $x) (local.get $y))
+      (then (return (i64.extend_i32_s (i32.sub (local.get $x) (local.get $y))))))  ;; raw byte distance
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $cmp)))
+  (if (i64.lt_s (local.get $alen) (local.get $blen))
+    (then (return (i64.const -1))))                               ;; a prefix sorts first
+  (if (i64.gt_s (local.get $alen) (local.get $blen))
+    (then (return (i64.const 1))))                                ;; ...and its extension last
+  (i64.const 0))                                                  ;; identical
+"#;
+
+/// `__rt_str_trim`: owns a copy with bytes stripped from one or both ends.
+///
+/// `$mode` bit 0 strips the left end and bit 1 the right, so one helper covers `trim`, `ltrim`
+/// and `rtrim`. A `$cl_len` of -1 selects PHP's DEFAULT set — space, tab, newline, carriage
+/// return, NUL and vertical tab — which is passed as a sentinel rather than a data segment so a
+/// module that never calls the one-argument form carries no extra bytes. An explicitly EMPTY
+/// charlist strips nothing, which is what php-src does.
+const RT_STR_TRIM: &str = r#"(func $__rt_str_trim (param $ptr i32) (param $len i64) (param $cl_ptr i32) (param $cl_len i64) (param $mode i32) (result i32) (result i64)
+  (local $start i64)                                              ;; first kept byte
+  (local $stop i64)                                               ;; one past the last kept byte
+  (local $out i32)                                                ;; owned result block
+  (local $w i32)                                                  ;; copy cursor
+  (local.set $start (i64.const 0))                                ;; nothing stripped yet
+  (local.set $stop (local.get $len))                              ;; ...from either end
+  (if (i32.and (local.get $mode) (i32.const 1))                   ;; strip the left end
+    (then
+      (block $ldone (loop $lscan
+        (br_if $ldone (i64.ge_s (local.get $start) (local.get $stop)))
+        (br_if $ldone (i32.eqz (call $__rt_trim_matches
+          (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $start))))
+          (local.get $cl_ptr) (local.get $cl_len))))
+        (local.set $start (i64.add (local.get $start) (i64.const 1)))
+        (br $lscan)))))
+  (if (i32.and (local.get $mode) (i32.const 2))                   ;; strip the right end
+    (then
+      (block $rdone (loop $rscan
+        (br_if $rdone (i64.le_s (local.get $stop) (local.get $start)))
+        (br_if $rdone (i32.eqz (call $__rt_trim_matches
+          (i32.load8_u (i32.add (local.get $ptr)
+                                (i32.wrap_i64 (i64.sub (local.get $stop) (i64.const 1)))))
+          (local.get $cl_ptr) (local.get $cl_len))))
+        (local.set $stop (i64.sub (local.get $stop) (i64.const 1)))
+        (br $rscan)))))
+  (local.set $out (call $__rt_str_alloc (i64.sub (local.get $stop) (local.get $start))))
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $copy
+    (br_if $end (i64.ge_s (local.get $start) (local.get $stop)))  ;; every kept byte copied
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $start)))))
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))         ;; w++
+    (local.set $start (i64.add (local.get $start) (i64.const 1))) ;; next kept byte
+    (br $copy)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
+/// `__rt_trim_matches`: whether one byte belongs to a trim character set.
+///
+/// A `$cl_len` of -1 means PHP's default set rather than a caller-provided list, so the one- and
+/// two-argument forms of `trim` share the same scan.
+const RT_TRIM_MATCHES: &str = r#"(func $__rt_trim_matches (param $byte i32) (param $cl_ptr i32) (param $cl_len i64) (result i32)
+  (local $i i64)                                                  ;; charlist cursor
+  (if (i64.lt_s (local.get $cl_len) (i64.const 0))                ;; the default set
+    (then (return (i32.or
+      (i32.or (i32.eq (local.get $byte) (i32.const 32))           ;; space
+              (i32.eq (local.get $byte) (i32.const 9)))           ;; tab
+      (i32.or
+        (i32.or (i32.eq (local.get $byte) (i32.const 10))         ;; line feed
+                (i32.eq (local.get $byte) (i32.const 13)))        ;; carriage return
+        (i32.or (i32.eqz (local.get $byte))                       ;; NUL
+                (i32.eq (local.get $byte) (i32.const 11))))))))   ;; vertical tab
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $end (loop $scan
+    (br_if $end (i64.ge_s (local.get $i) (local.get $cl_len)))    ;; charlist exhausted
+    (if (i32.eq (local.get $byte)
+                (i32.load8_u (i32.add (local.get $cl_ptr) (i32.wrap_i64 (local.get $i)))))
+      (then (return (i32.const 1))))                              ;; listed
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $scan)))
+  (i32.const 0))                                                  ;; not listed
+"#;
+
+/// `__rt_str_substr`: owns PHP's `substr` slice of a string.
+///
+/// Every out-of-range case answers the EMPTY string rather than false, which is PHP 8's
+/// behaviour. A negative `$offset` counts from the end and saturates at 0, so `substr("hello",
+/// -9)` is the whole string. `$has_len` distinguishes the two-argument form from an explicit
+/// length; a negative length names an end offset from the right, and an end at or before the
+/// start yields the empty string. All measured against php-src.
+const RT_STR_SUBSTR: &str = r#"(func $__rt_str_substr (param $ptr i32) (param $len i64) (param $offset i64) (param $count i64) (param $has_len i32) (result i32) (result i64)
+  (local $start i64)                                              ;; first byte taken
+  (local $stop i64)                                               ;; one past the last byte taken
+  (local $out i32)                                                ;; owned result block
+  (local $w i32)                                                  ;; copy cursor
+  (local.set $start (local.get $offset))                          ;; assume a forward offset
+  (if (i64.lt_s (local.get $start) (i64.const 0))
+    (then
+      (local.set $start (i64.add (local.get $len) (local.get $start)))  ;; count from the end
+      (if (i64.lt_s (local.get $start) (i64.const 0))
+        (then (local.set $start (i64.const 0))))))                ;; ...saturating at the start
+  (if (i64.gt_s (local.get $start) (local.get $len))
+    (then (local.set $start (local.get $len))))                   ;; past the end takes nothing
+  (local.set $stop (local.get $len))                              ;; the two-argument form runs to the end
+  (if (local.get $has_len)
+    (then
+      (if (i64.lt_s (local.get $count) (i64.const 0))
+        (then (local.set $stop (i64.add (local.get $len) (local.get $count))))  ;; end from the right
+        (else (local.set $stop (i64.add (local.get $start) (local.get $count)))))
+      (if (i64.gt_s (local.get $stop) (local.get $len))
+        (then (local.set $stop (local.get $len))))                ;; clamp to the end
+      (if (i64.lt_s (local.get $stop) (local.get $start))
+        (then (local.set $stop (local.get $start))))))            ;; an inverted range is empty
+  (local.set $out (call $__rt_str_alloc (i64.sub (local.get $stop) (local.get $start))))
+  (local.set $w (i32.const 0))                                    ;; w = 0
+  (block $end (loop $copy
+    (br_if $end (i64.ge_s (local.get $start) (local.get $stop)))  ;; every selected byte copied
+    (i32.store8 (i32.add (local.get $out) (local.get $w))
+      (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $start)))))
+    (local.set $w (i32.add (local.get $w) (i32.const 1)))         ;; w++
+    (local.set $start (i64.add (local.get $start) (i64.const 1))) ;; next byte
+    (br $copy)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -849,6 +1073,15 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::StrEndsWith
             | RuntimeFnId::Chr
             | RuntimeFnId::Ord
+            | RuntimeFnId::Ucfirst
+            | RuntimeFnId::Lcfirst
+            | RuntimeFnId::Ucwords
+            | RuntimeFnId::Strcmp
+            | RuntimeFnId::Strcasecmp
+            | RuntimeFnId::Trim
+            | RuntimeFnId::Ltrim
+            | RuntimeFnId::Rtrim
+            | RuntimeFnId::Substr
     )
 }
 
@@ -907,6 +1140,27 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if matches!(target, RuntimeFnId::Chr | RuntimeFnId::Ord) {
         return byte_conversion_shape_issue(function, call, target);
+    }
+    if matches!(target, RuntimeFnId::Strcmp | RuntimeFnId::Strcasecmp) {
+        return string_compare_shape_issue(function, call, target);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::Trim | RuntimeFnId::Ltrim | RuntimeFnId::Rtrim
+    ) {
+        return trim_shape_issue(function, call, target);
+    }
+    if target == RuntimeFnId::Substr {
+        return substr_shape_issue(function, call);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::Ucfirst | RuntimeFnId::Lcfirst | RuntimeFnId::Ucwords
+    ) {
+        return trim_shape_issue(function, call, target)
+            .or_else(|| (call.operands.len() != 1).then(|| {
+                format!("{target:?} takes exactly one string, got {}", call.operands.len())
+            }));
     }
     let [operand] = call.operands.as_slice() else {
         return Some(format!(
@@ -1038,6 +1292,50 @@ pub(super) fn lower_direct_builtin(
         ctx.fb
             .ins("call $__rt_str_ord", "the first byte, or zero for the empty string");
         return store_result(ctx, inst);
+    }
+    if matches!(target, RuntimeFnId::Ucfirst | RuntimeFnId::Lcfirst) {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb.ins(
+            if target == RuntimeFnId::Ucfirst {
+                "i32.const 1"
+            } else {
+                "i32.const 0"
+            },
+            "map the first byte towards upper or lower case",
+        );
+        ctx.fb
+            .ins("call $__rt_str_case_edge", "case-map the first byte only");
+        return store_result(ctx, inst);
+    }
+    if target == RuntimeFnId::Ucwords {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb
+            .ins("call $__rt_str_ucwords", "upper-case each word's first letter");
+        return store_result(ctx, inst);
+    }
+    if matches!(target, RuntimeFnId::Strcmp | RuntimeFnId::Strcasecmp) {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.emit_load_value(operand(inst, 1)?)?;
+        ctx.fb.ins(
+            if target == RuntimeFnId::Strcasecmp {
+                "i32.const 1"
+            } else {
+                "i32.const 0"
+            },
+            "fold ASCII case before comparing",
+        );
+        ctx.fb
+            .ins("call $__rt_str_cmp", "byte distance, or +/-1 on length alone");
+        return store_result(ctx, inst);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::Trim | RuntimeFnId::Ltrim | RuntimeFnId::Rtrim
+    ) {
+        return lower_trim(ctx, inst, target);
+    }
+    if target == RuntimeFnId::Substr {
+        return lower_substr(ctx, inst);
     }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
@@ -1444,6 +1742,163 @@ fn lower_array_fill(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 }
 
 /// Validates `str_contains`, `str_starts_with` and `str_ends_with`: two strings in, a bool out.
+/// Lowers `trim`, `ltrim` and `rtrim` through the shared end-stripping helper.
+///
+/// The one-argument form passes a `-1` charlist length, which the helper reads as PHP's default
+/// set. That keeps the default out of the data segments of a module that never asks for it, and
+/// keeps an explicitly EMPTY charlist — which strips nothing — distinguishable from it.
+fn lower_trim(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    if inst.operands.len() == 2 {
+        ctx.emit_load_value(operand(inst, 1)?)?;
+    } else {
+        ctx.fb.ins("i32.const 0", "no charlist pointer");
+        ctx.fb
+            .ins("i64.const -1", "sentinel: PHP's default character set");
+    }
+    let mode = match target {
+        RuntimeFnId::Ltrim => 1,
+        RuntimeFnId::Rtrim => 2,
+        _ => 3,
+    };
+    ctx.fb
+        .ins(&format!("i32.const {mode}"), "which ends to strip");
+    ctx.fb.ins("call $__rt_str_trim", "strip the selected ends");
+    store_result(ctx, inst)
+}
+
+/// Lowers `substr`, passing whether an explicit length was written.
+///
+/// The two- and three-argument forms differ in more than a default: without a length the slice
+/// runs to the end, while a NEGATIVE length names an end offset from the right. A single flag
+/// tells the helper which rule to apply rather than inventing a length that would have to encode
+/// both.
+fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    if inst.operands.len() == 3 {
+        ctx.emit_load_value(operand(inst, 2)?)?;
+        ctx.fb.ins("i32.const 1", "an explicit length was written");
+    } else {
+        ctx.fb.ins("i64.const 0", "unused length");
+        ctx.fb.ins("i32.const 0", "no length: run to the end");
+    }
+    ctx.fb.ins("call $__rt_str_substr", "own the selected bytes");
+    store_result(ctx, inst)
+}
+
+/// Validates `trim`, `ltrim` and `rtrim`: a string, and optionally a charlist string.
+fn trim_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    if !matches!(call.operands.len(), 1 | 2) {
+        return Some(format!(
+            "expected a subject and an optional charlist, got {} operands",
+            call.operands.len()
+        ));
+    }
+    for operand in &call.operands {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+            return Some(format!(
+                "expected a string operand, got {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates `substr`: a string, an integer offset, and optionally an integer length.
+fn substr_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    if !matches!(call.operands.len(), 2 | 3) {
+        return Some(format!(
+            "expected a subject, an offset and an optional length, got {} operands",
+            call.operands.len()
+        ));
+    }
+    for (index, operand) in call.operands.iter().enumerate() {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        let (want_ir, want_php) = if index == 0 {
+            (IrType::Str, PhpType::Str)
+        } else {
+            (IrType::I64, PhpType::Int)
+        };
+        if value.ir_type != want_ir || value.php_type.codegen_repr() != want_php {
+            return Some(format!(
+                "substr operand {index} is {:?}/{:?}, expected {want_ir:?}/{want_php:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "substr result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates `strcmp` and `strcasecmp`: two strings in, an integer out.
+fn string_compare_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let [left, right] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected two string operands, got {}",
+            call.operands.len()
+        ));
+    };
+    for operand in [left, right] {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+            return Some(format!(
+                "expected a string operand, got {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::I64
+        || call.result_php_type.codegen_repr() != PhpType::Int
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the expected I64/Int",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
 /// Validates `chr` and `ord`: one concrete scalar in, the opposite one out.
 ///
 /// A `mixed` argument is refused rather than coerced. PHP would juggle it, and juggling carries
@@ -1903,6 +2358,159 @@ mod tests {
                 "the profiles must agree on the ANSWER, not just on the diagnostic"
             );
         }
+    }
+
+    /// Builds a `RuntimeCall` probe with an arbitrary operand list.
+    fn shaped_call(
+        target: RuntimeFnId,
+        operands: &[(IrType, PhpType)],
+        result_ir: IrType,
+        result_php: PhpType,
+    ) -> Function {
+        let mut function = Function::new("probe".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let arguments: Vec<_> = operands
+                .iter()
+                .enumerate()
+                .map(|(index, (ir, php))| {
+                    let slot = builder.add_local(
+                        Some(format!("a{index}")),
+                        *ir,
+                        php.clone(),
+                        crate::ir::LocalKind::PhpLocal,
+                    );
+                    builder.emit_load_local(slot, *ir, php.clone())
+                })
+                .collect();
+            builder.emit(
+                Op::RuntimeCall,
+                arguments,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))),
+                result_ir,
+                result_php,
+                Ownership::MaybeOwned,
+            );
+            builder.terminate(crate::ir::Terminator::Return { value: None });
+        }
+        function
+    }
+
+    /// Verifies the string-shaping builtins accept exactly the arities they lower.
+    ///
+    /// `trim` and `substr` each have an optional trailing argument that changes the RULE, not
+    /// just a default — an absent charlist means PHP's built-in set rather than the empty one,
+    /// and an absent length runs to the end rather than meaning zero — so both arities have to be
+    /// admitted and a third refused. The rest take exactly what they take.
+    #[test]
+    fn string_shaping_builtins_admit_only_their_arities() {
+        let str_arg = (IrType::Str, PhpType::Str);
+        let int_arg = (IrType::I64, PhpType::Int);
+
+        for target in [
+            RuntimeFnId::Ucfirst,
+            RuntimeFnId::Lcfirst,
+            RuntimeFnId::Ucwords,
+        ] {
+            let ok = shaped_call(target, &[str_arg.clone()], IrType::Str, PhpType::Str);
+            let call = ok.instructions.last().expect("the probe emitted a call");
+            assert_eq!(direct_builtin_shape_issue(&ok, call, target), None);
+
+            let two = shaped_call(
+                target,
+                &[str_arg.clone(), str_arg.clone()],
+                IrType::Str,
+                PhpType::Str,
+            );
+            let call = two.instructions.last().expect("the probe emitted a call");
+            assert!(
+                direct_builtin_shape_issue(&two, call, target).is_some(),
+                "{target:?} takes one string"
+            );
+        }
+
+        for target in [RuntimeFnId::Trim, RuntimeFnId::Ltrim, RuntimeFnId::Rtrim] {
+            for arity in 1..=2 {
+                let operands = vec![str_arg.clone(); arity];
+                let ok = shaped_call(target, &operands, IrType::Str, PhpType::Str);
+                let call = ok.instructions.last().expect("the probe emitted a call");
+                assert_eq!(
+                    direct_builtin_shape_issue(&ok, call, target),
+                    None,
+                    "{target:?} accepts {arity} operand(s)"
+                );
+            }
+            let three = shaped_call(target, &vec![str_arg.clone(); 3], IrType::Str, PhpType::Str);
+            let call = three.instructions.last().expect("the probe emitted a call");
+            assert!(direct_builtin_shape_issue(&three, call, target).is_some());
+        }
+
+        for arity in 2..=3 {
+            let mut operands = vec![str_arg.clone()];
+            operands.extend(vec![int_arg.clone(); arity - 1]);
+            let ok = shaped_call(RuntimeFnId::Substr, &operands, IrType::Str, PhpType::Str);
+            let call = ok.instructions.last().expect("the probe emitted a call");
+            assert_eq!(
+                direct_builtin_shape_issue(&ok, call, RuntimeFnId::Substr),
+                None,
+                "substr accepts {arity} operands"
+            );
+        }
+        // A string where the offset belongs is refused rather than coerced.
+        let bad_offset = shaped_call(
+            RuntimeFnId::Substr,
+            &[str_arg.clone(), str_arg.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = bad_offset.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&bad_offset, call, RuntimeFnId::Substr).is_some());
+
+        for target in [RuntimeFnId::Strcmp, RuntimeFnId::Strcasecmp] {
+            let ok = shaped_call(
+                target,
+                &[str_arg.clone(), str_arg.clone()],
+                IrType::I64,
+                PhpType::Int,
+            );
+            let call = ok.instructions.last().expect("the probe emitted a call");
+            assert_eq!(direct_builtin_shape_issue(&ok, call, target), None);
+
+            // A comparison answers an int, never a bool: PHP's result is a byte distance.
+            let as_bool = shaped_call(
+                target,
+                &[str_arg.clone(), str_arg.clone()],
+                IrType::I64,
+                PhpType::Bool,
+            );
+            let call = as_bool.instructions.last().expect("the probe emitted a call");
+            assert!(direct_builtin_shape_issue(&as_bool, call, target).is_some());
+        }
+    }
+
+    /// Verifies `strcmp` reports a byte DISTANCE but normalizes a pure length difference.
+    ///
+    /// These are two different rules and php-src applies both: `strcmp("ABC", "abc")` is -32
+    /// because `A` and `a` are 32 apart, while `strcmp("abcd", "a")` is 1 rather than 3 because
+    /// nothing mismatched — only the lengths differ. A helper that returned the length delta, or
+    /// that clamped the byte distance to a sign, would pass a naive test and fail php-src.
+    #[test]
+    fn strcmp_returns_a_byte_distance_but_a_normalized_length_difference() {
+        assert!(
+            RT_STR_CMP.contains("(return (i64.extend_i32_s (i32.sub (local.get $x) (local.get $y))))"),
+            "a mismatched byte yields its raw distance, not a sign"
+        );
+        for normalized in ["(then (return (i64.const -1)))", "(then (return (i64.const 1)))"] {
+            assert!(
+                RT_STR_CMP.contains(normalized),
+                "a pure length difference is normalized to +/-1"
+            );
+        }
+        // The bytes are read UNSIGNED, which is what makes strcmp("\xff", "\x01") 254 and not -2.
+        assert!(!RT_STR_CMP.contains("i32.load8_s"));
     }
 
     /// Verifies the two url codecs differ exactly where php-src says they do.

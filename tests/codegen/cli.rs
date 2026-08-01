@@ -3515,6 +3515,142 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the string-shaping builtins reproduce php-src byte for byte.
+///
+/// The samples pin what a naive implementation gets wrong. `ucwords` treats VERTICAL TAB as a
+/// word delimiter but not `-`, `_` or `.`; `trim`'s default set includes NUL and vertical tab,
+/// while an explicitly EMPTY charlist strips nothing. `strcmp` reports the raw UNSIGNED byte
+/// distance at the first mismatch — -32 for `ABC` against `abc`, 254 for `\xff` against `\x01` —
+/// but normalizes a pure length difference to +/-1. `substr` answers the empty string rather than
+/// false for every out-of-range case, a negative offset counts from the end and saturates, and a
+/// negative length names an end offset from the right.
+#[test]
+fn test_cli_wasm_string_shaping_builtins_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_string_shaping");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function t(string $s): void {
+    echo bin2hex($s), "|", bin2hex(ucfirst($s)), "|", bin2hex(lcfirst($s)), "|", bin2hex(ucwords($s)),
+         "|", bin2hex(trim($s)), "|", bin2hex(ltrim($s)), "|", bin2hex(rtrim($s)), "\n";
+}
+t(""); t("a"); t("abc"); t("ABC"); t("hello world  foo"); t(" \t x \n "); t("\x00\x0bz\x0b\x00"); t("h\xc3\xa9llo"); t("123abc");
+t("a\tb\nc\rd\x0ce\x0bf g"); t("a-b_c.d");
+function c(string $a, string $b): void { echo strcmp($a, $b), "|", strcasecmp($a, $b), "\n"; }
+c("a","a"); c("a","b"); c("b","a"); c("","a"); c("a",""); c("",""); c("abc","abd"); c("ABC","abc");
+c("a","A"); c("abc","ab"); c("\xff","\x01"); c("abcd","a"); c("ab","abcdefgh"); c("Z","a"); c("_","a");
+function s2(string $x, int $o): void { echo bin2hex(substr($x, $o)), "\n"; }
+function s3(string $x, int $o, int $n): void { echo bin2hex(substr($x, $o, $n)), "\n"; }
+s2("hello",0); s2("hello",2); s2("hello",-2); s2("hello",5); s2("hello",6); s2("hello",-9); s2("",0); s2("",3);
+s3("hello",1,3); s3("hello",1,-1); s3("hello",-3,2); s3("hello",0,-5); s3("hello",0,-9); s3("hello",2,0); s3("hello",2,99); s3("hello",-2,-1);
+function tc(string $x, string $cl): void { echo bin2hex(trim($x,$cl)), "|", bin2hex(ltrim($x,$cl)), "|", bin2hex(rtrim($x,$cl)), "\n"; }
+tc("xxhelloxx","x"); tc("abcHELLOcba","abc"); tc("hello",""); tc("aaa","a");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the shaping builtins to WASM");
+    assert!(
+        output.status.success(),
+        "shaping builtin compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the shaping builtins under Node");
+    assert!(
+        run.status.success(),
+        "shaping builtins trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "||||||\n",
+            "61|41|61|41|61|61|61\n",
+            "616263|416263|616263|416263|616263|616263|616263\n",
+            "414243|414243|614243|414243|414243|414243|414243\n",
+            "68656c6c6f20776f726c642020666f6f|48656c6c6f20776f726c642020666f6f|68656c6c6f20776f726c642020666f6f|48656c6c6f20576f726c642020466f6f|68656c6c6f20776f726c642020666f6f|68656c6c6f20776f726c642020666f6f|68656c6c6f20776f726c642020666f6f\n",
+            "20092078200a20|20092078200a20|20092078200a20|20092058200a20|78|78200a20|20092078\n",
+            "000b7a0b00|000b7a0b00|000b7a0b00|000b5a0b00|7a|7a0b00|000b7a\n",
+            "68c3a96c6c6f|48c3a96c6c6f|68c3a96c6c6f|48c3a96c6c6f|68c3a96c6c6f|68c3a96c6c6f|68c3a96c6c6f\n",
+            "313233616263|313233616263|313233616263|313233616263|313233616263|313233616263|313233616263\n",
+            "6109620a630d640c650b662067|4109620a630d640c650b662067|6109620a630d640c650b662067|4109420a430d440c450b462047|6109620a630d640c650b662067|6109620a630d640c650b662067|6109620a630d640c650b662067\n",
+            "612d625f632e64|412d625f632e64|612d625f632e64|412d625f632e64|612d625f632e64|612d625f632e64|612d625f632e64\n",
+            "0|0\n",
+            "-1|-1\n",
+            "1|1\n",
+            "-1|-1\n",
+            "1|1\n",
+            "0|0\n",
+            "-1|-1\n",
+            "-32|0\n",
+            "32|0\n",
+            "1|1\n",
+            "254|254\n",
+            "1|1\n",
+            "-1|-1\n",
+            "-7|25\n",
+            "-2|-2\n",
+            "68656c6c6f\n",
+            "6c6c6f\n",
+            "6c6f\n",
+            "\n",
+            "\n",
+            "68656c6c6f\n",
+            "\n",
+            "\n",
+            "656c6c\n",
+            "656c6c\n",
+            "6c6c\n",
+            "\n",
+            "\n",
+            "\n",
+            "6c6c6f\n",
+            "6c\n",
+            "68656c6c6f|68656c6c6f7878|787868656c6c6f\n",
+            "48454c4c4f|48454c4c4f636261|61626348454c4c4f\n",
+            "68656c6c6f|68656c6c6f|68656c6c6f\n",
+            "||\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `chr` and `ord` reproduce php-src, including the values PHP does not reject.
 ///
 /// PHP does not refuse an out-of-range `chr`: it constrains the argument with `% 256`, bringing a

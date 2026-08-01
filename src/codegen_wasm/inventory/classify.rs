@@ -234,6 +234,22 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_direct_builtins_match_php",
             ][..],
         ),
+        RuntimeFnId::Ucfirst
+        | RuntimeFnId::Lcfirst
+        | RuntimeFnId::Ucwords
+        | RuntimeFnId::Strcmp
+        | RuntimeFnId::Strcasecmp
+        | RuntimeFnId::Trim
+        | RuntimeFnId::Ltrim
+        | RuntimeFnId::Rtrim
+        | RuntimeFnId::Substr => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
+                "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+            ][..],
+        ),
         RuntimeFnId::Chr | RuntimeFnId::Ord => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
