@@ -1048,6 +1048,29 @@ fn test_error_write_to_get_only_hooked_property() {
     );
 }
 
+/// Verifies that a VIRTUAL get-only hooked property (its hook body never names `$this->p`) is
+/// still rejected on write, now that BACKED hooked properties are accepted. `php -n` 8.5.6 throws
+/// `Error: Property C::$p is read-only` here, and `ReflectionProperty::isVirtual()` reports `true`.
+#[test]
+fn test_error_write_to_virtual_hooked_property_reading_another_property() {
+    expect_error(
+        "<?php class C { public string $q = \"seed\"; public string $p { get { return strtoupper($this->q); } } } $c = new C(); $c->p = \"nope\";",
+        "Cannot write to read-only hooked property C::p",
+    );
+}
+
+/// Verifies that a `$this->p` buried inside a CLOSURE in the hook body does NOT make the property
+/// backed: `php -n` 8.5.6 reports `isVirtual() === true` for `get => (fn () => $this->p)()` and
+/// throws `Error: Property D::$p is read-only` on write. This is the negative control for the
+/// backing-store scanner's deliberate refusal to descend into `ExprKind::Closure`.
+#[test]
+fn test_error_write_to_hooked_property_backed_only_inside_closure() {
+    expect_error(
+        "<?php class D { public string $p { get { return (fn () => $this->p)(); } } } $d = new D(); $d->p = \"nope\";",
+        "Cannot write to read-only hooked property D::p",
+    );
+}
+
 /// Verifies that a set hook cannot be declared by reference.
 #[test]
 fn test_error_set_hook_by_ref_rejected() {

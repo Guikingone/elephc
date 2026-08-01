@@ -31,6 +31,7 @@ mod functions;
 mod inference;
 mod loop_storage;
 mod method_pass;
+mod property_hooks;
 mod schema;
 mod stmt_check;
 pub(crate) mod type_compat;

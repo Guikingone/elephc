@@ -264,3 +264,30 @@ fn test_mixed_case_get_only_hooked_property() {
     );
     assert_eq!(out, "5");
 }
+
+/// Verifies PHP's BACKED-vs-VIRTUAL rule for a property that declares a `get` hook and no `set`
+/// hook: naming `$this-><prop>` in the hook body makes the property BACKED, and PHP then allows a
+/// write from OUTSIDE the class, routed to the backing store.
+///
+/// The hook here uppercases what it reads, so the assertion is self-validating in both directions:
+/// a write that never reached the backing store would not produce the sentinel, and a read that
+/// bypassed the hook would come back lowercase.
+///
+/// `php -n` 8.5.6 oracle (`ReflectionProperty::isVirtual()` is `false` for both shapes, and both
+/// writes succeed). Symfony shape: `HttpKernel\Event\ViewEvent::$controllerArgumentsEvent`.
+#[test]
+fn test_backed_get_only_hooked_property_accepts_external_write() {
+    let out = compile_and_run(
+        "<?php
+        class Plain { public string $p { get { return $this->p; } } }
+        class Upper { public string $p { get { return strtoupper($this->p); } } }
+        $a = new Plain();
+        $a->p = 'SENTINEL-BACKED';
+        echo $a->p, \"\\n\";
+        $b = new Upper();
+        $b->p = 'sentinel-upper';
+        echo $b->p, \"\\n\";
+        ",
+    );
+    assert_eq!(out, "SENTINEL-BACKED\nSENTINEL-UPPER\n");
+}

@@ -267,9 +267,12 @@ fn check_object_property_write(
             );
             return Ok(());
         }
-        // A property with a `get` hook but no `set` hook is read-only: external writes are an error
-        // (PHP rejects writing a virtual/get-only hooked property). Writes from inside the property's
-        // own accessor target the raw backing slot and are allowed.
+        // A property with a `get` hook but no `set` hook is read-only ONLY when it is VIRTUAL —
+        // i.e. when the hook body never names `$this-><property>`. When the body does name it the
+        // property is BACKED, and PHP allows the write (it goes to the backing store) even from
+        // outside the class; `hooked_property_is_backed` carries the measured `php -n` matrix.
+        // Writes from inside the property's own accessor target the raw backing slot and are
+        // likewise allowed.
         let has_get_hook = class_info
             .methods
             .contains_key(&php_symbol_key(&property_hook_get_method(property)));
@@ -284,12 +287,18 @@ fn check_object_property_write(
                 method == php_symbol_key(&property_hook_get_method(property))
                     || method == php_symbol_key(&property_hook_set_method(property))
             });
-        if has_get_hook && !has_set_hook && !in_own_accessor {
+        if has_get_hook
+            && !has_set_hook
+            && !in_own_accessor
+            && !super::super::super::property_hooks::hooked_property_is_backed(
+                checker, class_name, property,
+            )
+        {
             return Err(CompileError::new(
                 span,
                 &format!(
-                    "Cannot write to read-only hooked property {}::{} (it declares a get hook but no set hook)",
-                    class_name, property
+                    "Cannot write to read-only hooked property {}::{} (its get hook is virtual — it never reads or writes $this->{}, and there is no set hook)",
+                    class_name, property, property
                 ),
             ));
         }
