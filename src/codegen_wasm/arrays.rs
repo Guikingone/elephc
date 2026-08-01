@@ -55,6 +55,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_REVERSE_INT);
     wm.add_raw_func(RT_ARRAY_SUM_INT);
     wm.add_raw_func(RT_ARRAY_PRODUCT_INT);
+    wm.add_raw_func(RT_ARRAY_FILL_INT);
 }
 
 /// `__rt_array_new`: allocates an indexed array with `capacity` slots of
@@ -192,6 +193,28 @@ const RT_ARRAY_PRODUCT_INT: &str = r#"(func $__rt_array_product_int (param $arra
     (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
     (br $mul)))
   (local.get $acc))
+"#;
+
+/// `__rt_array_fill_int`: builds `[value, value, ...]` with `count` raw i64 slots.
+///
+/// Serves `array_fill(0, $count, $value)` only: a non-zero start index produces the keys
+/// `start..start+count-1`, which is not a list and therefore not this representation. A count of
+/// zero yields the empty array, matching PHP.
+const RT_ARRAY_FILL_INT: &str = r#"(func $__rt_array_fill_int (param $count i64) (param $value i64) (result i32)
+  (local $new i32)
+  (local $i i64)
+  (local.set $new (call $__rt_array_new (local.get $count) (i64.const 8)))  ;; exact capacity, raw i64 slots
+  (i64.store (local.get $new) (local.get $count))                 ;; every slot is live
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $end (loop $fill
+    (br_if $end (i64.ge_s (local.get $i) (local.get $count)))     ;; all slots written
+    (i64.store
+      (i32.add (i32.add (local.get $new) (i32.const 24))
+               (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8))))
+      (local.get $value))                                         ;; the same value in every slot
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $fill)))
+  (local.get $new))                                               ;; owned result
 "#;
 
 /// `__rt_array_grow`: allocates a double-capacity array (min 8), copies the live

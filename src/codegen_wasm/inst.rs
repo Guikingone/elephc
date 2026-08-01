@@ -702,7 +702,7 @@ fn lower_int_shift(ctx: &mut FnCtx, inst: &Instruction, left: bool) -> Result<()
 /// WebAssembly traps for both `rhs == 0` and `i64::MIN / -1`. PHP surfaces
 /// `DivisionByZeroError` and `ArithmeticError`, so command modules route those
 /// cases through the deterministic runtime failure path before `i64.div_s`.
-fn lower_signed_int_div(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_signed_int_div(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let lhs = ctx.fresh_temp(ValType::I64);
     let rhs = ctx.fresh_temp(ValType::I64);
     capture_int_operands(ctx, inst, &lhs, &rhs)?;

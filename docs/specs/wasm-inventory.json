@@ -5026,9 +5026,9 @@
     },
     "runtime_fn": {
       "total": 437,
-      "supported": 16,
+      "supported": 20,
       "excluded": 29,
-      "missing": 392,
+      "missing": 388,
       "rows": [
         {
           "name": "array_all",
@@ -5146,7 +5146,7 @@
           "name": "array_fill",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "array_fill(...)"
           ],
@@ -5154,7 +5154,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
+              "codegen_wasm::builtins::tests::in_array_is_admitted_only_when_strict_is_literally_true",
+              "codegen::cli::test_cli_wasm_direct_builtins_match_php"
+            ]
+          }
         },
         {
           "name": "array_fill_keys",
@@ -8914,7 +8922,7 @@
           "name": "intdiv",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "intdiv(...)"
           ],
@@ -8922,7 +8930,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
+              "codegen_wasm::builtins::tests::in_array_is_admitted_only_when_strict_is_literally_true",
+              "codegen::cli::test_cli_wasm_direct_builtins_match_php"
+            ]
+          }
         },
         {
           "name": "log",
@@ -8970,7 +8986,7 @@
           "name": "max",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "max(...)"
           ],
@@ -8978,13 +8994,21 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
+              "codegen_wasm::builtins::tests::in_array_is_admitted_only_when_strict_is_literally_true",
+              "codegen::cli::test_cli_wasm_direct_builtins_match_php"
+            ]
+          }
         },
         {
           "name": "min",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "min(...)"
           ],
@@ -8992,7 +9016,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
+              "codegen_wasm::builtins::tests::in_array_is_admitted_only_when_strict_is_literally_true",
+              "codegen::cli::test_cli_wasm_direct_builtins_match_php"
+            ]
+          }
         },
         {
           "name": "mt_rand",
@@ -12112,14 +12144,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 140,
+    "supported": 144,
     "excluded": 47,
-    "missing": 525,
+    "missing": 521,
     "evidence_gaps": 178,
     "row_evidence_gaps": 177,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "525 reachable identities lack a WASM lowerer; 177 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "521 reachable identities lack a WASM lowerer; 177 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

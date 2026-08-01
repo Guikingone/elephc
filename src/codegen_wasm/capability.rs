@@ -4454,7 +4454,11 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::InArray
         | RuntimeFnId::ArrayReverse
         | RuntimeFnId::ArraySum
-        | RuntimeFnId::ArrayProduct => true,
+        | RuntimeFnId::ArrayProduct
+        | RuntimeFnId::Max
+        | RuntimeFnId::Min
+        | RuntimeFnId::Intdiv
+        | RuntimeFnId::ArrayFill => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4467,7 +4471,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayDiff
         | RuntimeFnId::ArrayDiffAssoc
         | RuntimeFnId::ArrayDiffKey
-        | RuntimeFnId::ArrayFill
         | RuntimeFnId::ArrayFillKeys
         | RuntimeFnId::ArrayFind
         | RuntimeFnId::ArrayFlip
@@ -4708,12 +4711,9 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fdiv
         | RuntimeFnId::Fmod
         | RuntimeFnId::Hypot
-        | RuntimeFnId::Intdiv
         | RuntimeFnId::Log
         | RuntimeFnId::Log10
         | RuntimeFnId::Log2
-        | RuntimeFnId::Max
-        | RuntimeFnId::Min
         | RuntimeFnId::MtRand
         | RuntimeFnId::Pi
         | RuntimeFnId::Pow

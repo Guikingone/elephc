@@ -93,6 +93,10 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::ArrayReverse
             | RuntimeFnId::ArraySum
             | RuntimeFnId::ArrayProduct
+            | RuntimeFnId::Max
+            | RuntimeFnId::Min
+            | RuntimeFnId::Intdiv
+            | RuntimeFnId::ArrayFill
     )
 }
 
@@ -133,6 +137,12 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if matches!(target, RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) {
         return array_fold_shape_issue(function, call, target);
+    }
+    if matches!(target, RuntimeFnId::Max | RuntimeFnId::Min | RuntimeFnId::Intdiv) {
+        return int_pair_shape_issue(function, call, target);
+    }
+    if target == RuntimeFnId::ArrayFill {
+        return array_fill_shape_issue(function, call);
     }
     if target == RuntimeFnId::InArray {
         return in_array_shape_issue(function, call);
@@ -237,6 +247,15 @@ pub(super) fn lower_direct_builtin(
     }
     if matches!(target, RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) {
         return lower_array_fold(ctx, inst, target);
+    }
+    if matches!(target, RuntimeFnId::Max | RuntimeFnId::Min) {
+        return lower_int_extremum(ctx, inst, target);
+    }
+    if target == RuntimeFnId::Intdiv {
+        return super::inst::lower_signed_int_div(ctx, inst);
+    }
+    if target == RuntimeFnId::ArrayFill {
+        return lower_array_fill(ctx, inst);
     }
     if target == RuntimeFnId::InArray {
         return lower_in_array(ctx, inst);
@@ -517,6 +536,134 @@ fn lower_array_fold(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) ->
     store_result(ctx, inst)
 }
 
+/// Validates the builtins taking two ints and answering one: `max`, `min` and `intdiv`.
+///
+/// PHP's `max`/`min` are variadic and compare across types; only the two-integer form is served
+/// here, where the comparison is a plain signed ordering with no juggling.
+fn int_pair_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let [left, right] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected two int operands, got {}",
+            call.operands.len()
+        ));
+    };
+    for operand in [left, right] {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if value.ir_type != IrType::I64 || value.php_type.codegen_repr() != PhpType::Int {
+            return Some(format!(
+                "expected an int operand, got {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::I64
+        || call.result_php_type.codegen_repr() != PhpType::Int
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the expected I64/Int",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Validates `array_fill(0, $count, $value)` against the one shape a list can represent.
+///
+/// A non-zero start index produces the keys `start..start+count-1`, which is not a list, so the
+/// start must be the literal `0`. The value must be an int because the result's slots are raw
+/// i64s.
+fn array_fill_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [start, count, value] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected start, count and value, got {} operands",
+            call.operands.len()
+        ));
+    };
+    if !literal_zero(function, *start) {
+        return Some(
+            "only a literal 0 start index yields a list; other starts key from the start index"
+                .to_string(),
+        );
+    }
+    for operand in [count, value] {
+        let Some(operand) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if operand.ir_type != IrType::I64 || operand.php_type.codegen_repr() != PhpType::Int {
+            return Some(format!(
+                "expected an int operand, got {:?}/{:?}",
+                operand.ir_type,
+                operand.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Heap(IrHeapKind::Array)
+        || !matches!(
+            call.result_php_type.codegen_repr(),
+            PhpType::Array(element) if matches!(*element, PhpType::Int | PhpType::Never)
+        )
+    {
+        return Some(format!(
+            "result {:?}/{:?} is not the expected Heap(Array)/array<int>",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Returns whether `value` is the constant integer zero.
+fn literal_zero(function: &Function, value: crate::ir::ValueId) -> bool {
+    let Some(defined) = function.value(value) else {
+        return false;
+    };
+    let crate::ir::ValueDef::Instruction { inst, .. } = defined.def else {
+        return false;
+    };
+    let Some(defining) = function.instruction(inst) else {
+        return false;
+    };
+    defining.op == crate::ir::Op::ConstI64
+        && matches!(defining.immediate, Some(crate::ir::Immediate::I64(0)))
+}
+
+/// Lowers the two-integer `max` / `min` to a signed comparison and a select.
+fn lower_int_extremum(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Result<()> {
+    let left = operand(inst, 0)?;
+    let right = operand(inst, 1)?;
+    ctx.emit_load_value(left)?;
+    ctx.emit_load_value(right)?;
+    ctx.emit_load_value(left)?;
+    ctx.emit_load_value(right)?;
+    if target == RuntimeFnId::Max {
+        ctx.fb.ins("i64.gt_s", "is the left operand the larger?");
+    } else {
+        ctx.fb.ins("i64.lt_s", "is the left operand the smaller?");
+    }
+    ctx.fb
+        .ins("select", "keep the operand the comparison chose");
+    store_result(ctx, inst)
+}
+
+/// Lowers `array_fill(0, $count, $value)` to a filled list.
+fn lower_array_fill(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.emit_load_value(operand(inst, 2)?)?;
+    ctx.fb
+        .ins("call $__rt_array_fill_int", "one repeated value per slot");
+    store_result(ctx, inst)
+}
+
 /// Lowers strict `in_array($needle, $haystack, true)` to an identity scan.
 fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 1)?)?;
@@ -775,6 +922,35 @@ mod tests {
                 "{target:?} folds integer slots only"
             );
         }
+
+        // `RuntimeFnId::Max`, `RuntimeFnId::Min` and `RuntimeFnId::Intdiv` take two ints; the
+        // variadic and cross-type forms of max/min are not served.
+        for target in [RuntimeFnId::Max, RuntimeFnId::Min, RuntimeFnId::Intdiv] {
+            let single = call_with(
+                target,
+                IrType::I64,
+                PhpType::Int,
+                IrType::I64,
+                PhpType::Int,
+            );
+            assert!(
+                verdict(&single, target).is_some(),
+                "{target:?} needs exactly two operands"
+            );
+        }
+
+        // `RuntimeFnId::ArrayFill` needs its start index, count and value; one operand is not it.
+        let short_fill = call_with(
+            RuntimeFnId::ArrayFill,
+            IrType::I64,
+            PhpType::Int,
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Int)),
+        );
+        assert!(
+            verdict(&short_fill, RuntimeFnId::ArrayFill).is_some(),
+            "array_fill takes three operands"
+        );
 
         let scalar_count = call_with(
             RuntimeFnId::Count,

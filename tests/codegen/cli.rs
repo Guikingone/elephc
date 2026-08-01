@@ -3039,6 +3039,13 @@ function folds(array $xs): void {
 }
 folds([1, 2, 3]);
 echo array_sum($e), "|", array_product($e), "|", count(array_reverse($e)), "\n";
+function pairs(int $p, int $q): void {
+    echo max($p, $q), "|", min($p, $q), "|", intdiv($p, $q), "\n";
+}
+pairs(7, 2);
+pairs(-7, 2);
+$filled = array_fill(0, 3, 7);
+echo count($filled), "|", $filled[2], "|", count(array_fill(0, 0, 9)), "\n";
 "#,
     )
     .unwrap();
@@ -3100,6 +3107,9 @@ process.exitCode = wasi.start(instance);
         "n|3|1|7,99\n",
         "6|6|3,1\n",
         "0|1|0\n",
+        "7|2|3\n",
+        "2|-7|-3\n",
+        "3|7|0\n",
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
     assert!(
