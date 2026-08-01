@@ -147,7 +147,11 @@ The pain is symmetric and neither side is covered by the other's tests — which
 
 Three decisions the mapping forces:
 
-1. **Persist every `Str` returned from an export, unconditionally.** `persist_scratch_return_string` (`ir_lower/stmt/mod.rs:2522-2544`) only persists values produced by scratch-categorised ops (`ir_lower/expr/mod.rs:673-686`). So `return $param;` can hand the host back *the very pointer the host passed in*. Today `heap_free_safe` happens to reject out-of-heap pointers silently, but that is an implementation accident, not a contract. An ABI where the host sometimes owns the result and sometimes does not is unusable; one copy per export call buys a rule the host can actually follow.
+1. **Persist every `Str` returned from an export, unconditionally — and do it in lowering, not in the trampoline.** `persist_scratch_return_string` (`ir_lower/stmt/mod.rs:2522-2544`) only persists values produced by scratch-categorised ops (`ir_lower/expr/mod.rs:673-686`). So `return $param;` can hand the host back *the very pointer the host passed in*. Today `heap_free_safe` happens to reject out-of-heap pointers silently, but that is an implementation accident, not a contract. An ABI where the host sometimes owns the result and sometimes does not is unusable.
+
+   The obvious shortcut — calling `__rt_str_persist` from the trampoline — is wrong: on the common path the value has *already* been persisted by lowering, so a second persist allocates a fresh block and **leaks the first**. The persist must happen exactly once, which means lowering has to know the enclosing function is exported.
+
+   That is the real cost of Lot 1, and it is wider than the signature-list change implies: **`ir_lower` currently has no notion of exports at all** (zero references), and `exports::collect` runs at `pipeline.rs:420`, ahead of both `lower_program_*` call sites (`:467`, `:502`). The set of exported names therefore has to be threaded into the lowering context. Feasible and correctly ordered — but it is the design decision Lot 1 turns on, not a five-line edit.
 2. **Translate `NULL_SENTINEL` to a real C `NULL`** at the trampoline boundary. The internal "no string" marker is `0x7fff_ffff_ffff_fffe` (`sentinels.rs:62`), not a null pointer; leaking it to a C caller turns any deref or `elephc_free` into a crash.
 3. **No NUL-termination guarantee.** PHP strings are byte strings. The host must use the returned length; `strlen()` breaks silently on embedded `\0`. To be stated in the header docs, not merely implied.
 
@@ -183,7 +187,28 @@ Proves the UI answer with today's toolchain, with iOS entirely out of the pictur
 **Depends on:** Lot 1.
 
 ### Lot 3 — `Target` Apple variant, then `Emit::Staticlib`
-The enabling refactor (§5), then the delivery form. A staticlib reuses the cdylib PIC path wholesale — iOS mandates PIE — so only the final archiving step differs, and `ar`/`ranlib` already exist in the linker for bridge staticlibs.
+The enabling refactor (§5), then the delivery form.
+
+**A staticlib must NOT reuse the cdylib PIC path.** An earlier draft of this spec claimed it should, on the grounds that "iOS mandates PIE". That conflated two different things and was wrong. `pic_data_refs` (`emit.rs:58-62`) routes cross-object symbol access through the **GOT**; its own comment (`emit.rs:21-26`) states the reason — shared-library output, *"where the loader cannot resolve cross-object relocations at dlopen time"*. That is about dynamic loading and symbol interposition, not position independence. The non-PIC path is already PC-relative (`adrp`+`add` on arm64, `lea [rip+sym]` on x86_64) and already produces PIE executables on macOS/arm64 today. A `.a` is merged once into the app's final binary by the app's own linker, exactly like the executable path.
+
+So `Emit::Staticlib` takes `Emitter::new(target)`, and `runtime_pic` (`pipeline.rs:596`) stays `matches!(emit, Emit::Cdylib)`. Lot 0 settles it empirically: hand-linking a non-PIC object against the iPhoneSimulator SDK either works or does not.
+
+Sites a third `Emit` variant must touch:
+
+| Site | Action |
+|---|---|
+| `cli.rs:475-476` `parse_emit` | add `staticlib`/`static`/`lib` aliases |
+| `cli.rs:387` | reject `--web` for Staticlib as for Cdylib |
+| `codegen/mod.rs:175-177` | `Emitter::new` (**not** `new_pic`) |
+| `codegen/mod.rs:269` | join the `emit_cdylib_exports` branch — same trampolines and lifecycle symbols |
+| `codegen/mod.rs:305` | do **not** extend — ELF dynamic-symbol visibility is `.so`-only |
+| `codegen/block_emit.rs:95-97` | join the branch that skips `main` |
+| `pipeline.rs:596` `runtime_pic` | leave as-is |
+| `pipeline.rs:764-770` `output_paths` | new branch producing `lib<stem>.a` |
+| `pipeline.rs:720-733` | route to an archive step instead of `link_with_plan` |
+| `linker/command.rs` | untouched — a staticlib never invokes `ld` |
+
+**The existing `ar` flow is a precedent, not reusable logic.** `archive_dedup.rs` deduplicates *already-built bridge* archives before `ld -force_load`; bridge `.a`s themselves come from `cargo build -p <crate>` (`linker/bridges.rs:375-397`). What Lot 3 needs is a single `ar rcs <out.a> <obj> <runtime_obj>` — self-indexing, no member dedup. What carries over is the `run_tool()` idiom (`linker/command.rs:93-105`), nothing more. Bridges and managed native packages stay separate `.a`s for the consuming Xcode project to link.
 
 Target strings follow the existing dual convention (short `platform-arch` plus an LLVM-style triple): `ios-arm64` / `aarch64-apple-ios`, and `ios-sim-arm64` / `aarch64-apple-ios-simulator`. `test_target_parse` (`platform/mod.rs:27-40`) and the shared integration fixture `tests/codegen/support/platform.rs:14-21` extend with them.
 
@@ -192,13 +217,24 @@ Includes the native-dependency path: `native_deps/toolchain.rs` `validate_tuple`
 **Accept:** `--target ios-arm64 --emit staticlib` produces a `.a` that links cleanly in an Xcode project.
 
 ### Lot 4 — Capability gating
-`exec`, `shell_exec`, `system`, `passthru`, `popen`, `pclose`, `proc_open` are unusable in the iOS sandbox — no `fork`. They must fail **at compile time** with a targeted diagnostic, never silently at runtime.
+Six builtins depend on `fork`/`exec` and are unusable in the iOS sandbox. `proc_open` and its family are **not** in this list — they do not exist in the compiler at all (zero occurrences in `src/`); the note to carry forward is that whenever they are added, they must ship with the gate from day one.
 
-Model to follow: the WASM backend's `capability.rs` (on `feat/wasm-target`) uses **exhaustive matches with no `_` arm**, so a newly added enum variant cannot compile until its support status is decided, and `validate_module` aggregates every violation into one error naming collection / function / block / instruction before planning begins.
+| Builtin | Declaration | Backed by |
+|---|---|---|
+| `system` | `builtins/system/system.rs:12-20` | `bl_c("system")` directly |
+| `passthru` | `builtins/system/passthru.rs:12-21` | `bl_c("system")` directly |
+| `exec` | `builtins/system/exec.rs:12-21` | `__rt_shell_exec` → `popen()` |
+| `shell_exec` | `builtins/system/shell_exec.rs:12-21` | same helper |
+| `popen` | `builtins/io/popen.rs:18-29` | `bl_c("popen")` |
+| `pclose` | `builtins/io/pclose.rs:15-26` | `__rt_pclose` |
 
-What `main` has today is the weaker shape and should not be copied: `Platform::Windows => panic!(…)` repeated ~20 times across `impl Platform`, a runtime trap that only fires when a path actually executes.
+**Insertion point — the per-builtin `check:` hook, not the backend.** The builtin architecture is now one `builtin!` macro declaration per file under `src/builtins/<area>/`, collected by `inventory` in `builtins/registry.rs`; `types/signatures.rs` holds only the `FunctionSig` struct. `popen.rs:23` and `pclose.rs:20` **already carry a `check:` hook**, and `Checker.target_platform` already exists (`types/checker/mod.rs:61`) and is already consulted for a target-dependent decision in `require_macos_builtin_library()` (`types/checker/builtins/mod.rs:50-56`) — though only to *add* a requirement, never to reject. Pattern to imitate verbatim: `builtins/spl/spl_object_id.rs:27-37`, returning `Err(CompileError::new(cx.span, …))`, which propagates through `check_builtin` to `pipeline.rs`'s `process::exit(1)`.
 
-**Accept:** compiling a script that calls any of them for an iOS target yields a clear compile error naming the builtin and the reason.
+This gives an exact PHP source position (`file:line:col` via `errors/report.rs`), which the WASM-style backend audit cannot: `WasmError` is not wired to `CompileError`/`Span` and reports only `collection::function block#N instruction#M`. The exhaustive-match model remains the right guarantee *against omission* — worth pairing with the hooks so a newly added process builtin cannot compile without a decision — but it is not the right diagnostic on its own.
+
+**Blocked by Lot 3:** until `Target` distinguishes iOS from macOS, the condition has nothing to test.
+
+**Accept:** compiling a script that calls any of the six for an iOS target yields a compile error naming the builtin, the reason, and the source position.
 
 ## 8. Deliberately deferred — raw syscalls to libSystem
 
