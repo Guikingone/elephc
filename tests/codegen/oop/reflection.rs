@@ -984,6 +984,65 @@ try {
     assert_eq!(out, "name|1|1|caught");
 }
 
+/// Verifies dynamic `new ReflectionClassConstant($class, $constant)` construction — the shape
+/// `error-handler/DebugClassLoader.php:977` uses, where BOTH arguments are runtime values.
+///
+/// All expectations are `php -n` 8.5.6 measured: the constant value/visibility resolve through the
+/// dynamic dispatcher, the CLASS name matches case-INsensitively, the CONSTANT name matches
+/// case-SENSITIVEly, and both a class miss and a constant miss throw a catchable
+/// `\ReflectionException` (`Class "NAME" does not exist` / `Constant CLASS::NAME does not exist`).
+#[test]
+fn test_reflection_class_constant_dynamic_construction_case_rules_and_misses() {
+    let out = compile_and_run(
+        r#"<?php
+class ElephcDynConstHolder {
+    const FOO = "SENTINEL-RC";
+    protected const BAR = 7;
+}
+$className = $argc > 0 ? "ElephcDynConstHolder" : "NOPE";
+$constName = $argc > 0 ? "FOO" : "NOPE";
+$rc = new ReflectionClassConstant($className, $constName);
+echo $rc->getValue();
+echo "|";
+echo $rc->getName();
+echo "|";
+echo $rc->isPublic() ? "1" : "0";
+echo "|";
+$protectedName = $argc > 0 ? "BAR" : "NOPE";
+$rc2 = new ReflectionClassConstant($className, $protectedName);
+echo $rc2->getValue();
+echo $rc2->isProtected() ? "1" : "0";
+echo "|";
+// class names are case-INsensitive, so an upper-cased class query still resolves
+$upperClass = $argc > 0 ? "ELEPHCDYNCONSTHOLDER" : "NOPE";
+echo (new ReflectionClassConstant($upperClass, $constName))->getValue();
+echo "|";
+// constant names are case-SENSITIVE, so a wrong-case query must miss
+$wrongCase = $argc > 0 ? "foo" : "NOPE";
+try {
+    new ReflectionClassConstant($className, $wrongCase);
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo $e->getMessage();
+}
+echo "|";
+$missingClass = $argc > 0 ? "ElephcDynConstAbsent" : "NOPE";
+try {
+    new ReflectionClassConstant($missingClass, $constName);
+    echo "no throw";
+} catch (\ReflectionException $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "SENTINEL-RC|FOO|1|71|SENTINEL-RC|\
+Constant ElephcDynConstHolder::foo does not exist|\
+Class \"ElephcDynConstAbsent\" does not exist"
+    );
+}
+
 /// Verifies gradual member-name operands resolve when their runtime payload is a string and throw
 /// a catchable `TypeError` before dispatch when the payload has another tag.
 #[test]

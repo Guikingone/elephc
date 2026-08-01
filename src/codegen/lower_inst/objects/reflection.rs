@@ -347,7 +347,10 @@ pub(super) fn lower_reflection_owner_new(
             }
         }
     }
-    if matches!(class_name, "ReflectionMethod" | "ReflectionProperty") && inst.operands.len() >= 2
+    if matches!(
+        class_name,
+        "ReflectionMethod" | "ReflectionProperty" | "ReflectionClassConstant"
+    ) && inst.operands.len() >= 2
     {
         let class_operand = inst.operands[0];
         let member_operand = inst.operands[1];
@@ -359,20 +362,29 @@ pub(super) fn lower_reflection_owner_new(
             member_operand,
         );
         if dynamic {
-            return if class_name == "ReflectionMethod" {
-                super::reflection_members_dynamic::lower_reflection_method_new_dynamic(
+            return match class_name {
+                "ReflectionMethod" => {
+                    super::reflection_members_dynamic::lower_reflection_method_new_dynamic(
+                        ctx,
+                        inst,
+                        class_operand,
+                        member_operand,
+                    )
+                }
+                "ReflectionProperty" => {
+                    super::reflection_members_dynamic::lower_reflection_property_new_dynamic(
+                        ctx,
+                        inst,
+                        class_operand,
+                        member_operand,
+                    )
+                }
+                _ => super::reflection_members_dynamic::lower_reflection_class_constant_new_dynamic(
                     ctx,
                     inst,
                     class_operand,
                     member_operand,
-                )
-            } else {
-                super::reflection_members_dynamic::lower_reflection_property_new_dynamic(
-                    ctx,
-                    inst,
-                    class_operand,
-                    member_operand,
-                )
+                ),
             };
         }
     }
@@ -2213,7 +2225,7 @@ fn reflection_parameter_member_for_selector(
     }
 }
 
-/// Resolves `ReflectionClassConstant(class, constant)` metadata.
+/// Resolves `ReflectionClassConstant(class, constant)` metadata from constant EIR operands.
 fn reflection_class_constant_metadata(
     ctx: &FunctionContext<'_>,
     inst: &Instruction,
@@ -2228,10 +2240,29 @@ fn reflection_class_constant_metadata(
         const_string_or_class_operand(ctx, class_operand, "ReflectionClassConstant")?;
     let constant_name =
         const_required_string_operand(ctx, constant_operand, "ReflectionClassConstant")?;
+    Ok(
+        reflection_class_constant_metadata_for_names(ctx, &reflected_class, &constant_name)?
+            .unwrap_or_else(empty_reflection_metadata),
+    )
+}
+
+/// Resolves `ReflectionClassConstant(class, constant)` metadata from already-resolved names.
+///
+/// Shared by the compile-time constructor path (which resolves both names off constant EIR
+/// operands) and the dynamic member dispatcher (which bakes one arm per candidate
+/// class/constant pair). Returns `None` when the class declares no such constant, letting each
+/// caller pick its own miss behaviour — an empty reflector for the literal path, a skipped
+/// dispatch arm for the dynamic one.
+pub(super) fn reflection_class_constant_metadata_for_names(
+    ctx: &FunctionContext<'_>,
+    reflected_class: &str,
+    constant_name: &str,
+) -> Result<Option<ReflectionOwnerMetadata>> {
+    let constant_name = constant_name.to_string();
     if let Some((enum_name, case)) =
-        resolve_reflection_enum_case(ctx, &reflected_class, &constant_name)
+        resolve_reflection_enum_case(ctx, reflected_class, &constant_name)
     {
-        return Ok(ReflectionOwnerMetadata {
+        return Ok(Some(ReflectionOwnerMetadata {
             unbacked_name: false,
             unbacked_file: false,
             reflected_name: Some(constant_name.clone()),
@@ -2286,12 +2317,11 @@ fn reflection_class_constant_metadata(
                 false,
                 false,
             ),
-        });
+        }));
     }
     Ok(
-        reflection_class_constant_lookup(ctx, &reflected_class, &constant_name)?
-            .map(|metadata| reflection_class_constant_owner_metadata(constant_name, metadata))
-            .unwrap_or_else(empty_reflection_metadata),
+        reflection_class_constant_lookup(ctx, reflected_class, &constant_name)?
+            .map(|metadata| reflection_class_constant_owner_metadata(constant_name, metadata)),
     )
 }
 
@@ -2995,7 +3025,7 @@ pub(super) fn reflection_class_property_names(
 }
 
 /// Returns PHP case-sensitive class constant names visible to `ReflectionClass::hasConstant()`.
-fn reflection_class_constant_names(
+pub(super) fn reflection_class_constant_names(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     _info: &crate::types::ClassInfo,

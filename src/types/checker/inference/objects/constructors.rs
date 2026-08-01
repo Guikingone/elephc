@@ -284,9 +284,10 @@ impl Checker {
             return Ok(());
         }
 
-        // `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty` accept PHP's real
-        // `object|string` first argument dynamically: any non-literal expression routes to the
-        // EIR dynamic dispatchers (`crate::codegen::lower_inst::objects::reflection_dynamic` /
+        // `ReflectionClass`/`ReflectionMethod`/`ReflectionProperty`/`ReflectionClassConstant`
+        // accept PHP's real `object|string` first argument dynamically: any non-literal
+        // expression routes to the EIR dynamic dispatchers
+        // (`crate::codegen::lower_inst::objects::reflection_dynamic` /
         // `reflection_members_dynamic`), which unbox the runtime tag, weak-coerce scalars to a
         // class-name string exactly like PHP, and throw a catchable `\TypeError` /
         // `\ReflectionException` at runtime. `reflection_dynamic_class_arg` returns `None` for
@@ -294,7 +295,10 @@ impl Checker {
         // reflected member is unknown until runtime).
         if matches!(
             class_name,
-            "ReflectionClass" | "ReflectionMethod" | "ReflectionProperty"
+            "ReflectionClass"
+                | "ReflectionMethod"
+                | "ReflectionProperty"
+                | "ReflectionClassConstant"
         ) {
             let reflected_class =
                 self.reflection_dynamic_class_arg(class_name, &normalized_args[0], env)?;
@@ -318,7 +322,7 @@ impl Checker {
                         _ => Ok(()),
                     }
                 }
-                _ => {
+                "ReflectionProperty" => {
                     let property_name = self.reflection_member_name_arg(
                         class_name,
                         "property name",
@@ -335,6 +339,23 @@ impl Checker {
                         _ => Ok(()),
                     }
                 }
+                _ => {
+                    let constant_name = self.reflection_member_name_arg(
+                        class_name,
+                        "constant name",
+                        normalized_args.get(1),
+                        env,
+                    )?;
+                    match (reflected_class, constant_name) {
+                        (Some(reflected_class), Some(constant_name)) => self
+                            .validate_reflection_class_constant_attrs(
+                                &reflected_class,
+                                &constant_name,
+                                expr,
+                            ),
+                        _ => Ok(()),
+                    }
+                }
             };
         }
 
@@ -342,19 +363,6 @@ impl Checker {
             self.reflection_class_literal_arg(class_name, &normalized_args[0], env)?;
         match class_name {
             "ReflectionEnum" => self.validate_reflection_enum_attrs(&reflected_class, expr),
-            "ReflectionClassConstant" => {
-                let constant_name = self.reflection_string_literal_arg(
-                    class_name,
-                    "constant name",
-                    normalized_args.get(1),
-                    env,
-                )?;
-                self.validate_reflection_class_constant_attrs(
-                    &reflected_class,
-                    &constant_name,
-                    expr,
-                )
-            }
             "ReflectionEnumUnitCase" => {
                 let case_name = self.reflection_string_literal_arg(
                     class_name,

@@ -1,22 +1,25 @@
 //! Purpose:
 //! Lowers dynamic `new ReflectionMethod($class, $method)` / `new ReflectionProperty($class,
-//! $property)` construction — either argument a non-literal runtime value — through two shared,
-//! program-wide dispatcher labels (`_elephc_reflect_method_new_dynamic` /
-//! `_elephc_reflect_property_new_dynamic`). The class-name argument accepts PHP's real
+//! $property)` / `new ReflectionClassConstant($class, $constant)` construction — either argument
+//! a non-literal runtime value — through three shared, program-wide dispatcher labels
+//! (`_elephc_reflect_method_new_dynamic` / `_elephc_reflect_property_new_dynamic` /
+//! `_elephc_reflect_class_constant_new_dynamic`). The class-name argument accepts PHP's real
 //! `object|string` surface (objects resolve `get_class`, scalars weak-coerce to a class-name
 //! string, arrays/resources throw a catchable `\TypeError`); a class miss throws PHP's
 //! `Class "NAME" does not exist` `\ReflectionException`; a member miss throws
-//! `Method CLASS::NAME() does not exist` / `Property CLASS::$NAME does not exist`.
+//! `Method CLASS::NAME() does not exist` / `Property CLASS::$NAME does not exist` /
+//! `Constant CLASS::NAME does not exist`.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::objects::reflection::lower_reflection_owner_new()` routes a
-//!   non-literal `ReflectionMethod`/`ReflectionProperty` constructor operand pair here.
+//!   non-literal `ReflectionMethod`/`ReflectionProperty`/`ReflectionClassConstant` constructor
+//!   operand pair here.
 //! - `crate::codegen::block_emit::emit_module()` calls
 //!   `emit_reflection_member_dynamic_dispatch_if_needed()` once, after per-function lowering.
 //!
 //! Key details:
 //! - Class names and method names are PHP case-insensitive (both case-folded before the compare
-//!   chains); property names are case-sensitive and compared byte-for-byte.
+//!   chains); property and class-constant names are case-sensitive and compared byte-for-byte.
 //! - Gradual member-name operands are unboxed and runtime-checked as strings before dispatch;
 //!   non-string values throw a catchable `TypeError`.
 //! - Matched (class, member) arms reuse the same `emit_reflection_owner_object` metadata bake
@@ -37,9 +40,10 @@ use super::super::super::context::FunctionContext;
 use super::super::super::frame;
 use super::super::super::shared_state::SharedCodegenState;
 use super::reflection::{
-    emit_reflection_owner_object, reflection_class_method_names,
+    emit_reflection_owner_object, reflection_class_constant_metadata_for_names,
+    reflection_class_constant_names, reflection_class_method_names,
     reflection_class_property_names, reflection_method_metadata_for_names,
-    reflection_property_metadata_for_names,
+    reflection_property_metadata_for_names, ReflectionOwnerMetadata,
 };
 use super::reflection_dynamic::{
     emit_dynamic_dispatch_epilogue, emit_dynamic_dispatch_prologue,
@@ -51,6 +55,8 @@ use super::reflection_dynamic::{
 const METHOD_DISPATCH_LABEL: &str = "_elephc_reflect_method_new_dynamic";
 /// Assembly label of the shared dynamic `ReflectionProperty(class, property)` dispatcher.
 const PROPERTY_DISPATCH_LABEL: &str = "_elephc_reflect_property_new_dynamic";
+/// Assembly label of the shared dynamic `ReflectionClassConstant(class, constant)` dispatcher.
+const CLASS_CONSTANT_DISPATCH_LABEL: &str = "_elephc_reflect_class_constant_new_dynamic";
 
 /// Which member reflector a dispatcher resolves; drives case-folding, metadata lookup, and
 /// miss-message wording.
@@ -58,6 +64,7 @@ const PROPERTY_DISPATCH_LABEL: &str = "_elephc_reflect_property_new_dynamic";
 enum MemberKind {
     Method,
     Property,
+    ClassConstant,
 }
 
 impl MemberKind {
@@ -66,6 +73,7 @@ impl MemberKind {
         match self {
             MemberKind::Method => METHOD_DISPATCH_LABEL,
             MemberKind::Property => PROPERTY_DISPATCH_LABEL,
+            MemberKind::ClassConstant => CLASS_CONSTANT_DISPATCH_LABEL,
         }
     }
 
@@ -74,6 +82,7 @@ impl MemberKind {
         match self {
             MemberKind::Method => "ReflectionMethod",
             MemberKind::Property => "ReflectionProperty",
+            MemberKind::ClassConstant => "ReflectionClassConstant",
         }
     }
 }
@@ -101,6 +110,22 @@ pub(super) fn lower_reflection_property_new_dynamic(
         class_operand,
         member_operand,
         MemberKind::Property,
+    )
+}
+
+/// Lowers a dynamic-argument `new ReflectionClassConstant($class, $constant)` call site.
+pub(super) fn lower_reflection_class_constant_new_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    class_operand: ValueId,
+    member_operand: ValueId,
+) -> Result<()> {
+    lower_reflection_member_new_dynamic(
+        ctx,
+        inst,
+        class_operand,
+        member_operand,
+        MemberKind::ClassConstant,
     )
 }
 
@@ -355,6 +380,9 @@ fn emit_member_class_argument_type_error_throw(ctx: &mut FunctionContext<'_>, ki
         MemberKind::Property => {
             b"ReflectionProperty::__construct(): Argument #1 ($class) must be of type object|string"
         }
+        MemberKind::ClassConstant => {
+            b"ReflectionClassConstant::__construct(): Argument #1 ($class) must be of type object|string"
+        }
     };
     emit_reflection_dynamic_type_error_throw(ctx, message);
 }
@@ -418,12 +446,16 @@ fn emit_member_name_argument_type_error_throw(
         MemberKind::Property => {
             b"ReflectionProperty::__construct(): Argument #2 ($property) must be of type string"
         }
+        MemberKind::ClassConstant => {
+            b"ReflectionClassConstant::__construct(): Argument #2 ($constant) must be of type string"
+        }
     };
     emit_reflection_dynamic_type_error_throw(ctx, message);
 }
 
 /// Returns true when the module contains at least one dynamic-argument
-/// `new ReflectionMethod(...)`/`new ReflectionProperty(...)` construction site.
+/// `new ReflectionMethod(...)`/`new ReflectionProperty(...)`/`new ReflectionClassConstant(...)`
+/// construction site.
 fn module_needs_member_dynamic_dispatch(module: &Module, owner: &str) -> bool {
     scan_functions(module).any(|function| {
         function.instructions.iter().any(|inst| {
@@ -472,7 +504,11 @@ pub(crate) fn emit_reflection_member_dynamic_dispatch_if_needed(
     data: &mut DataSection,
     shared: &mut SharedCodegenState,
 ) -> Result<()> {
-    for kind in [MemberKind::Method, MemberKind::Property] {
+    for kind in [
+        MemberKind::Method,
+        MemberKind::Property,
+        MemberKind::ClassConstant,
+    ] {
         if module_needs_member_dynamic_dispatch(module, kind.owner_class()) {
             emit_member_dynamic_dispatch(module, emitter, data, shared, kind)?;
         }
@@ -683,39 +719,101 @@ fn emit_member_match_for_class(
                 .class_infos
                 .get(class_name)
                 .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
-            let mut arms = Vec::new();
+            let mut members = Vec::new();
             for property_name in reflection_class_property_names(ctx, class_name, class_info) {
                 let Some(metadata) =
                     reflection_property_metadata_for_names(ctx, class_name, &property_name)
                 else {
                     continue;
                 };
-                let arm_label = ctx.next_label("reflect_member_property_arm");
-                super::emit_branch_if_dynamic_name_matches(ctx, &property_name, &arm_label);
-                arms.push((arm_label, metadata));
+                members.push((property_name, metadata));
             }
-            abi::emit_jump(ctx.emitter, &miss_label);
-            for (arm_label, metadata) in arms {
-                ctx.emitter.label(&arm_label);
-                abi::emit_release_temporary_stack(ctx.emitter, 32);
-                emit_reflection_owner_object(ctx, kind.owner_class(), &metadata)?;
-                abi::emit_jump(ctx.emitter, done_label);
-            }
-            ctx.emitter.label(&miss_label);
             // php -n verified: `Property CLASS::$NAME does not exist`, NAME echoed as queried.
-            let (prefix_label, prefix_len) = ctx
-                .data
-                .add_string(format!("Property {}::$", class_name).as_bytes());
-            let (suffix_label, suffix_len) = ctx.data.add_string(b" does not exist");
-            emit_reflection_dynamic_not_found_throw(
+            emit_case_sensitive_member_arms(
                 ctx,
-                &prefix_label,
-                prefix_len,
-                &suffix_label,
-                suffix_len,
-                0,
-            );
+                kind,
+                members,
+                "reflect_member_property_arm",
+                &miss_label,
+                done_label,
+                &format!("Property {}::$", class_name),
+                b" does not exist",
+            )?;
+        }
+        MemberKind::ClassConstant => {
+            // Class constant names are case-sensitive exactly like properties (php -n verified:
+            // `new ReflectionClassConstant('Holder', 'foo')` throws for a `FOO` constant), so the
+            // parked original member query at 0/8 is compared byte-for-byte and no fold is pushed.
+            let class_info = ctx
+                .module
+                .class_infos
+                .get(class_name)
+                .ok_or_else(|| CodegenIrError::missing_entry("class", 0))?;
+            let mut members = Vec::new();
+            for constant_name in reflection_class_constant_names(ctx, class_name, class_info) {
+                let Some(metadata) =
+                    reflection_class_constant_metadata_for_names(ctx, class_name, &constant_name)?
+                else {
+                    continue;
+                };
+                members.push((constant_name, metadata));
+            }
+            // php -n verified: `Constant CLASS::NAME does not exist`, NAME echoed as queried.
+            emit_case_sensitive_member_arms(
+                ctx,
+                kind,
+                members,
+                "reflect_member_class_constant_arm",
+                &miss_label,
+                done_label,
+                &format!("Constant {}::", class_name),
+                b" does not exist",
+            )?;
         }
     }
+    Ok(())
+}
+
+/// Emits a case-sensitive member compare chain, one metadata bake per matched member, and the
+/// member-miss throw.
+///
+/// Shared by the `ReflectionProperty` and `ReflectionClassConstant` arms, which are identical in
+/// shape: neither case-folds the member query, so both compare the original parked query at 0/8
+/// and both unwind the same two parked pairs (32 bytes) before constructing. Only the declared
+/// member set and the miss-message wording differ.
+fn emit_case_sensitive_member_arms(
+    ctx: &mut FunctionContext<'_>,
+    kind: MemberKind,
+    members: Vec<(String, ReflectionOwnerMetadata)>,
+    arm_label_stem: &str,
+    miss_label: &str,
+    done_label: &str,
+    miss_prefix: &str,
+    miss_suffix: &[u8],
+) -> Result<()> {
+    let mut arms = Vec::new();
+    for (member_name, metadata) in members {
+        let arm_label = ctx.next_label(arm_label_stem);
+        super::emit_branch_if_dynamic_name_matches(ctx, &member_name, &arm_label);
+        arms.push((arm_label, metadata));
+    }
+    abi::emit_jump(ctx.emitter, miss_label);
+    for (arm_label, metadata) in arms {
+        ctx.emitter.label(&arm_label);
+        abi::emit_release_temporary_stack(ctx.emitter, 32);
+        emit_reflection_owner_object(ctx, kind.owner_class(), &metadata)?;
+        abi::emit_jump(ctx.emitter, done_label);
+    }
+    ctx.emitter.label(miss_label);
+    let (prefix_label, prefix_len) = ctx.data.add_string(miss_prefix.as_bytes());
+    let (suffix_label, suffix_len) = ctx.data.add_string(miss_suffix);
+    emit_reflection_dynamic_not_found_throw(
+        ctx,
+        &prefix_label,
+        prefix_len,
+        &suffix_label,
+        suffix_len,
+        0,
+    );
     Ok(())
 }
