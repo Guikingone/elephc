@@ -52,6 +52,9 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_UNION);
     wm.add_raw_func(RT_ARRAY_INDEX_KEYS);
     wm.add_raw_func(RT_ARRAY_CONTAINS_INT);
+    wm.add_raw_func(RT_ARRAY_REVERSE_INT);
+    wm.add_raw_func(RT_ARRAY_SUM_INT);
+    wm.add_raw_func(RT_ARRAY_PRODUCT_INT);
 }
 
 /// `__rt_array_new`: allocates an indexed array with `capacity` slots of
@@ -121,6 +124,74 @@ const RT_ARRAY_CONTAINS_INT: &str = r#"(func $__rt_array_contains_int (param $ar
     (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
     (br $scan)))
   (i64.const 0))                                                 ;; no element is identical
+"#;
+
+/// `__rt_array_reverse_int`: builds the reverse of an indexed array of raw i64 slots.
+///
+/// `array_reverse()` without `preserve_keys` re-indexes from zero, which over a list is exactly
+/// the reversed sequence. The result is a fresh owned array; the source is only read.
+const RT_ARRAY_REVERSE_INT: &str = r#"(func $__rt_array_reverse_int (param $array i32) (result i32)
+  (local $len i64)
+  (local $new i32)
+  (local $i i64)
+  (local.set $len (i64.load (local.get $array)))                 ;; length @ A+0
+  (local.set $new (call $__rt_array_new (local.get $len) (i64.const 8)))  ;; exact capacity, raw i64 slots
+  (i64.store (local.get $new) (local.get $len))                  ;; same element count
+  (local.set $i (i64.const 0))                                   ;; i = 0
+  (block $end (loop $copy
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))      ;; every element placed
+    (i64.store
+      (i32.add (i32.add (local.get $new) (i32.const 24))
+               (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8))))
+      (i64.load
+        (i32.add (i32.add (local.get $array) (i32.const 24))
+                 (i32.wrap_i64 (i64.mul (i64.sub (i64.sub (local.get $len) (i64.const 1)) (local.get $i))
+                                        (i64.const 8))))))       ;; destination i takes source len-1-i
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
+    (br $copy)))
+  (local.get $new))                                              ;; owned result
+"#;
+
+/// `__rt_array_sum_int`: adds every raw i64 slot of an indexed array, starting from zero.
+///
+/// The empty array sums to 0, which is what PHP answers. Addition WRAPS on overflow; see
+/// `builtins::lower_array_fold` for why that divergence is not representable here.
+const RT_ARRAY_SUM_INT: &str = r#"(func $__rt_array_sum_int (param $array i32) (result i64)
+  (local $len i64)
+  (local $i i64)
+  (local $acc i64)
+  (local.set $len (i64.load (local.get $array)))                 ;; length @ A+0
+  (local.set $acc (i64.const 0))                                 ;; PHP sums an empty array to 0
+  (local.set $i (i64.const 0))                                   ;; i = 0
+  (block $end (loop $add
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))      ;; every element added
+    (local.set $acc (i64.add (local.get $acc)
+      (i64.load (i32.add (i32.add (local.get $array) (i32.const 24))
+                         (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8)))))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
+    (br $add)))
+  (local.get $acc))
+"#;
+
+/// `__rt_array_product_int`: multiplies every raw i64 slot of an indexed array.
+///
+/// The empty array's product is 1, which is what PHP answers. Multiplication WRAPS on overflow;
+/// see `builtins::lower_array_fold`.
+const RT_ARRAY_PRODUCT_INT: &str = r#"(func $__rt_array_product_int (param $array i32) (result i64)
+  (local $len i64)
+  (local $i i64)
+  (local $acc i64)
+  (local.set $len (i64.load (local.get $array)))                 ;; length @ A+0
+  (local.set $acc (i64.const 1))                                 ;; PHP's empty product is 1
+  (local.set $i (i64.const 0))                                   ;; i = 0
+  (block $end (loop $mul
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))      ;; every element multiplied
+    (local.set $acc (i64.mul (local.get $acc)
+      (i64.load (i32.add (i32.add (local.get $array) (i32.const 24))
+                         (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8)))))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))        ;; i++
+    (br $mul)))
+  (local.get $acc))
 "#;
 
 /// `__rt_array_grow`: allocates a double-capacity array (min 8), copies the live

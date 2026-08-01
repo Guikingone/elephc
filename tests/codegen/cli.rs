@@ -3033,6 +3033,12 @@ function arrays(array $xs, int $n): void {
 }
 arrays([7, 8, 9], 8);
 arrays([7, 8, 9], 5);
+function folds(array $xs): void {
+    $r = array_reverse($xs);
+    echo array_sum($xs), "|", array_product($xs), "|", $r[0], ",", $r[2], "\n";
+}
+folds([1, 2, 3]);
+echo array_sum($e), "|", array_product($e), "|", count(array_reverse($e)), "\n";
 "#,
     )
     .unwrap();
@@ -3092,6 +3098,8 @@ process.exitCode = wasi.start(instance);
         "list|list\n",
         "y|3|1|7,99\n",
         "n|3|1|7,99\n",
+        "6|6|3,1\n",
+        "0|1|0\n",
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
     assert!(

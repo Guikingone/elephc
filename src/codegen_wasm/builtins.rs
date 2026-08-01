@@ -90,6 +90,9 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::ArrayKeys
             | RuntimeFnId::ArrayValues
             | RuntimeFnId::InArray
+            | RuntimeFnId::ArrayReverse
+            | RuntimeFnId::ArraySum
+            | RuntimeFnId::ArrayProduct
     )
 }
 
@@ -122,8 +125,14 @@ pub(super) fn direct_builtin_shape_issue(
     if target == RuntimeFnId::ArrayIsList {
         return array_is_list_shape_issue(function, call);
     }
-    if matches!(target, RuntimeFnId::ArrayKeys | RuntimeFnId::ArrayValues) {
+    if matches!(
+        target,
+        RuntimeFnId::ArrayKeys | RuntimeFnId::ArrayValues | RuntimeFnId::ArrayReverse
+    ) {
         return indexed_array_result_shape_issue(function, call, target);
+    }
+    if matches!(target, RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) {
+        return array_fold_shape_issue(function, call, target);
     }
     if target == RuntimeFnId::InArray {
         return in_array_shape_issue(function, call);
@@ -222,6 +231,12 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::ArrayValues {
         return lower_array_values(ctx, inst);
+    }
+    if target == RuntimeFnId::ArrayReverse {
+        return lower_array_reverse(ctx, inst);
+    }
+    if matches!(target, RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct) {
+        return lower_array_fold(ctx, inst, target);
     }
     if target == RuntimeFnId::InArray {
         return lower_in_array(ctx, inst);
@@ -439,6 +454,69 @@ fn lower_array_values(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
+/// Validates `array_sum($list)` / `array_product($list)`, which fold an `array<int>` to an int.
+fn array_fold_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected one array operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("array operand is missing from the value table".to_string());
+    };
+    if !indexed_int_array(value) {
+        return Some(format!(
+            "expected a statically typed array<int>, got {:?}/{:?}",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::I64
+        || call.result_php_type.codegen_repr() != PhpType::Int
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the expected I64/Int",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Lowers `array_reverse($list)` to a reversed copy.
+fn lower_array_reverse(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(
+        "call $__rt_array_reverse_int",
+        "reversing a list re-indexes it from zero",
+    );
+    store_result(ctx, inst)
+}
+
+/// Lowers `array_sum($list)` / `array_product($list)` to their accumulating scan.
+///
+/// KNOWN DIVERGENCE, shared with the native backend and rooted in the checker rather than in
+/// either emitter: PHP promotes an overflowing sum or product to a float, so
+/// `array_sum([PHP_INT_MAX, 1])` is `9.2233720368548E+18`. The checker types this call `int`,
+/// leaving no slot a float could be returned in, and both backends therefore wrap. Closing it
+/// means widening the declared result to `int|float`, which is an EIR-level change.
+fn lower_array_fold(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    let (helper, comment) = if target == RuntimeFnId::ArraySum {
+        ("call $__rt_array_sum_int", "PHP sums an empty array to 0")
+    } else {
+        ("call $__rt_array_product_int", "PHP's empty product is 1")
+    };
+    ctx.fb.ins(helper, comment);
+    store_result(ctx, inst)
+}
+
 /// Lowers strict `in_array($needle, $haystack, true)` to an identity scan.
 fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 1)?)?;
@@ -646,7 +724,11 @@ mod tests {
 
         // The array family reads raw i64 slots, so it accepts `array<int>` and the empty
         // `array<never>`, and nothing else.
-        for target in [RuntimeFnId::ArrayKeys, RuntimeFnId::ArrayValues] {
+        for target in [
+            RuntimeFnId::ArrayKeys,
+            RuntimeFnId::ArrayValues,
+            RuntimeFnId::ArrayReverse,
+        ] {
             let ok = call_with(
                 target,
                 IrType::Heap(IrHeapKind::Array),
@@ -666,6 +748,31 @@ mod tests {
             assert!(
                 verdict(&stringly, target).is_some(),
                 "{target:?} must not read string slots at the integer stride"
+            );
+        }
+
+        // `RuntimeFnId::ArraySum` and `RuntimeFnId::ArrayProduct` fold to an int, so they take
+        // an array<int> and answer I64/Int.
+        for target in [RuntimeFnId::ArraySum, RuntimeFnId::ArrayProduct] {
+            let ok = call_with(
+                target,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+                IrType::I64,
+                PhpType::Int,
+            );
+            assert_eq!(verdict(&ok, target), None, "{target:?} over array<int>");
+
+            let floaty = call_with(
+                target,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Float)),
+                IrType::F64,
+                PhpType::Float,
+            );
+            assert!(
+                verdict(&floaty, target).is_some(),
+                "{target:?} folds integer slots only"
             );
         }
 

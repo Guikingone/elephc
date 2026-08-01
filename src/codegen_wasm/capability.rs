@@ -4451,7 +4451,10 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayIsList
         | RuntimeFnId::ArrayKeys
         | RuntimeFnId::ArrayValues
-        | RuntimeFnId::InArray => true,
+        | RuntimeFnId::InArray
+        | RuntimeFnId::ArrayReverse
+        | RuntimeFnId::ArraySum
+        | RuntimeFnId::ArrayProduct => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4479,17 +4482,14 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayMultisort
         | RuntimeFnId::ArrayPad
         | RuntimeFnId::ArrayPop
-        | RuntimeFnId::ArrayProduct
         | RuntimeFnId::ArrayPush
         | RuntimeFnId::ArrayRand
         | RuntimeFnId::ArrayReplace
         | RuntimeFnId::ArrayReplaceRecursive
-        | RuntimeFnId::ArrayReverse
         | RuntimeFnId::ArraySearch
         | RuntimeFnId::ArrayShift
         | RuntimeFnId::ArraySlice
         | RuntimeFnId::ArraySplice
-        | RuntimeFnId::ArraySum
         | RuntimeFnId::ArrayUdiff
         | RuntimeFnId::ArrayUintersect
         | RuntimeFnId::ArrayUnique
