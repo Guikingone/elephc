@@ -5033,9 +5033,9 @@
     },
     "runtime_fn": {
       "total": 437,
-      "supported": 44,
+      "supported": 45,
       "excluded": 29,
-      "missing": 364,
+      "missing": 363,
       "rows": [
         {
           "name": "array_all",
@@ -9918,7 +9918,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10215,7 +10216,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10223,7 +10225,7 @@
           "name": "implode",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "implode(...)"
           ],
@@ -10231,7 +10233,21 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::string_shaping_builtins_admit_only_their_arities",
+              "codegen::cli::test_cli_wasm_string_shaping_builtins_match_php",
+              "codegen::cli::test_cli_wasm_str_repeat_matches_php_and_raises_its_value_error",
+              "codegen::cli::test_cli_wasm_str_pad_matches_php",
+              "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
+              "codegen::cli::test_cli_wasm_sha1_matches_php",
+              "codegen::cli::test_cli_wasm_md5_matches_php",
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
+            ]
+          }
         },
         {
           "name": "inet_ntop",
@@ -10298,7 +10314,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10339,7 +10356,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10394,7 +10412,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10470,7 +10489,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10497,7 +10517,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10610,7 +10631,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10637,7 +10659,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10664,7 +10687,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10727,7 +10751,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10754,7 +10779,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10850,7 +10876,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10891,7 +10918,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10918,7 +10946,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -10945,7 +10974,8 @@
               "codegen::cli::test_cli_wasm_str_replace_and_crc32_match_php",
               "codegen::cli::test_cli_wasm_sha1_matches_php",
               "codegen::cli::test_cli_wasm_md5_matches_php",
-              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php"
+              "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+              "codegen::cli::test_cli_wasm_implode_matches_php"
             ]
           }
         },
@@ -12515,14 +12545,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 182,
+    "supported": 183,
     "excluded": 47,
-    "missing": 483,
+    "missing": 482,
     "evidence_gaps": 177,
     "row_evidence_gaps": 176,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "483 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "482 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

@@ -4495,6 +4495,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StrRepeat
         | RuntimeFnId::Strpos
         | RuntimeFnId::Strrpos
+        | RuntimeFnId::Implode
         | RuntimeFnId::Strstr
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
@@ -4824,7 +4825,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::HashInit
         | RuntimeFnId::HashUpdate
         | RuntimeFnId::Htmlentities
-        | RuntimeFnId::Implode
         | RuntimeFnId::InetNtop
         | RuntimeFnId::InetPton
         | RuntimeFnId::Ip2long

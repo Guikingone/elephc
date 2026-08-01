@@ -249,7 +249,8 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::Crc32
         | RuntimeFnId::Sha1
         | RuntimeFnId::Md5
-        | RuntimeFnId::Htmlspecialchars => (
+        | RuntimeFnId::Htmlspecialchars
+        | RuntimeFnId::Implode => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
             &[
@@ -261,6 +262,7 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_sha1_matches_php",
                 "codegen::cli::test_cli_wasm_md5_matches_php",
                 "codegen::cli::test_cli_wasm_htmlspecialchars_matches_php",
+                "codegen::cli::test_cli_wasm_implode_matches_php",
             ][..],
         ),
         RuntimeFnId::Strpos | RuntimeFnId::Strrpos | RuntimeFnId::Strstr => (

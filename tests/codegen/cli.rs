@@ -4152,6 +4152,91 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `implode` joins an indexed string array the way php-src does.
+///
+/// This is the first builtin on this target that READS an array, so the shape contract is
+/// deliberately narrow: the elements must be exactly `string`, because `__rt_array_get_str` reads
+/// a slot as a (pointer, length) pair and a slot holding an int or a boxed Mixed is a different
+/// layout. An array of `Never` — the type of a literal `[]` — is admitted alongside it, since the
+/// element read never happens and the answer is the empty string.
+///
+/// The glue goes BETWEEN elements, so there is one fewer glue than elements: an empty array joins
+/// to nothing, a single element to itself, and three empty strings joined by `,` give `,,`.
+#[test]
+fn test_cli_wasm_implode_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_implode");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function j(string $g, array $a): void { echo "[", implode($g, $a), "]|"; }
+j(",", ["a","b","c"]); j(",", ["a"]); j("", ["a","b"]); j("--", ["x","y","z"]); echo "\n";
+j(",", ["","",""]); j("\x00", ["a","b"]); j("::", ["one"]); j(" ", ["a","b","c","d","e"]); echo "\n";
+j(",", ["h\xc3\xa9","llo"]); j("\xff", ["\x00","\x01"]); echo "\n";
+$e = [];
+echo "[", implode(",", $e), "]\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile implode to WASM");
+    assert!(
+        output.status.success(),
+        "implode compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run implode under Node");
+    assert!(
+        run.status.success(),
+        "implode trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected: Vec<u8> = [
+        b"[a,b,c]|[a]|[ab]|[x--y--z]|\n".as_slice(),
+        b"[,,]|[a\x00b]|[one]|[a b c d e]|\n".as_slice(),
+        b"[h\xc3\xa9,llo]|[\x00\xff\x01]|\n".as_slice(),
+        b"[]\n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

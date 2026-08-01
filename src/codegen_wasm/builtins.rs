@@ -60,6 +60,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_REPEAT);
     wm.add_raw_func(RT_STR_FIND);
     wm.add_raw_func(RT_STR_RFIND);
+    wm.add_raw_func(RT_IMPLODE);
     wm.add_raw_func(RT_PAD_BYTE);
     wm.add_raw_func(RT_STR_PAD);
     wm.add_raw_func(RT_STR_REPLACE);
@@ -1780,6 +1781,67 @@ const RT_STR_RFIND: &str = r#"(func $__rt_str_rfind (param $hptr i32) (param $hl
   (i64.const -1))                                                 ;; absent
 "#;
 
+/// `__rt_implode`: owns the elements of an indexed STRING array joined by a glue string.
+///
+/// Two passes rather than a worst-case reservation: the total is the sum of the element lengths
+/// plus `(count - 1)` glues, which is exactly knowable before writing, so the result block is
+/// sized precisely. An empty array joins to the empty string with no glue at all, and a
+/// single-element array to that element — the glue count is one FEWER than the elements, which is
+/// the off-by-one this shape makes hard to get wrong.
+const RT_IMPLODE: &str = r#"(func $__rt_implode (param $array i32) (param $gptr i32) (param $glen i64) (result i32) (result i64)
+  (local $n i64)                                                  ;; element count
+  (local $i i64)                                                  ;; element cursor
+  (local $j i64)                                                  ;; byte cursor within a piece
+  (local $total i64)                                              ;; exact output length
+  (local $eptr i32)                                               ;; current element pointer
+  (local $elen i64)                                               ;; current element length
+  (local $out i32)                                                ;; owned result block
+  (local $w i32)                                                  ;; destination cursor
+  (local.set $n (i64.load (local.get $array)))                    ;; the length lives at [array+0]
+  (local.set $total (i64.const 0))
+  (local.set $i (i64.const 0))
+  (block $mend (loop $measure
+    (br_if $mend (i64.ge_s (local.get $i) (local.get $n)))
+    (call $__rt_array_get_str (local.get $array) (local.get $i))
+    (local.set $elen)                                             ;; pop the length
+    (local.set $eptr)                                             ;; pop the pointer
+    (local.set $total (i64.add (local.get $total) (local.get $elen)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $measure)))
+  (if (i64.gt_s (local.get $n) (i64.const 0))
+    (then (local.set $total (i64.add (local.get $total)
+      (i64.mul (i64.sub (local.get $n) (i64.const 1)) (local.get $glen))))))  ;; one fewer glue than elements
+  (local.set $out (call $__rt_str_alloc (local.get $total)))
+  (local.set $w (i32.const 0))
+  (local.set $i (i64.const 0))
+  (block $wend (loop $write
+    (br_if $wend (i64.ge_s (local.get $i) (local.get $n)))
+    (if (i64.gt_s (local.get $i) (i64.const 0))
+      (then                                                       ;; glue goes BETWEEN, not after
+        (local.set $j (i64.const 0))
+        (block $gend (loop $glue
+          (br_if $gend (i64.ge_s (local.get $j) (local.get $glen)))
+          (i32.store8 (i32.add (local.get $out) (local.get $w))
+            (i32.load8_u (i32.add (local.get $gptr) (i32.wrap_i64 (local.get $j)))))
+          (local.set $w (i32.add (local.get $w) (i32.const 1)))
+          (local.set $j (i64.add (local.get $j) (i64.const 1)))
+          (br $glue)))))
+    (call $__rt_array_get_str (local.get $array) (local.get $i))
+    (local.set $elen)                                             ;; pop the length
+    (local.set $eptr)                                             ;; pop the pointer
+    (local.set $j (i64.const 0))
+    (block $eend (loop $elem
+      (br_if $eend (i64.ge_s (local.get $j) (local.get $elen)))
+      (i32.store8 (i32.add (local.get $out) (local.get $w))
+        (i32.load8_u (i32.add (local.get $eptr) (i32.wrap_i64 (local.get $j)))))
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))
+      (local.set $j (i64.add (local.get $j) (i64.const 1)))
+      (br $elem)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $write)))
+  (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; owned result
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -2052,6 +2114,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::StrRepeat
             | RuntimeFnId::Strpos
             | RuntimeFnId::Strrpos
+            | RuntimeFnId::Implode
             | RuntimeFnId::Strstr
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrReplace
@@ -2135,6 +2198,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if matches!(target, RuntimeFnId::Strpos | RuntimeFnId::Strrpos) {
         return string_search_shape_issue(function, call, target);
+    }
+    if target == RuntimeFnId::Implode {
+        return implode_shape_issue(function, call);
     }
     if target == RuntimeFnId::Strstr {
         return strstr_shape_issue(function, call);
@@ -2349,6 +2415,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Strrpos {
         return lower_string_rsearch(ctx, inst);
+    }
+    if target == RuntimeFnId::Implode {
+        return lower_implode(ctx, inst);
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);
@@ -2827,6 +2896,73 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     ctx.fb.ins("call $__rt_str_substr", "own the selected bytes");
     store_result(ctx, inst)
+}
+
+/// Lowers `implode` over an indexed array of strings.
+///
+/// PHP also accepts an array of ints or mixed values, joining their string coercions, and a
+/// one-argument form whose glue is empty. Only the two-argument all-string shape is admitted:
+/// coercing elements would need the per-tag conversions this backend keeps fail-closed, and
+/// admitting the shorter form would mean inventing an empty glue with no literal behind it.
+fn lower_implode(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins("call $__rt_implode", "join the elements with the glue");
+    store_result(ctx, inst)
+}
+
+/// Validates `implode`: a glue string and an indexed array of strings, a string out.
+fn implode_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [glue, array] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected a glue and an array, got {} operands",
+            call.operands.len()
+        ));
+    };
+    let Some(glue_value) = function.value(*glue) else {
+        return Some("glue is missing from the value table".to_string());
+    };
+    if glue_value.ir_type != IrType::Str || glue_value.php_type.codegen_repr() != PhpType::Str {
+        return Some(format!(
+            "implode glue is {:?}/{:?}, expected Str/Str",
+            glue_value.ir_type,
+            glue_value.php_type.codegen_repr()
+        ));
+    }
+    let Some(array_value) = function.value(*array) else {
+        return Some("array is missing from the value table".to_string());
+    };
+    if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "implode takes an indexed array, got {:?}",
+            array_value.ir_type
+        ));
+    }
+    // The element type has to be exactly string: `__rt_array_get_str` reads a slot as a
+    // (pointer, length) pair, and a slot holding an int or a boxed Mixed is a different layout.
+    // `Never` is admitted alongside it because it is the type of an array proven to have no
+    // elements — `implode(",", [])` — where the element read never happens and the answer is the
+    // empty string. Refusing it would reject a shape whose result cannot be got wrong.
+    if !matches!(
+        &array_value.php_type,
+        PhpType::Array(element) if matches!(**element, PhpType::Str | PhpType::Never)
+    ) {
+        return Some(format!(
+            "implode elements must be exactly string, got {:?}",
+            array_value.php_type
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "implode result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
 }
 
 /// Lowers `strrpos` in its two-argument form, boxing PHP's `int|false`.
@@ -4046,6 +4182,46 @@ mod tests {
         );
         let call = bad_flag.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&bad_flag, call, RuntimeFnId::Strstr).is_some());
+
+        // `implode` reads an array, so its element type is part of the contract.
+        let str_array = (IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Str)));
+        let joined = shaped_call(
+            RuntimeFnId::Implode,
+            &[str_arg.clone(), str_array.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = joined.instructions.last().expect("the probe emitted a call");
+        assert_eq!(direct_builtin_shape_issue(&joined, call, RuntimeFnId::Implode), None);
+        // A provably empty array is fine: the element read never happens.
+        let empty = shaped_call(
+            RuntimeFnId::Implode,
+            &[
+                str_arg.clone(),
+                (IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Never))),
+            ],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = empty.instructions.last().expect("the probe emitted a call");
+        assert_eq!(direct_builtin_shape_issue(&empty, call, RuntimeFnId::Implode), None);
+        // An int or Mixed element is a DIFFERENT slot layout, not a coercion this can do.
+        for element in [PhpType::Int, PhpType::Mixed] {
+            let wrong = shaped_call(
+                RuntimeFnId::Implode,
+                &[
+                    str_arg.clone(),
+                    (IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(element.clone()))),
+                ],
+                IrType::Str,
+                PhpType::Str,
+            );
+            let call = wrong.instructions.last().expect("the probe emitted a call");
+            assert!(
+                direct_builtin_shape_issue(&wrong, call, RuntimeFnId::Implode).is_some(),
+                "an array of {element:?} is not readable as (pointer, length) slots"
+            );
+        }
 
         // `strrpos` answers the same tagged cell, and scans from the right.
         let last = shaped_call(
