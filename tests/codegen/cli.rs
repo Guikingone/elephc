@@ -2703,6 +2703,140 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies PHP's arithmetic RAISES on the native backend, on both targets alike.
+///
+/// Five operators answered a machine result where reference PHP raises: `%` by zero returned
+/// zero, either shift by a negative count returned the hardware's masked result, and BOTH float
+/// and integer `/` by zero returned an infinity. All five were SILENT wrong answers — a program
+/// that expected an exception continued with a plausible-looking number.
+///
+/// Integer `/` is a separate opcode from float `/` because PHP promotes its operands, so the
+/// guard has to run on the INTEGER divisor before the promotion: a promoted zero has a sign, and
+/// testing it after the fact would need the sign masked off.
+///
+/// The shift also masked its count to six bits, so `1 << 64` answered 1 and `-8 >> 64` answered
+/// -8 where PHP answers 0 and -1. That is fixed here too: PHP saturates rather than wrapping.
+///
+/// Both backends are checked against the same expected output, because this is where they
+/// disagreed: WASM already raised four of the five, so the native one was mostly the outlier —
+/// but integer `/` was wrong on BOTH, which is why one expected output covers them together.
+#[test]
+fn test_cli_arithmetic_raises_match_php_on_both_backends() {
+    let dir = make_cli_test_dir("elephc_cli_arithmetic_raises");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function m(int $a, int $b): int { return $a % $b; }
+function sl(int $a, int $b): int { return $a << $b; }
+function sr(int $a, int $b): int { return $a >> $b; }
+function fd(float $a, float $b): float { return $a / $b; }
+function q(int $a, int $b): float { return $a / $b; }
+echo m(7,3), "|", m(-7,3), "|", m(7,-3), "\n";
+echo sl(1,0), "|", sl(1,63), "|", sl(1,64), "|", sl(1,100), "|", sl(-8,1), "\n";
+echo sr(1,63), "|", sr(1,64), "|", sr(-8,1), "|", sr(-8,64), "|", sr(-8,100), "\n";
+echo fd(1.5,0.5), "|", fd(-6.0,3.0), "|", q(6,3), "|", q(7,2), "\n";
+try { echo m(1,0), "\n"; } catch (\DivisionByZeroError $a) { echo "mod0|", $a->getMessage(), "\n"; }
+try { echo sl(1,-1), "\n"; } catch (\ArithmeticError $b) { echo "shl|", $b->getMessage(), "\n"; }
+try { echo sr(1,-1), "\n"; } catch (\ArithmeticError $c) { echo "shr|", $c->getMessage(), "\n"; }
+try { echo fd(1.0,0.0), "\n"; } catch (\DivisionByZeroError $d) { echo "fdiv|", $d->getMessage(), "\n"; }
+try { echo fd(1.0,-0.0), "\n"; } catch (\DivisionByZeroError $e) { echo "fdiv-neg0|", $e->getMessage(), "\n"; }
+try { echo q(1,0), "\n"; } catch (\DivisionByZeroError $f) { echo "intdiv0|", $f->getMessage(), "\n"; }
+try { echo q(0,0), "\n"; } catch (\DivisionByZeroError $g) { echo "int00|", $g->getMessage(), "\n"; }
+echo "end\n";
+"#,
+    )
+    .unwrap();
+
+    // php-src 8.5.6's own output for the same program.
+    let expected = concat!(
+        "1|-1|1\n",
+        "1|-9223372036854775808|0|0|-16\n",
+        "0|0|-4|-1|-1\n",
+        "3|-2|2|3.5\n",
+        "mod0|Modulo by zero\n",
+        "shl|Bit shift by negative number\n",
+        "shr|Bit shift by negative number\n",
+        "fdiv|Division by zero\n",
+        "fdiv-neg0|Division by zero\n",
+        "intdiv0|Division by zero\n",
+        "int00|Division by zero\n",
+        "end\n",
+    );
+
+    let native = elephc_cli_command(&dir)
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the arithmetic raises natively");
+    assert!(
+        native.status.success(),
+        "native compilation failed: {}",
+        String::from_utf8_lossy(&native.stderr)
+    );
+    let native_run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the arithmetic raises natively");
+    assert!(
+        native_run.status.success(),
+        "a caught arithmetic error still killed the native program: {}",
+        String::from_utf8_lossy(&native_run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&native_run.stdout), expected);
+
+    if Command::new("node").arg("--version").output().is_err() {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    let wasm = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the arithmetic raises to WASM");
+    assert!(
+        wasm.status.success(),
+        "WASM compilation failed: {}",
+        String::from_utf8_lossy(&wasm.stderr)
+    );
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+    let wasm_run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the arithmetic raises under Node");
+    if !wasm_run.status.success()
+        && String::from_utf8_lossy(&wasm_run.stderr).contains("CompileError")
+    {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        wasm_run.status.success(),
+        "a caught arithmetic error still killed the WASM program: {}",
+        String::from_utf8_lossy(&wasm_run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&wasm_run.stdout), expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies PHP's arithmetic runtime errors are CATCHABLE, not process-killing fatals.
 ///
 /// Reference PHP raises `DivisionByZeroError` / `ArithmeticError` for these five guards, so a

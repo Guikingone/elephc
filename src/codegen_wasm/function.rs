@@ -344,7 +344,7 @@ pub(super) fn raises_runtime_error(function: &Function) -> bool {
     function.instructions.iter().any(|inst| {
         matches!(
             inst.op,
-            Op::IShl | Op::IShrA | Op::ISDiv | Op::ISMod | Op::FDiv
+            Op::IShl | Op::IShrA | Op::IDiv | Op::ISDiv | Op::ISMod | Op::FDiv
         ) || matches!(
             inst.immediate,
             Some(Immediate::RuntimeCall(
