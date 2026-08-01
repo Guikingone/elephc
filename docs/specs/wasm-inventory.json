@@ -305,9 +305,9 @@
     },
     "op": {
       "total": 236,
-      "supported": 105,
+      "supported": 106,
       "excluded": 17,
-      "missing": 114,
+      "missing": 113,
       "rows": [
         {
           "name": "const_i64",
@@ -1918,16 +1918,23 @@
           "name": "str_persist",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "returning a string from a function",
+            "storing a computed string"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::inst::lower_str_persist",
+            "tests": [
+              "codegen_wasm::tests::str_persist_copies_a_literal_into_owned_heap_bytes",
+              "codegen::cli::test_cli_wasm_chr_and_ord_match_php"
+            ]
+          }
         },
         {
           "name": "str_char_at",
@@ -5026,9 +5033,9 @@
     },
     "runtime_fn": {
       "total": 437,
-      "supported": 23,
+      "supported": 25,
       "excluded": 29,
-      "missing": 385,
+      "missing": 383,
       "rows": [
         {
           "name": "array_all",
@@ -9871,7 +9878,7 @@
           "name": "chr",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "chr(...)"
           ],
@@ -9879,7 +9886,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::chr_and_ord_admit_only_their_concrete_scalar",
+              "codegen::cli::test_cli_wasm_chr_and_ord_match_php"
+            ]
+          }
         },
         {
           "name": "crc32",
@@ -10337,7 +10351,7 @@
           "name": "ord",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "ord(...)"
           ],
@@ -10345,7 +10359,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::chr_and_ord_admit_only_their_concrete_scalar",
+              "codegen::cli::test_cli_wasm_chr_and_ord_match_php"
+            ]
+          }
         },
         {
           "name": "printf",
@@ -12259,14 +12280,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 160,
+    "supported": 163,
     "excluded": 47,
-    "missing": 505,
-    "evidence_gaps": 178,
-    "row_evidence_gaps": 177,
+    "missing": 502,
+    "evidence_gaps": 177,
+    "row_evidence_gaps": 176,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "505 reachable identities lack a WASM lowerer; 177 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "502 reachable identities lack a WASM lowerer; 176 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

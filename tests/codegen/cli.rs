@@ -3515,6 +3515,99 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `chr` and `ord` reproduce php-src, including the values PHP does not reject.
+///
+/// PHP does not refuse an out-of-range `chr`: it constrains the argument with `% 256`, bringing a
+/// negative remainder back up, so `chr(-1)` is `\xff` and `chr(1000000)` is `\x40`. `ord` answers
+/// 0 for the empty string and the FIRST byte of a longer one. Since PHP 8.5 both cases are
+/// deprecated, but they still answer, and the value is what this compares.
+///
+/// Each helper is reached through a user function returning a `string`, which is what makes this
+/// also the coverage for `Op::StrPersist`: without it the returned bytes would not outlive the
+/// callee's frame.
+#[test]
+fn test_cli_wasm_chr_and_ord_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_chr_ord");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function c(int $n): string { return chr($n); }
+function o(string $s): int { return ord($s); }
+echo bin2hex(c(65)), "|", bin2hex(c(0)), "|", bin2hex(c(255)), "|", bin2hex(c(10)), "\n";
+echo bin2hex(c(-1)), "|", bin2hex(c(-256)), "|", bin2hex(c(-257)), "|", bin2hex(c(256)), "|", bin2hex(c(257)), "|", bin2hex(c(1000000)), "\n";
+echo o("A"), "|", o("\xff"), "|", o("0"), "|", o(""), "|", o("AB"), "\n";
+echo bin2hex(c(o("Z"))), "|", o(c(200)), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile chr/ord to WASM");
+    assert!(
+        output.status.success(),
+        "chr/ord compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run chr/ord under Node");
+    assert!(
+        run.status.success(),
+        "chr/ord trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "41|00|ff|0a\n",
+            "ff|00|ff|00|01|40\n",
+            "65|255|48|0|65\n",
+            "5a|200\n",
+        )
+    );
+
+    // php-src 8.5 diagnoses the six out-of-range `chr` arguments and the two `ord` arguments
+    // that are not one byte, once each — counted rather than matched whole, because php-src also
+    // prints a file, line and stack trace this target does not reproduce.
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert_eq!(stderr.matches("chr():").count(), 6, "stderr was: {stderr}");
+    assert_eq!(stderr.matches("ord():").count(), 2, "stderr was: {stderr}");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies base64 and url coding reproduce php-src, tolerant decoding included.
 ///
 /// The samples pin what separates these from a textbook implementation. `urlencode` folds a

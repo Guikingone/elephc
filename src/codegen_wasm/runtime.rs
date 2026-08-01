@@ -102,6 +102,11 @@ const WARN_OBJECT_TO_FLOAT_SUFFIX: &[u8] = b" could not be converted to float\n"
 /// uncaught fatal until this target gains exception support.
 const ERR_UNSUPPORTED_OPERAND: &[u8] =
     b"PHP Fatal error: Uncaught TypeError: Unsupported operand types\n";
+/// `chr()` outside `[0, 255]` still answers, wrapping modulo 256, but is deprecated since 8.5.
+const DEPRECATED_CHR_RANGE: &[u8] = b"Deprecated: chr(): Providing a value not in-between 0 and 255 is deprecated, this is because a byte value must be in the [0, 255] interval. The value used will be constrained using % 256\n";
+/// `ord()` on anything but exactly one byte still answers, but is deprecated since 8.5.
+const DEPRECATED_ORD_LENGTH: &[u8] =
+    b"Deprecated: ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead\n";
 
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
@@ -140,7 +145,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_OBJECT_TO_SCALAR_PREFIX.len() as u32
     + WARN_OBJECT_TO_INT_SUFFIX.len() as u32
     + WARN_OBJECT_TO_FLOAT_SUFFIX.len() as u32
-    + ERR_UNSUPPORTED_OPERAND.len() as u32;
+    + ERR_UNSUPPORTED_OPERAND.len() as u32
+    + DEPRECATED_CHR_RANGE.len() as u32
+    + DEPRECATED_ORD_LENGTH.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -258,6 +265,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_OBJECT_TO_SCALAR_PREFIX,
         WARN_OBJECT_TO_INT_SUFFIX,
         WARN_OBJECT_TO_FLOAT_SUFFIX,
+        DEPRECATED_CHR_RANGE,
+        DEPRECATED_ORD_LENGTH,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -380,10 +389,12 @@ fn emit_undefined_array_key_warning_runtime(
     wm: &mut WatModule,
     offsets: &[(u32, u32)],
 ) {
-    debug_assert_eq!(offsets.len(), 12);
+    debug_assert_eq!(offsets.len(), 14);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (quote_ptr, quote_len) = offsets[1];
     let (suffix_ptr, suffix_len) = offsets[2];
+    let (chr_range_ptr, chr_range_len) = offsets[12];
+    let (ord_length_ptr, ord_length_len) = offsets[13];
     let (float_prefix_ptr, float_prefix_len) = offsets[5];
     let (float_suffix_ptr, float_suffix_len) = offsets[6];
     let (non_numeric_ptr, non_numeric_len) = offsets[7];
@@ -471,6 +482,17 @@ fn emit_undefined_array_key_warning_runtime(
         // Registered here, not in `emit_float_runtime`: the diagnosing conversion
         // depends on the warning helper above, which only command modules carry.
         wm.add_raw_func(super::float::RT_FLOAT_TO_INT_WARN);
+        // PHP 8.5 alone deprecates a `chr()` argument outside a byte and an `ord()` argument
+        // that is not exactly one byte. Both still ANSWER — the value is unchanged, only the
+        // diagnostic is new — so earlier profiles get the same result with no message.
+        wm.add_raw_func(&format!(
+            r#"(func $__rt_deprecated_chr_range
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {chr_range_ptr}) (i32.const {chr_range_len})))"#
+        ));
+        wm.add_raw_func(&format!(
+            r#"(func $__rt_deprecated_ord_length
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {ord_length_ptr}) (i32.const {ord_length_len})))"#
+        ));
     }
     super::mixed_numeric::emit_mixed_numeric_runtime(wm);
 }

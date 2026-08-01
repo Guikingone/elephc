@@ -239,7 +239,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // `(global.get $__float_scratch)` as the bignum scratch base.
     float::emit_float_runtime(&mut wm, runtime::FLOAT_SCRATCH_BASE as i32);
     strict::emit_strict_runtime(&mut wm);
-    super::builtins::emit_builtin_runtime(&mut wm);
+    super::builtins::emit_builtin_runtime(&mut wm, has_main);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.
     let mut functions: Vec<_> = module.functions.iter().collect();

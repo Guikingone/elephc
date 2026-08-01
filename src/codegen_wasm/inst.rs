@@ -48,6 +48,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::ConstNull => lower_const_null(ctx, &inst),
         Op::ConstStr => lower_const_str(ctx, &inst),
         Op::StrLen => lower_strlen(ctx, &inst),
+        Op::StrPersist => lower_str_persist(ctx, &inst),
         Op::StrConcat => lower_str_concat(ctx, &inst),
         Op::Nop => lower_nop(ctx),
         Op::ConcatReset => lower_concat_reset(ctx),
@@ -1255,6 +1256,21 @@ fn lower_strlen(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
         other => return Err(WasmError::Unsupported(format!("strlen of {:?}", other))),
     }
+    store_result(ctx, inst)
+}
+
+/// Lowers `StrPersist`: takes an independently owned heap copy of a string.
+///
+/// EIR inserts this wherever a string has to outlive whatever produced it — most visibly when a
+/// function RETURNS one, since the callee's frame is gone by the time the caller reads it. The
+/// runtime helper it calls is the same one property stores and string defaults already use, so a
+/// persisted string is owned on exactly the terms the release path expects.
+fn lower_str_persist(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(
+        "call $__rt_str_persist",
+        "own an independent copy (ptr,len) -> (new_ptr,new_len)",
+    );
     store_result(ctx, inst)
 }
 

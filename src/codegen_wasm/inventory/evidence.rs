@@ -78,6 +78,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::MixedTagOf => &["runtime type inspection of a Mixed value"],
         Op::StrConcat => &["string concatenation (`.`)"],
         Op::StrLen => &["`strlen()`"],
+        Op::StrPersist => &["returning a string from a function", "storing a computed string"],
         Op::ConcatReset => &["reset of a compiler-managed concatenation chain"],
         Op::ArrayNew => &["indexed array literal"],
         Op::ArrayLen => &["`count()` on an indexed array"],
@@ -189,6 +190,10 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         }
         Op::StrConcat => &["codegen_wasm::tests::chained_concat_echoes_correctly"],
         Op::StrLen => &["codegen_wasm::tests::strlen_of_literal_invokes_correctly"],
+        Op::StrPersist => &[
+            "codegen_wasm::tests::str_persist_copies_a_literal_into_owned_heap_bytes",
+            "codegen::cli::test_cli_wasm_chr_and_ord_match_php",
+        ],
         Op::ArrayNew | Op::ArrayPush | Op::ArrayGet => {
             &["codegen_wasm::tests::array_new_push_get_lowers"]
         }
@@ -275,6 +280,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::ConstNull => "codegen_wasm::inst::lower_const_null",
         Op::ConstStr => "codegen_wasm::inst::lower_const_str",
         Op::StrLen => "codegen_wasm::inst::lower_strlen",
+        Op::StrPersist => "codegen_wasm::inst::lower_str_persist",
         Op::StrConcat => "codegen_wasm::inst::lower_str_concat",
         Op::Nop => "codegen_wasm::inst::lower_nop",
         Op::ConcatReset => "codegen_wasm::inst::lower_concat_reset",
@@ -416,7 +422,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::ArrayToMixed
         | Op::MixedNumericBinop
         | Op::HashToMixed => "mixed",
-        Op::StrConcat | Op::ConcatReset | Op::StrLen => "string",
+        Op::StrConcat | Op::ConcatReset | Op::StrLen | Op::StrPersist => "string",
         Op::ArrayNew
         | Op::ArrayLen
         | Op::ArrayGet

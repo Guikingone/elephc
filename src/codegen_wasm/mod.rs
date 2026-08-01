@@ -3853,6 +3853,58 @@ mod tests {
         }
     }
 
+    /// Verifies `Op::StrPersist` yields an independently owned copy of the same bytes.
+    ///
+    /// EIR inserts this wherever a string has to outlive whatever produced it — most visibly when
+    /// a function RETURNS one. The copy has to compare equal in LENGTH and content to the source,
+    /// and live at a different address, which is what "independently owned" means here: the
+    /// literal it came from sits in a data segment the release path must never free.
+    #[test]
+    fn str_persist_copies_a_literal_into_owned_heap_bytes() {
+        let mut module = Module::new(Target::wasm());
+        let s_id = module.data.intern_string("héllo");
+        let mut f = Function::new("plen".to_string(), IrType::I64, PhpType::Int);
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let s = b.emit_const_str(s_id);
+            let owned = b
+                .emit(
+                    Op::StrPersist,
+                    vec![s],
+                    None,
+                    IrType::Str,
+                    PhpType::Str,
+                    Ownership::Owned,
+                )
+                .unwrap();
+            let len = b
+                .emit(
+                    Op::StrLen,
+                    vec![owned],
+                    None,
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+            b.terminate(Terminator::Return { value: Some(len) });
+        }
+        module.add_function(f);
+
+        let wat = generate(&module, Emit::Executable).expect("StrPersist lowers");
+        assert!(
+            wat.contains("call $__rt_str_persist"),
+            "StrPersist must reach the runtime helper that owns the copy"
+        );
+        // The persisted length is the source length, so the byte count survives the copy.
+        if let Some(o) = invoke(&module, "fn_plen", &[]) {
+            assert_eq!(o, "6");
+        }
+    }
+
     // ----- P7c: by-ref closure captures (caller-side promote + retroactive routing) -----
 
     /// Helper: builds a by-ref int capture closure body `() { $n = $n + by }` (void).

@@ -234,6 +234,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_direct_builtins_match_php",
             ][..],
         ),
+        RuntimeFnId::Chr | RuntimeFnId::Ord => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::chr_and_ord_admit_only_their_concrete_scalar",
+                "codegen::cli::test_cli_wasm_chr_and_ord_match_php",
+            ][..],
+        ),
         _ => return None,
     };
     Some(SupportedEvidence {

@@ -23,8 +23,18 @@ use crate::types::PhpType;
 
 /// Registers the WAT helpers the builtins in this module call.
 ///
-/// Emitted for every module: none of these touch WASI, so a reactor carries them too.
-pub(super) fn emit_builtin_runtime(wm: &mut WatModule) {
+/// Emitted for every module: none of these touch WASI directly. `has_main` selects whether
+/// `chr`/`ord` can reach the PHP 8.5 deprecation helpers, which do — a reactor gets the same
+/// answer with no diagnostic rather than a reference it cannot resolve.
+pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
+    let diagnoses = has_main
+        && matches!(
+            crate::codegen_support::compile_php_version(),
+            crate::web_prelude::PhpVersion::Php85
+        );
+    let (chr, ord) = str_chr_ord(diagnoses);
+    wm.add_raw_func(&chr);
+    wm.add_raw_func(&ord);
     wm.add_raw_func(RT_STR_REGION_EQ);
     wm.add_raw_func(RT_STR_CONTAINS);
     wm.add_raw_func(RT_STR_MAP_CASE);
@@ -523,6 +533,62 @@ const RT_STR_BASE64_DECODE: &str = r#"(func $__rt_str_base64_decode (param $ptr 
   (local.get $out) (i64.extend_i32_u (local.get $w)))             ;; leftover bits are discarded
 "#;
 
+/// `__rt_str_chr`: owns the one-byte string PHP's `chr` returns for any integer.
+///
+/// PHP does not reject an out-of-range codepoint: it constrains it with `% 256`, and a NEGATIVE
+/// remainder is brought back up by adding 256, so `chr(-1)` is `\xff` and `chr(1000000)` is
+/// `\x40` — measured. `$deprecate` carries whether this profile diagnoses the out-of-range
+/// argument; the RESULT is the same either way, which is why the flag only gates the message.
+const RT_STR_CHR_TEMPLATE: &str = r#"(func $__rt_str_chr (param $n i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $byte i64)                                               ;; the constrained byte value
+{deprecation}  (local.set $byte (i64.rem_s (local.get $n) (i64.const 256)))    ;; % 256 keeps the sign in C
+  (if (i64.lt_s (local.get $byte) (i64.const 0))
+    (then (local.set $byte (i64.add (local.get $byte) (i64.const 256))))) ;; back into [0, 255]
+  (local.set $out (call $__rt_str_alloc (i64.const 1)))           ;; exactly one byte
+  (i32.store8 (local.get $out) (i32.wrap_i64 (local.get $byte)))  ;; the byte itself
+  (local.get $out) (i64.const 1))                                 ;; owned one-byte string
+"#;
+
+/// `__rt_str_ord`: the first byte of a string as PHP's `ord` reports it.
+///
+/// An EMPTY string answers 0 rather than failing, and a longer string answers its FIRST byte —
+/// both measured. `$deprecate` carries whether this profile diagnoses a length other than one;
+/// as with `chr`, the answer does not depend on it.
+const RT_STR_ORD_TEMPLATE: &str = r#"(func $__rt_str_ord (param $ptr i32) (param $len i64) (result i64)
+{deprecation}  (if (i64.le_s (local.get $len) (i64.const 0))
+    (then (return (i64.const 0))))                                ;; the empty string is zero
+  (i64.extend_i32_u (i32.load8_u (local.get $ptr))))              ;; the first byte, unsigned
+"#;
+
+/// Renders `__rt_str_chr` and `__rt_str_ord` for this module's diagnostic capability.
+///
+/// The deprecation helpers they would call are command-only (they write to stderr through WASI)
+/// and PHP 8.5-only, so a reactor or an earlier profile gets the same helper WITHOUT the call
+/// rather than a dangling reference. The answer is identical either way — only the message is
+/// conditional — which is exactly why eliding it is sound rather than a silent divergence.
+fn str_chr_ord(diagnoses: bool) -> (String, String) {
+    let (chr_deprecation, ord_deprecation) = if diagnoses {
+        (
+            concat!(
+                "  (if (i32.or (i64.lt_s (local.get $n) (i64.const 0))\n",
+                "              (i64.gt_s (local.get $n) (i64.const 255)))\n",
+                "    (then (call $__rt_deprecated_chr_range)))                    ;; 8.5 diagnoses, then answers\n",
+            ),
+            concat!(
+                "  (if (i64.ne (local.get $len) (i64.const 1))\n",
+                "    (then (call $__rt_deprecated_ord_length)))                   ;; 8.5 diagnoses, then answers\n",
+            ),
+        )
+    } else {
+        ("", "")
+    };
+    (
+        RT_STR_CHR_TEMPLATE.replace("{deprecation}", chr_deprecation),
+        RT_STR_ORD_TEMPLATE.replace("{deprecation}", ord_deprecation),
+    )
+}
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -781,6 +847,8 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::StrContains
             | RuntimeFnId::StrStartsWith
             | RuntimeFnId::StrEndsWith
+            | RuntimeFnId::Chr
+            | RuntimeFnId::Ord
     )
 }
 
@@ -836,6 +904,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::InArray {
         return in_array_shape_issue(function, call);
+    }
+    if matches!(target, RuntimeFnId::Chr | RuntimeFnId::Ord) {
+        return byte_conversion_shape_issue(function, call, target);
     }
     let [operand] = call.operands.as_slice() else {
         return Some(format!(
@@ -955,6 +1026,18 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::InArray {
         return lower_in_array(ctx, inst);
+    }
+    if target == RuntimeFnId::Chr {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb
+            .ins("call $__rt_str_chr", "the byte PHP's chr returns for this integer");
+        return store_result(ctx, inst);
+    }
+    if target == RuntimeFnId::Ord {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb
+            .ins("call $__rt_str_ord", "the first byte, or zero for the empty string");
+        return store_result(ctx, inst);
     }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
@@ -1361,6 +1444,50 @@ fn lower_array_fill(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 }
 
 /// Validates `str_contains`, `str_starts_with` and `str_ends_with`: two strings in, a bool out.
+/// Validates `chr` and `ord`: one concrete scalar in, the opposite one out.
+///
+/// A `mixed` argument is refused rather than coerced. PHP would juggle it, and juggling carries
+/// its own per-tag diagnostics that this backend does not reproduce yet, so admitting one here
+/// would answer confidently where PHP would have complained first.
+fn byte_conversion_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let (argument_ir, argument_php, result_ir, result_php) = if target == RuntimeFnId::Chr {
+        (IrType::I64, PhpType::Int, IrType::Str, PhpType::Str)
+    } else {
+        (IrType::Str, PhpType::Str, IrType::I64, PhpType::Int)
+    };
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected one operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("operand is missing from the value table".to_string());
+    };
+    if value.ir_type != argument_ir || value.php_type.codegen_repr() != argument_php {
+        return Some(format!(
+            "{target:?} operand {:?}/{:?} is not the expected {argument_ir:?}/{argument_php:?}",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != result_ir
+        || call.result_php_type.codegen_repr() != result_php
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the expected {result_ir:?}/{result_php:?}",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
 fn string_predicate_shape_issue(
     function: &Function,
     call: &Instruction,
@@ -1641,6 +1768,141 @@ mod tests {
             UnaryStringRuntime::HtmlEntityDecode
         ));
         assert!(!unary_string_is_supported(UnaryStringRuntime::HexToBin));
+    }
+
+    /// Builds a one-operand `RuntimeCall` probe with a chosen operand and result typing.
+    fn scalar_conversion_call(
+        target: RuntimeFnId,
+        operand_ir: IrType,
+        operand_php: PhpType,
+        result_ir: IrType,
+        result_php: PhpType,
+    ) -> Function {
+        let mut function = Function::new("probe".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let slot = builder.add_local(
+                Some("v".to_string()),
+                operand_ir,
+                operand_php.clone(),
+                crate::ir::LocalKind::PhpLocal,
+            );
+            let argument = builder.emit_load_local(slot, operand_ir, operand_php);
+            builder.emit(
+                Op::RuntimeCall,
+                vec![argument],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))),
+                result_ir,
+                result_php,
+                Ownership::MaybeOwned,
+            );
+            builder.terminate(crate::ir::Terminator::Return { value: None });
+        }
+        function
+    }
+
+    /// Verifies `chr` and `ord` take one concrete scalar and refuse anything juggled.
+    ///
+    /// `RuntimeFnId::Chr` maps an int to a one-byte string and `RuntimeFnId::Ord` maps a string
+    /// back to an int, so each refuses the other's typing as well as a `mixed` operand. PHP would
+    /// juggle a `mixed` with its own per-tag diagnostics, which this backend does not reproduce,
+    /// so admitting one would answer confidently where PHP would have complained first.
+    #[test]
+    fn chr_and_ord_admit_only_their_concrete_scalar() {
+        let chr = scalar_conversion_call(
+            RuntimeFnId::Chr,
+            IrType::I64,
+            PhpType::Int,
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = chr.instructions.last().expect("the probe emitted a call");
+        assert_eq!(direct_builtin_shape_issue(&chr, call, RuntimeFnId::Chr), None);
+
+        let ord = scalar_conversion_call(
+            RuntimeFnId::Ord,
+            IrType::Str,
+            PhpType::Str,
+            IrType::I64,
+            PhpType::Int,
+        );
+        let call = ord.instructions.last().expect("the probe emitted a call");
+        assert_eq!(direct_builtin_shape_issue(&ord, call, RuntimeFnId::Ord), None);
+
+        // Each refuses the other's operand typing, and both refuse a juggled one.
+        let swapped = scalar_conversion_call(
+            RuntimeFnId::Chr,
+            IrType::Str,
+            PhpType::Str,
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = swapped.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&swapped, call, RuntimeFnId::Chr).is_some());
+
+        let juggled = scalar_conversion_call(
+            RuntimeFnId::Ord,
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+            IrType::I64,
+            PhpType::Int,
+        );
+        let call = juggled.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&juggled, call, RuntimeFnId::Ord).is_some());
+
+        // A wrong RESULT typing is refused too: `chr` cannot answer an int.
+        let bad_result = scalar_conversion_call(
+            RuntimeFnId::Chr,
+            IrType::I64,
+            PhpType::Int,
+            IrType::I64,
+            PhpType::Int,
+        );
+        let call = bad_result.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&bad_result, call, RuntimeFnId::Chr).is_some());
+    }
+
+    /// Verifies the PHP 8.5 deprecations are the ONLY thing the profile changes about chr/ord.
+    ///
+    /// PHP 8.5 diagnoses an out-of-range `chr` argument and an `ord` argument that is not exactly
+    /// one byte, but both still ANSWER, and with the same value an earlier profile gives. So the
+    /// two renderings must differ only by the diagnostic call: if the arithmetic differed, an
+    /// earlier profile would silently compute something else.
+    #[test]
+    fn chr_and_ord_differ_between_profiles_only_by_the_deprecation() {
+        let (diagnosing_chr, diagnosing_ord) = str_chr_ord(true);
+        let (silent_chr, silent_ord) = str_chr_ord(false);
+
+        assert!(diagnosing_chr.contains("call $__rt_deprecated_chr_range"));
+        assert!(!silent_chr.contains("__rt_deprecated"));
+        assert!(diagnosing_ord.contains("call $__rt_deprecated_ord_length"));
+        assert!(!silent_ord.contains("__rt_deprecated"));
+
+        // Strip the guard the diagnosing form adds; what remains must be identical.
+        for (diagnosing, silent, marker) in [
+            (&diagnosing_chr, &silent_chr, "__rt_deprecated_chr_range"),
+            (&diagnosing_ord, &silent_ord, "__rt_deprecated_ord_length"),
+        ] {
+            let stripped: String = diagnosing
+                .lines()
+                .skip_while(|line| !line.contains("(if ("))
+                .skip_while(|line| !line.contains(marker))
+                .skip(1)
+                .collect::<Vec<_>>()
+                .join("\n");
+            let expected: String = silent
+                .lines()
+                .skip_while(|line| !line.contains("(local.set $byte") && !line.contains("(if (i64.le_s"))
+                .collect::<Vec<_>>()
+                .join("\n");
+            assert_eq!(
+                stripped, expected,
+                "the profiles must agree on the ANSWER, not just on the diagnostic"
+            );
+        }
     }
 
     /// Verifies the two url codecs differ exactly where php-src says they do.

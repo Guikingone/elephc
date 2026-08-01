@@ -4470,7 +4470,9 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayFill
         | RuntimeFnId::StrContains
         | RuntimeFnId::StrStartsWith
-        | RuntimeFnId::StrEndsWith => true,
+        | RuntimeFnId::StrEndsWith
+        | RuntimeFnId::Chr
+        | RuntimeFnId::Ord => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4774,7 +4776,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::SplObjectHash
         | RuntimeFnId::SplObjectId
         | RuntimeFnId::Chop
-        | RuntimeFnId::Chr
         | RuntimeFnId::Crc32
         | RuntimeFnId::CtypeAlnum
         | RuntimeFnId::CtypeAlpha
@@ -4807,7 +4808,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::MbStrlen
         | RuntimeFnId::Md5
         | RuntimeFnId::NumberFormat
-        | RuntimeFnId::Ord
         | RuntimeFnId::Printf
         | RuntimeFnId::Rtrim
         | RuntimeFnId::Sha1
@@ -4990,6 +4990,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::MixedTagOf
         | Op::StrConcat
         | Op::StrLen
+        | Op::StrPersist
         | Op::ConcatReset
         | Op::ArrayNew
         | Op::HashNew
@@ -5085,7 +5086,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::MixedCastInt
         | Op::MixedCastFloat
         | Op::MixedCastString
-        | Op::StrPersist
         | Op::StrCharAt
         | Op::StrInterpolate
         | Op::WriteStrStdout
