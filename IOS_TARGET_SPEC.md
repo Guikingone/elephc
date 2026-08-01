@@ -257,9 +257,18 @@ Six builtins depend on `fork`/`exec` and are unusable in the iOS sandbox. `proc_
 
 This gives an exact PHP source position (`file:line:col` via `errors/report.rs`), which the WASM-style backend audit cannot: `WasmError` is not wired to `CompileError`/`Span` and reports only `collection::function block#N instruction#M`. The exhaustive-match model remains the right guarantee *against omission* — worth pairing with the hooks so a newly added process builtin cannot compile without a decision — but it is not the right diagnostic on its own.
 
-**Blocked by Lot 3:** until `Target` distinguishes iOS from macOS, the condition has nothing to test.
+Reaching the variant required the checker to hold the whole `Target` rather than just a `Platform`. `check_with_target` already received one and dropped the variant on the floor.
 
-**Accept:** compiling a script that calls any of the six for an iOS target yields a compile error naming the builtin, the reason, and the source position.
+**Accept — met.**
+
+```
+error[1:7]: shell_exec() cannot be compiled for ios-arm64: that sandbox forbids
+spawning a process, so the call would always fail at run time
+```
+
+All six are refused with an exact position, and the same source still compiles for the host — this is a target capability gate, not a removal of the builtin. `pclose(popen(…))` reports `popen`, its inner call being evaluated first.
+
+The exhaustive-match guarantee was **not** adopted. It would prevent a future process builtin from being forgotten, but the WASM equivalent shows the price: its errors can only cite block and instruction indices, having no wiring to `CompileError`/`Span`. An exact source position is worth more here than compiler-enforced completeness, and the guard's doc comment carries the list forward instead.
 
 ## 8. Deliberately deferred — raw syscalls to libSystem
 
