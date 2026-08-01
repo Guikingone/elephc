@@ -4493,7 +4493,8 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Rtrim
         | RuntimeFnId::Substr
         | RuntimeFnId::StrRepeat
-        | RuntimeFnId::Strpos => true,
+        | RuntimeFnId::Strpos
+        | RuntimeFnId::Strstr => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4836,7 +4837,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StrReplace
         | RuntimeFnId::StrSplit
         | RuntimeFnId::Strrpos
-        | RuntimeFnId::Strstr
         | RuntimeFnId::SubstrReplace
         | RuntimeFnId::Vprintf
         | RuntimeFnId::Vsprintf

@@ -3651,6 +3651,96 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `strstr` reproduces php-src in both arities, including its `string|false`.
+///
+/// The result is a REGION of the haystack — from the match to the end, or from the start up to
+/// the match when `$before_needle` is true — so the two arities return different halves of the
+/// same scan rather than one being a default of the other. An empty needle matches at offset 0,
+/// which makes `strstr($h, "")` the whole string and its `before` form empty; a needle that is
+/// absent gives false in BOTH arities. Binary samples are included because boxing under the
+/// string tag persists a copy of the region rather than aliasing the source.
+#[test]
+fn test_cli_wasm_strstr_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_strstr");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function f(string $h, string $n): void {
+    $r = strstr($h, $n);
+    if ($r === false) { echo "F"; } else { echo "[", $r, "]"; }
+    echo "|";
+}
+function b(string $h, string $n): void {
+    $r = strstr($h, $n, true);
+    if ($r === false) { echo "F"; } else { echo "[", $r, "]"; }
+    echo "|";
+}
+f("abcdef","cd"); f("abcdef","z"); f("abcdef",""); f("","a"); f("abcdef","a"); f("abcdef","f"); f("abcabc","bc"); echo "\n";
+b("abcdef","cd"); b("abcdef","z"); b("abcdef",""); b("","a"); b("abcdef","a"); b("abcdef","f"); b("abcabc","bc"); echo "\n";
+f("h\xc3\xa9llo","\xc3\xa9"); b("h\xc3\xa9llo","\xc3\xa9"); f("\x00\x01\x02","\x01"); b("\x00\x01\x02","\x01"); echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile strstr to WASM");
+    assert!(
+        output.status.success(),
+        "strstr compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run strstr under Node");
+    assert!(
+        run.status.success(),
+        "strstr trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program. A byte literal rather than a `str`,
+    // because the samples carry bytes no Rust string literal can hold.
+    let expected: Vec<u8> = [
+        b"[cdef]|F|[abcdef]|F|[abcdef]|[f]|[bcabc]|\n".as_slice(),
+        b"[ab]|F|[]|F|[]|[abcde]|[a]|\n".as_slice(),
+        b"[\xc3\xa9llo]|[h]|[\x01\x02]|[\x00]|\n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `strpos` and PHP's `===` against a runtime-tagged value.
 ///
 /// These belong in one test because neither is usable without the other: `strpos` answers

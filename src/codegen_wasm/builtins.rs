@@ -881,6 +881,117 @@ const RT_STR_FIND: &str = r#"(func $__rt_str_find (param $hptr i32) (param $hlen
   (i64.const -1))                                                 ;; absent
 "#;
 
+/// Lowers `strstr` in both its arities.
+///
+/// PHP's result is `string|false`, so the two outcomes are boxed under different Mixed tags the
+/// way `strpos` boxes its own. The returned slice is a REGION of the haystack — from the match to
+/// the end, or from the start up to the match when `$before_needle` is true — and boxing under
+/// the string tag persists a copy, so pointing into the source is safe rather than aliasing it.
+/// An empty needle matches at 0, which is why `strstr("abcdef", "")` is the whole string and its
+/// `before` form is empty.
+fn lower_strstr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let found = ctx.fb.local("__strstr_at", super::wat::ValType::I64);
+    let hptr = ctx.fb.local("__strstr_hptr", super::wat::ValType::I32);
+    let hlen = ctx.fb.local("__strstr_hlen", super::wat::ValType::I64);
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(&format!("local.set {hlen}"), "spill haystack length");
+    ctx.fb.ins(&format!("local.set {hptr}"), "spill haystack pointer");
+    ctx.fb.ins(&format!("local.get {hptr}"), "haystack pointer");
+    ctx.fb.ins(&format!("local.get {hlen}"), "haystack length");
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins("i32.const 0", "strstr is case-sensitive");
+    ctx.fb
+        .ins("call $__rt_str_find", "first offset, or -1 when absent");
+    ctx.fb
+        .ins(&format!("local.set {found}"), "spill the scan result");
+
+    ctx.fb.ins(&format!("local.get {found}"), "scan result");
+    ctx.fb.ins("i64.const 0", "the absent sentinel is negative");
+    ctx.fb.ins("i64.lt_s", "was the needle absent?");
+    ctx.fb
+        .ins("if (result i32)", "string|false travels as a Mixed cell");
+    ctx.fb.ins("i64.const 3", "mixed tag (bool)");
+    ctx.fb.ins("i64.const 0", "the value false");
+    ctx.fb.ins("i64.const 0", "hi unused");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box PHP's false");
+    ctx.fb.ins("else", "the needle was found");
+    ctx.fb.ins("i64.const 1", "mixed tag (string)");
+    if inst.operands.len() == 3 {
+        // `$before_needle` selects which side of the match survives, and it is a runtime value
+        // rather than a literal, so both regions are computed and one is selected.
+        ctx.fb.ins(&format!("local.get {hptr}"), "the haystack start");
+        ctx.fb.ins("i64.extend_i32_u", "start pointer -> lo");
+        ctx.fb.ins(&format!("local.get {hptr}"), "the haystack start");
+        ctx.fb.ins("i64.extend_i32_u", "widen before adding the offset");
+        ctx.fb.ins(&format!("local.get {found}"), "the match offset");
+        ctx.fb.ins("i64.add", "pointer to the match");
+        ctx.emit_load_value(operand(inst, 2)?)?;
+        ctx.fb.ins("i64.const 0", "compare the flag against false");
+        ctx.fb
+            .ins("i64.ne", "a truthy flag selects the leading region");
+        ctx.fb.ins("select", "which region's pointer");
+        ctx.fb.ins(&format!("local.get {found}"), "bytes before the match");
+        ctx.fb.ins(&format!("local.get {hlen}"), "haystack length");
+        ctx.fb.ins(&format!("local.get {found}"), "the match offset");
+        ctx.fb.ins("i64.sub", "bytes from the match to the end");
+        ctx.emit_load_value(operand(inst, 2)?)?;
+        ctx.fb.ins("i64.const 0", "compare the flag against false");
+        ctx.fb
+            .ins("i64.ne", "a truthy flag selects the leading region");
+        ctx.fb.ins("select", "which region's length");
+    } else {
+        ctx.fb.ins(&format!("local.get {hptr}"), "the haystack start");
+        ctx.fb.ins("i64.extend_i32_u", "widen before adding the offset");
+        ctx.fb.ins(&format!("local.get {found}"), "the match offset");
+        ctx.fb.ins("i64.add", "lo: pointer to the match");
+        ctx.fb.ins(&format!("local.get {hlen}"), "haystack length");
+        ctx.fb.ins(&format!("local.get {found}"), "the match offset");
+        ctx.fb.ins("i64.sub", "hi: bytes from the match to the end");
+    }
+    ctx.fb
+        .ins("call $__rt_mixed_from_value", "box the region (persists a copy)");
+    ctx.fb.ins("end", "end string|false selection");
+    store_result(ctx, inst)
+}
+
+/// Validates `strstr`: two strings, an optional bool, and PHP's `string|false` Mixed out.
+fn strstr_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    if !matches!(call.operands.len(), 2 | 3) {
+        return Some(format!(
+            "expected a haystack, a needle and an optional flag, got {} operands",
+            call.operands.len()
+        ));
+    }
+    for (index, operand) in call.operands.iter().enumerate() {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        let (want_ir, want_php) = if index < 2 {
+            (IrType::Str, PhpType::Str)
+        } else {
+            (IrType::I64, PhpType::Bool)
+        };
+        if value.ir_type != want_ir || value.php_type.codegen_repr() != want_php {
+            return Some(format!(
+                "strstr operand {index} is {:?}/{:?}, expected {want_ir:?}/{want_php:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Heap(IrHeapKind::Mixed)
+        || call.result_php_type.codegen_repr() != PhpType::Mixed
+    {
+        return Some(format!(
+            "strstr result {:?}/{:?} is not the Mixed cell PHP's string|false needs",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -1152,6 +1263,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Substr
             | RuntimeFnId::StrRepeat
             | RuntimeFnId::Strpos
+            | RuntimeFnId::Strstr
     )
 }
 
@@ -1228,6 +1340,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Strpos {
         return string_search_shape_issue(function, call, target);
+    }
+    if target == RuntimeFnId::Strstr {
+        return strstr_shape_issue(function, call);
     }
     if matches!(
         target,
@@ -1418,6 +1533,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Strpos {
         return lower_string_search(ctx, inst);
+    }
+    if target == RuntimeFnId::Strstr {
+        return lower_strstr(ctx, inst);
     }
     let argument = operand(inst, 0)?;
     let operand_php = ctx.value_php_type(argument)?.codegen_repr();
@@ -2745,6 +2863,35 @@ mod tests {
         );
         let call = as_int.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&as_int, call, RuntimeFnId::Strpos).is_some());
+        // `strstr` answers `string|false` through the same tagged cell, in BOTH arities.
+        for arity in 2..=3 {
+            let mut operands = vec![str_arg.clone(), str_arg.clone()];
+            if arity == 3 {
+                operands.push((IrType::I64, PhpType::Bool));
+            }
+            let ok = shaped_call(
+                RuntimeFnId::Strstr,
+                &operands,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+            );
+            let call = ok.instructions.last().expect("the probe emitted a call");
+            assert_eq!(
+                direct_builtin_shape_issue(&ok, call, RuntimeFnId::Strstr),
+                None,
+                "strstr accepts {arity} operands"
+            );
+        }
+        // The flag is a bool, not an int offset, and the result is never a bare string.
+        let bad_flag = shaped_call(
+            RuntimeFnId::Strstr,
+            &[str_arg.clone(), str_arg.clone(), int_arg.clone()],
+            IrType::Heap(IrHeapKind::Mixed),
+            PhpType::Mixed,
+        );
+        let call = bad_flag.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&bad_flag, call, RuntimeFnId::Strstr).is_some());
+
         // Only the two-argument form is lowered; the offset form has its own ValueError contract.
         let with_offset = shaped_call(
             RuntimeFnId::Strpos,
