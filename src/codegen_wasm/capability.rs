@@ -3599,10 +3599,19 @@ fn check_runtime_call(
             ));
         }
         Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(target))) => {
-            issues.push(format!(
-                "{context}: unsupported unary string runtime {}",
-                unary_string_name(target)
-            ));
+            if !super::builtins::unary_string_is_supported(target) {
+                issues.push(format!(
+                    "{context}: unsupported unary string runtime {}",
+                    unary_string_name(target)
+                ));
+                return;
+            }
+            if let Some(issue) = super::builtins::unary_string_shape_issue(function, call, target) {
+                issues.push(format!(
+                    "{context}: unsupported unary string runtime {} shape: {issue}",
+                    unary_string_name(target)
+                ));
+            }
         }
         _ => issues.push(format!("{context}: missing typed runtime target")),
     }

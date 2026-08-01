@@ -18,7 +18,7 @@ use super::context::{FnCtx, Result};
 use super::wat::WatModule;
 use super::inst::{operand, store_result};
 use super::WasmError;
-use crate::ir::{Function, Instruction, IrHeapKind, IrType, RuntimeFnId};
+use crate::ir::{Function, Instruction, IrHeapKind, IrType, RuntimeFnId, UnaryStringRuntime};
 use crate::types::PhpType;
 
 /// Registers the WAT helpers the builtins in this module call.
@@ -27,6 +27,143 @@ use crate::types::PhpType;
 pub(super) fn emit_builtin_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_STR_REGION_EQ);
     wm.add_raw_func(RT_STR_CONTAINS);
+    wm.add_raw_func(RT_STR_MAP_CASE);
+    wm.add_raw_func(RT_STR_REVERSE);
+}
+
+/// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
+///
+/// `$upper` selects the direction. Since PHP 8.2 `strtoupper` and `strtolower` are
+/// LOCALE-INDEPENDENT and touch `A-Z` / `a-z` only — byte `0xE9` comes back unchanged, which is
+/// what makes a pure byte map correct here rather than an approximation.
+const RT_STR_MAP_CASE: &str = r#"(func $__rt_str_map_case (param $ptr i32) (param $len i64) (param $upper i32) (result i32) (result i64)
+  (local $out i32)
+  (local $olen i64)
+  (local $i i64)
+  (local $byte i32)
+  (call $__rt_str_persist (local.get $ptr) (local.get $len))      ;; own a copy to transform in place
+  (local.set $olen)                                               ;; persisted length
+  (local.set $out)                                                ;; persisted pointer
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $end (loop $map
+    (br_if $end (i64.ge_s (local.get $i) (local.get $olen)))      ;; every byte visited
+    (local.set $byte (i32.load8_u (i32.add (local.get $out) (i32.wrap_i64 (local.get $i)))))
+    (if (local.get $upper)
+      (then
+        (if (i32.and (i32.ge_u (local.get $byte) (i32.const 97)) (i32.le_u (local.get $byte) (i32.const 122)))
+          (then (i32.store8 (i32.add (local.get $out) (i32.wrap_i64 (local.get $i)))
+                            (i32.sub (local.get $byte) (i32.const 32))))))  ;; a-z -> A-Z
+      (else
+        (if (i32.and (i32.ge_u (local.get $byte) (i32.const 65)) (i32.le_u (local.get $byte) (i32.const 90)))
+          (then (i32.store8 (i32.add (local.get $out) (i32.wrap_i64 (local.get $i)))
+                            (i32.add (local.get $byte) (i32.const 32)))))))  ;; A-Z -> a-z
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $map)))
+  (local.get $out) (local.get $olen))                             ;; owned result
+"#;
+
+/// `__rt_str_reverse`: owns a byte-reversed copy of a string.
+///
+/// `strrev` operates on BYTES, not characters, so a multi-byte sequence comes back with its
+/// bytes in reverse order — which is what PHP does.
+const RT_STR_REVERSE: &str = r#"(func $__rt_str_reverse (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $out i32)
+  (local $olen i64)
+  (local $i i64)
+  (call $__rt_str_persist (local.get $ptr) (local.get $len))      ;; own a copy sized like the source
+  (local.set $olen)                                               ;; persisted length
+  (local.set $out)                                                ;; persisted pointer
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $end (loop $rev
+    (br_if $end (i64.ge_s (local.get $i) (local.get $olen)))      ;; every byte placed
+    (i32.store8
+      (i32.add (local.get $out) (i32.wrap_i64 (local.get $i)))
+      (i32.load8_u (i32.add (local.get $ptr)
+                            (i32.wrap_i64 (i64.sub (i64.sub (local.get $olen) (i64.const 1)) (local.get $i))))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $rev)))
+  (local.get $out) (local.get $olen))                             ;; owned result
+"#;
+
+/// Returns whether a unary string transform is lowered by this module.
+///
+/// The three admitted here are exact BYTE transforms of the same length. The rest of the family
+/// re-encodes (base64, url, hex, html), which changes the length and needs its own allocation
+/// and escaping rules.
+pub(super) fn unary_string_is_supported(target: UnaryStringRuntime) -> bool {
+    matches!(
+        target,
+        UnaryStringRuntime::StrToUpper
+            | UnaryStringRuntime::StrToLower
+            | UnaryStringRuntime::StrReverse
+    )
+}
+
+/// Validates one unary string transform: a string in, a string out.
+pub(super) fn unary_string_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: UnaryStringRuntime,
+) -> Option<String> {
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected one string operand, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("string operand is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+        return Some(format!(
+            "expected a string operand, got {:?}/{:?}",
+            value.ir_type,
+            value.php_type.codegen_repr()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Lowers one unary string transform to its byte-mapping helper.
+pub(super) fn lower_unary_string(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    target: UnaryStringRuntime,
+) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    match target {
+        UnaryStringRuntime::StrToUpper => {
+            ctx.fb.ins("i32.const 1", "map towards upper case");
+            ctx.fb
+                .ins("call $__rt_str_map_case", "ASCII-only case mapping");
+        }
+        UnaryStringRuntime::StrToLower => {
+            ctx.fb.ins("i32.const 0", "map towards lower case");
+            ctx.fb
+                .ins("call $__rt_str_map_case", "ASCII-only case mapping");
+        }
+        UnaryStringRuntime::StrReverse => {
+            ctx.fb
+                .ins("call $__rt_str_reverse", "reverse the bytes");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "unary string transform {:?}",
+                other
+            )))
+        }
+    }
+    store_result(ctx, inst)
 }
 
 /// `__rt_str_region_eq`: compares `nlen` bytes of a needle against a haystack at `offset`.
@@ -937,6 +1074,66 @@ mod tests {
             builder.terminate(crate::ir::Terminator::Return { value: None });
         }
         function
+    }
+
+    /// Builds a unary string transform call with the given operand storage.
+    fn unary_string_call(
+        target: UnaryStringRuntime,
+        operand_ir: IrType,
+        operand_php: PhpType,
+    ) -> Function {
+        let mut function = Function::new("probe".to_string(), IrType::Void, PhpType::Void);
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let slot = builder.add_local(
+                Some("s".to_string()),
+                operand_ir,
+                operand_php.clone(),
+                crate::ir::LocalKind::PhpLocal,
+            );
+            let argument = builder.emit_load_local(slot, operand_ir, operand_php);
+            builder.emit(
+                Op::RuntimeCall,
+                vec![argument],
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(
+                    target,
+                ))),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::MaybeOwned,
+            );
+            builder.terminate(crate::ir::Terminator::Return { value: None });
+        }
+        function
+    }
+
+    /// Verifies the admitted unary string transforms take a string and nothing else.
+    #[test]
+    fn unary_string_transforms_admit_only_strings() {
+        for target in [
+            UnaryStringRuntime::StrToUpper,
+            UnaryStringRuntime::StrToLower,
+            UnaryStringRuntime::StrReverse,
+        ] {
+            assert!(unary_string_is_supported(target), "{target:?} is lowered");
+            let ok = unary_string_call(target, IrType::Str, PhpType::Str);
+            let call = ok.instructions.last().expect("the probe emitted a call");
+            assert_eq!(unary_string_shape_issue(&ok, call, target), None);
+
+            let scalar = unary_string_call(target, IrType::I64, PhpType::Int);
+            let call = scalar.instructions.last().expect("the probe emitted a call");
+            assert!(
+                unary_string_shape_issue(&scalar, call, target).is_some(),
+                "{target:?} maps string bytes"
+            );
+        }
+
+        // The re-encoding half of the family changes the length and is not lowered yet.
+        assert!(!unary_string_is_supported(UnaryStringRuntime::Base64Encode));
+        assert!(!unary_string_is_supported(UnaryStringRuntime::UrlEncode));
     }
 
     /// Verifies `in_array` is lowered only in its STRICT form.

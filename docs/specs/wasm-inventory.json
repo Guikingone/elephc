@@ -11685,9 +11685,9 @@
     },
     "unary_string": {
       "total": 15,
-      "supported": 0,
+      "supported": 3,
       "excluded": 0,
-      "missing": 15,
+      "missing": 12,
       "rows": [
         {
           "name": "string.add_slashes",
@@ -11833,7 +11833,7 @@
           "name": "string.reverse",
           "family": "unary_string",
           "enum_name": "UnaryStringRuntime",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "strrev(...)"
           ],
@@ -11841,13 +11841,20 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP string transform reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_unary_string",
+            "tests": [
+              "codegen_wasm::builtins::tests::unary_string_transforms_admit_only_strings",
+              "codegen::cli::test_cli_wasm_unary_string_transforms_match_php"
+            ]
+          }
         },
         {
           "name": "string.to_lower",
           "family": "unary_string",
           "enum_name": "UnaryStringRuntime",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "strtolower(...)"
           ],
@@ -11855,13 +11862,20 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP string transform reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_unary_string",
+            "tests": [
+              "codegen_wasm::builtins::tests::unary_string_transforms_admit_only_strings",
+              "codegen::cli::test_cli_wasm_unary_string_transforms_match_php"
+            ]
+          }
         },
         {
           "name": "string.to_upper",
           "family": "unary_string",
           "enum_name": "UnaryStringRuntime",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "strtoupper(...)"
           ],
@@ -11869,7 +11883,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP string transform reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_unary_string",
+            "tests": [
+              "codegen_wasm::builtins::tests::unary_string_transforms_admit_only_strings",
+              "codegen::cli::test_cli_wasm_unary_string_transforms_match_php"
+            ]
+          }
         },
         {
           "name": "string.url_decode",
@@ -12168,14 +12189,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 147,
+    "supported": 150,
     "excluded": 47,
-    "missing": 518,
+    "missing": 515,
     "evidence_gaps": 178,
     "row_evidence_gaps": 177,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "518 reachable identities lack a WASM lowerer; 177 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "515 reachable identities lack a WASM lowerer; 177 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

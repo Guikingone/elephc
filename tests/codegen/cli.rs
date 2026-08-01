@@ -3131,3 +3131,83 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the byte-mapping string transforms match php-src.
+///
+/// Since PHP 8.2 `strtoupper` and `strtolower` are locale-independent and touch `A-Z` / `a-z`
+/// only, so a byte outside that range comes back unchanged; `strrev` reverses BYTES. Every
+/// expected line is php-src 8.5's own output for the same program.
+#[test]
+fn test_cli_wasm_unary_string_transforms_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_unary_strings");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function t(string $s): void {
+    echo strtoupper($s), "|", strtolower($s), "|", strrev($s), "\n";
+}
+t("aBc1-z");
+t("");
+t("a");
+t("Hello, World!");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the string transforms to WASM");
+    assert!(
+        output.status.success(),
+        "string transform compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the string transforms under Node");
+    assert!(
+        run.status.success(),
+        "string transforms trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "ABC1-Z|abc1-z|z-1cBa\n",
+            "||\n",
+            "A|a|a\n",
+            "HELLO, WORLD!|hello, world!|!dlroW ,olleH\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

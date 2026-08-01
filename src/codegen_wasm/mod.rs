@@ -21,7 +21,7 @@
 
 mod artifacts;
 mod arrays;
-mod builtins;
+pub(crate) mod builtins;
 pub mod inventory;
 mod calls;
 mod classes;

@@ -1837,6 +1837,9 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             RuntimeCallTarget::Function(target)
             | RuntimeCallTarget::ProfiledFunction { target, .. },
         )) => target,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::UnaryString(target))) => {
+            return super::builtins::lower_unary_string(ctx, inst, target);
+        }
         Some(Immediate::RuntimeCall(target)) => {
             return Err(WasmError::Unsupported(format!(
                 "runtime call target {:?}",

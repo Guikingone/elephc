@@ -345,6 +345,29 @@ pub(super) fn runtime_fn_row(id: RuntimeFnId) -> InventoryRow {
 
 /// Classifies one `UnaryStringRuntime` into an inventory row with exactly one disposition.
 pub(super) fn unary_string_row(target: UnaryStringRuntime) -> InventoryRow {
+    if crate::codegen_wasm::builtins::unary_string_is_supported(target) {
+        let mut row = InventoryRow {
+            name: unary_string_name(target).to_string(),
+            family: "unary_string",
+            enum_name: "UnaryStringRuntime",
+            disposition: Disposition::Supported,
+            producers: unary_string_producers(target),
+            execution_modes: public_wasm_modes(),
+            evidence_gaps: Vec::new(),
+            supported: Some(SupportedEvidence {
+                backend: "codegen_wasm::builtins",
+                lowerer: "codegen_wasm::builtins::lower_unary_string",
+                tests: &[
+                    "codegen_wasm::builtins::tests::unary_string_transforms_admit_only_strings",
+                    "codegen::cli::test_cli_wasm_unary_string_transforms_match_php",
+                ],
+            }),
+            excluded: None,
+            missing: None,
+        };
+        row.evidence_gaps = Vec::new();
+        return row;
+    }
     InventoryRow {
         name: unary_string_name(target).to_string(),
         family: "unary_string",
