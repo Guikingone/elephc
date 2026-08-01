@@ -15,10 +15,60 @@
 //!   lower is refused before planning rather than producing an invalid module.
 
 use super::context::{FnCtx, Result};
+use super::wat::WatModule;
 use super::inst::{operand, store_result};
 use super::WasmError;
 use crate::ir::{Function, Instruction, IrHeapKind, IrType, RuntimeFnId};
 use crate::types::PhpType;
+
+/// Registers the WAT helpers the builtins in this module call.
+///
+/// Emitted for every module: none of these touch WASI, so a reactor carries them too.
+pub(super) fn emit_builtin_runtime(wm: &mut WatModule) {
+    wm.add_raw_func(RT_STR_REGION_EQ);
+    wm.add_raw_func(RT_STR_CONTAINS);
+}
+
+/// `__rt_str_region_eq`: compares `nlen` bytes of a needle against a haystack at `offset`.
+///
+/// The caller guarantees the region is in bounds, which every user below checks by comparing
+/// lengths first. An empty needle matches anywhere, which is what makes `str_contains($h, "")`
+/// true in PHP.
+const RT_STR_REGION_EQ: &str = r#"(func $__rt_str_region_eq (param $hptr i32) (param $nptr i32) (param $nlen i64) (param $offset i64) (result i64)
+  (local $i i64)
+  (local.set $i (i64.const 0))                                    ;; i = 0
+  (block $end (loop $cmp
+    (br_if $end (i64.ge_s (local.get $i) (local.get $nlen)))      ;; every needle byte matched
+    (if (i32.ne
+          (i32.load8_u (i32.add (local.get $hptr)
+                                (i32.wrap_i64 (i64.add (local.get $offset) (local.get $i)))))
+          (i32.load8_u (i32.add (local.get $nptr) (i32.wrap_i64 (local.get $i)))))
+      (then (return (i64.const 0))))                              ;; first mismatch decides
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
+    (br $cmp)))
+  (i64.const 1))                                                  ;; the whole needle matched
+"#;
+
+/// `__rt_str_contains`: whether the needle occurs anywhere in the haystack.
+///
+/// Scans every start offset that leaves room for the needle. A needle longer than the haystack
+/// leaves none, so the answer is false without reading a byte; an empty needle matches at offset
+/// zero, which PHP reports as true even for an empty haystack.
+const RT_STR_CONTAINS: &str = r#"(func $__rt_str_contains (param $hptr i32) (param $hlen i64) (param $nptr i32) (param $nlen i64) (result i64)
+  (local $offset i64)
+  (local $last i64)
+  (local.set $last (i64.sub (local.get $hlen) (local.get $nlen)))  ;; last start offset with room
+  (if (i64.lt_s (local.get $last) (i64.const 0))
+    (then (return (i64.const 0))))                                 ;; the needle cannot fit
+  (local.set $offset (i64.const 0))                                ;; start at the beginning
+  (block $end (loop $scan
+    (br_if $end (i64.gt_s (local.get $offset) (local.get $last)))  ;; no room left
+    (if (i64.eq (call $__rt_str_region_eq (local.get $hptr) (local.get $nptr) (local.get $nlen) (local.get $offset)) (i64.const 1))
+      (then (return (i64.const 1))))                               ;; occurrence found
+    (local.set $offset (i64.add (local.get $offset) (i64.const 1)))  ;; try the next offset
+    (br $scan)))
+  (i64.const 0))                                                   ;; no occurrence
+"#;
 
 /// The storage one direct builtin accepts and produces.
 ///
@@ -97,6 +147,9 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Min
             | RuntimeFnId::Intdiv
             | RuntimeFnId::ArrayFill
+            | RuntimeFnId::StrContains
+            | RuntimeFnId::StrStartsWith
+            | RuntimeFnId::StrEndsWith
     )
 }
 
@@ -143,6 +196,12 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::ArrayFill {
         return array_fill_shape_issue(function, call);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::StrContains | RuntimeFnId::StrStartsWith | RuntimeFnId::StrEndsWith
+    ) {
+        return string_predicate_shape_issue(function, call, target);
     }
     if target == RuntimeFnId::InArray {
         return in_array_shape_issue(function, call);
@@ -256,6 +315,12 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::ArrayFill {
         return lower_array_fill(ctx, inst);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::StrContains | RuntimeFnId::StrStartsWith | RuntimeFnId::StrEndsWith
+    ) {
+        return lower_string_predicate(ctx, inst, target);
     }
     if target == RuntimeFnId::InArray {
         return lower_in_array(ctx, inst);
@@ -664,6 +729,106 @@ fn lower_array_fill(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
+/// Validates `str_contains`, `str_starts_with` and `str_ends_with`: two strings in, a bool out.
+fn string_predicate_shape_issue(
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    let [haystack, needle] = call.operands.as_slice() else {
+        return Some(format!(
+            "expected a haystack and a needle, got {} operands",
+            call.operands.len()
+        ));
+    };
+    for operand in [haystack, needle] {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        if value.ir_type != IrType::Str || value.php_type.codegen_repr() != PhpType::Str {
+            return Some(format!(
+                "expected a string operand, got {:?}/{:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::I64
+        || call.result_php_type.codegen_repr() != PhpType::Bool
+    {
+        return Some(format!(
+            "{target:?} result {:?}/{:?} is not the expected I64/Bool",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
+}
+
+/// Lowers the three PHP 8 substring predicates to a byte comparison.
+///
+/// `str_starts_with` and `str_ends_with` compare ONE region, so they check the needle fits and
+/// then compare at offset zero or at `hlen - nlen`. `str_contains` scans every offset that
+/// leaves room. An empty needle matches in all three, which is PHP's answer.
+fn lower_string_predicate(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    target: RuntimeFnId,
+) -> Result<()> {
+    let haystack = operand(inst, 0)?;
+    let needle = operand(inst, 1)?;
+    let (hptr, hlen) = match ctx.value_repr(haystack)?.clone() {
+        super::values::WasmRepr::Str { ptr, len } => (ptr, len),
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "string predicate haystack is {:?}",
+                other
+            )))
+        }
+    };
+    let (nptr, nlen) = match ctx.value_repr(needle)?.clone() {
+        super::values::WasmRepr::Str { ptr, len } => (ptr, len),
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "string predicate needle is {:?}",
+                other
+            )))
+        }
+    };
+    if target == RuntimeFnId::StrContains {
+        ctx.fb.ins(&format!("local.get {}", hptr), "haystack pointer");
+        ctx.fb.ins(&format!("local.get {}", hlen), "haystack length");
+        ctx.fb.ins(&format!("local.get {}", nptr), "needle pointer");
+        ctx.fb.ins(&format!("local.get {}", nlen), "needle length");
+        ctx.fb
+            .ins("call $__rt_str_contains", "scan every start offset");
+        return store_result(ctx, inst);
+    }
+    // A needle longer than the haystack cannot match at any single offset, and the comparison
+    // would read past the end, so the length check has to come first.
+    ctx.fb.ins(&format!("local.get {}", nlen), "needle length");
+    ctx.fb.ins(&format!("local.get {}", hlen), "haystack length");
+    ctx.fb.ins("i64.gt_s", "does the needle overrun the haystack?");
+    ctx.fb.ins("if (result i64)", "needle too long");
+    ctx.fb.ins("i64.const 0", "an overrunning needle never matches");
+    ctx.fb.ins("else", "the needle fits");
+    ctx.fb.ins(&format!("local.get {}", hptr), "haystack pointer");
+    ctx.fb.ins(&format!("local.get {}", nptr), "needle pointer");
+    ctx.fb.ins(&format!("local.get {}", nlen), "needle length");
+    if target == RuntimeFnId::StrStartsWith {
+        ctx.fb.ins("i64.const 0", "compare at the start");
+    } else {
+        ctx.fb.ins(&format!("local.get {}", hlen), "haystack length");
+        ctx.fb.ins(&format!("local.get {}", nlen), "needle length");
+        ctx.fb.ins("i64.sub", "compare at the trailing region");
+    }
+    ctx.fb
+        .ins("call $__rt_str_region_eq", "compare the one candidate region");
+    ctx.fb.ins("end", "end needle-length guard");
+    store_result(ctx, inst)
+}
+
 /// Lowers strict `in_array($needle, $haystack, true)` to an identity scan.
 fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 1)?)?;
@@ -951,6 +1116,20 @@ mod tests {
             verdict(&short_fill, RuntimeFnId::ArrayFill).is_some(),
             "array_fill takes three operands"
         );
+
+        // `RuntimeFnId::StrContains`, `RuntimeFnId::StrStartsWith` and `RuntimeFnId::StrEndsWith`
+        // take two strings; a scalar operand has no bytes to compare.
+        for target in [
+            RuntimeFnId::StrContains,
+            RuntimeFnId::StrStartsWith,
+            RuntimeFnId::StrEndsWith,
+        ] {
+            let scalar = call_with(target, IrType::I64, PhpType::Int, IrType::I64, PhpType::Bool);
+            assert!(
+                verdict(&scalar, target).is_some(),
+                "{target:?} compares string bytes"
+            );
+        }
 
         let scalar_count = call_with(
             RuntimeFnId::Count,

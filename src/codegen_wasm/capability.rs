@@ -4458,7 +4458,10 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Max
         | RuntimeFnId::Min
         | RuntimeFnId::Intdiv
-        | RuntimeFnId::ArrayFill => true,
+        | RuntimeFnId::ArrayFill
+        | RuntimeFnId::StrContains
+        | RuntimeFnId::StrStartsWith
+        | RuntimeFnId::StrEndsWith => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4801,14 +4804,11 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Sha1
         | RuntimeFnId::Sprintf
         | RuntimeFnId::Sscanf
-        | RuntimeFnId::StrContains
-        | RuntimeFnId::StrEndsWith
         | RuntimeFnId::StrIreplace
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrRepeat
         | RuntimeFnId::StrReplace
         | RuntimeFnId::StrSplit
-        | RuntimeFnId::StrStartsWith
         | RuntimeFnId::Strcasecmp
         | RuntimeFnId::Strcmp
         | RuntimeFnId::Strpos

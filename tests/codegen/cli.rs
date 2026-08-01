@@ -3046,6 +3046,13 @@ pairs(7, 2);
 pairs(-7, 2);
 $filled = array_fill(0, 3, 7);
 echo count($filled), "|", $filled[2], "|", count(array_fill(0, 0, 9)), "\n";
+function needles(string $h, string $n): void {
+    echo str_contains($h, $n) ? 1 : 0, str_starts_with($h, $n) ? 1 : 0, str_ends_with($h, $n) ? 1 : 0, "\n";
+}
+needles("hello", "ell");
+needles("hello", "");
+needles("he", "hello");
+needles("", "");
 "#,
     )
     .unwrap();
@@ -3110,6 +3117,10 @@ process.exitCode = wasi.start(instance);
         "7|2|3\n",
         "2|-7|-3\n",
         "3|7|0\n",
+        "100\n",
+        "111\n",
+        "000\n",
+        "111\n",
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
     assert!(

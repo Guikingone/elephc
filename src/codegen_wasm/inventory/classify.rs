@@ -223,7 +223,9 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::Count | RuntimeFnId::ArrayIsList | RuntimeFnId::ArrayKeys
         | RuntimeFnId::ArrayValues | RuntimeFnId::InArray | RuntimeFnId::ArrayReverse
         | RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct | RuntimeFnId::Max
-        | RuntimeFnId::Min | RuntimeFnId::Intdiv | RuntimeFnId::ArrayFill => (
+        | RuntimeFnId::Min | RuntimeFnId::Intdiv | RuntimeFnId::ArrayFill
+        | RuntimeFnId::StrContains | RuntimeFnId::StrStartsWith
+        | RuntimeFnId::StrEndsWith => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
             &[
