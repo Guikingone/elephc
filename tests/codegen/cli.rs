@@ -3651,6 +3651,116 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `sha1` reproduces php-src, block boundaries included.
+///
+/// Every SHA-1 word is BIG-endian, which is where an implementation usually diverges, and the
+/// padding rule is the other: one `0x80` byte, zeros up to 56 bytes past a 64-byte boundary, then
+/// the BIT length as a big-endian 64-bit word. The sample lengths sit either side of every
+/// boundary that rule turns on — 55/56/57, 63/64/65, 119/120, 127/128 — because a digest that is
+/// right for short inputs and wrong for those is the usual failure.
+#[test]
+fn test_cli_wasm_sha1_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_sha1");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function h(string $s): void { echo sha1($s), "\n"; }
+h("");
+h("a");
+h("abc");
+h("message digest");
+h("The quick brown fox jumps over the lazy dog");
+h("\x00\x01\xff");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+h("aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile sha1 to WASM");
+    assert!(
+        output.status.success(),
+        "sha1 compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run sha1 under Node");
+    assert!(
+        run.status.success(),
+        "sha1 trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own digests, which are the published SHA-1 test vectors.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "da39a3ee5e6b4b0d3255bfef95601890afd80709\n",
+            "86f7e437faa5a7fce15d1ddcb9eaeaea377667b8\n",
+            "a9993e364706816aba3e25717850c26c9cd0d89d\n",
+            "c12252ceda8be8994d5fa0290a47231c1d16aae3\n",
+            "2fd4e1c67a2d28fced849ee1bb76e7391b93eb12\n",
+            "c63e8274458bc7501e7c981f6394ced6d4490fda\n",
+            "b05d71c64979cb95fa74a33cdb31a40d258ae02e\n",
+            "c1c8bbdc22796e28c0e15163d20899b65621d65a\n",
+            "c2db330f6083854c99d4b5bfb6e8f29f201be699\n",
+            "f08f24908d682555111be7ff6f004e78283d989a\n",
+            "03f09f5b158a7a8cdad920bddc29b81c18a551f5\n",
+            "0098ba824b5c16427bd7a1122a5a442a25ec644d\n",
+            "11655326c708d70319be2610e8a57d9a5b959d3b\n",
+            "ee971065aaa017e0632a8ca6c77bb3bf8b1dfc56\n",
+            "f34c1488385346a55709ba056ddd08280dd4c6d6\n",
+            "89d95fa32ed44a7c610b7ee38517ddf57e0bb975\n",
+            "ad5b3fdbcb526778c2839d2f151ea753995e26a0\n",
+            "e61cfffe0d9195a525fc6cf06ca2d77119c24a40\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `str_replace` and `crc32` reproduce php-src.
 ///
 /// `str_replace` scans left to right, NON-overlapping, and never rescans what it wrote — which is

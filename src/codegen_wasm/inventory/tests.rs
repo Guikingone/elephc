@@ -704,6 +704,11 @@ fn excluded_rows_carry_complete_contracts() {
 }
 
 /// Verifies native implementation requirements never exclude ordinary PHP builtins.
+///
+/// The rule under test is about EXCLUSION, which is reserved for Elephc-only extensions and the
+/// web SAPI: an ordinary PHP builtin with no WASM lowerer is `missing`, a reachable gap someone
+/// can close. So these may be `supported` once they ARE lowered — `sha1` now is — and what must
+/// never happen is any of them turning into `excluded`.
 #[test]
 fn ordinary_php_bridge_and_system_builtins_remain_reachable_gaps() {
     for id in [
@@ -718,7 +723,14 @@ fn ordinary_php_bridge_and_system_builtins_remain_reachable_gaps() {
             "ordinary PHP runtime {} must not be excluded",
             id.as_eir()
         );
-        assert_eq!(runtime_fn_row(id).disposition, Disposition::Missing);
+        assert!(
+            matches!(
+                runtime_fn_row(id).disposition,
+                Disposition::Missing | Disposition::Supported
+            ),
+            "ordinary PHP runtime {} is a reachable gap or lowered, never excluded",
+            id.as_eir()
+        );
     }
     for id in [
         RuntimeFnId::Ptr,

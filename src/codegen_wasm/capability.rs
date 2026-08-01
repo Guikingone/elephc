@@ -4497,7 +4497,8 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Strstr
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
-        | RuntimeFnId::Crc32 => true,
+        | RuntimeFnId::Crc32
+        | RuntimeFnId::Sha1 => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -4831,7 +4832,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Md5
         | RuntimeFnId::NumberFormat
         | RuntimeFnId::Printf
-        | RuntimeFnId::Sha1
         | RuntimeFnId::Sprintf
         | RuntimeFnId::Sscanf
         | RuntimeFnId::StrIreplace

@@ -63,6 +63,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_PAD);
     wm.add_raw_func(RT_STR_REPLACE);
     wm.add_raw_func(RT_CRC32);
+    wm.add_raw_func(RT_SHA1_HEX);
 }
 
 /// `__rt_str_map_case`: owns a copy of a string with its ASCII letters case-mapped.
@@ -1135,6 +1136,159 @@ const RT_CRC32: &str = r#"(func $__rt_crc32 (param $ptr i32) (param $len i64) (r
            (i64.const 0xFFFFFFFF)))                               ;; PHP's unsigned 32-bit result
 "#;
 
+/// `__rt_sha1_hex`: PHP's `sha1`, returning the 40-character lowercase hex digest.
+///
+/// The message is padded into an owned buffer rather than processed in place with a special-cased
+/// tail: one `0x80` byte, zeros up to 56 bytes past a 64-byte boundary, then the BIT length as a
+/// big-endian 64-bit word. Every word in SHA-1 is big-endian, which is the difference from MD5
+/// and the usual place an implementation goes wrong. The 80-word message schedule lives in the
+/// same buffer's tail so a single allocation covers both, and it is freed before returning.
+const RT_SHA1_HEX: &str = r#"(func $__rt_sha1_hex (param $ptr i32) (param $len i64) (result i32) (result i64)
+  (local $blocks i32)                                             ;; padded length in 64-byte blocks
+  (local $buf i32)                                                ;; padded message
+  (local $w i32)                                                  ;; 80-word schedule
+  (local $i i32)                                                  ;; general cursor
+  (local $t i32)                                                  ;; round counter
+  (local $n i32)                                                  ;; source length as i32
+  (local $base i32)                                               ;; current block offset
+  (local $h0 i32) (local $h1 i32) (local $h2 i32) (local $h3 i32) (local $h4 i32)
+  (local $a i32) (local $b i32) (local $c i32) (local $d i32) (local $e i32)
+  (local $f i32) (local $k i32) (local $tmp i32)
+  (local $out i32) (local $ow i32) (local $nib i32)
+  (local.set $n (i32.wrap_i64 (local.get $len)))
+  (local.set $blocks
+    (i32.div_u (i32.add (local.get $n) (i32.const 72)) (i32.const 64)))  ;; room for 0x80 + 8 length bytes
+  (local.set $buf (call $__rt_heap_alloc
+    (i32.add (i32.mul (local.get $blocks) (i32.const 64)) (i32.const 320))))  ;; message + schedule
+  (local.set $w (i32.add (local.get $buf) (i32.mul (local.get $blocks) (i32.const 64))))
+  (local.set $i (i32.const 0))
+  (block $cend (loop $copy
+    (br_if $cend (i32.ge_u (local.get $i) (local.get $n)))
+    (i32.store8 (i32.add (local.get $buf) (local.get $i))
+      (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $copy)))
+  (i32.store8 (i32.add (local.get $buf) (local.get $i)) (i32.const 128))  ;; the 0x80 terminator
+  (local.set $i (i32.add (local.get $i) (i32.const 1)))
+  (block $zend (loop $zeros
+    (br_if $zend (i32.ge_u (local.get $i) (i32.mul (local.get $blocks) (i32.const 64))))
+    (i32.store8 (i32.add (local.get $buf) (local.get $i)) (i32.const 0))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $zeros)))
+  (local.set $i (i32.const 0))
+  (block $lend (loop $lenbytes                                    ;; big-endian bit length in the last 8 bytes
+    (br_if $lend (i32.ge_u (local.get $i) (i32.const 8)))
+    (i32.store8
+      (i32.sub (i32.add (local.get $buf) (i32.mul (local.get $blocks) (i32.const 64)))
+               (i32.sub (i32.const 8) (local.get $i)))
+      (i32.wrap_i64 (i64.and
+        (i64.shr_u (i64.mul (local.get $len) (i64.const 8))
+                   (i64.extend_i32_u (i32.mul (i32.sub (i32.const 7) (local.get $i)) (i32.const 8))))
+        (i64.const 255))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $lenbytes)))
+  (local.set $h0 (i32.const 0x67452301))
+  (local.set $h1 (i32.const 0xEFCDAB89))
+  (local.set $h2 (i32.const 0x98BADCFE))
+  (local.set $h3 (i32.const 0x10325476))
+  (local.set $h4 (i32.const 0xC3D2E1F0))
+  (local.set $base (i32.const 0))
+  (block $bend (loop $block
+    (br_if $bend (i32.ge_u (local.get $base) (i32.mul (local.get $blocks) (i32.const 64))))
+    (local.set $t (i32.const 0))
+    (block $wend (loop $w16                                       ;; the first 16 words, big-endian
+      (br_if $wend (i32.ge_u (local.get $t) (i32.const 16)))
+      (i32.store (i32.add (local.get $w) (i32.mul (local.get $t) (i32.const 4)))
+        (i32.or (i32.or
+          (i32.shl (i32.load8_u (i32.add (local.get $buf)
+            (i32.add (local.get $base) (i32.mul (local.get $t) (i32.const 4))))) (i32.const 24))
+          (i32.shl (i32.load8_u (i32.add (local.get $buf)
+            (i32.add (i32.add (local.get $base) (i32.mul (local.get $t) (i32.const 4))) (i32.const 1)))) (i32.const 16)))
+          (i32.or
+          (i32.shl (i32.load8_u (i32.add (local.get $buf)
+            (i32.add (i32.add (local.get $base) (i32.mul (local.get $t) (i32.const 4))) (i32.const 2)))) (i32.const 8))
+          (i32.load8_u (i32.add (local.get $buf)
+            (i32.add (i32.add (local.get $base) (i32.mul (local.get $t) (i32.const 4))) (i32.const 3)))))))
+      (local.set $t (i32.add (local.get $t) (i32.const 1)))
+      (br $w16)))
+    (block $xend (loop $expand                                    ;; w[t] = rotl(w[t-3]^w[t-8]^w[t-14]^w[t-16], 1)
+      (br_if $xend (i32.ge_u (local.get $t) (i32.const 80)))
+      (local.set $tmp (i32.xor (i32.xor
+        (i32.load (i32.add (local.get $w) (i32.mul (i32.sub (local.get $t) (i32.const 3)) (i32.const 4))))
+        (i32.load (i32.add (local.get $w) (i32.mul (i32.sub (local.get $t) (i32.const 8)) (i32.const 4)))))
+        (i32.xor
+        (i32.load (i32.add (local.get $w) (i32.mul (i32.sub (local.get $t) (i32.const 14)) (i32.const 4))))
+        (i32.load (i32.add (local.get $w) (i32.mul (i32.sub (local.get $t) (i32.const 16)) (i32.const 4)))))))
+      (i32.store (i32.add (local.get $w) (i32.mul (local.get $t) (i32.const 4)))
+        (i32.rotl (local.get $tmp) (i32.const 1)))
+      (local.set $t (i32.add (local.get $t) (i32.const 1)))
+      (br $expand)))
+    (local.set $a (local.get $h0)) (local.set $b (local.get $h1))
+    (local.set $c (local.get $h2)) (local.set $d (local.get $h3))
+    (local.set $e (local.get $h4))
+    (local.set $t (i32.const 0))
+    (block $rend (loop $rounds
+      (br_if $rend (i32.ge_u (local.get $t) (i32.const 80)))
+      (if (i32.lt_u (local.get $t) (i32.const 20))
+        (then
+          (local.set $f (i32.or (i32.and (local.get $b) (local.get $c))
+                                (i32.and (i32.xor (local.get $b) (i32.const -1)) (local.get $d))))
+          (local.set $k (i32.const 0x5A827999)))
+        (else (if (i32.lt_u (local.get $t) (i32.const 40))
+          (then
+            (local.set $f (i32.xor (i32.xor (local.get $b) (local.get $c)) (local.get $d)))
+            (local.set $k (i32.const 0x6ED9EBA1)))
+          (else (if (i32.lt_u (local.get $t) (i32.const 60))
+            (then
+              (local.set $f (i32.or (i32.or
+                (i32.and (local.get $b) (local.get $c))
+                (i32.and (local.get $b) (local.get $d)))
+                (i32.and (local.get $c) (local.get $d))))
+              (local.set $k (i32.const 0x8F1BBCDC)))
+            (else
+              (local.set $f (i32.xor (i32.xor (local.get $b) (local.get $c)) (local.get $d)))
+              (local.set $k (i32.const 0xCA62C1D6))))))))
+      (local.set $tmp (i32.add (i32.add (i32.add (i32.add
+        (i32.rotl (local.get $a) (i32.const 5)) (local.get $f)) (local.get $e)) (local.get $k))
+        (i32.load (i32.add (local.get $w) (i32.mul (local.get $t) (i32.const 4))))))
+      (local.set $e (local.get $d))
+      (local.set $d (local.get $c))
+      (local.set $c (i32.rotl (local.get $b) (i32.const 30)))
+      (local.set $b (local.get $a))
+      (local.set $a (local.get $tmp))
+      (local.set $t (i32.add (local.get $t) (i32.const 1)))
+      (br $rounds)))
+    (local.set $h0 (i32.add (local.get $h0) (local.get $a)))
+    (local.set $h1 (i32.add (local.get $h1) (local.get $b)))
+    (local.set $h2 (i32.add (local.get $h2) (local.get $c)))
+    (local.set $h3 (i32.add (local.get $h3) (local.get $d)))
+    (local.set $h4 (i32.add (local.get $h4) (local.get $e)))
+    (local.set $base (i32.add (local.get $base) (i32.const 64)))
+    (br $block)))
+  (call $__rt_heap_free (local.get $buf))                         ;; the scratch is done with
+  (local.set $out (call $__rt_str_alloc (i64.const 40)))          ;; 5 words, 8 hex digits each
+  (local.set $ow (i32.const 0))
+  (local.set $i (i32.const 0))
+  (block $hend (loop $hex
+    (br_if $hend (i32.ge_u (local.get $i) (i32.const 40)))
+    (local.set $tmp (local.get $h0))
+    (if (i32.ge_u (local.get $i) (i32.const 8))  (then (local.set $tmp (local.get $h1))))
+    (if (i32.ge_u (local.get $i) (i32.const 16)) (then (local.set $tmp (local.get $h2))))
+    (if (i32.ge_u (local.get $i) (i32.const 24)) (then (local.set $tmp (local.get $h3))))
+    (if (i32.ge_u (local.get $i) (i32.const 32)) (then (local.set $tmp (local.get $h4))))
+    (local.set $nib (i32.and
+      (i32.shr_u (local.get $tmp)
+        (i32.mul (i32.sub (i32.const 7) (i32.rem_u (local.get $i) (i32.const 8))) (i32.const 4)))
+      (i32.const 15)))
+    (i32.store8 (i32.add (local.get $out) (local.get $ow))
+      (i32.add (local.get $nib)
+        (select (i32.const 48) (i32.const 87) (i32.lt_u (local.get $nib) (i32.const 10)))))
+    (local.set $ow (i32.add (local.get $ow) (i32.const 1)))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $hex)))
+  (local.get $out) (i64.const 40))                                ;; owned 40-character digest
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -1410,6 +1564,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrReplace
             | RuntimeFnId::Crc32
+            | RuntimeFnId::Sha1
     )
 }
 
@@ -1498,6 +1653,12 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Crc32 {
         return crc32_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Sha1 {
+        return trim_shape_issue(function, call, target)
+            .or_else(|| (call.operands.len() != 1).then(|| {
+                format!("sha1 takes exactly one string, got {}", call.operands.len())
+            }));
     }
     if matches!(
         target,
@@ -1701,6 +1862,11 @@ pub(super) fn lower_direct_builtin(
     if target == RuntimeFnId::Crc32 {
         ctx.emit_load_value(operand(inst, 0)?)?;
         ctx.fb.ins("call $__rt_crc32", "reflected IEEE 802.3 remainder");
+        return store_result(ctx, inst);
+    }
+    if target == RuntimeFnId::Sha1 {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.fb.ins("call $__rt_sha1_hex", "40-character lowercase digest");
         return store_result(ctx, inst);
     }
     let argument = operand(inst, 0)?;
@@ -3227,6 +3393,23 @@ mod tests {
         );
         let call = with_count.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&with_count, call, RuntimeFnId::StrReplace).is_some());
+
+        // `sha1` answers a 40-character hex string from exactly one string.
+        let digest = shaped_call(
+            RuntimeFnId::Sha1,
+            &[str_arg.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = digest.instructions.last().expect("the probe emitted a call");
+        assert_eq!(direct_builtin_shape_issue(&digest, call, RuntimeFnId::Sha1), None);
+        // The digest is fixed-width, and every SHA-1 word is big-endian.
+        assert!(RT_SHA1_HEX.contains("(local.get $out) (i64.const 40)"));
+        assert!(
+            RT_SHA1_HEX.contains("(i32.const 0x5A827999)")
+                && RT_SHA1_HEX.contains("(i32.const 0xCA62C1D6)"),
+            "the four round constants must all be present"
+        );
 
         // `crc32` answers an int, and PHP's is the UNSIGNED 32-bit value.
         let hashed = shaped_call(
