@@ -782,13 +782,37 @@ fn emit_zero_divisor_guard(
 
 /// Emits a non-returning PHP runtime failure for command modules.
 ///
-/// Import-free reactor modules cannot reference WASI; their exceptional path
-/// therefore remains an explicit `unreachable`, while the valid path and module
-/// stay portable. User-compiled PHP command modules call `__rt_fail`, which
-/// writes the PHP error class/message and exits deterministically.
+/// Reference PHP does not treat these as immediate fatals: a division by zero, a modulo by
+/// zero, a negative shift count and `PHP_INT_MIN / -1` all raise a `Throwable` that a `catch`
+/// can receive. So when the module declares the exception tag and this backend can build the
+/// error class inline, the failure is RAISED and only becomes a fatal if it reaches the top of
+/// `main` uncaught — which is php-src's behaviour for all five guards. Anything else keeps the
+/// deterministic `__rt_fail` exit, which is still the right answer for a code with no PHP class
+/// behind it. Import-free reactor modules cannot reference WASI; their exceptional path
+/// therefore remains an explicit `unreachable`, while the valid path and module stay portable.
+///
+/// The native backend currently raises only for the two `intdiv` guards and computes a raw
+/// machine result for the other three, so this target is the more faithful of the two here.
 fn emit_runtime_failure(ctx: &mut FnCtx, failure_code: i32, reason: &str) {
     let has_main = ctx.module.functions.iter().any(|f| f.flags.is_main);
     if has_main {
+        if let Some((class_name, message)) = super::objects::catchable_runtime_error(failure_code)
+            .filter(|_| super::function::module_uses_exceptions(ctx.module))
+            .filter(|(_, message)| ctx.default_strings.contains_key(*message))
+            .filter(|(class_name, _)| {
+                super::objects::runtime_error_is_constructible(ctx.module, class_name)
+            })
+        {
+            // `throw` ends this path the way `return` does, so no trap follows it — the guard
+            // arm simply has no fallthrough. Every precondition is proven above; the remaining
+            // error paths all report before emitting anything, so falling back to the fatal
+            // below stays stack-balanced rather than stranding a half-built object.
+            if super::objects::emit_runtime_error_throw(ctx, class_name, message, failure_code)
+                .is_ok()
+            {
+                return;
+            }
+        }
         ctx.fb
             .ins(&format!("i32.const {}", failure_code), "runtime failure code");
         ctx.fb.ins("call $__rt_fail", reason);
@@ -862,6 +886,20 @@ fn lower_try_pop_handler(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// the object to pick its matching clause. `throw` does not return, so nothing follows.
 fn lower_throw(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(
+        &format!(
+            "i32.const {}",
+            super::function::UNCAUGHT_EXCEPTION_FAILURE_CODE
+        ),
+        "class-agnostic diagnostic for a user-raised exception",
+    );
+    ctx.fb.ins(
+        &format!(
+            "global.set ${}",
+            super::function::EXCEPTION_FATAL_CODE_GLOBAL
+        ),
+        "claim the uncaught diagnostic for this exception",
+    );
     ctx.fb.ins(
         &format!("throw ${}", super::function::EXCEPTION_TAG),
         "raise the PHP exception",

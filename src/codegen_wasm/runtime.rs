@@ -735,14 +735,43 @@ mod tests {
     //!   available, including strings larger than the former 64 KiB buffer.
 
     use super::{
-        emit_common_runtime, RT_ARGV, RT_ECHO_BOOL, RT_ECHO_F64, RT_ECHO_I64, RT_ECHO_STR,
-        RT_WASI_WRITE_OR_FAIL,
+        emit_common_runtime, ERR_DIV_ZERO, ERR_INTDIV_OVERFLOW, ERR_MOD_ZERO, ERR_NEG_SHIFT,
+        RT_ARGV, RT_ECHO_BOOL, RT_ECHO_F64, RT_ECHO_I64, RT_ECHO_STR, RT_WASI_WRITE_OR_FAIL,
     };
     use super::super::heap::emit_heap_runtime;
+    use super::super::objects::CATCHABLE_RUNTIME_ERRORS;
     use super::super::wat::{DataSegment, WatModule};
     use std::sync::atomic::{AtomicU32, Ordering};
 
     static TMP_SEQ: AtomicU32 = AtomicU32::new(0);
+
+    /// Verifies a raised runtime error and its uncaught fatal name the same class and message.
+    ///
+    /// These two halves live apart on purpose: the raise site builds the object a `catch` will
+    /// match, while `__rt_fail` owns the text `main` prints when no clause matched. Nothing in
+    /// the emitter forces them to agree, so changing one and not the other would let a program
+    /// catch a `DivisionByZeroError` yet report an `ArithmeticError` when it does not.
+    #[test]
+    fn raised_runtime_errors_agree_with_their_uncaught_diagnostics() {
+        let fatals = [
+            (1, ERR_DIV_ZERO),
+            (2, ERR_MOD_ZERO),
+            (3, ERR_NEG_SHIFT),
+            (4, ERR_INTDIV_OVERFLOW),
+        ];
+        for (code, class_name, message) in CATCHABLE_RUNTIME_ERRORS {
+            let (_, fatal) = fatals
+                .iter()
+                .find(|(fatal_code, _)| *fatal_code == code)
+                .unwrap_or_else(|| panic!("failure code {code} has no registered fatal message"));
+            let fatal = String::from_utf8_lossy(fatal).to_string();
+            assert_eq!(
+                fatal,
+                format!("PHP Fatal error: Uncaught {class_name}: {message}\n"),
+                "failure code {code} raises a different class or message than it reports"
+            );
+        }
+    }
 
     /// Verifies every PHP stdout helper converts a non-zero WASI errno into the
     /// shared fatal path and that `$argv` rejects pointer-table multiplication

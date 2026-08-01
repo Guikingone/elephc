@@ -816,79 +816,7 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
         .cloned()
         .unwrap_or_else(|| class_name.clone());
 
-    let n = ci.properties.len();
-    let has_dyn = has_dynamic_properties(&ci, &class_name);
-    let dyn_off = if has_dyn { Some(8 + (n as i32) * 16) } else { None };
-    let payload_size: i32 = 8 + (n as i32) * 16 + if has_dyn { 8 } else { 0 };
-    let class_id = ci.class_id as i64;
-
-    // -- allocate the object block --
-    ctx.fb.ins(&format!("i32.const {}", payload_size), "object payload size in bytes");
-    ctx.fb.ins("call $__rt_heap_alloc", "allocate object block -> ptr (i32)");
-    let obj = ctx.fresh_temp(ValType::I32);
-    ctx.fb.ins(&format!("local.set {}", obj), "capture fresh object pointer");
-
-    // -- stamp the heap header kind word (kind 4 = object) at [obj-8] --
-    ctx.fb.ins(&format!("local.get {}", obj), "object base address");
-    ctx.fb.ins("i32.const 8", "header kind word offset (ptr - 8)");
-    ctx.fb.ins("i32.sub", "address of the kind word");
-    ctx.fb.ins("i64.const 4", "heap kind 4 = object instance");
-    ctx.fb.ins("i64.store", "stamp the heap header kind word");
-
-    // -- write the compile-time class id at [obj+0] --
-    ctx.fb.ins(&format!("local.get {}", obj), "object base address");
-    ctx.fb.ins(&format!("i64.const {}", class_id), "compile-time class id");
-    ctx.fb.ins("i64.store", "store class id at object payload offset zero");
-
-    // -- zero every property slot (value_lo and the tag value_hi) --
-    for i in 0..n {
-        let off = 8 + i * 16;
-        ctx.fb.ins(&format!("local.get {}", obj), "object base address");
-        ctx.fb.ins("i64.const 0", "zero");
-        ctx.fb.ins(&format!("i64.store offset={}", off), "zero property slot value_lo");
-        ctx.fb.ins(&format!("local.get {}", obj), "object base address");
-        ctx.fb.ins("i64.const 0", "zero");
-        ctx.fb.ins(&format!("i64.store offset={}", off + 8), "zero property slot value_hi (tag)");
-    }
-
-    // -- emit concrete or boxed scalar property defaults; non-scalars remain unsupported --
-    for i in 0..n {
-        let Some(Some(expr)) = ci.defaults.get(i) else {
-            continue;
-        };
-        let prop_name = ci.properties[i].0.clone();
-        let prop_type = ci.properties[i].1.clone();
-        let off = ci
-            .property_offsets
-            .get(&prop_name)
-            .copied()
-            .unwrap_or(8 + i * 16);
-        let lit = literal_default_value(
-            &format!("property ${}", prop_name),
-            &prop_type,
-            &expr.kind,
-            "ObjectNew",
-        )
-        .map_err(|e| WasmError::Unsupported(e.to_string()))?;
-        emit_scalar_default(ctx, &obj, off, &lit, &prop_name)?;
-    }
-
-    // -- initialise the dynamic-property hash tail (ADP / stdClass) --
-    // An extra 8-byte slot after the declared payload holds an i32 ptr to a Mixed-cell
-    // hash (capacity 4, value_tag 7). Undeclared reads/writes go through it; the tail is
-    // released by __rt_decref_object when (size-8) & 15 == 8. stdClass has no declared
-    // properties, so dyn_off == 8 and the whole payload is the 8-byte hash slot.
-    if let Some(off) = dyn_off {
-        ctx.fb.ins("i64.const 4", "dynamic-property hash capacity (4 entries)");
-        ctx.fb.ins("i64.const 7", "dynamic-property hash value tag (7 = mixed cell)");
-        ctx.fb.ins("call $__rt_hash_new", "allocate the dyn-prop mixed hash -> ptr (i32)");
-        let dyn_hash = ctx.fresh_temp(ValType::I32);
-        ctx.fb.ins(&format!("local.set {}", dyn_hash), "capture dyn-prop hash pointer");
-        ctx.fb.ins(&format!("local.get {}", obj), "object base address (store addr)");
-        ctx.fb.ins(&format!("local.get {}", dyn_hash), "dyn-prop hash ptr (value)");
-        ctx.fb.ins("i64.extend_i32_u", "widen the hash ptr to i64 for storage");
-        ctx.fb.ins(&format!("i64.store offset={}", off), "store the dyn-prop hash ptr at [obj + dyn_off]");
-    }
+    let obj = emit_object_allocation(ctx, &class_name, &ci)?;
 
     // -- call __construct (if declared) with [$this, ...user_args]; defaults run first --
     match &ctor_sig {
@@ -975,6 +903,223 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
     // -- store the object pointer into the result value's local --
     ctx.fb.ins(&format!("local.get {}", obj), "reload object pointer for result store");
     store_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Allocates one instance of `class_name` and returns the local holding its pointer.
+///
+/// Covers everything a fresh instance needs before any constructor runs: the heap block, the
+/// kind-4 header word, the compile-time class id, a zeroed slot per declared property, the
+/// property defaults, and the dynamic-property hash tail. Shared by `ObjectNew` and by the
+/// runtime-error raise sites, so an object built by a division-by-zero guard is byte-identical
+/// to one built by `new` — including the gc_desc contract its release path depends on.
+fn emit_object_allocation(
+    ctx: &mut FnCtx,
+    class_name: &str,
+    ci: &ClassInfo,
+) -> Result<String> {
+    let n = ci.properties.len();
+    let has_dyn = has_dynamic_properties(ci, class_name);
+    let dyn_off = if has_dyn { Some(8 + (n as i32) * 16) } else { None };
+    let payload_size: i32 = 8 + (n as i32) * 16 + if has_dyn { 8 } else { 0 };
+    let class_id = ci.class_id as i64;
+
+    // -- allocate the object block --
+    ctx.fb.ins(&format!("i32.const {}", payload_size), "object payload size in bytes");
+    ctx.fb.ins("call $__rt_heap_alloc", "allocate object block -> ptr (i32)");
+    let obj = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(&format!("local.set {}", obj), "capture fresh object pointer");
+
+    // -- stamp the heap header kind word (kind 4 = object) at [obj-8] --
+    ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+    ctx.fb.ins("i32.const 8", "header kind word offset (ptr - 8)");
+    ctx.fb.ins("i32.sub", "address of the kind word");
+    ctx.fb.ins("i64.const 4", "heap kind 4 = object instance");
+    ctx.fb.ins("i64.store", "stamp the heap header kind word");
+
+    // -- write the compile-time class id at [obj+0] --
+    ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+    ctx.fb.ins(&format!("i64.const {}", class_id), "compile-time class id");
+    ctx.fb.ins("i64.store", "store class id at object payload offset zero");
+
+    // -- zero every property slot (value_lo and the tag value_hi) --
+    for i in 0..n {
+        let off = 8 + i * 16;
+        ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+        ctx.fb.ins("i64.const 0", "zero");
+        ctx.fb.ins(&format!("i64.store offset={}", off), "zero property slot value_lo");
+        ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+        ctx.fb.ins("i64.const 0", "zero");
+        ctx.fb.ins(&format!("i64.store offset={}", off + 8), "zero property slot value_hi (tag)");
+    }
+
+    // -- emit concrete or boxed scalar property defaults; non-scalars remain unsupported --
+    for i in 0..n {
+        let Some(Some(expr)) = ci.defaults.get(i) else {
+            continue;
+        };
+        let prop_name = ci.properties[i].0.clone();
+        let prop_type = ci.properties[i].1.clone();
+        let off = ci
+            .property_offsets
+            .get(&prop_name)
+            .copied()
+            .unwrap_or(8 + i * 16);
+        let lit = literal_default_value(
+            &format!("property ${}", prop_name),
+            &prop_type,
+            &expr.kind,
+            "ObjectNew",
+        )
+        .map_err(|e| WasmError::Unsupported(e.to_string()))?;
+        emit_scalar_default(ctx, &obj, off, &lit, &prop_name)?;
+    }
+
+    // -- initialise the dynamic-property hash tail (ADP / stdClass) --
+    // An extra 8-byte slot after the declared payload holds an i32 ptr to a Mixed-cell
+    // hash (capacity 4, value_tag 7). Undeclared reads/writes go through it; the tail is
+    // released by __rt_decref_object when (size-8) & 15 == 8. stdClass has no declared
+    // properties, so dyn_off == 8 and the whole payload is the 8-byte hash slot.
+    if let Some(off) = dyn_off {
+        ctx.fb.ins("i64.const 4", "dynamic-property hash capacity (4 entries)");
+        ctx.fb.ins("i64.const 7", "dynamic-property hash value tag (7 = mixed cell)");
+        ctx.fb.ins("call $__rt_hash_new", "allocate the dyn-prop mixed hash -> ptr (i32)");
+        let dyn_hash = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(&format!("local.set {}", dyn_hash), "capture dyn-prop hash pointer");
+        ctx.fb.ins(&format!("local.get {}", obj), "object base address (store addr)");
+        ctx.fb.ins(&format!("local.get {}", dyn_hash), "dyn-prop hash ptr (value)");
+        ctx.fb.ins("i64.extend_i32_u", "widen the hash ptr to i64 for storage");
+        ctx.fb.ins(&format!("i64.store offset={}", off), "store the dyn-prop hash ptr at [obj + dyn_off]");
+    }
+
+    Ok(obj)
+}
+
+/// PHP's Error class and message for each runtime failure reference PHP makes CATCHABLE.
+///
+/// Indexed by the `__rt_fail` diagnostic code the same failure carries when it reaches the top
+/// of `main` uncaught, so one table pins both halves of the behaviour together: the class a
+/// `catch` clause matches, and the fatal text printed when no clause matches. `runtime.rs`'s
+/// `ERR_*` strings are the second half and must keep naming these same classes and messages.
+pub(super) const CATCHABLE_RUNTIME_ERRORS: [(i32, &str, &str); 4] = [
+    (1, "DivisionByZeroError", "Division by zero"),
+    (2, "DivisionByZeroError", "Modulo by zero"),
+    (3, "ArithmeticError", "Bit shift by negative number"),
+    (
+        4,
+        "ArithmeticError",
+        "Division of PHP_INT_MIN by -1 is not an integer",
+    ),
+];
+
+/// Returns the Error class and message a runtime failure code raises, when PHP makes it catchable.
+pub(super) fn catchable_runtime_error(failure_code: i32) -> Option<(&'static str, &'static str)> {
+    CATCHABLE_RUNTIME_ERRORS
+        .iter()
+        .find(|(code, _, _)| *code == failure_code)
+        .map(|(_, class_name, message)| (*class_name, *message))
+}
+
+/// Returns whether this module can build `class_name` inline at a runtime-error raise site.
+///
+/// A raise site has no EIR instruction behind it, so an `Unsupported` there would reject a
+/// program that compiles today. The construction is therefore proven possible BEFORE any WAT is
+/// written, and a class this backend cannot build inline falls back to the deterministic fatal —
+/// less faithful to PHP, but never a new compile failure and never a half-emitted object.
+pub(super) fn runtime_error_is_constructible(module: &Module, class_name: &str) -> bool {
+    let Some(class_info) = module.class_infos.get(class_name) else {
+        return false;
+    };
+    if !is_throwable_class(module, class_name) {
+        return false;
+    }
+    if has_dynamic_properties(class_info, class_name) {
+        return false;
+    }
+    if !matches!(
+        resolve_property_slot(class_info, "message"),
+        Ok((_, _, PhpType::Str))
+    ) {
+        return false;
+    }
+    class_info
+        .defaults
+        .iter()
+        .enumerate()
+        .all(|(index, default)| {
+            let Some(default) = default else {
+                return true;
+            };
+            let Some((property, property_type)) = class_info.properties.get(index) else {
+                return false;
+            };
+            literal_default_value(
+                &format!("property ${property}"),
+                property_type,
+                &default.kind,
+                "ObjectNew",
+            )
+            .is_ok()
+        })
+}
+
+/// Builds the PHP Error object for a runtime failure and raises it as an ordinary exception.
+///
+/// This is what makes `try { intdiv(1, 0); } catch (\DivisionByZeroError $e)` behave as PHP
+/// specifies rather than killing the process: the guard raises the same tag a `throw` does, so
+/// every landing pad already in place receives it and picks its matching clause. The failure
+/// code travels alongside in `EXCEPTION_FATAL_CODE_GLOBAL`, so an error that nobody catches
+/// still prints the class-and-message fatal it printed when the guard exited directly.
+///
+/// The caller must have proven `runtime_error_is_constructible` for this class and that the
+/// module declares the exception tag; `inst::emit_runtime_failure` is the only such caller.
+pub(super) fn emit_runtime_error_throw(
+    ctx: &mut FnCtx,
+    class_name: &str,
+    message: &str,
+    failure_code: i32,
+) -> Result<()> {
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(class_name)
+        .cloned()
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!("runtime error class {} is unknown", class_name))
+        })?;
+    let obj = emit_object_allocation(ctx, class_name, &class_info)?;
+
+    // The defaults loop already wrote an owned empty string into `$message`, so the slot is
+    // released before the real message replaces it — the same order `PropSet` uses, and the
+    // reason a raise site does not leak the default it overwrites.
+    let (_, offset, _) = resolve_property_slot(&class_info, "message")?;
+    ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+    ctx.fb.ins(&format!("i32.load offset={}", offset), "load the default message pointer");
+    ctx.fb.ins("call $__rt_decref_any", "release the default message (null-safe)");
+    emit_scalar_default(
+        ctx,
+        &obj,
+        offset,
+        &LiteralDefaultValue::Str(message.to_string()),
+        "message",
+    )?;
+
+    ctx.fb.ins(&format!("local.get {}", obj), "the error being raised");
+    ctx.fb.ins(
+        &format!("i32.const {}", failure_code),
+        "diagnostic this error prints if nothing catches it",
+    );
+    ctx.fb.ins(
+        &format!(
+            "global.set ${}",
+            super::function::EXCEPTION_FATAL_CODE_GLOBAL
+        ),
+        "claim the uncaught diagnostic for this error",
+    );
+    ctx.fb.ins(
+        &format!("throw ${}", super::function::EXCEPTION_TAG),
+        "raise the PHP runtime error",
+    );
     Ok(())
 }
 

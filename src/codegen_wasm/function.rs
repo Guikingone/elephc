@@ -29,8 +29,8 @@ use super::values::{declare_local, declare_param, WasmRepr};
 use super::wat::{FuncBuilder, ValType};
 use super::WasmError;
 use crate::ir::{
-    Function, Immediate, InstId, IrHeapKind, IrType, LocalSlotId, Module, Op, Terminator,
-    ValueDef, ValueId,
+    Function, Immediate, InstId, IrHeapKind, IrType, LocalSlotId, Module, Op, RuntimeCallTarget,
+    RuntimeFnId, Terminator, ValueDef, ValueId,
 };
 use crate::types::PhpType;
 
@@ -298,6 +298,17 @@ pub(super) const EXCEPTION_TAG: &str = "__php_exc";
 /// Mirrors the native backend's `_exc_value` symbol, which `CatchCurrent` reads.
 pub(super) const EXCEPTION_VALUE_GLOBAL: &str = "__exc_value";
 
+/// Name of the global carrying the diagnostic `main` prints if an exception is never caught.
+///
+/// Every raise site sets it immediately before `throw`, so the value in flight always belongs
+/// to the exception in flight. A runtime error names its own PHP class and message; an ordinary
+/// `throw` restores the class-agnostic default, which is what keeps a user exception raised
+/// AFTER a caught `DivisionByZeroError` from inheriting that error's diagnostic.
+pub(super) const EXCEPTION_FATAL_CODE_GLOBAL: &str = "__exc_fatal_code";
+
+/// `__rt_fail` code for an exception that reaches the top of `main` with no `catch`.
+pub(super) const UNCAUGHT_EXCEPTION_FAILURE_CODE: i32 = 10;
+
 /// Returns whether a function participates in exception handling.
 ///
 /// Only such functions pay for the `try_table` wrapper and the handler slot, so a
@@ -314,12 +325,56 @@ pub(super) fn uses_exceptions(function: &Function) -> bool {
         .any(|block| matches!(block.terminator, Some(Terminator::Throw { .. })))
 }
 
+/// Returns whether a function holds an operation whose lowering can raise a PHP runtime Error.
+///
+/// PHP does not treat a division by zero or a negative shift count as an immediate fatal: it
+/// raises `DivisionByZeroError` / `ArithmeticError`, which a `catch` can receive like any other
+/// `Throwable`. This is what tells `plan_module` to lay out those errors' message text.
+///
+/// It deliberately does NOT make a module declare the exception tag. A module with no `try`
+/// anywhere has no clause that could ever receive such an error, so raising it and reporting it
+/// directly are indistinguishable — same message, same 255 exit — and staying on the direct path
+/// keeps a program that merely divides runnable on a host without the exceptions proposal.
+///
+/// This list mirrors `inst::lower_instruction`'s dispatch to the lowerings that call
+/// `emit_runtime_failure`. Missing an entry costs catchability at that site — the failure path
+/// falls back to the deterministic fatal — but never emits a `throw` without a declared tag,
+/// because `emit_runtime_failure` re-checks `module_uses_exceptions` before raising.
+pub(super) fn raises_runtime_error(function: &Function) -> bool {
+    function.instructions.iter().any(|inst| {
+        matches!(
+            inst.op,
+            Op::IShl | Op::IShrA | Op::ISDiv | Op::ISMod | Op::FDiv
+        ) || matches!(
+            inst.immediate,
+            Some(Immediate::RuntimeCall(
+                RuntimeCallTarget::Function(RuntimeFnId::Intdiv)
+                    | RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::Intdiv,
+                        ..
+                    }
+            ))
+        )
+    })
+}
+
+/// Returns whether ANY function, class method or closure in the module can raise a runtime Error.
+pub(super) fn module_raises_runtime_errors(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .any(raises_runtime_error)
+}
+
 /// Returns whether ANY function, class method or closure in the module uses exceptions.
 ///
 /// This is what decides whether the module declares the exception tag and whether `main` is
 /// guarded. It deliberately spans every function list rather than `module.functions` alone: a
 /// `throw` living only inside a method or a closure body still needs the tag declared and still
-/// unwinds into `main`.
+/// unwinds into `main`. It is also what lets a runtime Error be RAISED rather than reported
+/// directly, because the two are only distinguishable once some frame can catch.
 pub(super) fn module_uses_exceptions(module: &Module) -> bool {
     module
         .functions
@@ -435,8 +490,10 @@ fn emit_dispatch_loop(ctx: &mut FnCtx) -> Result<()> {
         ctx.fb.ins("i32.lt_s", "no try is active in this frame?");
         ctx.fb.ins("if", "unhandled here");
         if ctx.function.flags.is_main {
-            ctx.fb
-                .ins("i32.const 10", "uncaught PHP exception diagnostic");
+            ctx.fb.ins(
+                &format!("global.get ${}", EXCEPTION_FATAL_CODE_GLOBAL),
+                "diagnostic the raise site chose for this exception",
+            );
             ctx.fb.ins(
                 "call $__rt_fail",
                 "report PHP's uncaught fatal and exit with status 255",
@@ -625,6 +682,14 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator, preceding_op: Option<Op>
             // enclosing `try_table` in this function catches it, or it propagates to
             // the caller's landing pad.
             ctx.emit_load_value(*value)?;
+            ctx.fb.ins(
+                &format!("i32.const {}", UNCAUGHT_EXCEPTION_FAILURE_CODE),
+                "class-agnostic diagnostic for a user-raised exception",
+            );
+            ctx.fb.ins(
+                &format!("global.set ${}", EXCEPTION_FATAL_CODE_GLOBAL),
+                "claim the uncaught diagnostic for this exception",
+            );
             ctx.fb.ins(
                 &format!("throw ${}", EXCEPTION_TAG),
                 "raise the PHP exception",

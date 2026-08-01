@@ -2703,6 +2703,216 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies PHP's arithmetic runtime errors are CATCHABLE, not process-killing fatals.
+///
+/// Reference PHP raises `DivisionByZeroError` / `ArithmeticError` for these five guards, so a
+/// `catch` receives them and execution continues past the `try`. Emitting them as a direct
+/// `__rt_fail` exit — which is what this backend did before — silently skipped every handler
+/// and killed the program, so the assertion that matters is that `end` is reached at all. Each
+/// clause binds its own variable because re-binding one name across clauses of DIFFERENT classes
+/// still corrupts the caught object on this target, which is an unrelated open defect.
+#[test]
+fn test_cli_wasm_runtime_errors_are_catchable() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_catchable_runtime_errors");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function idiv(int $x, int $y): int { return intdiv($x, $y); }
+function imod(int $x, int $y): int { return $x % $y; }
+function ishift(int $x, int $y): int { return $x << $y; }
+function fdiv2(float $x, float $y): float { return $x / $y; }
+
+try { echo idiv(1, 0), "\n"; } catch (\DivisionByZeroError $a) { echo "A|", $a->getMessage(), "\n"; }
+try { echo imod(1, 0), "\n"; } catch (\DivisionByZeroError $b) { echo "B|", $b->getMessage(), "\n"; }
+try { echo ishift(1, -1), "\n"; } catch (\ArithmeticError $c) { echo "C|", $c->getMessage(), "\n"; }
+try { echo idiv(PHP_INT_MIN, -1), "\n"; } catch (\ArithmeticError $d) { echo "D|", $d->getMessage(), "\n"; }
+try { echo fdiv2(1.0, 0.0), "\n"; } catch (\DivisionByZeroError $f) { echo "E|", $f->getMessage(), "\n"; }
+echo "end\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile catchable runtime errors to WASM");
+    assert!(
+        output.status.success(),
+        "catchable runtime error compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run catchable runtime errors under Node");
+    if !run.status.success() && String::from_utf8_lossy(&run.stderr).contains("CompileError") {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        run.status.success(),
+        "a caught runtime error still killed the program: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    let expected = concat!(
+        "A|Division by zero\n",
+        "B|Modulo by zero\n",
+        "C|Bit shift by negative number\n",
+        "D|Division of PHP_INT_MIN by -1 is not an integer\n",
+        "E|Division by zero\n",
+        "end\n",
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an uncaught runtime error reports identically whether or not it was raised.
+///
+/// A module with no `try` cannot catch, so its guards stay on the direct `__rt_fail` path that
+/// keeps the program runnable on a host without the exceptions proposal. A module that does
+/// catch raises instead, and the diagnostic then has to travel with the exception for `main`'s
+/// landing pad to print it — otherwise the uncaught case regresses to the class-agnostic
+/// "Uncaught exception". Both variants of each failure are compiled here precisely because the
+/// two paths are different code: the point is that they are indistinguishable from outside.
+/// php-src also prints the file, line and stack trace, which this target does not reproduce
+/// yet; the class, the message and the 255 exit status are what is compared.
+#[test]
+fn test_cli_wasm_uncaught_runtime_error_keeps_its_php_diagnostic() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let runner_source = r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#;
+
+    // A `try` for a class the failure never raises: it does not catch anything here, it only
+    // makes the module declare the exception tag, which is what puts the guards on the raise
+    // path. Without it the same program stays on the direct fatal path.
+    let arming_try = concat!(
+        "try {\n",
+        "    echo \"armed\\n\";\n",
+        "} catch (\\RuntimeException $unused) {\n",
+        "    echo \"never\\n\";\n",
+        "}\n",
+    );
+
+    for (label, body, expected) in [
+        (
+            "div",
+            "function f(int $x, int $y): int { return intdiv($x, $y); }\necho f(1, 0), \"\\n\";\n",
+            "PHP Fatal error: Uncaught DivisionByZeroError: Division by zero\n",
+        ),
+        (
+            "mod",
+            "function f(int $x, int $y): int { return $x % $y; }\necho f(1, 0), \"\\n\";\n",
+            "PHP Fatal error: Uncaught DivisionByZeroError: Modulo by zero\n",
+        ),
+        (
+            "shift",
+            "function f(int $x, int $y): int { return $x << $y; }\necho f(1, -1), \"\\n\";\n",
+            "PHP Fatal error: Uncaught ArithmeticError: Bit shift by negative number\n",
+        ),
+        (
+            "overflow",
+            "function f(int $x, int $y): int { return intdiv($x, $y); }\necho f(PHP_INT_MIN, -1), \"\\n\";\n",
+            "PHP Fatal error: Uncaught ArithmeticError: Division of PHP_INT_MIN by -1 is not an integer\n",
+        ),
+    ] {
+        for (path_label, prologue, expected_stdout) in
+            [("direct", "", ""), ("raised", arming_try, "armed\n")]
+        {
+            let dir = make_cli_test_dir(&format!(
+                "elephc_cli_wasm_uncaught_runtime_error_{label}_{path_label}"
+            ));
+            let php_path = dir.join("main.php");
+            fs::write(&php_path, format!("<?php\n{prologue}{body}")).unwrap();
+
+            let output = elephc_cli_command(&dir)
+                .arg("--target")
+                .arg("wasm32-wasi")
+                .arg(&php_path)
+                .output()
+                .expect("failed to compile an uncaught runtime error to WASM");
+            assert!(
+                output.status.success(),
+                "uncaught runtime error compilation failed for {label}/{path_label}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+
+            let runner = dir.join("run.mjs");
+            fs::write(&runner, runner_source).unwrap();
+
+            // `--no-warnings` keeps Node's `ExperimentalWarning: WASI` off the stream the PHP
+            // diagnostic is compared on.
+            let run = Command::new("node")
+                .arg("--no-warnings")
+                .arg(&runner)
+                .arg(dir.join("main.wasm"))
+                .current_dir(&dir)
+                .output()
+                .expect("failed to run an uncaught runtime error under Node");
+            let stderr = String::from_utf8_lossy(&run.stderr).to_string();
+            if stderr.contains("CompileError") {
+                let _ = fs::remove_dir_all(&dir);
+                continue;
+            }
+            assert_eq!(
+                stderr, expected,
+                "uncaught {label} lost the PHP class and message it names on the {path_label} path"
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&run.stdout),
+                expected_stdout,
+                "output before the {label} failure must still be flushed on the {path_label} path"
+            );
+            assert_eq!(
+                run.status.code(),
+                Some(255),
+                "an uncaught PHP runtime error exits 255 for {label}/{path_label}"
+            );
+
+            let _ = fs::remove_dir_all(&dir);
+        }
+    }
+}
+
 /// Verifies a class property STRING default is materialized, raw and boxed.
 ///
 /// Object construction writes defaults inline rather than through the class's

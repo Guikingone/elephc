@@ -66,6 +66,15 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             mutable: true,
             init: 0,
         });
+        // Set by every raise site immediately before `throw`, read by `main`'s landing pad when
+        // nothing caught the exception. The initial value is the class-agnostic diagnostic, so a
+        // path that somehow reaches the pad without a raise still prints a PHP fatal.
+        wm.add_global(wat::Global {
+            name: super::function::EXCEPTION_FATAL_CODE_GLOBAL.to_string(),
+            ty: wat::ValType::I32,
+            mutable: true,
+            init: i64::from(super::function::UNCAUGHT_EXCEPTION_FAILURE_CODE),
+        });
     }
 
     // Lay out every interned string literal as a data segment above the runtime
@@ -109,7 +118,22 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // already interned and key the whole set by content for `emit_scalar_default`.
     let mut default_strings: std::collections::HashMap<String, (u32, u32)> =
         std::collections::HashMap::new();
-    for value in objects::literal_default_strings(&module.class_infos) {
+    // A runtime-error raise site writes its `$message` from the same content-keyed map, and its
+    // text is a backend constant that no PHP literal need mention. Laid out only for a module
+    // that can actually raise one — which needs both a failing operation and a `try` able to
+    // receive it — so every other module's data segments stay byte-identical.
+    let mut layout_values = objects::literal_default_strings(&module.class_infos);
+    if has_main
+        && super::function::module_uses_exceptions(module)
+        && super::function::module_raises_runtime_errors(module)
+    {
+        for (_, _, message) in objects::CATCHABLE_RUNTIME_ERRORS {
+            if !layout_values.iter().any(|value| value == message) {
+                layout_values.push(message.to_string());
+            }
+        }
+    }
+    for value in layout_values {
         if let Some(&placed) = interned_by_content.get(value.as_str()) {
             default_strings.insert(value, placed);
             continue;
