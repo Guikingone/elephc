@@ -63,6 +63,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_IMPLODE);
     wm.add_raw_func(RT_EXPLODE);
     wm.add_raw_func(RT_STR_SPLIT);
+    wm.add_raw_func(RT_WORDWRAP);
     wm.add_raw_func(RT_PAD_BYTE);
     wm.add_raw_func(RT_STR_PAD);
     wm.add_raw_func(RT_STR_REPLACE);
@@ -1902,6 +1903,57 @@ const RT_STR_SPLIT: &str = r#"(func $__rt_str_split (param $ptr i32) (param $len
   (local.get $arr))                                               ;; the built array
 "#;
 
+/// `__rt_wordwrap`: PHP's `wordwrap` with the default one-byte break and no long-word cutting.
+///
+/// The transform is IN PLACE and length-preserving: a space is REPLACED by the break, never
+/// inserted, which is why `wordwrap("a ", 1)` is `"a\n"` — the trailing space becomes the break —
+/// and why a word longer than the width is left whole rather than split.
+///
+/// This is php-src's fast path, transcribed: `laststart` is where the current line began,
+/// `lastspace` the most recent space seen. A space at or past the width breaks THERE; any other
+/// byte at or past the width breaks at the last space instead, but only when one has been seen
+/// since the line started — `laststart != lastspace` is what leaves an unbreakable run alone. An
+/// existing break resets both. A width of zero or less needs no special case: the comparison is
+/// then always true.
+const RT_WORDWRAP: &str = r#"(func $__rt_wordwrap (param $ptr i32) (param $len i64) (param $width i64) (result i32) (result i64)
+  (local $out i32)                                                ;; owned result block
+  (local $olen i64)                                               ;; persisted length
+  (local $cur i64)                                                ;; scan cursor
+  (local $laststart i64)                                          ;; start of the current line
+  (local $lastspace i64)                                          ;; most recent space
+  (local $b i32)                                                  ;; current byte
+  (call $__rt_str_persist (local.get $ptr) (local.get $len))      ;; own a copy to rewrite in place
+  (local.set $olen)
+  (local.set $out)
+  (local.set $cur (i64.const 0))
+  (local.set $laststart (i64.const 0))
+  (local.set $lastspace (i64.const 0))
+  (block $end (loop $scan
+    (br_if $end (i64.ge_s (local.get $cur) (local.get $olen)))
+    (local.set $b (i32.load8_u (i32.add (local.get $out) (i32.wrap_i64 (local.get $cur)))))
+    (if (i32.eq (local.get $b) (i32.const 10))                    ;; an existing break resets the line
+      (then
+        (local.set $laststart (i64.add (local.get $cur) (i64.const 1)))
+        (local.set $lastspace (local.get $laststart)))
+      (else (if (i32.eq (local.get $b) (i32.const 32))            ;; a space can become the break
+        (then
+          (if (i64.ge_s (i64.sub (local.get $cur) (local.get $laststart)) (local.get $width))
+            (then
+              (i32.store8 (i32.add (local.get $out) (i32.wrap_i64 (local.get $cur))) (i32.const 10))
+              (local.set $laststart (i64.add (local.get $cur) (i64.const 1)))))
+          (local.set $lastspace (local.get $cur)))
+        (else
+          (if (i32.and
+                (i64.ge_s (i64.sub (local.get $cur) (local.get $laststart)) (local.get $width))
+                (i64.ne (local.get $laststart) (local.get $lastspace)))
+            (then                                                 ;; break back at the last space
+              (i32.store8 (i32.add (local.get $out) (i32.wrap_i64 (local.get $lastspace))) (i32.const 10))
+              (local.set $laststart (i64.add (local.get $lastspace) (i64.const 1)))))))))
+    (local.set $cur (i64.add (local.get $cur) (i64.const 1)))
+    (br $scan)))
+  (local.get $out) (local.get $olen))                             ;; owned result, same length
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -2177,6 +2229,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Implode
             | RuntimeFnId::Explode
             | RuntimeFnId::StrSplit
+            | RuntimeFnId::Wordwrap
             | RuntimeFnId::Strstr
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrReplace
@@ -2269,6 +2322,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::StrSplit {
         return str_split_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Wordwrap {
+        return wordwrap_shape_issue(function, call);
     }
     if target == RuntimeFnId::Strstr {
         return strstr_shape_issue(function, call);
@@ -2492,6 +2548,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::StrSplit {
         return lower_str_split(ctx, inst);
+    }
+    if target == RuntimeFnId::Wordwrap {
+        return lower_wordwrap(ctx, inst);
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);
@@ -2970,6 +3029,61 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     ctx.fb.ins("call $__rt_str_substr", "own the selected bytes");
     store_result(ctx, inst)
+}
+
+/// Lowers `wordwrap` in its one- and two-argument forms.
+///
+/// The default break is a single newline and the default is NOT to cut long words, which together
+/// select php-src's fast in-place path. A custom `$break` or `$cut_long_words` selects a different
+/// algorithm in php-src — the general path can change the LENGTH, which this one never does — so
+/// those arities are refused rather than approximated.
+fn lower_wordwrap(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    if inst.operands.len() == 2 {
+        ctx.emit_load_value(operand(inst, 1)?)?;
+    } else {
+        ctx.fb.ins("i64.const 75", "PHP's default width");
+    }
+    ctx.fb.ins("call $__rt_wordwrap", "break lines at spaces, in place");
+    store_result(ctx, inst)
+}
+
+/// Validates `wordwrap`: a subject and an optional integer width, a string out.
+fn wordwrap_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    if !matches!(call.operands.len(), 1 | 2) {
+        return Some(format!(
+            "expected a subject and an optional width, got {} operands",
+            call.operands.len()
+        ));
+    }
+    for (index, operand) in call.operands.iter().enumerate() {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        let (want_ir, want_php) = if index == 0 {
+            (IrType::Str, PhpType::Str)
+        } else {
+            (IrType::I64, PhpType::Int)
+        };
+        if value.ir_type != want_ir || value.php_type.codegen_repr() != want_php {
+            return Some(format!(
+                "wordwrap operand {index} is {:?}/{:?}, expected {want_ir:?}/{want_php:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::Str
+        || call.result_php_type.codegen_repr() != PhpType::Str
+    {
+        return Some(format!(
+            "wordwrap result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    None
 }
 
 /// The `__rt_fail` code PHP's non-positive-length `str_split` `ValueError` reports under.
@@ -4395,6 +4509,34 @@ mod tests {
         );
         let call = bad_flag.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&bad_flag, call, RuntimeFnId::Strstr).is_some());
+
+        // `wordwrap` takes an optional width; a custom break or cut flag is a different path.
+        for arity in 1..=2 {
+            let mut operands = vec![str_arg.clone()];
+            if arity == 2 {
+                operands.push(int_arg.clone());
+            }
+            let wrapped = shaped_call(RuntimeFnId::Wordwrap, &operands, IrType::Str, PhpType::Str);
+            let call = wrapped.instructions.last().expect("the probe emitted a call");
+            assert_eq!(
+                direct_builtin_shape_issue(&wrapped, call, RuntimeFnId::Wordwrap),
+                None,
+                "wordwrap accepts {arity} operand(s)"
+            );
+        }
+        let with_break = shaped_call(
+            RuntimeFnId::Wordwrap,
+            &[str_arg.clone(), int_arg.clone(), str_arg.clone()],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = with_break.instructions.last().expect("the probe emitted a call");
+        assert!(direct_builtin_shape_issue(&with_break, call, RuntimeFnId::Wordwrap).is_some());
+        // The fast path never changes the length: it replaces a space, it does not insert.
+        assert!(
+            RT_WORDWRAP.contains("(local.get $out) (local.get $olen)"),
+            "wordwrap returns the persisted length unchanged"
+        );
 
         // `str_split` accepts both arities, since the default really is a chunk of one.
         for arity in 1..=2 {

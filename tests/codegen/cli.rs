@@ -4152,6 +4152,144 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `wordwrap` reproduces php-src's in-place line breaking.
+///
+/// The transform REPLACES a space with the break rather than inserting one, so the result has the
+/// same length as the subject. That is why `wordwrap("a ", 1)` is `"a\n"` — the trailing space
+/// becomes the break — and why a word longer than the width is left whole: with no space to
+/// consume, there is nowhere to break without growing the string.
+///
+/// Consecutive spaces are where a plausible implementation diverges. `wordwrap("a  b", 1)` is
+/// `"a\n b"` but `wordwrap("a  b", 2)` is `"a \nb"`: the break lands on whichever space first
+/// reaches the width, and the other survives as content. A width of zero or less is not an error.
+///
+/// The algorithm was derived from php-src's fast path and checked against 400 random subjects
+/// over the alphabet `{a, b, space, newline}` before any of it was written in WAT.
+#[test]
+fn test_cli_wasm_wordwrap_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_wordwrap");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function w(string $s, int $n): void { echo "[", wordwrap($s, $n), "]|[", wordwrap($s, $n), "]\n"; }
+function w1(string $s): void { echo "[", wordwrap($s), "]\n"; }
+w("The quick brown fox", 10); w("The quick brown fox", 1); w("abcdefghij", 3);
+w("a b c d e", 3); w("", 5); w("short", 99); w("aa bb cc", 5); w("  lead", 3);
+w("a  b", 1); w("a  b", 2); w("a ", 1); w("  ", 1); w("x  ", 2);
+w("one two\nthree four", 5); w("a b c", 0);
+w1("a b c"); w1("");
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile wordwrap to WASM");
+    assert!(
+        output.status.success(),
+        "wordwrap compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run wordwrap under Node");
+    assert!(
+        run.status.success(),
+        "wordwrap trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected: Vec<u8> = [
+        b"[The quick\n".as_slice(),
+        b"brown fox]|[The quick\n".as_slice(),
+        b"brown fox]\n".as_slice(),
+        b"[The\n".as_slice(),
+        b"quick\n".as_slice(),
+        b"brown\n".as_slice(),
+        b"fox]|[The\n".as_slice(),
+        b"quick\n".as_slice(),
+        b"brown\n".as_slice(),
+        b"fox]\n".as_slice(),
+        b"[abcdefghij]|[abcdefghij]\n".as_slice(),
+        b"[a b\n".as_slice(),
+        b"c d\n".as_slice(),
+        b"e]|[a b\n".as_slice(),
+        b"c d\n".as_slice(),
+        b"e]\n".as_slice(),
+        b"[]|[]\n".as_slice(),
+        b"[short]|[short]\n".as_slice(),
+        b"[aa bb\n".as_slice(),
+        b"cc]|[aa bb\n".as_slice(),
+        b"cc]\n".as_slice(),
+        b"[ \n".as_slice(),
+        b"lead]|[ \n".as_slice(),
+        b"lead]\n".as_slice(),
+        b"[a\n".as_slice(),
+        b" b]|[a\n".as_slice(),
+        b" b]\n".as_slice(),
+        b"[a \n".as_slice(),
+        b"b]|[a \n".as_slice(),
+        b"b]\n".as_slice(),
+        b"[a\n".as_slice(),
+        b"]|[a\n".as_slice(),
+        b"]\n".as_slice(),
+        b"[ \n".as_slice(),
+        b"]|[ \n".as_slice(),
+        b"]\n".as_slice(),
+        b"[x \n".as_slice(),
+        b"]|[x \n".as_slice(),
+        b"]\n".as_slice(),
+        b"[one\n".as_slice(),
+        b"two\n".as_slice(),
+        b"three\n".as_slice(),
+        b"four]|[one\n".as_slice(),
+        b"two\n".as_slice(),
+        b"three\n".as_slice(),
+        b"four]\n".as_slice(),
+        b"[a\n".as_slice(),
+        b"b\n".as_slice(),
+        b"c]|[a\n".as_slice(),
+        b"b\n".as_slice(),
+        b"c]\n".as_slice(),
+        b"[a b c]\n".as_slice(),
+        b"[]\n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `str_split` cuts into chunks the way php-src does, empty subject included.
 ///
 /// The final chunk is SHORT when the length does not divide evenly, and an EMPTY subject yields

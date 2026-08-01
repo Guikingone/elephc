@@ -4498,6 +4498,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Implode
         | RuntimeFnId::Explode
         | RuntimeFnId::StrSplit
+        | RuntimeFnId::Wordwrap
         | RuntimeFnId::Strstr
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
@@ -4840,7 +4841,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::SubstrReplace
         | RuntimeFnId::Vprintf
         | RuntimeFnId::Vsprintf
-        | RuntimeFnId::Wordwrap
         | RuntimeFnId::ElephcGmmktimeRaw
         | RuntimeFnId::ElephcMktimeRaw
         | RuntimeFnId::ElephcStrtotimeRaw
