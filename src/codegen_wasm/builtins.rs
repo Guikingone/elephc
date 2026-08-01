@@ -70,6 +70,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_FMT_PAD);
     wm.add_raw_func(RT_FMT_INT);
     wm.add_raw_func(RT_FMT_STR);
+    wm.add_raw_func(RT_FMT_FLOAT);
     wm.add_raw_func(RT_PAD_BYTE);
     wm.add_raw_func(RT_STR_PAD);
     wm.add_raw_func(RT_STR_REPLACE);
@@ -2371,6 +2372,24 @@ fn lower_sprintf(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                             .ins(&format!("i32.const {}", i32::from(*left)), "left-justified?");
                         ctx.fb.ins("call $__rt_fmt_str", "render %s");
                     }
+                    b'f' => {
+                        ctx.emit_load_value(value)?;
+                        ctx.fb
+                            .ins("i64.reinterpret_f64", "the exact bits are what gets rounded");
+                        ctx.fb.ins(
+                            &format!("i64.const {}", precision.unwrap_or(6)),
+                            "an absent precision is PHP's six, not zero",
+                        );
+                        ctx.fb.ins(
+                            &format!("i32.const {}", i32::from(*plus)),
+                            "does a positive value carry a plus?",
+                        );
+                        ctx.fb.ins(&format!("i64.const {width}"), "field width");
+                        ctx.fb.ins(&format!("i32.const {pad}"), "padding character");
+                        ctx.fb
+                            .ins(&format!("i32.const {}", i32::from(*left)), "left-justified?");
+                        ctx.fb.ins("call $__rt_fmt_float", "render %f");
+                    }
                     other => {
                         return Err(WasmError::Unsupported(format!(
                             "sprintf conversion %{}",
@@ -2417,17 +2436,13 @@ fn sprintf_shape_issue(
         else {
             continue;
         };
-        // `%f` needs the exact-digit rounding this batch does not carry yet.
-        if *conversion == b'f' {
-            return Some("sprintf %f is not lowered yet".to_string());
-        }
         let Some(value) = function.value(call.operands[argument + 1]) else {
             return Some("argument is missing from the value table".to_string());
         };
-        let (want_ir, want_php) = if *conversion == b'd' {
-            (IrType::I64, PhpType::Int)
-        } else {
-            (IrType::Str, PhpType::Str)
+        let (want_ir, want_php) = match conversion {
+            b'd' => (IrType::I64, PhpType::Int),
+            b'f' => (IrType::F64, PhpType::Float),
+            _ => (IrType::Str, PhpType::Str),
         };
         // PHP coerces an argument to the conversion's type; that coercion carries its own
         // diagnostics, so an exact match is required rather than converted here.
@@ -2453,6 +2468,176 @@ fn sprintf_shape_issue(
     }
     None
 }
+
+/// `__rt_fmt_float`: renders `%f` from the EXACT decimal digits of the double.
+///
+/// PHP's `%f` rounds the exact binary value with ties-to-even — `%.0f` of 0.5 is 0 and of 2.5 is
+/// 2 — which is C's rule and NOT `number_format`'s. `number_format` rounds the shortest decimal
+/// that round-trips, so `number_format(2.675, 2)` is 2.68 while `sprintf("%.2f", 2.675)` is 2.67.
+/// Working from `__rt_f64_digits`' exact digits is what makes the difference reproducible.
+///
+/// Non-finite values IGNORE the field entirely: `%08.2f` of INF is `INF`, not `00000INF`, and the
+/// `+` flag does not reach them either — measured. A true zero drops its sign, so `-0.0` prints
+/// `0.00`, while a negative value that merely ROUNDS to zero keeps it and prints `-0.00`.
+const RT_FMT_FLOAT: &str = r#"(func $__rt_fmt_float (param $bits i64) (param $prec i64) (param $plus i32) (param $width i64) (param $pad i32) (param $left i32) (result i32) (result i64)
+  (local $scratch i32) (local $big i32) (local $dbuf i32) (local $kept i32) (local $body i32)
+  (local $sign i32) (local $class i32) (local $digptr i32) (local $ndigits i32) (local $p i32)
+  (local $keep i64) (local $klen i64) (local $i i64) (local $first i32) (local $up i32)
+  (local $rest i64) (local $carry i64) (local $intlen i64) (local $w i32) (local $signch i32)
+  (local.set $scratch (call $__rt_heap_alloc
+    (i32.add (i32.const 2048) (i32.wrap_i64 (i64.mul (local.get $prec) (i64.const 2))))))
+  (local.set $big (local.get $scratch))                           ;; 80 limbs, must start zeroed
+  (local.set $dbuf (i32.add (local.get $scratch) (i32.const 640)))
+  (local.set $kept (i32.add (local.get $scratch) (i32.const 1408)))
+  (local.set $i (i64.const 0))
+  (block $ze (loop $zl                                            ;; zero the bignum limbs
+    (br_if $ze (i64.ge_s (local.get $i) (i64.const 640)))
+    (i32.store8 (i32.add (local.get $big) (i32.wrap_i64 (local.get $i))) (i32.const 0))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $zl)))
+  (call $__rt_f64_digits (local.get $bits) (local.get $big) (i32.const 80)
+        (local.get $dbuf) (i32.const 768))
+  (local.set $p) (local.set $ndigits) (local.set $digptr)
+  (local.set $class) (local.set $sign)
+  (if (i32.eq (local.get $class) (i32.const 1))                   ;; infinity ignores the field
+    (then
+      (local.set $body (call $__rt_str_alloc (i64.const 4)))
+      (local.set $w (i32.const 0))
+      (if (local.get $sign)
+        (then
+          (i32.store8 (local.get $body) (i32.const 45))
+          (local.set $w (i32.const 1))))
+      (i32.store8 (i32.add (local.get $body) (local.get $w)) (i32.const 73))          ;; I
+      (i32.store8 offset=1 (i32.add (local.get $body) (local.get $w)) (i32.const 78)) ;; N
+      (i32.store8 offset=2 (i32.add (local.get $body) (local.get $w)) (i32.const 70)) ;; F
+      (return (local.get $body) (i64.extend_i32_u (i32.add (local.get $w) (i32.const 3))))))
+  (if (i32.eq (local.get $class) (i32.const 2))                   ;; PHP spells it NaN, not NAN
+    (then
+      (local.set $body (call $__rt_str_alloc (i64.const 3)))
+      (i32.store8 (local.get $body) (i32.const 78))               ;; N
+      (i32.store8 offset=1 (local.get $body) (i32.const 97))      ;; a
+      (i32.store8 offset=2 (local.get $body) (i32.const 78))      ;; N
+      (return (local.get $body) (i64.const 3))))
+  (if (i32.eq (local.get $class) (i32.const 3))
+    (then                                                          ;; a true zero has no digits
+      (local.set $ndigits (i32.const 0))
+      (local.set $p (i32.const 0))
+      (local.set $sign (i32.const 0))))                            ;; ...and drops its sign
+  (local.set $keep (i64.add (i64.sub (i64.extend_i32_s (local.get $ndigits))
+                                     (i64.extend_i32_s (local.get $p)))
+                            (local.get $prec)))
+  (local.set $klen (local.get $keep))
+  (if (i64.lt_s (local.get $klen) (i64.const 0))
+    (then (local.set $klen (i64.const 0))))
+  (local.set $i (i64.const 0))
+  (block $ce (loop $cl                                            ;; the kept prefix, zero-extended
+    (br_if $ce (i64.ge_s (local.get $i) (local.get $klen)))
+    (i32.store8 (i32.add (local.get $kept) (i32.wrap_i64 (local.get $i)))
+      (select
+        (i32.load8_u (i32.add (local.get $digptr) (i32.wrap_i64 (local.get $i))))
+        (i32.const 48)
+        (i64.lt_s (local.get $i) (i64.extend_i32_s (local.get $ndigits)))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $cl)))
+  (local.set $up (i32.const 0))
+  (if (i32.and (i64.ge_s (local.get $keep) (i64.const 0))
+               (i64.lt_s (local.get $keep) (i64.extend_i32_s (local.get $ndigits))))
+    (then
+      (local.set $first (i32.sub
+        (i32.load8_u (i32.add (local.get $digptr) (i32.wrap_i64 (local.get $keep))))
+        (i32.const 48)))
+      (local.set $rest (i64.add (local.get $keep) (i64.const 1)))
+      (local.set $carry (i64.const 0))                            ;; reused: any non-zero tail?
+      (block $re (loop $rl
+        (br_if $re (i64.ge_s (local.get $rest) (i64.extend_i32_s (local.get $ndigits))))
+        (if (i32.ne (i32.load8_u (i32.add (local.get $digptr) (i32.wrap_i64 (local.get $rest))))
+                    (i32.const 48))
+          (then (local.set $carry (i64.const 1)) (br $re)))
+        (local.set $rest (i64.add (local.get $rest) (i64.const 1)))
+        (br $rl)))
+      (if (i32.gt_u (local.get $first) (i32.const 5))
+        (then (local.set $up (i32.const 1))))
+      (if (i32.eq (local.get $first) (i32.const 5))
+        (then (if (i64.ne (local.get $carry) (i64.const 0))
+          (then (local.set $up (i32.const 1)))
+          (else                                                    ;; an exact tie rounds to EVEN
+            (if (i64.gt_s (local.get $klen) (i64.const 0))
+              (then (local.set $up (i32.and (i32.const 1)
+                (i32.sub (i32.load8_u (i32.add (local.get $kept)
+                  (i32.wrap_i64 (i64.sub (local.get $klen) (i64.const 1))))) (i32.const 48))))))))))))
+  (if (local.get $up)
+    (then
+      (local.set $i (local.get $klen))
+      (block $ue (loop $ul                                        ;; propagate the carry leftwards
+        (br_if $ue (i64.le_s (local.get $i) (i64.const 0)))
+        (local.set $i (i64.sub (local.get $i) (i64.const 1)))
+        (if (i32.eq (i32.load8_u (i32.add (local.get $kept) (i32.wrap_i64 (local.get $i))))
+                    (i32.const 57))                               ;; '9' wraps and carries on
+          (then (i32.store8 (i32.add (local.get $kept) (i32.wrap_i64 (local.get $i))) (i32.const 48)))
+          (else
+            (i32.store8 (i32.add (local.get $kept) (i32.wrap_i64 (local.get $i)))
+              (i32.add (i32.load8_u (i32.add (local.get $kept) (i32.wrap_i64 (local.get $i))))
+                       (i32.const 1)))
+            (local.set $up (i32.const 0))                         ;; absorbed
+            (br $ue)))
+        (br $ul)))
+      (if (local.get $up)
+        (then                                                     ;; every digit was 9: prepend 1
+          (local.set $i (local.get $klen))
+          (block $se (loop $sl
+            (br_if $se (i64.le_s (local.get $i) (i64.const 0)))
+            (i32.store8 (i32.add (local.get $kept) (i32.wrap_i64 (local.get $i)))
+              (i32.load8_u (i32.add (local.get $kept)
+                (i32.wrap_i64 (i64.sub (local.get $i) (i64.const 1))))))
+            (local.set $i (i64.sub (local.get $i) (i64.const 1)))
+            (br $sl)))
+          (i32.store8 (local.get $kept) (i32.const 49))            ;; '1'
+          (local.set $klen (i64.add (local.get $klen) (i64.const 1)))
+          (local.set $keep (i64.add (local.get $keep) (i64.const 1)))))))
+  (local.set $intlen (i64.sub (local.get $keep) (local.get $prec)))
+  (local.set $body (call $__rt_str_alloc
+    (i64.add (i64.add (local.get $klen) (local.get $prec)) (i64.const 8))))
+  (local.set $w (i32.const 0))
+  (if (i64.le_s (local.get $intlen) (i64.const 0))
+    (then                                                          ;; no integer digits: a bare 0
+      (i32.store8 (local.get $body) (i32.const 48))
+      (local.set $w (i32.const 1)))
+    (else
+      (local.set $i (i64.const 0))
+      (block $ie (loop $il
+        (br_if $ie (i64.ge_s (local.get $i) (local.get $intlen)))
+        (i32.store8 (i32.add (local.get $body) (local.get $w))
+          (i32.load8_u (i32.add (local.get $kept) (i32.wrap_i64 (local.get $i)))))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))
+        (br $il)))))
+  (if (i64.gt_s (local.get $prec) (i64.const 0))
+    (then
+      (i32.store8 (i32.add (local.get $body) (local.get $w)) (i32.const 46))   ;; '.'
+      (local.set $w (i32.add (local.get $w) (i32.const 1)))
+      (local.set $i (i64.const 0))
+      (block $fe (loop $fl
+        (br_if $fe (i64.ge_s (local.get $i) (local.get $prec)))
+        ;; the fraction starts at intlen; a negative intlen means leading zeros first
+        (i32.store8 (i32.add (local.get $body) (local.get $w))
+          (select (i32.const 48)
+            (select
+              (i32.load8_u (i32.add (local.get $kept)
+                (i32.wrap_i64 (i64.add (local.get $intlen) (local.get $i)))))
+              (i32.const 48)
+              (i64.lt_s (i64.add (local.get $intlen) (local.get $i)) (local.get $klen)))
+            (i64.lt_s (i64.add (local.get $intlen) (local.get $i)) (i64.const 0))))
+        (local.set $w (i32.add (local.get $w) (i32.const 1)))
+        (local.set $i (i64.add (local.get $i) (i64.const 1)))
+        (br $fl)))))
+  (call $__rt_heap_free (local.get $scratch))
+  (local.set $signch (i32.const 0))
+  (if (local.get $sign)
+    (then (local.set $signch (i32.const 45)))
+    (else (if (local.get $plus) (then (local.set $signch (i32.const 43))))))
+  (call $__rt_fmt_pad (local.get $body) (i64.extend_i32_u (local.get $w))
+    (local.get $signch) (local.get $width) (local.get $pad) (local.get $left)))
+"#;
 
 /// Returns whether a unary string transform is lowered by this module.
 ///
@@ -5290,6 +5475,12 @@ mod tests {
         let sized = conv(&parse_sprintf_format(b"%8.2f", 1).unwrap()[0]);
         assert_eq!((sized.3, sized.4), (8, Some(2)));
         assert_eq!(conv(&parse_sprintf_format(b"%.s", 1).unwrap()[0]).4, Some(0));
+
+        // `%f` accepts the same flags; `-` with `0` is the one combination refused.
+        assert!(parse_sprintf_format(b"%08.2f", 1).is_ok());
+        assert_eq!(conv(&parse_sprintf_format(b"%.3f", 1).unwrap()[0]).4, Some(3));
+        // An absent precision on %f is SIX, which the lowering supplies, not zero.
+        assert_eq!(conv(&parse_sprintf_format(b"%f", 1).unwrap()[0]).4, None);
 
         // Refused rather than guessed.
         for (format, why) in [

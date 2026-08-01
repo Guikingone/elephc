@@ -4286,6 +4286,98 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `sprintf`'s `%f` rounds the EXACT binary value with ties-to-even.
+///
+/// This is C's rule and NOT `number_format`'s, which is the distinction worth pinning:
+/// `sprintf("%.2f", 2.675)` is 2.67 because the double is really 2.67499…, while
+/// `number_format(2.675, 2)` is 2.68 because it rounds the shortest decimal that round-trips.
+/// Ties go to even, so `%.0f` gives 0 for 0.5, 2 for 1.5 AND 2 for 2.5.
+///
+/// Non-finite values IGNORE the field entirely — `%08.2f` of INF is `INF`, not `00000INF` — and
+/// PHP spells NaN with that capitalisation. A true zero drops its sign, so `-0.0` prints `0.00`,
+/// while a negative value that merely rounds to zero keeps it.
+#[test]
+fn test_cli_wasm_sprintf_float_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_sprintf_float");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function f(float $v): void {
+    echo "[", sprintf("%f", $v), "][", sprintf("%.0f", $v), "][", sprintf("%.2f", $v), "][", sprintf("%10.2f", $v), "][", sprintf("%-10.2f", $v), "][", sprintf("%010.2f", $v), "][", sprintf("%+.2f", $v), "]\n";
+}
+f(0.0); f(1.5); f(-1.5); f(2.5); f(0.125); f(-0.125); f(2.675); f(1234.5678); f(9.99); f(-0.4);
+echo sprintf("%08.2f", INF), "|", sprintf("%-8.2f", -INF), "|", sprintf("%+.2f", NAN), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile sprintf %f to WASM");
+    assert!(
+        output.status.success(),
+        "sprintf %f compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run sprintf %f under Node");
+    assert!(
+        run.status.success(),
+        "sprintf %f trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "[0.000000][0][0.00][      0.00][0.00      ][0000000.00][+0.00]\n",
+            "[1.500000][2][1.50][      1.50][1.50      ][0000001.50][+1.50]\n",
+            "[-1.500000][-2][-1.50][     -1.50][-1.50     ][-000001.50][-1.50]\n",
+            "[2.500000][2][2.50][      2.50][2.50      ][0000002.50][+2.50]\n",
+            "[0.125000][0][0.12][      0.12][0.12      ][0000000.12][+0.12]\n",
+            "[-0.125000][-0][-0.12][     -0.12][-0.12     ][-000000.12][-0.12]\n",
+            "[2.675000][3][2.67][      2.67][2.67      ][0000002.67][+2.67]\n",
+            "[1234.567800][1235][1234.57][   1234.57][1234.57   ][0001234.57][+1234.57]\n",
+            "[9.990000][10][9.99][      9.99][9.99      ][0000009.99][+9.99]\n",
+            "[-0.400000][-0][-0.40][     -0.40][-0.40     ][-000000.40][-0.40]\n",
+            "INF|-INF|NaN\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `sprintf` reproduces php-src's formatting, which is NOT C's.
 ///
 /// The format is required to be a LITERAL, so it is parsed once at compile time and the module

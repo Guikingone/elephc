@@ -272,6 +272,7 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_wordwrap_matches_php",
                 "codegen_wasm::builtins::tests::sprintf_format_parser_follows_php_flag_rules",
                 "codegen::cli::test_cli_wasm_sprintf_matches_php",
+                "codegen::cli::test_cli_wasm_sprintf_float_matches_php",
             ][..],
         ),
         RuntimeFnId::Strpos | RuntimeFnId::Strrpos | RuntimeFnId::Strstr => (
