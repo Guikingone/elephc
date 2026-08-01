@@ -697,6 +697,74 @@ echo go([1, 2, 3, 4]);
     assert_eq!(out, "10");
 }
 
+/// PHP unpacks any `Traversable` into an array literal, not just arrays. A statically-typed one
+/// reaches the checker as `Object("Generator")`, which used to be rejected outright. Integer keys
+/// are renumbered across the spreads and string keys are preserved, matching `php -n` — the same
+/// rule an array spread follows, which is why the destination must be hash storage.
+#[test]
+fn test_spread_generator_into_array_literal() {
+    let out = compile_and_run(
+        r#"<?php
+function ga(): \Generator { yield 'a1'; yield 'a2'; }
+function gb(): \Generator { yield 'b1'; }
+function keyed(): \Generator { yield 'k' => 'v'; yield 'k2' => 'v2'; }
+foreach ([...ga(), ...gb()] as $key => $value) { echo $key, ':', $value, ','; }
+echo '|';
+foreach ([...keyed()] as $key => $value) { echo $key, '=', $value, ';'; }
+echo '|';
+foreach (['lead', ...gb()] as $key => $value) { echo $key, ':', $value, ','; }
+"#,
+    );
+    assert_eq!(out, "0:a1,1:a2,2:b1,|k=v;k2=v2;|0:lead,1:b1,");
+}
+
+/// The Symfony `InvokableCommand` idiom: an existing `?array` property spread together with two
+/// `Generator`-returning calls, assigned back to the property.
+#[test]
+fn test_spread_generators_alongside_array_property() {
+    let out = compile_and_run(
+        r#"<?php
+function props(): \Generator { yield 'p1'; yield 'p2'; }
+function meths(): \Generator { yield 'm1'; }
+class Invokable {
+    private ?array $interactions = null;
+    public function build(): void {
+        $this->interactions = ['seed'];
+        $this->interactions = [...$this->interactions, ...props(), ...meths()];
+    }
+    public function join(): string {
+        $out = '';
+        foreach ($this->interactions as $key => $value) { $out .= $key . ':' . $value . ','; }
+        return $out;
+    }
+}
+$i = new Invokable();
+$i->build();
+echo $i->join();
+"#,
+    );
+    assert_eq!(out, "0:seed,1:p1,2:p2,3:m1,");
+}
+
+/// An `IteratorAggregate` spreads through its `getIterator()` (string keys preserved), and a
+/// `Generator` unpacks into a variadic call argument — both drive the same generic-iteration
+/// emitter `iterator_to_array()` already used for an `Iterable` source.
+#[test]
+fn test_spread_iterator_aggregate_and_generator_call_argument() {
+    let out = compile_and_run(
+        r#"<?php
+class Agg implements \IteratorAggregate {
+    public function getIterator(): \Iterator { return new \ArrayIterator(['x' => 'X', 'y' => 'Y']); }
+}
+function collect(...$parts): string { return implode('-', $parts); }
+function g(): \Generator { yield 'g1'; yield 'g2'; }
+foreach ([...new Agg()] as $key => $value) { echo $key, '=', $value, ';'; }
+echo '|', collect(...g());
+"#,
+    );
+    assert_eq!(out, "x=X;y=Y;|g1-g2");
+}
+
 /// Verifies list-unpacking a `Mixed` right-hand side that holds an array binds each
 /// positional target. PHP: `[$a, $b] = [10, 20]` gives `$a + $b == 30`.
 #[test]

@@ -8910,7 +8910,11 @@ fn lower_gradual_array_literal_spread_source(
             }
             converted
         }
-        PhpType::Iterable => emit_builtin_call_value(
+        // PHP spreads any `Traversable`, not only arrays, and a statically-typed one arrives here
+        // as `Object` rather than `Iterable`. Both drive the same generic-iteration emitter, which
+        // already probes `Iterator`/`IteratorAggregate` and takes a Generator fast path; the
+        // checker admits an object spread only for the classes that emitter handles.
+        PhpType::Iterable | PhpType::Object(_) => emit_builtin_call_value(
             ctx,
             "iterator_to_array",
             vec![source.value],
@@ -8941,7 +8945,10 @@ fn lower_gradual_call_spread_source(
     span: Span,
 ) -> LoweredValue {
     let source_ty = ctx.builder.value_php_type(source.value).codegen_repr();
-    if !matches!(source_ty, PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable) {
+    if !matches!(
+        source_ty,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable | PhpType::Object(_)
+    ) {
         return source;
     }
     let hash = lower_gradual_array_literal_spread_source(ctx, source, span);

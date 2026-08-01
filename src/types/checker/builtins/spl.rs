@@ -67,8 +67,12 @@ pub(crate) fn check_iterator_apply_source(
     ))
 }
 
-/// Provides the Traversable object supported helper used by the SPL module.
-fn traversable_object_supported(checker: &Checker, name: &str) -> bool {
+/// Returns true when an object type can be iterated by the `iterator_to_array()` emitter.
+///
+/// Also the gate for spreading an object (`[...$generator]`), so the spread relaxation admits
+/// exactly the classes that emitter drives — `Iterator` and `IteratorAggregate` implementors, plus
+/// `Traversable` itself. Sharing one predicate is what keeps the two from diverging.
+pub(crate) fn traversable_object_supported(checker: &Checker, name: &str) -> bool {
     if name == "Traversable" {
         return true;
     }

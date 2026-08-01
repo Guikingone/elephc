@@ -180,6 +180,20 @@ impl Checker {
                         {
                             requires_hash_spread = true;
                         }
+                        // PHP unpacks any `Traversable` into an array literal, not just arrays:
+                        // `[...$generator]` is valid and keeps the Traversable's string keys while
+                        // renumbering integer ones — the same rule as an array spread, which is why
+                        // hash storage is required. `crate::ir_lower` materializes the object
+                        // through `iterator_to_array()` before the existing spread machinery runs,
+                        // and this gate is that builtin's own supported-source predicate, so the
+                        // checker admits exactly the classes the emitter can iterate.
+                        PhpType::Object(class_name)
+                            if crate::types::checker::builtins::spl::traversable_object_supported(
+                                self, class_name,
+                            ) =>
+                        {
+                            requires_hash_spread = true;
+                        }
                         other => {
                             return Err(CompileError::new(
                                 elem.span,
@@ -612,6 +626,16 @@ impl Checker {
                     // loud in the fallthrough arm.
                     PhpType::Mixed | PhpType::Iterable => Ok(PhpType::Mixed),
                     PhpType::Union(_) if array_arg_is_gradually_acceptable(&ty) => {
+                        Ok(PhpType::Mixed)
+                    }
+                    // A statically-typed `Traversable` arrives as `Object`; it unpacks through the
+                    // same `iterator_to_array()` materialization as `Iterable`, gated on that
+                    // builtin's own supported-source predicate.
+                    PhpType::Object(ref class_name)
+                        if crate::types::checker::builtins::spl::traversable_object_supported(
+                            self, class_name,
+                        ) =>
+                    {
                         Ok(PhpType::Mixed)
                     }
                     other => Err(CompileError::new(
