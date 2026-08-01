@@ -1950,13 +1950,17 @@ echo (new AppKernel("/warm"))->probe(), (new AppKernel(null))->probe();
     assert_eq!(out, "/warm/build");
 }
 
-/// Regression test (keep-loud boundary): a `$this`-using `Closure::bind` body that is NOT the
-/// single-`return $this->prop` shape codegen lowers (here an ARRAY of property reads — Symfony's
-/// `TraceableCommand` idiom) must stay a loud checker diagnostic, never a silent accept whose
-/// codegen would diverge.
+/// A `$this`-using `Closure::bind` body that is not the single-`return $this->prop` shape — here
+/// an ARRAY of private property reads, Symfony's `TraceableCommand` idiom — rebinds `$this` to
+/// `$newThis` and reads the receiver's own values.
+///
+/// `$this` is `$newThis` (the `Command` argument), not the lexically enclosing `TraceableCommand`,
+/// so the private `$code` read yields the argument's `"x"` and not the enclosing object's `null`.
+/// The explicit `Command::class` scope authorizes the private access even though the enclosing
+/// class is a subclass. Matches `php -n`.
 #[test]
-fn test_closure_bind_this_array_body_stays_loud() {
-    let out = compile_expect_check_error(
+fn test_closure_bind_this_array_body_reads_bound_receiver() {
+    let out = compile_and_run(
         r#"<?php
 class Command {
     private ?string $code = null;
@@ -1971,11 +1975,28 @@ class TraceableCommand extends Command {
 (new TraceableCommand(null))->probe(new Command("x"));
 "#,
     );
-    assert!(
-        out.contains("Cannot access private property"),
-        "expected the non-single-property $this bind shape to stay loud, got: {}",
-        out
+    assert_eq!(out, "x");
+}
+
+/// The rebound `$this` of a non-single-property bind body reaches a receiver whose class the
+/// enclosing scope is unrelated to: `Reader` declares neither `$a` nor `$b`, so resolving them
+/// against the enclosing class would not compile at all. Guards the `$newThis`-class typing
+/// (`set_bound_closure_this_class` on the generic bind path) that makes them resolve.
+#[test]
+fn test_closure_bind_this_array_body_from_unrelated_class() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { private $a = 'A1'; private $b = 'B2'; }
+class Reader {
+    public function read(Holder $h): string {
+        [$x, $y] = \Closure::bind(fn () => [$this->a, $this->b], $h, Holder::class)();
+        return $x . $y;
+    }
+}
+echo (new Reader())->read(new Holder());
+"#,
     );
+    assert_eq!(out, "A1B2");
 }
 
 /// Regression test (keep-loud boundary): the `$this` single-property bind authorizes the receiver

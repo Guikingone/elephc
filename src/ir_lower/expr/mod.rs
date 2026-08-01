@@ -16361,7 +16361,28 @@ fn lower_static_method_call(
             && php_symbol_key(method) == "bind"
             && !args.is_empty()
         {
+            // Type the rebound `$this` inside the closure body as `$newThis`'s class, so a
+            // `$this->prop` read resolves its offset against the receiver's layout instead of the
+            // lexically enclosing class — which, for a bind performed from an unrelated class, may
+            // not declare the property at all. Sound because the runtime `$this` IS `$newThis`.
+            // A top-level closure has no enclosing `$this` and already captures a null receiver
+            // typed `Mixed`, so it keeps dispatching against the bound object at runtime.
+            if let Some(new_this_class) =
+                args.get(1).and_then(|arg| instance_callable_object_class(ctx, arg))
+            {
+                ctx.set_bound_closure_this_class(new_this_class);
+            }
             let closure = lower_expr(ctx, &args[0]);
+            // Clear any override the closure body did not consume so it cannot leak to a later
+            // closure lowered in the same function.
+            ctx.take_bound_closure_this_class();
+            // A closure literal registers a pending static-callable binding describing itself —
+            // the raw, still-UNBOUND closure. `emit_closure_bind` below supersedes it, so drop it
+            // here: left pending, an immediate invoke (`Closure::bind(fn () => …, $obj)()`) would
+            // pick it up in `lower_expr_call` and call the closure directly, bypassing the rebind
+            // and running the body against its original (null) `$this` — silently reading null for
+            // every `$this->prop`.
+            ctx.take_pending_static_callable_result();
             let new_this = match args.get(1) {
                 Some(arg) => lower_expr(ctx, arg),
                 None => lower_null(ctx, expr),

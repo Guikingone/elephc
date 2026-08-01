@@ -225,6 +225,19 @@ pub(crate) fn closure_body_free_of_self_scope(body: &[Stmt]) -> bool {
     !body_uses_this(body) && !body.iter().any(stmt_uses_relative_static)
 }
 
+/// Returns true when a closure body uses `$this` but no lexically-resolved static receiver
+/// (`self::`/`static::`/`parent::`, recursively including nested closures).
+///
+/// This is the gate for typing a `Closure::bind($closure, $newThis, $scope)` body's `$this` from
+/// `$newThis`. `crate::ir_lower` rebinds `$this` for any such body — the bind installs `$newThis`
+/// as the closure's receiver and members dispatch against it at runtime — so the rebound receiver
+/// is sound whatever shape the body has. The relative static receivers are still excluded: those
+/// `crate::ir_lower` resolves against the closure's LEXICAL class, so authorizing them against the
+/// rebound scope would approve a program whose compiled behavior diverges.
+pub(crate) fn closure_body_rebinds_this_only(body: &[Stmt]) -> bool {
+    body_uses_this(body) && !body.iter().any(stmt_uses_relative_static)
+}
+
 /// Returns true if the statement references `self::`/`static::`/`parent::` anywhere. `$this` is
 /// covered separately by `stmt_uses_this`; this scanner only adds the relative static receivers.
 fn stmt_uses_relative_static(stmt: &Stmt) -> bool {

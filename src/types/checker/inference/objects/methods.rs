@@ -1608,14 +1608,18 @@ impl Checker {
         else {
             return None;
         };
-        // `Closure::bind(fn () => $this->prop, $newThis, Scope::class)`: the body uses `$this`
-        // (rebound to `$newThis`) and `crate::ir_lower::closure_bind_property_return_type` lowers
-        // exactly the single-`return $this->prop` shape by boxing `$newThis` as the `$this`
-        // capture. Authorize the `$this` receiver for that shape only, so the checker relaxation
-        // stays in lock-step with what codegen actually compiles. Any other
-        // `$this`/`self::`/`static::`/`parent::` body remains gated below.
+        // `Closure::bind(fn () => …$this…, $newThis, Scope::class)`: the body's `$this` is
+        // `$newThis`. `crate::ir_lower` rebinds it for any body — the single-`return $this->prop`
+        // form through `closure_bind_property_return_type` (which additionally carries a
+        // by-reference return), every other form through the generic bind, which installs
+        // `$newThis` as the closure's receiver so members dispatch against it at runtime.
+        // `closure_body_rebinds_this_only` keeps `self::`/`static::`/`parent::` bodies out: those
+        // codegen resolves against the LEXICAL class, so the checker must not authorize them
+        // against the rebound scope.
         if params.is_empty()
-            && closure_body_is_single_this_property_return(body)
+            && crate::types::checker::inference::expr::static_closure::closure_body_rebinds_this_only(
+                body,
+            )
         {
             // PHP takes the rebound `$this` from `$newThis` (argument two). `$scope` only widens
             // the visibility the body is checked under, so resolve the two independently instead
@@ -1724,24 +1728,6 @@ impl Checker {
             })
             .cloned()
     }
-}
-
-/// Returns true when a closure body is exactly `return $this->prop;` — a single statement
-/// returning a property access whose receiver is `$this`. This is the only `$this`-using
-/// `Closure::bind` shape `crate::ir_lower::closure_bind_property_return_type` lowers directly
-/// (boxing `$newThis` as the closure's `$this` capture), so the checker authorizes the rebound
-/// `$this` receiver only for this form.
-fn closure_body_is_single_this_property_return(body: &[crate::parser::ast::Stmt]) -> bool {
-    let [stmt] = body else {
-        return false;
-    };
-    let crate::parser::ast::StmtKind::Return(Some(ret)) = &stmt.kind else {
-        return false;
-    };
-    let ExprKind::PropertyAccess { object, .. } = &ret.kind else {
-        return false;
-    };
-    matches!(object.kind, ExprKind::This)
 }
 
 /// Returns true when a method variadic parameter must keep runtime key information.
