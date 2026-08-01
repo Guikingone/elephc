@@ -134,6 +134,7 @@ fn render_macos_command(
             args.extend([OsString::from("-e"), OsString::from("_main")]);
             args.push(OsString::from("-dead_strip"));
         }
+        Emit::Staticlib => unreachable!("a static library is archived with ar, never linked"),
         Emit::Cdylib => {
             let install_name = paths
                 .bin
@@ -189,6 +190,7 @@ fn render_linux_command(
     match emit {
         Emit::Executable => args.push(OsString::from("-Wl,--gc-sections")),
         Emit::Cdylib => args.push(OsString::from("-shared")),
+        Emit::Staticlib => unreachable!("a static library is archived with ar, never linked"),
     }
     args.extend([
         OsString::from("-o"),

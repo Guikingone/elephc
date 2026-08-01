@@ -385,8 +385,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if web && check_only {
         fail("--web cannot be combined with --check");
     }
-    if web && matches!(emit, Emit::Cdylib) {
-        fail("--web cannot be combined with --emit cdylib");
+    // --web restructures the process entry point, which a library artifact does
+    // not have: both library kinds are incompatible with it for the same reason.
+    if web && emit.is_library() {
+        fail("--web cannot be combined with a library --emit kind (cdylib, staticlib)");
     }
     if web && emit_asm {
         fail("--web cannot be combined with --emit-asm");
@@ -466,7 +468,7 @@ fn parse_required_emit(args: &[String], index: usize) -> Emit {
     if index < args.len() {
         parse_emit(&args[index])
     } else {
-        fail("Missing emit kind after --emit (expected: executable, cdylib)")
+        fail("Missing emit kind after --emit (expected: executable, cdylib, staticlib)")
     }
 }
 
@@ -475,8 +477,9 @@ fn parse_emit(value: &str) -> Emit {
     match value {
         "executable" | "exe" | "bin" => Emit::Executable,
         "cdylib" | "dylib" | "shared" => Emit::Cdylib,
+        "staticlib" | "static" | "lib" => Emit::Staticlib,
         other => fail(&format!(
-            "Invalid --emit kind '{}': expected one of: executable, cdylib",
+            "Invalid --emit kind '{}': expected one of: executable, cdylib, staticlib",
             other
         )),
     }

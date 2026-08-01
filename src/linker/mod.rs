@@ -79,6 +79,26 @@ pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
     command::run_tool("Assembler", &mut assembler);
 }
 
+/// Packs the compiled objects into a static library with `ar`.
+///
+/// This deliberately does not go through the link plan. An archive is not a
+/// link: bridge staticlibs and managed native packages stay separate `.a` files
+/// for the consuming project to link alongside this one, exactly as a C library
+/// would leave its own dependencies to its consumer. Rolling them in would
+/// duplicate every symbol the host also links directly.
+///
+/// `rcs` replaces the archive, creates it when absent, and writes the symbol
+/// index in one step -- no separate `ranlib` pass is needed on either platform.
+pub(crate) fn archive(archive_path: &Path, object: &Path, runtime_object: &Path) {
+    // A stale archive would otherwise keep members from the previous build,
+    // because `r` replaces matching names but never removes vanished ones.
+    let _ = std::fs::remove_file(archive_path);
+
+    let mut ar = Command::new("ar");
+    ar.arg("rcs").arg(archive_path).arg(object).arg(runtime_object);
+    command::run_tool("ar", &mut ar);
+}
+
 /// Bakes macOS debug maps into a dSYM before temporary objects are removed.
 pub(crate) fn bake_debug_info(target: Target, bin_path: &Path) -> bool {
     if target.platform != Platform::MacOS {

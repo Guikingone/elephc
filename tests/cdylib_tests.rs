@@ -195,6 +195,105 @@ int main(int argc, char **argv) {
 }
 "#;
 
+const STATICLIB_HOST_C: &str = r#"
+#include <stdint.h>
+#include <stdio.h>
+#include <stddef.h>
+
+typedef struct { const char *ptr; size_t len; } elephc_str;
+
+extern int32_t elephc_init(void);
+extern void elephc_shutdown(void);
+extern void elephc_free(void *);
+extern elephc_str greet(const char *, size_t);
+extern elephc_str fixed_label(void);
+
+int main(void) {
+    if (elephc_init() != 0) return 1;
+    elephc_str g = greet("static", 6);
+    elephc_str f = fixed_label();
+    printf("%.*s %zu %.*s %zu\n", (int)g.len, g.ptr, g.len, (int)f.len, f.ptr, f.len);
+    elephc_free((void *)g.ptr);
+    elephc_free((void *)f.ptr);
+    elephc_shutdown();
+    return 0;
+}
+"#;
+
+/// Verifies `--emit staticlib`: the archive links directly into a host binary,
+/// with no `dlopen` and no runtime symbol resolution involved.
+///
+/// This is the delivery form an Xcode project consumes, and it exercises the
+/// *non-PIC* codegen path — a staticlib takes `Emitter::new`, not
+/// `Emitter::new_pic`, because GOT indirection exists for `dlopen`-time
+/// resolution rather than for position independence. The host executable is PIE
+/// regardless, so a link succeeding here is what proves that distinction holds.
+#[test]
+fn test_staticlib_links_directly_into_a_host_binary() {
+    let dir = make_test_dir("elephc_staticlib");
+    fs::write(dir.join("strret.php"), STRING_RETURN_PHP).unwrap();
+
+    let output = elephc_command(&dir)
+        .args(["--emit", "staticlib", "strret.php"])
+        .output()
+        .expect("failed to run elephc");
+    assert!(
+        output.status.success(),
+        "staticlib compilation failed:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let archive = dir.join("libstrret.a");
+    assert!(archive.exists(), "expected an archive at {:?}", archive);
+
+    // `ar rcs` must have written a symbol index, or the link below cannot
+    // resolve anything out of the archive.
+    let listing = Command::new("ar")
+        .arg("t")
+        .arg(&archive)
+        .output()
+        .expect("failed to run ar");
+    let members = String::from_utf8_lossy(&listing.stdout);
+    assert!(
+        members.contains("strret.o"),
+        "the user object must be a member: {members}"
+    );
+    assert!(
+        members.contains("runtime-"),
+        "the runtime object must be a member: {members}"
+    );
+
+    let c_path = dir.join("host.c");
+    fs::write(&c_path, STATICLIB_HOST_C).unwrap();
+    let host = dir.join("statichost");
+    let compile = Command::new("cc")
+        .arg("-o")
+        .arg(&host)
+        .arg(&c_path)
+        .arg(&archive)
+        .output()
+        .expect("failed to spawn the system C compiler");
+    assert!(
+        compile.status.success(),
+        "linking against the archive failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(&host).output().expect("failed to run the host");
+    assert!(
+        run.status.success(),
+        "host run failed (exit {:?}):\n{}",
+        run.status.code(),
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Hello, static 13 fixed 5\n"
+    );
+
+    fs::remove_dir_all(&dir).ok();
+}
+
 /// Verifies the string-return half of the export ABI end to end.
 ///
 /// Covers the three provenances that reach a `return` differently, because each
