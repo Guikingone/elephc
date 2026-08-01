@@ -117,6 +117,40 @@ It is also **platform-independent**: it serves macOS, Linux, Android and iOS ali
 
 Hence it is Lot 1, ahead of any iOS-specific work.
 
+### 6.1 What a `Str` actually is
+
+There is no Zend-style string object. A `Str` is a raw **pointer + length** byte string (not UTF-8) carried in a register pair, and its provenance decides who owns it:
+
+| Provenance | Storage | Owned? |
+|---|---|---|
+| Literal | `.rodata` | never — must not be freed |
+| Scratch | `_concat_buf` bump arena with `_concat_off` cursor (`runtime/strings/concat.rs:13-82`) | no — **invalidated by the next concat** |
+| Persisted | `__rt_str_persist` copies into an `__rt_heap_alloc` block, kind tag `1` (`runtime/strings/str_persist.rs:18-88` arm64, `:95-144` x86_64) | yes |
+
+Heap blocks carry a 16-byte header before the user pointer — `[size:4][refcount:4][kind:8]` (`runtime/arrays/heap_alloc.rs:21`). Kinds: `1` owned string, `2` indexed array, `3` hash, `4` object, `5` boxed Mixed, `6` throwable.
+
+**Strings are move-semantics, not shared-ownership.** `__rt_decref_any` dispatches kind `1` to `__rt_heap_free_safe`, which validates liveness and then frees **unconditionally** — it does not decrement (`runtime/arrays/decref_any.rs:65-66`, `runtime/arrays/heap_free.rs:266-300`). Only boxed Mixed (kind 5) has genuine refcounting. `str_persist.rs:36-37` records why: a zero-length early-return was removed precisely because it let two owners alias one buffer into a double-free.
+
+### 6.2 Two register mismatches that would corrupt silently
+
+The internal string-return pair is `string_result_regs` (`abi/registers.rs:97-104`): **arm64 `(x1, x2)`**, **x86_64 `(rax, rdx)`**.
+
+**Return path — arm64 breaks.** AAPCS64 returns a 16-byte aggregate in `(x0, x1)`. Today's trampoline is a blind tail-branch (`cdylib.rs:108-113`), so the host would read `x0` — an unrelated value — as the pointer, and the real pointer as the length. Fix: a non-tail trampoline, `bl` then `mov x0, x1` / `mov x1, x2` / `ret`. x86_64 needs nothing: `(rax, rdx)` is exactly the SysV convention for a two-INTEGER-member 16-byte struct return, so the tail `jmp` stays valid.
+
+**Free path — x86_64 breaks.** The C first argument arrives in `rdi`, but `__rt_heap_free_safe` expects the pointer in `rax` (`runtime/arrays/heap_free.rs:311`, `:540-554`). Fix: `mov rax, rdi` before the tail `jmp`. arm64 needs nothing: `x0` is both the C argument register and the helper's input.
+
+The pain is symmetric and neither side is covered by the other's tests — which is exactly how this would have shipped as silent corruption on the arm64 path that iOS depends on.
+
+### 6.3 ABI decisions
+
+**Return `(ptr, len)` by value in the existing register pair**, host releases through `elephc_free`. This is the only option requiring no new runtime mechanism — a caller-supplied buffer needs a two-phase size probe, and a NUL-terminated `const char*` cannot represent PHP byte strings containing `\0`.
+
+Three decisions the mapping forces:
+
+1. **Persist every `Str` returned from an export, unconditionally.** `persist_scratch_return_string` (`ir_lower/stmt/mod.rs:2522-2544`) only persists values produced by scratch-categorised ops (`ir_lower/expr/mod.rs:673-686`). So `return $param;` can hand the host back *the very pointer the host passed in*. Today `heap_free_safe` happens to reject out-of-heap pointers silently, but that is an implementation accident, not a contract. An ABI where the host sometimes owns the result and sometimes does not is unusable; one copy per export call buys a rule the host can actually follow.
+2. **Translate `NULL_SENTINEL` to a real C `NULL`** at the trampoline boundary. The internal "no string" marker is `0x7fff_ffff_ffff_fffe` (`sentinels.rs:62`), not a null pointer; leaking it to a C caller turns any deref or `elephc_free` into a crash.
+3. **No NUL-termination guarantee.** PHP strings are byte strings. The host must use the returned length; `strlen()` breaks silently on embedded `\0`. To be stated in the header docs, not merely implied.
+
 ## 7. Work packages
 
 ### Lot 0 — iOS relink spike
