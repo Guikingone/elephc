@@ -2052,6 +2052,73 @@ echo (new Outer())->peek(new Derived(13));
     assert_eq!(out, "13");
 }
 
+/// Symfony's `RequestStack::resetRequestFormats()` idiom: `self::` inside a bound closure resolves
+/// to the BIND SCOPE, not the lexically enclosing class. Measured against `php -n`: the write
+/// lands on `Scoped::$formats` while the enclosing class's same-named static is untouched — so
+/// resolving `self::` lexically both reported `Lexical::$formats` undefined and would have written
+/// the wrong class. Covers the checker gate (`rebinds_relative_static`) and the matching ir_lower
+/// swap of the closure body's `current_class`.
+#[test]
+fn test_closure_bind_self_static_property_resolves_to_bind_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class Scoped { public static $formats = 'INIT'; }
+class Lexical {
+    public static $formats = 'LEXICAL-UNTOUCHED';
+    public function reset(): void {
+        static $r;
+        $r ??= \Closure::bind(static fn () => self::$formats = 'REBOUND', null, Scoped::class);
+        $r();
+    }
+}
+(new Lexical())->reset();
+echo Scoped::$formats, '|', Lexical::$formats;
+"#,
+    );
+    assert_eq!(out, "REBOUND|LEXICAL-UNTOUCHED");
+}
+
+/// A `self::` STATIC METHOD CALL in a bound closure body dispatches against the bind scope too.
+/// Without the matching emitter change the checker accepted this while codegen rejected it with
+/// `lexical static method receiver outside class method`, so the two had to move together.
+#[test]
+fn test_closure_bind_self_static_method_resolves_to_bind_scope() {
+    let out = compile_and_run(
+        r#"<?php
+class Maker { public static function make(): string { return 'FROM-MAKER'; } }
+class Caller {
+    public static function make(): string { return 'FROM-CALLER'; }
+    public function go(): string {
+        return \Closure::bind(static fn () => self::make(), null, Maker::class)();
+    }
+}
+echo (new Caller())->go();
+"#,
+    );
+    assert_eq!(out, "FROM-MAKER");
+}
+
+/// `parent::` in a bound closure resolves to the parent of the SCOPE, not the parent of the
+/// lexically enclosing class — `php -n` yields `Base`'s value here even though `Host` has its own
+/// `$tag` and an unrelated ancestry.
+#[test]
+fn test_closure_bind_parent_resolves_to_bind_scope_parent() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public static $tag = 'BASE-TAG'; }
+class Child extends Base { public static $tag = 'CHILD-TAG'; }
+class Host {
+    public static $tag = 'HOST-TAG';
+    public function go(): string {
+        return \Closure::bind(static fn () => parent::$tag, null, Child::class)();
+    }
+}
+echo (new Host())->go();
+"#,
+    );
+    assert_eq!(out, "BASE-TAG");
+}
+
 // --- Untyped closure/arrow-fn parameter is Mixed inside the body (PHP semantics) ---
 
 /// An untyped arrow-function parameter with no contextual hint is `Mixed` inside the body, so

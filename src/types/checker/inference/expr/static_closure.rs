@@ -196,6 +196,20 @@ fn expr_uses_this(expr: &Expr) -> bool {
         ExprKind::BufferNew { len, .. } => expr_uses_this(len),
         ExprKind::FirstClassCallable(target) => callable_target_uses_this(target),
         ExprKind::Closure { body, .. } => body_uses_this(body),
+        // An assignment in EXPRESSION position (`fn () => $this->x = 1`) is the whole body of an
+        // arrow function, so missing it would report a `$this`-writing body as `$this`-free.
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            ..
+        } => {
+            expr_uses_this(target)
+                || expr_uses_this(value)
+                || result_target.as_deref().is_some_and(expr_uses_this)
+                || prelude.iter().any(stmt_uses_this)
+        }
         _ => false,
     }
 }
@@ -236,6 +250,26 @@ pub(crate) fn closure_body_free_of_self_scope(body: &[Stmt]) -> bool {
 /// rebound scope would approve a program whose compiled behavior diverges.
 pub(crate) fn closure_body_rebinds_this_only(body: &[Stmt]) -> bool {
     body_uses_this(body) && !body.iter().any(stmt_uses_relative_static)
+}
+
+/// Returns true when a closure body uses a lexically-resolved static receiver
+/// (`self::`/`static::`/`parent::`) but never `$this`.
+///
+/// This is the gate for `Closure::bind($closure, $newThis, Scope::class)` bodies whose relative
+/// static receivers must resolve to the BIND SCOPE instead of the closure's lexical class. PHP
+/// resolves `self::`/`static::`/`parent::` from the closure's runtime scope, which the rebind
+/// replaces, so `Closure::bind(static fn () => self::$f, null, Req::class)` writes `Req::$f` even
+/// from an unrelated class — measured against `php -n`, including `parent::` resolving to the
+/// SCOPE's parent and a scope-less two-argument bind keeping the lexical class.
+///
+/// `crate::ir_lower` implements exactly that by lowering the closure body with its `current_class`
+/// swapped to the scope, and gates on this same predicate, so the checker cannot authorize a
+/// program codegen would resolve against a different class.
+///
+/// `$this` is excluded because the swap also re-types `$this` and the enclosing receiver need not
+/// be an instance of the scope; `$this` bodies are handled by `closure_body_rebinds_this_only`.
+pub(crate) fn closure_body_rebinds_scope_only(body: &[Stmt]) -> bool {
+    !body_uses_this(body) && body.iter().any(stmt_uses_relative_static)
 }
 
 /// Returns true if the statement references `self::`/`static::`/`parent::` anywhere. `$this` is
@@ -434,6 +468,25 @@ fn expr_uses_relative_static(expr: &Expr) -> bool {
         ExprKind::NamedArg { value, .. } => expr_uses_relative_static(value),
         ExprKind::BufferNew { len, .. } => expr_uses_relative_static(len),
         ExprKind::Closure { body, .. } => body.iter().any(stmt_uses_relative_static),
+        // An assignment in EXPRESSION position is how an arrow function spells a write:
+        // `static fn () => self::$formats = null` is one `Return` of one `Assignment`. Missing it
+        // reported such a body as free of relative static receivers, which both relaxed the
+        // `closure_body_free_of_self_scope` gate too far and hid the write from
+        // `closure_body_rebinds_scope_only`.
+        ExprKind::Assignment {
+            target,
+            value,
+            result_target,
+            prelude,
+            ..
+        } => {
+            expr_uses_relative_static(target)
+                || expr_uses_relative_static(value)
+                || result_target
+                    .as_deref()
+                    .is_some_and(expr_uses_relative_static)
+                || prelude.iter().any(stmt_uses_relative_static)
+        }
         _ => false,
     }
 }

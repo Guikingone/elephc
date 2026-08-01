@@ -194,6 +194,15 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
     /// so a `return $obj->prop` yields the property's ref-cell pointer instead of a value copy.
     pub by_ref_return: bool,
+    /// True when `current_class` is a `Closure::bind` SCOPE rather than the lexically enclosing
+    /// class — set only for the closure literal of a `Closure::bind($closure, $newThis,
+    /// Scope::class)` whose scope resolved statically. It is the proof that this body's `self::`
+    /// really does refer to that class, which is what lets `static_receiver_metadata_name` resolve
+    /// a relative receiver codegen cannot. A closure whose eventual scope is NOT known here (a
+    /// plain closure, or one bound later through a variable) leaves this `false` and keeps
+    /// emitting the relative receiver verbatim, so codegen still rejects it loudly instead of
+    /// silently pinning it to the wrong class.
+    pub(crate) class_from_bind_scope: bool,
     pub in_main: bool,
     pub all_global_var_names: HashSet<String>,
     /// `true` when lowering for a `--web` compile. Gates whether a bare
@@ -211,6 +220,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// the closure's lexically-enclosing class. Consumed (taken) by the `this` capture in
     /// `lower_closure_with_context`; see `build_bound_closure_binding`.
     bound_closure_this_class: Option<String>,
+    /// Set for the span of lowering a `Closure::bind(static fn () => self::$x, $newThis,
+    /// Scope::class)` closure literal: the class the body's `self::`/`static::`/`parent::` must
+    /// resolve against. PHP resolves those from the closure's runtime scope, which the rebind
+    /// replaces, so the closure body is lowered with this as its `current_class`. Consumed (taken)
+    /// by `crate::ir_lower::function::lower_closure_function_with_signature`.
+    bound_closure_scope_class: Option<String>,
     pending_static_callable_result: Option<StaticCallableBinding>,
     closure_counter: usize,
     hidden_temp_counter: usize,
@@ -301,12 +316,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             return_type,
             return_php_type,
             by_ref_return: false,
+            class_from_bind_scope: false,
             in_main,
             all_global_var_names,
             web,
             owner_name,
             closures: Vec::new(),
             bound_closure_this_class: None,
+            bound_closure_scope_class: None,
             pending_static_callable_result: None,
             closure_counter: 0,
             hidden_temp_counter: 0,
@@ -969,6 +986,29 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// it so it cannot leak into a nested or subsequent closure.
     pub(crate) fn take_bound_closure_this_class(&mut self) -> Option<String> {
         self.bound_closure_this_class.take()
+    }
+
+    /// Records the class the body's `self::`/`static::`/`parent::` must resolve against while
+    /// lowering the closure literal of a `Closure::bind($closure, $newThis, Scope::class)`.
+    pub(crate) fn set_bound_closure_scope_class(&mut self, class_name: String) {
+        self.bound_closure_scope_class = Some(class_name);
+    }
+
+    /// Takes the pending bound-closure scope class (see `set_bound_closure_scope_class`), clearing
+    /// it so it cannot leak into a subsequent closure lowered in the same function.
+    pub(crate) fn take_bound_closure_scope_class(&mut self) -> Option<String> {
+        self.bound_closure_scope_class.take()
+    }
+
+    /// Returns true when the function being lowered is a class method.
+    ///
+    /// Codegen recovers the class a relative static receiver refers to by splitting the EIR
+    /// function name on `::` (`current_method_class`), so a body whose name carries no class —
+    /// a closure, a free function, top level — must have `self::`/`parent::` resolved during
+    /// lowering instead. Deliberately the same test codegen applies, so the two agree on which
+    /// bodies codegen can resolve for itself.
+    pub(crate) fn lowers_class_method_body(&self) -> bool {
+        self.owner_name.contains("::")
     }
 
     /// Clears stale callable-result metadata before lowering a new independent expression.

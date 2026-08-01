@@ -12851,7 +12851,7 @@ pub(crate) fn lower_ref_assign_static_property(
     let ExprKind::StaticPropertyAccess { receiver, property } = &source.kind else {
         return;
     };
-    let name = format!("{}::{}", receiver_name(receiver), property);
+    let name = format!("{}::{}", static_receiver_metadata_name(ctx, receiver), property);
     let data = ctx.intern_string(&name);
     let value_type = static_property_result_type(ctx, receiver, property, source);
     let cell_ptr = ctx.emit_value(
@@ -12867,7 +12867,7 @@ pub(crate) fn lower_ref_assign_static_property(
 
 /// Lowers a static property read.
 fn lower_static_property_get(ctx: &mut LoweringContext<'_, '_>, receiver: &StaticReceiver, property: &str, expr: &Expr) -> LoweredValue {
-    let name = format!("{}::{}", receiver_name(receiver), property);
+    let name = format!("{}::{}", static_receiver_metadata_name(ctx, receiver), property);
     let data = ctx.intern_string(&name);
     let result_type = static_property_result_type(ctx, receiver, property, expr);
     ctx.emit_value(
@@ -16347,6 +16347,35 @@ fn lower_static_method_call_through_object(
     Some(call)
 }
 
+/// Resolves the class a `Closure::bind($closure, $newThis, $scope)` body's `self::`/`static::`/
+/// `parent::` must lower against, or `None` when the rebind does not qualify.
+///
+/// Mirrors the checker's `closure_bind_lockstep_scope_class` gate exactly: a closure LITERAL with
+/// no parameters, a body that uses a relative static receiver and never `$this` (the shared
+/// `closure_body_rebinds_scope_only` predicate), and a `$scope` written either as `X::class` over
+/// a NAMED receiver or as a class-name string literal that names a declared class verbatim. The
+/// checker relaxes `self::` only for shapes this function also accepts — and both look the trimmed
+/// spelling up in the same class table with no case folding — so the two resolutions cannot
+/// diverge. Anything else keeps the lexically enclosing class, which the checker still rejects.
+fn bound_closure_scope_class(ctx: &LoweringContext<'_, '_>, args: &[Expr]) -> Option<String> {
+    let ExprKind::Closure { params, body, .. } = &args.first()?.kind else {
+        return None;
+    };
+    if !params.is_empty() || !crate::types::checker::closure_body_rebinds_scope_only(body) {
+        return None;
+    }
+    let written = match &args.get(2)?.kind {
+        ExprKind::StringLiteral(name) => name.trim_start_matches('\\'),
+        ExprKind::ClassConstant {
+            receiver: StaticReceiver::Named(name),
+        } => name.as_str().trim_start_matches('\\'),
+        _ => return None,
+    };
+    ctx.classes
+        .contains_key(written)
+        .then(|| written.to_string())
+}
+
 /// Lowers a static method call.
 fn lower_static_method_call(
     ctx: &mut LoweringContext<'_, '_>,
@@ -16372,10 +16401,18 @@ fn lower_static_method_call(
             {
                 ctx.set_bound_closure_this_class(new_this_class);
             }
+            // The rebind also replaces the closure's SCOPE, which is what PHP resolves
+            // `self::`/`static::`/`parent::` from — measured: a body bound to `Scope::class`
+            // reads and writes `Scope`'s statics, `parent::` reaches `Scope`'s parent, and a
+            // two-argument bind keeps the lexical class. Lower such a body against the scope.
+            if let Some(scope_class) = bound_closure_scope_class(ctx, args) {
+                ctx.set_bound_closure_scope_class(scope_class);
+            }
             let closure = lower_expr(ctx, &args[0]);
             // Clear any override the closure body did not consume so it cannot leak to a later
             // closure lowered in the same function.
             ctx.take_bound_closure_this_class();
+            ctx.take_bound_closure_scope_class();
             // A closure literal registers a pending static-callable binding describing itself —
             // the raw, still-UNBOUND closure. `emit_closure_bind` below supersedes it, so drop it
             // here: left pending, an immediate invoke (`Closure::bind(fn () => …, $obj)()`) would
@@ -16453,7 +16490,11 @@ fn lower_static_method_call(
         operands,
         expr,
     );
-    let name = format!("{}::{}", receiver_name(receiver), dispatch_method);
+    let name = format!(
+        "{}::{}",
+        static_receiver_metadata_name(ctx, receiver),
+        dispatch_method
+    );
     let data = ctx.intern_string(&name);
     let result_type = sig
         .as_ref()
@@ -16867,6 +16908,30 @@ fn static_receiver_binds_current_instance(
         }
         StaticReceiver::Static => false,
     }
+}
+
+/// Formats a static receiver for an EIR metadata immediate, resolving the relative receivers
+/// codegen cannot resolve for itself.
+///
+/// See the twin in `crate::ir_lower::stmt` for the full rationale: codegen recovers the class
+/// behind `self::`/`parent::` from the enclosing EIR function's `Class::method` name, which a
+/// closure body does not have. Only a body whose scope is statically known — the closure literal
+/// of a `Closure::bind(…, Scope::class)` — is resolved here; leaving the others verbatim keeps a
+/// later rebind through a variable a loud error instead of a silently wrong class. `static::`
+/// stays verbatim throughout. No-op inside a class method.
+fn static_receiver_metadata_name(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> String {
+    if ctx.class_from_bind_scope
+        && !ctx.lowers_class_method_body()
+        && matches!(receiver, StaticReceiver::Self_ | StaticReceiver::Parent)
+    {
+        if let Some(class_name) = static_receiver_class_name(ctx, receiver) {
+            return class_name;
+        }
+    }
+    receiver_name(receiver)
 }
 
 /// Resolves a static receiver to a concrete class name when lexical metadata is available.

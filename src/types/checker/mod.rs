@@ -52,7 +52,7 @@ use crate::types::{
 
 pub use inference::{infer_expr_type_syntactic, infer_return_type_syntactic};
 pub(crate) use loop_storage::loop_carried_storage_types;
-pub(crate) use inference::closure_body_uses_this;
+pub(crate) use inference::{closure_body_rebinds_scope_only, closure_body_uses_this};
 pub(crate) use builtin_types::InterfaceDeclInfo;
 use builtin_types::validate_magic_method_contracts;
 use schema::propagate_abstract_return_types;
@@ -355,6 +355,47 @@ impl Checker {
         self.first_class_callable_targets = saved.first_class_callable_targets;
         self.callable_captures = saved.callable_captures;
     }
+
+    /// Installs `context` for the span of checking a `Closure::bind` closure-literal argument.
+    ///
+    /// A `rebinds_relative_static` context additionally swaps `current_class` to the bind scope, so
+    /// every `self::`/`static::`/`parent::` resolver in the checker sees the scope class without
+    /// each one having to learn about rebinds — the same single-point swap `crate::ir_lower` makes
+    /// on the closure's lowering context, which is what keeps the two in lockstep.
+    ///
+    /// Pair with `exit_bound_scope_context`.
+    pub(crate) fn enter_bound_scope_context(
+        &mut self,
+        context: Option<BoundScopeContext>,
+    ) -> SavedBoundScope {
+        let saved_class = context
+            .as_ref()
+            .filter(|context| context.rebinds_relative_static)
+            .map(|context| {
+                std::mem::replace(&mut self.current_class, Some(context.scope_class.clone()))
+            });
+        SavedBoundScope {
+            context: std::mem::replace(&mut self.bound_scope_context, context),
+            current_class: saved_class,
+        }
+    }
+
+    /// Restores the state saved by `enter_bound_scope_context`.
+    pub(crate) fn exit_bound_scope_context(&mut self, saved: SavedBoundScope) {
+        self.bound_scope_context = saved.context;
+        if let Some(current_class) = saved.current_class {
+            self.current_class = current_class;
+        }
+    }
+}
+
+/// Checker state displaced by `enter_bound_scope_context`, restored by `exit_bound_scope_context`.
+pub(crate) struct SavedBoundScope {
+    /// The enclosing rebind context, if any — rebinds nest while checking nested closure literals.
+    context: Option<BoundScopeContext>,
+    /// The lexically enclosing class, `Some` only when the context swapped `current_class`. The
+    /// inner `Option` is `current_class`'s own, which is `None` outside a class body.
+    current_class: Option<Option<String>>,
 }
 
 #[derive(Clone, Debug)]
@@ -389,6 +430,12 @@ pub(crate) struct BoundScopeContext {
     /// authorizes a `$this` receiver against `scope_class`. Left `false` for the parameter-based
     /// relaxation, whose body is proven free of `$this`.
     pub(crate) this_receiver_scope: bool,
+    /// Set only for the `Closure::bind(static fn () => self::$x, $newThis, Scope::class)` shape,
+    /// whose body uses `self::`/`static::`/`parent::` and never `$this`. PHP resolves those from
+    /// the closure's runtime scope, which the rebind replaces, so while the body is checked
+    /// `current_class` becomes `scope_class` — the same swap `crate::ir_lower` performs on the
+    /// closure's lowering context, keeping the two resolutions identical.
+    pub(crate) rebinds_relative_static: bool,
 }
 
 #[derive(Clone)]

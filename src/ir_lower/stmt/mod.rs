@@ -6358,7 +6358,7 @@ fn load_static_property_as(
     php_type: PhpType,
     span: Span,
 ) -> LoweredValue {
-    let name = format!("{}::{}", receiver_name(receiver), property);
+    let name = format!("{}::{}", static_receiver_metadata_name(ctx, receiver), property);
     let data = ctx.intern_string(&name);
     ctx.emit_value(
         Op::LoadStaticProperty,
@@ -6378,7 +6378,7 @@ fn store_static_property(
     value: crate::ir::ValueId,
     span: Span,
 ) {
-    let name = format!("{}::{}", receiver_name(receiver), property);
+    let name = format!("{}::{}", static_receiver_metadata_name(ctx, receiver), property);
     let data = ctx.intern_string(&name);
     ctx.emit_void(
         Op::StoreStaticProperty,
@@ -6387,6 +6387,40 @@ fn store_static_property(
         Op::StoreStaticProperty.default_effects(),
         Some(span),
     );
+}
+
+/// Formats a static receiver for an EIR metadata immediate, resolving the relative receivers
+/// codegen cannot resolve for itself.
+///
+/// Codegen recovers the class behind `self::`/`parent::` by splitting the enclosing EIR function's
+/// `Class::method` name (`current_method_class`), so a closure body — which carries no class in its
+/// name — makes it fail the whole compile with `lexical static method receiver outside class
+/// method`. Resolving here is only sound when the closure's scope is actually known, which is
+/// exactly `class_from_bind_scope`: the literal argument of a `Closure::bind($closure, $newThis,
+/// Scope::class)`, whose body PHP resolves against that scope.
+///
+/// A closure whose scope is NOT known here is deliberately left alone. Pinning `self::` to the
+/// lexical class would compile `$f = static fn () => self::$tag; Closure::bind($f, null,
+/// Other::class)()` to the enclosing class's value where PHP yields `Other`'s — trading a loud
+/// unsupported-feature error for a silently wrong answer, which is strictly worse.
+///
+/// `static::` stays verbatim even under a known scope: it is late-bound to the runtime called
+/// class, which a non-null `$newThis` moves off the scope.
+///
+/// Inside a class method this is a no-op, so existing EIR metadata is unchanged.
+fn static_receiver_metadata_name(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+) -> String {
+    if ctx.class_from_bind_scope
+        && !ctx.lowers_class_method_body()
+        && matches!(receiver, StaticReceiver::Self_ | StaticReceiver::Parent)
+    {
+        if let Some(class_name) = static_receiver_class_name(ctx, receiver) {
+            return class_name;
+        }
+    }
+    receiver_name(receiver)
 }
 
 /// Formats a static receiver for metadata immediates.

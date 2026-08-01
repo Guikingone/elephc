@@ -88,6 +88,7 @@ pub(crate) fn lower_main(
         "main".to_string(),
         constants,
         None,
+        false,
         PhpType::Void,
         &[],
         None,
@@ -727,6 +728,7 @@ pub(crate) fn lower_user_function(
         name.to_string(),
         constants,
         None,
+        false,
         body_return_type.clone(),
         &body_params,
         None,
@@ -841,6 +843,7 @@ pub(crate) fn lower_class_method(
         name.clone(),
         constants,
         Some(class_name.to_string()),
+        false,
         method_body_return_type.clone(),
         &body_params,
         None,
@@ -907,6 +910,7 @@ pub(crate) fn lower_eval_aot_function(
         "main".to_string(),
         constants,
         None,
+        false,
         return_type,
         &[],
         None,
@@ -1013,6 +1017,7 @@ pub(crate) fn lower_eval_aot_scope_function(
         "main".to_string(),
         constants,
         None,
+        false,
         return_type,
         &signature.params,
         None,
@@ -1113,6 +1118,7 @@ pub(crate) fn lower_property_init_thunk(
         function_name.clone(),
         constants,
         Some(class_name.to_string()),
+        false,
         PhpType::Void,
         &params,
         None,
@@ -1303,6 +1309,15 @@ fn lower_closure_function_with_signature(
     function.source_signature = Some(source_signature(name, &signature));
     function.signature = Some(eir_runtime_metadata_signature(&signature));
     attach_generator_source_if_needed(&mut function, body, signature.params.len());
+    // A `Closure::bind($closure, $newThis, Scope::class)` rebind replaces the closure's scope, and
+    // PHP resolves `self::`/`static::`/`parent::` from that runtime scope — so the body lowers with
+    // the bind scope as its class, not the lexically enclosing one. Every `static_receiver_class_name`
+    // copy reads `ctx.current_class`, so this single swap covers all of them. Taken before the
+    // captures below so it cannot leak into a closure lowered later in the same function; `None`
+    // for every other closure, which keeps the lexical class unchanged.
+    let bind_scope_class = parent.take_bound_closure_scope_class();
+    let class_from_bind_scope = bind_scope_class.is_some();
+    let body_class = bind_scope_class.or_else(|| parent.current_class.clone());
     let env = env_with_closure_captures(&signature, captures, parent.web);
     let lowered_params = params_with_closure_captures(&signature, captures);
     let recursive_binding = self_ref_callable_capture.map(|local_name| RecursiveClosureBinding {
@@ -1336,7 +1351,8 @@ fn lower_closure_function_with_signature(
         parent.loop_storage_types,
         loop_storage_scope,
         &parent.constants,
-        parent.current_class.clone(),
+        body_class,
+        class_from_bind_scope,
         closure_body_return_type.clone(),
         &lowered_params,
         recursive_binding,
@@ -1374,6 +1390,7 @@ fn lower_body_into_function(
     loop_storage_scope: String,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
+    class_from_bind_scope: bool,
     return_php_type: PhpType,
     params: &[(String, PhpType)],
     recursive_closure_binding: Option<RecursiveClosureBinding>,
@@ -1429,6 +1446,7 @@ fn lower_body_into_function(
         web,
     );
     ctx.by_ref_return = function_by_ref_return;
+    ctx.class_from_bind_scope = class_from_bind_scope;
     if let Some((scope_param, read_names, write_names, flush_names)) = eval_scope_reads {
         ctx.enable_eval_scope_access(scope_param, read_names, write_names, flush_names);
     }

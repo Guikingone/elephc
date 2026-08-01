@@ -595,10 +595,9 @@ impl Checker {
                 };
                 for (index, arg) in expanded_args.iter().enumerate() {
                     if index == 0 && scope_ctx.is_some() {
-                        let saved = self.bound_scope_context.take();
-                        self.bound_scope_context = scope_ctx.clone();
+                        let saved = self.enter_bound_scope_context(scope_ctx.clone());
                         let result = self.infer_type_with_assignment_effects(arg, env);
-                        self.bound_scope_context = saved;
+                        self.exit_bound_scope_context(saved);
                         result?;
                     } else {
                         self.infer_type_with_assignment_effects(arg, env)?;

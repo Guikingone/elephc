@@ -1092,10 +1092,9 @@ impl Checker {
             let scope_ctx = self.closure_bind_scope_context(args, env);
             for (index, arg) in args.iter().enumerate() {
                 if index == 0 && scope_ctx.is_some() {
-                    let saved = self.bound_scope_context.take();
-                    self.bound_scope_context = scope_ctx.clone();
+                    let saved = self.enter_bound_scope_context(scope_ctx.clone());
                     let result = self.infer_type(arg, env);
-                    self.bound_scope_context = saved;
+                    self.exit_bound_scope_context(saved);
                     result?;
                 } else {
                     self.infer_type(arg, env)?;
@@ -1644,6 +1643,27 @@ impl Checker {
                 declared_params: std::collections::HashSet::new(),
                 captured_variables: std::collections::HashSet::new(),
                 this_receiver_scope: true,
+                rebinds_relative_static: false,
+            });
+        }
+        // `Closure::bind(static fn () => self::$x, $newThis, Scope::class)`: the body's relative
+        // static receivers resolve to the BIND SCOPE, not the lexical class. `crate::ir_lower`
+        // lowers such a body with `current_class` swapped to the scope, so the checker swaps the
+        // same way (`rebinds_relative_static`) rather than authorizing a resolution codegen would
+        // not reproduce. The scope must be one of the two literal spellings ir_lower resolves
+        // identically, so an unresolvable scope keeps today's loud diagnostics.
+        if params.is_empty()
+            && crate::types::checker::closure_body_rebinds_scope_only(body)
+        {
+            let scope_class = self.closure_bind_lockstep_scope_class(args.get(2)?)?;
+            return Some(crate::types::checker::BoundScopeContext {
+                scope_class,
+                this_class: None,
+                eligible_params: std::collections::HashSet::new(),
+                declared_params: std::collections::HashSet::new(),
+                captured_variables: std::collections::HashSet::new(),
+                this_receiver_scope: false,
+                rebinds_relative_static: true,
             });
         }
         // The parameter-based relaxation below reasons purely about `$scope`, so it keeps
@@ -1687,7 +1707,29 @@ impl Checker {
             declared_params,
             captured_variables,
             this_receiver_scope: false,
+            rebinds_relative_static: false,
         })
+    }
+
+    /// Resolves a `Closure::bind` `$scope` argument for the `rebinds_relative_static` shape.
+    ///
+    /// Deliberately narrower than `closure_bind_scope_class`: only the two spellings
+    /// `crate::ir_lower` resolves — `X::class` over a NAMED receiver, and a class-name string
+    /// literal — and only when the written name is a declared class VERBATIM. ir_lower looks the
+    /// trimmed spelling up in the same class table with no case folding and no alias resolution, so
+    /// accepting a case-insensitive or aliased match here would let the checker approve a scope
+    /// codegen resolves to a different class. A declined scope simply leaves the rebind unrelaxed.
+    fn closure_bind_lockstep_scope_class(&self, scope_arg: &Expr) -> Option<String> {
+        let written = match &scope_arg.kind {
+            ExprKind::StringLiteral(name) => name.trim_start_matches('\\'),
+            ExprKind::ClassConstant {
+                receiver: StaticReceiver::Named(name),
+            } => name.as_str().trim_start_matches('\\'),
+            _ => return None,
+        };
+        self.classes
+            .contains_key(written)
+            .then(|| written.to_string())
     }
 
     /// Resolves a `Closure::bind` `$scope` argument (`X::class` or a class-name string literal) to a
