@@ -3421,3 +3421,88 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a string literal reaches the module as PHP BYTES, not as Rust's UTF-8.
+///
+/// A PHP string is a byte string while a Rust `String` must be valid UTF-8, so the lexer carries
+/// every escaped non-ASCII byte as a private-use marker char. A data segment written straight
+/// from those Rust bytes turns `"\xff"` into the three UTF-8 bytes of U+E0FF, which `strlen`
+/// then reports as 3. The native backend decodes through `string_bytes::literal_bytes`; this
+/// pins that the WASM segments do too.
+#[test]
+fn test_cli_wasm_string_literals_carry_raw_php_bytes() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_raw_literal_bytes");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$high = "\xff";
+$mixed = "\x00\x01\xfe\xff";
+$octal = "\101\377";
+$utf8 = "h\xc3\xa9llo";
+echo strlen($high), "|", bin2hex($high), "\n";
+echo strlen($mixed), "|", bin2hex($mixed), "\n";
+echo strlen($octal), "|", bin2hex($octal), "\n";
+echo strlen($utf8), "|", bin2hex($utf8), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the raw byte literals to WASM");
+    assert!(
+        output.status.success(),
+        "raw byte literal compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the raw byte literals under Node");
+    assert!(
+        run.status.success(),
+        "raw byte literals trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own output for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "1|ff\n",
+            "4|0001feff\n",
+            "2|41ff\n",
+            "6|68c3a96c6c6f\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

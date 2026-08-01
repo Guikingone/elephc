@@ -100,17 +100,23 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     let mut interned_by_content: std::collections::HashMap<&str, (u32, u32)> =
         std::collections::HashMap::new();
     for (data_id, string) in ordered_strings {
-        let bytes = string.as_bytes();
+        // A PHP string is BYTES; a Rust `String` must be UTF-8. The lexer bridges that by
+        // carrying every non-ASCII escaped byte as a private-use marker char, so the segment has
+        // to be decoded rather than copied — otherwise `"\xff"` reaches the module as the three
+        // UTF-8 bytes of U+E0FF and `strlen` answers 3. The native backend decodes through the
+        // same `string_bytes::literal_bytes`.
+        let bytes = crate::string_bytes::literal_bytes(string);
+        let len = bytes.len() as u32;
         wm.add_data(wat::DataSegment {
             offset: cursor,
-            bytes: bytes.to_vec(),
+            bytes,
         });
-        str_literals[data_id] = (cursor, bytes.len() as u32);
+        str_literals[data_id] = (cursor, len);
         interned_by_content
             .entry(string.as_str())
-            .or_insert((cursor, bytes.len() as u32));
+            .or_insert((cursor, len));
         // 4-align the next literal.
-        cursor = (cursor + bytes.len() as u32 + 3) & !3;
+        cursor = (cursor + len + 3) & !3;
     }
 
     // Object construction writes property defaults inline, so a string default has no `DataId`
@@ -138,7 +144,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             default_strings.insert(value, placed);
             continue;
         }
-        let bytes = value.as_bytes().to_vec();
+        let bytes = crate::string_bytes::literal_bytes(&value);
         let len = bytes.len() as u32;
         wm.add_data(wat::DataSegment {
             offset: cursor,
