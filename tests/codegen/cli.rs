@@ -5771,6 +5771,100 @@ echo "\n";
 const PHP_EXPECTED: &str = r##"5:10,20,30,40,50|5:10,20,30,40,50|1:50|5:10,20,30,40,50|4:20,30,40,50|1:50|0:|0:|0:|4:10,20,30,40|0:|1:10|3:10,20,30|5:10,20,30,40,50|0:|0:|0:|1:50|1:50|1:50|0:|4:10,20,30,40|0:|1:10|3:10,20,30|5:10,20,30,40,50|0:|2:30,40|0:|1:30|3:30,40,50|3:30,40,50|5:10,20,30,40,50|0:|0:|5:10,20,30,40,50|5:10,20,30,40,50|
 "##;
 
+/// Verifies `array_merge` over lists, and that both operands survive it intact.
+///
+/// Unlike `+`, which keeps the left's keys and takes only the right's surplus tail, `array_merge`
+/// APPENDS every element of the right and reindexes. The two share their element-copy walk, and
+/// that walk is where ownership can go wrong in the direction that double-frees rather than leaks:
+/// a string element is re-persisted so the result owns its own copy, and a refcounted child is
+/// increfed.
+///
+/// Mixed elements are in here because they live in 16-BYTE slots: reading them at the scalar
+/// stride and appending them as scalars wrote into the middle of the previous slot, which showed
+/// up as `[1, "x", 2.5]` merging to `1,x,,,` — a corrupted element the source arrays still held
+/// correctly.
+#[test]
+fn test_cli_wasm_array_merge_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_array_merge");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, MERGE_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the array_merge probe");
+    assert!(
+        output.status.success(),
+        "array_merge compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the array_merge probe under Node");
+    assert!(
+        run.status.success(),
+        "array_merge probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), MERGE_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The `array_merge` probe program: every lowered element type, plus both operands re-read after.
+const MERGE_SOURCE: &str = r##"<?php
+$a = [1,2]; $b = [3,4,5]; $e = [];
+$s1 = ["xx","y"]; $s2 = ["z"];
+$f1 = [1.5, 2.5]; $f2 = [3.5];
+$m1 = [1, "x", 2.5]; $m2 = [true, null];
+$r1 = array_merge($a, $b);   echo count($r1), ":", implode(",", $r1), "|";
+$r2 = array_merge($a, $e);   echo count($r2), ":", implode(",", $r2), "|";
+$r3 = array_merge($e, $b);   echo count($r3), ":", implode(",", $r3), "|";
+$r4 = array_merge($e, $e);   echo count($r4), ":", implode(",", $r4), "|";
+$r5 = array_merge($s1, $s2); echo count($r5), ":", implode(",", $r5), "|";
+$r6 = array_merge($f1, $f2); echo count($r6), ":", implode(",", $r6), "|";
+$r7 = array_merge($m1, $m2); echo count($r7), ":", implode(",", $r7), "|";
+$r8 = array_merge($a, $a);   echo count($r8), ":", implode(",", $r8), "|";
+echo "\n";
+echo count($a), count($b), count($s1), count($s2), count($m1), count($m2), "\n";
+echo implode(",", $s1), ";", implode(",", $m1), "\n";
+"##;
+
+/// php-src 8.5.6's own output for `MERGE_SOURCE`.
+const MERGE_EXPECTED: &str = r##"5:1,2,3,4,5|2:1,2|3:3,4,5|0:|3:xx,y,z|3:1.5,2.5,3.5|5:1,x,2.5,1,|4:1,2,1,2|
+232132
+xx,y;1,x,2.5
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

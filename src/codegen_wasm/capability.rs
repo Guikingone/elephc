@@ -4546,6 +4546,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Strrpos
         | RuntimeFnId::Implode
         | RuntimeFnId::ArraySlice
+        | RuntimeFnId::ArrayMerge
         | RuntimeFnId::Explode
         | RuntimeFnId::StrSplit
         | RuntimeFnId::Wordwrap
@@ -4579,7 +4580,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayKeyExists
         | RuntimeFnId::ArrayKeyFirst
         | RuntimeFnId::ArrayKeyLast
-        | RuntimeFnId::ArrayMerge
         | RuntimeFnId::ArrayMergeRecursive
         | RuntimeFnId::ArrayMultisort
         | RuntimeFnId::ArrayPad

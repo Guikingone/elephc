@@ -3039,6 +3039,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Strrpos
             | RuntimeFnId::Implode
             | RuntimeFnId::ArraySlice
+            | RuntimeFnId::ArrayMerge
             | RuntimeFnId::Explode
             | RuntimeFnId::StrSplit
             | RuntimeFnId::Wordwrap
@@ -3134,6 +3135,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::ArraySlice {
         return array_slice_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::ArrayMerge {
+        return array_merge_shape_issue(function, call);
     }
     if target == RuntimeFnId::Explode {
         return explode_shape_issue(function, call);
@@ -3366,6 +3370,15 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::ArraySlice {
         return lower_array_slice(ctx, inst);
+    }
+    if target == RuntimeFnId::ArrayMerge {
+        ctx.emit_load_value(operand(inst, 0)?)?;
+        ctx.emit_load_value(operand(inst, 1)?)?;
+        ctx.fb.ins(
+            "call $__rt_array_merge",
+            "clone the left, then append every element of the right",
+        );
+        return store_result(ctx, inst);
     }
     if target == RuntimeFnId::Explode {
         return lower_explode(ctx, inst);
@@ -4134,6 +4147,60 @@ fn lower_array_slice(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "copy the window into a fresh mixed-cell array",
     );
     store_result(ctx, inst)
+}
+
+/// Validates `array_merge`: two indexed arrays whose element types agree with the result.
+///
+/// The front-end admits exactly two operands. Both reach here with the SAME element type — when
+/// they differ, EIR widens each with `Op::ArrayToMixed` first — so a mismatch here means the
+/// widening did not happen and the slot layouts would disagree.
+fn array_merge_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [left, right] = call.operands.as_slice() else {
+        return Some(format!(
+            "array_merge takes two arrays, got {} operands",
+            call.operands.len()
+        ));
+    };
+    let mut elements = Vec::new();
+    for (operand, side) in [(left, "left"), (right, "right")] {
+        let Some(value) = function.value(*operand) else {
+            return Some(format!("array_merge {side} is missing from the value table"));
+        };
+        if value.ir_type != IrType::Heap(IrHeapKind::Array) {
+            return Some(format!(
+                "array_merge {side} is {:?}, expected an indexed array",
+                value.ir_type
+            ));
+        }
+        let PhpType::Array(element) = value.php_type.codegen_repr() else {
+            return Some(format!(
+                "array_merge {side} is {:?}, expected an indexed array",
+                value.php_type.codegen_repr()
+            ));
+        };
+        // `Void` is what an empty literal's `Never` normalizes to: no element is ever read.
+        if !matches!(
+            element.codegen_repr(),
+            PhpType::Int | PhpType::Str | PhpType::Float | PhpType::Bool | PhpType::Mixed | PhpType::Void
+        ) {
+            return Some(format!(
+                "array_merge has no lowered element copy for {element:?}"
+            ));
+        }
+        elements.push(element.codegen_repr());
+    }
+    // An empty operand carries no elements, so its type never has to agree.
+    let concrete: Vec<_> = elements
+        .iter()
+        .filter(|element| **element != PhpType::Void)
+        .collect();
+    if concrete.len() == 2 && concrete[0] != concrete[1] {
+        return Some(format!(
+            "array_merge operands disagree on element storage: {:?} and {:?}",
+            concrete[0], concrete[1]
+        ));
+    }
+    None
 }
 
 /// Returns the cell tag and source slot stride for slicing an array, or `None` when this target
@@ -5210,6 +5277,56 @@ mod tests {
     }
 
     /// Builds a `RuntimeCall` probe with an arbitrary operand list.
+    /// `array_merge` clones the left and appends the right, so both operands must agree on slot
+    /// layout — which they do, because EIR widens each with `Op::ArrayToMixed` when they differ.
+    /// An empty operand carries no elements, so its type never has to agree.
+    #[test]
+    fn array_merge_admits_only_agreeing_element_storage() {
+        let array_of = |element: PhpType| {
+            (
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(element)),
+            )
+        };
+        let probe = |left: PhpType, right: PhpType| {
+            let function = shaped_call(
+                RuntimeFnId::ArrayMerge,
+                &[array_of(left.clone()), array_of(right)],
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(left)),
+            );
+            let call = function
+                .instructions
+                .last()
+                .expect("the probe emitted a call")
+                .clone();
+            direct_builtin_shape_issue(&probe_module(), &function, &call, RuntimeFnId::ArrayMerge)
+        };
+
+        for element in [
+            PhpType::Int,
+            PhpType::Str,
+            PhpType::Float,
+            PhpType::Bool,
+            PhpType::Mixed,
+        ] {
+            assert_eq!(
+                probe(element.clone(), element.clone()),
+                None,
+                "two arrays of {element:?} merge"
+            );
+            // `Never` is the empty literal's element type: nothing is read from that side.
+            assert_eq!(probe(element.clone(), PhpType::Never), None);
+            assert_eq!(probe(PhpType::Never, element.clone()), None);
+        }
+
+        assert!(
+            probe(PhpType::Int, PhpType::Str).is_some(),
+            "an int slot and a string slot are different widths; EIR widens before the call"
+        );
+        assert!(probe(PhpType::Mixed, PhpType::Float).is_some());
+    }
+
     /// `array_slice` copies the window into a fresh `array<mixed>`, so it admits every element
     /// type this target has a slot layout for — including `Mixed`, whose cells it shares rather
     /// than copies. The `preserve_keys` form answers a hash and stays refused, as does a

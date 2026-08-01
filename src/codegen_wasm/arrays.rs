@@ -53,7 +53,9 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_SET_STR);
     wm.add_raw_func(RT_ARRAY_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_ARRAY);
+    wm.add_raw_func(RT_ARRAY_APPEND_FROM);
     wm.add_raw_func(RT_ARRAY_UNION);
+    wm.add_raw_func(RT_ARRAY_MERGE);
     wm.add_raw_func(RT_ARRAY_INDEX_KEYS);
     wm.add_raw_func(RT_ARRAY_CONTAINS_INT);
     wm.add_raw_func(RT_ARRAY_REVERSE_INT);
@@ -849,22 +851,67 @@ const RT_DECREF_ARRAY: &str = r#"(func $__rt_decref_array (param $array i32)
 /// `__rt_array_push_int` retains the borrowed child; scalars are copied bits-as-is. The
 /// value_type range 4..7 mirrors the native `__rt_array_union` dispatch.
 const RT_ARRAY_UNION: &str = r#"(func $__rt_array_union (param $a i32) (param $b i32) (result i32)
-  (local $result i32) (local $i i64) (local $blen i64) (local $vt i64)
-  (local $slot i32) (local $ptr i32) (local $slen i64) (local $val i64)
+  (local $i i64)
   (local.set $i (i64.load (local.get $a)))                              ;; i = a.len (first missing right index)
   (if (i64.eqz (local.get $i))                                          ;; left has no keys?
     (then (return (call $__rt_array_clone_shallow (local.get $b)))))   ;; result is just a copy of b
-  (local.set $result (call $__rt_array_clone_shallow (local.get $a)))  ;; own a copy of the left operand
+  (call $__rt_array_append_from
+    (call $__rt_array_clone_shallow (local.get $a))                     ;; own a copy of the left operand
+    (local.get $b)
+    (local.get $i)))                                                    ;; append the right's TAIL only
+"#;
+
+/// `__rt_array_merge`: PHP's two-operand `array_merge` over LISTS.
+///
+/// Unlike `+`, which keeps the left's keys and takes only the right's surplus tail, `array_merge`
+/// APPENDS every element of the right and reindexes — so this is the same walk starting at 0.
+///
+/// Both operands reach here with the same element type: when they differ, EIR widens each with
+/// `Op::ArrayToMixed` before the call, so the result and both inputs agree on slot layout.
+/// Borrows both and returns a fresh OWNED array; the element-copy discipline lives in
+/// `__rt_array_append_from`.
+const RT_ARRAY_MERGE: &str = r#"(func $__rt_array_merge (param $a i32) (param $b i32) (result i32)
+  (if (i64.eqz (i64.load (local.get $a)))                               ;; left empty -> just a copy of b
+    (then (return (call $__rt_array_clone_shallow (local.get $b)))))
+  (call $__rt_array_append_from
+    (call $__rt_array_clone_shallow (local.get $a))                     ;; own a copy of the left operand
+    (local.get $b)
+    (i64.const 0)))                                                     ;; append ALL of the right
+"#;
+
+/// `__rt_array_append_from`: appends `$b`'s elements from index `$start` onto an OWNED `$result`.
+///
+/// The element-copy discipline is the whole point of sharing this: a string element goes through
+/// `__rt_array_push_str`, which persists a copy the result owns independently of `$b`; a
+/// refcounted container (`value_type` 4..6) is increfed before the borrowed pointer is retained;
+/// a Mixed cell (`value_type` 7) is increfed too but lives in a 16-BYTE slot, so it needs both a
+/// different read stride and `__rt_array_push_mixed` — appending it as an 8-byte scalar writes
+/// into the middle of the previous slot; every other slot is copied bits-as-is. Getting that wrong double-frees rather than
+/// leaking, so `+` and `array_merge` both go through here.
+///
+/// Consumes `$result` (it may reallocate) and returns the live pointer. Borrows `$b`.
+const RT_ARRAY_APPEND_FROM: &str = r#"(func $__rt_array_append_from (param $result i32) (param $b i32) (param $start i64) (result i32)
+  (local $i i64) (local $blen i64) (local $vt i64)
+  (local $slot i32) (local $ptr i32) (local $slen i64) (local $val i64)
+  (local.set $i (local.get $start))
   (local.set $blen (i64.load (local.get $b)))                           ;; right length
   (local.set $vt (i64.and (i64.shr_u (i64.load (i32.sub (local.get $b) (i32.const 8))) (i64.const 8)) (i64.const 127)))  ;; right value_type tag
   (block $done (loop $walk
-    (br_if $done (i64.ge_s (local.get $i) (local.get $blen)))           ;; appended the whole right tail
+    (br_if $done (i64.ge_s (local.get $i) (local.get $blen)))           ;; appended everything asked for
     (if (i64.eq (local.get $vt) (i64.const 1))                          ;; string elements?
       (then
         (local.set $slot (i32.add (i32.add (local.get $b) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16)))))  ;; &b string slot
         (local.set $ptr (i32.wrap_i64 (i64.load (local.get $slot))))    ;; borrowed string pointer
         (local.set $slen (i64.load (i32.add (local.get $slot) (i32.const 8))))  ;; string length
         (local.set $result (call $__rt_array_push_str (local.get $result) (local.get $ptr) (local.get $slen))))  ;; persist + append
+      (else (if (i64.eq (local.get $vt) (i64.const 7))                  ;; Mixed cells: 16-BYTE slots
+      (then
+        ;; both the read stride and the append differ here — reading at 8 and appending with
+        ;; __rt_array_push_int writes into the middle of the previous slot and corrupts it
+        (local.set $ptr (i32.wrap_i64 (i64.load (i32.add (i32.add (local.get $b) (i32.const 24))
+                                                         (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16)))))))  ;; borrowed cell
+        (call $__rt_incref (local.get $ptr))                            ;; the result shares the cell
+        (local.set $result (call $__rt_array_push_mixed (local.get $result) (local.get $ptr))))
       (else
         (local.set $val (i64.load (i32.add (i32.add (local.get $b) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8))))))  ;; scalar/container payload
         (if (i32.and (i64.ge_u (local.get $vt) (i64.const 4)) (i64.le_u (local.get $vt) (i64.const 7)))  ;; refcounted container range 4..7?
@@ -872,10 +919,10 @@ const RT_ARRAY_UNION: &str = r#"(func $__rt_array_union (param $a i32) (param $b
             (call $__rt_incref (i32.wrap_i64 (local.get $val)))         ;; retain the borrowed child
             (local.set $result (call $__rt_array_push_int (local.get $result) (local.get $val))))  ;; append container pointer
           (else
-            (local.set $result (call $__rt_array_push_int (local.get $result) (local.get $val)))))))  ;; append scalar bits
+            (local.set $result (call $__rt_array_push_int (local.get $result) (local.get $val)))))))))  ;; append scalar bits
     (local.set $i (i64.add (local.get $i) (i64.const 1)))               ;; next right index
-    (br $walk)))                                                                 ;; next right index
-  (local.get $result))                                                           ;; return the union result
+    (br $walk)))
+  (local.get $result))                                                  ;; the (possibly reallocated) result
 "#;
 
 #[cfg(test)]

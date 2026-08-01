@@ -209,6 +209,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             &["codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220"]
                 [..],
         ),
+        RuntimeFnId::ArrayMerge => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::array_merge_admits_only_agreeing_element_storage",
+                "codegen::cli::test_cli_wasm_array_merge_matches_php",
+            ][..],
+        ),
         RuntimeFnId::ArraySlice => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",

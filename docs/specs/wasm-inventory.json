@@ -5385,7 +5385,7 @@
           "name": "array_merge",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "array_merge(...)"
           ],
@@ -5393,7 +5393,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::array_merge_admits_only_agreeing_element_storage",
+              "codegen::cli::test_cli_wasm_array_merge_matches_php"
+            ],
+            "notes": "Two-operand list form, which is all the front-end admits. Shares its element-copy walk with the + operator via __rt_array_append_from; operands reach it with matching element storage because EIR widens with Op::ArrayToMixed when they differ."
+          }
         },
         {
           "name": "array_merge_recursive",
@@ -12787,14 +12795,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 190,
+    "supported": 191,
     "excluded": 47,
-    "missing": 475,
+    "missing": 474,
     "evidence_gaps": 176,
     "row_evidence_gaps": 175,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "475 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "474 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
