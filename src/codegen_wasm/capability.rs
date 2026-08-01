@@ -4497,6 +4497,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Strrpos
         | RuntimeFnId::Implode
         | RuntimeFnId::Explode
+        | RuntimeFnId::StrSplit
         | RuntimeFnId::Strstr
         | RuntimeFnId::StrPad
         | RuntimeFnId::StrReplace
@@ -4836,7 +4837,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Sprintf
         | RuntimeFnId::Sscanf
         | RuntimeFnId::StrIreplace
-        | RuntimeFnId::StrSplit
         | RuntimeFnId::SubstrReplace
         | RuntimeFnId::Vprintf
         | RuntimeFnId::Vsprintf

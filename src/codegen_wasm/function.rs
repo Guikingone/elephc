@@ -353,12 +353,14 @@ pub(super) fn raises_runtime_error(function: &Function) -> bool {
                         | RuntimeFnId::StrRepeat
                         | RuntimeFnId::StrPad
                         | RuntimeFnId::Explode
+                        | RuntimeFnId::StrSplit
                 ) | RuntimeCallTarget::ProfiledFunction {
                     target:
                         RuntimeFnId::Intdiv
                         | RuntimeFnId::StrRepeat
                         | RuntimeFnId::StrPad
-                        | RuntimeFnId::Explode,
+                        | RuntimeFnId::Explode
+                        | RuntimeFnId::StrSplit,
                     ..
                 }
             ))

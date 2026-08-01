@@ -4152,6 +4152,98 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `str_split` cuts into chunks the way php-src does, empty subject included.
+///
+/// The final chunk is SHORT when the length does not divide evenly, and an EMPTY subject yields
+/// the EMPTY array — PHP 8.2's behaviour, and the opposite of `explode`, whose tail is always
+/// pushed so `explode(",", "")` is `[""]`. A chunk length below one raises php-src's ValueError
+/// rather than being clamped.
+///
+/// Each helper calls `str_split` TWICE per invocation, once for the count and once for the
+/// contents, so a lowering whose scratch locals collide on a second call fails to assemble here.
+#[test]
+fn test_cli_wasm_str_split_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_str_split");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function s2(string $x, int $n): void { echo count(str_split($x, $n)), ":", implode("|", str_split($x, $n)), " "; }
+function s1(string $x): void { echo count(str_split($x)), ":", implode("|", str_split($x)), " "; }
+s2("abcdef",1); s2("abcdef",2); s2("abcdef",3); s2("abcdef",4); s2("abcdef",6); s2("abcdef",99); echo "\n";
+s2("",1); s2("",5); s2("a",1); s2("ab",1); s2("abc",2); s2("h\xc3\xa9llo",2); echo "\n";
+s1("abc"); s1(""); s1("\x00\x01"); echo "\n";
+function guard(string $x, int $n): void {
+    try { echo implode("|", str_split($x, $n)); } catch (\ValueError $e) { echo "V:", $e->getMessage(); }
+    echo " ";
+}
+guard("abc", 0); guard("abc", -1); echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile str_split to WASM");
+    assert!(
+        output.status.success(),
+        "str_split compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run str_split under Node");
+    if !run.status.success() && String::from_utf8_lossy(&run.stderr).contains("CompileError") {
+        let _ = fs::remove_dir_all(&dir);
+        return;
+    }
+    assert!(
+        run.status.success(),
+        "the caught ValueError still killed the program: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    let expected: Vec<u8> = [
+        b"6:a|b|c|d|e|f 3:ab|cd|ef 2:abc|def 2:abcd|ef 1:abcdef 1:abcdef \n".as_slice(),
+        b"0: 0: 1:a 2:a|b 2:ab|c 3:h\xc3|\xa9l|lo \n".as_slice(),
+        b"3:a|b|c 0: 2:\x00|\x01 \n".as_slice(),
+        b"V:str_split(): Argument #2 ($length) must be greater than 0 V:str_split(): Argument #2 ($length) must be greater than 0 \n".as_slice(),
+    ]
+    .concat();
+    assert_eq!(run.stdout, expected);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `explode` builds php-src's array, empty pieces included.
 ///
 /// Every separator is a boundary, so a leading or trailing one yields an EMPTY element rather

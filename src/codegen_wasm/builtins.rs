@@ -62,6 +62,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_RFIND);
     wm.add_raw_func(RT_IMPLODE);
     wm.add_raw_func(RT_EXPLODE);
+    wm.add_raw_func(RT_STR_SPLIT);
     wm.add_raw_func(RT_PAD_BYTE);
     wm.add_raw_func(RT_STR_PAD);
     wm.add_raw_func(RT_STR_REPLACE);
@@ -1876,6 +1877,31 @@ const RT_EXPLODE: &str = r#"(func $__rt_explode (param $sptr i32) (param $slen i
     (i64.sub (local.get $slen) (local.get $start))))              ;; the tail is always an element
 "#;
 
+/// `__rt_str_split`: cuts a string into fixed-size chunks as a fresh indexed string array.
+///
+/// The final chunk is SHORT when the length does not divide evenly, and an EMPTY subject yields
+/// the EMPTY array rather than one empty element — which is PHP 8.2's behaviour and the opposite
+/// of `explode`, where the tail is always pushed. The caller has already refused a non-positive
+/// chunk length, which is what would otherwise make this loop forever.
+const RT_STR_SPLIT: &str = r#"(func $__rt_str_split (param $ptr i32) (param $len i64) (param $chunk i64) (result i32)
+  (local $arr i32)                                                ;; the array being built
+  (local $i i64)                                                  ;; start of the current chunk
+  (local $take i64)                                               ;; bytes in the current chunk
+  (local.set $arr (call $__rt_array_new (i64.const 4) (i64.const 16)))
+  (local.set $i (i64.const 0))
+  (block $end (loop $cut
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))       ;; an empty subject yields no chunks
+    (local.set $take (i64.sub (local.get $len) (local.get $i)))
+    (if (i64.gt_s (local.get $take) (local.get $chunk))
+      (then (local.set $take (local.get $chunk))))                ;; the last chunk may be short
+    (local.set $arr (call $__rt_array_push_str (local.get $arr)
+      (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))
+      (local.get $take)))
+    (local.set $i (i64.add (local.get $i) (local.get $take)))
+    (br $cut)))
+  (local.get $arr))                                               ;; the built array
+"#;
+
 /// Returns whether a unary string transform is lowered by this module.
 ///
 /// Admitted: the exact same-length BYTE transforms, the re-encoders whose rules are pure byte
@@ -2150,6 +2176,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Strrpos
             | RuntimeFnId::Implode
             | RuntimeFnId::Explode
+            | RuntimeFnId::StrSplit
             | RuntimeFnId::Strstr
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrReplace
@@ -2239,6 +2266,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Explode {
         return explode_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::StrSplit {
+        return str_split_shape_issue(function, call);
     }
     if target == RuntimeFnId::Strstr {
         return strstr_shape_issue(function, call);
@@ -2459,6 +2489,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Explode {
         return lower_explode(ctx, inst);
+    }
+    if target == RuntimeFnId::StrSplit {
+        return lower_str_split(ctx, inst);
     }
     if target == RuntimeFnId::Strstr {
         return lower_strstr(ctx, inst);
@@ -2937,6 +2970,78 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     ctx.fb.ins("call $__rt_str_substr", "own the selected bytes");
     store_result(ctx, inst)
+}
+
+/// The `__rt_fail` code PHP's non-positive-length `str_split` `ValueError` reports under.
+const STR_SPLIT_LENGTH_FAILURE_CODE: i32 = 14;
+
+/// Lowers `str_split` in both arities.
+///
+/// The one-argument form's default really is a chunk of one rather than a different rule, so both
+/// arities share the same lowering with a literal 1 supplied. A chunk length below one raises
+/// php-src's ValueError.
+fn lower_str_split(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let chunk = ctx.fresh_temp(super::wat::ValType::I64);
+    if inst.operands.len() == 2 {
+        ctx.emit_load_value(operand(inst, 1)?)?;
+    } else {
+        ctx.fb.ins("i64.const 1", "the default chunk is one byte");
+    }
+    ctx.fb.ins(&format!("local.set {chunk}"), "spill the chunk length");
+    ctx.fb.ins(&format!("local.get {chunk}"), "chunk length");
+    ctx.fb.ins("i64.const 1", "PHP's lower bound");
+    ctx.fb.ins("i64.lt_s", "below one?");
+    ctx.fb.ins("if", "str_split() rejects a non-positive chunk length");
+    super::inst::emit_runtime_failure(
+        ctx,
+        STR_SPLIT_LENGTH_FAILURE_CODE,
+        "str_split() non-positive length",
+    );
+    ctx.fb.ins("end", "end chunk-length guard");
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb.ins(&format!("local.get {chunk}"), "the validated chunk length");
+    ctx.fb.ins("call $__rt_str_split", "cut into a fresh indexed array");
+    store_result(ctx, inst)
+}
+
+/// Validates `str_split`: a subject and an optional chunk length, an indexed string array out.
+fn str_split_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    if !matches!(call.operands.len(), 1 | 2) {
+        return Some(format!(
+            "expected a subject and an optional length, got {} operands",
+            call.operands.len()
+        ));
+    }
+    for (index, operand) in call.operands.iter().enumerate() {
+        let Some(value) = function.value(*operand) else {
+            return Some("operand is missing from the value table".to_string());
+        };
+        let (want_ir, want_php) = if index == 0 {
+            (IrType::Str, PhpType::Str)
+        } else {
+            (IrType::I64, PhpType::Int)
+        };
+        if value.ir_type != want_ir || value.php_type.codegen_repr() != want_php {
+            return Some(format!(
+                "str_split operand {index} is {:?}/{:?}, expected {want_ir:?}/{want_php:?}",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    if call.result.is_none() || call.result_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "str_split result {:?} is not an indexed array",
+            call.result_type
+        ));
+    }
+    if !matches!(&call.result_php_type, PhpType::Array(element) if **element == PhpType::Str) {
+        return Some(format!(
+            "str_split must produce exactly array<string>, got {:?}",
+            call.result_php_type
+        ));
+    }
+    None
 }
 
 /// The `__rt_fail` code PHP's empty-separator `explode` `ValueError` reports under.
@@ -4291,6 +4396,26 @@ mod tests {
         let call = bad_flag.instructions.last().expect("the probe emitted a call");
         assert!(direct_builtin_shape_issue(&bad_flag, call, RuntimeFnId::Strstr).is_some());
 
+        // `str_split` accepts both arities, since the default really is a chunk of one.
+        for arity in 1..=2 {
+            let mut operands = vec![str_arg.clone()];
+            if arity == 2 {
+                operands.push(int_arg.clone());
+            }
+            let cut = shaped_call(
+                RuntimeFnId::StrSplit,
+                &operands,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Str)),
+            );
+            let call = cut.instructions.last().expect("the probe emitted a call");
+            assert_eq!(
+                direct_builtin_shape_issue(&cut, call, RuntimeFnId::StrSplit),
+                None,
+                "str_split accepts {arity} operand(s)"
+            );
+        }
+
         // `explode` produces exactly array<string>; a limit argument is a different contract.
         let split = shaped_call(
             RuntimeFnId::Explode,
@@ -4432,6 +4557,7 @@ mod tests {
         for (target, operands) in [
             (RuntimeFnId::StrRepeat, vec![str_arg.clone(), int_arg.clone()]),
             (RuntimeFnId::Explode, vec![str_arg.clone(), str_arg.clone()]),
+            (RuntimeFnId::StrSplit, vec![str_arg.clone(), int_arg.clone()]),
             (
                 RuntimeFnId::StrPad,
                 vec![str_arg.clone(), int_arg.clone(), str_arg.clone()],
