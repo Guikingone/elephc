@@ -1,7 +1,8 @@
 //! Purpose:
 //! Synthesises built-in DOM extension checker metadata (`DOMNode`, `DOMDocument`,
-//! `DOMElement`, `DOMText`, `DOMNodeList`) so vendor code that references the PHP
-//! `ext-dom` classes — e.g. symfony/console's `XmlDescriptor.php` — type-checks.
+//! `DOMElement`, `DOMText`, `DOMNodeList`, `DOMNamedNodeMap`) so vendor code that references
+//! the PHP `ext-dom` classes — e.g. symfony/console's `XmlDescriptor.php` and
+//! symfony/config's `XmlUtils.php` — type-checks.
 //!
 //! Called from:
 //! - `crate::types::checker::driver::init` (immediately after `inject_builtin_reflection`).
@@ -13,8 +14,15 @@
 //! - Only the DOM surface actually exercised by `XmlDescriptor.php` is registered: the
 //!   `DOMDocument` constructor, `createElement`, `createTextNode`, `saveXML`, `importNode`,
 //!   `getElementsByTagName`, `DOMNode::appendChild`, `DOMElement::setAttribute`,
-//!   `DOMNodeList::item`, and the `formatOutput`/`ownerDocument`/`childNodes` properties.
-//!   `documentElement` is not touched by that file and is intentionally omitted.
+//!   `DOMNodeList::item`, and the `formatOutput`/`ownerDocument`/`childNodes` properties,
+//!   plus the surface symfony/config's `XmlUtils` reaches: `DOMDocument::loadXML`,
+//!   `normalizeDocument`, `schemaValidateSource`, `$validateOnParse`, and the
+//!   `nodeValue`/`prefix`/`localName`/`attributes` node properties.
+//!   `documentElement` is touched by neither file and is intentionally omitted.
+//! - The two predicates that report success (`loadXML`, `schemaValidateSource`) return FALSE
+//!   rather than true. With no XML parser behind these shells, claiming success would hand the
+//!   caller an empty document as though it were the parsed configuration; returning false routes
+//!   it into its own error path instead. A shell may answer "I could not", never "I did".
 //! - `DOMNodeList` (returned by `getElementsByTagName()` and exposed as `DOMNode::$childNodes`)
 //!   is a class not explicitly named in the original surface list but required for
 //!   `foreach ($node->childNodes as $child)` and `->getElementsByTagName(...)->item(0)` to
@@ -183,6 +191,15 @@ fn builtin_dom_node() -> FlattenedClass {
         properties: vec![
             property("ownerDocument", nullable_class_type("DOMDocument"), Some(null_lit())),
             property("childNodes", class_type("DOMNodeList"), None),
+            // `nodeValue`, `prefix` and `attributes` live on `DOMNode` in PHP, not on the
+            // subclasses, so registering them here covers `DOMElement`, `DOMText` and
+            // `DOMDocument` uniformly — which is exactly how symfony/config's `XmlUtils`
+            // reaches them (`$element->prefix`, `$element->attributes`, and `$node->nodeValue`
+            // on a `$node instanceof \DOMText` narrowing).
+            property("nodeValue", TypeExpr::Nullable(Box::new(TypeExpr::Str)), Some(null_lit())),
+            property("prefix", TypeExpr::Str, Some(str_lit(""))),
+            property("localName", TypeExpr::Str, Some(str_lit(""))),
+            property("attributes", nullable_class_type("DOMNamedNodeMap"), Some(null_lit())),
         ],
         methods: vec![method(
             "appendChild",
@@ -211,7 +228,10 @@ fn builtin_dom_document() -> FlattenedClass {
         is_abstract: false,
         is_final: false,
         is_readonly_class: false,
-        properties: vec![property("formatOutput", TypeExpr::Bool, Some(bool_lit(false)))],
+        properties: vec![
+            property("formatOutput", TypeExpr::Bool, Some(bool_lit(false))),
+            property("validateOnParse", TypeExpr::Bool, Some(bool_lit(false))),
+        ],
         methods: vec![
             method(
                 "__construct",
@@ -260,6 +280,32 @@ fn builtin_dom_document() -> FlattenedClass {
                 vec![param("qualifiedName", TypeExpr::Str, None)],
                 Some(class_type("DOMNodeList")),
                 vec![ret(new_obj("DOMNodeList"))],
+            ),
+            // The parse/validate surface symfony/config's `XmlUtils::parse()` calls. Both
+            // predicates return FALSE, which is the honest shell answer: there is no XML
+            // parser behind these classes, so claiming success would hand `XmlUtils` an empty
+            // document and let a caller act on silently-missing configuration. Returning false
+            // routes it into its own `XmlParsingException`/`InvalidXmlException` path, which is
+            // a diagnostic rather than a wrong answer. `normalizeDocument()` is a genuine no-op
+            // on a tree that is already empty, so its stub body is faithful as written.
+            method(
+                "loadXML",
+                vec![
+                    param("source", TypeExpr::Str, None),
+                    param("options", TypeExpr::Int, Some(int_lit(0))),
+                ],
+                Some(TypeExpr::Bool),
+                vec![ret(bool_lit(false))],
+            ),
+            method("normalizeDocument", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+            method(
+                "schemaValidateSource",
+                vec![
+                    param("source", TypeExpr::Str, None),
+                    param("flags", TypeExpr::Int, Some(int_lit(0))),
+                ],
+                Some(TypeExpr::Bool),
+                vec![ret(bool_lit(false))],
             ),
         ],
         attributes: Vec::new(),
@@ -356,8 +402,51 @@ fn builtin_dom_node_list() -> FlattenedClass {
     }
 }
 
-/// Injects the five built-in DOM shell types (`DOMNode`, `DOMDocument`, `DOMElement`,
-/// `DOMText`, `DOMNodeList`) into `class_map` after verifying none are already declared.
+/// Builds the `DOMNamedNodeMap` shell: the type of `DOMNode::$attributes`, iterated by
+/// symfony/config's `XmlUtils::convertDomElementToArray()`
+/// (`foreach ($element->attributes as $name => $node)`). It mirrors `DOMNodeList` — the same
+/// `Iterator`/`Traversable` stub surface — because the only thing this shell has to support is
+/// that foreach; PHP's real map is keyed by attribute name, which `key()` reflects by returning
+/// a string rather than `DOMNodeList`'s integer index.
+fn builtin_dom_named_node_map() -> FlattenedClass {
+    FlattenedClass {
+        name: "DOMNamedNodeMap".to_string(),
+        extends: None,
+        implements: vec!["Iterator".to_string(), "Traversable".to_string()],
+        is_abstract: false,
+        is_final: false,
+        is_readonly_class: false,
+        properties: Vec::new(),
+        methods: vec![
+            method(
+                "getNamedItem",
+                vec![param("qualifiedName", TypeExpr::Str, None)],
+                Some(nullable_class_type("DOMNode")),
+                vec![ret(null_lit())],
+            ),
+            method(
+                "item",
+                vec![param("index", TypeExpr::Int, None)],
+                Some(nullable_class_type("DOMNode")),
+                vec![ret(null_lit())],
+            ),
+            method("current", Vec::new(), Some(mixed_type()), vec![ret(null_lit())]),
+            method("key", Vec::new(), Some(mixed_type()), vec![ret(str_lit(""))]),
+            method("next", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+            method("rewind", Vec::new(), Some(TypeExpr::Void), Vec::new()),
+            method("valid", Vec::new(), Some(TypeExpr::Bool), vec![ret(bool_lit(false))]),
+        ],
+        attributes: Vec::new(),
+        constants: Vec::new(),
+        used_traits: Vec::new(),
+        span: crate::span::Span::dummy(),
+        trait_aliases: Vec::new(),
+    }
+}
+
+/// Injects the six built-in DOM shell types (`DOMNode`, `DOMDocument`, `DOMElement`,
+/// `DOMText`, `DOMNodeList`, `DOMNamedNodeMap`) into `class_map` after verifying none are
+/// already declared.
 /// Each type is a type-check-only shell; there is no DOM runtime yet, so method bodies are
 /// minimal stubs. Returns an error if any DOM name is already in use by a user-declared
 /// class, interface, or trait.
@@ -366,7 +455,14 @@ pub(crate) fn inject_builtin_dom(
     class_map: &mut HashMap<String, FlattenedClass>,
     trait_names: &HashSet<String>,
 ) -> Result<(), CompileError> {
-    for builtin_name in ["DOMNode", "DOMDocument", "DOMElement", "DOMText", "DOMNodeList"] {
+    for builtin_name in [
+        "DOMNode",
+        "DOMDocument",
+        "DOMElement",
+        "DOMText",
+        "DOMNodeList",
+        "DOMNamedNodeMap",
+    ] {
         let builtin_key = php_symbol_key(builtin_name);
         if interface_map
             .keys()
@@ -386,6 +482,62 @@ pub(crate) fn inject_builtin_dom(
     class_map.insert("DOMElement".to_string(), builtin_dom_element());
     class_map.insert("DOMText".to_string(), builtin_dom_text());
     class_map.insert("DOMNodeList".to_string(), builtin_dom_node_list());
+    class_map.insert(
+        "DOMNamedNodeMap".to_string(),
+        builtin_dom_named_node_map(),
+    );
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parser::ast::{ExprKind, StmtKind};
+
+    /// A DOM shell may answer "I could not", never "I did".
+    ///
+    /// `loadXML()` and `schemaValidateSource()` both report FAILURE because there is no XML
+    /// parser behind these classes. Reporting success would hand `XmlUtils::parse()` an empty
+    /// document as though it were the parsed configuration, and the caller would go on to
+    /// build a container out of silently-missing input; returning false routes it into its own
+    /// `XmlParsingException`/`InvalidXmlException` path, which is a diagnostic rather than a
+    /// wrong answer. This test pins that choice so a later "make it green" edit has to argue
+    /// with it instead of flipping it by accident.
+    #[test]
+    fn parse_predicates_report_failure_not_success() {
+        let document = builtin_dom_document();
+        for name in ["loadXML", "schemaValidateSource"] {
+            let method = document
+                .methods
+                .iter()
+                .find(|method| method.name == name)
+                .unwrap_or_else(|| panic!("{name} is registered on the DOMDocument shell"));
+            let Some(StmtKind::Return(Some(value))) = method.body.first().map(|stmt| &stmt.kind)
+            else {
+                panic!("{name} must return a value");
+            };
+            assert!(
+                matches!(value.kind, ExprKind::BoolLiteral(false)),
+                "{name} must return false: a shell with no parser must not claim success"
+            );
+        }
+    }
+
+    /// `nodeValue`, `prefix`, `localName` and `attributes` belong to `DOMNode` in PHP, not to
+    /// the leaf classes, so every node type must inherit them from one place. Registering them
+    /// per-subclass would let `DOMText::$nodeValue` work while `DOMElement::$nodeValue` did
+    /// not — a split symfony/config's `XmlUtils` walks straight across.
+    #[test]
+    fn node_level_properties_live_on_dom_node() {
+        let node = builtin_dom_node();
+        for name in ["nodeValue", "prefix", "localName", "attributes"] {
+            assert!(
+                node.properties.iter().any(|property| property.name == name),
+                "DOMNode must carry ${name} so every node subclass inherits it"
+            );
+        }
+        assert!(builtin_dom_element().properties.is_empty());
+        assert!(builtin_dom_text().properties.is_empty());
+    }
 }

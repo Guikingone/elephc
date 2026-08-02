@@ -80,3 +80,52 @@ accept($text);
     );
     assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
 }
+
+/// Verifies the `symfony/config` `XmlUtils::parse()` sequence type-checks: setting
+/// `$validateOnParse`, calling `loadXML()` in a boolean condition, `normalizeDocument()`,
+/// and `schemaValidateSource()`. These four members are what made that file the sole
+/// source of every remaining DOM diagnostic in the Symfony app.
+#[test]
+fn test_dom_document_parse_surface_type_checks() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function parseIt(string $content, string $schema): bool {
+    $dom = new \DOMDocument();
+    $dom->validateOnParse = true;
+    if (!$dom->loadXML($content, 0)) {
+        return false;
+    }
+    $dom->normalizeDocument();
+    return $dom->schemaValidateSource($schema);
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// Verifies the `XmlUtils::convertDomElementToArray()` sequence type-checks: reading
+/// `$prefix` off a `\DOMElement`, iterating `$attributes` (a `DOMNamedNodeMap`, whose only
+/// job in this shell is to make that `foreach` resolve), and reading `$nodeValue` off a
+/// node narrowed to `\DOMText`. All three properties live on `DOMNode` in PHP, so the
+/// subclasses inherit them here exactly as they do there.
+#[test]
+fn test_dom_node_value_prefix_and_attributes_type_check() {
+    let result = type_checks_cleanly(
+        r#"<?php
+function convert(\DOMElement $element): array {
+    $prefix = $element->prefix;
+    $config = [];
+    foreach ($element->attributes as $name => $node) {
+        $config[$name] = $prefix;
+    }
+    foreach ($element->childNodes as $node) {
+        if ($node instanceof \DOMText) {
+            $config['text'] = trim($node->nodeValue);
+        }
+    }
+    return $config;
+}
+"#,
+    );
+    assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
