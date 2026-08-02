@@ -8177,6 +8177,83 @@ echo "\n";
 /// php-src 8.5.6's own output for `ARRAY_PROPERTY_SOURCE`.
 const ARRAY_PROPERTY_EXPECTED: &str = "2,null;0;1111111111111111111111111111111111111111\n";
 
+/// A Mixed rendered in a STRING CONTEXT — concatenation and interpolation — over every tag.
+#[test]
+fn test_cli_wasm_mixed_string_context_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_string_context");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, MIXED_STRING_CONTEXT_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the string-context probe");
+    assert!(
+        output.status.success(),
+        "string-context compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the string-context probe under Node");
+    assert!(
+        run.status.success(),
+        "string-context probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        MIXED_STRING_CONTEXT_EXPECTED
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The string-context probe. These casts are IMPLICIT — nothing in the source says
+/// `(string)` — and PHP's conversion here is the same one the explicit cast performs,
+/// which is why the array row reads `[Array]` rather than raising.
+const MIXED_STRING_CONTEXT_SOURCE: &str = r##"<?php
+function show(mixed $v): string { return "[" . $v . "]"; }
+function interp(mixed $v): string { return "<$v>"; }
+echo show(42), show("x"), show(2.5), show(true), show(false), show(null), show([1,2]), ";";
+echo interp(42), interp("x"), interp(2.5), ";";
+$out = "";
+foreach ([1, "a", 2.5, null] as $v) { $out = $out . $v . ";"; }
+echo $out, "\n";
+"##;
+
+/// php-src 8.5.6's own output for `MIXED_STRING_CONTEXT_SOURCE`.
+const MIXED_STRING_CONTEXT_EXPECTED: &str = "[42][x][2.5][1][][][Array];<42><x><2.5>;1;a;2.5;;\n";
+
 /// Every scalar cast of a Mixed, over every runtime tag, plus `echo` of a container.
 #[test]
 fn test_cli_wasm_mixed_scalar_casts_match_php() {

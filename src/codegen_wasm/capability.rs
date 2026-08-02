@@ -901,6 +901,42 @@ fn value_transfer_shape_issue(
     }
 }
 
+/// Returns whether a cast's result is used ONLY where PHP renders a value as a string.
+///
+/// `"v=" . $mixed` and `echo $mixed` reach an implicit `Str` cast, and PHP's conversion there
+/// is the SAME operation `(string)` performs — the array warning and the object fatal
+/// included, with no `TypeError` in sight. So the implicit cast is exact in that context,
+/// unlike one at a typed parameter or return, where PHP raises instead of converting.
+///
+/// The check is over every consumer, so a result that also flows somewhere else stays refused.
+fn cast_feeds_string_context(function: &Function, inst: &Instruction) -> bool {
+    let Some(result) = inst.result else {
+        return false;
+    };
+    let mut consumed = false;
+    for candidate in &function.instructions {
+        if !candidate.operands.contains(&result) {
+            continue;
+        }
+        // Ownership bookkeeping is not a USE: the EIR releases the cast's temporary right
+        // after the concat consumes it, and that release says nothing about the context.
+        if matches!(
+            candidate.op,
+            Op::Acquire | Op::Release | Op::Move | Op::Borrow
+        ) {
+            continue;
+        }
+        consumed = true;
+        if !matches!(
+            candidate.op,
+            Op::StrConcat | Op::EchoValue | Op::StrInterpolate | Op::WriteStrStdout | Op::StrLen
+        ) {
+            return false;
+        }
+    }
+    consumed
+}
+
 /// Returns whether this value is a Mixed that INTEGER arithmetic produced, rather than one PHP
 /// would coerce.
 ///
@@ -1171,7 +1207,8 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     // makes a declared `int` return raise a `TypeError` this target cannot yet produce.
     let admitted_mixed_scalar = (explicit || widened_by_checked_arithmetic)
         && matches!(target, IrType::I64 | IrType::F64)
-        || (explicit && target == IrType::Str);
+        || ((explicit || cast_feeds_string_context(function, inst))
+            && target == IrType::Str);
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed)
         && source_php == PhpType::Mixed
         && matches!(target, IrType::I64 | IrType::F64 | IrType::Str)
