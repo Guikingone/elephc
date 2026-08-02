@@ -4932,8 +4932,11 @@ fn callable_param_is_unboxable(param: &crate::ir::FunctionParam) -> bool {
         IrType::Heap(IrHeapKind::Array) => matches!(php_type, PhpType::Array(_)),
         IrType::Heap(IrHeapKind::Hash) => matches!(php_type, PhpType::AssocArray { .. }),
         IrType::Heap(IrHeapKind::Object) => matches!(php_type, PhpType::Object(_)),
+        // The call's argument buffer is already an array of CELLS, so a Mixed parameter is
+        // the simplest case of all: the cell passes straight through with nothing to unbox.
+        IrType::Heap(IrHeapKind::Mixed) => php_type == PhpType::Mixed,
         IrType::Heap(
-            IrHeapKind::Mixed | IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer,
+            IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer,
         )
         | IrType::TaggedScalar
         | IrType::Void => false,
@@ -6403,8 +6406,10 @@ mod tests {
         closure.flags.is_closure = true;
         closure.params.push(FunctionParam {
             name: "value".to_string(),
-            ir_type: IrType::Heap(IrHeapKind::Mixed),
-            php_type: PhpType::Mixed,
+            // A Mixed parameter is SUPPORTED now — the argument buffer already holds cells —
+            // so the fixture uses a storage that still has no unboxing: a tagged scalar.
+            ir_type: IrType::TaggedScalar,
+            php_type: PhpType::TaggedScalar,
             by_ref: false,
             variadic: false,
         });

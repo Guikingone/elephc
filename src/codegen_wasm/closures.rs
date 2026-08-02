@@ -1935,10 +1935,16 @@ fn unbox_arg_wat(ir: &IrType, php: &PhpType) -> Result<String> {
                     s.push_str(&wat_ins("i32.wrap_i64", "push ptr i32 for the body"));
                 }
                 IrHeapKind::Mixed => {
-                    return Err(WasmError::Unsupported(
-                        "closure Mixed visible param on wasm32-wasi (caller-side box rejects it)"
-                            .to_string(),
-                    ));
+                    // The argument buffer already holds CELLS, so a Mixed parameter needs no
+                    // unboxing at all — only the reference the body will release at its
+                    // epilogue, exactly as the container arm above takes one.
+                    s.push_str(&wat_ins("i64.extend_i32_u", "cell ptr -> i64 for the scratch local"));
+                    s.push_str(&wat_ins("local.set $ub_lo", "save the cell pointer"));
+                    s.push_str(&wat_ins("local.get $ub_lo", "cell pointer"));
+                    s.push_str(&wat_ins("i32.wrap_i64", "ptr -> i32 for incref"));
+                    s.push_str(&wat_ins("call $__rt_incref", "own a ref for the body param"));
+                    s.push_str(&wat_ins("local.get $ub_lo", "cell pointer"));
+                    s.push_str(&wat_ins("i32.wrap_i64", "the cell IS the parameter"));
                 }
                 IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer => {
                     return Err(WasmError::Unsupported(format!(
