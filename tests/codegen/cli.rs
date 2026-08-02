@@ -9441,7 +9441,9 @@ echo "|", count($conf), count($h), count($n), count($f), "\n";
 const ASSOC_KEYS_EXPECTED: &str = "host=local;port=8080;debug=1;|a11,b01,c11,d11,e11,zz00,011,711,00,|11|11|000,111,201,311,400,|1=>a 2=> 3=>c |p:1.5 q:-0.25 |3732\n";
 
 /// The sort probe: empty, single, already-ordered, reversed, duplicates, negatives, both i64
-/// extremes, floats including -0.0, and twenty generated orderings.
+/// extremes, floats including -0.0, twenty generated orderings, and the STRING cases — where
+/// two numeric strings order NUMERICALLY, equal-as-doubles i64-overflowing texts fall back to
+/// their bytes, and equal infinities do too.
 const SORT_SOURCE: &str = r##"<?php
 $a0 = [5,3,9,1,3]; sort($a0); echo implode(",", $a0), ";";
 $b0 = [5,3,9,1,3]; rsort($b0); echo implode(",", $b0), ";";
@@ -9508,11 +9510,22 @@ $b30 = [-14,-35,-42,11]; rsort($b30); echo implode(",", $b30), ";";
 $a31 = [-39,-6,-42,2,-31,-48,-13]; sort($a31); echo implode(",", $a31), ";";
 $b31 = [-39,-6,-42,2,-31,-48,-13]; rsort($b31); echo implode(",", $b31), ";";
 echo "
-";"##;
+";$s0 = ["pear","apple","fig"]; sort($s0); echo implode("|", $s0), ";";
+$t0 = ["pear","apple","fig"]; rsort($t0); echo implode("|", $t0), ";";
+$s1 = ["10","9","1e1","10.0"]; sort($s1); echo implode("|", $s1), ";";
+$t1 = ["10","9","1e1","10.0"]; rsort($t1); echo implode("|", $t1), ";";
+$s2 = ["abc","ABC","zz","a"]; sort($s2); echo implode("|", $s2), ";";
+$s3 = ["9223372036854775808","9223372036854775807","9223372036854775809"]; sort($s3); echo implode("|", $s3), ";";
+$s4 = ["1e400","1e401","inf"]; sort($s4); echo implode("|", $s4), ";";
+$s5 = ["007","7","7.0"]; sort($s5); echo implode("|", $s5), ";";
+$s6 = [" 1","1 ","1"]; sort($s6); echo implode("|", $s6), ";";
+$s7 = ["only"]; sort($s7); echo implode("|", $s7), ";";
+$s8 = []; sort($s8); echo implode("|", $s8), ";";
+"##;
 
 /// php-src 8.5.6's own output for `SORT_SOURCE`.
 const SORT_EXPECTED: &str = r##"1,3,3,5,9;9,5,3,3,1;;;7;7;1,2;2,1;1,2,3;3,2,1;1,2,3;3,2,1;-5,-1,0,5;5,0,-1,-5;0,0,0;0,0,0;-9223372036854775808,0,9223372036854775807;9223372036854775807,0,-9223372036854775808;-2.5,0,1.5,1.5;1.5,1.5,0,-2.5;1,2,3;3,2,1;-0,0;-0,0;-34,19,25;25,19,-34;-42,10,24,27,30;30,27,24,10,-42;;;-26,-21,-17,10,19,20,41;41,20,19,10,-17,-21,-26;-31,-31,-21,0,10,16,31,31;31,31,16,10,0,-21,-31,-31;-49,-42,-30,35,44,49;49,44,35,-30,-42,-49;;;-47,-16,10,49;49,10,-16,-47;0,4,6,23,41,43;43,41,23,6,4,0;-38,-4;-4,-38;;;-23,13;13,-23;5,30,36,49;49,36,30,5;-1,3,14,23;23,14,3,-1;-21,2,18,24,24;24,24,18,2,-21;-47,-15,27,35,37;37,35,27,-15,-47;-9,39;39,-9;-37,-23,22,23,23,31,33,41;41,33,31,23,23,22,-23,-37;-42,-35,-14,11;11,-14,-35,-42;-48,-42,-39,-31,-13,-6,2;2,-6,-13,-31,-39,-42,-48;
-"##;
+apple|fig|pear;pear|fig|apple;9|10|1e1|10.0;10|1e1|10.0|9;ABC|a|abc|zz;9223372036854775807|9223372036854775808|9223372036854775809;1e400|1e401|inf;007|7|7.0; 1|1 |1;only;;"##;
 
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///

@@ -739,6 +739,59 @@ const RT_ARRAY_FIND_FLOAT: &str = r#"(func $__rt_array_find_float (param $needle
 ///
 /// Returns the (possibly cloned) array pointer, which the call site writes back into the by-
 /// reference argument's local — `sort($a)` rebinds `$a`.
+/// `__rt_sort_string`: `sort`/`rsort` over an array of STRINGS, ordered by php-src's own
+/// string comparison — which compares two NUMERIC strings numerically.
+///
+/// The same stable bubble walk as `__rt_sort_scalar`, over 16-byte `(ptr, len)` slots, with
+/// `__rt_str_smart_cmp` deciding each pair. Both words of a slot move together on a swap.
+pub(super) const RT_SORT_STRING: &str = r#"(func $__rt_sort_string (param $arr i32) (param $desc i32) (result i32)
+  (local $len i64)
+  (local $i i64)
+  (local $j i64)
+  (local $pa i32)
+  (local $pb i32)
+  (local $ap i64)
+  (local $al i64)
+  (local $bp i64)
+  (local $bl i64)
+  (local $ord i64)
+  (local.set $arr (call $__rt_array_ensure_unique (local.get $arr)))
+  (local.set $len (i64.load (local.get $arr)))
+  (if (i64.lt_s (local.get $len) (i64.const 2))
+    (then (return (local.get $arr))))
+  (local.set $i (i64.const 0))
+  (block $outer_end (loop $outer
+    (br_if $outer_end (i64.ge_s (local.get $i) (local.get $len)))
+    (local.set $j (i64.const 0))
+    (block $inner_end (loop $inner
+      (br_if $inner_end (i64.ge_s (local.get $j)
+        (i64.sub (i64.sub (local.get $len) (i64.const 1)) (local.get $i))))
+      (local.set $pa (i32.add (i32.add (local.get $arr) (i32.const 24))
+                              (i32.wrap_i64 (i64.mul (local.get $j) (i64.const 16)))))
+      (local.set $pb (i32.add (local.get $pa) (i32.const 16)))
+      (local.set $ap (i64.load (local.get $pa)))
+      (local.set $al (i64.load (i32.add (local.get $pa) (i32.const 8))))
+      (local.set $bp (i64.load (local.get $pb)))
+      (local.set $bl (i64.load (i32.add (local.get $pb) (i32.const 8))))
+      (local.set $ord (call $__rt_str_smart_cmp
+        (i32.wrap_i64 (local.get $ap)) (local.get $al)
+        (i32.wrap_i64 (local.get $bp)) (local.get $bl)))
+      (if (select
+            (i64.lt_s (local.get $ord) (i64.const 0))
+            (i64.gt_s (local.get $ord) (i64.const 0))
+            (local.get $desc))
+        (then
+          (i64.store (local.get $pa) (local.get $bp))
+          (i64.store (i32.add (local.get $pa) (i32.const 8)) (local.get $bl))
+          (i64.store (local.get $pb) (local.get $ap))
+          (i64.store (i32.add (local.get $pb) (i32.const 8)) (local.get $al))))
+      (local.set $j (i64.add (local.get $j) (i64.const 1)))
+      (br $inner)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $outer)))
+  (local.get $arr))
+"#;
+
 const RT_SORT_SCALAR: &str = r#"(func $__rt_sort_scalar (param $arr i32) (param $desc i32) (param $is_float i32) (result i32)
   (local $len i64)
   (local $i i64)

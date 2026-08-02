@@ -153,11 +153,86 @@ fn rt_str_loose_eq() -> String {
     )
 }
 
+
+/// `__rt_str_smart_cmp`: php-src's ORDERING of two strings — what `sort()` and `<=>` use.
+///
+/// Two numeric strings compare NUMERICALLY, which is why `sort(["10", "9"])` answers `9, 10`
+/// and not `10, 9`; anything else compares byte for byte, normalized to -1/0/1 as PHP 8 does.
+///
+/// Three escapes, all MEASURED against php-src 8.5.6 rather than assumed, and each one a case
+/// where the double values cannot separate the operands:
+/// - both texts overflow `i64` the SAME way and agree as doubles -> compare the bytes, so
+///   `"18446744073709551616" < "…617"` even though both round to the same double;
+/// - one text overflowed and the other is a genuine `i64` -> the overflowed side wins outright,
+///   so `"9223372036854775808" > "9223372036854775807"`. Note this does NOT apply against a
+///   real float literal: `"9223372036854775808" == "9.223372036854775808e18"`;
+/// - two equal INFINITIES -> compare the bytes, so `"1e400" < "1e401"`.
+///
+/// Validated on php-src's own answers for a 23x23 systematic table and 1500 random pairs.
+fn rt_str_smart_cmp() -> String {
+    format!(
+        r#"(func $__rt_str_smart_cmp (param $ap i32) (param $al i64) (param $bp i32) (param $bl i64) (result i64)
+  (local $ca i32) (local $cb i32) (local $oa i32) (local $ob i32)
+  (local $ia i64) (local $ib i64) (local $fa f64) (local $fb f64) (local $raw i64)
+  (local.set $ca (call $__rt_str_numeric_class (local.get $ap) (i32.wrap_i64 (local.get $al))))
+  (local.set $oa (i32.load (i32.add (global.get $__float_scratch) (i32.const {oflow_offset}))))
+  (if (i32.eq (local.get $ca) (i32.const 1))
+    (then (local.set $ia (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+  (if (i32.eq (local.get $ca) (i32.const 2))
+    (then (local.set $fa (f64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+  (local.set $cb (call $__rt_str_numeric_class (local.get $bp) (i32.wrap_i64 (local.get $bl))))
+  (local.set $ob (i32.load (i32.add (global.get $__float_scratch) (i32.const {oflow_offset}))))
+  (if (i32.eq (local.get $cb) (i32.const 1))
+    (then (local.set $ib (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+  (if (i32.eq (local.get $cb) (i32.const 2))
+    (then (local.set $fb (f64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+  ;; classes 3 and 4 are LEADING-numeric, which php-src does not treat as numeric here
+  (if (i32.and (i32.or (i32.eq (local.get $ca) (i32.const 1)) (i32.eq (local.get $ca) (i32.const 2)))
+               (i32.or (i32.eq (local.get $cb) (i32.const 1)) (i32.eq (local.get $cb) (i32.const 2))))
+    (then
+      (block $bytes
+        ;; both overflowed the same way and agree as doubles: the doubles cannot separate them
+        (br_if $bytes (i32.and (i32.and (i32.ne (local.get $oa) (i32.const 0))
+                                        (i32.eq (local.get $oa) (local.get $ob)))
+                               (f64.eq (local.get $fa) (local.get $fb))))
+        ;; an overflowed integer text keeps its true magnitude against a genuine i64
+        (if (i32.and (i32.ne (local.get $oa) (i32.const 0)) (i32.eq (local.get $cb) (i32.const 1)))
+          (then (return (i64.extend_i32_s (local.get $oa)))))
+        (if (i32.and (i32.ne (local.get $ob) (i32.const 0)) (i32.eq (local.get $ca) (i32.const 1)))
+          (then (return (i64.sub (i64.const 0) (i64.extend_i32_s (local.get $ob))))))
+        (if (i32.or (i32.eq (local.get $ca) (i32.const 2)) (i32.eq (local.get $cb) (i32.const 2)))
+          (then
+            (if (i32.ne (local.get $ca) (i32.const 2))
+              (then (local.set $fa (f64.convert_i64_s (local.get $ia)))))
+            (if (i32.ne (local.get $cb) (i32.const 2))
+              (then (local.set $fb (f64.convert_i64_s (local.get $ib)))))
+            ;; equal infinities carry no ordering information: fall through to the bytes
+            (br_if $bytes (i32.and (f64.eq (local.get $fa) (local.get $fb))
+                                   (f64.eq (f64.abs (local.get $fa)) (f64.const inf))))
+            (return (i64.sub
+              (i64.extend_i32_u (f64.gt (local.get $fa) (local.get $fb)))
+              (i64.extend_i32_u (f64.lt (local.get $fa) (local.get $fb)))))))
+        (return (i64.sub
+          (i64.extend_i32_u (i64.gt_s (local.get $ia) (local.get $ib)))
+          (i64.extend_i32_u (i64.lt_s (local.get $ia) (local.get $ib))))))))
+  ;; byte for byte, normalized to -1/0/1 the way PHP 8 reports it
+  (local.set $raw (call $__rt_str_cmp
+    (local.get $ap) (local.get $al) (local.get $bp) (local.get $bl) (i32.const 0)))
+  (i64.sub
+    (i64.extend_i32_u (i64.gt_s (local.get $raw) (i64.const 0)))
+    (i64.extend_i32_u (i64.lt_s (local.get $raw) (i64.const 0)))))
+"#,
+        value_offset = CLASS_VALUE_OFFSET,
+        oflow_offset = CLASS_OFLOW_OFFSET
+    )
+}
+
 /// Adds the boxed-Mixed arithmetic runtime to `wm`.
 pub(super) fn emit_mixed_numeric_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_INT_TEXT_OVERFLOWS);
     wm.add_raw_func(&rt_str_numeric_class());
     wm.add_raw_func(&rt_str_loose_eq());
+    wm.add_raw_func(&rt_str_smart_cmp());
     wm.add_raw_func(&rt_mixed_numeric_operand());
     wm.add_raw_func(RT_MIXED_NUMERIC_COMMON);
     wm.add_raw_func(RT_MIXED_NUMERIC_ADD);

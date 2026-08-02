@@ -69,6 +69,9 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
         // Compares through `__rt_str_loose_eq`, which lives in the command-only numeric runtime
         // because its diagnostics write to stderr. A reactor module has no such scan to make.
         wm.add_raw_func(RT_ARRAY_FIND_STR);
+        // `__rt_sort_string` orders by `__rt_str_smart_cmp`, which lives in that same
+        // command-only numeric runtime.
+        wm.add_raw_func(super::arrays::RT_SORT_STRING);
     }
     wm.add_raw_func(RT_IMPLODE_OWNED);
     wm.add_raw_func(RT_EXPLODE);
@@ -3357,7 +3360,7 @@ pub(super) fn direct_builtin_shape_issue(
         return range_shape_issue(function, call);
     }
     if matches!(target, RuntimeFnId::Sort | RuntimeFnId::Rsort) {
-        return scalar_sort_shape_issue(function, call);
+        return scalar_sort_shape_issue(module, function, call);
     }
     if target == RuntimeFnId::ArrayKeyExists {
         return array_key_exists_shape_issue(function, call);
@@ -4614,7 +4617,11 @@ fn array_key_exists_shape_issue(function: &Function, call: &Instruction) -> Opti
     None
 }
 
-fn scalar_sort_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+fn scalar_sort_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<String> {
     let [array] = call.operands.as_slice() else {
         return Some(format!(
             "sort takes one array, got {} operands",
@@ -4639,11 +4646,22 @@ fn scalar_sort_shape_issue(function: &Function, call: &Instruction) -> Option<St
     // `Void` is what an empty literal's `Never` normalizes to: nothing to order.
     if !matches!(
         element.codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Void
     ) {
         return Some(format!(
             "sort has no lowered ordering for elements of {element:?}"
         ));
+    }
+    // The string ordering runs through `__rt_str_smart_cmp`, which lives in the command-only
+    // numeric runtime because its classifier's diagnostics write to stderr.
+    if element.codegen_repr() == PhpType::Str
+        && !module.functions.iter().any(|candidate| candidate.flags.is_main)
+    {
+        return Some(
+            "ordering strings requires a main-bearing command module for the numeric-string \
+             classifier"
+                .to_string(),
+        );
     }
     None
 }
@@ -4660,16 +4678,27 @@ fn lower_scalar_sort(ctx: &mut FnCtx, inst: &Instruction, descending: bool) -> R
             )))
         }
     };
-    let is_float = i32::from(element.codegen_repr() == PhpType::Float);
-    ctx.emit_load_value(array)?;
-    ctx.fb
-        .ins(&format!("i32.const {}", i32::from(descending)), "rsort reverses the order");
-    ctx.fb
-        .ins(&format!("i32.const {is_float}"), "read the slots as doubles?");
-    ctx.fb.ins(
-        "call $__rt_sort_scalar",
-        "stable in-place sort (COW), returns the array pointer",
-    );
+    // A string array has 16-byte slots and its own comparison, so it takes a dedicated walk.
+    if element.codegen_repr() == PhpType::Str {
+        ctx.emit_load_value(array)?;
+        ctx.fb
+            .ins(&format!("i32.const {}", i32::from(descending)), "rsort reverses the order");
+        ctx.fb.ins(
+            "call $__rt_sort_string",
+            "stable in-place sort by php-src's string ordering (COW)",
+        );
+    } else {
+        let is_float = i32::from(element.codegen_repr() == PhpType::Float);
+        ctx.emit_load_value(array)?;
+        ctx.fb
+            .ins(&format!("i32.const {}", i32::from(descending)), "rsort reverses the order");
+        ctx.fb
+            .ins(&format!("i32.const {is_float}"), "read the slots as doubles?");
+        ctx.fb.ins(
+            "call $__rt_sort_scalar",
+            "stable in-place sort (COW), returns the array pointer",
+        );
+    }
     // `sort($a)` rebinds `$a`: the runtime may have cloned, so the pointer goes back.
     ctx.emit_store_value(array)?;
     if let Some(slot) = super::inst::value_source_slot(ctx, array) {
@@ -5853,7 +5882,25 @@ mod tests {
                     "{target:?} orders elements of {element:?}"
                 );
             }
-            for element in [PhpType::Str, PhpType::Mixed] {
+            // Strings order through the numeric-string classifier, which only a command
+            // module carries — so the same call is admitted there and refused without it.
+            let probe = shaped_call(
+                target,
+                &[array_of(PhpType::Str)],
+                IrType::I64,
+                PhpType::Void,
+            );
+            let call = probe.instructions.last().expect("the probe emitted a call");
+            assert_eq!(
+                direct_builtin_shape_issue(&command_probe_module(), &probe, call, target),
+                None,
+                "{target:?} orders strings in a command module"
+            );
+            assert!(
+                direct_builtin_shape_issue(&probe_module(), &probe, call, target).is_some(),
+                "{target:?} has no string ordering without a main"
+            );
+            for element in [PhpType::Mixed] {
                 let probe = shaped_call(
                     target,
                     &[array_of(element.clone())],
@@ -6593,6 +6640,15 @@ mod tests {
     /// strings — and no probe here builds one, so an empty module is the honest stand-in.
     fn probe_module() -> Module {
         Module::new(crate::codegen_support::platform::Target::wasm())
+    }
+
+    /// A module carrying a `main`, for the shapes whose runtime is command-only.
+    fn command_probe_module() -> Module {
+        let mut module = probe_module();
+        let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        main.flags.is_main = true;
+        module.add_function(main);
+        module
     }
 
     /// Verifies the format parser applies php-src's flag rules, not C's.
