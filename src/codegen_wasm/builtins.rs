@@ -67,7 +67,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     if has_main {
         // Compares through `__rt_str_loose_eq`, which lives in the command-only numeric runtime
         // because its diagnostics write to stderr. A reactor module has no such scan to make.
-        wm.add_raw_func(RT_IN_ARRAY_STR);
+        wm.add_raw_func(RT_ARRAY_FIND_STR);
     }
     wm.add_raw_func(RT_IMPLODE_OWNED);
     wm.add_raw_func(RT_EXPLODE);
@@ -2674,17 +2674,18 @@ const RT_FMT_FLOAT: &str = r#"(func $__rt_fmt_float (param $bits i64) (param $pr
     (local.get $signch) (local.get $width) (local.get $pad) (local.get $left)))
 "#;
 
-/// `__rt_in_array_str`: `in_array` over 16-byte (pointer, length) string slots.
+/// `__rt_array_find_str`: first index whose 16-byte (pointer, length) slot equals the needle,
+/// or -1.
 ///
 /// Lives here rather than beside the other two scans because it compares through
 /// `__rt_strict_str_eq` and `__rt_str_loose_eq`, which the array runtime is emitted before.
 ///
 /// `$strict` picks the comparison: `===` is byte equality, while `==` is php-src's
 /// `zendi_smart_strcmp` — so `in_array("1e1", ["10"])` is TRUE loosely and FALSE strictly.
-const RT_IN_ARRAY_STR: &str = r#"(func $__rt_in_array_str (param $nptr i32) (param $nlen i64) (param $array i32) (param $strict i32) (result i64)
+const RT_ARRAY_FIND_STR: &str = r#"(func $__rt_array_find_str (param $nptr i32) (param $nlen i64) (param $array i32) (param $strict i32) (result i64)
   (local $i i64) (local $len i64) (local $slot i32) (local $ep i32) (local $el i64)
   (if (i32.eqz (local.get $array))
-    (then (return (i64.const 0))))
+    (then (return (i64.const -1))))
   (local.set $len (i64.load (local.get $array)))
   (block $done (loop $scan
     (br_if $done (i64.ge_s (local.get $i) (local.get $len)))
@@ -2695,13 +2696,13 @@ const RT_IN_ARRAY_STR: &str = r#"(func $__rt_in_array_str (param $nptr i32) (par
     (if (local.get $strict)
       (then
         (if (call $__rt_strict_str_eq (local.get $nptr) (local.get $nlen) (local.get $ep) (local.get $el))
-          (then (return (i64.const 1)))))
+          (then (return (local.get $i)))))
       (else
         (if (i64.ne (call $__rt_str_loose_eq (local.get $nptr) (local.get $nlen) (local.get $ep) (local.get $el)) (i64.const 0))
-          (then (return (i64.const 1))))))
+          (then (return (local.get $i))))))
     (local.set $i (i64.add (local.get $i) (i64.const 1)))
     (br $scan)))
-  (i64.const 0))
+  (i64.const -1))
 "#;
 /// `__rt_implode_owned`: joins an array whose elements must be CONVERTED to strings first.
 ///
@@ -3075,6 +3076,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::ArraySlice
             | RuntimeFnId::ArrayMerge
             | RuntimeFnId::Range
+            | RuntimeFnId::ArraySearch
             | RuntimeFnId::Explode
             | RuntimeFnId::StrSplit
             | RuntimeFnId::Wordwrap
@@ -3176,6 +3178,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Range {
         return range_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::ArraySearch {
+        return in_array_shape_issue(function, call);
     }
     if target == RuntimeFnId::Explode {
         return explode_shape_issue(function, call);
@@ -3408,6 +3413,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::ArraySlice {
         return lower_array_slice(ctx, inst);
+    }
+    if target == RuntimeFnId::ArraySearch {
+        return lower_array_search(ctx, inst);
     }
     if target == RuntimeFnId::Range {
         ctx.emit_load_value(operand(inst, 0)?)?;
@@ -4197,14 +4205,16 @@ fn in_array_scan(needle: &PhpType, element: &PhpType) -> Option<InArrayScan> {
     }
 }
 
-/// Validates `in_array`: a needle, an indexed haystack, and an optional strict flag.
+/// Validates `in_array`/`array_search`: a needle, an indexed haystack, and an optional strict
+/// flag. `array_search` never carries one — the front-end admits exactly two operands — so the
+/// same rule covers both.
 fn in_array_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
     let (needle, haystack, strict) = match call.operands.as_slice() {
         [needle, haystack] => (needle, haystack, None),
         [needle, haystack, strict] => (needle, haystack, Some(strict)),
         other => {
             return Some(format!(
-                "in_array takes a needle, an array and an optional strict flag, got {} operands",
+                "the search takes a needle, an array and an optional strict flag, got {} operands",
                 other.len()
             ))
         }
@@ -4252,7 +4262,46 @@ fn in_array_shape_issue(function: &Function, call: &Instruction) -> Option<Strin
 }
 
 /// Lowers `in_array` by scanning the haystack with the pair's measured comparison.
+///
+/// The scan answers the first matching INDEX, which `array_search` boxes and this reduces to a
+/// bool — one scan, two builtins.
 fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    emit_array_find(ctx, inst)?;
+    ctx.fb.ins("i64.const 0", "a miss answers -1");
+    ctx.fb.ins("i64.ge_s", "found means a non-negative index");
+    ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+    store_result(ctx, inst)
+}
+
+/// Lowers `array_search`: the same scan, boxed as PHP's `int|false`.
+///
+/// The front-end admits exactly two operands, so only the LOOSE form exists here. `int|false`
+/// travels as a Mixed cell — tag 0 carrying the index, or tag 3 carrying the value false —
+/// matching what `strpos` already does for the same result type.
+fn lower_array_search(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let index = ctx.fresh_temp(super::wat::ValType::I64);
+    emit_array_find(ctx, inst)?;
+    ctx.fb.ins(&format!("local.set {}", index), "first matching index, or -1");
+    ctx.fb.ins(&format!("local.get {}", index), "index");
+    ctx.fb.ins("i64.const 0", "a miss answers -1");
+    ctx.fb.ins("i64.ge_s", "found?");
+    ctx.fb.ins("if (result i32)", "int|false travels as a Mixed cell");
+    ctx.fb.ins("i64.const 0", "int tag");
+    ctx.fb.ins(&format!("local.get {}", index), "the key");
+    ctx.fb.ins("i64.const 0", "no high payload");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box the key");
+    ctx.fb.ins("else", "not found");
+    ctx.fb.ins("i64.const 3", "bool tag");
+    ctx.fb.ins("i64.const 0", "the value false");
+    ctx.fb.ins("i64.const 0", "no high payload");
+    ctx.fb.ins("call $__rt_mixed_from_value", "box false");
+    ctx.fb.ins("end", "");
+    store_result(ctx, inst)
+}
+
+/// Emits the scan shared by `in_array` and `array_search`, leaving the matching index on the
+/// stack (-1 when absent).
+fn emit_array_find(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let needle = operand(inst, 0)?;
     let haystack = operand(inst, 1)?;
     let needle_php = ctx
@@ -4290,7 +4339,7 @@ fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.emit_load_value(needle)?;
             ctx.emit_load_value(haystack)?;
             emit_strict_block(ctx, &strict, scan.blocks_strict);
-            ctx.fb.ins("call $__rt_in_array_int", "scan comparing as integers");
+            ctx.fb.ins("call $__rt_array_find_int", "scan comparing as integers");
         }
         InArrayKind::Float => {
             ctx.emit_load_value(needle)?;
@@ -4304,19 +4353,19 @@ fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 &format!("i32.const {}", i32::from(scan.widen_elements)),
                 "the elements are integers to convert",
             );
-            ctx.fb.ins("call $__rt_in_array_float", "scan comparing as doubles");
+            ctx.fb.ins("call $__rt_array_find_float", "scan comparing as doubles");
         }
         InArrayKind::Str => {
             ctx.emit_load_value(needle)?;
             ctx.emit_load_value(haystack)?;
             ctx.fb.ins(&format!("local.get {}", strict), "=== or ==");
             ctx.fb.ins(
-                "call $__rt_in_array_str",
+                "call $__rt_array_find_str",
                 "scan; loose uses the numeric-string rule",
             );
         }
     }
-    store_result(ctx, inst)
+    Ok(())
 }
 
 /// Pushes the "a strict request cannot match" flag: the strict flag itself when the needle and the

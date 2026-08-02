@@ -209,6 +209,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             &["codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220"]
                 [..],
         ),
+        RuntimeFnId::ArraySearch => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::in_array_admits_only_the_pairs_whose_rule_was_measured",
+                "codegen::cli::test_cli_wasm_array_search_matches_php",
+            ][..],
+        ),
         RuntimeFnId::Range => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",

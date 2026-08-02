@@ -5597,7 +5597,7 @@
           "name": "array_search",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "array_search(...)"
           ],
@@ -5605,7 +5605,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::in_array_admits_only_the_pairs_whose_rule_was_measured",
+              "codegen::cli::test_cli_wasm_array_search_matches_php"
+            ],
+            "notes": "Loose form only, which is all the front-end admits. Shares its scan with in_array and boxes the first matching index as PHP int|false, the Mixed-cell convention strpos already uses. Restricted to the same measured (needle, element) pairs."
+          }
         },
         {
           "name": "array_shift",
@@ -12821,14 +12829,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 194,
+    "supported": 195,
     "excluded": 47,
-    "missing": 471,
+    "missing": 470,
     "evidence_gaps": 176,
     "row_evidence_gaps": 175,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "471 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "470 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

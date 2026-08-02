@@ -42,8 +42,8 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
     wm.add_raw_func(RT_ARRAY_SLICE);
     wm.add_raw_func(RT_RANGE_INT);
-    wm.add_raw_func(RT_IN_ARRAY_INT);
-    wm.add_raw_func(RT_IN_ARRAY_FLOAT);
+    wm.add_raw_func(RT_ARRAY_FIND_INT);
+    wm.add_raw_func(RT_ARRAY_FIND_FLOAT);
     wm.add_raw_func(RT_ARRAY_GET_INT);
     wm.add_raw_func(RT_ARRAY_GET_TAGGED_INT);
     wm.add_raw_func(RT_ARRAY_GET_MIXED_BOOL);
@@ -593,33 +593,37 @@ const RT_RANGE_INT: &str = r#"(func $__rt_range_int (param $start i64) (param $e
   (local.get $out))
 "#;
 
-/// `__rt_in_array_int`: `in_array` over 8-byte scalar slots compared as integers.
+/// `__rt_array_find_int`: first index whose 8-byte scalar slot equals the needle, or -1.
 ///
 /// Covers an int needle in an int haystack and a bool needle in a bool haystack, where PHP's loose
 /// and strict answers coincide — same type on both sides, so `==` and `===` agree.
 ///
-/// `$blocks` short-circuits to false: it is set when the CALLER knows a strict request cannot
-/// match, because the needle and the elements are different types. `===` compares types first, so
-/// no element can ever match and the scan is skipped entirely.
-const RT_IN_ARRAY_INT: &str = r#"(func $__rt_in_array_int (param $needle i64) (param $array i32) (param $blocks i32) (result i64)
+/// Answering the INDEX rather than a flag lets `in_array` and `array_search` share one scan: the
+/// first tests it against zero, the second boxes it.
+///
+/// `$blocks` short-circuits to "not found": it is set when the CALLER knows a strict request
+/// cannot match, because the needle and the elements are different types. `===` compares types
+/// first, so no element can ever match and the scan is skipped entirely.
+const RT_ARRAY_FIND_INT: &str = r#"(func $__rt_array_find_int (param $needle i64) (param $array i32) (param $blocks i32) (result i64)
   (local $i i64) (local $len i64)
   (if (local.get $blocks)
-    (then (return (i64.const 0))))                          ;; strict across types: nothing can match
+    (then (return (i64.const -1))))                         ;; strict across types: nothing can match
   (if (i32.eqz (local.get $array))
-    (then (return (i64.const 0))))
+    (then (return (i64.const -1))))
   (local.set $len (i64.load (local.get $array)))
   (block $done (loop $scan
     (br_if $done (i64.ge_s (local.get $i) (local.get $len)))
     (if (i64.eq (local.get $needle)
                 (i64.load (i32.add (i32.add (local.get $array) (i32.const 24))
                                    (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 8))))))
-      (then (return (i64.const 1))))
+      (then (return (local.get $i))))                       ;; first match wins, as PHP scans forward
     (local.set $i (i64.add (local.get $i) (i64.const 1)))
     (br $scan)))
-  (i64.const 0))
+  (i64.const -1))
 "#;
 
-/// `__rt_in_array_float`: `in_array` over 8-byte scalar slots compared as doubles.
+/// `__rt_array_find_float`: first index whose 8-byte scalar slot equals the needle as a double,
+/// or -1.
 ///
 /// `$widen` says the slots hold INTEGERS to convert rather than raw f64 bits, which is the
 /// float-needle-in-an-int-haystack case. The opposite mix — an int needle in a float haystack —
@@ -627,12 +631,12 @@ const RT_IN_ARRAY_INT: &str = r#"(func $__rt_in_array_int (param $needle i64) (p
 ///
 /// The conversion is PHP's own: it widens and compares as doubles, precision loss included.
 /// `f64.eq` answers false for NaN, which is what PHP does too.
-const RT_IN_ARRAY_FLOAT: &str = r#"(func $__rt_in_array_float (param $needle f64) (param $array i32) (param $blocks i32) (param $widen i32) (result i64)
+const RT_ARRAY_FIND_FLOAT: &str = r#"(func $__rt_array_find_float (param $needle f64) (param $array i32) (param $blocks i32) (param $widen i32) (result i64)
   (local $i i64) (local $len i64) (local $slot i32) (local $v f64)
   (if (local.get $blocks)
-    (then (return (i64.const 0))))                          ;; strict across types: nothing can match
+    (then (return (i64.const -1))))                         ;; strict across types: nothing can match
   (if (i32.eqz (local.get $array))
-    (then (return (i64.const 0))))
+    (then (return (i64.const -1))))
   (local.set $len (i64.load (local.get $array)))
   (block $done (loop $scan
     (br_if $done (i64.ge_s (local.get $i) (local.get $len)))
@@ -642,10 +646,10 @@ const RT_IN_ARRAY_FLOAT: &str = r#"(func $__rt_in_array_float (param $needle f64
     (if (local.get $widen)
       (then (local.set $v (f64.convert_i64_s (i64.load (local.get $slot))))))
     (if (f64.eq (local.get $needle) (local.get $v))
-      (then (return (i64.const 1))))
+      (then (return (local.get $i))))                       ;; first match wins, as PHP scans forward
     (local.set $i (i64.add (local.get $i) (i64.const 1)))
     (br $scan)))
-  (i64.const 0))
+  (i64.const -1))
 "#;
 
 

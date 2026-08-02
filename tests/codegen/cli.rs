@@ -7732,6 +7732,90 @@ echo "\n";
 const IN_ARRAY_EXPECTED: &str = r##"1010|11100|101|1010|1010|00|
 "##;
 
+/// Verifies `array_search`, which shares its scan with `in_array` and boxes the result.
+///
+/// One scan serves both: it answers the first matching INDEX, which `in_array` reduces to a bool
+/// and this boxes. `int|false` travels as a Mixed cell — tag 0 carrying the key, tag 3 carrying
+/// false — the same convention `strpos` uses for the same result type, which is why a miss prints
+/// as the empty string here.
+///
+/// Only the LOOSE form exists: the front-end rejects a third operand with "array_search() takes
+/// exactly 2 arguments". So the numeric-string rule applies throughout —
+/// `array_search("1e1", ["a","10","b"])` is 1, and `array_search(" 10", ...)` matches through the
+/// leading whitespace.
+#[test]
+fn test_cli_wasm_array_search_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_array_search");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ARRAY_SEARCH_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the array_search probe");
+    assert!(
+        output.status.success(),
+        "array_search compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the array_search probe under Node");
+    assert!(
+        run.status.success(),
+        "array_search probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), ARRAY_SEARCH_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The `array_search` probe: hits, misses, the numeric-string rule, and the empty haystack.
+const ARRAY_SEARCH_SOURCE: &str = r##"<?php
+function p(mixed $m): void { echo implode("", [$m]), "|"; }
+$i = [10, 20, 30]; $s = ["a", "10", "b"]; $f = [1.5, 2.5]; $e = [];
+p(array_search(20, $i)); p(array_search(99, $i)); p(array_search(10, $i)); p(array_search(30, $i));
+p(array_search("1e1", $s)); p(array_search("a", $s)); p(array_search("z", $s)); p(array_search(" 10", $s));
+p(array_search(2.5, $f)); p(array_search(9.5, $f));
+p(array_search(1, $e));
+p(array_search(1, [1.0, 2.0])); p(array_search(2.0, [1, 2]));
+echo "\n";
+"##;
+
+/// php-src 8.5.6's own output for `ARRAY_SEARCH_SOURCE`.
+const ARRAY_SEARCH_EXPECTED: &str = r##"1||0|2|1|0||1|1|||0|1|
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —
