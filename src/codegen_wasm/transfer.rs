@@ -482,6 +482,7 @@ fn convert_temps_to_dest(
             }
             Ok(None)
         }
+        // handled by the caller, which knows whether the destination owns the value
         TransferKind::BoxMixed => emit_box_temps_into_mixed(
             ctx,
             source_temps,
@@ -504,9 +505,10 @@ fn convert_temps_to_dest(
             let widened = ctx.fresh_temp(ValType::I32);
             ctx.fb.ins(
                 &format!("local.tee {}", widened),
-                "remember the widened array so its creator can free it",
+                "remember the widened array (the callee owns it and releases it)",
             );
-            Ok(Some((widened, IrType::Heap(IrHeapKind::Array))))
+            let _ = widened;
+            Ok(None)
         }
         TransferKind::UnboxMixed => {
             emit_unbox_mixed_to_concrete(ctx, source_temps, dest_repr, dest_ir, &dest_php)?;

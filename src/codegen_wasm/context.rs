@@ -508,6 +508,28 @@ impl<'a> FnCtx<'a> {
             })
             .collect::<Vec<_>>();
 
+        // An indexed-array PARAMETER is owned by the callee: the caller increfs before the call
+        // and never releases, so this is what balances it. That is what gives PHP's by-value
+        // semantics — a mutation inside sees two owners and copies on write, leaving the caller's
+        // array alone; `__rt_array_ensure_unique` hands the callee the clone and drops the
+        // original back to the caller's single reference, which this release must NOT touch.
+        //
+        // A returned parameter moves out instead, and a ref-bound one is the caller's cell.
+        let mut candidates = candidates;
+        for (index, local) in self.function.locals.iter().enumerate() {
+            if index >= self.function.params.len() {
+                break;
+            }
+            let raw = index as u32;
+            if Some(raw) == returned_raw || self.ref_cell_ptrs.contains_key(&raw) {
+                continue;
+            }
+            let php_type = local.php_type.codegen_repr();
+            if matches!(php_type, PhpType::Array(_)) {
+                candidates.push((raw, php_type));
+            }
+        }
+
         for (raw, php_type) in candidates {
             let repr = self.slot_repr(LocalSlotId::from_raw(raw))?.clone();
             match repr {

@@ -412,10 +412,23 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     for (&arg, (param_ir, param_php, by_ref, _)) in inst.operands.iter().zip(&params) {
         if *by_ref {
             push_by_ref_arg(ctx, arg, &mut temp_cells, &mut slot_to_cell)?;
-        } else if let Some(cell) =
-            transfer::emit_push_call_argument(ctx, arg, *param_ir, param_php.clone())?
-        {
-            boxed_args.push(cell);
+        } else {
+            let synthesized =
+                transfer::emit_push_call_argument(ctx, arg, *param_ir, param_php.clone())?;
+            if let Some(cell) = synthesized {
+                boxed_args.push(cell);
+            } else if matches!(*param_ir, IrType::Heap(IrHeapKind::Array)) {
+                // The callee OWNS its array parameter and releases it at every exit, which is
+                // what gives PHP by-value semantics: a mutation inside sees two owners and copies
+                // on write. So the caller lends a counted reference here and never takes it back
+                // — `__rt_array_ensure_unique` consumes it when the callee does copy.
+                let array = ctx.fresh_temp(ValType::I32);
+                ctx.fb.ins(&format!("local.tee {}", array), "array argument");
+                ctx.fb.ins(
+                    &format!("(call $__rt_incref (local.get {}))", array),
+                    "the callee owns its array parameter",
+                );
+            }
         }
     }
 

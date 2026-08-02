@@ -8512,6 +8512,110 @@ const WORDWRAP_EXPECTED: &str = r##"123|1.75|3
 [aaa bbbNccc]
 "##;
 
+/// Verifies an array passed BY VALUE, which PHP copies on write and this target used to corrupt.
+///
+/// The argument was borrowed rather than counted, so a push inside the callee saw one owner and
+/// grew the array in place — and `__rt_array_grow` freed the block the CALLER still pointed at.
+/// The caller then read a dead pointer: `mutate($src)` left `count($src)` answering 0.
+///
+/// The callee OWNS its array parameter now. The caller lends a counted reference and never takes
+/// it back; the callee releases at every exit. Both branches balance: when it mutates,
+/// `__rt_array_ensure_unique` hands it a clone and drops the original back to the caller's single
+/// reference, and the epilogue frees the clone; when it does not, the epilogue simply undoes the
+/// lend. A returned parameter moves out instead.
+///
+/// Every call-site kind is here because a missed lend is an over-release, not a leak: a plain
+/// call, a two-level pass-through, a mutation, two mutations of the same source, a returned
+/// parameter, five levels of recursion, a constructor argument and a method argument.
+#[test]
+fn test_cli_wasm_array_arguments_are_passed_by_value() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_by_value");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, BY_VALUE_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the by-value probe");
+    assert!(
+        output.status.success(),
+        "by-value compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the by-value probe under Node");
+    assert!(
+        run.status.success(),
+        "by-value probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), BY_VALUE_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The by-value probe: one of every call-site kind that can carry an array.
+const BY_VALUE_SOURCE: &str = r##"<?php
+class Bag {
+    public function __construct(public array $items) {}
+    public function size(): int { return count($this->items); }
+    public function grow(array $a): int { $a[] = 9; return count($a); }
+}
+function pass(array $a): int { return inner($a); }
+function inner(array $a): int { return count($a); }
+function mutate(array $a): int { $a[] = 9; return count($a); }
+function twice(array $a): int { $x = mutate($a); $y = mutate($a); if ($x === $y) { return $x; } return 0; }
+function give_back(array $a): array { return $a; }
+function deep(array $a, int $n): int { if ($n <= 0) { return count($a); } return deep($a, $n - 1); }
+function strs(array $a): int { $a[] = "z"; return count($a); }
+
+$src = [1, 2, 3];
+echo pass($src), "|", count($src), "|";
+echo mutate($src), "|", count($src), "|";
+echo twice($src), "|", count($src), "|";
+$b = give_back($src); echo count($b), ":", count($src), "|";
+echo deep($src, 5), "|", count($src), "|";
+$bag = new Bag($src);
+echo $bag->size(), "|", $bag->grow($src), "|", count($src), "|", $bag->size(), "|";
+$w = ["a", "bb"];
+echo strs($w), "|", count($w), "|", implode(",", $w), "|";
+echo implode(",", $src), "\n";
+"##;
+
+/// php-src 8.5.6's own output for `BY_VALUE_SOURCE`.
+const BY_VALUE_EXPECTED: &str = r##"3|3|4|3|4|3|3:3|3|3|3|4|3|3|3|2|a,bb|1,2,3
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —
