@@ -130,6 +130,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::Release => &["compiler-inserted release of a refcounted PHP value"],
         Op::GcCollect => &["the cycle-collection safe point unset(...) emits"],
         Op::LoadStaticProperty => &["Class::$prop read"],
+        Op::ScopedConstantGet => &["Enum::Case read"],
         Op::StoreStaticProperty => &["Class::$prop = ... assignment"],
         Op::Move => &["compiler-inserted ownership move"],
         Op::Borrow => &["compiler-inserted ownership borrow"],
@@ -164,6 +165,10 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         Op::LoadStaticProperty | Op::StoreStaticProperty => &[
             "codegen_wasm::statics::tests::inherited_statics_share_one_slot",
             "codegen::cli::test_cli_wasm_static_properties_match_php",
+        ],
+        Op::ScopedConstantGet => &[
+            "codegen_wasm::statics::tests::enum_cases_get_one_singleton_slot_each",
+            "codegen::cli::test_cli_wasm_enums_match_php",
         ],
         Op::StoreRefCell | Op::AliasLocalRefCell => {
             &["codegen_wasm::tests::ref_cell_alias_string_store_e2e"]
@@ -344,6 +349,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::Release => "codegen_wasm::inst::lower_release",
         Op::GcCollect => "codegen_wasm::inst::lower_gc_collect",
         Op::LoadStaticProperty => "codegen_wasm::inst::lower_load_static_property",
+        Op::ScopedConstantGet => "codegen_wasm::inst::lower_scoped_constant_get",
         Op::StoreStaticProperty => "codegen_wasm::inst::lower_store_static_property",
         Op::Move | Op::Borrow => "codegen_wasm::inst::lower_forward",
         Op::ArrayNew => "codegen_wasm::inst::lower_array_new",
@@ -490,7 +496,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         Op::Warn => "warn",
         Op::ThrowError => "throw_error",
         Op::Acquire | Op::Release | Op::Move | Op::Borrow | Op::Nop | Op::GcCollect => "ownership",
-        Op::LoadStaticProperty | Op::StoreStaticProperty => "object",
+        Op::LoadStaticProperty | Op::StoreStaticProperty | Op::ScopedConstantGet => "object",
         Op::TryPushHandler
         | Op::TryPopHandler
         | Op::ThrowException

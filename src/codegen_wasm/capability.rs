@@ -475,6 +475,7 @@ fn check_instruction_shape(
         Op::LoadStaticProperty | Op::StoreStaticProperty => {
             static_property_shape_issue(module, function, inst)
         }
+        Op::ScopedConstantGet => scoped_constant_shape_issue(module, inst),
         Op::HashAppend => hash_store_value_diagnostic_issue(function, inst, 1),
         Op::ArrayToHash => array_to_hash_shape_issue(function, inst),
         Op::Call => {
@@ -1723,6 +1724,64 @@ fn static_property_shape_issue(
                 slot.php_type.codegen_repr(),
                 value.php_type.codegen_repr()
             ));
+        }
+    }
+    None
+}
+
+/// Validates a scoped constant against the enum-case placement.
+///
+/// Only an ENUM CASE is lowered here: it is the form PHP models as a class constant holding
+/// a singleton object, and the one this backend can materialize. An ordinary class constant
+/// is folded to its literal by the emitter long before this, so anything still arriving as a
+/// `ScopedConstantGet` that is not a case has no shape to give it.
+fn scoped_constant_shape_issue(module: &Module, inst: &Instruction) -> Option<String> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return Some("scoped constant without an interned label".to_string());
+    };
+    let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
+        return Some("scoped constant label is missing from the data pool".to_string());
+    };
+    let Some(slots) = super::statics::plan_static_slots_for_audit(module) else {
+        return Some("enum case placement is unavailable".to_string());
+    };
+    let Some((_, enum_name, case)) = super::statics::resolve_enum_case(module, &slots, label)
+    else {
+        return Some(format!("scoped constant {label} is not an enum case"));
+    };
+    let Some(class_info) = module.class_infos.get(enum_name) else {
+        return Some(format!("enum {enum_name} has no class shape to materialize"));
+    };
+    // The materializer writes `name`, and `value` for a backed case; both must be real slots
+    // whose type the scalar-default writer can render.
+    let mut required = vec![("name", PhpType::Str)];
+    if let Some(value) = &case.value {
+        required.push((
+            "value",
+            match value {
+                crate::types::EnumCaseValue::Int(_) => PhpType::Int,
+                crate::types::EnumCaseValue::Str(_) => PhpType::Str,
+            },
+        ));
+    }
+    for (property, expected) in required {
+        match class_info
+            .properties
+            .iter()
+            .find(|(name, _)| name == property)
+        {
+            Some((_, declared)) if declared.codegen_repr() == expected => {}
+            Some((_, declared)) => {
+                return Some(format!(
+                    "enum {enum_name} case property ${property} is {:?}, not {expected:?}",
+                    declared.codegen_repr()
+                ))
+            }
+            None => {
+                return Some(format!(
+                    "enum {enum_name} has no ${property} property to materialize"
+                ))
+            }
         }
     }
     None
@@ -3247,6 +3306,10 @@ fn property_get_shape_issue(
             .map(|default| default.is_none())
             .unwrap_or(true)
         && !class_info.promoted_properties.contains(property)
+        // An ENUM CASE is the other exception: `name` and `value` are written by the
+        // materializer, and `scoped_constant_get` is the ONLY way to obtain a case object,
+        // so no read can precede those writes.
+        && !module.enum_infos.contains_key(&class_name)
     {
         return Some(format!(
             "typed property ${property} may be uninitialized and requires an exact PHP fatal check"
@@ -5409,6 +5472,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::GcCollect
         | Op::LoadStaticProperty
         | Op::StoreStaticProperty
+        | Op::ScopedConstantGet
         | Op::ArrayPush
         | Op::ArrayToHash
         | Op::HashAppend
@@ -5525,7 +5589,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::EnumBackingStringToInt
         | Op::EnumBackingMixedToInt
         | Op::ClassConstant
-        | Op::ScopedConstantGet
         | Op::ClassAttrNames
         | Op::ClassAttrArgs
         | Op::ClassGetAttributes

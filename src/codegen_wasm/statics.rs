@@ -38,6 +38,9 @@ pub(super) struct StaticSlot {
 }
 
 /// The module's static-property placement, keyed by `"DeclaringClass::name"`.
+///
+/// Enum case singletons share this map under the same `"Enum::CASE"` key shape: a case is
+/// PHP's own class constant holding an object, so one placement serves both.
 pub(super) type StaticSlots = HashMap<String, StaticSlot>;
 
 /// Returns the declaring class of `property` as seen from `class_name`.
@@ -108,7 +111,49 @@ pub(super) fn plan_static_slots(
             cursor += 16;
         }
     }
+    // One pointer slot per enum case. A case is a SINGLETON object PHP builds once, so the
+    // slot starts at zero and the first read materializes it — the same lazy shape the
+    // native uses, and the reason no initializer has to run before `main`.
+    let mut enum_names: Vec<&String> = module.enum_infos.keys().collect();
+    enum_names.sort();
+    for enum_name in enum_names {
+        let Some(info) = module.enum_infos.get(enum_name) else {
+            continue;
+        };
+        for case in &info.cases {
+            let key = slot_key(enum_name, &case.name);
+            if slots.contains_key(&key) {
+                continue;
+            }
+            wm.add_data(DataSegment {
+                offset: cursor,
+                bytes: vec![0u8; 16],
+            });
+            slots.insert(
+                key,
+                StaticSlot {
+                    address: cursor,
+                    php_type: PhpType::Object(enum_name.clone()),
+                },
+            );
+            cursor += 16;
+        }
+    }
     (slots, cursor)
+}
+
+/// Resolves an `Enum::CASE` label to the case's singleton slot, and the case itself.
+pub(super) fn resolve_enum_case<'a>(
+    module: &'a Module,
+    slots: &'a StaticSlots,
+    label: &'a str,
+) -> Option<(&'a StaticSlot, &'a str, &'a crate::types::EnumCaseInfo)> {
+    let (enum_name, case_name) = label.split_once("::")?;
+    let enum_name = enum_name.trim_start_matches('\\');
+    let info = module.enum_infos.get(enum_name)?;
+    let case = info.cases.iter().find(|case| case.name == case_name)?;
+    let slot = slots.get(&slot_key(enum_name, case_name))?;
+    Some((slot, enum_name, case))
 }
 
 /// Builds the placement key for one static property.
@@ -305,6 +350,49 @@ mod tests {
         assert_eq!(
             from_parent.address, from_child.address,
             "Child::$n and Parent::$n must be the same storage"
+        );
+    }
+
+    /// Every enum case gets its OWN singleton slot: `Op::ScopedConstantGet` reads a pointer
+    /// that starts at zero and materializes once, so two cases sharing a slot would make
+    /// `Suit::Hearts === Suit::Spades` answer true.
+    #[test]
+    fn enum_cases_get_one_singleton_slot_each() {
+        assert!(super::super::capability::op_is_supported(
+            crate::ir::Op::ScopedConstantGet
+        ));
+
+        let mut module = Module::new(Target::wasm());
+        module.enum_infos.insert(
+            "Suit".to_string(),
+            crate::types::EnumInfo {
+                backing_type: Some(PhpType::Str),
+                cases: vec![
+                    crate::types::EnumCaseInfo {
+                        name: "Hearts".to_string(),
+                        value: Some(crate::types::EnumCaseValue::Str("H".to_string())),
+                        attribute_names: Vec::new(),
+                        attribute_args: Vec::new(),
+                    },
+                    crate::types::EnumCaseInfo {
+                        name: "Spades".to_string(),
+                        value: Some(crate::types::EnumCaseValue::Str("S".to_string())),
+                        attribute_names: Vec::new(),
+                        attribute_args: Vec::new(),
+                    },
+                ],
+            },
+        );
+        let slots = plan_static_slots_for_audit(&module).expect("placement");
+        let hearts = resolve_enum_case(&module, &slots, "Suit::Hearts").expect("Hearts resolves");
+        let spades = resolve_enum_case(&module, &slots, "Suit::Spades").expect("Spades resolves");
+        assert_ne!(
+            hearts.0.address, spades.0.address,
+            "two cases must not share one singleton"
+        );
+        assert!(
+            resolve_enum_case(&module, &slots, "Suit::Missing").is_none(),
+            "an unknown case must not resolve"
         );
     }
 

@@ -117,6 +117,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::GcCollect => lower_gc_collect(ctx),
         Op::LoadStaticProperty => lower_load_static_property(ctx, &inst),
         Op::StoreStaticProperty => lower_store_static_property(ctx, &inst),
+        Op::ScopedConstantGet => lower_scoped_constant_get(ctx, &inst),
         Op::HashAppend => super::inst_hash::lower_hash_append(ctx, &inst),
         Op::HashUnion => super::inst_hash::lower_hash_union(ctx, &inst),
         Op::ArrayUnion => super::inst_hash::lower_array_union(ctx, &inst),
@@ -2920,6 +2921,94 @@ fn static_property_slot<'a>(
     super::statics::resolve_label(ctx.module, ctx.static_slots, label).ok_or_else(|| {
         WasmError::Unsupported(format!("static property {label} has no lowered slot"))
     })
+}
+
+/// Lowers `Op::ScopedConstantGet` for an ENUM CASE (`Suit::Hearts`).
+///
+/// A case is PHP's own class constant holding a SINGLETON object, so this reads a pointer
+/// slot that starts at zero and materializes the object on first use — the same lazy shape
+/// the native backend uses, which is what keeps a program that never touches an enum from
+/// paying for one.
+///
+/// The read hands out an OWNED reference: the consumer acquires into its destination and
+/// releases the temporary, so without the incref the singleton's count would drift down by
+/// one per read and the case would be freed while its slot still points at it.
+fn lower_scoped_constant_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let label = ctx
+        .module
+        .data
+        .strings
+        .get(data_immediate(inst)?.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| {
+            WasmError::Unsupported("scoped constant without an interned label".to_string())
+        })?;
+    let (address, enum_name, case_name, case_value) = {
+        let (slot, enum_name, case) =
+            super::statics::resolve_enum_case(ctx.module, ctx.static_slots, &label).ok_or_else(
+                || WasmError::Unsupported(format!("scoped constant {label} is not an enum case")),
+            )?;
+        (
+            slot.address,
+            enum_name.to_string(),
+            case.name.clone(),
+            case.value.clone(),
+        )
+    };
+    let class_info = ctx
+        .module
+        .class_infos
+        .get(&enum_name)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported(format!("enum {enum_name} has no class shape")))?;
+
+    let cached = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(
+        &format!("(i32.load offset={address} (i32.const 0))"),
+        "the case singleton, or zero on first use",
+    );
+    ctx.fb.ins(&format!("local.set {}", cached), "cached singleton");
+    ctx.fb
+        .ins(&format!("(if (i32.eqz (local.get {}))", cached), "materialize once");
+    ctx.fb.ins("(then", "first read of this case");
+    let object = super::objects::emit_object_allocation(ctx, &enum_name, &class_info)?;
+    // `name` is every case's property; a BACKED enum adds `value`.
+    let (_, name_offset, _) = super::objects::resolve_property_slot(&class_info, "name")?;
+    super::objects::emit_scalar_default(
+        ctx,
+        &object,
+        name_offset,
+        &crate::codegen::LiteralDefaultValue::Str(case_name.clone()),
+        "name",
+    )?;
+    if let Some(value) = &case_value {
+        let (_, value_offset, _) = super::objects::resolve_property_slot(&class_info, "value")?;
+        let literal = match value {
+            crate::types::EnumCaseValue::Int(number) => {
+                crate::codegen::LiteralDefaultValue::Int(*number)
+            }
+            crate::types::EnumCaseValue::Str(text) => {
+                crate::codegen::LiteralDefaultValue::Str(text.clone())
+            }
+        };
+        super::objects::emit_scalar_default(ctx, &object, value_offset, &literal, "value")?;
+    }
+    ctx.fb.ins("i32.const 0", "static region base");
+    ctx.fb.ins(&format!("local.get {}", object), "the fresh singleton");
+    ctx.fb
+        .ins(&format!("i32.store offset={address}"), "publish the singleton");
+    ctx.fb.ins(
+        &format!("(local.set {} (local.get {}))", cached, object),
+        "use it for this read too",
+    );
+    ctx.fb.ins("))", "close the materialization guard");
+
+    ctx.fb.ins(
+        &format!("(call $__rt_incref (local.get {}))", cached),
+        "a case read hands out an OWNED reference",
+    );
+    ctx.fb.ins(&format!("local.get {}", cached), "the case singleton");
+    store_result(ctx, inst)
 }
 
 /// Drops the reference a static store CONSUMED, when the EIR handed one over.

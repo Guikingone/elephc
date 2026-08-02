@@ -744,7 +744,7 @@ fn receiver_class_info(ctx: &FnCtx, object: ValueId) -> Result<(String, ClassInf
 
 /// Looks up a declared property's `(index, byte_offset, php_type)` on `ci`, rejecting
 /// undeclared properties (dynamic/`__get` are later sub-phases).
-fn resolve_property_slot(ci: &ClassInfo, property: &str) -> Result<(usize, usize, PhpType)> {
+pub(super) fn resolve_property_slot(ci: &ClassInfo, property: &str) -> Result<(usize, usize, PhpType)> {
     let index = ci
         .properties
         .iter()
@@ -962,7 +962,7 @@ pub(super) fn lower_object_new(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
 /// property defaults, and the dynamic-property hash tail. Shared by `ObjectNew` and by the
 /// runtime-error raise sites, so an object built by a division-by-zero guard is byte-identical
 /// to one built by `new` — including the gc_desc contract its release path depends on.
-fn emit_object_allocation(
+pub(super) fn emit_object_allocation(
     ctx: &mut FnCtx,
     class_name: &str,
     ci: &ClassInfo,
@@ -1200,7 +1200,7 @@ pub(super) fn emit_runtime_error_throw(
 /// resolves its bytes by content (they carry no `DataId` at a construction site) and stores an
 /// OWNED heap copy, because the slot's gc_desc tag makes the object's release path decref it.
 /// Arrays and sentinels remain unsupported.
-fn emit_scalar_default(
+pub(super) fn emit_scalar_default(
     ctx: &mut FnCtx,
     obj: &str,
     offset: usize,

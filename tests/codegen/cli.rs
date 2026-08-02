@@ -8177,6 +8177,96 @@ echo "\n";
 /// php-src 8.5.6's own output for `ARRAY_PROPERTY_SOURCE`.
 const ARRAY_PROPERTY_EXPECTED: &str = "2,null;0;1111111111111111111111111111111111111111\n";
 
+/// Enums: string-backed, int-backed and pure, read through `->value` and `->name`, compared
+/// by identity, and passed to a typed parameter.
+#[test]
+fn test_cli_wasm_enums_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_enums");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ENUM_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the enum probe");
+    assert!(
+        output.status.success(),
+        "enum compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the enum probe under Node");
+    assert!(
+        run.status.success(),
+        "enum probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), ENUM_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The enum probe. `$s === Suit::Spades` reading `same` while `$s === Suit::Hearts` reads
+/// `diff` is what proves each case is ONE singleton — two allocations per read would make
+/// every identity comparison false.
+const ENUM_SOURCE: &str = r##"<?php
+enum Suit: string {
+    case Hearts = "H";
+    case Spades = "S";
+    case Clubs = "C";
+}
+enum Level: int {
+    case Low = 1;
+    case High = 10;
+}
+enum Flag {
+    case On;
+    case Off;
+}
+echo Suit::Hearts->value, Suit::Spades->value, Suit::Clubs->value, ";";
+echo Suit::Hearts->name, ",", Suit::Spades->name, ";";
+echo Level::Low->value + Level::High->value, ";";
+echo Level::Low->name, ",", Flag::On->name, ",", Flag::Off->name, ";";
+$s = Suit::Spades;
+echo $s->value, ",", $s === Suit::Spades ? "same" : "diff", ",", $s === Suit::Hearts ? "same" : "diff", ";";
+function describe(Suit $s): string { return $s->name . "=" . $s->value; }
+echo describe(Suit::Clubs), ";";
+echo Suit::Hearts === Suit::Hearts ? "id" : "no", "\n";
+"##;
+
+/// php-src 8.5.6's own output for `ENUM_SOURCE`.
+const ENUM_EXPECTED: &str = "HSC;Hearts,Spades;11;Low,On,Off;S,same,diff;Clubs=C;id\n";
+
 /// Variadic parameters: free functions, an instance method and a static one, with and
 /// without leading fixed parameters, over int and string element types.
 #[test]

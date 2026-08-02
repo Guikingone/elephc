@@ -3178,16 +3178,22 @@
           "name": "scoped_constant_get",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "Enum::Case read"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::statics",
+            "lowerer": "codegen_wasm::inst::lower_scoped_constant_get",
+            "tests": [
+              "codegen_wasm::statics::tests::enum_cases_get_one_singleton_slot_each",
+              "codegen::cli::test_cli_wasm_enums_match_php"
+            ]
+          }
         },
         {
           "name": "class_attr_names",
@@ -12884,14 +12890,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 203,
+    "supported": 204,
     "excluded": 47,
-    "missing": 462,
-    "evidence_gaps": 170,
-    "row_evidence_gaps": 169,
+    "missing": 461,
+    "evidence_gaps": 169,
+    "row_evidence_gaps": 168,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "462 reachable identities lack a WASM lowerer; 169 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "461 reachable identities lack a WASM lowerer; 168 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

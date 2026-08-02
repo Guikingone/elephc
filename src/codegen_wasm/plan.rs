@@ -129,6 +129,22 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // that can actually raise one — which needs both a failing operation and a `try` able to
     // receive it — so every other module's data segments stay byte-identical.
     let mut layout_values = objects::literal_default_strings(&module.class_infos);
+    // An enum case's `name` — and a string-backed case's `value` — are written by the
+    // materializer as string defaults, so they need addresses for the same reason.
+    for (enum_name, info) in &module.enum_infos {
+        let _ = enum_name;
+        for case in &info.cases {
+            if !layout_values.contains(&case.name) {
+                layout_values.push(case.name.clone());
+            }
+            if let Some(crate::types::EnumCaseValue::Str(text)) = &case.value {
+                if !layout_values.contains(text) {
+                    layout_values.push(text.clone());
+                }
+            }
+        }
+    }
+    layout_values.sort();
     if has_main
         && super::function::module_uses_exceptions(module)
         && super::function::module_raises_runtime_errors(module)
