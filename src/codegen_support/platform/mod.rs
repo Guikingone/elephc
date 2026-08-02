@@ -12,7 +12,7 @@ mod linux_transform;
 mod target;
 mod toolchain;
 
-pub use target::{AppleVariant, Arch, Platform, Target};
+pub use target::{AppleVariant, Arch, Platform, Target, APPLE_IOS_MIN_OS};
 
 #[cfg(test)]
 mod tests {
@@ -102,6 +102,38 @@ mod tests {
         assert_eq!(simulator.apple_sdk_name(), "iphonesimulator");
         assert_eq!(simulator.apple_platform_name(), "ios-simulator");
         assert_eq!(simulator.apple_triple_os(), "ios");
+    }
+
+    /// A Mach-O object records the platform it was assembled for, and `ld`
+    /// refuses to link a macOS-tagged object into an iOS image. `as` cannot
+    /// express "iOS", so non-macOS Apple targets assemble through `clang` and
+    /// this triple is what carries the platform.
+    ///
+    /// The deployment floor must be the same value the linker records in
+    /// `-platform_version`; a mismatch between an object's `LC_BUILD_VERSION`
+    /// and the image's is itself a link error, which is why both read
+    /// `APPLE_IOS_MIN_OS`.
+    #[test]
+    fn test_apple_clang_triple_carries_the_platform() {
+        assert_eq!(
+            Target::new(Platform::MacOS, Arch::AArch64).apple_clang_triple(),
+            "arm64-apple-macos"
+        );
+        assert_eq!(
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS).apple_clang_triple(),
+            format!("arm64-apple-ios{APPLE_IOS_MIN_OS}")
+        );
+        assert_eq!(
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator).apple_clang_triple(),
+            format!("arm64-apple-ios{APPLE_IOS_MIN_OS}-simulator")
+        );
+
+        // Device and simulator must not share a triple: clang stamps a distinct
+        // Mach-O platform from each, and ld rejects the wrong one.
+        assert_ne!(
+            Target::new_apple(Arch::AArch64, AppleVariant::IOS).apple_clang_triple(),
+            Target::new_apple(Arch::AArch64, AppleVariant::IOSSimulator).apple_clang_triple()
+        );
     }
 
     /// The arm64 Darwin backend serves iOS unchanged, so the central gate must

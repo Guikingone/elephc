@@ -18,7 +18,7 @@ mod sdk;
 use std::path::{Path, PathBuf};
 use std::process::{self, Command};
 
-use crate::codegen::platform::{Platform, Target};
+use crate::codegen::platform::{AppleVariant, Platform, Target};
 use crate::codegen::Emit;
 use crate::link_plan::{LinkItem, LinkPlan};
 
@@ -69,12 +69,38 @@ pub(crate) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
     bridges::php_extension_for_lib(lib_name)
 }
 
-/// Invokes the target assembler for one generated assembly source file.
-pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
+/// Builds the assembler invocation for a target, minus the input and output.
+///
+/// A Mach-O object records the platform it was built for, and `ld` refuses to
+/// link a macOS-tagged object into an iOS image — the failure reads
+/// *"building for 'iOS-simulator', but linking in object file built for
+/// 'macOS'"*. Plain `as` has no way to say "iOS", so non-macOS Apple targets
+/// assemble through `clang`, which stamps the platform from `-target` and needs
+/// the matching SDK to resolve it.
+///
+/// Shared by the user object and the cached runtime object. Both must carry the
+/// same platform or the link fails on whichever one disagrees, and they used to
+/// build this command separately.
+pub(crate) fn assembler_command(target: Target) -> Command {
+    if target.platform == Platform::MacOS && target.apple_variant != AppleVariant::MacOS {
+        let sdk_path = sdk::macos_sdk_path(target.apple_sdk_name());
+        let mut assembler = Command::new("clang");
+        assembler
+            .arg("-c")
+            .args(["-target", &target.apple_clang_triple()])
+            .args(["-isysroot", &sdk_path]);
+        return assembler;
+    }
     let mut assembler = Command::new(target.assembler_cmd());
     if target.platform == Platform::MacOS {
         assembler.args(["-arch", target.darwin_arch_name()]);
     }
+    assembler
+}
+
+/// Invokes the target assembler for one generated assembly source file.
+pub(crate) fn assemble(target: Target, asm_path: &Path, obj_path: &Path) {
+    let mut assembler = assembler_command(target);
     assembler.arg("-o").arg(obj_path).arg(asm_path);
     command::run_tool("Assembler", &mut assembler);
 }

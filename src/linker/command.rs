@@ -115,7 +115,9 @@ pub(super) fn run_tool(name: &str, command: &mut Command) {
 fn apple_min_os_version<'a>(target: Target, sdk_version: &'a str) -> &'a str {
     match target.apple_variant {
         AppleVariant::MacOS => sdk_version,
-        AppleVariant::IOS | AppleVariant::IOSSimulator => "13.0",
+        AppleVariant::IOS | AppleVariant::IOSSimulator => {
+            crate::codegen::platform::APPLE_IOS_MIN_OS
+        }
     }
 }
 

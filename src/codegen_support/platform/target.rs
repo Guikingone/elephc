@@ -31,6 +31,15 @@ pub enum Arch {
     X86_64,
 }
 
+/// Deployment floor recorded for iOS builds.
+///
+/// One constant on purpose: the assembler stamps it into each object's
+/// `LC_BUILD_VERSION` and the linker stamps it into the image's
+/// `-platform_version`. If those disagree the link fails, so they must read the
+/// same value. iOS SDK versions run far ahead of any sensible floor, which is
+/// why this is not derived from the SDK the way macOS derives its own.
+pub const APPLE_IOS_MIN_OS: &str = "13.0";
+
 /// Which Apple platform a Darwin target is built for.
 ///
 /// iOS is deliberately *not* a `Platform`. Every syscall number, struct offset,
@@ -601,6 +610,22 @@ impl Target {
             AppleVariant::MacOS => "macos",
             AppleVariant::IOS => "ios",
             AppleVariant::IOSSimulator => "ios-simulator",
+        }
+    }
+
+    /// Returns the `clang -target` triple for a Darwin target.
+    ///
+    /// Used for assembling, because a Mach-O object records the platform it was
+    /// built for and `ld` refuses to link a macOS-tagged object into an iOS
+    /// image. `as` has no way to express "iOS", so the triple is what carries it.
+    pub fn apple_clang_triple(&self) -> String {
+        let arch = self.darwin_arch_name();
+        match self.apple_variant {
+            AppleVariant::MacOS => format!("{arch}-apple-macos"),
+            AppleVariant::IOS => format!("{arch}-apple-ios{APPLE_IOS_MIN_OS}"),
+            AppleVariant::IOSSimulator => {
+                format!("{arch}-apple-ios{APPLE_IOS_MIN_OS}-simulator")
+            }
         }
     }
 
