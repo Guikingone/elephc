@@ -9173,7 +9173,7 @@
           "name": "round",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "round(...)"
           ],
@@ -9181,7 +9181,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
+              "codegen::cli::test_cli_wasm_round_and_radix_conversions_match_php"
+            ],
+            "notes": "Precision-0 form. Half away from ZERO, compared against trunc(x) rather than floor(|x|+0.5) — the addition is inexact at 0.49999999999999994 and above 2^52. Verified on 104 values."
+          }
         },
         {
           "name": "sin",
@@ -12829,14 +12837,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 195,
+    "supported": 196,
     "excluded": 47,
-    "missing": 470,
+    "missing": 469,
     "evidence_gaps": 176,
     "row_evidence_gaps": 175,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "470 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "469 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

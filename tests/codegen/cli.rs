@@ -8233,6 +8233,98 @@ boom|42|RuntimeException
 3:2|a,b,z:a,b|3:2|1,2,3:1,2|1,2,4,5:1,2|
 "##;
 
+/// Verifies `round` and `sprintf`'s radix conversions against php-src.
+///
+/// PHP's `round` is half away from ZERO, where WebAssembly's `f64.nearest` is half to EVEN — it
+/// answers 2 for `round(2.5)` where PHP answers 3. The naive repair `floor(|x| + 0.5)` is worse:
+/// the addition is inexact, so `round(0.49999999999999994)` answers 1 instead of 0, and above
+/// 2^52 it perturbs values that are already integers. Comparing against `trunc(x)` is exact, and
+/// `f64.trunc` carries the sign of zero, which PHP prints — `round(-0.4)` is `-0`.
+///
+/// `%x`, `%X`, `%b` and `%o` read the argument as UNSIGNED, so `-1` prints as `ffffffffffffffff`
+/// and no sign is ever emitted whatever the flags say.
+#[test]
+fn test_cli_wasm_round_and_radix_conversions_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_round");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ROUND_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the round probe");
+    assert!(
+        output.status.success(),
+        "round compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the round probe under Node");
+    assert!(
+        run.status.success(),
+        "round probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), ROUND_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The probe: both halfway directions, the 0.49999999999999994 trap, the 2^52/2^53 boundaries,
+/// infinities and NaN, then every radix conversion including negatives and both i64 extremes.
+const ROUND_SOURCE: &str = r##"<?php
+foreach ([0.0, -0.0, 0.5, -0.5, 1.5, -1.5, 2.5, -2.5, 2.4, -2.4, 2.6] as $v) { echo round($v), "|"; }
+echo "\n";
+foreach ([0.49999999999999994, -0.49999999999999994, 4503599627370495.5, 9007199254740993.0] as $v) { echo round($v), "|"; }
+echo "\n";
+foreach ([1e15, 1e16, -1e16, 1e300, -1e300, INF, -INF, NAN, 1e-300] as $v) { echo round($v), "|"; }
+echo "\n";
+echo sprintf("%x|%X|%b|%o", 255, 255, 5, 8), "\n";
+echo sprintf("%x|%X|%b|%o", -1, -255, -1, -1), "\n";
+echo sprintf("[%08x][%-8x][%8b][%08b]", 255, 255, 5, 5), "\n";
+echo sprintf("%x|%b", PHP_INT_MAX, PHP_INT_MIN), "\n";
+"##;
+
+/// php-src 8.5.6's own output for `ROUND_SOURCE`.
+const ROUND_EXPECTED: &str = r##"0|-0|1|-1|2|-2|3|-3|2|-2|3|
+0|-0|4.5035996273705E+15|9.007199254741E+15|
+1.0E+15|1.0E+16|-1.0E+16|1.0E+300|-1.0E+300|INF|-INF|NAN|0|
+ff|FF|101|10
+ffffffffffffffff|FFFFFFFFFFFFFF01|1111111111111111111111111111111111111111111111111111111111111111|1777777777777777777777
+[000000ff][ff      ][     101][00000101]
+7fffffffffffffff|1000000000000000000000000000000000000000000000000000000000000000
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

@@ -42,6 +42,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_CONTAINS);
     wm.add_raw_func(RT_STR_MAP_CASE);
     wm.add_raw_func(RT_STR_REVERSE);
+    wm.add_raw_func(RT_ROUND);
     wm.add_raw_func(RT_STR_ALLOC);
     wm.add_raw_func(RT_STR_BIN2HEX);
     wm.add_raw_func(RT_STR_ADDSLASHES);
@@ -75,6 +76,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_WORDWRAP);
     wm.add_raw_func(RT_FMT_PAD);
     wm.add_raw_func(RT_FMT_INT);
+    wm.add_raw_func(RT_FMT_UINT_RADIX);
     wm.add_raw_func(RT_FMT_STR);
     wm.add_raw_func(RT_FMT_FLOAT);
     wm.add_raw_func(RT_PAD_BYTE);
@@ -143,6 +145,31 @@ const RT_STR_REVERSE: &str = r#"(func $__rt_str_reverse (param $ptr i32) (param 
     (local.set $i (i64.add (local.get $i) (i64.const 1)))         ;; i++
     (br $rev)))
   (local.get $out) (local.get $olen))                             ;; owned result
+"#;
+
+/// `__rt_round`: PHP's `round()` at precision 0 — half away from ZERO.
+///
+/// WebAssembly's `f64.nearest` is half-to-EVEN, so it answers 2 for `round(2.5)` where PHP answers
+/// 3. The naive repair, `floor(|x| + 0.5)`, is worse: the addition is inexact, so
+/// `round(0.49999999999999994)` answers 1 where PHP answers 0, and above 2^52 it perturbs values
+/// that are already integers.
+///
+/// Comparing against the TRUNCATED part instead is exact — `x - trunc(x)` loses nothing for
+/// |x| < 2^53, and above it the difference is zero because x is already an integer. `f64.trunc`
+/// also carries the sign of zero, which PHP prints: `round(-0.4)` is `-0`.
+///
+/// Verified on 104 values against php-src 8.5.6, including both halfway directions, the
+/// 0.49999999999999994 trap, the 2^52/2^53 boundaries, infinities and NaN.
+const RT_ROUND: &str = r#"(func $__rt_round (param $x f64) (result f64)
+  (local $t f64)
+  (if (f64.ne (local.get $x) (local.get $x))                ;; NaN rounds to itself
+    (then (return (local.get $x))))
+  (if (f64.eq (f64.abs (local.get $x)) (f64.const inf))     ;; so does an infinity
+    (then (return (local.get $x))))
+  (local.set $t (f64.trunc (local.get $x)))                 ;; keeps the sign of zero
+  (if (f64.ge (f64.abs (f64.sub (local.get $x) (local.get $t))) (f64.const 0.5))
+    (then (return (f64.add (local.get $t) (f64.copysign (f64.const 1) (local.get $x))))))
+  (local.get $t))
 "#;
 
 /// `__rt_str_alloc`: reserves an owned kind-1 string block of `bytes` capacity.
@@ -2104,9 +2131,9 @@ pub(super) fn parse_sprintf_format(
         }
         let conversion = format[i];
         i += 1;
-        if !matches!(conversion, b'd' | b's' | b'f') {
+        if !matches!(conversion, b'd' | b's' | b'f' | b'x' | b'X' | b'b' | b'o') {
             return Err(format!(
-                "conversion '%{}' is outside the lowered subset (%%, %d, %s, %f)",
+                "conversion '%{}' is outside the lowered subset (%%, %d, %s, %f, %x, %X, %b, %o)",
                 conversion as char
             ));
         }
@@ -2247,6 +2274,37 @@ const RT_FMT_INT: &str = r#"(func $__rt_fmt_int (param $value i64) (param $plus 
     (local.get $width) (local.get $pad) (local.get $left)))
 "#;
 
+/// `__rt_fmt_uint_radix`: renders `%x`, `%X`, `%b` and `%o` — the value as UNSIGNED, in `$radix`.
+///
+/// PHP reads the argument as an unsigned 64-bit word for these, so `-1` prints as
+/// `ffffffffffffffff` and no sign is ever emitted, whatever the `+` flag says. Measured across
+/// 0, 1, 255, 4095, -1, -255 and both i64 extremes in all four conversions.
+///
+/// 64 binary digits is the widest any radix produces, so the scratch is sized for that.
+const RT_FMT_UINT_RADIX: &str = r#"(func $__rt_fmt_uint_radix (param $value i64) (param $radix i64) (param $upper i32) (param $width i64) (param $pad i32) (param $left i32) (result i32) (result i64)
+  (local $digits i32)
+  (local $n i32)
+  (local $w i32)
+  (local $d i32)
+  (local.set $digits (call $__rt_str_alloc (i64.const 64)))       ;; %b of -1 is 64 digits
+  (local.set $w (i32.const 64))
+  (block $end (loop $emit
+    (local.set $w (i32.sub (local.get $w) (i32.const 1)))
+    (local.set $d (i32.wrap_i64 (i64.rem_u (local.get $value) (local.get $radix))))
+    (if (i32.lt_u (local.get $d) (i32.const 10))
+      (then (local.set $d (i32.add (local.get $d) (i32.const 48))))         ;; '0'..'9'
+      (else (local.set $d (i32.add (local.get $d)
+              (select (i32.const 55) (i32.const 87) (local.get $upper)))))) ;; 'A'-10 or 'a'-10
+    (i32.store8 (i32.add (local.get $digits) (local.get $w)) (local.get $d))
+    (local.set $value (i64.div_u (local.get $value) (local.get $radix)))
+    (br_if $end (i64.eqz (local.get $value)))                     ;; zero still emits one digit
+    (br $emit)))
+  (local.set $n (i32.sub (i32.const 64) (local.get $w)))
+  (call $__rt_fmt_pad (i32.add (local.get $digits) (local.get $w))
+    (i64.extend_i32_u (local.get $n)) (i32.const 0)               ;; never a sign character
+    (local.get $width) (local.get $pad) (local.get $left)))
+"#;
+
 /// `__rt_fmt_str`: renders `%s` — the string, truncated by any precision, then the field.
 ///
 /// A precision TRUNCATES rather than pads, so `%.2s` of "abcdef" is "ab"; `$has_prec` tells an
@@ -2384,6 +2442,26 @@ fn emit_formatted_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                             .ins(&format!("i32.const {}", i32::from(*left)), "left-justified?");
                         ctx.fb.ins("call $__rt_fmt_int", "render %d");
                     }
+                    b'x' | b'X' | b'b' | b'o' => {
+                        // PHP reads these as UNSIGNED, so no sign is ever emitted and the `+`
+                        // flag does not reach them.
+                        let (radix, upper) = match conversion {
+                            b'x' => (16, 0),
+                            b'X' => (16, 1),
+                            b'b' => (2, 0),
+                            _ => (8, 0),
+                        };
+                        ctx.emit_load_value(value)?;
+                        ctx.fb.ins(&format!("i64.const {radix}"), "radix");
+                        ctx.fb
+                            .ins(&format!("i32.const {upper}"), "uppercase alphabet?");
+                        ctx.fb.ins(&format!("i64.const {width}"), "field width");
+                        ctx.fb.ins(&format!("i32.const {pad}"), "padding character");
+                        ctx.fb
+                            .ins(&format!("i32.const {}", i32::from(*left)), "left-justified?");
+                        ctx.fb
+                            .ins("call $__rt_fmt_uint_radix", "render an unsigned radix field");
+                    }
                     b's' => {
                         ctx.emit_load_value(value)?;
                         ctx.fb.ins(
@@ -2469,7 +2547,7 @@ fn sprintf_shape_issue(
             return Some("argument is missing from the value table".to_string());
         };
         let (want_ir, want_php) = match conversion {
-            b'd' => (IrType::I64, PhpType::Int),
+            b'd' | b'x' | b'X' | b'b' | b'o' => (IrType::I64, PhpType::Int),
             b'f' => (IrType::F64, PhpType::Float),
             _ => (IrType::Str, PhpType::Str),
         };
@@ -3029,6 +3107,7 @@ fn direct_builtin(target: RuntimeFnId, operand_php: &PhpType) -> Option<(DirectS
             _ => None,
         },
         RuntimeFnId::Floor => float("f64.floor"),
+        RuntimeFnId::Round => float("call $__rt_round"),
         RuntimeFnId::Ceil => float("f64.ceil"),
         RuntimeFnId::Sqrt => float("f64.sqrt"),
         _ => None,
@@ -3041,6 +3120,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
         target,
         RuntimeFnId::Abs
             | RuntimeFnId::Floor
+            | RuntimeFnId::Round
             | RuntimeFnId::Ceil
             | RuntimeFnId::Sqrt
             | RuntimeFnId::Count
@@ -6263,9 +6343,18 @@ mod tests {
         // An absent precision on %f is SIX, which the lowering supplies, not zero.
         assert_eq!(conv(&parse_sprintf_format(b"%f", 1).unwrap()[0]).4, None);
 
+        // The radix conversions read the argument as UNSIGNED and carry no sign.
+        for radix in [&b"%x"[..], b"%X", b"%b", b"%o"] {
+            assert!(
+                parse_sprintf_format(radix, 1).is_ok(),
+                "{} is lowered",
+                String::from_utf8_lossy(radix)
+            );
+        }
+
         // Refused rather than guessed.
         for (format, why) in [
-            (&b"%x"[..], "a conversion outside the subset"),
+            (&b"%e"[..], "a conversion outside the subset"),
             (&b"%-08.2f"[..], "php-src loses the precision for '-' with '0' on %f"),
             (&b"%"[..], "a lone trailing percent"),
             (&b"%d"[..], "more conversions than arguments"),

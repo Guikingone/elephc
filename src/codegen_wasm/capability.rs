@@ -4578,6 +4578,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayReduce
         | RuntimeFnId::Abs
         | RuntimeFnId::Floor
+        | RuntimeFnId::Round
         | RuntimeFnId::Ceil
         | RuntimeFnId::Sqrt
         | RuntimeFnId::Count
@@ -4883,7 +4884,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Rad2deg
         | RuntimeFnId::Rand
         | RuntimeFnId::RandomInt
-        | RuntimeFnId::Round
         | RuntimeFnId::Sin
         | RuntimeFnId::Sinh
         | RuntimeFnId::Tan
