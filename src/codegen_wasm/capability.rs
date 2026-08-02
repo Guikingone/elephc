@@ -445,6 +445,7 @@ fn check_instruction_shape(
         Op::ArraySet => array_store_shape_issue(function, inst, 2, false),
         Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
         Op::ArrayToMixed => array_to_mixed_shape_issue(function, inst),
+        Op::LooseEq | Op::LooseNotEq => loose_eq_shape_issue(function, inst),
         Op::IterStart => iter_start_shape_issue(function, inst),
         Op::IterCurrentValueRef => iter_current_value_ref_shape_issue(function, inst),
         Op::ArrayGet | Op::ArrayGetSilent => {
@@ -1333,6 +1334,50 @@ fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option
             inst.op.name(),
             kinds[0],
             kinds[1]
+        ));
+    }
+    None
+}
+
+/// Validates `Op::LooseEq`/`Op::LooseNotEq` against the pairs the lowerer implements.
+///
+/// PHP 8's `==` table is much wider than this: anything involving a Mixed cell, an array, an
+/// object, or a bool against a number needs rules this backend has not measured yet, and answering
+/// those by guessing would be a silently wrong answer rather than a refusal.
+fn loose_eq_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+    let [left, right] = inst.operands.as_slice() else {
+        return Some(format!(
+            "loose comparison takes two operands, got {}",
+            inst.operands.len()
+        ));
+    };
+    let mut kinds = Vec::new();
+    for operand in [left, right] {
+        let Some(value) = function.value(*operand) else {
+            return Some("loose comparison operand is missing from the value table".to_string());
+        };
+        kinds.push((value.ir_type, value.php_type.codegen_repr()));
+    }
+    let admitted = match (&kinds[0], &kinds[1]) {
+        ((IrType::I64, left), (IrType::I64, right)) => {
+            // Two ints or two bools compare as machine words; a bool against a number is a
+            // DIFFERENT rule (PHP casts the number to bool) and is not lowered.
+            matches!(
+                (left, right),
+                (PhpType::Int, PhpType::Int)
+                    | (PhpType::Bool | PhpType::False, PhpType::Bool | PhpType::False)
+            )
+        }
+        ((IrType::F64, PhpType::Float), (IrType::F64, PhpType::Float)) => true,
+        ((IrType::Str, PhpType::Str), (IrType::Str, PhpType::Str)) => true,
+        ((IrType::I64, PhpType::Int), (IrType::F64, PhpType::Float)) => true,
+        ((IrType::F64, PhpType::Float), (IrType::I64, PhpType::Int)) => true,
+        _ => false,
+    };
+    if !admitted {
+        return Some(format!(
+            "loose comparison of {:?}/{:?} against {:?}/{:?} is not lowered",
+            kinds[0].0, kinds[0].1, kinds[1].0, kinds[1].1
         ));
     }
     None
@@ -5051,6 +5096,8 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::StrLen
         | Op::StrPersist
         | Op::ArrayToMixed
+        | Op::LooseEq
+        | Op::LooseNotEq
         | Op::ConcatReset
         | Op::ArrayNew
         | Op::HashNew
@@ -5126,8 +5173,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::StrEq
         | Op::StrCmp
         | Op::StrLooseEq
-        | Op::LooseEq
-        | Op::LooseNotEq
         | Op::Spaceship
         | Op::TypePredicate
         | Op::IsEmpty
@@ -5241,7 +5286,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_module as validate_and_plan, LoweredWasmPlan, WasmError};
+    use super::{loose_eq_shape_issue, validate_module as validate_and_plan, LoweredWasmPlan, WasmError};
     use crate::codegen::platform::Target;
     use crate::codegen::Emit;
     use crate::ir::{
@@ -5252,6 +5297,87 @@ mod tests {
     use crate::span::Span;
     use crate::types::{ClassInfo, FunctionSig, PhpType};
     use std::collections::{HashMap, HashSet};
+
+    /// `Op::LooseEq` admits only the operand pairs whose rule was MEASURED against php-src.
+    ///
+    /// PHP 8's `==` table is much wider than what is lowered: a bool against a number casts the
+    /// number to bool, a Mixed cell dispatches on its tag, and arrays compare element-wise.
+    /// Answering those by guessing would be a silently wrong answer rather than a refusal, so the
+    /// gate keeps them out.
+    #[test]
+    fn loose_equality_admits_only_measured_pairs() {
+        let probe_op = |op: Op, left: (IrType, PhpType), right: (IrType, PhpType)| {
+            let mut function =
+                Function::new("probe".to_string(), IrType::Void, PhpType::Void);
+            {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                let mut operands = Vec::new();
+                for (index, (ir, php)) in [left.clone(), right.clone()].into_iter().enumerate() {
+                    let slot = builder.add_local(
+                        Some(format!("a{index}")),
+                        ir,
+                        php.clone(),
+                        LocalKind::PhpLocal,
+                    );
+                    operands.push(builder.emit_load_local(slot, ir, php));
+                }
+                builder.emit(
+                    op,
+                    operands,
+                    None,
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                );
+                builder.terminate(Terminator::Return { value: None });
+            }
+            let inst = function
+                .instructions
+                .last()
+                .expect("the probe emitted a comparison")
+                .clone();
+            loose_eq_shape_issue(&function, &inst)
+        };
+        // `!=` is the same gate negated, so both opcodes go through the same predicate.
+        let probe = |left: (IrType, PhpType), right: (IrType, PhpType)| {
+            let eq = probe_op(Op::LooseEq, left.clone(), right.clone());
+            let ne = probe_op(Op::LooseNotEq, left, right);
+            assert_eq!(eq.is_some(), ne.is_some(), "== and != must gate alike");
+            eq
+        };
+
+        let int = (IrType::I64, PhpType::Int);
+        let boolean = (IrType::I64, PhpType::Bool);
+        let float = (IrType::F64, PhpType::Float);
+        let string = (IrType::Str, PhpType::Str);
+
+        for pair in [
+            (int.clone(), int.clone()),
+            (boolean.clone(), boolean.clone()),
+            (float.clone(), float.clone()),
+            (string.clone(), string.clone()),
+            (int.clone(), float.clone()),
+            (float.clone(), int.clone()),
+        ] {
+            assert_eq!(probe(pair.0.clone(), pair.1.clone()), None, "{pair:?}");
+        }
+
+        // A bool against a number casts the NUMBER to bool, which is a different answer from
+        // comparing the two words.
+        assert!(probe(boolean.clone(), int.clone()).is_some());
+        assert!(probe(int.clone(), boolean.clone()).is_some());
+        // A string against a number, and anything boxed, still need their measured tables.
+        assert!(probe(string.clone(), int.clone()).is_some());
+        assert!(probe(float.clone(), string.clone()).is_some());
+        assert!(probe(
+            (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed),
+            (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)
+        )
+        .is_some());
+    }
 
     /// Runs the production capability-and-planning gate for executable output.
     fn validate_module(module: &Module) -> Result<LoweredWasmPlan, WasmError> {

@@ -65,6 +65,8 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::FDiv => &["float `/`"],
         Op::FNeg => &["unary float `-`"],
         Op::ICmp => &["integer comparison"],
+        Op::LooseEq => &["loose equality (`==`)"],
+        Op::LooseNotEq => &["loose inequality (`!=`, `<>`)"],
         Op::FCmp => &["float comparison"],
         Op::StrictEq => &["strict equality (`===`)", "`match` arm selection"],
         Op::StrictNotEq => &["strict inequality (`!==`)"],
@@ -171,6 +173,10 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         }
         Op::IDiv => &["codegen_wasm::tests::php_division_returns_float"],
         Op::ICmp => &["codegen_wasm::tests::int_compare_invokes_correctly"],
+        Op::LooseEq | Op::LooseNotEq => &[
+            "codegen_wasm::capability::tests::loose_equality_admits_only_measured_pairs",
+            "codegen::cli::test_cli_wasm_loose_equality_matches_php",
+        ],
         Op::StrictEq | Op::StrictNotEq => {
             &[
                 "codegen_wasm::strict::tests::strict_scalar_equality_opcodes_lower_and_run",
@@ -366,6 +372,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::ReleaseLocalRefCell => "codegen_wasm::refcell::lower_release_local_ref_cell",
         Op::IterCurrentValueRef => "codegen_wasm::refcell::lower_iter_current_value_ref",
         Op::ArrayToMixed => "codegen_wasm::inst::lower_array_to_mixed",
+        Op::LooseEq | Op::LooseNotEq => "codegen_wasm::inst::lower_loose_eq",
         Op::TryPushHandler => "codegen_wasm::inst::lower_try_push_handler",
         Op::TryPopHandler => "codegen_wasm::inst::lower_try_pop_handler",
         Op::ThrowException | Op::ThrowErrorValue => "codegen_wasm::inst::lower_throw",
@@ -411,6 +418,8 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::FCmp
         | Op::StrictEq
         | Op::StrictNotEq
+        | Op::LooseEq
+        | Op::LooseNotEq
         | Op::IsNull
         | Op::IsTruthy => "compare",
         Op::InstanceOf => "instanceof",

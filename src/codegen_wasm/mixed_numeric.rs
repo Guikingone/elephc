@@ -22,9 +22,142 @@ use super::wat::WatModule;
 /// the two representations the class selects.
 const CLASS_VALUE_OFFSET: i32 = 10496;
 
+/// Scratch offset where `__rt_str_numeric_class` publishes php-src's `oflow` alongside the parsed
+/// value: 0 when the text fits i64, 1 past `i64::MAX`, -1 below `i64::MIN`.
+const CLASS_OFLOW_OFFSET: i32 = 10512;
+
+/// `__rt_int_text_overflows`: whether an INTEGRAL numeric string names a value outside i64.
+///
+/// The obvious round-trip test — parse as i64, convert back to f64, compare with the f64 parse —
+/// is BLIND exactly at the boundary: `__rt_str_to_int` saturates `"9223372036854775808"` to
+/// `i64::MAX`, and `(f64)i64::MAX` rounds up to 2^63, which is what the text parses to as a float.
+/// So the two agree and the overflow goes unnoticed, which made
+/// `"9223372036854775807" == "9223372036854775808"` answer true.
+///
+/// This accumulates the digits instead, checking before each multiply, in UNSIGNED arithmetic so
+/// the negative limit (2^63, one past `i64::MAX`) is representable. `$vlen` is the mantissa
+/// length the classifier already computed, so the scan never runs past the number.
+///
+/// Answers php-src's `oflow`: `0` when the text fits, `1` when it is past `i64::MAX`, `-1` when it
+/// is below `i64::MIN`. The DIRECTION matters — `zendi_smart_strcmp` uses it to settle a
+/// comparison outright rather than risk the accuracy a double conversion would lose.
+const RT_INT_TEXT_OVERFLOWS: &str = r#"(func $__rt_int_text_overflows (param $ptr i32) (param $vlen i32) (result i32)
+  (local $i i32) (local $c i32) (local $neg i32) (local $acc i64) (local $limit i64) (local $d i64)
+  (block $ws (loop $wl                                            ;; PHP's leading whitespace
+    (br_if $ws (i32.ge_u (local.get $i) (local.get $vlen)))
+    (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+    (br_if $ws (i32.eqz (i32.or (i32.or
+      (i32.or (i32.eq (local.get $c) (i32.const 32)) (i32.eq (local.get $c) (i32.const 9)))
+      (i32.or (i32.eq (local.get $c) (i32.const 10)) (i32.eq (local.get $c) (i32.const 13))))
+      (i32.or (i32.eq (local.get $c) (i32.const 11)) (i32.eq (local.get $c) (i32.const 12))))))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $wl)))
+  (if (i32.lt_u (local.get $i) (local.get $vlen))
+    (then
+      (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+      (if (i32.eq (local.get $c) (i32.const 45))                  ;; '-'
+        (then (local.set $neg (i32.const 1)) (local.set $i (i32.add (local.get $i) (i32.const 1)))))
+      (if (i32.eq (local.get $c) (i32.const 43))                  ;; '+'
+        (then (local.set $i (i32.add (local.get $i) (i32.const 1)))))))
+  (local.set $limit (i64.const 9223372036854775807))              ;; i64::MAX
+  (if (local.get $neg)
+    (then (local.set $limit (i64.const -9223372036854775808))))   ;; 2^63 read as unsigned
+  (block $done (loop $scan
+    (br_if $done (i32.ge_u (local.get $i) (local.get $vlen)))
+    (local.set $c (i32.load8_u (i32.add (local.get $ptr) (local.get $i))))
+    (br_if $done (i32.or (i32.lt_u (local.get $c) (i32.const 48))
+                         (i32.gt_u (local.get $c) (i32.const 57))))  ;; mantissa digits only
+    (local.set $d (i64.extend_i32_u (i32.sub (local.get $c) (i32.const 48))))
+    ;; acc*10 + d would pass the limit?  check before multiplying, unsigned throughout
+    (if (i64.gt_u (local.get $acc)
+                  (i64.div_u (i64.sub (local.get $limit) (local.get $d)) (i64.const 10)))
+      (then (return (select (i32.const -1) (i32.const 1) (local.get $neg)))))
+    (local.set $acc (i64.add (i64.mul (local.get $acc) (i64.const 10)) (local.get $d)))
+    (local.set $i (i32.add (local.get $i) (i32.const 1)))
+    (br $scan)))
+  (i32.const 0))
+"#;
+
+/// `__rt_str_loose_eq`: PHP 8's `==` between two strings — php-src's `zendi_smart_strcmp`.
+///
+/// Transcribed from php-src and validated on 3000 pairs against 8.5.6: 1600 from a systematic
+/// 40-string matrix and 1400 randomly generated. The naive rule — "both numeric, so compare the
+/// numbers" — passes a 625-pair sample and is still WRONG, which is why the sweep was widened.
+///
+/// Two strings compare numerically only when BOTH are fully numeric; a leading-numeric string like
+/// `"10abc"` does not qualify and falls back to bytes. On top of that php-src tracks `oflow`, set
+/// only for an INTEGRAL-form string whose magnitude escapes i64, and uses it to settle the
+/// comparison WITHOUT converting:
+///
+/// - both overflowed the same way and agree as doubles -> compare the BYTES, since the double
+///   comparison has already lost the accuracy that would separate them;
+/// - one side is an integer and the other overflowed -> they cannot be equal, whatever the
+///   doubles say;
+/// - two equal INFINITIES -> compare the bytes, for the same reason.
+///
+/// That is what makes `"9223372036854775807" == "9223372036854775808"` false while
+/// `"9223372036854775807" == "9.2233720368547758e18"` is TRUE: the second is in float form, so it
+/// never sets `oflow` and both sides go through the ordinary double conversion.
+///
+/// The classifier publishes its parsed value and flag into shared scratch, so the first operand's
+/// class, value and flag are copied out before the second call overwrites them.
+fn rt_str_loose_eq() -> String {
+    format!(
+        r#"(func $__rt_str_loose_eq (param $ap i32) (param $al i64) (param $bp i32) (param $bl i64) (result i64)
+  (local $ca i32) (local $cb i32) (local $oa i32) (local $ob i32)
+  (local $ia i64) (local $ib i64) (local $fa f64) (local $fb f64)
+  (local.set $ca (call $__rt_str_numeric_class (local.get $ap) (i32.wrap_i64 (local.get $al))))
+  (local.set $oa (i32.load (i32.add (global.get $__float_scratch) (i32.const {oflow_offset}))))
+  (if (i32.eq (local.get $ca) (i32.const 1))
+    (then (local.set $ia (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+  (if (i32.eq (local.get $ca) (i32.const 2))
+    (then (local.set $fa (f64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+  (local.set $cb (call $__rt_str_numeric_class (local.get $bp) (i32.wrap_i64 (local.get $bl))))
+  (local.set $ob (i32.load (i32.add (global.get $__float_scratch) (i32.const {oflow_offset}))))
+  (if (i32.eq (local.get $cb) (i32.const 1))
+    (then (local.set $ib (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+  (if (i32.eq (local.get $cb) (i32.const 2))
+    (then (local.set $fb (f64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+  ;; classes 3 and 4 are LEADING-numeric, which php-src does not treat as numeric here
+  (if (i32.and (i32.or (i32.eq (local.get $ca) (i32.const 1)) (i32.eq (local.get $ca) (i32.const 2)))
+               (i32.or (i32.eq (local.get $cb) (i32.const 1)) (i32.eq (local.get $cb) (i32.const 2))))
+    (then
+      ;; both overflowed the same way and agree as doubles: the doubles cannot separate them
+      (if (i32.and (i32.and (i32.ne (local.get $oa) (i32.const 0))
+                            (i32.eq (local.get $oa) (local.get $ob)))
+                   (f64.eq (local.get $fa) (local.get $fb)))
+        (then (return (i64.extend_i32_u (call $__rt_strict_str_eq
+                (local.get $ap) (local.get $al) (local.get $bp) (local.get $bl))))))
+      (if (i32.or (i32.eq (local.get $ca) (i32.const 2)) (i32.eq (local.get $cb) (i32.const 2)))
+        (then
+          (if (i32.ne (local.get $ca) (i32.const 2))
+            (then                                            ;; integer on the left, double on the right
+              (if (local.get $ob) (then (return (i64.const 0))))   ;; the overflowed side is strictly further out
+              (local.set $fa (f64.convert_i64_s (local.get $ia))))
+            (else (if (i32.ne (local.get $cb) (i32.const 2))
+              (then                                          ;; double on the left, integer on the right
+                (if (local.get $oa) (then (return (i64.const 0))))
+                (local.set $fb (f64.convert_i64_s (local.get $ib))))
+              (else                                          ;; two doubles: equal infinities go to bytes
+                (if (i32.and (f64.eq (local.get $fa) (local.get $fb))
+                             (f64.eq (f64.abs (local.get $fa)) (f64.const inf)))
+                  (then (return (i64.extend_i32_u (call $__rt_strict_str_eq
+                          (local.get $ap) (local.get $al) (local.get $bp) (local.get $bl))))))))))
+          (return (i64.extend_i32_u (f64.eq (local.get $fa) (local.get $fb))))))
+      (return (i64.extend_i32_u (i64.eq (local.get $ia) (local.get $ib))))))
+  (i64.extend_i32_u (call $__rt_strict_str_eq                    ;; not both numeric: byte for byte
+    (local.get $ap) (local.get $al) (local.get $bp) (local.get $bl))))
+"#,
+        value_offset = CLASS_VALUE_OFFSET,
+        oflow_offset = CLASS_OFLOW_OFFSET
+    )
+}
+
 /// Adds the boxed-Mixed arithmetic runtime to `wm`.
 pub(super) fn emit_mixed_numeric_runtime(wm: &mut WatModule) {
+    wm.add_raw_func(RT_INT_TEXT_OVERFLOWS);
     wm.add_raw_func(&rt_str_numeric_class());
+    wm.add_raw_func(&rt_str_loose_eq());
     wm.add_raw_func(&rt_mixed_numeric_operand());
     wm.add_raw_func(RT_MIXED_NUMERIC_COMMON);
     wm.add_raw_func(RT_MIXED_NUMERIC_ADD);
@@ -80,6 +213,7 @@ fn rt_str_numeric_class() -> String {
       (local.set $i (i32.add (local.get $i) (i32.const 1)))       ;; consume digit
       (br $il)))
   (local.set $isfloat (i32.const 0))                              ;; integer until proven otherwise
+  (i32.store (i32.add (global.get $__float_scratch) (i32.const {oflow_offset})) (i32.const 0))  ;; only an INTEGRAL form can overflow
   (if (i32.lt_u (local.get $i) (local.get $len))                  ;; optional fraction
     (then
       (if (i32.eq (i32.load8_u (i32.add (local.get $ptr) (local.get $i))) (i32.const 46))  ;; '.'
@@ -145,10 +279,9 @@ fn rt_str_numeric_class() -> String {
     (then
       (local.set $iv (call $__rt_str_to_int (local.get $ptr) (local.get $vlen) (global.get $__float_scratch)))  ;; parse the integral text
       (i64.store (i32.add (global.get $__float_scratch) (i32.const {value_offset})) (local.get $iv))            ;; publish the i64
-      (call $__rt_str_to_f64 (local.get $ptr) (local.get $vlen) (i32.add (global.get $__float_scratch) (i32.const 10240)) (global.get $__float_scratch))  ;; same text as f64
-      (if (f64.ne
-            (f64.convert_i64_s (local.get $iv))
-            (f64.reinterpret_i64 (i64.load (i32.add (global.get $__float_scratch) (i32.const 10240)))))
+      (i32.store (i32.add (global.get $__float_scratch) (i32.const {oflow_offset}))
+                 (call $__rt_int_text_overflows (local.get $ptr) (local.get $vlen)))  ;; publish php-src's oflow
+      (if (i32.load (i32.add (global.get $__float_scratch) (i32.const {oflow_offset})))
         (then (local.set $isfloat (i32.const 1))))))              ;; magnitude exceeds i64: PHP calls it a float
   (if (local.get $isfloat)                                        ;; float form: publish raw f64 bits
     (then
@@ -157,7 +290,8 @@ fn rt_str_numeric_class() -> String {
     (then (return (i32.add (i32.const 1) (local.get $isfloat))))) ;; 1 = int, 2 = float
   (i32.add (i32.const 3) (local.get $isfloat)))                   ;; 3 = leading int, 4 = leading float
 "#,
-        value_offset = CLASS_VALUE_OFFSET
+        value_offset = CLASS_VALUE_OFFSET,
+        oflow_offset = CLASS_OFLOW_OFFSET
     )
 }
 
@@ -195,7 +329,7 @@ fn rt_mixed_numeric_operand() -> String {
         (then (call $__rt_warn_non_numeric_value)))               ;; "A non-numeric value encountered"
       (return
         (i32.eqz (i32.and (local.get $class) (i32.const 1)))      ;; even classes (2 and 4) are the floats
-        (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))  ;; parsed value
+        (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset})))))) ;; parsed value
   (call $__rt_fatal_unsupported_operand)                          ;; any other tag is not a number
   (i32.const 0) (i64.const 0))                                    ;; unreachable, keeps the signature
 "#,

@@ -672,6 +672,7 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "hash_store_value_diagnostic_issue",
         "array_to_hash_shape_issue",
         "array_to_mixed_shape_issue",
+        "loose_eq_shape_issue",
         "direct_call_shape_issue",
         "by_ref_source_shape_issue",
         "method_call_shape_issue",

@@ -50,6 +50,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::StrLen => lower_strlen(ctx, &inst),
         Op::StrPersist => lower_str_persist(ctx, &inst),
         Op::ArrayToMixed => lower_array_to_mixed(ctx, &inst),
+        Op::LooseEq | Op::LooseNotEq => lower_loose_eq(ctx, &inst),
         Op::StrConcat => lower_str_concat(ctx, &inst),
         Op::Nop => lower_nop(ctx),
         Op::ConcatReset => lower_concat_reset(ctx),
@@ -2855,6 +2856,72 @@ fn emit_undefined_array_index_warning_if_null(
     );
     ctx.fb.ins("end", "continue with the stored null result");
     Ok(())
+}
+
+/// Lowers `Op::LooseEq` / `Op::LooseNotEq` — PHP's `==` and `!=` — over the CONCRETE pairs.
+///
+/// Same-type pairs are the machine comparison: two ints or two bools are `i64.eq`, and two floats
+/// `f64.eq`, which already answers false for NaN the way PHP does. Two strings go through
+/// `__rt_str_loose_eq`, which compares numerically only when BOTH are fully numeric.
+///
+/// An int against a float WIDENS the int, precision loss and all: `PHP_INT_MAX == 9.22e18` is
+/// true in PHP even though the values differ, because both round to 2^63. Numeric STRINGS do not
+/// follow that rule — see `__rt_str_loose_eq`, where php-src's `oflow` flag settles the same pair
+/// as unequal.
+///
+/// Every other pair — anything involving a Mixed cell, an array, an object, or a bool against a
+/// number — needs the rest of PHP 8's comparison table and is refused by the capability gate.
+fn lower_loose_eq(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let left = operand(inst, 0)?;
+    let right = operand(inst, 1)?;
+    let lhs = ctx.value_repr(left)?.clone();
+    let rhs = ctx.value_repr(right)?.clone();
+    match (&lhs, &rhs) {
+        (WasmRepr::I64(_), WasmRepr::I64(_)) => {
+            ctx.emit_load_value(left)?;
+            ctx.emit_load_value(right)?;
+            ctx.fb.ins("i64.eq", "same-width scalar comparison");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (WasmRepr::F64(_), WasmRepr::F64(_)) => {
+            ctx.emit_load_value(left)?;
+            ctx.emit_load_value(right)?;
+            ctx.fb.ins("f64.eq", "float comparison; NaN equals nothing");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (WasmRepr::Str { .. }, WasmRepr::Str { .. }) => {
+            ctx.emit_load_value(left)?;
+            ctx.emit_load_value(right)?;
+            ctx.fb.ins(
+                "call $__rt_str_loose_eq",
+                "numeric only when BOTH sides are fully numeric",
+            );
+        }
+        (WasmRepr::I64(_), WasmRepr::F64(_)) => {
+            ctx.emit_load_value(left)?;
+            ctx.fb.ins("f64.convert_i64_s", "PHP widens the integer, losing precision as it goes");
+            ctx.emit_load_value(right)?;
+            ctx.fb.ins("f64.eq", "compare as doubles");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (WasmRepr::F64(_), WasmRepr::I64(_)) => {
+            ctx.emit_load_value(left)?;
+            ctx.emit_load_value(right)?;
+            ctx.fb.ins("f64.convert_i64_s", "PHP widens the integer, losing precision as it goes");
+            ctx.fb.ins("f64.eq", "compare as doubles");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        (other_left, other_right) => {
+            return Err(WasmError::Unsupported(format!(
+                "loose comparison of {other_left:?} against {other_right:?}"
+            )))
+        }
+    }
+    if inst.op == Op::LooseNotEq {
+        ctx.fb.ins("i64.eqz", "!= is the negation of ==");
+        ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+    }
+    store_result(ctx, inst)
 }
 
 /// Lowers `Op::ArrayToMixed`: EIR's own `array<T>` -> `array<mixed>` widening.

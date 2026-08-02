@@ -1415,31 +1415,45 @@
           "name": "loose_eq",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "loose equality (`==`)"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::inst::lower_loose_eq",
+            "tests": [
+              "codegen_wasm::capability::tests::loose_equality_admits_only_measured_pairs",
+              "codegen::cli::test_cli_wasm_loose_equality_matches_php"
+            ],
+            "notes": "Concrete pairs only: two ints, two bools, two floats, two strings, and an int against a float. The string rule is php-src zendi_smart_strcmp including its oflow flag, validated on 3000 pairs. A bool against a number, a string against a number, and anything boxed still need their measured tables and are refused."
+          }
         },
         {
           "name": "loose_not_eq",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "loose inequality (`!=`, `<>`)"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst",
+            "lowerer": "codegen_wasm::inst::lower_loose_eq",
+            "tests": [
+              "codegen_wasm::capability::tests::loose_equality_admits_only_measured_pairs",
+              "codegen::cli::test_cli_wasm_loose_equality_matches_php"
+            ],
+            "notes": "Concrete pairs only: two ints, two bools, two floats, two strings, and an int against a float. The string rule is php-src zendi_smart_strcmp including its oflow flag, validated on 3000 pairs. A bool against a number, a string against a number, and anything boxed still need their measured tables and are refused."
+          }
         },
         {
           "name": "spaceship",
@@ -12647,6 +12661,10 @@
       "disposition": "enforced"
     },
     {
+      "name": "loose_eq_shape_issue",
+      "disposition": "enforced"
+    },
+    {
       "name": "direct_call_shape_issue",
       "disposition": "enforced"
     },
@@ -12803,14 +12821,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 192,
+    "supported": 194,
     "excluded": 47,
-    "missing": 473,
+    "missing": 471,
     "evidence_gaps": 176,
     "row_evidence_gaps": 175,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "473 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "471 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
