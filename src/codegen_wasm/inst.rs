@@ -3514,6 +3514,19 @@ fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             }
             store_result(ctx, inst)
         }
+        PhpType::Float => {
+            ctx.fb.ins(&format!("local.get {}", src), "source array");
+            ctx.fb.ins(&format!("local.get {}", cur), "cursor index");
+            ctx.fb
+                .ins("call $__rt_array_get_float", "foreach element (float)");
+            if boxed {
+                ctx.fb.ins("i64.reinterpret_f64", "the cell carries the float's bits");
+                ctx.fb.ins("i64.const 0", "hi unused");
+                ctx.fb
+                    .ins("call $__rt_mixed_from_value", "box the element");
+            }
+            store_result(ctx, inst)
+        }
         PhpType::Str => {
             if boxed {
                 let tmp_len = ctx.fresh_temp(ValType::I64);

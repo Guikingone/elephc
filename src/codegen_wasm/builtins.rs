@@ -3610,21 +3610,6 @@ fn indexed_array_result_shape_issue(
     None
 }
 
-/// Returns whether `value` is the constant `true`, following ownership forwarding.
-fn literal_true(function: &Function, value: crate::ir::ValueId) -> bool {
-    let Some(defined) = function.value(value) else {
-        return false;
-    };
-    let crate::ir::ValueDef::Instruction { inst, .. } = defined.def else {
-        return false;
-    };
-    let Some(defining) = function.instruction(inst) else {
-        return false;
-    };
-    defining.op == crate::ir::Op::ConstBool
-        && matches!(defining.immediate, Some(crate::ir::Immediate::Bool(true)))
-}
-
 /// Lowers `array_keys($list)` to the positional key array its representation implies.
 fn lower_array_keys(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;

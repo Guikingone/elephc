@@ -1534,7 +1534,7 @@ fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
         (IrType::Heap(IrHeapKind::Array), PhpType::Array(element)) => {
             if matches!(
                 element.codegen_repr(),
-                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str
+                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Float
             ) {
                 None
             } else {

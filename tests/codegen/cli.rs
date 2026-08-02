@@ -7816,6 +7816,105 @@ echo "\n";
 const ARRAY_SEARCH_EXPECTED: &str = r##"1||0|2|1|0||1|1|||0|1|
 "##;
 
+/// Verifies the EMPTY-ARRAY ACCUMULATOR — `$out = []; foreach (...) { $out[] = ...; }`.
+///
+/// The slot is typed from the empty literal (`array<never>`) and the value from whatever gets
+/// pushed, and the two meet at the loop's phi in BOTH directions. This target specializes slot
+/// width and value_type per element type, so those transfers looked like a widening and were
+/// refused — which turned away one of the most common shapes in PHP.
+///
+/// They are not a widening: an array whose element type is `never` has no elements and no decided
+/// layout, because `__rt_array_push_*` shapes slot width and value_type on the FIRST push. So the
+/// pointer is interchangeable with any element type's, and the transfer is a plain copy.
+///
+/// The float accumulator is here because `foreach` over float elements needed its own load
+/// contract, the counterpart of the float array storage.
+#[test]
+fn test_cli_wasm_empty_array_accumulator_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_accumulator");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ACCUMULATOR_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the accumulator probe");
+    assert!(
+        output.status.success(),
+        "accumulator compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the accumulator probe under Node");
+    assert!(
+        run.status.success(),
+        "accumulator probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), ACCUMULATOR_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The accumulator probe: every element type, a filtered build, one that stays empty, one
+/// returned, and a realistic slugifier that combines several of the lowered builtins.
+const ACCUMULATOR_SOURCE: &str = r##"<?php
+function slugify(string $title): string {
+    $lower = strtolower(trim($title));
+    $parts = explode(" ", $lower);
+    $kept = [];
+    foreach ($parts as $p) {
+        if ($p !== "" && !in_array($p, ["the", "a", "of"])) { $kept[] = $p; }
+    }
+    return implode("-", $kept);
+}
+function strs(array $xs): string { $o = []; foreach ($xs as $x) { $o[] = strtoupper($x); } return implode(",", $o); }
+function ints(array $xs): string { $o = []; foreach ($xs as $x) { $o[] = $x; } return implode(",", $o); }
+function flts(array $xs): string { $o = []; foreach ($xs as $x) { $o[] = $x; } return implode(",", $o); }
+function filt(array $xs): string { $o = []; foreach ($xs as $x) { if ($x !== "b") { $o[] = $x; } } return implode(",", $o); }
+function empt(array $xs): string { $o = []; foreach ($xs as $x) { if ($x === "zz") { $o[] = $x; } } return count($o) . ":" . implode(",", $o); }
+function ret(array $xs): array { $o = []; foreach ($xs as $x) { $o[] = $x; } return $o; }
+echo strs(["a","b"]), "|", ints([1,2,3]), "|", flts([1.5,2.5]), "|";
+echo filt(["a","b","c"]), "|", empt(["a","b"]), "|";
+$r = ret(["p","q"]); echo count($r), ":", implode(",", $r), "|";
+$n = []; echo count($n), ":", implode(",", $n), "|";
+echo slugify("  The Rise of  Machines "), "\n";
+"##;
+
+/// php-src 8.5.6's own output for `ACCUMULATOR_SOURCE`.
+const ACCUMULATOR_EXPECTED: &str = r##"A,B|1,2,3|1.5,2.5|a,c|0:|2:p,q|0:|rise-machines
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

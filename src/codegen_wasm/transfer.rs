@@ -62,6 +62,15 @@ pub(super) fn array_widen_shape(element: &PhpType) -> Option<(i64, i64)> {
     })
 }
 
+/// Returns true when this is an indexed array PROVEN to have no elements.
+///
+/// `Never` is the element type the checker gives a literal `[]`; `codegen_repr` normalizes it to
+/// `Void`. Such an array has no decided slot layout yet, so its pointer is interchangeable with
+/// any other element type's.
+fn array_is_empty(php: &PhpType) -> bool {
+    matches!(php, PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Void))
+}
+
 /// Returns true when an EIR/PHP pair is realized as a runtime Mixed cell pointer.
 ///
 /// Ordinary unions are normalized to `Mixed` before this boundary; nullable-int
@@ -117,6 +126,19 @@ fn reprs_match_for_copy(
             // Two indexed arrays whose ELEMENTS differ are not bit-compatible either: this
             // target specializes slot width and value_type per element type, so that pair is
             // a widening conversion (handled below), never a copy.
+            //
+            // Unless one of them is EMPTY. An array whose element type is `Never` has no
+            // elements and no decided layout — `__rt_array_push_*` shapes slot width and
+            // value_type on the FIRST push — so its pointer is interchangeable with any
+            // element type's. That is the `$out = []; $out[] = ...;` accumulator, where the
+            // slot is typed from the empty literal and the value from what gets pushed, and
+            // the two meet at the loop's phi in both directions.
+            if source_ir == dest_ir
+                && source_ir == IrType::Heap(IrHeapKind::Array)
+                && (array_is_empty(source_php) || array_is_empty(dest_php))
+            {
+                return true;
+            }
             source_ir == dest_ir && source_php == dest_php
         }
         _ => false,
