@@ -3250,6 +3250,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::ArraySlice
             | RuntimeFnId::ArrayMerge
             | RuntimeFnId::Range
+            | RuntimeFnId::ArrayKeyExists
             | RuntimeFnId::Sort
             | RuntimeFnId::Rsort
             | RuntimeFnId::ArraySearch
@@ -3357,6 +3358,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if matches!(target, RuntimeFnId::Sort | RuntimeFnId::Rsort) {
         return scalar_sort_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::ArrayKeyExists {
+        return array_key_exists_shape_issue(function, call);
     }
     if target == RuntimeFnId::ArraySearch {
         return in_array_shape_issue(function, call);
@@ -3595,6 +3599,9 @@ pub(super) fn lower_direct_builtin(
     }
     if matches!(target, RuntimeFnId::Sort | RuntimeFnId::Rsort) {
         return lower_scalar_sort(ctx, inst, target == RuntimeFnId::Rsort);
+    }
+    if target == RuntimeFnId::ArrayKeyExists {
+        return super::inst_hash::lower_array_key_exists(ctx, inst);
     }
     if target == RuntimeFnId::ArraySearch {
         return lower_array_search(ctx, inst);
@@ -4569,6 +4576,44 @@ fn emit_strict_block(ctx: &mut FnCtx, strict: &str, blocks: bool) {
 /// String and Mixed elements are NOT admitted: PHP orders strings with its standard comparison,
 /// where two numeric strings compare NUMERICALLY — `sort(["10", "9"])` answers `9, 10`, not
 /// `10, 9` — and that rule is not this helper's.
+/// Validates `array_key_exists($key, $hash)`.
+///
+/// The haystack must be an associative array: the indexed form asks a different question
+/// (an int index against a dense run) and has no lowering here. The key reuses the hash
+/// key contract, so a Mixed or float key is refused for the same diagnostic reason
+/// `$h[$k]` refuses it — PHP's implicit key conversions are profile-specific.
+fn array_key_exists_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [key, hash] = call.operands.as_slice() else {
+        return Some(format!(
+            "array_key_exists takes a key and an array, got {} operands",
+            call.operands.len()
+        ));
+    };
+    let Some(haystack) = function.value(*hash) else {
+        return Some("array_key_exists array is missing from the value table".to_string());
+    };
+    if haystack.ir_type != IrType::Heap(IrHeapKind::Hash) {
+        return Some(format!(
+            "array_key_exists has no lowering for a haystack of {:?}",
+            haystack.ir_type
+        ));
+    }
+    let Some(key_value) = function.value(*key) else {
+        return Some("array_key_exists key is missing from the value table".to_string());
+    };
+    let key_php = key_value.php_type.codegen_repr();
+    if key_value.ir_type == IrType::Heap(IrHeapKind::Mixed) || key_php == PhpType::Mixed {
+        return Some("dynamic Mixed associative keys require exact per-tag PHP diagnostics".to_string());
+    }
+    if key_value.ir_type == IrType::F64 && key_php == PhpType::Float {
+        return Some(
+            "float associative keys require exact profile-specific implicit-conversion diagnostics"
+                .to_string(),
+        );
+    }
+    None
+}
+
 fn scalar_sort_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
     let [array] = call.operands.as_slice() else {
         return Some(format!(

@@ -360,6 +360,73 @@ pub(super) fn lower_hash_array_union(ctx: &mut FnCtx, inst: &Instruction) -> Res
     store_result(ctx, inst)
 }
 
+/// Probes a hash for a key without materializing its value, and leaves the `found`
+/// flag and the stored value tag in fresh locals. Both key-presence questions PHP asks
+/// are answered from those two words alone.
+fn emit_hash_key_probe(
+    ctx: &mut FnCtx,
+    hash: crate::ir::ValueId,
+    key: crate::ir::ValueId,
+) -> Result<(String, String)> {
+    let (key_lo, key_hi) = materialize_hash_key(ctx, key)?;
+    ctx.emit_load_value(hash)?;
+    ctx.fb
+        .ins(&format!("local.get {}", key_lo), "hash key low word");
+    ctx.fb
+        .ins(&format!("local.get {}", key_hi), "hash key high word");
+    ctx.fb.ins("call $__rt_hash_get", "probe the hash for the key");
+
+    // (found i32, vlo i64, vhi i64, vtag i64) — the tag is on top.
+    let vtag = ctx.fresh_temp(ValType::I64);
+    ctx.fb
+        .ins(&format!("local.set {}", vtag), "captured value tag");
+    let discard_hi = ctx.fresh_temp(ValType::I64);
+    ctx.fb
+        .ins(&format!("local.set {}", discard_hi), "value high word (unused)");
+    let discard_lo = ctx.fresh_temp(ValType::I64);
+    ctx.fb
+        .ins(&format!("local.set {}", discard_lo), "value low word (unused)");
+    let found = ctx.fresh_temp(ValType::I32);
+    ctx.fb
+        .ins(&format!("local.set {}", found), "captured found flag");
+    Ok((found, vtag))
+}
+
+/// Lowers `Op::HashIsset` (`isset($h[k])`).
+///
+/// PHP answers TRUE only when the key is present AND its value is not null — measured on
+/// php-src 8.5.6, where `["b" => null]` gives `isset` false but `array_key_exists` true.
+/// A stored null carries tag 8, which is also what a miss reports, so the two conditions
+/// collapse into one comparison; the `found` flag is still needed because a hit on tag 8
+/// and a miss must stay distinguishable for `array_key_exists`, which shares this probe.
+pub(super) fn lower_hash_isset(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let hash = operand(inst, 0)?;
+    let key = operand(inst, 1)?;
+    let (found, vtag) = emit_hash_key_probe(ctx, hash, key)?;
+
+    ctx.fb.ins(&format!("local.get {}", found), "found flag");
+    ctx.fb
+        .ins(&format!("local.get {}", vtag), "stored value tag");
+    ctx.fb.ins("i64.const 8", "PHP null tag");
+    ctx.fb.ins("i64.ne", "the stored value is not null");
+    ctx.fb.ins("i32.and", "present and non-null");
+    ctx.fb.ins("i64.extend_i32_u", "widen the bool to the PHP int repr");
+    store_result(ctx, inst)
+}
+
+/// Lowers `array_key_exists($k, $h)`, which asks ONLY whether the key is present — a
+/// stored null answers TRUE here and FALSE for `isset`. Note the reversed operand order:
+/// the needle comes first in PHP's signature.
+pub(super) fn lower_array_key_exists(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let key = operand(inst, 0)?;
+    let hash = operand(inst, 1)?;
+    let (found, _vtag) = emit_hash_key_probe(ctx, hash, key)?;
+
+    ctx.fb.ins(&format!("local.get {}", found), "found flag");
+    ctx.fb.ins("i64.extend_i32_u", "widen the bool to the PHP int repr");
+    store_result(ctx, inst)
+}
+
 /// Lowers `Op::HashGet` (`$h[k]`). Materializes the key, calls `__rt_hash_get` (which
 /// returns `(found, value_lo, value_hi, value_tag)`), captures all four results, then
 /// reconstructs the typed result:

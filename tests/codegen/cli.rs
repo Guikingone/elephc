@@ -8897,6 +8897,92 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// `foreach ($h as $k => $v)` over Mixed hash values, plus `isset($h[$k])` and
+/// `array_key_exists($k, $h)` — the pair PHP answers DIFFERENTLY for a stored null.
+#[test]
+fn test_cli_wasm_assoc_foreach_and_key_tests_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_assoc_keys");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ASSOC_KEYS_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the associative-key probe");
+    assert!(
+        output.status.success(),
+        "associative-key compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the associative-key probe under Node");
+    assert!(
+        run.status.success(),
+        "associative-key probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), ASSOC_KEYS_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The associative-key probe. `"b" => null` is the case that separates the two questions:
+/// `isset` answers false there, `array_key_exists` answers true. `"0"`/`"7"` cover PHP's
+/// numeric-string key normalization, and the last group reads Mixed and float hash values.
+const ASSOC_KEYS_SOURCE: &str = r##"<?php
+$conf = ["host" => "local", "port" => 8080, "debug" => true];
+foreach ($conf as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|";
+$h = ["a" => 1, "b" => null, "c" => 0, "d" => "", "e" => false, "0" => "zero", "7" => "seven"];
+foreach (["a","b","c","d","e","zz","0","7",""] as $k) {
+  echo $k, isset($h[$k]) ? "1" : "0", array_key_exists($k, $h) ? "1" : "0", ",";
+}
+echo "|", isset($h[0]) ? "1" : "0", array_key_exists(0, $h) ? "1" : "0";
+echo "|", isset($h[7]) ? "1" : "0", array_key_exists(7, $h) ? "1" : "0";
+echo "|";
+$n = [1 => "a", 2 => null, 3 => "c"];
+foreach ([0,1,2,3,4] as $i) { echo $i, isset($n[$i]) ? "1" : "0", array_key_exists($i, $n) ? "1" : "0", ","; }
+echo "|";
+foreach ($n as $key => $val) { echo $key, "=>", $val, " "; }
+echo "|";
+$f = ["p" => 1.5, "q" => -0.25];
+foreach ($f as $key => $val) { echo $key, ":", $val, " "; }
+echo "|", count($conf), count($h), count($n), count($f), "\n";
+"##;
+
+/// php-src 8.5.6's own output for `ASSOC_KEYS_SOURCE`.
+const ASSOC_KEYS_EXPECTED: &str = "host=local;port=8080;debug=1;|a11,b01,c11,d11,e11,zz00,011,711,00,|11|11|000,111,201,311,400,|1=>a 2=> 3=>c |p:1.5 q:-0.25 |3732\n";
+
 /// The sort probe: empty, single, already-ordered, reversed, duplicates, negatives, both i64
 /// extremes, floats including -0.0, and twenty generated orderings.
 const SORT_SOURCE: &str = r##"<?php

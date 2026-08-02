@@ -95,6 +95,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::HashGetSilent => &["silent associative array offset read"],
         Op::HashSet => &["associative array offset assignment"],
         Op::HashUnset => &["unset of an associative array key"],
+        Op::HashIsset => &["isset($h[k]) over an associative array"],
         Op::HashAppend => &["append to an associative array"],
         Op::HashUnion => &["associative array union (`+`)"],
         Op::ArrayHashUnion => &["indexed-left/associative-right array union"],
@@ -213,6 +214,10 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         }
         Op::HashUnion => &["codegen_wasm::tests::hash_union_left_wins_lowers"],
         Op::HashUnset => &["codegen_wasm::tests::hash_unset_removes_element_lowers"],
+        Op::HashIsset => &[
+            "codegen_wasm::tests::hash_isset_and_array_key_exists_lower",
+            "codegen::cli::test_cli_wasm_assoc_foreach_and_key_tests_match_php",
+        ],
         Op::IterStart
         | Op::IterCurrentKey
         | Op::IterCurrentValue
@@ -337,6 +342,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::HashGet | Op::HashGetSilent => "codegen_wasm::inst_hash::lower_hash_get",
         Op::HashSet => "codegen_wasm::inst_hash::lower_hash_set",
         Op::HashUnset => "codegen_wasm::inst_hash::lower_hash_unset",
+        Op::HashIsset => "codegen_wasm::inst_hash::lower_hash_isset",
         Op::HashAppend => "codegen_wasm::inst_hash::lower_hash_append",
         Op::HashUnion => "codegen_wasm::inst_hash::lower_hash_union",
         Op::ArrayUnion => "codegen_wasm::inst_hash::lower_array_union",

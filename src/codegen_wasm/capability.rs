@@ -1670,9 +1670,18 @@ fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
             }
         }
         (IrType::Heap(IrHeapKind::Hash), PhpType::AssocArray { value, .. }) => {
+            // A hash entry is tagged storage already (tag at +40, payload at +24/+32), so a Mixed
+            // value needs no widening — the read boxes the three words it finds into a cell.
             if matches!(
                 value.codegen_repr(),
-                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str
+                PhpType::Int
+                    | PhpType::Bool
+                    | PhpType::False
+                    | PhpType::Str
+                    | PhpType::Float
+                    | PhpType::Mixed
+                    // An empty hash's value type: the body never runs, so any contract does.
+                    | PhpType::Void
             ) {
                 None
             } else {
@@ -4739,6 +4748,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArraySlice
         | RuntimeFnId::ArrayMerge
         | RuntimeFnId::Range
+        | RuntimeFnId::ArrayKeyExists
         | RuntimeFnId::Sort
         | RuntimeFnId::Rsort
         | RuntimeFnId::ArraySearch
@@ -4772,7 +4782,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ArrayIntersect
         | RuntimeFnId::ArrayIntersectAssoc
         | RuntimeFnId::ArrayIntersectKey
-        | RuntimeFnId::ArrayKeyExists
         | RuntimeFnId::ArrayKeyFirst
         | RuntimeFnId::ArrayKeyLast
         | RuntimeFnId::ArrayMergeRecursive
@@ -5254,6 +5263,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::ArraySet
         | Op::HashSet
         | Op::HashUnset
+        | Op::HashIsset
         | Op::ArrayPush
         | Op::ArrayToHash
         | Op::HashAppend
@@ -5340,7 +5350,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::WriteStrStdout
         | Op::HashLen
         | Op::ArrayIsset
-        | Op::HashIsset
         | Op::ArrayElemAddr
         | Op::MixedArrayAppend
         | Op::ArrayEnsureUnique

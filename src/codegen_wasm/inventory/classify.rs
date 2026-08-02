@@ -225,6 +225,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_array_search_matches_php",
             ][..],
         ),
+        RuntimeFnId::ArrayKeyExists => (
+            "codegen_wasm::inst_hash",
+            "codegen_wasm::inst_hash::lower_array_key_exists",
+            &[
+                "codegen_wasm::tests::hash_isset_and_array_key_exists_lower",
+                "codegen::cli::test_cli_wasm_assoc_foreach_and_key_tests_match_php",
+            ][..],
+        ),
         RuntimeFnId::Sort | RuntimeFnId::Rsort => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",

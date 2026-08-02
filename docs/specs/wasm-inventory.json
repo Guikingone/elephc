@@ -2198,16 +2198,22 @@
           "name": "hash_isset",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "isset($h[k]) over an associative array"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst_hash",
+            "lowerer": "codegen_wasm::inst_hash::lower_hash_isset",
+            "tests": [
+              "codegen_wasm::tests::hash_isset_and_array_key_exists_lower",
+              "codegen::cli::test_cli_wasm_assoc_foreach_and_key_tests_match_php"
+            ]
+          }
         },
         {
           "name": "array_elem_addr",
@@ -5315,7 +5321,7 @@
           "name": "array_key_exists",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "array_key_exists(...)"
           ],
@@ -5323,7 +5329,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::inst_hash",
+            "lowerer": "codegen_wasm::inst_hash::lower_array_key_exists",
+            "tests": [
+              "codegen_wasm::tests::hash_isset_and_array_key_exists_lower",
+              "codegen::cli::test_cli_wasm_assoc_foreach_and_key_tests_match_php"
+            ]
+          }
         },
         {
           "name": "array_key_first",
@@ -9204,7 +9217,7 @@
               "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
               "codegen::cli::test_cli_wasm_round_and_radix_conversions_match_php"
             ],
-            "notes": "Precision-0 form. Half away from ZERO, compared against trunc(x) rather than floor(|x|+0.5) — the addition is inexact at 0.49999999999999994 and above 2^52. Verified on 104 values."
+            "notes": "Precision-0 form. Half away from ZERO, compared against trunc(x) rather than floor(|x|+0.5) \u2014 the addition is inexact at 0.49999999999999994 and above 2^52. Verified on 104 values."
           }
         },
         {
@@ -12853,14 +12866,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 198,
+    "supported": 200,
     "excluded": 47,
-    "missing": 467,
-    "evidence_gaps": 176,
-    "row_evidence_gaps": 175,
+    "missing": 465,
+    "evidence_gaps": 173,
+    "row_evidence_gaps": 172,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "467 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "465 reachable identities lack a WASM lowerer; 172 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

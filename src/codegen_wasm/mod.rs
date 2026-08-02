@@ -7984,6 +7984,77 @@ mod tests {
         }
     }
 
+    /// `$h = [1=>10, 2=>20]; isset($h[1]) * 100 + isset($h[9]) * 10 + array_key_exists(2, $h)`
+    /// -> "101" through `Op::HashIsset` and `RuntimeFnId::ArrayKeyExists`.
+    ///
+    /// Both questions share one probe of `__rt_hash_get`, so this proves the two answers stay
+    /// distinct: present keys report 1, an absent key reports 0 on both. The null-value case,
+    /// where the two answers DIVERGE, is measured against php-src's own bytes in
+    /// `codegen::cli::test_cli_wasm_assoc_foreach_and_key_tests_match_php`.
+    #[test]
+    fn hash_isset_and_array_key_exists_lower() {
+        let assoc = int_hash_type();
+        let mut module = Module::new(Target::wasm());
+        let mut f = Function::new("a".to_string(), IrType::I64, PhpType::Int);
+        let slot = f.add_local(
+            Some("h".to_string()),
+            IrType::Heap(IrHeapKind::Hash),
+            assoc.clone(),
+            LocalKind::PhpLocal,
+        );
+        {
+            let mut b = Builder::new(&mut f);
+            let entry = b.create_named_block("entry", Vec::new());
+            b.set_entry(entry);
+            b.position_at_end(entry);
+            let hash = b
+                .emit(Op::HashNew, Vec::new(), Some(Immediate::Capacity(8)), IrType::Heap(IrHeapKind::Hash), assoc.clone(), Ownership::Owned)
+                .unwrap();
+            b.emit_store_local(slot, hash);
+            for (k, v) in [(1_i64, 10_i64), (2, 20)] {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_i64(k);
+                let val = b.emit_const_i64(v);
+                let _ = b.emit(Op::HashSet, vec![h, key, val], None, IrType::Void, PhpType::Void, Ownership::NonHeap);
+            }
+            let mut isset_of = |b: &mut Builder<'_>, k: i64| {
+                let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+                let key = b.emit_const_i64(k);
+                b.emit(Op::HashIsset, vec![h, key], None, IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                    .unwrap()
+            };
+            let present = isset_of(&mut b, 1);
+            let absent = isset_of(&mut b, 9);
+
+            let key2 = b.emit_const_i64(2);
+            let h = b.emit_load_local(slot, IrType::Heap(IrHeapKind::Hash), assoc.clone());
+            let exists = b
+                .emit(
+                    Op::RuntimeCall,
+                    vec![key2, h],
+                    Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(
+                        crate::ir::RuntimeFnId::ArrayKeyExists,
+                    ))),
+                    IrType::I64,
+                    PhpType::Bool,
+                    Ownership::NonHeap,
+                )
+                .unwrap();
+
+            let hundred = b.emit_const_i64(100);
+            let ten = b.emit_const_i64(10);
+            let a = b.emit(Op::IMul, vec![present, hundred], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let c = b.emit(Op::IMul, vec![absent, ten], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let sum = b.emit(Op::IAdd, vec![a, c], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            let total = b.emit(Op::IAdd, vec![sum, exists], None, IrType::I64, PhpType::Int, Ownership::NonHeap).unwrap();
+            b.terminate(Terminator::Return { value: Some(total) });
+        }
+        module.add_function(f);
+        if let Some(o) = invoke(&module, "fn_a", &[]) {
+            assert_eq!(o, "101");
+        }
+    }
+
     /// `$h = ["a"=>10, "b"=>20, "c"=>30]; unset($h["b"]); foreach ($h as $v) echo $v;` -> "1030"
     /// through `Op::HashUnset`. The removed entry is spliced out of the insertion-order chain,
     /// so the post-unset foreach walks only "a" and "c" in order, proving the linked-list
