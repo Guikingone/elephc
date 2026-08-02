@@ -1988,10 +1988,6 @@ fn test_cli_wasm_rejects_unproven_object_iterator_and_global_shapes() {
             "Nullsafe property access requires a single nullable object type",
         ),
         (
-            r#"<?php function m(): mixed { return 1; } $a = [m()]; foreach ($a as $v) { echo $v; }"#,
-            "indexed foreach element Mixed has no exact WASM load contract",
-        ),
-        (
             r#"<?php $h = ["a" => 1]; foreach ($h as &$v) { $v = 2; }"#,
             "by-reference foreach over associative arrays",
         ),
@@ -7913,6 +7909,112 @@ echo slugify("  The Rise of  Machines "), "\n";
 
 /// php-src 8.5.6's own output for `ACCUMULATOR_SOURCE`.
 const ACCUMULATOR_EXPECTED: &str = r##"A,B|1,2,3|1.5,2.5|a,c|0:|2:p,q|0:|rise-machines
+"##;
+
+/// Verifies arrays of OBJECTS end to end: building one, walking it, and reading through it.
+///
+/// An object is a refcounted container, so its slot holds a pointer under `value_type` 4 — the
+/// stamp that makes `__rt_array_free_deep` release each element instead of dropping it. The array
+/// takes a SHARE at the push, because the EIR emits `array_push` then `release` of the operand.
+///
+/// `foreach` binds an OWNED element, so the read increfs. Deciding that from the result's
+/// REPRESENTATION alone was wrong: an object pointer is a `Ptr` just like a Mixed cell, so the
+/// binding was boxed into a cell and the property read then found an empty slot — right shape,
+/// wrong object, and the loop printed nothing.
+///
+/// A promoted constructor property is admitted although it is typed with no default: the
+/// promotion assigns it from the constructor's signature, before the body runs, so no read can
+/// precede it. Non-promoted typed properties still need the initialization check and stay refused.
+///
+/// The Mixed-element loop is here because an untyped `array` parameter widens to cells, which is
+/// the shape any function boundary produces.
+#[test]
+fn test_cli_wasm_object_arrays_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_object_array");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, OBJECT_ARRAY_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the object-array probe");
+    assert!(
+        output.status.success(),
+        "object-array compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the object-array probe under Node");
+    assert!(
+        run.status.success(),
+        "object-array probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), OBJECT_ARRAY_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The object-array probe: a method call per element, a string and an int property, an empty
+/// array, and a Mixed-element loop.
+const OBJECT_ARRAY_SOURCE: &str = r##"<?php
+class Item {
+    public function __construct(public string $name, public int $qty) {}
+    public function label(): string { return $this->name . " x" . $this->qty; }
+}
+$items = [new Item("bolt", 3), new Item("nut", 7), new Item("pin", 1)];
+$out = [];
+foreach ($items as $it) { $out[] = $it->label(); }
+echo implode("; ", $out), "\n";
+$up = [];
+foreach ($items as $it) { $up[] = strtoupper($it->name); }
+echo implode(", ", $up), "\n";
+echo count($items), "\n";
+$empty = [];
+foreach ($empty as $it) { echo "never"; }
+foreach ($items as $it) { echo $it->qty, "."; }
+echo "\n";
+$m = [1, "hi", 2.5];
+foreach ($m as $v) { echo $v, "|"; }
+echo "done\n";
+"##;
+
+/// php-src 8.5.6's own output for `OBJECT_ARRAY_SOURCE`.
+const OBJECT_ARRAY_EXPECTED: &str = r##"bolt x3; nut x7; pin x1
+BOLT, NUT, PIN
+3
+3.7.1.
+1|hi|2.5|done
 "##;
 
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.

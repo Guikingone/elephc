@@ -57,6 +57,9 @@ pub(super) fn array_widen_shape(element: &PhpType) -> Option<(i64, i64)> {
         PhpType::Str => (1, 16),
         PhpType::Bool => (3, 8),
         PhpType::Float => (2, 8),
+        // An object slot holds its pointer; `__rt_mixed_from_value` increfs a refcounted child,
+        // so the copy owns its own share.
+        PhpType::Object(_) => (6, 8),
         PhpType::Void => (0, 8),
         _ => return None,
     })

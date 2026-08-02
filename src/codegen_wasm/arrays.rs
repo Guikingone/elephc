@@ -37,6 +37,8 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_PUSH_INT);
     wm.add_raw_func(RT_ARRAY_PUSH_STR);
     wm.add_raw_func(RT_ARRAY_PUSH_FLOAT);
+    wm.add_raw_func(RT_ARRAY_PUSH_OBJECT);
+    wm.add_raw_func(RT_ARRAY_GET_OBJECT);
     wm.add_raw_func(RT_ARRAY_GET_FLOAT);
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
@@ -287,6 +289,54 @@ const RT_ARRAY_PUSH_FLOAT: &str = r#"(func $__rt_array_push_float (param $array 
   (f64.store (local.get $slot) (local.get $value))          ;; write element
   (i64.store (local.get $array) (i64.add (local.get $len) (i64.const 1)))  ;; length++
   (local.get $array))                                                            ;; return the (possibly new) array
+"#;
+
+/// `__rt_array_push_object`: appends an object pointer, shaping an empty array to 8-byte slots
+/// stamped `value_type` 4, and growing capacity when full.
+///
+/// An object is a refcounted container, so the slot holds its pointer and the array owns a SHARE
+/// of it — the caller increfs before handing it over, matching what the EIR emits: `array_push`
+/// followed by a `release` of the operand. `__rt_array_free_deep` already walks `value_type` 4 and
+/// releases every child through `__rt_decref_any`, so the stamp is what makes the array's own
+/// release reach the objects rather than dropping them.
+const RT_ARRAY_PUSH_OBJECT: &str = r#"(func $__rt_array_push_object (param $array i32) (param $obj i32) (result i32)
+  (local $len i64)
+  (local $cap i64)
+  (local $slot i32)
+  (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as an object array
+    (then
+      (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 8))  ;; elem_size = 8
+      (i64.store (i32.sub (local.get $array) (i32.const 8))
+                 (i64.or (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const -32513)) (i64.const 1024)))))  ;; value_type = 4 (object; 4 << 8 = 1024)
+  (local.set $len (i64.load (local.get $array)))            ;; length
+  (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))  ;; capacity
+  (if (i64.ge_s (local.get $len) (local.get $cap))          ;; full -> grow
+    (then (local.set $array (call $__rt_array_grow (local.get $array)))))
+  (local.set $len (i64.load (local.get $array)))            ;; reload length (grow preserves it)
+  (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $len) (i64.const 8)))))  ;; slot = A+24+len*8
+  (i64.store (local.get $slot) (i64.extend_i32_u (local.get $obj)))  ;; object pointer (zero-extended)
+  (i64.store (local.get $array) (i64.add (local.get $len) (i64.const 1)))  ;; length++
+  (local.get $array))                                       ;; return the (possibly new) array
+"#;
+
+/// `__rt_array_get_object`: reads the object pointer at `index`, BORROWED.
+///
+/// A miss answers 0, which every release path treats as a no-op — unlike the int accessor's null
+/// sentinel, which as a pointer would be garbage. The caller decides ownership: `foreach` binds an
+/// OWNED value (`iter_current_value` is `own=owned` and the EIR releases it), so it increfs; a
+/// boxing caller hands the pointer to `__rt_mixed_from_value`, which increfs refcounted children
+/// itself.
+const RT_ARRAY_GET_OBJECT: &str = r#"(func $__rt_array_get_object (param $array i32) (param $index i64) (result i32)
+  (local $len i64)
+  (if (i32.eqz (local.get $array))
+    (then (return (i32.const 0))))
+  (if (i64.lt_s (local.get $index) (i64.const 0))
+    (then (return (i32.const 0))))
+  (local.set $len (i64.load (local.get $array)))
+  (if (i64.ge_s (local.get $index) (local.get $len))
+    (then (return (i32.const 0))))
+  (i32.wrap_i64 (i64.load (i32.add (i32.add (local.get $array) (i32.const 24))
+                                   (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8)))))))
 "#;
 
 /// `__rt_array_get_float`: reads the f64 element at `index`.

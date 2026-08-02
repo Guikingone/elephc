@@ -1414,8 +1414,8 @@ fn array_to_mixed_shape_issue(function: &Function, inst: &Instruction) -> Option
 
 /// Validates indexed-array write storage against the helper selected by WASM.
 ///
-/// The current runtime has exact layouts only for int/bool-like, float and string
-/// arrays. `ArrayPush` additionally supports an already-boxed Mixed/Union cell,
+/// The current runtime has exact layouts only for int/bool-like, float, string and
+/// object arrays. `ArrayPush` additionally supports an already-boxed Mixed/Union cell,
 /// and BOXES a concrete scalar when the destination stores Mixed cells — which is
 /// what a heterogeneous array literal emits, since EIR pushes raw scalars into an
 /// `array<mixed>` and leaves the boxing to the backend. `ArraySet` has no boxing
@@ -1477,6 +1477,10 @@ fn array_store_shape_issue(
         (PhpType::Str, IrType::Str, PhpType::Str) => true,
         // A float shares the int slot width; the array's value_type 2 records which it is.
         (PhpType::Float, IrType::F64, PhpType::Float) => true,
+        // An object slot holds its pointer; value_type 4 is what makes the deep free reach it.
+        (PhpType::Object(element), IrType::Heap(IrHeapKind::Object), PhpType::Object(source)) => {
+            *element == *source
+        }
         (
             PhpType::Void | PhpType::Never,
             IrType::I64,
@@ -1534,7 +1538,15 @@ fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
         (IrType::Heap(IrHeapKind::Array), PhpType::Array(element)) => {
             if matches!(
                 element.codegen_repr(),
-                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Str | PhpType::Float
+                PhpType::Int
+                    | PhpType::Bool
+                    | PhpType::False
+                    | PhpType::Str
+                    | PhpType::Float
+                    | PhpType::Object(_)
+                    | PhpType::Mixed
+                    // An empty array's element type: the body never runs, so any contract does.
+                    | PhpType::Void
             ) {
                 None
             } else {
@@ -2971,6 +2983,13 @@ fn property_get_shape_issue(
             "dynamic property ${property} reads require the exact PHP undefined-property warning"
         ));
     };
+    // A declared typed property with no default can be read before it is ever assigned, which PHP
+    // answers with `Error: Typed property C::$p must not be accessed before initialization`. The
+    // object allocator zeroes the slot, and zero is a legitimate value for an int or a bool, so
+    // there is no sentinel to test — implementing that check needs an initialization bitmap.
+    //
+    // A CONSTRUCTOR-PROMOTED property is the exception: the promotion assigns it from the
+    // constructor's signature, before the constructor body runs, so no read can precede it.
     if class_info
         .property_declared_slots
         .get(property_index)
@@ -2981,6 +3000,7 @@ fn property_get_shape_issue(
             .get(property_index)
             .map(|default| default.is_none())
             .unwrap_or(true)
+        && !class_info.promoted_properties.contains(property)
     {
         return Some(format!(
             "typed property ${property} may be uninitialized and requires an exact PHP fatal check"

@@ -1442,6 +1442,13 @@ fn emit_declared_property_load(
             ctx.fb.ins(&format!("f64.load offset={}", offset), "load float property value_lo");
         }
         PhpType::Str => {
+            // Persists a copy the reader owns. That is one allocation more than the EIR asks for
+            // — it follows `prop_get` with an `acquire`, which persists AGAIN, and only the second
+            // copy is released, so every string property read leaks ~31 bytes. Returning the
+            // BORROWED slot instead is NOT the fix: the Throwable accessors read a message and
+            // outlive the object that held it, so the borrowed pointer goes stale and
+            // `getMessage()` answers dead bytes. Closing this needs the EIR to stop asking for an
+            // acquire on an already-owned read, not a change here.
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.fb.ins(&format!("i32.load offset={}", offset), "load string property ptr (lo)");
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
