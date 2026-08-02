@@ -8831,6 +8831,146 @@ echo $t, "\n";
 const ISSET_EXPECTED: &str = r##"ynyyyyy|yyyyy|5|6
 "##;
 
+/// Verifies `sort` and `rsort` over scalar arrays, on 64 orderings against php-src.
+///
+/// The sort is STABLE — PHP's have been since 8.0 — so the swap test is strict and equal
+/// elements keep their order. It copy-on-write-uniques first and answers the array pointer, which
+/// the call site writes back: `sort($a)` rebinds `$a`.
+///
+/// String and Mixed elements stay refused. PHP orders strings with its standard comparison, where
+/// two numeric strings compare NUMERICALLY — `sort(["10", "9"])` answers `9, 10` — and that rule
+/// is not this helper's.
+#[test]
+fn test_cli_wasm_scalar_sorts_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_sort");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, SORT_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the sort probe");
+    assert!(
+        output.status.success(),
+        "sort compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the sort probe under Node");
+    assert!(
+        run.status.success(),
+        "sort probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), SORT_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The sort probe: empty, single, already-ordered, reversed, duplicates, negatives, both i64
+/// extremes, floats including -0.0, and twenty generated orderings.
+const SORT_SOURCE: &str = r##"<?php
+$a0 = [5,3,9,1,3]; sort($a0); echo implode(",", $a0), ";";
+$b0 = [5,3,9,1,3]; rsort($b0); echo implode(",", $b0), ";";
+$a1 = []; sort($a1); echo implode(",", $a1), ";";
+$b1 = []; rsort($b1); echo implode(",", $b1), ";";
+$a2 = [7]; sort($a2); echo implode(",", $a2), ";";
+$b2 = [7]; rsort($b2); echo implode(",", $b2), ";";
+$a3 = [2,1]; sort($a3); echo implode(",", $a3), ";";
+$b3 = [2,1]; rsort($b3); echo implode(",", $b3), ";";
+$a4 = [1,2,3]; sort($a4); echo implode(",", $a4), ";";
+$b4 = [1,2,3]; rsort($b4); echo implode(",", $b4), ";";
+$a5 = [3,2,1]; sort($a5); echo implode(",", $a5), ";";
+$b5 = [3,2,1]; rsort($b5); echo implode(",", $b5), ";";
+$a6 = [-5,0,5,-1]; sort($a6); echo implode(",", $a6), ";";
+$b6 = [-5,0,5,-1]; rsort($b6); echo implode(",", $b6), ";";
+$a7 = [0,0,0]; sort($a7); echo implode(",", $a7), ";";
+$b7 = [0,0,0]; rsort($b7); echo implode(",", $b7), ";";
+$a8 = [PHP_INT_MAX, PHP_INT_MIN, 0]; sort($a8); echo implode(",", $a8), ";";
+$b8 = [PHP_INT_MAX, PHP_INT_MIN, 0]; rsort($b8); echo implode(",", $b8), ";";
+$a9 = [1.5,-2.5,0.0,1.5]; sort($a9); echo implode(",", $a9), ";";
+$b9 = [1.5,-2.5,0.0,1.5]; rsort($b9); echo implode(",", $b9), ";";
+$a10 = [3.0,1.0,2.0]; sort($a10); echo implode(",", $a10), ";";
+$b10 = [3.0,1.0,2.0]; rsort($b10); echo implode(",", $b10), ";";
+$a11 = [-0.0,0.0]; sort($a11); echo implode(",", $a11), ";";
+$b11 = [-0.0,0.0]; rsort($b11); echo implode(",", $b11), ";";
+$a12 = [25,19,-34]; sort($a12); echo implode(",", $a12), ";";
+$b12 = [25,19,-34]; rsort($b12); echo implode(",", $b12), ";";
+$a13 = [27,10,30,24,-42]; sort($a13); echo implode(",", $a13), ";";
+$b13 = [27,10,30,24,-42]; rsort($b13); echo implode(",", $b13), ";";
+$a14 = []; sort($a14); echo implode(",", $a14), ";";
+$b14 = []; rsort($b14); echo implode(",", $b14), ";";
+$a15 = [-17,20,-21,-26,41,10,19]; sort($a15); echo implode(",", $a15), ";";
+$b15 = [-17,20,-21,-26,41,10,19]; rsort($b15); echo implode(",", $b15), ";";
+$a16 = [10,0,31,-31,-21,31,-31,16]; sort($a16); echo implode(",", $a16), ";";
+$b16 = [10,0,31,-31,-21,31,-31,16]; rsort($b16); echo implode(",", $b16), ";";
+$a17 = [44,-49,35,49,-42,-30]; sort($a17); echo implode(",", $a17), ";";
+$b17 = [44,-49,35,49,-42,-30]; rsort($b17); echo implode(",", $b17), ";";
+$a18 = []; sort($a18); echo implode(",", $a18), ";";
+$b18 = []; rsort($b18); echo implode(",", $b18), ";";
+$a19 = [49,-47,-16,10]; sort($a19); echo implode(",", $a19), ";";
+$b19 = [49,-47,-16,10]; rsort($b19); echo implode(",", $b19), ";";
+$a20 = [41,4,0,43,23,6]; sort($a20); echo implode(",", $a20), ";";
+$b20 = [41,4,0,43,23,6]; rsort($b20); echo implode(",", $b20), ";";
+$a21 = [-4,-38]; sort($a21); echo implode(",", $a21), ";";
+$b21 = [-4,-38]; rsort($b21); echo implode(",", $b21), ";";
+$a22 = []; sort($a22); echo implode(",", $a22), ";";
+$b22 = []; rsort($b22); echo implode(",", $b22), ";";
+$a23 = [13,-23]; sort($a23); echo implode(",", $a23), ";";
+$b23 = [13,-23]; rsort($b23); echo implode(",", $b23), ";";
+$a24 = [36,5,49,30]; sort($a24); echo implode(",", $a24), ";";
+$b24 = [36,5,49,30]; rsort($b24); echo implode(",", $b24), ";";
+$a25 = [3,14,-1,23]; sort($a25); echo implode(",", $a25), ";";
+$b25 = [3,14,-1,23]; rsort($b25); echo implode(",", $b25), ";";
+$a26 = [18,24,2,24,-21]; sort($a26); echo implode(",", $a26), ";";
+$b26 = [18,24,2,24,-21]; rsort($b26); echo implode(",", $b26), ";";
+$a27 = [37,-47,-15,27,35]; sort($a27); echo implode(",", $a27), ";";
+$b27 = [37,-47,-15,27,35]; rsort($b27); echo implode(",", $b27), ";";
+$a28 = [39,-9]; sort($a28); echo implode(",", $a28), ";";
+$b28 = [39,-9]; rsort($b28); echo implode(",", $b28), ";";
+$a29 = [23,22,-37,41,33,-23,31,23]; sort($a29); echo implode(",", $a29), ";";
+$b29 = [23,22,-37,41,33,-23,31,23]; rsort($b29); echo implode(",", $b29), ";";
+$a30 = [-14,-35,-42,11]; sort($a30); echo implode(",", $a30), ";";
+$b30 = [-14,-35,-42,11]; rsort($b30); echo implode(",", $b30), ";";
+$a31 = [-39,-6,-42,2,-31,-48,-13]; sort($a31); echo implode(",", $a31), ";";
+$b31 = [-39,-6,-42,2,-31,-48,-13]; rsort($b31); echo implode(",", $b31), ";";
+echo "
+";"##;
+
+/// php-src 8.5.6's own output for `SORT_SOURCE`.
+const SORT_EXPECTED: &str = r##"1,3,3,5,9;9,5,3,3,1;;;7;7;1,2;2,1;1,2,3;3,2,1;1,2,3;3,2,1;-5,-1,0,5;5,0,-1,-5;0,0,0;0,0,0;-9223372036854775808,0,9223372036854775807;9223372036854775807,0,-9223372036854775808;-2.5,0,1.5,1.5;1.5,1.5,0,-2.5;1,2,3;3,2,1;-0,0;-0,0;-34,19,25;25,19,-34;-42,10,24,27,30;30,27,24,10,-42;;;-26,-21,-17,10,19,20,41;41,20,19,10,-17,-21,-26;-31,-31,-21,0,10,16,31,31;31,31,16,10,0,-21,-31,-31;-49,-42,-30,35,44,49;49,44,35,-30,-42,-49;;;-47,-16,10,49;49,10,-16,-47;0,4,6,23,41,43;43,41,23,6,4,0;-38,-4;-4,-38;;;-23,13;13,-23;5,30,36,49;49,36,30,5;-1,3,14,23;23,14,3,-1;-21,2,18,24,24;24,24,18,2,-21;-47,-15,27,35,37;37,35,27,-15,-47;-9,39;39,-9;-37,-23,22,23,23,31,33,41;41,33,31,23,23,22,-23,-37;-42,-35,-14,11;11,-14,-35,-42;-48,-42,-39,-31,-13,-6,2;2,-6,-13,-31,-39,-42,-48;
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

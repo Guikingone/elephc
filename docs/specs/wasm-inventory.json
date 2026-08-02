@@ -5947,7 +5947,7 @@
           "name": "rsort",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "rsort(...)"
           ],
@@ -5955,7 +5955,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::scalar_sorts_admit_only_orderable_elements",
+              "codegen::cli::test_cli_wasm_scalar_sorts_match_php"
+            ],
+            "notes": "Scalar elements only, sorted in place after a copy-on-write split. STABLE, as PHP has been since 8.0. String and Mixed elements are refused: PHP orders strings with its standard comparison, where two numeric strings compare numerically."
+          }
         },
         {
           "name": "shuffle",
@@ -5975,7 +5983,7 @@
           "name": "sort",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "sort(...)"
           ],
@@ -5983,7 +5991,15 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::builtins",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::scalar_sorts_admit_only_orderable_elements",
+              "codegen::cli::test_cli_wasm_scalar_sorts_match_php"
+            ],
+            "notes": "Scalar elements only, sorted in place after a copy-on-write split. STABLE, as PHP has been since 8.0. String and Mixed elements are refused: PHP orders strings with its standard comparison, where two numeric strings compare numerically."
+          }
         },
         {
           "name": "uasort",
@@ -12837,14 +12853,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 196,
+    "supported": 198,
     "excluded": 47,
-    "missing": 469,
+    "missing": 467,
     "evidence_gaps": 176,
     "row_evidence_gaps": 175,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "469 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "467 reachable identities lack a WASM lowerer; 175 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

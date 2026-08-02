@@ -3250,6 +3250,8 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::ArraySlice
             | RuntimeFnId::ArrayMerge
             | RuntimeFnId::Range
+            | RuntimeFnId::Sort
+            | RuntimeFnId::Rsort
             | RuntimeFnId::ArraySearch
             | RuntimeFnId::Explode
             | RuntimeFnId::StrSplit
@@ -3352,6 +3354,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Range {
         return range_shape_issue(function, call);
+    }
+    if matches!(target, RuntimeFnId::Sort | RuntimeFnId::Rsort) {
+        return scalar_sort_shape_issue(function, call);
     }
     if target == RuntimeFnId::ArraySearch {
         return in_array_shape_issue(function, call);
@@ -3587,6 +3592,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::ArraySlice {
         return lower_array_slice(ctx, inst);
+    }
+    if matches!(target, RuntimeFnId::Sort | RuntimeFnId::Rsort) {
+        return lower_scalar_sort(ctx, inst, target == RuntimeFnId::Rsort);
     }
     if target == RuntimeFnId::ArraySearch {
         return lower_array_search(ctx, inst);
@@ -4554,6 +4562,82 @@ fn emit_strict_block(ctx: &mut FnCtx, strict: &str, blocks: bool) {
     } else {
         ctx.fb.ins("i32.const 0", "same types: === and == agree");
     }
+}
+
+/// Validates `sort`/`rsort`: one indexed array of a scalar element the runtime sorts in place.
+///
+/// String and Mixed elements are NOT admitted: PHP orders strings with its standard comparison,
+/// where two numeric strings compare NUMERICALLY — `sort(["10", "9"])` answers `9, 10`, not
+/// `10, 9` — and that rule is not this helper's.
+fn scalar_sort_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [array] = call.operands.as_slice() else {
+        return Some(format!(
+            "sort takes one array, got {} operands",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*array) else {
+        return Some("sort array is missing from the value table".to_string());
+    };
+    if value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "sort takes an indexed array, got {:?}",
+            value.ir_type
+        ));
+    }
+    let PhpType::Array(element) = value.php_type.codegen_repr() else {
+        return Some(format!(
+            "sort takes an indexed array, got {:?}",
+            value.php_type.codegen_repr()
+        ));
+    };
+    // `Void` is what an empty literal's `Never` normalizes to: nothing to order.
+    if !matches!(
+        element.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void
+    ) {
+        return Some(format!(
+            "sort has no lowered ordering for elements of {element:?}"
+        ));
+    }
+    None
+}
+
+/// Lowers `sort`/`rsort` over a scalar array, writing the sorted pointer back into the by-
+/// reference argument.
+fn lower_scalar_sort(ctx: &mut FnCtx, inst: &Instruction, descending: bool) -> Result<()> {
+    let array = operand(inst, 0)?;
+    let element = match ctx.function.value(array).map(|v| v.php_type.codegen_repr()) {
+        Some(PhpType::Array(element)) => *element,
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "sort takes an indexed array, got {other:?}"
+            )))
+        }
+    };
+    let is_float = i32::from(element.codegen_repr() == PhpType::Float);
+    ctx.emit_load_value(array)?;
+    ctx.fb
+        .ins(&format!("i32.const {}", i32::from(descending)), "rsort reverses the order");
+    ctx.fb
+        .ins(&format!("i32.const {is_float}"), "read the slots as doubles?");
+    ctx.fb.ins(
+        "call $__rt_sort_scalar",
+        "stable in-place sort (COW), returns the array pointer",
+    );
+    // `sort($a)` rebinds `$a`: the runtime may have cloned, so the pointer goes back.
+    ctx.emit_store_value(array)?;
+    if let Some(slot) = super::inst::value_source_slot(ctx, array) {
+        let array_ref = ctx.value_repr(array)?.local_refs();
+        let slot_ref = ctx.slot_repr(slot)?.local_refs();
+        if array_ref.len() == 1 && slot_ref.len() == 1 {
+            ctx.fb
+                .ins(&format!("local.get {}", array_ref[0]), "sorted array pointer");
+            ctx.fb
+                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
+        }
+    }
+    Ok(())
 }
 
 /// Validates `range`: two integer bounds. The step form does not exist — the front-end rejects
@@ -5699,6 +5783,47 @@ mod tests {
     }
 
     /// Builds a `RuntimeCall` probe with an arbitrary operand list.
+    /// `sort` and `rsort` order scalar slots in place; string and Mixed elements are refused,
+    /// because PHP compares two numeric strings NUMERICALLY and that rule is not this helper's.
+    #[test]
+    fn scalar_sorts_admit_only_orderable_elements() {
+        let array_of = |element: PhpType| {
+            (
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(element)),
+            )
+        };
+        for target in [RuntimeFnId::Sort, RuntimeFnId::Rsort] {
+            for element in [PhpType::Int, PhpType::Bool, PhpType::Float, PhpType::Never] {
+                let probe = shaped_call(
+                    target,
+                    &[array_of(element.clone())],
+                    IrType::I64,
+                    PhpType::Void,
+                );
+                let call = probe.instructions.last().expect("the probe emitted a call");
+                assert_eq!(
+                    direct_builtin_shape_issue(&probe_module(), &probe, call, target),
+                    None,
+                    "{target:?} orders elements of {element:?}"
+                );
+            }
+            for element in [PhpType::Str, PhpType::Mixed] {
+                let probe = shaped_call(
+                    target,
+                    &[array_of(element.clone())],
+                    IrType::I64,
+                    PhpType::Void,
+                );
+                let call = probe.instructions.last().expect("the probe emitted a call");
+                assert!(
+                    direct_builtin_shape_issue(&probe_module(), &probe, call, target).is_some(),
+                    "{target:?} has no measured ordering for {element:?}"
+                );
+            }
+        }
+    }
+
     /// `range` here is the two-bound integer form only: the front-end rejects every other arity
     /// with "range() takes exactly 2 arguments", so there is no step to validate and no float or
     /// string bound to widen.

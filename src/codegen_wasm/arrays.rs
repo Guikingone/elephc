@@ -43,6 +43,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
     wm.add_raw_func(RT_ARRAY_SLICE);
+    wm.add_raw_func(RT_SORT_SCALAR);
     wm.add_raw_func(RT_RANGE_INT);
     wm.add_raw_func(RT_ARRAY_FIND_INT);
     wm.add_raw_func(RT_ARRAY_FIND_FLOAT);
@@ -722,6 +723,59 @@ const RT_ARRAY_FIND_FLOAT: &str = r#"(func $__rt_array_find_float (param $needle
   (i64.const -1))
 "#;
 
+
+/// `__rt_sort_scalar`: PHP's `sort`/`rsort` over 8-byte scalar slots, in place.
+///
+/// Copy-on-write-uniques the array first, then STABLE bubble sorts — PHP's sorts have been stable
+/// since 8.0, so equal elements must keep their order, which is why the swap test is STRICT.
+/// `$desc` reverses it for `rsort`; `$is_float` reads the slots as doubles rather than integers.
+///
+/// Returns the (possibly cloned) array pointer, which the call site writes back into the by-
+/// reference argument's local — `sort($a)` rebinds `$a`.
+const RT_SORT_SCALAR: &str = r#"(func $__rt_sort_scalar (param $arr i32) (param $desc i32) (param $is_float i32) (result i32)
+  (local $len i64)
+  (local $i i64)
+  (local $j i64)
+  (local $pa i32)
+  (local $pb i32)
+  (local $a i64)
+  (local $b i64)
+  (local $swap i32)
+  (local.set $arr (call $__rt_array_ensure_unique (local.get $arr)))
+  (local.set $len (i64.load (local.get $arr)))
+  (if (i64.lt_s (local.get $len) (i64.const 2))
+    (then (return (local.get $arr))))
+  (local.set $i (i64.const 0))
+  (block $outer_end (loop $outer
+    (br_if $outer_end (i64.ge_s (local.get $i) (local.get $len)))
+    (local.set $j (i64.const 0))
+    (block $inner_end (loop $inner
+      (br_if $inner_end (i64.ge_s (local.get $j)
+        (i64.sub (i64.sub (local.get $len) (i64.const 1)) (local.get $i))))
+      (local.set $pa (i32.add (i32.add (local.get $arr) (i32.const 24))
+                              (i32.wrap_i64 (i64.mul (local.get $j) (i64.const 8)))))
+      (local.set $pb (i32.add (local.get $pa) (i32.const 8)))
+      (local.set $a (i64.load (local.get $pa)))
+      (local.set $b (i64.load (local.get $pb)))
+      (if (local.get $is_float)
+        (then (local.set $swap (select
+                (f64.lt (f64.reinterpret_i64 (local.get $a)) (f64.reinterpret_i64 (local.get $b)))
+                (f64.gt (f64.reinterpret_i64 (local.get $a)) (f64.reinterpret_i64 (local.get $b)))
+                (local.get $desc))))
+        (else (local.set $swap (select
+                (i64.lt_s (local.get $a) (local.get $b))
+                (i64.gt_s (local.get $a) (local.get $b))
+                (local.get $desc)))))
+      (if (local.get $swap)                                     ;; strict: equal keeps its order
+        (then
+          (i64.store (local.get $pa) (local.get $b))
+          (i64.store (local.get $pb) (local.get $a))))
+      (local.set $j (i64.add (local.get $j) (i64.const 1)))
+      (br $inner)))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $outer)))
+  (local.get $arr))
+"#;
 
 /// `__rt_array_ensure_unique`: the copy-on-write split point. Returns the array
 /// unchanged when it has at most one owner (refcount <= 1); otherwise clones it

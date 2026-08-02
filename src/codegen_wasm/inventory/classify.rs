@@ -225,6 +225,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_array_search_matches_php",
             ][..],
         ),
+        RuntimeFnId::Sort | RuntimeFnId::Rsort => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::scalar_sorts_admit_only_orderable_elements",
+                "codegen::cli::test_cli_wasm_scalar_sorts_match_php",
+            ][..],
+        ),
         RuntimeFnId::Range => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",
