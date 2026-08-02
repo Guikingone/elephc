@@ -2,7 +2,7 @@
 
 Tracking issue: [illegalstudio/elephc#662](https://github.com/illegalstudio/elephc/issues/662)
 Branch: `feat/ios-target`
-Status: draft — no code written yet
+Status: delivered — compiled PHP runs on the iOS Simulator
 
 ---
 
@@ -180,14 +180,21 @@ Fixed in the compiler rather than worked around in the script: non-macOS Apple t
 
 `scripts/ios-relink-spike.sh` now exercises the shipping path — `--target ios-* --emit staticlib` — rather than a hand-rolled relink, since there is no longer anything to work around.
 
-**Accept — met, up to execution.** Both targets build and link:
+**Accept — met.** Compiled PHP runs on iOS:
 
-| | device | simulator |
-|---|---|---|
-| archive members | `platform IOS` | `platform IOSSIMULATOR` |
-| host executable | links | links |
+```
+==> compiling for ios-sim-arm64
+    IOSSIMULATOR spike.o
+    IOSSIMULATOR runtime-v0.26.2-ios-sim-arm64-…​.o
+==> linking a arm64-apple-ios13.0-simulator host against the archive
+     platform IOSSIMULATOR   minos 14.0   sdk 26.5
+==> running inside booted simulator 9A3F533A-…​
+    42 hi iOS 6
+```
 
-Running it needs a booted simulator, which needs a runtime image of several GB that does not fit in the remaining disk. Execution is the only step outstanding, and it is an environment limit rather than a code one.
+iPhone 17 Pro, iOS 26.5, arm64. `spike_add(40, 2)` returned 42, `spike_greet("iOS", 3)` returned `"hi iOS"` with length 6, and `elephc_free` released the buffer without incident — the int export, the string export and the ownership contract, all on device-class arm64.
+
+The device target builds and links identically (`platform IOS`); running it needs provisioning and a signed bundle, which is an app-packaging concern rather than a compiler one.
 
 An isolated `XDG_CACHE_HOME` matters more than it looks: the runtime object's cache key encodes the program's runtime feature set, so the shared cache holds several candidates and a "newest match" glob would silently pick the wrong one.
 
