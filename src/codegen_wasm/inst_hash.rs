@@ -125,7 +125,7 @@ pub(super) fn lower_hash_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         .unwrap_or(PhpType::Mixed);
 
     let (key_lo, key_hi) = materialize_hash_key(ctx, key)?;
-    let (val_lo, val_hi, val_tag) =
+    let (val_lo, val_hi, val_tag, consumed_cell) =
         materialize_hash_value_tagged(ctx, value, &value_ty, &storage_value)?;
 
     // __rt_hash_set(hash, key_lo, key_hi, val_lo, val_hi, val_tag) -> hash'
@@ -139,9 +139,16 @@ pub(super) fn lower_hash_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     ctx.fb
         .ins(&format!("local.get {}", val_hi), "hash value high word");
     ctx.fb
-        .ins(&format!("i64.const {}", val_tag), "hash value runtime tag");
+        .ins(&val_tag, "hash value runtime tag");
     ctx.fb
         .ins("call $__rt_hash_set", "set hash element (COW, persists/increfs value)");
+    // The flattened cell's reference had no other owner; drop it now that the runtime has
+    // persisted or increfed whatever it needed out of it.
+    if let Some(cell) = &consumed_cell {
+        ctx.fb.ins(&format!("local.get {}", cell), "the flattened cell");
+        ctx.fb
+            .ins("call $__rt_decref_any", "its reference was handed to this store");
+    }
 
     // The runtime returned the (possibly cloned/resized) pointer: store it back into
     // the hash operand value's local and mirror it to the source slot so a later
@@ -217,7 +224,7 @@ pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .map(|v| v.php_type.codegen_repr())
         .unwrap_or(PhpType::Mixed);
 
-    let (val_lo, val_hi, val_tag) =
+    let (val_lo, val_hi, val_tag, consumed_cell) =
         materialize_hash_value_tagged(ctx, value, &value_ty, &storage_value)?;
 
     // __rt_hash_append(hash, val_lo, val_hi, val_tag) -> hash'
@@ -227,7 +234,7 @@ pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     ctx.fb
         .ins(&format!("local.get {}", val_hi), "append value high word");
     ctx.fb
-        .ins(&format!("i64.const {}", val_tag), "append value runtime tag");
+        .ins(&val_tag, "append value runtime tag");
     ctx.fb.ins(
         "call $__rt_hash_append",
         "append at persisted next int key (COW, persists/increfs value)",
@@ -235,6 +242,12 @@ pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     let appended = ctx.fresh_temp(ValType::I32);
     ctx.fb
         .ins(&format!("local.set {}", appended), "capture append result pointer");
+    // Same hand-over as the keyed store: see `materialize_hash_value_tagged`.
+    if let Some(cell) = &consumed_cell {
+        ctx.fb.ins(&format!("local.get {}", cell), "the flattened cell");
+        ctx.fb
+            .ins("call $__rt_decref_any", "its reference was handed to this append");
+    }
     ctx.fb
         .ins(&format!("local.get {}", appended), "append result pointer");
     ctx.fb.ins("i32.eqz", "saturated append key occupied?");
@@ -750,7 +763,48 @@ fn materialize_hash_value_tagged(
     value: crate::ir::ValueId,
     value_ty: &PhpType,
     storage_value: &PhpType,
-) -> Result<(String, String, i64)> {
+) -> Result<(String, String, String, Option<String>)> {
+    // A heterogeneous hash stores the value FLAT — tag at +40, payload at +24/+32 — so a
+    // Mixed CELL source must be unboxed into those three words rather than parked as a
+    // pointer under tag 7. Storing the pointer read back as a cell-holding-a-cell, and
+    // `$c[$k] = $c[$k] + 1` in a loop then stacked one more level of indirection every
+    // iteration; the counter printed empty because nothing follows that chain.
+    if matches!(storage_value, PhpType::Mixed | PhpType::Iterable)
+        && matches!(
+            ctx.function.value(value).map(|v| v.ir_type),
+            Some(IrType::Heap(IrHeapKind::Mixed))
+        )
+    {
+        let val_tag = ctx.fresh_temp(ValType::I64);
+        let val_hi = ctx.fresh_temp(ValType::I64);
+        let val_lo = ctx.fresh_temp(ValType::I64);
+        let cell = ctx.fresh_temp(ValType::I32);
+        ctx.emit_load_value(value)?;
+        ctx.fb
+            .ins(&format!("local.tee {}", cell), "the cell being flattened");
+        ctx.fb.ins(
+            "call $__rt_mixed_unbox",
+            "flatten the cell into the hash entry's own (tag, lo, hi)",
+        );
+        // The helper answers (tag, lo, hi) with `hi` on top.
+        ctx.fb
+            .ins(&format!("local.set {}", val_hi), "unboxed value high word");
+        ctx.fb
+            .ins(&format!("local.set {}", val_lo), "unboxed value low word");
+        ctx.fb
+            .ins(&format!("local.set {}", val_tag), "unboxed value tag");
+        // A freshly produced `Owned` temporary is HANDED OVER: the EIR emits no release for
+        // it, because the store used to take the cell pointer itself. Flattening leaves that
+        // reference with no owner, so it is dropped here — but only after the call, since a
+        // string's payload is BORROWED out of the cell and `__rt_hash_set` persists it.
+        // A `MaybeOwned` load keeps the EIR's own release and must not be touched.
+        let consumed = matches!(
+            ctx.function.value(value).map(|v| v.ownership),
+            Some(crate::ir::Ownership::Owned)
+        )
+        .then_some(cell);
+        return Ok((val_lo, val_hi, format!("local.get {}", val_tag), consumed));
+    }
     let needs_cast = !matches!(storage_value, PhpType::Mixed | PhpType::Iterable)
         && matches!(
             value_ty,
@@ -758,7 +812,12 @@ fn materialize_hash_value_tagged(
         );
     if !needs_cast {
         let (val_lo, val_hi) = materialize_hash_value(ctx, value)?;
-        return Ok((val_lo, val_hi, hash_value_tag(value_ty, storage_value)));
+        return Ok((
+            val_lo,
+            val_hi,
+            format!("i64.const {}", hash_value_tag(value_ty, storage_value)),
+            None,
+        ));
     }
 
     // Concrete storage with a boxed Mixed source: cast at runtime. Only a real Mixed
@@ -786,7 +845,8 @@ fn materialize_hash_value_tagged(
             Ok((
                 val_lo,
                 val_hi,
-                crate::codegen::runtime_value_tag(&PhpType::Int) as i64,
+                format!("i64.const {}", crate::codegen::runtime_value_tag(&PhpType::Int) as i64),
+                None,
             ))
         }
         PhpType::Float if is_mixed_cell => {
@@ -805,7 +865,8 @@ fn materialize_hash_value_tagged(
             Ok((
                 val_lo,
                 val_hi,
-                crate::codegen::runtime_value_tag(&PhpType::Float) as i64,
+                format!("i64.const {}", crate::codegen::runtime_value_tag(&PhpType::Float) as i64),
+                None,
             ))
         }
         PhpType::Str if is_mixed_cell => {
@@ -834,7 +895,8 @@ fn materialize_hash_value_tagged(
             Ok((
                 val_lo,
                 val_hi,
-                crate::codegen::runtime_value_tag(&PhpType::Str) as i64,
+                format!("i64.const {}", crate::codegen::runtime_value_tag(&PhpType::Str) as i64),
+                None,
             ))
         }
         PhpType::Bool if is_mixed_cell => {
@@ -853,7 +915,8 @@ fn materialize_hash_value_tagged(
             Ok((
                 val_lo,
                 val_hi,
-                crate::codegen::runtime_value_tag(&PhpType::Bool) as i64,
+                format!("i64.const {}", crate::codegen::runtime_value_tag(&PhpType::Bool) as i64),
+                None,
             ))
         }
         _ => Err(WasmError::Unsupported(format!(

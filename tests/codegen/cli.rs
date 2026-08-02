@@ -8013,6 +8013,98 @@ BOLT, NUT, PIN
 1|hi|2.5|done
 "##;
 
+/// The word-counter — `$c[$k] = $c[$k] + 1` — and a hash carrying one value of every tag.
+///
+/// This is the shape that read back WRONG before the store flattened its Mixed value: the
+/// counter printed `a=;b=;c=1;`, because a re-read key had been stored as a cell holding a
+/// cell and nothing follows that indirection. The `else` branch's plain `= 1` was the only
+/// entry that printed, which is what made the bug look like a counting error rather than a
+/// storage one.
+#[test]
+fn test_cli_wasm_heterogeneous_hash_values_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_het_hash");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, HETEROGENEOUS_HASH_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the heterogeneous-hash probe");
+    assert!(
+        output.status.success(),
+        "heterogeneous-hash compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the heterogeneous-hash probe under Node");
+    assert!(
+        run.status.success(),
+        "heterogeneous-hash probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        HETEROGENEOUS_HASH_EXPECTED
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The heterogeneous-hash probe: one value of every runtime tag, read back through both
+/// `foreach` and `$h[k]`, plus a re-read-and-store and a copy between two keys.
+const HETEROGENEOUS_HASH_SOURCE: &str = r##"<?php
+$counts = [];
+foreach (["a", "b", "a", "c", "b", "a"] as $ch) {
+    if (isset($counts[$ch])) { $counts[$ch] = $counts[$ch] + 1; } else { $counts[$ch] = 1; }
+}
+foreach ($counts as $k => $n) { echo $k, "=", $n, ";"; }
+echo "|";
+$h = [];
+$h["i"] = 1;
+$h["s"] = "text";
+$h["f"] = 2.5;
+$h["b"] = true;
+$h["n"] = null;
+$h["i"] = $h["i"] + 10;
+$h["copy"] = $h["s"];
+foreach ($h as $k => $v) { echo $k, "=", $v, ";"; }
+echo "|", count($h), "|", isset($h["n"]) ? "y" : "n", array_key_exists("n", $h) ? "y" : "n";
+echo "|", $h["s"], ",", $h["f"], ",", $h["i"], ",", $h["copy"], "\n";
+"##;
+
+/// php-src 8.5.6's own output for `HETEROGENEOUS_HASH_SOURCE`.
+const HETEROGENEOUS_HASH_EXPECTED: &str = "a=3;b=2;c=1;|i=11;s=text;f=2.5;b=1;n=;copy=text;|6|ny|text,2.5,11,text\n";
+
 /// Nested indexed arrays: `[[1,2],[3,4]]` built, iterated, accumulated into a fresh `[]`,
 /// and nested one level deeper.
 #[test]

@@ -2330,15 +2330,22 @@ fn array_to_hash_shape_issue(function: &Function, inst: &Instruction) -> Option<
             source.ownership
         ));
     }
+    // A promoted array's EXISTING entries carry integer keys, so a `Str`-keyed result is only
+    // honest when the source is proven empty — which is exactly `$h = []; $h["k"] = ...`, the
+    // ordinary way a string-keyed map is built. A non-empty source claiming string keys would
+    // be a type the runtime contradicts.
     let result_value = match inst.result_php_type.codegen_repr() {
         PhpType::AssocArray { key, value }
-            if matches!(key.codegen_repr(), PhpType::Int | PhpType::Mixed) =>
+            if matches!(key.codegen_repr(), PhpType::Int | PhpType::Mixed)
+                || (matches!(key.codegen_repr(), PhpType::Str)
+                    && source_element == PhpType::Void) =>
         {
             value.codegen_repr()
         }
         php_type => {
             return Some(format!(
-                "result must be AssocArray<Int|Mixed, T>, got {:?}/{php_type:?}",
+                "result must be AssocArray<Int|Mixed, T> (or Str-keyed from an empty source), \
+                 got {:?}/{php_type:?}",
                 inst.result_type
             ))
         }
