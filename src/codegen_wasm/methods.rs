@@ -718,7 +718,20 @@ pub(super) fn lower_static_method_call(ctx: &mut FnCtx, inst: &Instruction) -> R
         && is_instance_fn
         && ci.methods.contains_key(&method_key);
 
-    let return_arity = WasmRepr::val_types(inst.result_type).len();
+    // A `void` body pushes nothing, but PHP still gives its CALL EXPRESSION the value null
+    // — the same rule the instance path applies. The EIR materializes an `I64 php=null`
+    // result whenever it is used, so the null is supplied after the call.
+    let body_returns_void = ctx
+        .module
+        .class_methods
+        .iter()
+        .any(|body| body.name.ends_with(&format!("::{}", method_name)) && body.return_type == IrType::Void
+            && body.name.starts_with(&receiver_class));
+    let return_arity = if body_returns_void {
+        0
+    } else {
+        WasmRepr::val_types(inst.result_type).len()
+    };
 
     if true_static {
         let impl_class = ci
@@ -762,6 +775,12 @@ pub(super) fn lower_static_method_call(ctx: &mut FnCtx, inst: &Instruction) -> R
         )));
     }
 
+    if body_returns_void && inst.result.is_some() {
+        ctx.fb.ins(
+            "i64.const 9223372036854775806",
+            "null sentinel: a void static call evaluates to null",
+        );
+    }
     if let Some(r) = inst.result {
         ctx.emit_store_value(r)?;
     } else {

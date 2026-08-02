@@ -109,6 +109,12 @@ pub(super) struct FnCtx<'a> {
     /// absent from this slice is a builtin/extern/method FCC target (deferred) and
     /// is rejected rather than miscompiled. Built once in `generate()`.
     pub(super) fcc_entries: &'a [String],
+    /// Compile-time placement of every static property, keyed by `"DeclaringClass::name"`.
+    ///
+    /// A static is ONE 16-byte slot in static memory for the whole program, so its address
+    /// is a constant and `Op::LoadStaticProperty` / `Op::StoreStaticProperty` need no
+    /// runtime lookup. Built once in `generate()`; see `codegen_wasm::statics`.
+    pub(super) static_slots: &'a super::statics::StaticSlots,
     /// Maps an `IterStart` result `ValueId::as_raw()` to its iterator locals, so the
     /// loop's `IterNext`/`IterCurrent*` ops (which reference the iterator value by
     /// dominance) recover its source/cursor without any heap state.

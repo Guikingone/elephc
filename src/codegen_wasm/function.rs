@@ -72,6 +72,7 @@ pub fn lower_function(
     default_strings: &std::collections::HashMap<String, (u32, u32)>,
     closure_tag_ptrs: &[u32],
     fcc_entries: &[String],
+    static_slots: &super::statics::StaticSlots,
 ) -> Result<FuncBuilder> {
     let is_main = function.flags.is_main;
 
@@ -164,6 +165,7 @@ pub fn lower_function(
         default_strings,
         closure_tag_ptrs,
         fcc_entries,
+        static_slots,
         iter_state: std::collections::HashMap::new(),
         ref_cell_ptrs: std::collections::HashMap::new(),
         owned_ref_cell_slots: std::collections::HashSet::new(),
@@ -840,6 +842,7 @@ mod tests {
             &Default::default(),
             &[],
             &[],
+            &Default::default(),
         )
         .expect("exception lowering");
         let wat = lowered.render("  ");

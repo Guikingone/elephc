@@ -2939,7 +2939,7 @@ mod tests {
         let mut module = Module::new(Target::wasm());
         module.closures.push(closure_fn);
         let body_fb =
-            super::super::function::lower_function(&module, &module.closures[0], &[], &Default::default(), &[], &[])
+            super::super::function::lower_function(&module, &module.closures[0], &[], &Default::default(), &[], &[], &Default::default())
                 .expect("lower closure body");
         wm.add_func(body_fb);
         super::emit_closure_dispatch(&mut wm, &module, &[]).expect("emit_closure_dispatch");
@@ -3575,7 +3575,7 @@ mod tests {
         let body_fn = apply_via_descriptor_invoke_fn(add2_data);
         let fcc_entries = vec!["add2".to_string()];
         let body_fb =
-            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries)
+            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries, &Default::default())
                 .expect("lower descriptor-invoke body");
         wm.add_func(body_fb);
         super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
@@ -3845,7 +3845,7 @@ mod tests {
         let body_fn = map_dbl_via_builtin_fn(dbl_data, array_map_data);
         let fcc_entries = vec!["dbl".to_string()];
         let body_fb =
-            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries)
+            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries, &Default::default())
                 .expect("lower array_map body");
         wm.add_func(body_fb);
         super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
@@ -4154,7 +4154,7 @@ mod tests {
         let body_fn = filter_keep_gt2_via_builtin_fn(keep_data, array_filter_data);
         let fcc_entries = vec!["keep_gt2".to_string()];
         let body_fb =
-            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries)
+            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries, &Default::default())
                 .expect("lower array_filter body");
         wm.add_func(body_fb);
         super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
@@ -4456,7 +4456,7 @@ mod tests {
         let body_fn = sort_local_via_builtin_fn(cmp_data, builtin);
         let fcc_entries = vec!["cmp_asc".to_string()];
         let body_fb =
-            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries)
+            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries, &Default::default())
                 .expect("lower usort body");
         wm.add_func(body_fb);
         super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
@@ -4806,7 +4806,7 @@ mod tests {
         let body_fn = reduce_sum_via_builtin_fn(sum_data, array_reduce_data);
         let fcc_entries = vec!["sum2".to_string()];
         let body_fb =
-            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries)
+            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries, &Default::default())
                 .expect("lower array_reduce body");
         wm.add_func(body_fb);
         super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");
@@ -5175,7 +5175,7 @@ mod tests {
         let body_fn = walk_sum_via_builtin_fn(walk_data, array_walk_data);
         let fcc_entries = vec!["walk_acc".to_string()];
         let body_fb =
-            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries)
+            super::super::function::lower_function(&module, &body_fn, &[], &Default::default(), &[], &fcc_entries, &Default::default())
                 .expect("lower array_walk body");
         wm.add_func(body_fb);
         super::emit_closure_dispatch(&mut wm, &module, &fcc_entries).expect("emit_closure_dispatch");

@@ -351,6 +351,29 @@ pub(super) fn literal_default_strings(class_infos: &HashMap<String, ClassInfo>) 
                 }
             }
         }
+        // A static property's string default needs an address for the same reason: its slot
+        // bytes carry the literal's pointer, so the literal must be laid out in static data.
+        for (index, default) in class_info.static_defaults.iter().enumerate() {
+            let Some(default) = default else {
+                continue;
+            };
+            let Some((property, property_type)) = class_info.static_properties.get(index) else {
+                continue;
+            };
+            let Ok(literal) = literal_default_value(
+                &format!("static property ${property}"),
+                property_type,
+                &default.kind,
+                "StaticInit",
+            ) else {
+                continue;
+            };
+            if let LiteralDefaultValue::Str(value) | LiteralDefaultValue::BoxedStr(value) = literal {
+                if !strings.contains(&value) {
+                    strings.push(value);
+                }
+            }
+        }
     }
     strings.sort();
     strings

@@ -96,6 +96,8 @@ fn test_source(identifier: &str) -> &'static str {
         include_str!("../function.rs")
     } else if identifier.starts_with("codegen_wasm::gc::tests::") {
         include_str!("../gc.rs")
+    } else if identifier.starts_with("codegen_wasm::statics::tests::") {
+        include_str!("../statics.rs")
     } else if identifier.starts_with("codegen_wasm::builtins::tests::") {
         include_str!("../builtins.rs")
     } else if identifier.starts_with("codegen::cli::") {

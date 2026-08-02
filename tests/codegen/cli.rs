@@ -8177,6 +8177,101 @@ echo "\n";
 /// php-src 8.5.6's own output for `ARRAY_PROPERTY_SOURCE`.
 const ARRAY_PROPERTY_EXPECTED: &str = "2,null;0;1111111111111111111111111111111111111111\n";
 
+/// Static properties: defaults of every slottable type, reads, writes, a string reassigned
+/// and concatenated, and the shared storage an inherited static has.
+#[test]
+fn test_cli_wasm_static_properties_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_statics");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, STATIC_PROPERTY_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the static-property probe");
+    assert!(
+        output.status.success(),
+        "static-property compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the static-property probe under Node");
+    assert!(
+        run.status.success(),
+        "static-property probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), STATIC_PROPERTY_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The static-property probe. `Child::$shared` and `Base::$shared` must both read 106 after
+/// two separate increments — one through each name — which is what proves an inherited static
+/// is ONE slot and not a per-class copy.
+const STATIC_PROPERTY_SOURCE: &str = r##"<?php
+class Base {
+    public static int $shared = 100;
+    public static string $tag = "base";
+    public static float $ratio = 1.5;
+    public static bool $on = false;
+}
+class Child extends Base {}
+class Counter {
+    public static int $n = 0;
+    public static function tick(): int { Counter::$n = Counter::$n + 1; return Counter::$n; }
+    public static function reset(): void { Counter::$n = 0; }
+}
+echo Base::$shared, ",", Base::$tag, ",", Base::$ratio, ",", Base::$on ? "y" : "n", ";";
+Base::$shared = Base::$shared + 5;
+Child::$shared = Child::$shared + 1;
+echo Base::$shared, ",", Child::$shared, ";";
+Base::$tag = "changed";
+echo Base::$tag, ",", Child::$tag, ";";
+Base::$tag = Base::$tag . "!";
+echo Base::$tag, ";";
+Counter::tick(); Counter::tick(); Counter::tick();
+echo Counter::$n, ";";
+Counter::reset();
+echo Counter::$n, ";";
+Base::$ratio = Base::$ratio * 2;
+Base::$on = true;
+echo Base::$ratio, ",", Base::$on ? "y" : "n", "\n";
+"##;
+
+/// php-src 8.5.6's own output for `STATIC_PROPERTY_SOURCE`.
+const STATIC_PROPERTY_EXPECTED: &str = "100,base,1.5,n;106,106;changed,changed;changed!;3;0;3,y\n";
+
 /// The word-counter — `$c[$k] = $c[$k] + 1` — and a hash carrying one value of every tag.
 ///
 /// This is the shape that read back WRONG before the store flattened its Mixed value: the

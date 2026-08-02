@@ -129,6 +129,8 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::Acquire => &["compiler-inserted retain of a refcounted PHP value"],
         Op::Release => &["compiler-inserted release of a refcounted PHP value"],
         Op::GcCollect => &["the cycle-collection safe point unset(...) emits"],
+        Op::LoadStaticProperty => &["Class::$prop read"],
+        Op::StoreStaticProperty => &["Class::$prop = ... assignment"],
         Op::Move => &["compiler-inserted ownership move"],
         Op::Borrow => &["compiler-inserted ownership borrow"],
         Op::Nop => &["compiler-inserted no-op"],
@@ -158,6 +160,10 @@ fn op_tests(op: Op) -> &'static [&'static str] {
         Op::GcCollect => &[
             "codegen_wasm::gc::tests::collect_cycles_reclaims_a_two_block_cycle",
             "codegen::cli::test_cli_wasm_unset_collects_reference_cycles",
+        ],
+        Op::LoadStaticProperty | Op::StoreStaticProperty => &[
+            "codegen_wasm::statics::tests::inherited_statics_share_one_slot",
+            "codegen::cli::test_cli_wasm_static_properties_match_php",
         ],
         Op::StoreRefCell | Op::AliasLocalRefCell => {
             &["codegen_wasm::tests::ref_cell_alias_string_store_e2e"]
@@ -337,6 +343,8 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::Acquire => "codegen_wasm::inst::lower_acquire",
         Op::Release => "codegen_wasm::inst::lower_release",
         Op::GcCollect => "codegen_wasm::inst::lower_gc_collect",
+        Op::LoadStaticProperty => "codegen_wasm::inst::lower_load_static_property",
+        Op::StoreStaticProperty => "codegen_wasm::inst::lower_store_static_property",
         Op::Move | Op::Borrow => "codegen_wasm::inst::lower_forward",
         Op::ArrayNew => "codegen_wasm::inst::lower_array_new",
         Op::ArrayLen => "codegen_wasm::inst::lower_array_len",
@@ -482,6 +490,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         Op::Warn => "warn",
         Op::ThrowError => "throw_error",
         Op::Acquire | Op::Release | Op::Move | Op::Borrow | Op::Nop | Op::GcCollect => "ownership",
+        Op::LoadStaticProperty | Op::StoreStaticProperty => "object",
         Op::TryPushHandler
         | Op::TryPopHandler
         | Op::ThrowException

@@ -196,6 +196,14 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // (via `FnCtx::fcc_entry_index`) to stamp descriptors; `emit_closure_dispatch` reads
     // it to emit one FCC wrapper + ladder arm per entry. A builtin/extern/method FCC
     // target is excluded here and rejected at lowering time (deferred slice).
+    // One 16-byte slot per distinct static property, laid out under its DECLARING class so
+    // an inherited static shares one storage. Must land before `heap_base` is computed so
+    // the region sits in static memory below the bump allocator and its addresses are
+    // compile-time constants. The initial bytes come from the literal defaults, which is
+    // why no initializer has to run: a string default carries its LITERAL's address, and
+    // the refcount helpers already no-op below the heap.
+    let (static_slots, cursor) = super::statics::plan_static_slots(&mut wm, module, &default_strings, cursor);
+
     let fcc_entries = closures::collect_fcc_free_function_entries(module);
 
     // The heap begins 16-aligned just above the string/data region; reserve two
@@ -256,6 +264,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             &default_strings,
             &closure_tag_ptrs,
             &fcc_entries,
+            &static_slots,
         )?;
         wm.add_func(function);
     }
@@ -278,6 +287,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             &default_strings,
             &closure_tag_ptrs,
             &fcc_entries,
+            &static_slots,
         )?;
         wm.add_func(function);
     }
@@ -296,6 +306,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             &default_strings,
             &closure_tag_ptrs,
             &fcc_entries,
+            &static_slots,
         )?;
         wm.add_func(function);
     }

@@ -115,6 +115,8 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::HashUnset => super::inst_hash::lower_hash_unset(ctx, &inst),
         Op::HashIsset => super::inst_hash::lower_hash_isset(ctx, &inst),
         Op::GcCollect => lower_gc_collect(ctx),
+        Op::LoadStaticProperty => lower_load_static_property(ctx, &inst),
+        Op::StoreStaticProperty => lower_store_static_property(ctx, &inst),
         Op::HashAppend => super::inst_hash::lower_hash_append(ctx, &inst),
         Op::HashUnion => super::inst_hash::lower_hash_union(ctx, &inst),
         Op::ArrayUnion => super::inst_hash::lower_array_union(ctx, &inst),
@@ -2894,6 +2896,182 @@ fn emit_undefined_array_index_warning_if_null(
 ///
 /// Every other pair — anything involving a Mixed cell, an array, an object, or a bool against a
 /// number — needs the rest of PHP 8's comparison table and is refused by the capability gate.
+/// Resolves the `Class::$prop` label an `Op::LoadStaticProperty` / `Op::StoreStaticProperty`
+/// carries, and answers its slot address and declared type.
+fn static_property_slot<'a>(
+    ctx: &'a FnCtx,
+    inst: &Instruction,
+) -> Result<&'a super::statics::StaticSlot> {
+    let label = ctx
+        .module
+        .data
+        .strings
+        .get(data_immediate(inst)?.as_raw() as usize)
+        .ok_or_else(|| {
+            WasmError::Unsupported("static property without an interned label".to_string())
+        })?;
+    super::statics::resolve_label(ctx.module, ctx.static_slots, label).ok_or_else(|| {
+        WasmError::Unsupported(format!("static property {label} has no lowered slot"))
+    })
+}
+
+/// Drops the reference a static store CONSUMED, when the EIR handed one over.
+///
+/// A widened arithmetic result arrives as a freshly built Mixed cell with `own=owned` and
+/// NO matching release — the EIR expects the store to take it. Narrowing reads the cell's
+/// payload out and leaves the cell itself with no owner, so it is dropped here.
+fn release_consumed_static_source(ctx: &mut FnCtx, value: ValueId, narrows: bool) -> Result<()> {
+    if !narrows {
+        return Ok(());
+    }
+    if !matches!(
+        ctx.function.value(value).map(|v| v.ownership),
+        Some(crate::ir::Ownership::Owned)
+    ) {
+        return Ok(());
+    }
+    ctx.emit_load_value(value)?;
+    ctx.fb
+        .ins("call $__rt_decref_any", "the narrowed cell had no other owner");
+    Ok(())
+}
+
+/// Lowers `Op::LoadStaticProperty` (`Class::$prop`).
+///
+/// The slot is a compile-time address in static memory holding `value_lo` at +0 and
+/// `value_hi` at +8 — the same shape an instance property slot has — so the read is a
+/// direct load with no lookup. A string answers the stored `(ptr, len)` BORROWED: the
+/// EIR's `acquire` persists the caller's own copy, exactly as the instance path does.
+fn lower_load_static_property(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let (address, php_type) = {
+        let slot = static_property_slot(ctx, inst)?;
+        (slot.address, slot.php_type.codegen_repr())
+    };
+    match php_type {
+        PhpType::Int | PhpType::Bool | PhpType::False => {
+            ctx.fb
+                .ins(&format!("(i64.load offset={address} (i32.const 0))"), "static property value");
+        }
+        PhpType::Float => {
+            ctx.fb.ins(
+                &format!("(f64.load offset={address} (i32.const 0))"),
+                "static property value (float)",
+            );
+        }
+        PhpType::Str => {
+            ctx.fb.ins(
+                &format!("(i32.wrap_i64 (i64.load offset={address} (i32.const 0)))"),
+                "static property string pointer",
+            );
+            ctx.fb.ins(
+                &format!("(i64.load offset={} (i32.const 0))", address + 8),
+                "static property string length",
+            );
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "load of a static property typed {other:?}"
+            )))
+        }
+    }
+    store_result(ctx, inst)
+}
+
+/// Lowers `Op::StoreStaticProperty` (`Class::$prop = v`).
+///
+/// A string slot owns its bytes, so the incoming value is persisted and the outgoing one
+/// released first — and because the refcount helpers no-op below the heap, releasing an
+/// initial LITERAL default is a no-op rather than a fault.
+fn lower_store_static_property(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let (address, php_type) = {
+        let slot = static_property_slot(ctx, inst)?;
+        (slot.address, slot.php_type.codegen_repr())
+    };
+    // A Mixed source narrows into the concrete slot through the same coercion an instance
+    // property store uses; anything else is already in the slot's representation.
+    let narrows = matches!(
+        ctx.function.value(value).map(|v| v.ir_type),
+        Some(IrType::Heap(IrHeapKind::Mixed))
+    ) && php_type != PhpType::Mixed;
+    match php_type {
+        PhpType::Int | PhpType::Bool | PhpType::False => {
+            // Materialize BEFORE the base address: narrowing runs its own loads and stores,
+            // so leaving the base underneath it would have it consumed as an operand.
+            let word = ctx.fresh_temp(ValType::I64);
+            if narrows {
+                super::transfer::emit_narrow_mixed_into(ctx, value, &php_type)?;
+            } else {
+                ctx.emit_load_value(value)?;
+            }
+            release_consumed_static_source(ctx, value, narrows)?;
+            ctx.fb.ins(&format!("local.set {}", word), "the value to store");
+            ctx.fb.ins("i32.const 0", "static region base");
+            ctx.fb.ins(&format!("local.get {}", word), "the value to store");
+            ctx.fb
+                .ins(&format!("i64.store offset={address}"), "store the static property");
+        }
+        PhpType::Float => {
+            let word = ctx.fresh_temp(ValType::F64);
+            if narrows {
+                super::transfer::emit_narrow_mixed_into(ctx, value, &php_type)?;
+            } else {
+                ctx.emit_load_value(value)?;
+            }
+            release_consumed_static_source(ctx, value, narrows)?;
+            ctx.fb.ins(&format!("local.set {}", word), "the value to store");
+            ctx.fb.ins("i32.const 0", "static region base");
+            ctx.fb.ins(&format!("local.get {}", word), "the value to store");
+            ctx.fb.ins(
+                &format!("f64.store offset={address}"),
+                "store the static property (float)",
+            );
+        }
+        PhpType::Str => {
+            let pointer = ctx.fresh_temp(ValType::I32);
+            let length = ctx.fresh_temp(ValType::I64);
+            if narrows {
+                super::transfer::emit_narrow_mixed_into(ctx, value, &php_type)?;
+            } else {
+                ctx.emit_load_value(value)?;
+            }
+            ctx.fb.ins(&format!("local.set {}", length), "incoming string length");
+            ctx.fb.ins(&format!("local.set {}", pointer), "incoming string pointer");
+            // The slot TAKES the incoming reference rather than persisting a second copy:
+            // the EIR hands one over (its `acquire` already made the owned copy) and emits no
+            // release, so persisting again would leak exactly that copy. A bare literal has
+            // no reference to take, and storing its static-data address is equally safe —
+            // the refcount helpers no-op below the heap.
+            // Release what the slot held; a literal default sits below the heap and no-ops.
+            ctx.fb.ins(
+                &format!("(i32.wrap_i64 (i64.load offset={address} (i32.const 0)))"),
+                "the string the slot held",
+            );
+            ctx.fb
+                .ins("call $__rt_decref_any", "release the previous value (null-safe)");
+            ctx.fb.ins("i32.const 0", "static region base");
+            ctx.fb.ins(
+                &format!("(i64.extend_i32_u (local.get {}))", pointer),
+                "the taken pointer as the slot's low word",
+            );
+            ctx.fb
+                .ins(&format!("i64.store offset={address}"), "store the string pointer");
+            ctx.fb.ins("i32.const 0", "static region base");
+            ctx.fb.ins(&format!("local.get {}", length), "the taken length");
+            ctx.fb.ins(
+                &format!("i64.store offset={}", address + 8),
+                "store the string length",
+            );
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "store into a static property typed {other:?}"
+            )))
+        }
+    }
+    Ok(())
+}
+
 /// Lowers `Op::GcCollect`, the cycle-collection safe point `unset(...)` emits.
 ///
 /// Refcounting cannot reclaim a reference cycle, so this is the only path on this target

@@ -472,6 +472,9 @@ fn check_instruction_shape(
         Op::HashSet => hash_key_diagnostic_issue(function, inst, 1)
             .or_else(|| hash_store_value_diagnostic_issue(function, inst, 2)),
         Op::HashIsset | Op::HashUnset => hash_key_diagnostic_issue(function, inst, 1),
+        Op::LoadStaticProperty | Op::StoreStaticProperty => {
+            static_property_shape_issue(module, function, inst)
+        }
         Op::HashAppend => hash_store_value_diagnostic_issue(function, inst, 1),
         Op::ArrayToHash => array_to_hash_shape_issue(function, inst),
         Op::Call => {
@@ -1667,6 +1670,60 @@ fn array_store_shape_issue(
             "array write value {:?}/{source_php:?} does not match supported element storage {element:?}",
             source.ir_type
         ));
+    }
+    None
+}
+
+/// Validates one static-property access against the placement `codegen_wasm::statics` built.
+///
+/// A static is one 16-byte slot in static memory, shaped like an instance property slot, so
+/// the supported types are the ones that fit two words directly: int, bool, float, string.
+/// A Mixed or container static needs a heap cell the data region cannot express, and a
+/// `static::`/`self::` receiver picks its slot from the CALLED class at runtime, which a
+/// compile-time address cannot follow — both stay refused rather than guessed.
+fn static_property_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return Some("static property access without an interned label".to_string());
+    };
+    let Some(label) = module.data.strings.get(data.as_raw() as usize) else {
+        return Some("static property label is missing from the data pool".to_string());
+    };
+    let slots = match super::statics::plan_static_slots_for_audit(module) {
+        Some(slots) => slots,
+        None => return Some("static property placement is unavailable".to_string()),
+    };
+    let Some(slot) = super::statics::resolve_label(module, &slots, label) else {
+        return Some(format!("static property {label} has no lowered slot"));
+    };
+    if !matches!(
+        slot.php_type.codegen_repr(),
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str
+    ) {
+        return Some(format!(
+            "static property {label} typed {:?} has no WASM slot shape",
+            slot.php_type.codegen_repr()
+        ));
+    }
+    if inst.op == Op::StoreStaticProperty {
+        let Some(value) = inst.operands.first().and_then(|id| function.value(*id)) else {
+            return Some("static property store is missing its value".to_string());
+        };
+        // A Mixed source narrows into a concrete slot, exactly as an instance property store
+        // does: `K::$count = K::$count + 1` widens through the checked add and the slot stays
+        // an int.
+        let narrows = value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+            && value.php_type.codegen_repr() == PhpType::Mixed;
+        if !narrows && value.php_type.codegen_repr() != slot.php_type.codegen_repr() {
+            return Some(format!(
+                "static property {label} takes {:?}, got {:?}",
+                slot.php_type.codegen_repr(),
+                value.php_type.codegen_repr()
+            ));
+        }
     }
     None
 }
@@ -5338,6 +5395,8 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::HashUnset
         | Op::HashIsset
         | Op::GcCollect
+        | Op::LoadStaticProperty
+        | Op::StoreStaticProperty
         | Op::ArrayPush
         | Op::ArrayToHash
         | Op::HashAppend
@@ -5392,8 +5451,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::LoadStaticLocal
         | Op::StoreStaticLocal
         | Op::InitStaticLocal
-        | Op::LoadStaticProperty
-        | Op::StoreStaticProperty
         | Op::LoadReflectionStaticProperty
         | Op::StoreReflectionStaticProperty
         | Op::ReflectionStaticPropertyInitialized

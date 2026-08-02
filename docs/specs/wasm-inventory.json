@@ -731,31 +731,43 @@
           "name": "load_static_property",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "Class::$prop read"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::statics",
+            "lowerer": "codegen_wasm::inst::lower_load_static_property",
+            "tests": [
+              "codegen_wasm::statics::tests::inherited_statics_share_one_slot",
+              "codegen::cli::test_cli_wasm_static_properties_match_php"
+            ]
+          }
         },
         {
           "name": "store_static_property",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "Class::$prop = ... assignment"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::statics",
+            "lowerer": "codegen_wasm::inst::lower_store_static_property",
+            "tests": [
+              "codegen_wasm::statics::tests::inherited_statics_share_one_slot",
+              "codegen::cli::test_cli_wasm_static_properties_match_php"
+            ]
+          }
         },
         {
           "name": "load_reflection_static_property",
@@ -12872,14 +12884,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 201,
+    "supported": 203,
     "excluded": 47,
-    "missing": 464,
-    "evidence_gaps": 172,
-    "row_evidence_gaps": 171,
+    "missing": 462,
+    "evidence_gaps": 170,
+    "row_evidence_gaps": 169,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "464 reachable identities lack a WASM lowerer; 171 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "462 reachable identities lack a WASM lowerer; 169 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
