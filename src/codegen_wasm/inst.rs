@@ -2977,7 +2977,13 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // literal like `[1, "a", 2.5]` emits — and leaves the boxing to the backend, the
     // way the native one does. Dispatching on the source repr alone would send those
     // to the int/string helpers and write the wrong slot layout.
-    if array_stores_mixed_cells(ctx, array) && !matches!(value_repr, WasmRepr::Ptr(_)) {
+    if array_stores_mixed_cells(ctx, array)
+        && (!matches!(value_repr, WasmRepr::Ptr(_))
+            || matches!(
+                ctx.function.value(value).map(|v| v.ir_type),
+                Some(IrType::Heap(IrHeapKind::Object))
+            ))
+    {
         return push_boxed_scalar(ctx, inst, array, value, &value_repr);
     }
     match value_repr {
@@ -3156,6 +3162,16 @@ fn push_boxed_scalar(
             );
             ctx.fb.ins(&format!("local.get {}", len), "length payload");
         }
+        WasmRepr::Ptr(_) => {
+            // An object into a Mixed-cell array. The EIR emits NO release after this push, unlike
+            // the concrete `array<Object>` one — so the operand's single reference is transferred
+            // here. `__rt_mixed_from_value` increfs a refcounted child, so the operand is released
+            // right after to leave the cell as the only owner.
+            ctx.fb.ins("i64.const 6", "object tag");
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins("i64.extend_i32_u", "ptr -> lo");
+            ctx.fb.ins("i64.const 0", "no high payload");
+        }
         other => {
             return Err(WasmError::Unsupported(format!(
                 "array_push boxes no {other:?} into a mixed cell"
@@ -3166,6 +3182,15 @@ fn push_boxed_scalar(
         "call $__rt_mixed_from_value",
         "box the scalar (one reference, handed to the array)",
     );
+    if matches!(value_repr, WasmRepr::Ptr(_)) {
+        // The boxing increfed; drop the operand's own reference so the cell owns it alone.
+        let boxed = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(&format!("local.set {}", boxed), "boxed object cell");
+        ctx.emit_load_value(value)?;
+        ctx.fb
+            .ins("call $__rt_decref_any", "the cell owns the object now");
+        ctx.fb.ins(&format!("local.get {}", boxed), "boxed object cell");
+    }
     ctx.fb.ins(&format!("local.set {}", cell), "boxed element");
     ctx.emit_load_value(array)?;
     ctx.fb

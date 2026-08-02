@@ -881,6 +881,54 @@ fn value_transfer_shape_issue(
     }
 }
 
+/// Returns whether this value is a Mixed that INTEGER arithmetic produced, rather than one PHP
+/// would coerce.
+///
+/// `$a + $b` on two ints is typed Mixed only because an overflow would promote it to a float —
+/// PHP itself performs no conversion, so narrowing the result back is exact for every value that
+/// did not overflow. Chained arithmetic reaches the same shape through `MixedNumericBinop`, whose
+/// left operand is the previous Mixed, so the walk is transitive: every operand must itself be a
+/// plain integer or another widened integer computation.
+///
+/// That transitivity is the whole point. `function f(mixed $m): int { return $m + 1; }` also
+/// emits a `MixedNumericBinop`, but its operand is a genuine `mixed` — PHP really does coerce
+/// there, with a diagnostic this target cannot raise yet — so the walk refuses it.
+fn value_is_widened_integer_arithmetic(
+    function: &Function,
+    value: crate::ir::ValueId,
+    depth: usize,
+) -> bool {
+    // A chain long enough to matter is pathological; the bound keeps a malformed module from
+    // walking forever.
+    if depth > 32 {
+        return false;
+    }
+    if let Some(defined) = function.value(value) {
+        if defined.ir_type == IrType::I64 && matches!(defined.php_type.codegen_repr(), PhpType::Int)
+        {
+            return true;
+        }
+    }
+    let Some(instruction) = function
+        .instructions
+        .iter()
+        .find(|instruction| instruction.result == Some(value))
+    else {
+        return false;
+    };
+    match instruction.op {
+        Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => instruction
+            .operands
+            .iter()
+            .all(|operand| value_is_widened_integer_arithmetic(function, *operand, depth + 1)),
+        Op::MixedNumericBinop => instruction
+            .operands
+            .iter()
+            .all(|operand| value_is_widened_integer_arithmetic(function, *operand, depth + 1)),
+        _ => false,
+    }
+}
+
 /// Validates the typed transfer performed by a local load or store.
 fn local_transfer_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
@@ -1050,7 +1098,18 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     // raise a `TypeError` — so it stays refused until that path carries its own diagnostics.
     // `(string)` is refused for both: its array and object arms still answer the empty string
     // where PHP produces "Array" with a notice, or dispatches `__toString`.
-    let admitted_mixed_scalar = explicit && matches!(target, IrType::I64 | IrType::F64);
+    // A Mixed produced by CHECKED ARITHMETIC is a widening artefact, not a value PHP ever
+    // coerces: `Math::square(int $x): int { return $x * $x; }` multiplies two ints, and the
+    // result is typed Mixed only because an overflow would promote it to a float. PHP performs no
+    // conversion there — `square(7)` is just 49 — so narrowing it back is exact for every value
+    // that did not overflow, and refusing it turned away arithmetic in any typed function.
+    //
+    // This is deliberately narrower than "implicit": a genuinely Mixed value reaching a typed
+    // parameter or return IS coerced by PHP, with a `TypeError` or a `Deprecated` this target
+    // cannot yet raise, and that stays refused.
+    let widened_by_checked_arithmetic = value_is_widened_integer_arithmetic(function, *operand, 0);
+    let admitted_mixed_scalar = (explicit || widened_by_checked_arithmetic)
+        && matches!(target, IrType::I64 | IrType::F64);
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed)
         && source_php == PhpType::Mixed
         && matches!(target, IrType::I64 | IrType::F64 | IrType::Str)
@@ -1501,6 +1560,9 @@ fn array_store_shape_issue(
         ) if is_push => true,
         (PhpType::Mixed, IrType::F64, PhpType::Float) if is_push => true,
         (PhpType::Mixed, IrType::Str, PhpType::Str) if is_push => true,
+        // An object boxes into a cell under tag 6, which is what an array of interface
+        // implementors is: the checker types it `array<mixed>` because the classes differ.
+        (PhpType::Mixed, IrType::Heap(IrHeapKind::Object), PhpType::Object(_)) if is_push => true,
         (
             PhpType::Void | PhpType::Never,
             IrType::Heap(IrHeapKind::Mixed),

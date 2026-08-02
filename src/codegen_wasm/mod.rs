@@ -5453,10 +5453,19 @@ mod tests {
         }
     }
 
-    /// Verifies a checked arithmetic Mixed result cannot be narrowed to int
-    /// until overflow-tag conversion and PHP diagnostics are exact.
+    /// Verifies a checked arithmetic Mixed result NARROWS back to int.
+    ///
+    /// The Mixed is a widening artefact, not a value PHP ever coerces: `6 * 7` multiplies two
+    /// ints and is typed Mixed only because an overflow would promote it to a float. PHP performs
+    /// no conversion — the answer is just 42 — so narrowing is exact for everything that did not
+    /// overflow, and refusing it turned away arithmetic inside any typed function.
+    ///
+    /// This is deliberately narrower than "implicit": a genuinely Mixed value reaching a typed
+    /// parameter or return IS coerced by PHP, with a `TypeError` or a `Deprecated` this target
+    /// cannot raise yet, and `mixed_to_scalar_cast_without_checked_source_fails_closed` pins that
+    /// it stays refused.
     #[test]
-    fn checked_integer_result_cast_to_int_fails_closed() {
+    fn checked_integer_result_cast_to_int_lowers() {
         let mut module = Module::new(Target::wasm());
         let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
         function.flags.is_main = true;
@@ -5506,8 +5515,67 @@ mod tests {
             builder.terminate(Terminator::Return { value: None });
         }
         module.add_function(function);
+        generate(&module, Emit::Executable)
+            .expect("a checked-arithmetic result narrows back to int");
+    }
+
+    /// Verifies a Mixed that did NOT come from checked arithmetic still refuses to narrow.
+    ///
+    /// That is the case PHP really does coerce — a `mixed` reaching a typed parameter or return —
+    /// and it carries a `TypeError` or a `Deprecated` this target cannot raise yet. Boxing a value
+    /// and casting it stands in for that shape.
+    #[test]
+    fn mixed_to_scalar_cast_without_checked_source_fails_closed() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let raw = builder.emit_const_i64(42);
+            let mixed = builder
+                .emit(
+                    Op::MixedBox,
+                    vec![raw],
+                    None,
+                    IrType::Heap(IrHeapKind::Mixed),
+                    PhpType::Mixed,
+                    Ownership::Owned,
+                )
+                .expect("boxing produces a mixed value");
+            let integer = builder
+                .emit(
+                    Op::Cast,
+                    vec![mixed],
+                    Some(Immediate::CastTarget(IrType::I64)),
+                    IrType::I64,
+                    PhpType::Int,
+                    Ownership::NonHeap,
+                )
+                .expect("cast produces an integer");
+            let _ = builder.emit(
+                Op::EchoValue,
+                vec![integer],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                Op::Release,
+                vec![mixed],
+                None,
+                IrType::Void,
+                PhpType::Void,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
         let error = generate(&module, Emit::Executable)
-            .expect_err("checked Mixed-to-int cast must fail capability");
+            .expect_err("an implicit Mixed-to-int coercion must fail capability");
         assert!(
             error
                 .to_string()

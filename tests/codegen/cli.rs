@@ -8616,6 +8616,105 @@ echo implode(",", $src), "\n";
 const BY_VALUE_EXPECTED: &str = r##"3|3|4|3|4|3|3:3|3|3|3|4|3|3|3|2|a,bb|1,2,3
 "##;
 
+/// Verifies arithmetic inside TYPED functions, and an array of interface implementors.
+///
+/// `return $this->s * $this->s;` from an `: int` method could not compile. The multiplication is
+/// checked, so its result is typed Mixed — an overflow would promote it to a float — and narrowing
+/// that back for the declared return was refused as an implicit coercion. It is not one: PHP
+/// performs no conversion there, `square(7)` is just 49. The narrowing is admitted when the value
+/// is TRANSITIVELY integer arithmetic, which `$a + $b + $c` also is: the chain runs through
+/// `MixedNumericBinop`, whose left operand is the previous Mixed.
+///
+/// The transitivity is what keeps the refusal where PHP really does coerce — `f(mixed $m): int {
+/// return $m + 1; }` emits the same opcode over a genuine `mixed`, and still refuses.
+///
+/// The shapes array is `array<mixed>` because the classes differ, so each object BOXES into a
+/// cell under tag 6. The EIR emits no release after that push, unlike a concrete `array<Object>`,
+/// so the operand's single reference is handed over rather than shared.
+#[test]
+fn test_cli_wasm_typed_arithmetic_and_polymorphic_arrays_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_polymorphic");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, POLYMORPHIC_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the polymorphic probe");
+    assert!(
+        output.status.success(),
+        "polymorphic compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the polymorphic probe under Node");
+    assert!(
+        run.status.success(),
+        "polymorphic probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), POLYMORPHIC_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The probe: two implementors dispatched through one array, and typed arithmetic including a
+/// chained sum, zero and a negative.
+const POLYMORPHIC_SOURCE: &str = r##"<?php
+interface Shape { public function area(): int; }
+class Sq implements Shape {
+    public function __construct(private int $s) {}
+    public function area(): int { return $this->s * $this->s; }
+}
+class Re implements Shape {
+    public function __construct(private int $w, private int $h) {}
+    public function area(): int { return $this->w * $this->h; }
+}
+class Math {
+    public static function square(int $x): int { return $x * $x; }
+    public static function sum3(int $a, int $b, int $c): int { return $a + $b + $c; }
+}
+$shapes = [new Sq(3), new Re(2, 5), new Sq(4)];
+foreach ($shapes as $s) { echo $s->area(), ";"; }
+echo "|", count($shapes), "|";
+echo Math::square(7), "|", Math::sum3(1, 2, 3), "|";
+echo Math::square(0), "|", Math::square(-4), "\n";
+"##;
+
+/// php-src 8.5.6's own output for `POLYMORPHIC_SOURCE`.
+const POLYMORPHIC_EXPECTED: &str = r##"9;10;16;|3|49|6|0|16
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —
