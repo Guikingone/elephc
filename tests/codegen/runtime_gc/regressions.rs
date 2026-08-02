@@ -4750,3 +4750,118 @@ echo implode("", $r), "\n";
         out.stderr
     );
 }
+
+/// A reassignment that changes a local's REPRESENTATION (`string` → `int`) must release the
+/// value being overwritten.
+///
+/// The slot's frame layout is its FINAL widened type, so the occupant physically present at the
+/// second store is a Mixed cell — but lowering emitted the release eagerly, typed with the type
+/// visible at that moment (`Str`), because the widening store had not been lowered yet. The
+/// release then freed a Mixed cell as if it were a bare string block and dropped the string on
+/// the floor: one leaked block per reassignment, growing to ~400 KB over 10 000 iterations.
+/// A deferred `release_local_slot`, resolved by the backend against the final storage type, is
+/// what makes this correct.
+#[test]
+fn test_widening_reassign_releases_the_previous_string() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    $s = "hello world payload";
+    $n += strlen($s);
+    $s = 5;
+    $n += $s;
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "480\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a string→int reassignment to release the overwritten string, got: {}",
+        out.stderr
+    );
+}
+
+/// Same defect, reached through a different refcounted representation: the overwritten value is
+/// an ARRAY rather than a string, and the reassignment widens the slot to Mixed exactly the same
+/// way. Covering both proves the fix is about the widening, not about strings.
+#[test]
+fn test_widening_reassign_releases_the_previous_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    $a = [1, 2, 3];
+    $n += count($a);
+    $a = 7;
+    $n += is_int($a) ? 1 : 0;
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "80\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected an array→int reassignment to release the overwritten array, got: {}",
+        out.stderr
+    );
+}
+
+/// Control for the two above: a SAME-representation reassignment (`string` → `string`) never
+/// widens the slot, so it was already clean and its release must keep firing exactly once.
+/// This is the arm a fix that simply stopped releasing would break — it would leak here too —
+/// and the arm a double-release would turn into a crash.
+#[test]
+fn test_same_representation_reassign_stays_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    $s = "hello world payload";
+    $n += strlen($s);
+    $s = "second payload!!";
+    $n += strlen($s);
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "700\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a string→string reassignment to stay leak-free, got: {}",
+        out.stderr
+    );
+}
+
+/// Passing a STRING local to a `mixed &$p` parameter widens that local's slot to Mixed storage
+/// for the call. Reading the concrete string back out of a slot whose final storage is Mixed
+/// unboxes it WITH an extra owned reference, and the boxing step is the only place that
+/// reference can be dropped — without the provisional release, the source string leaked once per
+/// call (measured: one block per iteration for a `string` source, none for an `int` one, which
+/// carries no reference to drop).
+#[test]
+fn test_by_ref_mixed_param_with_string_source_stays_leak_free() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function wb(mixed &$v): void { $v = 999; }
+$n = 0;
+for ($i = 0; $i < 20; $i++) {
+    $s = "hello world payload";
+    wb($s);
+    $n += $s;
+}
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "19980\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a string source passed to a mixed by-ref param to stay leak-free, got: {}",
+        out.stderr
+    );
+}

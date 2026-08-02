@@ -1255,35 +1255,39 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     ///
     /// The caller must first retain the incoming value because borrowing operations
     /// can return storage that aliases the previous occupant (for example,
-    /// `$value = trim($value)`). When the slot's storage type already needs lifetime
-    /// tracking this emits the eager load+release pair. When it does not, the slot can
-    /// STILL be widened to refcounted storage by a store lowered later that reaches
-    /// this one through a loop back-edge (e.g. an inner `for` counter re-initialized
-    /// by the outer body but widened Int→Mixed by its checked-add update). The storage
-    /// type visible here is stale in that case, so inside loops a deferred
-    /// `release_local_slot` is emitted instead: the backend releases the occupant
-    /// using the final widened storage type, and `prune_untracked_release_local_slot_ops`
-    /// erases the op when the slot never widens (issue #534: without this, the
-    /// previous outer iteration's Mixed box leaked on every re-initialization).
+    /// `$value = trim($value)`).
+    ///
+    /// The release is emitted as a DEFERRED `release_local_slot` rather than an eager
+    /// load+release pair, because lowering cannot yet know the slot's final frame
+    /// storage type. A store lowered LATER can still widen the slot to `Mixed`, and the
+    /// frame layout — hence the physical shape of the occupant being overwritten — is the
+    /// FINAL widened type, not the type visible at this point. The backend resolves
+    /// `release_local_slot` against that final type, and
+    /// `prune_untracked_release_local_slot_ops` erases the op when the slot's final
+    /// storage never becomes refcounted, so a plain scalar slot still ships nothing.
+    ///
+    /// An eager release typed here leaked the occupant on every widening reassignment,
+    /// measured on shapes as ordinary as `$s = "a"; $s = 5;` — the release was emitted as
+    /// `Str` while the slot's final layout was `Mixed`, so it freed a `Mixed` cell as if it
+    /// were a bare string block. It reproduced identically for `str`→`float`,
+    /// `array`→`int` and through an `if`, and inside a loop it leaked once per iteration
+    /// (~400 KB over 10 000 iterations). A same-representation reassignment
+    /// (`str`→`str`) never widens, so it never leaked — which is why the family stayed
+    /// invisible. Issue #534's loop case was the same defect seen through its
+    /// untracked-storage half only.
     fn release_stored_local_value_before_overwrite(
         &mut self,
         name: &str,
         slot: LocalSlotId,
         span: Option<Span>,
     ) {
-        let storage_type = self.builder.local_php_type(slot);
-        if Ownership::php_type_needs_lifetime_tracking(&storage_type) {
-            self.release_stored_local_value(name, slot, span);
-            return;
-        }
-        if self.loop_stack.is_empty() {
-            // Outside loops no back-edge can execute a later widening store before
-            // this one, so the untracked storage type is final for this path.
-            return;
-        }
         // Ref-bound locals keep a cell pointer in the frame slot and are released
         // through the ref-cell owner machinery, never through a raw slot release.
         if self.is_ref_bound_local(name) {
+            let storage_type = self.builder.local_php_type(slot);
+            if Ownership::php_type_needs_lifetime_tracking(&storage_type) {
+                self.release_stored_local_value(name, slot, span);
+            }
             return;
         }
         self.emit_void(

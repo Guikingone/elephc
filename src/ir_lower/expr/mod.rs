@@ -6646,12 +6646,19 @@ fn lower_by_ref_mixed_scalar_arg_with_signature(
     }
     if !matches!(
         ctx.local_type(name).codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void | PhpType::Never
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void | PhpType::Never | PhpType::Str
     ) {
         return None;
     }
     let local = ctx.load_local(name, Some(arg.span));
     let boxed = ctx.box_value_as_mixed(local, PhpType::Mixed, Some(arg.span));
+    // Reading a concrete payload out of a slot whose final storage is `Mixed` unboxes it WITH
+    // an extra owned reference, and this is the only place that reference can be dropped. The
+    // store below is what widens the slot, so the load above is always that unboxing read.
+    // Emitting nothing leaked the source once per call (measured: one block per iteration for
+    // a `string` source, none for an `int` one, which carries no reference to drop).
+    // `release_if_owned` is itself type-gated, so the non-refcounted sources above emit nothing.
+    crate::ir_lower::ownership::release_if_owned(ctx, local, Some(arg.span));
     // The plain assignment path, not `store_mutated_local`: this is semantically `$v = <boxed $v>`,
     // so the slot must ACQUIRE the fresh cell (making it the owner that scope-exit cleanup
     // releases) and release its previous occupant. `store_mutated_local` skips the acquire — it is

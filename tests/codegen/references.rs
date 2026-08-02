@@ -3022,3 +3022,56 @@ var_dump($id);
     );
     assert_eq!(out, "string(9) \"BOUND::id\"\n");
 }
+
+/// A STRING caller local passed to a `mixed &$p` parameter must be widened to Mixed storage like
+/// any other narrow scalar source, so the callee's write of a DIFFERENT type lands correctly.
+///
+/// This source representation used to be refused outright ("by-reference Mixed parameter
+/// writeback to PHP type Str"), because widening a refcounted local leaked the value it
+/// overwrote. That leak was never about strings: it was the eager overwrite-release being typed
+/// before the widening, and fixing it at the root opens this source. Every arm has the callee
+/// write back a type different from `string`, plus one arm that writes a string (same
+/// representation) and one that writes nothing at all — the case that must leave the caller's
+/// original string untouched rather than clobbering it with a boxed reload. Values match
+/// `php -n` exactly.
+#[test]
+fn test_by_ref_mixed_param_writes_back_to_a_string_local() {
+    let out = compile_and_run(
+        r#"<?php
+function wb_null(mixed &$v): void { $v = null; }
+function wb_int(mixed &$v): void { $v = 4242; }
+function wb_str(mixed &$v): void { $v = "WRITTEN"; }
+function wb_float(mixed &$v): void { $v = 2.5; }
+function wb_none(mixed &$v): void { }
+
+$a = "original"; wb_null($a);  var_dump($a);
+$b = "original"; wb_int($b);   var_dump($b);
+$c = "original"; wb_str($c);   var_dump($c);
+$d = "original"; wb_float($d); var_dump($d);
+$e = "original"; wb_none($e);  var_dump($e);
+"#,
+    );
+    assert_eq!(
+        out,
+        "NULL\nint(4242)\nstring(7) \"WRITTEN\"\nfloat(2.5)\nstring(8) \"original\"\n"
+    );
+}
+
+/// The same string source used TWICE in one function, so the second call sees a slot the first
+/// call already widened to Mixed. A widening that only worked on a slot still typed `Str` would
+/// pass the first arm and mis-handle the second.
+#[test]
+fn test_by_ref_mixed_param_string_source_used_twice_in_one_scope() {
+    let out = compile_and_run(
+        r#"<?php
+function wb(mixed &$v): void { $v = $v === "first" ? 1 : 2; }
+$s = "first";
+wb($s);
+var_dump($s);
+$s = "second";
+wb($s);
+var_dump($s);
+"#,
+    );
+    assert_eq!(out, "int(1)\nint(2)\n");
+}
