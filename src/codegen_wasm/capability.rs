@@ -896,12 +896,13 @@ fn value_transfer_shape_issue(
 fn value_is_widened_integer_arithmetic(
     function: &Function,
     value: crate::ir::ValueId,
-    depth: usize,
+    visiting: &mut HashSet<crate::ir::ValueId>,
 ) -> bool {
-    // A chain long enough to matter is pathological; the bound keeps a malformed module from
-    // walking forever.
-    if depth > 32 {
-        return false;
+    // A loop-carried counter is CYCLIC: the boxing store reads the very slot it writes. Treating
+    // a value already on the walk as satisfied is what makes the cycle converge — it adds no
+    // source of its own, so the answer rests on the other stores into the slot.
+    if !visiting.insert(value) {
+        return true;
     }
     if let Some(defined) = function.value(value) {
         if defined.ir_type == IrType::I64 && matches!(defined.php_type.codegen_repr(), PhpType::Int)
@@ -917,14 +918,49 @@ fn value_is_widened_integer_arithmetic(
         return false;
     };
     match instruction.op {
-        Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul => instruction
+        Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul | Op::MixedNumericBinop => instruction
             .operands
             .iter()
-            .all(|operand| value_is_widened_integer_arithmetic(function, *operand, depth + 1)),
-        Op::MixedNumericBinop => instruction
+            .all(|operand| value_is_widened_integer_arithmetic(function, *operand, visiting)),
+        // Boxing a number is how a loop-carried counter gets into its Mixed slot: the checker
+        // reports the widened storage and lowering boxes the local at loop entry.
+        Op::MixedBox => instruction
             .operands
             .iter()
-            .all(|operand| value_is_widened_integer_arithmetic(function, *operand, depth + 1)),
+            .all(|operand| value_is_widened_integer_arithmetic(function, *operand, visiting)),
+        // Reading a local is integer-derived when EVERY store into that slot is. A `mixed`
+        // PARAMETER has no store at all, so it fails this and keeps its refusal — which is the
+        // case PHP really coerces, with a diagnostic this target cannot raise yet. So does a slot
+        // fed by a `mixed`-returning call.
+        Op::LoadLocal => {
+            let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
+                return false;
+            };
+            let mut stored_at_least_once = false;
+            for store in function.instructions.iter().filter(|candidate| {
+                candidate.op == Op::StoreLocal
+                    && matches!(
+                        candidate.immediate,
+                        Some(Immediate::LocalSlot(candidate_slot)) if candidate_slot == slot
+                    )
+            }) {
+                stored_at_least_once = true;
+                let Some(source) = store.operands.first() else {
+                    return false;
+                };
+                if !value_is_widened_integer_arithmetic(function, *source, visiting) {
+                    return false;
+                }
+            }
+            stored_at_least_once
+        }
+        // `acquire` forwards its operand unchanged.
+        Op::Acquire => instruction
+            .operands
+            .first()
+            .is_some_and(|operand| {
+                value_is_widened_integer_arithmetic(function, *operand, visiting)
+            }),
         _ => false,
     }
 }
@@ -1107,7 +1143,8 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     // This is deliberately narrower than "implicit": a genuinely Mixed value reaching a typed
     // parameter or return IS coerced by PHP, with a `TypeError` or a `Deprecated` this target
     // cannot yet raise, and that stays refused.
-    let widened_by_checked_arithmetic = value_is_widened_integer_arithmetic(function, *operand, 0);
+    let widened_by_checked_arithmetic =
+        value_is_widened_integer_arithmetic(function, *operand, &mut HashSet::new());
     let admitted_mixed_scalar = (explicit || widened_by_checked_arithmetic)
         && matches!(target, IrType::I64 | IrType::F64);
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed)

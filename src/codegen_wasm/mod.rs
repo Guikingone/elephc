@@ -5519,11 +5519,13 @@ mod tests {
             .expect("a checked-arithmetic result narrows back to int");
     }
 
-    /// Verifies a Mixed that did NOT come from checked arithmetic still refuses to narrow.
+    /// Verifies a Mixed that did NOT come from integer arithmetic still refuses to narrow.
     ///
     /// That is the case PHP really does coerce — a `mixed` reaching a typed parameter or return —
-    /// and it carries a `TypeError` or a `Deprecated` this target cannot raise yet. Boxing a value
-    /// and casting it stands in for that shape.
+    /// and it carries a `TypeError` or a `Deprecated` this target cannot raise yet. A `mixed`
+    /// PARAMETER is the exact shape: its slot has no store to trace back to, so the walk finds no
+    /// integer origin. (Boxing a constant would NOT do: an int that has merely been boxed is
+    /// integer-derived, which is how a loop-carried counter reaches its Mixed slot.)
     #[test]
     fn mixed_to_scalar_cast_without_checked_source_fails_closed() {
         let mut module = Module::new(Target::wasm());
@@ -5534,17 +5536,17 @@ mod tests {
             let entry = builder.create_named_block("entry", Vec::new());
             builder.set_entry(entry);
             builder.position_at_end(entry);
-            let raw = builder.emit_const_i64(42);
-            let mixed = builder
-                .emit(
-                    Op::MixedBox,
-                    vec![raw],
-                    None,
-                    IrType::Heap(IrHeapKind::Mixed),
-                    PhpType::Mixed,
-                    Ownership::Owned,
-                )
-                .expect("boxing produces a mixed value");
+            let slot = builder.add_local(
+                Some("m".to_string()),
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+                LocalKind::PhpLocal,
+            );
+            let mixed = builder.emit_load_local(
+                slot,
+                IrType::Heap(IrHeapKind::Mixed),
+                PhpType::Mixed,
+            );
             let integer = builder
                 .emit(
                     Op::Cast,
@@ -5558,14 +5560,6 @@ mod tests {
             let _ = builder.emit(
                 Op::EchoValue,
                 vec![integer],
-                None,
-                IrType::Void,
-                PhpType::Void,
-                Ownership::NonHeap,
-            );
-            let _ = builder.emit(
-                Op::Release,
-                vec![mixed],
                 None,
                 IrType::Void,
                 PhpType::Void,
