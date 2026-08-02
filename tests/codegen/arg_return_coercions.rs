@@ -219,3 +219,56 @@ echo need(src(true)), need(src(false));
     );
     assert_eq!(out, "<3><2.5>");
 }
+
+/// A value-returning body that runs off its end raises PHP's catchable `TypeError`, with PHP's
+/// exact message — fully-qualified function name, fully-qualified declared type — rather than
+/// being refused at compile time or returning a fabricated value.
+///
+/// All three expectations are `php -n` 8.5 output. `crate::return_type_guard` synthesizes the
+/// throw; without it, `ir_lower::function::terminate_open_block` would hand the caller a
+/// placeholder value for the fall-through path.
+#[test]
+fn test_falling_off_a_value_returning_function_raises_phps_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Sub;
+
+class Item { public int $n = 7; }
+
+function firstOf(array $items): Item {
+    foreach ($items as $item) {
+        return $item;
+    }
+}
+
+class Holder {
+    public function pick(bool $ok): int { if ($ok) { return 5; } }
+}
+
+echo firstOf([new Item()])->n, "|";
+try { firstOf([]); } catch (\TypeError $e) { echo $e->getMessage(), "|"; }
+echo (new Holder())->pick(true), "|";
+try { (new Holder())->pick(false); } catch (\TypeError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "7|App\\Sub\\firstOf(): Return value must be of type App\\Sub\\Item, none returned|\
+         5|App\\Sub\\Holder::pick(): Return value must be of type int, none returned"
+    );
+}
+
+/// A GENERATOR legitimately runs off its end and PHP raises nothing, so no guard is synthesized.
+/// Without the `body_contains_yield` exclusion this would throw where PHP returns cleanly.
+#[test]
+fn test_generator_running_off_its_end_raises_nothing() {
+    let out = compile_and_run(
+        r#"<?php
+function gen(): \Generator { yield 1; yield 2; }
+$total = 0;
+foreach (gen() as $v) { $total += $v; }
+echo $total;
+"#,
+    );
+    assert_eq!(out, "3");
+}

@@ -38,6 +38,7 @@ mod optimize;
 mod parse_ini_prelude;
 mod parser;
 mod dom_prelude;
+mod return_type_guard;
 mod pdo_prelude;
 mod pipeline;
 mod progress;

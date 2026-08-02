@@ -20,6 +20,7 @@ use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, conditional, debug_info, errors, exports, filter_var_prelude, ir, ir_lower,
     ir_passes, lexer, linker, list_id_prelude, magic_constants, name_resolver, optimize,
+    return_type_guard,
     dom_prelude, parse_ini_prelude, parser, pdo_prelude, resolver, runtime_cache, shutdown_prelude, source_map,
     tree_shake, tz_prelude, types, var_export_prelude, web_prelude,
 };
@@ -376,6 +377,16 @@ pub(crate) fn compile(config: CliConfig) {
         }
         timings.record_since("tree-shake", phase_started);
     }
+
+    // PHP does NO static return-coverage analysis: a value-returning body that can reach its
+    // closing brace compiles, and only the call that actually falls off the end raises a
+    // CATCHABLE `TypeError`. Materialize that throw here, after name resolution (declaration
+    // names are canonical, which the message needs) and before the checker, so the checker's
+    // coverage rule is satisfied on its own terms and the backend lowers an ordinary throw
+    // instead of `terminate_open_block`'s fabricated placeholder return value.
+    // NOTE (PR #661 forbidden zone): one added line in this file, flagged deliberately — the
+    // pass itself lives entirely in `crate::return_type_guard`.
+    let ast = return_type_guard::inject(ast);
 
     crate::progress::phase("typecheck");
     let phase_started = Instant::now();

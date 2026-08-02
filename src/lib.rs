@@ -60,6 +60,7 @@ pub mod parse_ini_prelude;
 pub mod parser;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod dom_prelude;
+pub mod return_type_guard;
 pub mod pdo_prelude;
 /// Resolution of includes.
 pub mod resolver;

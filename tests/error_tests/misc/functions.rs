@@ -397,33 +397,31 @@ fn test_error_function_declared_return_type_rejects_mismatch_via_first_class_cal
     );
 }
 
-/// Verifies that a function with a declared return type that does not return a
-/// value on all paths (bare function body) produces an error.
+/// A value-returning body that can reach its closing brace is ACCEPTED, because PHP accepts it:
+/// `php -n -l` reports no syntax error, and only the call that actually falls off the end raises
+/// a catchable `TypeError`. `crate::return_type_guard` materializes that throw, so these compile
+/// and fail at the same moment PHP fails.
+///
+/// These three used to be `expect_error` on "must return a value on every path". That diagnostic
+/// refused programs PHP runs — `symfony/cache`'s `TagAwareAdapter::getItem()` returns only from
+/// inside a `foreach` — so the rule was removed rather than kept. See
+/// `codegen::oop::return_type_guard` for the runtime side.
 #[test]
-fn test_error_function_declared_return_type_requires_return_value() {
-    expect_error(
-        "<?php function foo(): int { }",
-        "Function 'foo' must return a value on every path",
-    );
+fn test_function_declared_return_type_allows_fallthrough_body() {
+    expect_ok("<?php function foo(): int { }");
 }
 
-/// Verifies that a function with a declared return type that returns a value on
-/// some paths but not all (e.g., inside an `if` without an `else`) produces an error.
+/// A value-returning function that returns on only SOME paths compiles, as in PHP.
 #[test]
-fn test_error_function_declared_return_type_rejects_partial_fallthrough() {
-    expect_error(
-        "<?php function foo(bool $ok): int { if ($ok) { return 1; } }",
-        "Function 'foo' must return a value on every path",
-    );
+fn test_function_declared_return_type_allows_partial_fallthrough() {
+    expect_ok("<?php function foo(bool $ok): int { if ($ok) { return 1; } }");
 }
 
-/// Verifies that a function with a declared return type that can exit via a switch
-/// `break` without returning a value produces an error.
+/// A `switch` arm that leaves via `break` without returning compiles, as in PHP.
 #[test]
-fn test_error_function_declared_return_type_rejects_switch_break_path() {
-    expect_error(
+fn test_function_declared_return_type_allows_switch_break_path() {
+    expect_ok(
         "<?php function foo(int $x): int { switch ($x) { case 1: if ($x > 0) { break; } return 1; default: return 2; } }",
-        "Function 'foo' must return a value on every path",
     );
 }
 
@@ -437,14 +435,12 @@ fn test_error_function_declared_return_type_rejects_bare_return() {
     );
 }
 
-/// Verifies that a method with a declared return type that does not return a
-/// value on all paths produces an error.
+/// A METHOD whose body can reach its closing brace compiles too, matching PHP (`php -n -l`
+/// accepts it; the failure is a runtime `TypeError`). Same behaviour change as the free
+/// functions above.
 #[test]
-fn test_error_method_declared_return_type_requires_return_value() {
-    expect_error(
-        "<?php class Box { public function value(): int { } }",
-        "Method 'Box::value' must return a value on every path",
-    );
+fn test_method_declared_return_type_allows_fallthrough_body() {
+    expect_ok("<?php class Box { public function value(): int { } }");
 }
 
 /// Verifies that a GENERATOR method (body contains `yield`) whose declared
@@ -460,16 +456,13 @@ fn test_error_generator_method_non_generator_return_hint_rejected() {
     );
 }
 
-/// No-regression guard for the generator-method fix: an ORDINARY method (no
-/// `yield`) with a non-void declared return and no `return` on every path must
-/// still fire "must return a value on every path". Confirms the `body_contains_yield`
-/// guard did not disable return coverage for non-generator method bodies.
+/// The generator guard's sibling case: an ORDINARY method (no `yield`) that never returns
+/// compiles, and its declared return type is enforced at RUNTIME. PHP behaves identically —
+/// the distinction the generator guard protects is that a `yield`-bodied function raises
+/// nothing at all when it runs off the end, whereas this one raises a `TypeError`.
 #[test]
-fn test_error_ordinary_method_missing_return_still_reported_after_generator_guard() {
-    expect_error(
-        "<?php class C { public function g(): string { $x = 1; } }",
-        "Method 'C::g' must return a value on every path",
-    );
+fn test_ordinary_method_missing_return_is_a_runtime_error_not_a_compile_error() {
+    expect_ok("<?php class C { public function g(): string { $x = 1; } }");
 }
 
 /// Verifies that a typed closure parameter rejects a mismatched argument type
@@ -581,16 +574,14 @@ fn test_error_static_arrow_closure_uses_this() {
     );
 }
 
-/// Verifies that a `: string` function with NO return statement produces the
-/// "must return a value on every path" diagnostic and NOT a spurious "got Int"
-/// message. Guards the line-27 change: the no-return seed is now `Void`, so the
-/// checker's no-return path fires instead of the unsound `Int`-vs-`Str` mismatch.
+/// A `: string` function with NO return statement must not report a spurious "got Int" — the
+/// unsound `Int`-vs-`Str` mismatch the `Void` no-return seed was introduced to prevent. Accepting
+/// the source proves that: any surviving return-type mismatch would fail this. The declared type
+/// is now enforced at runtime instead (see `codegen::arg_return_coercions`), matching PHP, which
+/// compiles this and raises a `TypeError` only on a call that falls off the end.
 #[test]
-fn test_error_string_function_no_return_does_not_report_got_int() {
-    expect_error(
-        "<?php function foo(): string { }",
-        "Function 'foo' must return a value on every path",
-    );
+fn test_string_function_no_return_does_not_report_got_int() {
+    expect_ok("<?php function foo(): string { }");
 }
 
 /// Verifies that a `: int` function returning a string literal still produces the

@@ -104,6 +104,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
     let resolved = elephc::image_prelude::inject_if_used(resolved, false);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let resolved = elephc::return_type_guard::inject(resolved);
     let (resolved, _autoload_warnings) =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
     // Mirror `pipeline::compile`: hoist conditional function declarations, then inject the
@@ -586,6 +587,7 @@ pub(crate) fn compile_expect_check_error(source: &str) -> String {
     let resolved = elephc::list_id_prelude::inject_if_used(resolved);
     let resolved = elephc::image_prelude::inject_if_used(resolved, false);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    let resolved = elephc::return_type_guard::inject(resolved);
     let (resolved, _autoload_warnings) =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
     let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);

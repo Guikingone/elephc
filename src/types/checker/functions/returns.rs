@@ -287,9 +287,21 @@ impl Checker {
             return Ok(());
         }
 
+        // Two accepting shapes, both meaning "control cannot reach the closing brace":
+        //  - the body leaves the FUNCTION on every path (return/throw/never-call), and
+        //  - the body's end is unreachable for another reason — a `goto` jumping backwards is
+        //    the shape `Cache\PhpArrayAdapter::get()` uses, and it exits the BLOCK without
+        //    exiting the function, so the first check alone rejected a program PHP runs.
+        //
+        // For everything else `crate::return_type_guard` has already appended PHP's implicit
+        // `throw new TypeError(...)`, which lands in the first case — so by the time a
+        // function or method reaches here it always passes, and what survives is the CLOSURE
+        // path, which that pass deliberately skips (PHP names a closure in the message by
+        // source position, and elephc has no per-declaration file identity yet).
         if crate::termination::block_guarantees_function_exit_with_divergence(body, &|expr| {
             self.expr_is_declared_never_call(expr)
-        }) {
+        }) || body.iter().any(crate::termination::stmt_guarantees_termination)
+        {
             Ok(())
         } else {
             Err(CompileError::new(
