@@ -3043,7 +3043,8 @@ pub(super) fn reflection_class_constant_names(
         else {
             break;
         };
-        for constant in current_info.constants.keys() {
+        // `constant_order`, not the `constants` map: PHP reports declaration order.
+        for constant in &current_info.constant_order {
             push_unique_constant_name(constant, &mut names, &mut seen);
         }
         for interface_name in &current_info.interfaces {
@@ -3086,10 +3087,14 @@ fn reflection_class_constant_members(
         else {
             break;
         };
-        for (constant_name, value_expr) in &current_info.constants {
+        // `constant_order`, not the `constants` map: PHP reports declaration order.
+        for constant_name in &current_info.constant_order {
             if seen.contains(constant_name) {
                 continue;
             }
+            let Some(value_expr) = current_info.constants.get(constant_name) else {
+                continue;
+            };
             let value =
                 reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
             push_unique_constant_member(constant_name, value, &mut members, &mut seen);
@@ -3234,10 +3239,14 @@ fn reflection_class_constant_reflection_members(
         else {
             break;
         };
-        for (constant_name, value_expr) in &current_info.constants {
+        // `constant_order`, not the `constants` map: PHP reports declaration order.
+        for constant_name in &current_info.constant_order {
             if seen.contains(constant_name) {
                 continue;
             }
+            let Some(value_expr) = current_info.constants.get(constant_name) else {
+                continue;
+            };
             let value =
                 reflection_constant_value(ctx, resolved_name, Some(current_info), value_expr, 0)?;
             push_unique_constant_reflection_member(

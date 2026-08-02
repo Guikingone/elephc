@@ -144,6 +144,13 @@ impl ClassBuildState {
                     ))
                 })
                 .collect::<Result<HashMap<_, _>, CompileError>>()?,
+            // `class.constants` is the flattened declaration list, already in PHP's
+            // enumeration order (own first, then inherited); keep that order verbatim.
+            constant_order: class
+                .constants
+                .iter()
+                .map(|constant| constant.name.clone())
+                .collect(),
             constant_types: class
                 .constants
                 .iter()

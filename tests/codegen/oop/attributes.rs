@@ -1822,6 +1822,42 @@ echo count($reflection->getReflectionConstants(0));
     );
 }
 
+/// Verifies class constants are enumerated in PHP's order — this class's own constants in
+/// declaration order, then each ancestor's, nearest first — for both
+/// `getReflectionConstants()` and `getConstants()`.
+///
+/// Both used to iterate the `ClassInfo::constants` HashMap directly, so the reported order
+/// followed hash layout rather than the source. That is a wrong answer for user code, and it
+/// also made `test_reflection_class_filters_constant_reflector_objects` fail or pass depending
+/// on unrelated edits. Expectations below are `php -n` output, byte for byte.
+#[test]
+fn test_reflection_class_constants_keep_declaration_order() {
+    let out = compile_and_run(
+        r#"<?php
+class ConstOrderBase { public const B_ONE = 1; public const B_TWO = 2; }
+class ConstOrderTarget extends ConstOrderBase {
+    public const PUBLIC_VALUE = 1;
+    protected const PROTECTED_VALUE = 2;
+    private const PRIVATE_VALUE = 3;
+    final public const FINAL_VALUE = 4;
+}
+$ref = new ReflectionClass(ConstOrderTarget::class);
+foreach ($ref->getReflectionConstants() as $constant) {
+    echo $constant->getName() . " ";
+}
+echo "|";
+foreach ($ref->getConstants() as $name => $value) {
+    echo " " . $name . "=" . $value;
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "PUBLIC_VALUE PROTECTED_VALUE PRIVATE_VALUE FINAL_VALUE B_ONE B_TWO | \
+         PUBLIC_VALUE=1 PROTECTED_VALUE=2 PRIVATE_VALUE=3 FINAL_VALUE=4 B_ONE=1 B_TWO=2"
+    );
+}
+
 /// Verifies that `ReflectionClass` reports implemented interface and used trait names.
 #[test]
 fn test_reflection_class_reports_relation_names() {

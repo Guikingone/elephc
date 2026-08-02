@@ -265,7 +265,18 @@ pub struct ClassInfo {
     pub allow_dynamic_properties: bool,
     /// User-declared class constants (PHP 7.1+). Maps the constant name to
     /// its value expression — codegen inlines the literal at access time.
+    ///
+    /// Lookup only: this map has no stable iteration order, so anything that must
+    /// ENUMERATE constants walks [`Self::constant_order`] instead.
     pub constants: HashMap<String, crate::parser::ast::Expr>,
+    /// Constant names in PHP's enumeration order: this class's own constants in
+    /// declaration order, then each ancestor's, nearest first (php -n verified against
+    /// `ReflectionClass::getConstants()` and `getReflectionConstants()` on a 2-level
+    /// hierarchy). Mirrors `InterfaceInfo::method_order`, which exists for the same
+    /// reason. Reflection used to iterate the `constants` HashMap directly, which made
+    /// the reported order depend on hash layout — a silently wrong answer for user code
+    /// and a recurring phantom test failure.
+    pub constant_order: Vec<String>,
     /// PHP 8.3 declared types for constants declared directly on this class-like symbol.
     pub constant_types: HashMap<String, TypeExpr>,
     /// Class constant visibilities keyed by case-sensitive constant name.
