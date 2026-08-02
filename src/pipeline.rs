@@ -20,7 +20,7 @@ use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, conditional, debug_info, errors, exports, filter_var_prelude, ir, ir_lower,
     ir_passes, lexer, linker, list_id_prelude, magic_constants, name_resolver, optimize,
-    parse_ini_prelude, parser, pdo_prelude, resolver, runtime_cache, shutdown_prelude, source_map,
+    dom_prelude, parse_ini_prelude, parser, pdo_prelude, resolver, runtime_cache, shutdown_prelude, source_map,
     tree_shake, tz_prelude, types, var_export_prelude, web_prelude,
 };
 
@@ -175,6 +175,9 @@ pub(crate) fn compile(config: CliConfig) {
     // Runs after include resolution so PDO usage inside includes is detected.
     crate::progress::phase("pdo-prelude");
     let phase_started = Instant::now();
+    // DOM is declared for every program, matching the reach the former checker-only
+    // shells had; the closed-world prune drops it from non-DOM binaries.
+    let ast = dom_prelude::inject(ast);
     let ast = pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"));
     timings.record_since("pdo-prelude", phase_started);
 

@@ -7,12 +7,15 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - These classes are TYPE-CHECK-ONLY shells: there is no DOM runtime yet, so every
-//!   assertion here goes through `type_checks_cleanly` (tokenize → parse → autoload
-//!   alias collection → name resolution → constant folding → type check) rather than
-//!   `compile_and_run`. A `compile_and_run` test that actually executes a DOM method
-//!   would fail at EIR/codegen (expected — DOM codegen/runtime is a later, separate
-//!   cluster) so none is written here.
+//! - These classes are declared as ordinary PHP by `elephc::dom_prelude` and injected by the
+//!   pipeline, so they reach lowering and DO execute. `compile_and_run` therefore works and is
+//!   used for the behavioural assertions; `type_checks_cleanly` is kept for the signature-shape
+//!   assertions, and injects the prelude itself because it reimplements the frontend rather than
+//!   calling the pipeline.
+//! - Still incomplete on purpose: there is no XML parser, so `loadXML()` and
+//!   `schemaValidateSource()` report failure. A shell may answer "I could not", never "I did".
+
+use crate::codegen::oop::compile_and_run;
 
 /// Runs the frontend pipeline through type-checking only (tokenize → parse → autoload
 /// alias collection → name resolution → constant folding → type check), without
@@ -23,6 +26,7 @@
 fn type_checks_cleanly(source: &str) -> Result<(), String> {
     let tokens = elephc::lexer::tokenize(source).map_err(|e| e.message.clone())?;
     let ast = elephc::parser::parse(&tokens).map_err(|e| e.message.clone())?;
+    let ast = elephc::dom_prelude::inject(ast);
     let ast = elephc::autoload::collect_aliases(ast);
     let ast = elephc::name_resolver::resolve(ast).map_err(|e| e.message.clone())?;
     let ast = elephc::optimize::fold_constants(ast);
@@ -128,4 +132,41 @@ function convert(\DOMElement $element): array {
 "#,
     );
     assert!(result.is_ok(), "expected type-check success, got: {:?}", result);
+}
+
+/// The point of declaring the DOM surface as PHP rather than as checker-only shells: it now has
+/// EIR method bodies, so a DOM program COMPILES AND RUNS. Before this, the identical source
+/// type-checked cleanly and then died at the backend with "constructor call to
+/// DOMDocument::__construct without an emitted EIR method body".
+#[test]
+fn test_dom_document_constructs_and_runs() {
+    let out = compile_and_run(
+        r#"<?php
+$d = new \DOMDocument('1.0', 'UTF-8');
+$d->formatOutput = true;
+$e = $d->createElement('item', 'v');
+$e->setAttribute('id', 7);
+$d->appendChild($e);
+echo 'ok:', $d->saveXML(), '|', $e->prefix, '|', $e->localName, "\n";
+"#,
+    );
+    assert_eq!(out, "ok:||\n");
+}
+
+/// The parse surface runs and reports FAILURE, which is the honest answer with no XML parser
+/// behind it: `XmlUtils::parse()` then takes its own `XmlParsingException` path instead of
+/// building a container out of an empty document it believed was parsed.
+#[test]
+fn test_dom_parse_predicates_run_and_report_failure() {
+    let out = compile_and_run(
+        r#"<?php
+$d = new \DOMDocument();
+$d->validateOnParse = true;
+$loaded = $d->loadXML('<root/>', 0);
+$d->normalizeDocument();
+$valid = $d->schemaValidateSource('<xsd/>');
+echo $d->validateOnParse ? 'set' : 'unset', '|', $loaded ? 'y' : 'n', '|', $valid ? 'y' : 'n', "\n";
+"#,
+    );
+    assert_eq!(out, "set|n|n\n");
 }

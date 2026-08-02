@@ -22,7 +22,7 @@ use crate::types::{
 
 use super::builtin_types::{
     finalize_magic_call_arg_signatures, inject_builtin_date_period, inject_builtin_datetime,
-    inject_builtin_dom, inject_builtin_normalizer, inject_builtin_reflection,
+    inject_builtin_normalizer, inject_builtin_reflection,
     inject_builtin_throwables,
     patch_builtin_exception_signatures,
     patch_builtin_fiber_signatures, patch_builtin_reflection_signatures,
@@ -195,9 +195,10 @@ pub(super) fn check_types_impl(
     {
         errors.extend(error.flatten());
     }
-    if let Err(error) = inject_builtin_dom(&interface_map, &mut class_map, &declared_traits) {
-        errors.extend(error.flatten());
-    }
+    // The DOM surface is no longer injected as checker-only shells: it is declared as ordinary
+    // PHP by `crate::dom_prelude`, so it is collected here like any user class AND reaches
+    // lowering. The shells type-checked but had no EIR body, which made `new DOMDocument()`
+    // un-compilable for every DOM-using program regardless of how clean its types were.
     // Register the ext-intl `Normalizer` class constants elephc's emulated intl environment
     // defines. Injects a builtin constants-only `Normalizer` when none is registered, or
     // supplements a vendor-provided `Normalizer` (the intl polyfill stub) with the ext-intl

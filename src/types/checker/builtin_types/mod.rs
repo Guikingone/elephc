@@ -12,7 +12,6 @@ mod calendar;
 mod date_period;
 mod datetime;
 mod declarations;
-mod dom;
 mod exception;
 mod fiber;
 mod magic_methods;
@@ -64,7 +63,6 @@ pub(crate) use reflection::{inject_builtin_reflection, patch_builtin_reflection_
 /// Injects the five built-in DOM shell types (`DOMNode`, `DOMDocument`, `DOMElement`,
 /// `DOMText`, `DOMNodeList`) used by vendor code such as symfony/console's
 /// `XmlDescriptor.php`. Type-check-only shell; no DOM runtime exists yet.
-pub(crate) use dom::inject_builtin_dom;
 
 /// Injects the builtin `DateTimeInterface`, `DateTimeZone`, and `DateTimeImmutable` declarations.
 pub(crate) use datetime::inject_builtin_datetime;
