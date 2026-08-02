@@ -8177,6 +8177,88 @@ echo "\n";
 /// php-src 8.5.6's own output for `ARRAY_PROPERTY_SOURCE`.
 const ARRAY_PROPERTY_EXPECTED: &str = "2,null;0;1111111111111111111111111111111111111111\n";
 
+/// Every scalar cast of a Mixed, over every runtime tag, plus `echo` of a container.
+#[test]
+fn test_cli_wasm_mixed_scalar_casts_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_casts");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, MIXED_CAST_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the Mixed-cast probe");
+    assert!(
+        output.status.success(),
+        "Mixed-cast compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the Mixed-cast probe under Node");
+    assert!(
+        run.status.success(),
+        "Mixed-cast probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program, with diagnostics silenced: the
+    // "Array to string conversion" warning goes to stderr and is not compared here.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), MIXED_CAST_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The Mixed-cast probe: fifteen values covering every runtime tag a cell can carry, each
+/// through `(int)`, `(float)`, `(bool)` and `(string)`. The two array rows are the ones that
+/// used to answer the empty string where PHP prints "Array".
+const MIXED_CAST_SOURCE: &str = r##"<?php
+function show(mixed $v): void {
+    echo (int)$v, "|", (float)$v, "|", ((bool)$v) ? "T" : "F", "|", (string)$v, ";";
+}
+show(1); show(-5); show(0); show(1.5); show(-2.7);
+show(true); show(false); show(null);
+show("42"); show("3.9"); show("abc"); show(""); show("0");
+show([1,2]); show([]);
+echo "\n";
+$mixedish = [1, "x", [7, 8], 2.5];
+foreach ($mixedish as $v) { echo $v, ";"; }
+echo "\n";
+$rows = [[1, 2], [3, 4]];
+foreach ($rows as $r) { echo $r, ";"; }
+echo "\n";
+"##;
+
+/// php-src 8.5.6's own output for `MIXED_CAST_SOURCE`.
+const MIXED_CAST_EXPECTED: &str = "1|1|T|1;-5|-5|T|-5;0|0|F|0;1|1.5|T|1.5;-2|-2.7|T|-2.7;1|1|T|1;0|0|F|;0|0|F|;42|42|T|42;3|3.9|T|3.9;0|0|T|abc;0|0|F|;0|0|F|0;1|1|T|Array;0|0|F|Array;\n1;x;Array;2.5;\nArray;Array;\n";
+
 /// Enums: string-backed, int-backed and pure, read through `->value` and `->name`, compared
 /// by identity, and passed to a typed parameter.
 #[test]

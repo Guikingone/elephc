@@ -491,6 +491,18 @@ fn target_has_registered_noreturn_proof(
             "reactor-callable-corruption",
             None,
         ),
+        // `(string)` of an object without `__toString` is PHP's fatal, and the helper writes
+        // the class name before exiting — so it is non-returning on the same proof as the
+        // method-call fatal: its own body ends in `wasi_proc_exit`.
+        "$__rt_fail_object_to_string" => {
+            proc_exit
+                && has_site(
+                    "$__rt_fail_object_to_string",
+                    TrapClass::PostNoreturn,
+                    "object-to-string-fatal",
+                    Some("$wasi_proc_exit"),
+                )
+        }
         "$__rt_fail_method_call_non_object" => {
             proc_exit
                 && has_site(
@@ -527,6 +539,7 @@ fn has_noreturn_predecessor(
         "$__rt_fail_callable_dispatch",
         "$__rt_fail_method_call_non_object",
         "$__rt_fail_undefined_method",
+        "$__rt_fail_object_to_string",
     ]
     .iter()
     .any(|target| {
@@ -569,6 +582,11 @@ fn validate_non_public_site(site: &UnreachableSite, command_module: bool) -> Res
         "reactor-oom" => !command_module && site.function == "$__rt_oom",
         "reactor-callable-corruption" => {
             !command_module && site.function == "$__rt_fail_callable_dispatch"
+        }
+        // `(string)` of an object is PHP's fatal, and a reactor has no WASI to report it
+        // through — so the answer is the same trap the other import-free boundaries take.
+        "reactor-object-to-string" => {
+            !command_module && site.function == "$__rt_mixed_cast_string"
         }
         _ => false,
     };

@@ -1165,8 +1165,13 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     // cannot yet raise, and that stays refused.
     let widened_by_checked_arithmetic =
         value_is_widened_integer_arithmetic(function, *operand, &mut HashSet::new());
+    // An EXPLICIT `(string)` is now exact for every tag too: the array arm warns and yields
+    // "Array", and the object arm raises PHP's fatal naming the class. What stays refused is
+    // the IMPLICIT coercion, a different operation — the same value `(int)` turns into 0
+    // makes a declared `int` return raise a `TypeError` this target cannot yet produce.
     let admitted_mixed_scalar = (explicit || widened_by_checked_arithmetic)
-        && matches!(target, IrType::I64 | IrType::F64);
+        && matches!(target, IrType::I64 | IrType::F64)
+        || (explicit && target == IrType::Str);
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed)
         && source_php == PhpType::Mixed
         && matches!(target, IrType::I64 | IrType::F64 | IrType::Str)
@@ -1218,10 +1223,15 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
         // An explicit `(int)` / `(float)` over an arbitrary Mixed: the runtime dispatches on the
         // cell's tag and reproduces php-src's answer for each, diagnostics included.
         (IrType::Heap(IrHeapKind::Mixed), IrType::I64) => {
-            admitted_mixed_scalar && result_php == PhpType::Int
+            admitted_mixed_scalar && matches!(result_php, PhpType::Int | PhpType::Bool)
         }
         (IrType::Heap(IrHeapKind::Mixed), IrType::F64) => {
             admitted_mixed_scalar && result_php == PhpType::Float
+        }
+        // `(string)` reaches every tag exactly too: "Array" with a warning for a container,
+        // and PHP's fatal naming the class for an object.
+        (IrType::Heap(IrHeapKind::Mixed), IrType::Str) => {
+            admitted_mixed_scalar && result_php == PhpType::Str
         }
         _ => false,
     };

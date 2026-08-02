@@ -37,7 +37,7 @@ pub(super) fn emit_mixed_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_MIXED_CAST_BOOL);
     wm.add_raw_func(&mixed_cast_int(has_main));
     wm.add_raw_func(&mixed_cast_float(has_main));
-    wm.add_raw_func(RT_MIXED_CAST_STRING);
+    wm.add_raw_func(&mixed_cast_string(has_main));
     wm.add_raw_func(RT_MIXED_CAST_STRING_REF);
 }
 
@@ -228,6 +228,27 @@ const RT_MIXED_CAST_BOOL: &str = r#"(func $__rt_mixed_cast_bool (param $ptr i32)
 /// can only warn from a COMMAND module: `__rt_warn_object_to_int` writes to stderr through the
 /// WASI imports a reactor does not carry, so an import-free module produces PHP's value without
 /// its diagnostic rather than failing to link.
+/// Renders `__rt_mixed_cast_string` for this module kind.
+///
+/// The two container arms carry PHP's only diagnostics in the cast family, and both write to
+/// stderr — so a reactor module, which has no WASI to write through, gets the same ANSWERS
+/// without them: "Array" for a container, and a bare trap for the object fatal.
+fn mixed_cast_string(has_main: bool) -> String {
+    let array_warning = if has_main {
+        "(call $__rt_warn_array_to_string)"
+    } else {
+        ""
+    };
+    let object_fatal = if has_main {
+        "(call $__rt_fail_object_to_string (i64.load (i32.wrap_i64 (local.get $lo))))\n      unreachable)) ;; elephc-trap:post-noreturn:object-to-string"
+    } else {
+        "unreachable)) ;; elephc-trap:non-public:reactor-object-to-string"
+    };
+    RT_MIXED_CAST_STRING_TEMPLATE
+        .replace("{array_warning}", array_warning)
+        .replace("{object_fatal}", object_fatal)
+}
+
 fn mixed_cast_int(has_main: bool) -> String {
     let float_to_int = if has_main
         && matches!(
@@ -331,7 +352,7 @@ const RT_MIXED_CAST_FLOAT_TEMPLATE: &str = r#"(func $__rt_mixed_cast_float (para
 /// bool true renders "1" via `__rt_itoa` and is persisted, while false yields an empty
 /// `(0, 0)`; arrays/hashes/objects/resources/null/other yield an empty `(0, 0)`. Borrows
 /// the source cell (never frees it).
-const RT_MIXED_CAST_STRING: &str = r#"(func $__rt_mixed_cast_string (param $ptr i32) (result i32) (result i32) (local $tag i64) (local $lo i64) (local $hi i64) (local $iptr i32) (local $ilen i32) (local $pptr i32) (local $plen i64) ;; cast a boxed Mixed cell to a PHP string (ptr,len), always persisting so callers own the result
+const RT_MIXED_CAST_STRING_TEMPLATE: &str = r#"(func $__rt_mixed_cast_string (param $ptr i32) (result i32) (result i32) (local $tag i64) (local $lo i64) (local $hi i64) (local $iptr i32) (local $ilen i32) (local $pptr i32) (local $plen i64) ;; cast a boxed Mixed cell to a PHP string (ptr,len), always persisting so callers own the result
   (call $__rt_mixed_unbox (local.get $ptr))                             ;; unbox -> stack: tag, lo, hi
   (local.set $hi)                                                       ;; pop value high word
   (local.set $lo)                                                       ;; pop value low word
@@ -372,7 +393,28 @@ const RT_MIXED_CAST_STRING: &str = r#"(func $__rt_mixed_cast_string (param $ptr 
           (local.set $plen)                                             ;; pop persisted length (i64, result 1, on top)
           (local.set $pptr)                                             ;; pop persisted pointer (result 0)
           (return (local.get $pptr) (i32.wrap_i64 (local.get $plen))))))) ;; return the owned "1"
-  (i32.const 0) (i32.const 0))                                          ;; array/hash/object/resource/null/other -> empty string
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))  ;; tag 4/5 = array/hash
+    (then
+      ;; The ONE diagnostic in PHP's scalar-cast family: `(string)` of an array warns and
+      ;; yields the literal text "Array". `(int)`, `(float)` and `(bool)` of one are silent.
+      {array_warning}
+      ;; "Array" is written into the float scratch rather than carried as a data segment, so
+      ;; this helper stays independent of the module's static-data layout.
+      (i32.store8 (global.get $__float_scratch) (i32.const 65))                        ;; 'A'
+      (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 1)) (i32.const 114)) ;; 'r'
+      (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 2)) (i32.const 114)) ;; 'r'
+      (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 3)) (i32.const 97))  ;; 'a'
+      (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 4)) (i32.const 121)) ;; 'y'
+      (call $__rt_str_persist (global.get $__float_scratch) (i64.const 5))  ;; own a copy of "Array"
+      (local.set $plen)                                                 ;; pop persisted length
+      (local.set $pptr)                                                 ;; pop persisted pointer
+      (return (local.get $pptr) (i32.wrap_i64 (local.get $plen)))))
+  (if (i64.eq (local.get $tag) (i64.const 6))                           ;; tag 6 = object
+    (then
+      ;; `(string)` of an object without `__toString` is where this family stops at a
+      ;; diagnostic and TERMINATES, unlike the numeric casts which warn and answer 1.
+      {object_fatal}
+  (i32.const 0) (i32.const 0))                                          ;; resource/null/other -> empty string
 "#;
 
 /// `__rt_mixed_cast_string_ref`: like `__rt_mixed_cast_string` but returns a
@@ -951,13 +993,17 @@ mod tests {
     /// `__rt_mixed_cast_string` on null/object/array cells yields an empty string.
     #[test]
     fn cast_string_non_scalar_is_empty() {
-        // null cell (tag 8) -> ""
+        // null cell (tag 8) -> "", which is what PHP prints for null.
         if let Some(o) = run_driver(&cast_string_scalar_driver(8, 0, 0), "t") {
             assert_eq!(o, str_hash("").to_string());
         }
-        // object cell (tag 6) -> ""
-        if let Some(o) = run_driver(&cast_string_scalar_driver(6, 0, 0), "t") {
+        // A resource cell (tag 9) has no lowered text either and stays empty.
+        if let Some(o) = run_driver(&cast_string_scalar_driver(9, 0, 0), "t") {
             assert_eq!(o, str_hash("").to_string());
         }
+        // An OBJECT cell no longer answers "": `(string)` of an object without `__toString`
+        // is PHP's fatal, so the harness (a reactor, with no WASI to report through) traps
+        // rather than producing a value. Asserting the old empty string here would be
+        // asserting a wrong ANSWER.
     }
 }

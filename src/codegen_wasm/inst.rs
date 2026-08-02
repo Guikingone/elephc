@@ -2607,6 +2607,21 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 .ins("call $__rt_mixed_write_stdout", "echo mixed value (tag-dispatched)");
             Ok(())
         }
+        // PHP prints the literal text "Array" for a container and warns. A CONCRETE array
+        // reaches this since nested arrays bind at their own type; the Mixed arm above hits
+        // the same rule through the cell's tag.
+        PhpType::Array(_) | PhpType::AssocArray { .. } => {
+            ctx.fb
+                .ins("call $__rt_warn_array_to_string", "PHP warns before printing");
+            let _ = ctx.value_repr(op0)?;
+            ctx.fb.ins("i32.const 0", "\"Array\" is written into the float scratch");
+            ctx.fb.ins("drop", "the container itself is not read");
+            ctx.fb.ins(
+                "(call $__rt_echo_array_word)",
+                "echo the literal text PHP prints for a container",
+            );
+            Ok(())
+        }
         PhpType::TaggedScalar => {
             let WasmRepr::Tagged { payload, tag } = ctx.value_repr(op0)?.clone() else {
                 return Err(WasmError::Unsupported(
@@ -3274,11 +3289,16 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // literal like `[1, "a", 2.5]` emits — and leaves the boxing to the backend, the
     // way the native one does. Dispatching on the source repr alone would send those
     // to the int/string helpers and write the wrong slot layout.
+    // A CONTAINER destined for a Mixed-cell array is boxed too, for the same reason: the slot
+    // holds a CELL pointer, and storing the container's own pointer there read back as the
+    // container's length reinterpreted as a tag — a nested array printed as a denormal float.
     if array_stores_mixed_cells(ctx, array)
         && (!matches!(value_repr, WasmRepr::Ptr(_))
             || matches!(
                 ctx.function.value(value).map(|v| v.ir_type),
-                Some(IrType::Heap(IrHeapKind::Object))
+                Some(IrType::Heap(
+                    IrHeapKind::Object | IrHeapKind::Array | IrHeapKind::Hash
+                ))
             ))
     {
         return push_boxed_scalar(ctx, inst, array, value, &value_repr);
@@ -3332,7 +3352,18 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             // An object or nested-array element is the same contract with a different helper: the
             // array takes a SHARE (incref here), and the EIR releases the operand right after the
             // push. The two differ only in the `value_type` the empty array is shaped to.
+            //
+            // This is the CONCRETE-element form only. A container pushed into an `array<mixed>`
+            // must be BOXED into a cell instead — routing it here stored a raw pointer in a
+            // cell-strided array, which read back as a denormal float and lost the container.
+            let element_is_mixed = matches!(
+                ctx.function
+                    .value(array)
+                    .map(|v| v.php_type.codegen_repr()),
+                Some(PhpType::Array(element)) if matches!(element.codegen_repr(), PhpType::Mixed)
+            );
             if let Some(container_tag) = match value_ir {
+                _ if element_is_mixed => None,
                 Some(IrType::Heap(IrHeapKind::Object)) => Some(4),
                 Some(IrType::Heap(IrHeapKind::Array)) => Some(5),
                 Some(IrType::Heap(IrHeapKind::Hash)) => Some(6),

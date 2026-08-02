@@ -93,11 +93,18 @@ const WARN_FLOAT_NOT_REPRESENTABLE_SUFFIX: &[u8] =
     b" is not representable as an int, cast occurred\n";
 /// Arithmetic on a string carrying only a numeric prefix warns and uses the prefix.
 const WARN_NON_NUMERIC_VALUE: &[u8] = b"Warning: A non-numeric value encountered\n";
+/// The ONE diagnostic in PHP's whole scalar-cast family: `(string)` of an array. Measured —
+/// `(int)`, `(float)` and `(bool)` of an array are all silent.
+const WARN_ARRAY_TO_STRING: &[u8] = b"Warning: Array to string conversion\n";
 /// PHP reports an object reaching a numeric cast, then uses 1. The class name sits between
 /// the prefix and the per-target suffix.
 const WARN_OBJECT_TO_SCALAR_PREFIX: &[u8] = b"Warning: Object of class ";
 const WARN_OBJECT_TO_INT_SUFFIX: &[u8] = b" could not be converted to int\n";
 const WARN_OBJECT_TO_FLOAT_SUFFIX: &[u8] = b" could not be converted to float\n";
+/// `(string)` of an object without `__toString` is a FATAL, not a warning — the one place
+/// this family stops at a diagnostic and terminates.
+const ERR_OBJECT_TO_STRING_PREFIX: &[u8] = b"PHP Fatal error: Uncaught Error: Object of class ";
+const ERR_OBJECT_TO_STRING_SUFFIX: &[u8] = b" could not be converted to string\n";
 /// Arithmetic on a wholly non-numeric string is a PHP `TypeError`. Reported as an
 /// uncaught fatal until this target gains exception support.
 const ERR_UNSUPPORTED_OPERAND: &[u8] =
@@ -159,7 +166,10 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_OBJECT_TO_FLOAT_SUFFIX.len() as u32
     + ERR_UNSUPPORTED_OPERAND.len() as u32
     + DEPRECATED_CHR_RANGE.len() as u32
-    + DEPRECATED_ORD_LENGTH.len() as u32;
+    + DEPRECATED_ORD_LENGTH.len() as u32
+    + WARN_ARRAY_TO_STRING.len() as u32
+    + ERR_OBJECT_TO_STRING_PREFIX.len() as u32
+    + ERR_OBJECT_TO_STRING_SUFFIX.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -283,6 +293,9 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_OBJECT_TO_FLOAT_SUFFIX,
         DEPRECATED_CHR_RANGE,
         DEPRECATED_ORD_LENGTH,
+        WARN_ARRAY_TO_STRING,
+        ERR_OBJECT_TO_STRING_PREFIX,
+        ERR_OBJECT_TO_STRING_SUFFIX,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -405,12 +418,15 @@ fn emit_undefined_array_key_warning_runtime(
     wm: &mut WatModule,
     offsets: &[(u32, u32)],
 ) {
-    debug_assert_eq!(offsets.len(), 14);
+    debug_assert_eq!(offsets.len(), 17);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (quote_ptr, quote_len) = offsets[1];
     let (suffix_ptr, suffix_len) = offsets[2];
     let (chr_range_ptr, chr_range_len) = offsets[12];
     let (ord_length_ptr, ord_length_len) = offsets[13];
+    let (array_to_string_ptr, array_to_string_len) = offsets[14];
+    let (object_string_prefix_ptr, object_string_prefix_len) = offsets[15];
+    let (object_string_suffix_ptr, object_string_suffix_len) = offsets[16];
     let (float_prefix_ptr, float_prefix_len) = offsets[5];
     let (float_suffix_ptr, float_suffix_len) = offsets[6];
     let (non_numeric_ptr, non_numeric_len) = offsets[7];
@@ -443,6 +459,34 @@ fn emit_undefined_array_key_warning_runtime(
   (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $key_ptr) (local.get $key_len))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {quote_ptr}) (i32.const {quote_len}))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_object_to_string (param $cid i64)
+  (local $ptr i32) (local $len i64)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {object_string_prefix_ptr}) (i32.const {object_string_prefix_len}))
+  (call $__rt_class_name_by_cid (local.get $cid))                 ;; resolve the class name -> (ptr, len)
+  (local.set $len)
+  (local.set $ptr)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (i32.wrap_i64 (local.get $len)))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {object_string_suffix_ptr}) (i32.const {object_string_suffix_len}))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:object-to-string-fatal
+)"#
+    ));
+    wm.add_raw_func(
+        r#"(func $__rt_echo_array_word
+  ;; The five bytes of "Array" are written into the float scratch rather than carried as a
+  ;; data segment, so this stays independent of the module's static-data layout.
+  (i32.store8 (global.get $__float_scratch) (i32.const 65))
+  (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 1)) (i32.const 114))
+  (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 2)) (i32.const 114))
+  (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 3)) (i32.const 97))
+  (i32.store8 (i32.add (global.get $__float_scratch) (i32.const 4)) (i32.const 121))
+  (call $__rt_echo_str (global.get $__float_scratch) (i64.const 5)))"#,
+    );
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_array_to_string
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {array_to_string_ptr}) (i32.const {array_to_string_len})))"#
     ));
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_array_offset_on_null
@@ -633,6 +677,8 @@ const RT_ARGV: &str = r#"(func $__rt_argv (result i32)
 /// print nothing (PHP semantics).
 const RT_MIXED_WRITE_STDOUT: &str = r#"(func $__rt_mixed_write_stdout (param $ptr i32)
   (local $tag i64)
+  (local $sptr i32)
+  (local $len i32)
   (if (i32.eqz (local.get $ptr))
     (then (return)))                                                ;; null pointer -> nothing
   (local.set $tag (i64.load (local.get $ptr)))                      ;; tag @ +0
@@ -653,6 +699,16 @@ const RT_MIXED_WRITE_STDOUT: &str = r#"(func $__rt_mixed_write_stdout (param $pt
   (if (i64.eq (local.get $tag) (i64.const 3))                       ;; tag 3 = bool
     (then
       (call $__rt_echo_bool (i64.load (i32.add (local.get $ptr) (i32.const 8)))) ;; echo bool payload
+      (return)))
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))
+    (then
+      ;; PHP prints the literal text "Array" and warns; the cast helper owns both, and its
+      ;; persisted result is released here because echoing keeps nothing.
+      (call $__rt_mixed_cast_string (local.get $ptr))
+      (local.set $len)                                               ;; pop (ptr, len)
+      (local.set $sptr)
+      (call $__rt_echo_str (local.get $sptr) (i64.extend_i32_u (local.get $len)))  ;; "Array"
+      (call $__rt_heap_free_safe (local.get $sptr))                  ;; the echo owns nothing
       (return))))                                                    ;; done
 "#;
 
