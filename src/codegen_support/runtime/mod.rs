@@ -34,6 +34,7 @@ mod system;
 mod zval;
 
 pub(crate) use data::emit_class_registry_data;
+pub(crate) use data::emit_class_methods_registry_data;
 pub(crate) use data::emit_class_relation_registry_data;
 pub(crate) use data::emit_const_registry_data;
 pub(crate) use data::emit_runtime_data_fixed;

@@ -1545,14 +1545,30 @@ pub(super) fn check_builtin(
                 ));
             }
             let ty = checker.infer_type(&args[0], env)?;
-            // Only a literal class-name string, or an object of statically-known
-            // type, are supported (compile-time bake — see the EIR lowering in
-            // `crate::codegen::lower_inst::builtins::get_class_methods`).
-            let is_literal_string = matches!(args[0].kind, ExprKind::StringLiteral(_));
-            if !matches!(ty, PhpType::Object(_)) && !is_literal_string {
+            // A literal class name and a statically-typed object are compile-time baked; any
+            // other value that can CARRY a class name at runtime (a computed string, or a
+            // gradual `Mixed`/union) resolves through the `_class_methods_table` registry
+            // instead — see the EIR lowering in
+            // `crate::codegen::lower_inst::builtins::get_class_methods`. Both sides must accept
+            // the same set: widening here without the runtime path would only relocate the
+            // failure into codegen.
+            //
+            // Anything that can never name a class (int, float, bool, array, …) stays refused.
+            // PHP raises a TypeError there, and the runtime path raises that same TypeError for
+            // a `Mixed` that turns out to hold one — this is the statically-provable case, so
+            // it is reported at compile time rather than deferred.
+            fn can_name_a_class(ty: &PhpType) -> bool {
+                match ty {
+                    PhpType::Object(_) | PhpType::Str | PhpType::Mixed => true,
+                    PhpType::Union(members) => members.iter().any(can_name_a_class),
+                    _ => false,
+                }
+            }
+            if !can_name_a_class(&ty) {
                 return Err(CompileError::new(
                     span,
-                    "get_class_methods() requires a literal class-name string or an object of statically-known type in AOT mode",
+                    "get_class_methods() requires an object or a class-name string; a value of \
+                     this type can never name a class",
                 ));
             }
             Ok(Some(PhpType::Array(Box::new(PhpType::Str))))

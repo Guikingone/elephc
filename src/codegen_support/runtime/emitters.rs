@@ -229,6 +229,11 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
         system::emit_rt_class_relation_lookup(emitter);
         system::emit_rt_hash_from_name_list(emitter);
     }
+    if features.class_methods_introspection {
+        // `__rt_sorted_name_search` is shared with the const/class registries; arm it here too
+        // so a program whose ONLY dynamic lookup is `get_class_methods()` still links.
+        system::emit_rt_array_from_name_list(emitter);
+    }
 
     // Exception runtime functions
     exceptions::emit_exception_cleanup_frames(emitter);

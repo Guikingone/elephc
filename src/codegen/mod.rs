@@ -337,6 +337,12 @@ fn finalize_user_asm(
             module,
         ));
     }
+    if module.required_runtime_features.class_methods_introspection {
+        user_asm.push('\n');
+        user_asm.push_str(&crate::codegen_support::runtime::emit_class_methods_registry_data(
+            module,
+        ));
+    }
     if matches!(emit, Emit::Cdylib) && module.target.platform == Platform::Linux {
         let mut exported: HashSet<String> = exported_functions
             .values()

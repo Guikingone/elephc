@@ -826,19 +826,15 @@ fn test_error_late_bound_name_in_class_const_decl_still_loud() {
 // (see `tests/codegen/io/output_buffering.rs` for the behavioral coverage), so the
 // former rejected-form tests were retired.
 
-// `get_class_methods()` requires a literal class-name string or an object of
-// statically-known type; a non-literal string is unsupported (never a silent guess).
+// A non-literal string and a `Mixed` receiver are no longer refused: both resolve through the
+// `_class_methods_table` registry at runtime (behavioral coverage lives in
+// `tests/codegen/oop/reflection.rs`). What stays loud is a value that can NEVER name a class —
+// PHP raises a TypeError there, and this one is statically provable, so it is reported at
+// compile time instead of deferred to the runtime miss path.
 expect_builtin_arity_error!(
-    test_error_get_class_methods_non_literal_string,
-    "<?php class C {} function f(string $name) { return get_class_methods($name); } f('C');",
-    "get_class_methods() requires a literal class-name string or an object of statically-known type in AOT mode"
-);
-
-// `get_class_methods()` on a genuinely dynamic (Mixed) receiver is unsupported.
-expect_builtin_arity_error!(
-    test_error_get_class_methods_mixed_receiver,
-    "<?php function f($x) { return get_class_methods($x); }",
-    "get_class_methods() requires a literal class-name string or an object of statically-known type in AOT mode"
+    test_error_get_class_methods_argument_that_can_never_name_a_class,
+    "<?php function f(int $n) { return get_class_methods($n); } f(7);",
+    "get_class_methods() requires an object or a class-name string; a value of this type can never name a class"
 );
 
 /// Verifies the pre-checker fold does not over-reach beyond its curated allowlist: a plausible but

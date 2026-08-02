@@ -422,6 +422,8 @@ pub(super) fn include_lowered_runtime_features(module: &mut Module) {
     module.required_runtime_features.class_introspection |= features.class_introspection;
     module.required_runtime_features.class_relation_introspection |=
         features.class_relation_introspection;
+    module.required_runtime_features.class_methods_introspection |=
+        features.class_methods_introspection;
     module.required_runtime_features.eval_bridge |= features.eval_bridge;
     module.required_runtime_features.eval_scope |= features.eval_scope;
 }
@@ -492,6 +494,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     if builtin_call_requires_class_relation_introspection(module, function, inst) {
                         features.class_relation_introspection = true;
                     }
+                    if builtin_call_requires_class_methods_introspection(module, function, inst) {
+                        features.class_methods_introspection = true;
+                    }
                     if builtin_call_requires_eval(module, inst) {
                         features.eval_bridge = true;
                     }
@@ -520,6 +525,9 @@ fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                     }
                     if builtin_call_requires_class_relation_introspection(module, function, inst) {
                         features.class_relation_introspection = true;
+                    }
+                    if builtin_call_requires_class_methods_introspection(module, function, inst) {
+                        features.class_methods_introspection = true;
                     }
                     if builtin_call_requires_eval(module, inst) {
                         features.eval_bridge = true;
@@ -1137,6 +1145,38 @@ fn builtin_call_requires_class_relation_introspection(
         .first()
         .copied()
         .is_some_and(|operand| !value_is_const_string(function, operand))
+}
+
+/// Returns true when a `get_class_methods()` call cannot be resolved at compile time and must
+/// therefore search the emitted `_class_methods_table` payload registry at runtime.
+///
+/// Mirrors `builtin_call_requires_class_relation_introspection`'s rule with ONE deliberate
+/// difference: an OBJECT argument does NOT arm the feature here. Unlike `class_implements()`,
+/// `get_class_methods()`'s object path still bakes the argument's static declared type at
+/// compile time (a documented residual of
+/// `crate::codegen::lower_inst::builtins::get_class_methods`), so it needs no table. Only a
+/// non-literal string, or a `Mixed`/union value, reaches the runtime lookup.
+fn builtin_call_requires_class_methods_introspection(
+    module: &Module,
+    function: &Function,
+    inst: &crate::ir::Instruction,
+) -> bool {
+    let Some(name) = builtin_call_name(module, inst) else {
+        return false;
+    };
+    if php_symbol_key(name.trim_start_matches('\\')).as_str() != "get_class_methods" {
+        return false;
+    }
+    let Some(operand) = inst.operands.first().copied() else {
+        return false;
+    };
+    if value_is_const_string(function, operand) {
+        return false;
+    }
+    !matches!(
+        function.value(operand).map(|value| &value.php_type),
+        Some(crate::types::PhpType::Object(_))
+    )
 }
 
 /// Returns true when an EIR value is defined by a constant-string opcode.

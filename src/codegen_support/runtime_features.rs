@@ -77,6 +77,16 @@ pub struct RuntimeFeatures {
     /// into it: a program can use non-literal `class_exists()` without ever
     /// needing the (larger) per-class relation payload tables, and vice versa.
     pub class_relation_introspection: bool,
+
+    /// Whether `get_class_methods()` is reached with a target this compiler cannot resolve at
+    /// compile time (a non-literal class-name string, or a `Mixed`/union value). Gates the
+    /// `_class_methods_table` payload registry and `__rt_array_from_name_list`.
+    ///
+    /// A sibling of `class_relation_introspection` rather than part of it, for the same reason
+    /// that one is a sibling of `class_introspection`: the method-name payload is by far the
+    /// largest of the three registries (every method of every class), and a program using
+    /// dynamic `class_implements()` must not pay for it.
+    pub class_methods_introspection: bool,
 }
 
 impl RuntimeFeatures {
@@ -93,6 +103,7 @@ impl RuntimeFeatures {
             const_introspection: false,
             class_introspection: false,
             class_relation_introspection: false,
+            class_methods_introspection: false,
         }
     }
 
@@ -110,6 +121,7 @@ impl RuntimeFeatures {
             const_introspection: true,
             class_introspection: true,
             class_relation_introspection: true,
+            class_methods_introspection: true,
         }
     }
 
@@ -1282,6 +1294,7 @@ mod tests {
             const_introspection: false,
             class_introspection: false,
             class_relation_introspection: false,
+            class_methods_introspection: false,
         })
         .iter()
         .any(|lib| lib == "elephc_crypto"));

@@ -2170,3 +2170,92 @@ echo $rf->getNumberOfParameters();
 // full sentinel repro and root-cause hypothesis). Fixing it is a runtime ownership/GC change
 // (how a `Mixed` property holding a nested object gets freed with its owner), out of scope for
 // this checker-bundle cycle and left as a documented follow-up rather than risked here.
+
+/// `get_class_methods()` with a class name only known at runtime resolves through the
+/// `_class_methods_table` registry instead of being refused, and reports PHP's public-only
+/// filter in declaration order (child level first, then inherited). php -n verified.
+#[test]
+fn test_get_class_methods_with_a_runtime_class_name() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function pub() {} protected function prot() {} private function priv() {} }
+class Kid extends Base { public function kidPub() {} private function kidPriv() {} }
+$name = 'Kid';
+echo implode(',', get_class_methods($name));
+"#,
+    );
+    assert_eq!(out, "kidPub,pub");
+}
+
+/// The calling scope stays a COMPILE-TIME decision even when the target name is dynamic: read
+/// from inside `Kid` itself, PHP also exposes `Kid`'s own private methods and every inherited
+/// protected one, but NOT an ancestor's private method. php -n verified.
+#[test]
+fn test_get_class_methods_runtime_name_from_inside_the_class_sees_its_own_privates() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public function pub() {} protected function prot() {} private function priv() {} }
+class Kid extends Base {
+    public function kidPub() {}
+    private function kidPriv() {}
+    public function inside(): string { $name = 'Kid'; return implode(',', get_class_methods($name)); }
+}
+echo (new Kid())->inside();
+"#,
+    );
+    assert_eq!(out, "kidPub,kidPriv,inside,pub,prot");
+}
+
+/// PHP class names are case-insensitive, so the runtime lookup folds the query before searching
+/// the pre-lowercased registry rows.
+#[test]
+fn test_get_class_methods_runtime_class_name_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget { public function draw() {} public function hide() {} }
+$name = 'wIdGeT';
+echo implode(',', get_class_methods($name));
+"#,
+    );
+    assert_eq!(out, "draw,hide");
+}
+
+/// A name that is not a declared class raises PHP 8.5's own catchable `TypeError`, byte for
+/// byte — NOT `false` (which is what the sibling `class_implements()` family returns) and not a
+/// compile error. php -n verified, including the trailing "string given".
+#[test]
+fn test_get_class_methods_unknown_runtime_class_name_throws_phps_type_error() {
+    let out = compile_and_run(
+        r#"<?php
+class Widget { public function draw() {} }
+$name = 'NoSuchClass';
+try {
+    get_class_methods($name);
+    echo 'no throw';
+} catch (\TypeError $e) {
+    echo get_class($e), ':', $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "TypeError:get_class_methods(): Argument #1 ($object_or_class) must be an object or a \
+         valid class name, string given"
+    );
+}
+
+/// The registry rows and the compile-time literal fold are two separate implementations of
+/// PHP's declaration-order walk (see `class_methods_registry`'s doc). This pins them together:
+/// the same class read through a literal name and through a runtime name must agree exactly.
+#[test]
+fn test_dynamic_and_literal_get_class_methods_agree() {
+    let out = compile_and_run(
+        r#"<?php
+class A { public function one() {} public function two() {} protected function hidden() {} }
+class B extends A { public function two() {} public function three() {} }
+$name = 'B';
+echo implode(',', get_class_methods('B')), '|', implode(',', get_class_methods($name));
+"#,
+    );
+    assert_eq!(out, "two,three,one|two,three,one");
+}

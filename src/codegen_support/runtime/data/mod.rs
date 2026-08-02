@@ -8,6 +8,7 @@
 //! Key details:
 //! - Symbol names and table layouts are link-time ABI shared with generated code and runtime helper labels.
 
+mod class_methods_registry;
 mod class_relation_registry;
 mod const_registry;
 mod fixed;
@@ -21,6 +22,9 @@ pub(crate) use const_registry::emit_class_registry_data;
 /// Emit the closed-world per-class relation payload registry backing non-literal
 /// `class_implements()`/`class_parents()`/`class_uses()`.
 pub(crate) use class_relation_registry::emit_class_relation_registry_data;
+/// Emit the closed-world per-class public-method payload registry backing non-literal
+/// `get_class_methods()`.
+pub(crate) use class_methods_registry::emit_class_methods_registry_data;
 pub(crate) use fixed::emit_runtime_data_fixed;
 /// Emit fixed runtime data section (heap globals, fatal/assertion messages, lookup tables, builtin callable metadata).
 pub(crate) use user::emit_runtime_data_user;
