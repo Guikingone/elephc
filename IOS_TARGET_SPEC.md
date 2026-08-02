@@ -166,15 +166,32 @@ ld -arch arm64 -dylib -o libfoo.dylib foo.o <cache>/runtime-*.o \
    -platform_version ios-simulator <min> <sdk>
 ```
 
-Automated as `scripts/ios-relink-spike.sh`. It compiles a PHP file with both export return shapes, assembles the emitted assembly, relinks against the iOS SDK, then builds a C host for the simulator triple and runs it through `simctl spawn` — so the spike ends in an actual call into compiled PHP rather than in a well-formed file. No Xcode project needed.
+Run against a real SDK, and it found the thing it existed to find.
 
-**Everything except the SDK swap is already proven.** The identical chain — isolated runtime cache, `as -arch arm64`, hand-rolled `ld` of user object plus runtime object, `dlopen` and call — was run end to end against the *macOS* SDK and returned `42 hi iOS 6`, exercising the int export, the string export and `elephc_free`. The only untested variables that remain are `-syslibroot` and `-platform_version`.
+**The premise was wrong.** Relinking a macOS-assembled object against the iOS SDK does not work:
 
-An isolated `XDG_CACHE_HOME` matters more than it looks: the runtime object's cache key encodes the program's runtime feature set, so the shared cache holds several candidates and a "newest match" glob would silently link the wrong one.
+```
+ld: building for 'iOS-simulator', but linking in object file built for 'macOS'
+```
 
-**Accept:** `./scripts/ios-relink-spike.sh` prints `42 hi iOS 6` from inside a booted simulator.
-**Prereq:** full Xcode. Command Line Tools alone carry no iOS SDK; the script detects this and says so instead of falling back to the macOS SDK.
-**Purpose:** kill or validate the premise in one command, before any investment.
+A Mach-O object records the platform it was **assembled** for. `as -arch arm64` stamps macOS and has no way to say otherwise, so the earlier claim here — that only `-syslibroot` and `-platform_version` remained untested — was false. Nothing short of a real SDK could have surfaced it, which is precisely what this package was for.
+
+Fixed in the compiler rather than worked around in the script: non-macOS Apple targets assemble through `clang` with `-target` and `-isysroot`, and the user object and cached runtime object now share one `linker::assembler_command` instead of building it separately. They must agree — the link fails on whichever one disagrees. `APPLE_IOS_MIN_OS` is likewise a single constant, because the assembler writes it into each object's `LC_BUILD_VERSION` and the linker into the image's `-platform_version`, and a mismatch between those is itself a link error.
+
+`scripts/ios-relink-spike.sh` now exercises the shipping path — `--target ios-* --emit staticlib` — rather than a hand-rolled relink, since there is no longer anything to work around.
+
+**Accept — met, up to execution.** Both targets build and link:
+
+| | device | simulator |
+|---|---|---|
+| archive members | `platform IOS` | `platform IOSSIMULATOR` |
+| host executable | links | links |
+
+Running it needs a booted simulator, which needs a runtime image of several GB that does not fit in the remaining disk. Execution is the only step outstanding, and it is an environment limit rather than a code one.
+
+An isolated `XDG_CACHE_HOME` matters more than it looks: the runtime object's cache key encodes the program's runtime feature set, so the shared cache holds several candidates and a "newest match" glob would silently pick the wrong one.
+
+**Prereq:** full Xcode, licence accepted. The Command Line Tools carry no iOS SDK, and an unaccepted licence blocks `xcrun`, `cc` and `as` outright — not just iOS work.
 
 ### Lot 1 — `Str` return on `#[Export]`
 Allow `PhpType::Str` in `is_v1_return_type`, implement C-ABI marshaling, settle ownership so `elephc_free` stops being a stub.

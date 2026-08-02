@@ -1,25 +1,24 @@
 #!/usr/bin/env bash
-# Lot 0 of IOS_TARGET_SPEC.md: prove that elephc's existing arm64 Mach-O output
-# links and runs against an iOS SDK, without changing one line of the compiler.
+# Builds a static library of compiled PHP for iOS, links it into a host binary,
+# and — on the simulator, when one is booted — runs it.
 #
 # Usage:
 #   ./scripts/ios-relink-spike.sh                 # iOS Simulator (default)
-#   ./scripts/ios-relink-spike.sh device          # iOS device (link + inspect only)
+#   ./scripts/ios-relink-spike.sh device          # iOS device (build + link only)
 #   ./scripts/ios-relink-spike.sh --keep          # keep the work directory
 #
-# What it does: compiles a PHP file with two `#[Export]`s to assembly for the
-# native macos-aarch64 target, assembles it, then relinks that object plus the
-# cached runtime object against the iOS SDK instead of the macOS one. The only
-# difference from an ordinary build is `-syslibroot` and `-platform_version`.
+# This exercises the shipping path: `elephc --target ios-* --emit staticlib`.
+# An earlier version assembled for macOS and relinked against the iOS SDK by
+# hand, on the theory that only the SDK differed. It does not — a Mach-O object
+# records the platform it was assembled for, and ld refuses to mix them:
 #
-# On the simulator it goes further and actually runs the result: a C host is
-# built for the simulator triple and spawned inside a booted device through
-# `simctl spawn`, so the spike ends in a real call into compiled PHP rather than
-# in a well-formed file. On device the run stops after inspection — executing
-# there needs provisioning and a signed app bundle, which is out of scope.
+#   ld: building for 'iOS-simulator', but linking in object file built for 'macOS'
+#
+# The compiler now assembles through clang with the right -target, so there is
+# nothing left for this script to work around.
 #
 # Requires full Xcode. The Command Line Tools alone carry no iOS SDK; if that is
-# all that is installed the script says so and exits without doing damage.
+# all that is installed, elephc says so and exits without doing damage.
 #
 set -euo pipefail
 
@@ -39,17 +38,14 @@ done
 
 if [ "$MODE" = "simulator" ]; then
   SDK="iphonesimulator"
-  PLATFORM="ios-simulator"
-  HOST_TRIPLE="arm64-apple-ios17.0-simulator"
+  ELEPHC_TARGET="ios-sim-arm64"
+  HOST_TRIPLE="arm64-apple-ios13.0-simulator"
 else
   SDK="iphoneos"
-  PLATFORM="ios"
-  HOST_TRIPLE="arm64-apple-ios17.0"
+  ELEPHC_TARGET="ios-arm64"
+  HOST_TRIPLE="arm64-apple-ios13.0"
 fi
 
-# -- preconditions -----------------------------------------------------------
-# xcrun resolves against the *selected* developer directory, so Command Line
-# Tools alone fail here rather than silently falling back to the macOS SDK.
 if ! SDK_PATH="$(xcrun --sdk "$SDK" --show-sdk-path 2>/dev/null)" || [ -z "$SDK_PATH" ]; then
   cat >&2 <<EOF
 No '$SDK' SDK found.
@@ -58,15 +54,13 @@ xcode-select currently points at:
   $(xcode-select -p 2>/dev/null || echo '<unset>')
 
 The Command Line Tools do not ship iOS SDKs. Install full Xcode, point at it,
-and fetch the platform:
+and accept the licence:
 
-  xcodes install --latest            # or install Xcode from the App Store
   sudo xcode-select -s /Applications/Xcode.app
-  xcodebuild -downloadPlatform iOS
+  sudo xcodebuild -license accept
 EOF
   exit 1
 fi
-SDK_VERSION="$(xcrun --sdk "$SDK" --show-sdk-version)"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/elephc_ios_spike.XXXXXX")"
 cleanup() { [ "$KEEP" = "1" ] || rm -rf "$WORK"; }
@@ -79,7 +73,6 @@ if [ ! -x "$ELEPHC" ]; then
   (cd "$PROJECT_DIR" && cargo build)
 fi
 
-# -- 1. a PHP library exercising both export return shapes --------------------
 cat > "$WORK/spike.php" <<'PHP'
 <?php
 #[Export]
@@ -93,37 +86,44 @@ function spike_greet(string $name): string {
 }
 PHP
 
-# The runtime object is cached under a key that encodes the program's runtime
-# feature set, so an isolated cache guarantees exactly one candidate below
-# instead of a fragile "newest match" glob over the shared cache.
+# Isolated so the runtime object cache holds exactly this build's artifact.
 export XDG_CACHE_HOME="$WORK/cache"
 
-echo "==> compiling for macos-aarch64 (populates the runtime cache)"
-(cd "$WORK" && "$ELEPHC" --emit cdylib spike.php >/dev/null)
+echo "==> compiling for $ELEPHC_TARGET"
+(cd "$WORK" && "$ELEPHC" --target "$ELEPHC_TARGET" --emit staticlib spike.php)
 
-echo "==> emitting user assembly"
-(cd "$WORK" && "$ELEPHC" --emit cdylib --emit-asm spike.php >/dev/null)
+echo "==> archive members and their Mach-O platform"
+(cd "$WORK" && for member in $(ar t libspike.a | grep -v SYMDEF); do
+  ar x libspike.a "$member"
+  printf '    %-8s %s\n' "$(vtool -show-build "$member" | grep -Eo 'IOS[A-Z]*|MACOS' | head -1)" "$member"
+  rm -f "$member"
+done)
 
-RUNTIME_OBJ="$(find "$XDG_CACHE_HOME" -name 'runtime-*macos-aarch64*.o' -print -quit)"
-if [ -z "$RUNTIME_OBJ" ]; then
-  echo "no cached runtime object was produced" >&2
-  exit 1
-fi
+cat > "$WORK/host.c" <<'C'
+#include <stdint.h>
+#include <stdio.h>
+#include <stddef.h>
 
-echo "==> assembling"
-as -arch arm64 -o "$WORK/spike.o" "$WORK/spike.s"
+typedef struct { const char *ptr; size_t len; } elephc_str;
 
-# -- 2. the actual experiment: same objects, iOS SDK --------------------------
-echo "==> relinking against the $SDK SDK ($SDK_VERSION)"
-LIB="$WORK/libspike.dylib"
-ld -arch arm64 -dylib -o "$LIB" \
-   "$WORK/spike.o" "$RUNTIME_OBJ" \
-   -lSystem -syslibroot "$SDK_PATH" \
-   -platform_version "$PLATFORM" 17.0 "$SDK_VERSION" \
-   -install_name @rpath/libspike.dylib
+extern int32_t elephc_init(void);
+extern void elephc_free(void *);
+extern int64_t spike_add(int64_t, int64_t);
+extern elephc_str spike_greet(const char *, size_t);
 
-echo "==> Mach-O platform"
-vtool -show-build "$LIB" | sed 's/^/    /'
+int main(void) {
+    if (elephc_init() != 0) return 1;
+    elephc_str g = spike_greet("iOS", 3);
+    printf("%lld %.*s %zu\n", (long long)spike_add(40, 2), (int)g.len, g.ptr, g.len);
+    elephc_free((void *)g.ptr);
+    return 0;
+}
+C
+
+echo "==> linking a $HOST_TRIPLE host against the archive"
+xcrun --sdk "$SDK" clang -target "$HOST_TRIPLE" -isysroot "$SDK_PATH" \
+      -o "$WORK/host" "$WORK/host.c" "$WORK/libspike.a"
+vtool -show-build "$WORK/host" | sed 's/^/    /'
 
 if [ "$MODE" = "device" ]; then
   cat <<EOF
@@ -134,52 +134,23 @@ EOF
   exit 0
 fi
 
-# -- 3. run it inside a booted simulator -------------------------------------
-cat > "$WORK/host.c" <<'C'
-#include <dlfcn.h>
-#include <stdint.h>
-#include <stdio.h>
-#include <stddef.h>
-
-typedef struct { const char *ptr; size_t len; } elephc_str;
-
-int main(int argc, char **argv) {
-    if (argc != 2) return 1;
-    void *lib = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
-    if (!lib) { fprintf(stderr, "dlopen: %s\n", dlerror()); return 2; }
-    int32_t (*init)(void) = (int32_t (*)(void))dlsym(lib, "elephc_init");
-    int64_t (*add)(int64_t, int64_t) = (int64_t (*)(int64_t, int64_t))dlsym(lib, "spike_add");
-    elephc_str (*greet)(const char *, size_t) =
-        (elephc_str (*)(const char *, size_t))dlsym(lib, "spike_greet");
-    void (*efree)(void *) = (void (*)(void *))dlsym(lib, "elephc_free");
-    if (!init || !add || !greet || !efree) { fprintf(stderr, "dlsym failed\n"); return 3; }
-    if (init() != 0) return 4;
-    elephc_str g = greet("iOS", 3);
-    printf("%lld %.*s %zu\n", (long long)add(40, 2), (int)g.len, g.ptr, g.len);
-    efree((void *)g.ptr);
-    return 0;
-}
-C
-
-echo "==> building the C host for $HOST_TRIPLE"
-xcrun --sdk "$SDK" clang -target "$HOST_TRIPLE" -isysroot "$SDK_PATH" \
-      -o "$WORK/host" "$WORK/host.c"
-
 DEVICE="$(xcrun simctl list devices booted -j 2>/dev/null \
           | grep -o '"udid" : "[^"]*"' | head -1 | cut -d'"' -f4 || true)"
 if [ -z "$DEVICE" ]; then
   cat <<EOF
 
-Linked and built, but no simulator is booted, so nothing was executed.
-Boot one and re-run to get the end-to-end answer:
+Built and linked, but no simulator is booted, so nothing was executed. Boot one
+and re-run for the end-to-end answer:
 
-  xcrun simctl boot "iPhone 15"     # or any device from: xcrun simctl list devices
+  xcrun simctl list devices            # if empty, no runtime is installed
+  xcodebuild -downloadPlatform iOS     # installs one (several GB)
+  xcrun simctl boot "iPhone 16"
 EOF
   exit 0
 fi
 
 echo "==> running inside booted simulator $DEVICE"
-OUTPUT="$(xcrun simctl spawn "$DEVICE" "$WORK/host" "$LIB")"
+OUTPUT="$(xcrun simctl spawn "$DEVICE" "$WORK/host")"
 echo "    $OUTPUT"
 
 EXPECTED="42 hi iOS 6"
@@ -190,8 +161,7 @@ fi
 
 cat <<EOF
 
-Lot 0 answered: compiled PHP links against the iOS SDK and runs on the
-simulator, through the same C ABI the cdylib path already exposes -- with no
-compiler change. Both export return shapes work, and the string result was
-released through elephc_free.
+Lot 0 answered: compiled PHP builds for iOS, links into a native host through
+the same C ABI the cdylib path exposes, and runs on the simulator. Both export
+return shapes work and the string result was released through elephc_free.
 EOF
