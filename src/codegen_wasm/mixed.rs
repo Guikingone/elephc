@@ -33,6 +33,7 @@ pub(super) fn emit_mixed_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_MIXED_UNBOX);
     wm.add_raw_func(RT_MIXED_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_MIXED);
+    wm.add_raw_func(RT_MIXED_NARROW_INT);
     wm.add_raw_func(RT_MIXED_CAST_BOOL);
     wm.add_raw_func(&mixed_cast_int(has_main));
     wm.add_raw_func(&mixed_cast_float(has_main));
@@ -125,6 +126,43 @@ const RT_DECREF_MIXED: &str = r#"(func $__rt_decref_mixed (param $ptr i32)
   (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (local.get $rc))          ;; store decremented refcount
   (if (i32.eqz (local.get $rc))
     (then (call $__rt_mixed_free_deep (local.get $ptr)))))              ;; last owner -> deep free
+"#;
+
+/// `__rt_mixed_narrow_int`: the IMPLICIT Mixed-to-int coercion, silent.
+///
+/// Distinct from `__rt_mixed_cast_int`, which implements the EXPLICIT `(int)` cast: that one
+/// warns when a float is out of range and wraps it, exactly as PHP does for `(int) $f`. An
+/// implicit narrowing is a different operation — PHP does not perform one here at all, so
+/// borrowing the cast's diagnostics would print a warning for a program PHP runs silently.
+///
+/// Where the value cannot be represented, this SATURATES and says nothing, which is what the
+/// native backend does for the same coercion. The two targets therefore answer alike, and the
+/// remaining divergence from PHP is the shared EIR one: a local widened to Mixed by checked
+/// arithmetic is still read back as an `int`, so a genuine overflow loses its float-ness on both.
+const RT_MIXED_NARROW_INT: &str = r#"(func $__rt_mixed_narrow_int (param $ptr i32) (result i64)
+  (local $tag i64)
+  (local $lo i64)
+  (local $hi i64)
+  (local $f f64)
+  (call $__rt_mixed_unbox (local.get $ptr))                       ;; -> stack: tag, lo, hi
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; float: saturate, do not warn
+    (then
+      (local.set $f (f64.reinterpret_i64 (local.get $lo)))
+      (if (f64.ne (local.get $f) (local.get $f))
+        (then (return (i64.const 0))))                            ;; NaN narrows to 0
+      (if (f64.ge (local.get $f) (f64.const 9223372036854775808))
+        (then (return (i64.const 9223372036854775807))))
+      (if (f64.le (local.get $f) (f64.const -9223372036854775808))
+        (then (return (i64.const -9223372036854775808))))
+      (return (i64.trunc_f64_s (local.get $f)))))
+  (if (i64.eq (local.get $tag) (i64.const 0))                     ;; int and bool carry their word
+    (then (return (local.get $lo))))
+  (if (i64.eq (local.get $tag) (i64.const 3))
+    (then (return (local.get $lo))))
+  (call $__rt_mixed_cast_int (local.get $ptr)))                   ;; anything else keeps the cast
 "#;
 
 /// `__rt_mixed_cast_bool`: casts a boxed Mixed cell to a PHP boolean (0 or 1)

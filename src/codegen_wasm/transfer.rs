@@ -329,10 +329,12 @@ fn emit_unbox_mixed_to_concrete(
 
     match dest_repr {
         WasmRepr::I64(_) => {
+            // The IMPLICIT narrowing, not the explicit `(int)` cast: PHP performs no cast
+            // here, so the cast's out-of-range warning would be noise on a silent program.
             let call = if *dest_php == PhpType::Bool {
                 "__rt_mixed_cast_bool"
             } else {
-                "__rt_mixed_cast_int"
+                "__rt_mixed_narrow_int"
             };
             ctx.fb.ins(
                 &format!("call ${}", call),

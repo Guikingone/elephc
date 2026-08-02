@@ -1595,9 +1595,11 @@ unset($values[$key]);
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
         // The explicit `(int)` cast now carries its exact PHP 8.5 diagnostic and is
-        // admitted, so this fixture no longer produces a float-to-int issue. The
-        // implicit coercion stays rejected but the checker refuses it earlier, so no
-        // PHP source in this fixture can reach that capability message.
+        // admitted, so this fixture no longer produces a float-to-int issue. The implicit
+        // Mixed-to-scalar TRANSFER is lowered too — through `__rt_mixed_narrow_int`, which
+        // narrows silently the way the native backend does rather than borrowing the explicit
+        // cast's warning — so its refusal message is gone as well. What still refuses here is
+        // NAN truthiness and the explicit Mixed-to-scalar CAST.
         assert!(
             stderr.contains(
                 "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
@@ -1612,12 +1614,6 @@ unset($values[$key]);
                 .count()
                 >= 6,
             "PHP {version}: constant NAN truthiness was optimized away: {stderr}"
-        );
-        assert!(
-            stderr.contains(
-                "implicit Mixed-to-scalar transfer requires exact per-tag PHP diagnostics"
-            ),
-            "PHP {version}: {stderr}"
         );
         assert!(
             stderr.contains(
@@ -8323,6 +8319,99 @@ ff|FF|101|10
 ffffffffffffffff|FFFFFFFFFFFFFF01|1111111111111111111111111111111111111111111111111111111111111111|1777777777777777777777
 [000000ff][ff      ][     101][00000101]
 7fffffffffffffff|1000000000000000000000000000000000000000000000000000000000000000
+"##;
+
+/// Verifies COUNTING LOOPS, which no target-side gap explains but which did not compile.
+///
+/// `$i = $i + 1` lowers to a checked add, whose result must be Mixed because PHP promotes an
+/// overflowing integer to a float. So the local widens to Mixed, and every later read of it is an
+/// implicit Mixed-to-scalar transfer — which was refused, turning away the most ordinary loop in
+/// the language along with anything that accumulates.
+///
+/// The transfer unboxes through the same helpers the NATIVE backend uses for the identical
+/// coercion, except that a float narrows SILENTLY: PHP performs no cast here, so borrowing the
+/// explicit `(int)` cast's out-of-range warning would print a diagnostic for a program PHP runs
+/// quietly, and the two backends would disagree.
+///
+/// The gap this inherits belongs to the EIR, not to either lowering: a read is typed `int` from
+/// the slot's type BEFORE the loop's widening store, so once an add really does overflow, both
+/// targets answer a saturated `9223372036854775807` where PHP answers `9.2233720368548E+18`.
+/// They agree with each other, which is what this pins.
+#[test]
+fn test_cli_wasm_counting_loops_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_counting");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, COUNTING_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the counting probe");
+    assert!(
+        output.status.success(),
+        "counting-loop compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the counting probe under Node");
+    assert!(
+        run.status.success(),
+        "counting probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), COUNTING_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The probe: a `while` counter, a `foreach` sum, a decreasing counter, and a running product.
+const COUNTING_SOURCE: &str = r##"<?php
+$i = 0;
+while ($i < 3) { echo $i; $i = $i + 1; }
+echo "|";
+$t = 0;
+foreach ([5, 7, 9] as $v) { $t = $t + $v; }
+echo $t, "|";
+$n = 10;
+while ($n > 0) { $n = $n - 3; }
+echo $n, "|";
+$p = 1;
+foreach (range(1, 5) as $k) { $p = $p * $k; }
+echo $p, "\n";
+"##;
+
+/// php-src 8.5.6's own output for `COUNTING_SOURCE`.
+const COUNTING_EXPECTED: &str = r##"012|21|-2|120
 "##;
 
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.

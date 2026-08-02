@@ -861,17 +861,16 @@ fn value_transfer_shape_issue(
         destination_ir,
         destination_php,
     ) {
-        Ok(transfer::TransferKind::UnboxMixed)
-            if matches!(
-                destination_ir,
-                IrType::I64 | IrType::F64 | IrType::Str
-            ) =>
-        {
-            Some(
-                "implicit Mixed-to-scalar transfer requires exact per-tag PHP diagnostics"
-                    .to_string(),
-            )
-        }
+        // An implicit Mixed-to-scalar transfer unboxes through the same `__rt_mixed_cast_*`
+        // helpers the NATIVE backend uses for the identical coercion, so the two targets answer
+        // alike. It is what a local widened by checked arithmetic needs — `$i = $i + 1` types
+        // `$i` Mixed, and every later read of it is one of these — so refusing it turned away
+        // ordinary counting loops.
+        //
+        // The known gap it inherits is the EIR's, not this lowering's: a load is typed `int` from
+        // the slot's type BEFORE the loop's widening store, so once an add really does overflow
+        // into a float the read still claims an integer. The native backend narrows there too and
+        // prints a saturated `9223372036854775807` where PHP prints `9.2233720368548E+18`.
         Ok(transfer::TransferKind::UnboxMixed) => None,
         Ok(
             transfer::TransferKind::Copy
