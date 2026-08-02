@@ -332,3 +332,66 @@ echo Maker::build(1, 2);
     );
     assert_eq!(out, "n=2");
 }
+
+/// A method whose relaxation is ABI-NEUTRAL — all declared parameters required, and a variadic
+/// tail ALREADY declared in source — must compile even when its name is shared with unrelated
+/// implementations program-wide, which is what `func_args_scan`'s closed-world gate rejects.
+///
+/// This is `Symfony\Component\Dotenv\Dotenv::load(string $path, string ...$extraPaths)`, whose
+/// name collides with dozens of unrelated `load()` methods across Symfony. Nothing about the
+/// lowered signature changes for such a body: `func_num_args()` is
+/// `<declared count> + array_len($tail)` read straight off the frame, so there is no hidden
+/// operand a name-dispatched call site could get wrong. php-verified with `php -n`.
+#[test]
+fn test_abi_neutral_arity_hungry_method_compiles_with_a_shared_name() {
+    let out = compile_and_run(
+        r#"<?php
+class UnrelatedLoader {
+    public function load(string $a): string { return 'other:' . $a; }
+}
+class Dotenv {
+    public function load(string $path, string ...$extraPaths): string
+    {
+        $path = 'MUTATED';
+        return implode(',', \func_get_args()) . '|' . \func_num_args();
+    }
+}
+$dotenv = new Dotenv();
+echo $dotenv->load('a', 'b', 'c'), ';';
+echo $dotenv->load('a'), ';';
+echo (new UnrelatedLoader())->load('z');
+"#,
+    );
+    // `func_get_args()` reports the CURRENT parameter values, so the reassigned `$path` shows
+    // through — php -n verified, not an approximation of it.
+    assert_eq!(out, "MUTATED,b,c|3;MUTATED|1;other:z");
+}
+
+/// The self-derived count must satisfy `func_get_arg()`'s bounds checks with PHP's own
+/// messages, exactly like the hidden-operand path does: an in-range read returns the value and
+/// an out-of-range one raises a catchable `ValueError`. php-verified with `php -n`.
+#[test]
+fn test_abi_neutral_func_get_arg_bounds_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Reader {
+    public function take(string $first, string ...$rest): string
+    {
+        return func_get_arg(0) . '/' . func_get_arg(1);
+    }
+}
+$reader = new Reader();
+echo $reader->take('Z', 'Y'), ';';
+try {
+    echo $reader->take('Z');
+} catch (\ValueError $e) {
+    echo get_class($e), ':', $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "Z/Y;ValueError:func_get_arg(): Argument #1 ($position) must be less than the number \
+         of the arguments passed to the currently executed function"
+    );
+}

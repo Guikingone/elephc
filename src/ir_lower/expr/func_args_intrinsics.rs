@@ -74,16 +74,71 @@ pub(super) fn lower_func_args_intrinsic(
     let span = expr.span;
 
     match php_symbol_key(canonical_name.trim_start_matches('\\')).as_str() {
-        "func_num_args" => lower_expr(ctx, &argc_var_expr(span)),
+        "func_num_args" => lower_argc(ctx, &sig, regular_param_count, span),
         "func_get_args" => lower_expr(ctx, &args_slice_expr(&sig, regular_param_count, span)),
         "func_get_arg" => lower_func_get_arg(ctx, &sig, regular_param_count, args, span),
         other => unreachable!("is_func_args_intrinsic gated an unexpected name: {other}"),
     }
 }
 
-/// Builds a `Variable(HIDDEN_ARGC_PARAM_NAME)` reference expression.
-fn argc_var_expr(span: Span) -> Expr {
-    Expr::new(ExprKind::Variable(HIDDEN_ARGC_PARAM_NAME.to_string()), span)
+/// Lowers `func_num_args()` for this body.
+///
+/// When the count is self-derivable (`argc_is_self_derivable`: every declared parameter is
+/// required, so it was necessarily passed) the body carries NO hidden argc parameter, and the
+/// count is `<declared parameter count> + array_len($<variadic tail>)` — read straight off the
+/// frame. Otherwise it reads the hidden `$__fga_argc` operand its callers supplied.
+///
+/// This is the same predicate `crate::types::checker::func_args_scan` uses to decide whether
+/// to emit the hidden parameter, and `maybe_append_hidden_argc_operand` uses to decide whether
+/// to pass it — one shared rule rather than three independent ones.
+///
+/// Emitted as EIR rather than synthesized as a `count(...)` PHP expression on purpose: routing
+/// it through the builtin path made `count` infer a `Heap(Mixed)` result in some bodies and an
+/// `I64` in others, and the `release` the Mixed shape drags along then ran on a raw integer
+/// (measured: a clean segfault in `f(string $s) { return func_get_arg(0); }`). `array_len` is
+/// unconditionally `I64`, and allocates nothing.
+fn lower_argc(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    regular_param_count: usize,
+    span: Span,
+) -> LoweredValue {
+    if !crate::types::checker::func_args_scan::argc_is_self_derivable(sig) {
+        return lower_expr(
+            ctx,
+            &Expr::new(ExprKind::Variable(HIDDEN_ARGC_PARAM_NAME.to_string()), span),
+        );
+    }
+    let declared = lower_expr(
+        ctx,
+        &Expr::new(ExprKind::IntLiteral(regular_param_count as i64), span),
+    );
+    // `ensure_variadic_for_func_args` guarantees a tail on every marked signature; a signature
+    // without one can only mean zero extra arguments are representable, so the declared count
+    // already IS the answer.
+    let Some(variadic_name) = sig.variadic.as_ref() else {
+        return declared;
+    };
+    let tail = lower_expr(
+        ctx,
+        &Expr::new(ExprKind::Variable(variadic_name.clone()), span),
+    );
+    let tail_len = ctx.emit_value(
+        crate::ir::Op::ArrayLen,
+        vec![tail.value],
+        None,
+        crate::types::PhpType::Int,
+        crate::ir::Op::ArrayLen.default_effects(),
+        Some(span),
+    );
+    ctx.emit_value(
+        crate::ir::Op::IAdd,
+        vec![declared.value, tail_len.value],
+        None,
+        crate::types::PhpType::Int,
+        crate::ir::Op::IAdd.default_effects(),
+        Some(span),
+    )
 }
 
 /// Builds `[$p0, $p1, ..., ...$tail]` — every declared regular parameter followed by a
@@ -114,14 +169,22 @@ fn full_args_array_expr(sig: &FunctionSig, regular_param_count: usize, span: Spa
 /// documented "func_get_args() returns copies" behavior) and tolerates a length greater
 /// than the source array (php-verified: `array_slice($a, 0, $n)` with `$n > count($a)`
 /// simply returns the whole array), so no extra bounds handling is needed here.
+///
+/// When the count is self-derivable there is nothing to trim — every declared parameter was
+/// necessarily passed, so the full array IS the answer — and the freshly built array literal
+/// already satisfies the copy semantics `array_slice` was providing.
 fn args_slice_expr(sig: &FunctionSig, regular_param_count: usize, span: Span) -> Expr {
+    let full = full_args_array_expr(sig, regular_param_count, span);
+    if crate::types::checker::func_args_scan::argc_is_self_derivable(sig) {
+        return full;
+    }
     Expr::new(
         ExprKind::FunctionCall {
             name: crate::names::Name::unqualified("array_slice"),
             args: vec![
-                full_args_array_expr(sig, regular_param_count, span),
+                full,
                 Expr::new(ExprKind::IntLiteral(0), span),
-                argc_var_expr(span),
+                Expr::new(ExprKind::Variable(HIDDEN_ARGC_PARAM_NAME.to_string()), span),
             ],
         },
         span,
@@ -173,7 +236,7 @@ fn lower_func_get_arg(
     );
 
     ctx.builder.position_at_end(range_check_block);
-    let argc = lower_expr(ctx, &argc_var_expr(span));
+    let argc = lower_argc(ctx, sig, regular_param_count, span);
     let out_of_range = ctx.emit_value(
         crate::ir::Op::ICmp,
         vec![position.value, argc.value],
@@ -280,6 +343,12 @@ fn compute_static_passed_count(sig: &FunctionSig, args: &[Expr], callee_desc: &s
 /// Appends the hidden trailing arity-count operand to `operands` when `callee_key` (a
 /// free-function name or `"Class::method"`) is arity-hungry. No-op otherwise — untouched
 /// (non-arity-hungry) call sites pay zero extra cost, satisfying the zero-cost requirement.
+///
+/// This is the SINGLE choke point through which every direct call shape (free function,
+/// statically-named callback, constructor, instance method, static method) appends the
+/// operand, so gating `argc_is_self_derivable` here — with the same predicate the two callee
+/// prologues in `crate::ir_lower::function` use — is what keeps caller and callee in lockstep
+/// no matter which callee-key resolver got here.
 pub(super) fn maybe_append_hidden_argc_operand(
     ctx: &mut LoweringContext<'_, '_>,
     callee_key: &str,
@@ -288,7 +357,9 @@ pub(super) fn maybe_append_hidden_argc_operand(
     span: Span,
     operands: &mut Vec<ValueId>,
 ) {
-    if !ctx.is_arity_hungry_callee(callee_key) {
+    if !ctx.is_arity_hungry_callee(callee_key)
+        || crate::types::checker::func_args_scan::argc_is_self_derivable(sig)
+    {
         return;
     }
     let count = compute_static_passed_count(sig, args, callee_key);

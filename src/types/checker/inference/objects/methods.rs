@@ -63,6 +63,13 @@ impl Checker {
         let Some(marked_key) = marked_key else {
             return Ok(());
         };
+        // Deliberately NOT relaxed for a self-derivable callee (which carries no hidden operand
+        // for the spread to fail to supply): measured, a runtime-sized spread into ANY variadic
+        // method — `func_get_args()` or not — has no backend lowering
+        // (`unsupported EIR backend feature: method call to P::plain with 2 operands for 3 ABI
+        // params`), so lifting this would only defer the same loud failure to codegen.
+        // `Dotenv::overload(string $path, string ...$extra)` called as `->overload(...$paths)`
+        // is exactly that shape.
         let class_name = marked_key.split("::").next().unwrap_or(marked_key.as_str());
         Err(func_args_scan::dynamic_spread_call_error(
             &format!("Method '{}::{}'", class_name, method),

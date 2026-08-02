@@ -770,6 +770,32 @@ echo (new BarChild())->render(3);
 /// `instance_method_arity_hungry_callee_key` resolves a gradual receiver by method NAME
 /// alone, so name-global uniqueness is a lockstep invariant of the marking rule.
 #[test]
+/// The ABI-neutral escape hatch (`func_args_scan::relaxation_is_abi_neutral`) needs BOTH of its
+/// conditions, and this pins the second one: a method that DOES declare a variadic tail but
+/// carries an OPTIONAL parameter cannot derive `func_num_args()` from its own frame — `pick()`
+/// and `pick(0)` look identical from inside — so it still needs the hidden argc operand, and
+/// therefore still needs the closed-world gate. Sharing the name with an unrelated class must
+/// keep it refused rather than silently pick one implementation's operand layout.
+#[test]
+fn test_error_func_num_args_optional_param_with_variadic_and_shared_name_stays_refused() {
+    expect_error(
+        r#"<?php
+class Unrelated {
+    public function pick(): string { return 'plain'; }
+}
+class Picker {
+    public function pick(int $max = 0, string ...$rest): string
+    {
+        return 'n=' . \func_num_args();
+    }
+}
+echo (new Unrelated())->pick();
+echo (new Picker())->pick(1);
+"#,
+        "does not support in methods",
+    );
+}
+
 fn test_error_func_num_args_name_shared_with_unrelated_class_stays_refused() {
     expect_error(
         r#"<?php

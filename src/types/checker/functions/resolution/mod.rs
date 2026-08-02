@@ -159,6 +159,10 @@ impl Checker {
         // spread of anything but a literal array/assoc-array cannot supply that. Gate it
         // here with a normal diagnostic instead of letting it reach EIR lowering, where the
         // same condition is only a defense-in-depth panic.
+        // Deliberately NOT relaxed for a self-derivable callee (which needs no hidden operand):
+        // measured, a runtime-sized spread into ANY variadic callee — `func_get_args()` or not —
+        // has no backend lowering at all (`unsupported EIR backend feature: call to f with 1
+        // args for 2 params`), so lifting this would only move a loud error later.
         if self.func_args_functions.contains(name)
             && super::super::func_args_scan::call_has_dynamic_spread(args)
         {

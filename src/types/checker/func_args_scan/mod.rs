@@ -15,6 +15,12 @@
 //!   implementation get the hidden ABI extension. Closures are intentionally out of scope (see
 //!   `detect::body_calls_func_args_intrinsic`, which stops at `Closure` boundaries) and
 //!   are rejected defensively in `crate::ir_lower` if reached.
+//! - ...EXCEPT when marking the method changes nothing about its ABI: see
+//!   `relaxation_is_abi_neutral`. A body whose declared parameters are ALL required computes
+//!   `func_num_args()` from its own frame (`argc_is_self_derivable`), so it needs no hidden
+//!   operand; if it ALSO already declares a variadic tail, its lowered signature is identical
+//!   to what it would be if the body never mentioned `func_get_args()`, and the closed-world
+//!   gate has nothing left to protect.
 //! - `mark_func_args_functions` mutates each matched signature's `variadic` slot in place
 //!   (synthesizing one when the function was not already variadic) so 100% of the existing
 //!   variadic call-argument-count relaxation, named-argument exclusion, and EIR local/ABI
@@ -70,6 +76,73 @@ pub(crate) fn ensure_variadic_for_func_args(sig: &mut FunctionSig) {
     sig.ref_params.push(false);
     sig.declared_params.push(false);
     sig.variadic = Some(SYNTHETIC_VARIADIC_NAME.to_string());
+}
+
+/// Returns `true` when `func_num_args()` is derivable INSIDE the body from its own frame,
+/// with no cooperation from any caller: every declared regular parameter is required, so it
+/// was necessarily passed, and the argument count is exactly
+/// `regular_param_count + count($<variadic tail>)`.
+///
+/// This is precisely the condition under which the hidden `HIDDEN_ARGC_PARAM_NAME` ABI
+/// operand is unnecessary — and with it every restriction that operand imposes. A callee that
+/// needs nothing from its callers can be reached through ANY dispatch shape, so
+/// `method_has_one_closed_world_implementation` and the dynamic-length-spread rejection are
+/// both skipped for it. `crate::ir_lower::expr::func_args_intrinsics` reads the same predicate
+/// to decide between `$__fga_argc` and the self-derived count; keeping ONE predicate (rather
+/// than a second marked set threaded through lowering) is what keeps the two sides in
+/// lockstep, and a divergence would surface as a loud EIR operand/parameter count mismatch
+/// rather than a silent miscompile.
+///
+/// A DEFAULT is exactly what breaks this: `f(int $max = 0)` cannot tell `f()` from `f(0)` by
+/// looking at `$max`, yet PHP reports 0 vs 1 (php -n verified) — those bodies keep the hidden
+/// operand and the closed-world gate.
+///
+/// The predicate is invariant to whether `ensure_variadic_for_func_args` has already run:
+/// `regular_param_count` excludes the variadic slot, so the set of parameters inspected is the
+/// declared one either way.
+pub(crate) fn argc_is_self_derivable(sig: &FunctionSig) -> bool {
+    (0..crate::types::call_args::regular_param_count(sig))
+        .all(|index| sig.defaults.get(index).map_or(true, Option::is_none))
+}
+
+/// Returns `true` when marking `sig` arity-hungry changes its ABI in NO way at all: it needs
+/// no hidden argc operand (`argc_is_self_derivable`), and `ensure_variadic_for_func_args` will
+/// add nothing because the source already declares a real variadic tail.
+///
+/// This — not `argc_is_self_derivable` alone — is the condition under which
+/// `method_has_one_closed_world_implementation` can be skipped. The gate protects TWO things,
+/// and the synthetic variadic is the one that is easy to miss: giving `C::m($a)` a synthesized
+/// tail while an override `D::m($a)` keeps two parameters makes the two implementations
+/// disagree on their operand layout, so a union/`Mixed` receiver dispatching by name reaches
+/// one of them with the wrong frame (measured: `$value->m(1)` on `true ? new C() : new D()`
+/// compiles and then dies with an uncaught exception). A signature that ALREADY declares
+/// `...$rest` is immune: its lowered form is byte-identical to what it would be if the body
+/// never mentioned `func_get_args()`, so nothing about dispatch can change.
+///
+/// The synthetic name is excluded explicitly because `mark_func_args_functions` runs twice
+/// (see `crate::types::checker::driver`), and the second pass must not mistake the first
+/// pass's own synthesized tail for a source-declared one.
+pub(crate) fn relaxation_is_abi_neutral(sig: &FunctionSig) -> bool {
+    sig.variadic
+        .as_deref()
+        .is_some_and(|name| name != SYNTHETIC_VARIADIC_NAME)
+        && argc_is_self_derivable(sig)
+}
+
+/// Looks up the resolved signature of `class_name::method_key`, honoring the static/instance
+/// split, for `argc_is_self_derivable` queries.
+pub(crate) fn method_signature<'a>(
+    classes: &'a std::collections::HashMap<String, crate::types::ClassInfo>,
+    class_name: &str,
+    method_key: &str,
+    is_static: bool,
+) -> Option<&'a FunctionSig> {
+    let class_info = classes.get(class_name)?;
+    if is_static {
+        class_info.static_methods.get(method_key)
+    } else {
+        class_info.methods.get(method_key)
+    }
 }
 
 /// Scans every top-level (non-declaration) statement of the program for a call to
@@ -361,7 +434,8 @@ fn first_func_args_intrinsic_span(body: &[crate::parser::ast::Stmt]) -> Option<c
 /// canonical name (matching `CheckResult::functions`). Methods are keyed as
 /// `"ClassName::lowercase_method_key"`.
 ///
-/// A non-constructor method is marked only when every class exposing that method name
+/// A non-constructor method whose relaxation is NOT ABI-neutral (`relaxation_is_abi_neutral`)
+/// is marked only when every class exposing that method name
 /// dispatches to the same implementation. This deliberately strong closed-world condition
 /// keeps gradual/interface receiver calls safe too: one call shape can never select a
 /// non-arity-hungry unrelated implementation at runtime. Constructors are direct allocation
@@ -397,7 +471,18 @@ pub(crate) fn mark_func_args_functions(
         }
     }
     for (class_name, method_key, is_static) in method_candidates {
-        if method_key != "__construct"
+        // An ABI-NEUTRAL relaxation leaves the lowered signature exactly as declared — no
+        // hidden operand, no synthesized tail — so no dispatch shape can get its operand layout
+        // wrong and the closed-world gate below has nothing left to protect. This is what lets
+        // `Dotenv::load(string $path, string ...$extraPaths)` compile: `load` has dozens of
+        // unrelated implementations in Symfony, which the gate cannot distinguish from a
+        // genuinely ambiguous ABI. `ArrayAdapter::getValues()` deliberately does NOT qualify —
+        // it declares no variadic, so relaxing it would ADD a parameter that any other
+        // `getValues()` implementation reached by name dispatch would not have.
+        let abi_neutral = method_signature(classes, &class_name, &method_key, is_static)
+            .is_some_and(relaxation_is_abi_neutral);
+        if !abi_neutral
+            && method_key != "__construct"
             && !method_has_one_closed_world_implementation(
                 classes,
                 &class_name,

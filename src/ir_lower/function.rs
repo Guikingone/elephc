@@ -696,7 +696,11 @@ pub(crate) fn lower_user_function(
     function.flags.by_ref_return = signature.by_ref_return;
     function.source_signature = Some(source_signature(name, &eir_signature));
     function.signature = Some(eir_runtime_metadata_signature(&eir_signature));
-    let is_arity_hungry = check_result.func_args_functions.contains(name);
+    // Only a body that cannot derive its own argument count carries the hidden operand; the
+    // predicate is shared with every call site through
+    // `func_args_intrinsics::maybe_append_hidden_argc_operand`.
+    let is_arity_hungry = check_result.func_args_functions.contains(name)
+        && !crate::types::checker::func_args_scan::argc_is_self_derivable(signature);
     if is_arity_hungry {
         function.params.push(arity_hungry_hidden_argc_param());
     }
@@ -819,7 +823,9 @@ pub(crate) fn lower_class_method(
     }
     function.params.extend(function_params(&signature));
     let arity_key = format!("{}::{}", class_name, crate::names::php_symbol_key(method_name));
-    let is_arity_hungry = check_result.func_args_functions.contains(&arity_key);
+    // See `lower_user_function`: a self-derivable body carries no hidden operand at all.
+    let is_arity_hungry = check_result.func_args_functions.contains(&arity_key)
+        && !crate::types::checker::func_args_scan::argc_is_self_derivable(&signature);
     if is_arity_hungry {
         function.params.push(arity_hungry_hidden_argc_param());
         env.insert(

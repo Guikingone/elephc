@@ -60,6 +60,9 @@ impl Checker {
             .get("__construct")
             .map(String::as_str)
             .unwrap_or(class_name);
+        // Deliberately NOT relaxed for a self-derivable constructor: see
+        // `Checker::reject_dynamic_spread_into_arity_hungry_method` — a runtime-sized spread
+        // into a variadic callee has no backend lowering at all.
         if !self
             .func_args_functions
             .contains(&format!("{}::__construct", implementation))
