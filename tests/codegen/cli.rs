@@ -8013,6 +8013,82 @@ BOLT, NUT, PIN
 1|hi|2.5|done
 "##;
 
+/// A list of records — `[["name" => ..., "qty" => ...], ...]` — built, iterated, read by key,
+/// accumulated from, and walked key-by-key one level down.
+#[test]
+fn test_cli_wasm_array_of_records_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_records");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, RECORD_LIST_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the record-list probe");
+    assert!(
+        output.status.success(),
+        "record-list compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the record-list probe under Node");
+    assert!(
+        run.status.success(),
+        "record-list probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), RECORD_LIST_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The record-list probe. The last loop reads each row through `$k => $v`, which is what
+/// proves the row binds as a HASH rather than as a boxed cell.
+const RECORD_LIST_SOURCE: &str = r##"<?php
+$rows = [["name" => "bolt", "qty" => 3], ["name" => "nut", "qty" => 7], ["name" => "pin", "qty" => 1]];
+$total = 0;
+foreach ($rows as $r) { $total = $total + $r["qty"]; echo $r["name"], "=", $r["qty"], ";"; }
+echo "|", $total, "|", count($rows), "|";
+$acc = [];
+foreach ($rows as $r2) { $acc[] = $r2["name"]; }
+echo implode(",", $acc), "|";
+foreach ($rows as $r3) { foreach ($r3 as $k => $v) { echo $k, ":", $v, " "; } }
+echo "\n";
+"##;
+
+/// php-src 8.5.6's own output for `RECORD_LIST_SOURCE`.
+const RECORD_LIST_EXPECTED: &str = "bolt=3;nut=7;pin=1;|11|3|bolt,nut,pin|name:bolt qty:3 name:nut qty:7 name:pin qty:1 \n";
+
 /// A class holding an array collection: `$this->items[] = $v`, `$this->items = []`, and a
 /// `void` method whose call expression is used.
 ///

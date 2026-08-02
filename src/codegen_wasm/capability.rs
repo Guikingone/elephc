@@ -1602,6 +1602,19 @@ fn array_store_shape_issue(
                 || matches!(source.codegen_repr(), PhpType::Void)
                 || matches!(element.codegen_repr(), PhpType::Void)
         }
+        // An associative array element is the same pointer slot under value_type 6. The two
+        // key/value shapes must agree exactly for the same reason: a slot is just a pointer.
+        (
+            PhpType::AssocArray { key, value },
+            IrType::Heap(IrHeapKind::Hash),
+            PhpType::AssocArray {
+                key: source_key,
+                value: source_value,
+            },
+        ) => {
+            key.codegen_repr() == source_key.codegen_repr()
+                && value.codegen_repr() == source_value.codegen_repr()
+        }
         (
             PhpType::Void | PhpType::Never,
             IrType::I64,
@@ -1680,6 +1693,7 @@ fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
                     | PhpType::Float
                     | PhpType::Object(_)
                     | PhpType::Array(_)
+                    | PhpType::AssocArray { .. }
                     | PhpType::Mixed
                     // An empty array's element type: the body never runs, so any contract does.
                     | PhpType::Void

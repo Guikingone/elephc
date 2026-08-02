@@ -3043,7 +3043,11 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             if !matches!(
                 value_ir,
                 Some(IrType::Heap(
-                    IrHeapKind::Mixed | IrHeapKind::Union | IrHeapKind::Object | IrHeapKind::Array
+                    IrHeapKind::Mixed
+                        | IrHeapKind::Union
+                        | IrHeapKind::Object
+                        | IrHeapKind::Array
+                        | IrHeapKind::Hash
                 ))
             ) {
                 return Err(WasmError::Unsupported(format!(
@@ -3057,6 +3061,7 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             if let Some(container_tag) = match value_ir {
                 Some(IrType::Heap(IrHeapKind::Object)) => Some(4),
                 Some(IrType::Heap(IrHeapKind::Array)) => Some(5),
+                Some(IrType::Heap(IrHeapKind::Hash)) => Some(6),
                 _ => None,
             } {
                 let obj = ctx.fresh_temp(ValType::I32);
@@ -3651,12 +3656,16 @@ fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins(&format!("local.get {}", cell), "owned cell");
             store_result(ctx, inst)
         }
-        PhpType::Object(_) | PhpType::Array(_) => {
+        PhpType::Object(_) | PhpType::Array(_) | PhpType::AssocArray { .. } => {
             // The accessor answers a BORROWED pointer; who increfs depends on the destination.
             // Object (value_type 4) and nested-array (5) slots are both a pointer at slot+0, so
             // the READ is shared — but the boxing tag is NOT: a cell tagged 6 is an object and
             // tagged 4 an array, and every later reader dispatches on that tag.
-            let cell_tag = if matches!(elem, PhpType::Array(_)) { 4 } else { 6 };
+            let cell_tag = match elem {
+                PhpType::Array(_) => 4,
+                PhpType::AssocArray { .. } => 5,
+                _ => 6,
+            };
             let object = ctx.fresh_temp(ValType::I32);
             ctx.fb.ins(&format!("local.get {}", src), "source array");
             ctx.fb.ins(&format!("local.get {}", cur), "cursor index");
