@@ -2459,7 +2459,18 @@ fn direct_call_shape_issue(
         Ok(target) => target,
         Err(error) => return Some(error.to_string()),
     };
-    if target.function.params.iter().any(|param| param.variadic) {
+    // A variadic parameter is ALREADY PACKED by the EIR: the call site builds the array and
+    // the callee's signature carries one `array<T>` parameter, so the call is an ordinary
+    // direct one. Only a variadic the emitter did NOT pack — arity or storage disagreeing
+    // with the packed form — is outside the contract.
+    let packed_variadic = target
+        .function
+        .params
+        .iter()
+        .filter(|param| param.variadic)
+        .all(|param| matches!(param.ir_type, IrType::Heap(IrHeapKind::Array)))
+        && inst.operands.len() == target.function.params.len();
+    if !packed_variadic && target.function.params.iter().any(|param| param.variadic) {
         return Some(format!(
             "target {:?} has a variadic parameter outside the L1 direct-call contract",
             target.name
@@ -3716,11 +3727,12 @@ fn method_signature_shape_issue(
     signature: &crate::types::FunctionSig,
     method_name: &str,
 ) -> Option<String> {
-    if signature.variadic.is_some() || signature.ref_params.iter().any(|by_ref| *by_ref) {
-        return Some(format!(
-            "{method_name} has a variadic or by-reference parameter"
-        ));
+    if signature.ref_params.iter().any(|by_ref| *by_ref) {
+        return Some(format!("{method_name} has a by-reference parameter"));
     }
+    // A variadic the EIR already packed arrives as one ordinary `array<T>` argument, so the
+    // arity check below is what decides: the packed form has exactly `params.len()` operands.
+    // A variadic the emitter did NOT pack shows up as an arity mismatch and is refused there.
     if signature.params.len() != arguments.len() {
         return Some(format!(
             "{method_name} expects {} arguments, got {}",

@@ -392,7 +392,14 @@ fn lower_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .collect();
     let callee_return_type = target.function.return_type;
     let callee_return_php = target.function.return_php_type.codegen_repr();
-    if params.iter().any(|(_, _, _, variadic)| *variadic) {
+    // A variadic parameter the EIR already packed is an ordinary `array<T>` argument — the
+    // call site built the array — so only an UNPACKED one is outside the contract.
+    let packed_variadic = params
+        .iter()
+        .filter(|(_, _, _, variadic)| *variadic)
+        .all(|(ir, _, _, _)| matches!(ir, IrType::Heap(IrHeapKind::Array)))
+        && inst.operands.len() == params.len();
+    if !packed_variadic && params.iter().any(|(_, _, _, variadic)| *variadic) {
         return Err(WasmError::Unsupported(format!(
             "variadic direct call target {name:?} is outside the wasm32-wasi L1 call contract"
         )));

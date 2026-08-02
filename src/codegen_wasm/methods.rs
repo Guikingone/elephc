@@ -97,7 +97,10 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         .methods
         .get(&method_key)
         .ok_or_else(|| WasmError::Unsupported(format!("unknown method {}::{}", class_name, method_name)))?;
-    if callee_sig.variadic.is_some() {
+    // A variadic the EIR already packed arrives as one ordinary `array<T>` argument, so the
+    // operand count matches the declared parameter count; anything else is unpacked.
+    let packed_variadic = inst.operands.len() == callee_sig.params.len() + 1;
+    if callee_sig.variadic.is_some() && !packed_variadic {
         return Err(WasmError::Unsupported(format!(
             "variadic method {}::{} (out of P6d scope)",
             class_name, method_name

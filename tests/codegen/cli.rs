@@ -8177,6 +8177,85 @@ echo "\n";
 /// php-src 8.5.6's own output for `ARRAY_PROPERTY_SOURCE`.
 const ARRAY_PROPERTY_EXPECTED: &str = "2,null;0;1111111111111111111111111111111111111111\n";
 
+/// Variadic parameters: free functions, an instance method and a static one, with and
+/// without leading fixed parameters, over int and string element types.
+#[test]
+fn test_cli_wasm_variadic_calls_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_variadic");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, VARIADIC_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the variadic probe");
+    assert!(
+        output.status.success(),
+        "variadic compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the variadic probe under Node");
+    assert!(
+        run.status.success(),
+        "variadic probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), VARIADIC_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The variadic probe. `sum()` with NO arguments is what proves the empty packed array is
+/// built and passed rather than the call being reshaped.
+const VARIADIC_SOURCE: &str = r##"<?php
+function sum(int ...$xs): int { $t = 0; foreach ($xs as $x) { $t = $t + $x; } return $t; }
+function label(string $prefix, string ...$parts): string { return $prefix . ":" . implode("|", $parts); }
+function counted(int $base, int ...$rest): int { return $base + count($rest); }
+class Adder {
+    public function all(int ...$xs): int { $t = 0; foreach ($xs as $x) { $t = $t + $x; } return $t; }
+    public static function stat(int ...$xs): int { return count($xs); }
+}
+echo sum(1,2,3), ",", sum(), ",", sum(7), ";";
+echo label("a"), ",", label("a","b"), ",", label("a","b","c"), ";";
+echo counted(10), ",", counted(10,1,2), ";";
+$a = new Adder();
+echo $a->all(4,5,6), ",", Adder::stat(1,2), "\n";
+"##;
+
+/// php-src 8.5.6's own output for `VARIADIC_SOURCE`.
+const VARIADIC_EXPECTED: &str = "6,0,7;a:,a:b,a:b|c;10,12;15,2\n";
+
 /// Static properties: defaults of every slottable type, reads, writes, a string reassigned
 /// and concatenated, and the shared storage an inherited static has.
 #[test]
