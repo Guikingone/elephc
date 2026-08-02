@@ -3042,28 +3042,37 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             let value_ir = ctx.function.value(value).map(|v| v.ir_type);
             if !matches!(
                 value_ir,
-                Some(IrType::Heap(IrHeapKind::Mixed | IrHeapKind::Union | IrHeapKind::Object))
+                Some(IrType::Heap(
+                    IrHeapKind::Mixed | IrHeapKind::Union | IrHeapKind::Object | IrHeapKind::Array
+                ))
             ) {
                 return Err(WasmError::Unsupported(format!(
                     "array_push of {:?} on wasm32-wasi",
                     value_repr
                 )));
             }
-            // An object element is the same contract with a different helper: the array takes a
-            // SHARE (incref here), and the EIR releases the operand right after the push.
-            if matches!(value_ir, Some(IrType::Heap(IrHeapKind::Object))) {
+            // An object or nested-array element is the same contract with a different helper: the
+            // array takes a SHARE (incref here), and the EIR releases the operand right after the
+            // push. The two differ only in the `value_type` the empty array is shaped to.
+            if let Some(container_tag) = match value_ir {
+                Some(IrType::Heap(IrHeapKind::Object)) => Some(4),
+                Some(IrType::Heap(IrHeapKind::Array)) => Some(5),
+                _ => None,
+            } {
                 let obj = ctx.fresh_temp(ValType::I32);
                 ctx.emit_load_value(value)?;
-                ctx.fb.ins(&format!("local.set {}", obj), "object to append");
+                ctx.fb.ins(&format!("local.set {}", obj), "container to append");
                 ctx.fb.ins(
                     &format!("(call $__rt_incref (local.get {}))", obj),
-                    "the array shares the object (the EIR releases the operand after the push)",
+                    "the array shares the child (the EIR releases the operand after the push)",
                 );
                 ctx.emit_load_value(array)?;
-                ctx.fb.ins(&format!("local.get {}", obj), "object pointer for the append");
+                ctx.fb.ins(&format!("local.get {}", obj), "child pointer for the append");
+                ctx.fb
+                    .ins(&format!("i64.const {container_tag}"), "value_type for the slot");
                 ctx.fb.ins(
-                    "call $__rt_array_push_object",
-                    "append into a value_type-4 array (may reallocate)",
+                    "call $__rt_array_push_ptr",
+                    "append into a pointer-slot array (may reallocate)",
                 );
                 stamp_bool_array_result_type(ctx, array, value)?;
                 ctx.emit_store_value(array)?;
@@ -3186,11 +3195,17 @@ fn push_boxed_scalar(
             ctx.fb.ins(&format!("local.get {}", len), "length payload");
         }
         WasmRepr::Ptr(_) => {
-            // An object into a Mixed-cell array. The EIR emits NO release after this push, unlike
-            // the concrete `array<Object>` one — so the operand's single reference is transferred
-            // here. `__rt_mixed_from_value` increfs a refcounted child, so the operand is released
-            // right after to leave the cell as the only owner.
-            ctx.fb.ins("i64.const 6", "object tag");
+            // A container into a Mixed-cell array. The EIR emits NO release after this push,
+            // unlike the concrete `array<Object>` one — so the operand's single reference is
+            // transferred here. `__rt_mixed_from_value` increfs a refcounted child, so the
+            // operand is released right after to leave the cell as the only owner.
+            let tag = match ctx.function.value(value).map(|v| v.ir_type) {
+                Some(IrType::Heap(IrHeapKind::Array)) => 4,
+                Some(IrType::Heap(IrHeapKind::Hash)) => 5,
+                _ => 6,
+            };
+            ctx.fb
+                .ins(&format!("i64.const {tag}"), "container tag (4 array, 5 hash, 6 object)");
             ctx.emit_load_value(value)?;
             ctx.fb.ins("i64.extend_i32_u", "ptr -> lo");
             ctx.fb.ins("i64.const 0", "no high payload");
@@ -3636,22 +3651,29 @@ fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins(&format!("local.get {}", cell), "owned cell");
             store_result(ctx, inst)
         }
-        PhpType::Object(_) => {
+        PhpType::Object(_) | PhpType::Array(_) => {
             // The accessor answers a BORROWED pointer; who increfs depends on the destination.
+            // Object (value_type 4) and nested-array (5) slots are both a pointer at slot+0, so
+            // the READ is shared — but the boxing tag is NOT: a cell tagged 6 is an object and
+            // tagged 4 an array, and every later reader dispatches on that tag.
+            let cell_tag = if matches!(elem, PhpType::Array(_)) { 4 } else { 6 };
             let object = ctx.fresh_temp(ValType::I32);
             ctx.fb.ins(&format!("local.get {}", src), "source array");
             ctx.fb.ins(&format!("local.get {}", cur), "cursor index");
             ctx.fb
-                .ins("call $__rt_array_get_object", "foreach element (object, borrowed)");
+                .ins("call $__rt_array_get_object", "foreach element (container, borrowed)");
             ctx.fb.ins(&format!("local.set {}", object), "borrowed element");
             if boxed {
-                ctx.fb.ins("i64.const 6", "mixed tag (object)");
+                ctx.fb.ins(
+                    &format!("i64.const {cell_tag}"),
+                    "mixed tag (4 = array, 6 = object)",
+                );
                 ctx.fb
                     .ins(&format!("(i64.extend_i32_u (local.get {}))", object), "ptr -> lo");
                 ctx.fb.ins("i64.const 0", "hi unused");
                 // `__rt_mixed_from_value` increfs a refcounted child itself.
                 ctx.fb
-                    .ins("call $__rt_mixed_from_value", "box the object element");
+                    .ins("call $__rt_mixed_from_value", "box the container element");
             } else {
                 ctx.fb.ins(
                     &format!("(call $__rt_incref (local.get {}))", object),

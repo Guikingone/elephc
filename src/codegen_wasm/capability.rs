@@ -1592,6 +1592,16 @@ fn array_store_shape_issue(
         (PhpType::Object(element), IrType::Heap(IrHeapKind::Object), PhpType::Object(source)) => {
             *element == *source
         }
+        // A nested indexed array is the same pointer slot under value_type 5. The inner
+        // element types must agree exactly — a slot is just a pointer, so nothing here can
+        // convert one layout to another, and admitting a mismatch would read the child with
+        // the wrong stride. An inner `Never` (a literal `[]`) has no decided layout yet, so
+        // it is interchangeable with any.
+        (PhpType::Array(element), IrType::Heap(IrHeapKind::Array), PhpType::Array(source)) => {
+            element.codegen_repr() == source.codegen_repr()
+                || matches!(source.codegen_repr(), PhpType::Void)
+                || matches!(element.codegen_repr(), PhpType::Void)
+        }
         (
             PhpType::Void | PhpType::Never,
             IrType::I64,
@@ -1599,6 +1609,14 @@ fn array_store_shape_issue(
         ) => true,
         (PhpType::Void | PhpType::Never, IrType::F64, PhpType::Float) => true,
         (PhpType::Void | PhpType::Never, IrType::Str, PhpType::Str) => true,
+        // An `array<never>` — a literal `[]` — has no decided slot layout, so the FIRST push
+        // is what fixes it. A container element shapes it to pointer slots the same way a
+        // scalar shapes it to 8-byte ones; this is the accumulator `$out = []; $out[] = $row;`.
+        (
+            PhpType::Void | PhpType::Never,
+            IrType::Heap(IrHeapKind::Array | IrHeapKind::Object),
+            PhpType::Array(_) | PhpType::Object(_),
+        ) if is_push => true,
         (PhpType::Mixed, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)
             if is_push =>
         {
@@ -1616,6 +1634,9 @@ fn array_store_shape_issue(
         // An object boxes into a cell under tag 6, which is what an array of interface
         // implementors is: the checker types it `array<mixed>` because the classes differ.
         (PhpType::Mixed, IrType::Heap(IrHeapKind::Object), PhpType::Object(_)) if is_push => true,
+        // A nested array boxes under tag 4 — what `[["a"], []]` needs, since inner element
+        // types that differ make the checker type the outer literal `array<mixed>`.
+        (PhpType::Mixed, IrType::Heap(IrHeapKind::Array), PhpType::Array(_)) if is_push => true,
         (
             PhpType::Void | PhpType::Never,
             IrType::Heap(IrHeapKind::Mixed),
@@ -1658,6 +1679,7 @@ fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
                     | PhpType::Str
                     | PhpType::Float
                     | PhpType::Object(_)
+                    | PhpType::Array(_)
                     | PhpType::Mixed
                     // An empty array's element type: the body never runs, so any contract does.
                     | PhpType::Void

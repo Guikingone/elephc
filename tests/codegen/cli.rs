@@ -8013,6 +8013,92 @@ BOLT, NUT, PIN
 1|hi|2.5|done
 "##;
 
+/// Nested indexed arrays: `[[1,2],[3,4]]` built, iterated, accumulated into a fresh `[]`,
+/// and nested one level deeper.
+#[test]
+fn test_cli_wasm_nested_arrays_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_nested_arrays");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, NESTED_ARRAY_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the nested-array probe");
+    assert!(
+        output.status.success(),
+        "nested-array compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the nested-array probe under Node");
+    assert!(
+        run.status.success(),
+        "nested-array probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), NESTED_ARRAY_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The nested-array probe. The last group is nested twice, which is what proves the element
+/// layout is chosen from the element's own type rather than assumed one level deep.
+const NESTED_ARRAY_SOURCE: &str = r##"<?php
+$m = [[1, 2], [3, 4], [5, 6]];
+foreach ($m as $row) { echo implode("-", $row), ";"; }
+echo "|", count($m), "|";
+$g = [["a", "b"], ["c", "d"]];
+foreach ($g as $words) { echo "[", implode("", $words), "]"; }
+echo "|";
+$t = 0;
+foreach ($m as $pair) { foreach ($pair as $n) { $t = $t + $n; } }
+echo $t, "|";
+$sizes = [];
+foreach ($m as $r2) { $sizes[] = count($r2); }
+echo implode(",", $sizes), "|";
+$built = [];
+foreach ($m as $r3) { $built[] = $r3; }
+foreach ($built as $r4) { echo count($r4); }
+echo "|";
+$deep = [[[1, 2]], [[3]]];
+foreach ($deep as $outer) { foreach ($outer as $inner) { echo implode("+", $inner), "."; } }
+echo "\n";
+"##;
+
+/// php-src 8.5.6's own output for `NESTED_ARRAY_SOURCE`.
+const NESTED_ARRAY_EXPECTED: &str = "1-2;3-4;5-6;|3|[ab][cd]|21|2,2,2|222|1+2.3.\n";
+
 /// Proves the cycle collector actually reclaims a cycle, by watching memory not grow.
 ///
 /// Two objects pointing at each other keep each other's refcount above zero forever, so

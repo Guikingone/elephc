@@ -37,7 +37,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_PUSH_INT);
     wm.add_raw_func(RT_ARRAY_PUSH_STR);
     wm.add_raw_func(RT_ARRAY_PUSH_FLOAT);
-    wm.add_raw_func(RT_ARRAY_PUSH_OBJECT);
+    wm.add_raw_func(RT_ARRAY_PUSH_PTR);
     wm.add_raw_func(RT_ARRAY_GET_OBJECT);
     wm.add_raw_func(RT_ARRAY_GET_FLOAT);
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
@@ -300,15 +300,19 @@ const RT_ARRAY_PUSH_FLOAT: &str = r#"(func $__rt_array_push_float (param $array 
   (local.get $array))                                                            ;; return the (possibly new) array
 "#;
 
-/// `__rt_array_push_object`: appends an object pointer, shaping an empty array to 8-byte slots
-/// stamped `value_type` 4, and growing capacity when full.
+/// `__rt_array_push_ptr`: appends a refcounted container pointer, shaping an empty array to
+/// 8-byte slots stamped with the caller's `value_type`, and growing capacity when full.
 ///
-/// An object is a refcounted container, so the slot holds its pointer and the array owns a SHARE
-/// of it — the caller increfs before handing it over, matching what the EIR emits: `array_push`
-/// followed by a `release` of the operand. `__rt_array_free_deep` already walks `value_type` 4 and
-/// releases every child through `__rt_decref_any`, so the stamp is what makes the array's own
-/// release reach the objects rather than dropping them.
-const RT_ARRAY_PUSH_OBJECT: &str = r#"(func $__rt_array_push_object (param $array i32) (param $obj i32) (result i32)
+/// `vt` is 4 for an object element and 5 for a nested indexed array. (Note this target's
+/// `value_type` 4 is OBJECT, where the native's is array-of-arrays; the tag is internal to
+/// each backend, and both agree that 4..7 mean "the slot holds a refcounted pointer".)
+///
+/// The array owns a SHARE of the child — the caller increfs before handing it over, matching
+/// what the EIR emits: `array_push` followed by a `release` of the operand.
+/// `__rt_array_free_deep` and `__rt_array_clone_shallow` already treat `value_type` 4..7 as
+/// refcounted children, so the stamp is what makes the array's own release and its
+/// copy-on-write split reach them rather than dropping or aliasing them.
+const RT_ARRAY_PUSH_PTR: &str = r#"(func $__rt_array_push_ptr (param $array i32) (param $obj i32) (param $vt i64) (result i32)
   (local $len i64)
   (local $cap i64)
   (local $slot i32)
@@ -320,7 +324,7 @@ const RT_ARRAY_PUSH_OBJECT: &str = r#"(func $__rt_array_push_object (param $arra
     (then
       (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 8))  ;; elem_size = 8
       (i64.store (i32.sub (local.get $array) (i32.const 8))
-                 (i64.or (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const -32513)) (i64.const 1024)))))  ;; value_type = 4 (object; 4 << 8 = 1024)
+                 (i64.or (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const -32513)) (i64.shl (local.get $vt) (i64.const 8))))))  ;; value_type = vt (object 4, nested array 5)
   (local.set $len (i64.load (local.get $array)))            ;; length
   (local.set $cap (i64.load (i32.add (local.get $array) (i32.const 8))))  ;; capacity
   (if (i64.ge_s (local.get $len) (local.get $cap))          ;; full -> grow
@@ -332,7 +336,10 @@ const RT_ARRAY_PUSH_OBJECT: &str = r#"(func $__rt_array_push_object (param $arra
   (local.get $array))                                       ;; return the (possibly new) array
 "#;
 
-/// `__rt_array_get_object`: reads the object pointer at `index`, BORROWED.
+/// `__rt_array_get_object`: reads the container pointer at `index`, BORROWED.
+///
+/// Serves object elements (`value_type` 4) and nested indexed arrays (5) alike: both store
+/// the child pointer at slot+0 with an 8-byte stride, so the read does not consult the tag.
 ///
 /// A miss answers 0, which every release path treats as a no-op — unlike the int accessor's null
 /// sentinel, which as a pointer would be garbage. The caller decides ownership: `foreach` binds an

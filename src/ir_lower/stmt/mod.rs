@@ -1738,6 +1738,10 @@ fn foreach_value_type(source_ty: &PhpType) -> PhpType {
         PhpType::Array(elem) => match elem.codegen_repr() {
             PhpType::Callable => PhpType::Callable,
             PhpType::Object(class_name) => PhpType::Object(class_name),
+            // A nested array binds at its own type, exactly as an object element does. Falling
+            // back to Mixed here boxed every row of `[[1,2],[3,4]]`, so `count($row)` inside the
+            // body then had to answer for a cell rather than an array.
+            inner @ PhpType::Array(_) => inner,
             elem @ (PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => elem,
             _ => PhpType::Mixed,
         },
