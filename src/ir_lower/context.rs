@@ -426,6 +426,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.data.intern_global_name(value)
     }
 
+    /// Interns the program-global symbol name a variable's global storage lives under.
+    ///
+    /// A `$GLOBALS['name']` alias is interned as plain `name`, so it shares one
+    /// `_eir_global_name` symbol with a top-level `$name` and with any function's
+    /// `global $name;` — that shared slot is what makes the three views of the same
+    /// global observe each other's writes.
+    fn intern_global_storage_name(&mut self, name: &str) -> DataId {
+        let storage = crate::globals_array::alias_target(name).unwrap_or(name);
+        self.intern_global_name(storage)
+    }
+
     /// Interns a function-name metadata string in the module data pool.
     pub(crate) fn intern_function_name(&mut self, value: &str) -> DataId {
         self.data.intern_function_name(value)
@@ -469,7 +480,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// and crash; fall through to the ordinary env lookup (typically `Mixed`)
     /// instead. Ordinary PHP globals use boxed Mixed storage in every scope
     /// because a function declaring `global $x` may replace its runtime type.
+    /// A `$GLOBALS['_SERVER']` alias names the same slot as `$_SERVER`, so it must
+    /// resolve to the same storage type — the alias spelling is looked through first.
     pub(crate) fn global_alias_type(&self, name: &str) -> PhpType {
+        let name = crate::globals_array::alias_target(name).unwrap_or(name);
         if self.web && crate::superglobals::is_superglobal(name) {
             return crate::superglobals::superglobal_type();
         }
@@ -571,7 +585,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Declares a local slot if it does not already exist.
     pub(crate) fn declare_local(&mut self, name: &str, php_type: PhpType) -> LocalSlotId {
-        self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
+        // A `$GLOBALS['name']` alias names program-global storage that outlives the
+        // frame, exactly like a `global $name;` import — declaring it as an ordinary
+        // local would make the scope treat the slot as its own and null-initialize it
+        // on first use, destroying the caller's value before reading it back.
+        let kind = if crate::globals_array::is_alias(name) {
+            LocalKind::GlobalAlias
+        } else {
+            LocalKind::PhpLocal
+        };
+        self.declare_local_with_kind(name, php_type, kind)
     }
 
     /// Declares a local slot with the requested role if it does not already exist.
@@ -1044,7 +1067,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             _ => Op::LoadLocal,
         };
         let immediate = if uses_global {
-            Some(Immediate::GlobalName(self.intern_global_name(name)))
+            Some(Immediate::GlobalName(self.intern_global_storage_name(name)))
         } else {
             Some(Immediate::LocalSlot(slot))
         };
@@ -1193,7 +1216,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             _ => Op::LoadLocal,
         };
         let immediate = if uses_global {
-            Some(Immediate::GlobalName(self.intern_global_name(name)))
+            Some(Immediate::GlobalName(self.intern_global_storage_name(name)))
         } else {
             Some(Immediate::LocalSlot(slot))
         };
@@ -2540,9 +2563,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Request superglobals (`$_SERVER`/`$_GET`/`$_POST`) route to the shared
     /// `_eir_global_*` symbol in EVERY scope — main and functions alike — so a
     /// function read targets the same storage the top-level `--web` prelude writes.
+    /// A `$GLOBALS['name']` alias behaves the same way in every scope: it names the
+    /// program-global slot directly, which is what makes it independent of any local
+    /// `$name` the same function may also declare.
     fn uses_global_storage(&self, name: &str, kind: LocalKind) -> bool {
         kind == LocalKind::GlobalAlias
             || crate::superglobals::is_superglobal(name)
+            || crate::globals_array::is_alias(name)
             || (self.in_main && self.all_global_var_names.contains(name))
     }
 
@@ -2554,7 +2581,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         value: LoweredValue,
         span: Option<Span>,
     ) {
-        let data = self.intern_global_name(name);
+        let data = self.intern_global_storage_name(name);
         self.builder.emit_with_effects(
             Op::StoreGlobal,
             vec![value.value],

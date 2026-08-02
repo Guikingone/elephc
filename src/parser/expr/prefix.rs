@@ -604,6 +604,20 @@ fn parse_variable(
     name: String,
 ) -> Result<Expr, CompileError> {
     *pos += 1;
+    // `$GLOBALS` is only meaningful as `$GLOBALS['name']`; the Pratt postfix-`[` arm rewrites
+    // that shape into an alias variable before it is ever seen as a `$GLOBALS` read. Reaching
+    // here with anything but a following `[` therefore means the program uses `$GLOBALS` as a
+    // whole array (`count`, `foreach`, passing it along) or replaces it outright. Neither is
+    // supported, and both used to miscompile silently, so refuse them at the parse choke point.
+    if name == "GLOBALS" {
+        let next = tokens.get(*pos).map(|(t, _)| t);
+        if let Some(message) = crate::globals_array::unsupported_use_message(
+            matches!(next, Some(Token::LBracket)),
+            matches!(next, Some(Token::Assign)),
+        ) {
+            return Err(CompileError::new(span, message));
+        }
+    }
     if *pos < tokens.len() {
         match &tokens[*pos].0 {
             Token::PlusPlus => {

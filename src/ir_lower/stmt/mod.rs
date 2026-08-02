@@ -457,7 +457,14 @@ fn lower_assign(ctx: &mut LoweringContext<'_, '_>, name: &str, value: &Expr, spa
     // checker injects the variable as `Void` and emits a warning. At the
     // lowering level, we must initialize the local slot to null/0 before
     // the compound read so the runtime does not read garbage from the stack.
-    if is_compound_assignment_self_read(value, name, span) && !ctx.has_local_slot(name) {
+    // A `$GLOBALS['name']` alias is exempt: the slot it names is program-global and already
+    // holds the caller's value, so "not yet declared in THIS scope" does not mean "undefined".
+    // Null-initializing it would overwrite that value before the compound read loads it, the
+    // way an explicit `global $name;` declaration prevents by declaring the slot up front.
+    if is_compound_assignment_self_read(value, name, span)
+        && !ctx.has_local_slot(name)
+        && !crate::globals_array::is_alias(name)
+    {
         let null_value = ctx.builder.emit_const_null();
         let null_lowered = LoweredValue { value: null_value, ir_type: IrType::I64 };
         ctx.store_local(name, null_lowered, PhpType::Void, Some(span));

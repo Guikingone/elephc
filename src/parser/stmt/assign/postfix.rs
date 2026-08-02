@@ -150,6 +150,11 @@ pub(in crate::parser::stmt) fn try_parse_postfix_assignment(
             },
             span,
         )),
+        // A postfix LHS that parsed down to a plain variable is a plain assignment. This is
+        // reachable because `$GLOBALS['name']` is rewritten to a single alias variable while
+        // its tokens still look like a postfix `[` target, so the postfix parser owns the
+        // statement but must emit the simple-variable form.
+        ExprKind::Variable(name) => StmtKind::Assign { name, value },
         _ => return Err(CompileError::new(span, "Invalid assignment target")),
     };
 

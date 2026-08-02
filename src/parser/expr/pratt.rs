@@ -93,6 +93,14 @@ fn parse_expr_bp_inner(
                     if *pos >= tokens.len() || tokens[*pos].0 != Token::Assign {
                         return Err(CompileError::new(span, "Cannot use [] for reading"));
                     }
+                    // `$GLOBALS[] = v` appends under a numeric key, which no `$name` syntax can
+                    // reach; it is outside the literal-key subset rather than a silent no-op.
+                    if matches!(&lhs.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                        return Err(CompileError::new(
+                            span,
+                            crate::globals_array::BARE_USE_MESSAGE,
+                        ));
+                    }
                     *pos += 1; // consume '='
                     // Right binding power 6 matches `assignment_bp`'s `(l_bp, r_bp) = (7, 6)` for
                     // `=`, keeping append's RHS precedence identical to ordinary assignment.
@@ -105,6 +113,31 @@ fn parse_expr_bp_inner(
                     return Err(CompileError::new(span, "Expected ']'"));
                 }
                 *pos += 1;
+                // `$GLOBALS['name']` is the ONLY supported `$GLOBALS` shape. Rewrite it here,
+                // at the single postfix-`[` construction site, into the internal alias variable
+                // that IR lowering routes to `_eir_global_name` storage. Doing it in the parser
+                // means every syntactic position — read, assignment target, `isset`, `unset`,
+                // nested index, `??` — is covered without a separate AST walk that could
+                // silently miss a node kind. Anything else is refused loudly.
+                if matches!(&lhs.kind, ExprKind::Variable(name) if name == "GLOBALS") {
+                    let ExprKind::StringLiteral(key) = &index.kind else {
+                        return Err(CompileError::new(
+                            span,
+                            crate::globals_array::DYNAMIC_KEY_MESSAGE,
+                        ));
+                    };
+                    if !crate::globals_array::is_php_variable_name(key) {
+                        return Err(CompileError::new(
+                            span,
+                            crate::globals_array::BARE_USE_MESSAGE,
+                        ));
+                    }
+                    lhs = Expr::new(
+                        ExprKind::Variable(crate::globals_array::alias_name(key)),
+                        lhs.span,
+                    );
+                    continue;
+                }
                 lhs = Expr::new(
                     ExprKind::ArrayAccess {
                         array: Box::new(lhs),

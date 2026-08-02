@@ -124,10 +124,22 @@ fn web_gated_global_env(global_env: &TypeEnv, web: bool) -> TypeEnv {
     env
 }
 
-/// Collects PHP variable names that any function-like body declares with `global`.
+/// Collects PHP variable names that must live in program-global storage.
+///
+/// Two sources contribute, and both must, because they name the SAME storage:
+/// an explicit `global $x;` in any function-like body, and a `$GLOBALS['x']`
+/// element access anywhere in the program. Without the second source a top-level
+/// `$x = 1;` would stay in a `main` frame slot while a function's
+/// `$GLOBALS['x']` read went to `_eir_global_x`, and the read would silently
+/// observe an uninitialized slot instead of the assigned value.
 fn collect_global_var_names(statements: &[Stmt]) -> std::collections::HashSet<String> {
     let mut names = std::collections::HashSet::new();
     collect_global_var_names_in_body(statements, &mut names);
+    let mut usage = crate::ast_usage::Usage::default();
+    for stmt in statements {
+        usage.merge(crate::ast_usage::collect_stmt(stmt));
+    }
+    names.extend(usage.globals_keys);
     names
 }
 

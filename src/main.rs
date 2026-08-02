@@ -19,6 +19,7 @@ mod errors;
 mod eval_aot;
 mod exports;
 mod filter_var_prelude;
+mod globals_array;
 mod image_prelude;
 mod intrinsics;
 #[allow(dead_code, unused_imports)]

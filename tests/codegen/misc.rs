@@ -497,3 +497,54 @@ echo label(5) . "|" . label(-1);
     );
     assert_eq!(out, "positive|zero or negative");
 }
+
+/// Verifies `$GLOBALS['name']` reads the global of that name from inside a function, which PHP
+/// resolves through the global symbol table. elephc models it as a compile-time alias onto the
+/// same storage a `global $name;` import would use, so no runtime table is needed for a literal
+/// key. Before this was modelled the read compiled and silently returned `0`.
+#[test]
+fn test_globals_literal_key_read() {
+    let out = compile_and_run(
+        r#"<?php
+$alpha = 'A';
+$num = 42;
+function readIt(): string { return $GLOBALS['alpha']; }
+function readNum() { return $GLOBALS['num']; }
+echo readIt(), readNum();
+"#,
+    );
+    assert_eq!(out, "A42");
+}
+
+/// Verifies `$GLOBALS['name'] = …` writes THROUGH to the global, so a later top-level read sees
+/// the new value — the aliasing property that makes the model faithful rather than a copy.
+#[test]
+fn test_globals_literal_key_write_is_visible_at_top_level() {
+    let out = compile_and_run(
+        r#"<?php
+$alpha = 'A';
+function w(): void { $GLOBALS['alpha'] = 'WRITTEN'; }
+w();
+echo $alpha;
+"#,
+    );
+    assert_eq!(out, "WRITTEN");
+}
+
+/// Verifies `isset($GLOBALS['x'])` distinguishes a declared global from an absent name, and that
+/// an absent key under `??` yields the default rather than a warning — both matching `php -n`.
+#[test]
+fn test_globals_isset_and_absent_key_default() {
+    let out = compile_and_run(
+        r#"<?php
+$a = 1;
+function t(): string {
+    return (isset($GLOBALS['a']) ? 'set' : 'unset')
+        . (isset($GLOBALS['zz']) ? 'set' : 'unset')
+        . ($GLOBALS['nope'] ?? 'DEF');
+}
+echo t();
+"#,
+    );
+    assert_eq!(out, "setunsetDEF");
+}

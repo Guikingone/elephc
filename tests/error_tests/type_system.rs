@@ -1841,3 +1841,25 @@ fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
         "array_sum() argument must be array",
     );
 }
+
+/// SILENT-DIVERGENCE GATE: replacing the whole array (`$GLOBALS = [...]`) is a fatal in PHP 8.1+,
+/// and elephc must refuse it rather than compile a program that keeps running past the point PHP
+/// aborts. The statement parser is a SECOND entry point that does not reach the expression
+/// parser's own refusal — this shape compiled and ran until both routes shared one rule.
+#[test]
+fn test_error_globals_whole_array_assignment_is_refused() {
+    expect_error(
+        "<?php $x = 1; $GLOBALS = ['a' => 1];",
+        "$GLOBALS can only be modified using the $GLOBALS[$name] = $value syntax",
+    );
+}
+
+/// Using `$GLOBALS` as a whole array (here `count()`) is refused LOUDLY instead of silently
+/// yielding an empty array, which is what it did before the superglobal was modelled.
+#[test]
+fn test_error_globals_bare_use_is_refused() {
+    expect_error(
+        "<?php $a = 1; function c() { return count($GLOBALS); } echo c();",
+        "Unsupported use of $GLOBALS",
+    );
+}

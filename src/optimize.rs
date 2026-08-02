@@ -65,6 +65,15 @@ pub fn propagate_constants(program: Program) -> Program {
     for name in crate::superglobals::SUPERGLOBALS {
         mark_reference_volatile(name);
     }
+    // `$GLOBALS['x']` and a top-level `$x` are two names for ONE slot, and the
+    // propagator sees them as unrelated variables. Without this, a write through
+    // either name is invisible to a read through the other and the read folds to
+    // the stale constant. Both spellings are marked so the aliasing is opaque in
+    // both directions.
+    for key in crate::ast_usage::collect(&program).globals_keys {
+        mark_reference_volatile(&crate::globals_array::alias_name(&key));
+        mark_reference_volatile(&key);
+    }
     // Install the callable effect summaries and by-ref signatures so calls to
     // known-pure user callables stop clearing the environment. Substitution
     // into by-ref argument positions is masked by `propagate_args`, which

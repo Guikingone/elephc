@@ -309,6 +309,11 @@ fn infer_arrow_captures(
     let mut captures = Vec::new();
     let mut seen = HashSet::new();
     collect_arrow_expr_captures(body_expr, &bound, &mut seen, &mut captures);
+    // A `$GLOBALS['name']` alias is not a capture: it resolves to program-global storage in
+    // EVERY scope, so the arrow body reaches it directly the way it reaches `$_SERVER`.
+    // Capturing it would both demand an enclosing-scope binding that need not exist and copy
+    // the value at closure-creation time instead of reading the global live.
+    captures.retain(|name| !crate::globals_array::is_alias(name));
     captures
 }
 

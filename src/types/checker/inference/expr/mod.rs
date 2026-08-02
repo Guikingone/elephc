@@ -860,8 +860,39 @@ impl Checker {
     ) -> Result<PhpType, CompileError> {
         env.get(name)
             .cloned()
+            .or_else(|| self.globals_alias_type(name))
             .or_else(|| self.eval_barrier_active.then_some(PhpType::Mixed))
-            .ok_or_else(|| CompileError::new(span, &format!("Undefined variable: ${}", name)))
+            .ok_or_else(|| {
+                CompileError::new(
+                    span,
+                    &format!(
+                        "Undefined variable: {}",
+                        crate::globals_array::display_name(name)
+                    ),
+                )
+            })
+    }
+
+    /// Returns the type of a `$GLOBALS['name']` alias, or `None` for other names.
+    ///
+    /// The type must describe the STORAGE, not the value the top-level `$name`
+    /// happens to hold: an ordinary global is one boxed `Mixed` cell, so that is
+    /// what a read of it yields. Typing an alias from `top_level_env` instead
+    /// (the way `check_global` types a `global $name;` import) makes a caller
+    /// expect the narrow type while the callee returns a boxed cell, and the
+    /// mismatch is read back as a raw pointer.
+    ///
+    /// Unlike an ordinary variable an alias is never "undefined": PHP creates the
+    /// global on first write and yields null for an absent key, so an unknown name
+    /// is still `Mixed` rather than a hard error — and never a folded constant,
+    /// which `top_level_env` could not support anyway since it only carries the
+    /// FIRST top-level pass's snapshot while function bodies are checked.
+    fn globals_alias_type(&self, name: &str) -> Option<PhpType> {
+        let target = crate::globals_array::alias_target(name)?;
+        if crate::superglobals::is_superglobal(target) {
+            return Some(crate::superglobals::superglobal_type());
+        }
+        Some(PhpType::Mixed)
     }
 
     /// Returns the element type of a hash-backed array literal spread.

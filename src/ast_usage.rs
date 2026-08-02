@@ -29,6 +29,13 @@ use crate::parser::ast::{
 pub(crate) struct Usage {
     pub(crate) functions: HashSet<String>,
     pub(crate) dynamic_function_call: bool,
+    /// Global names the program reaches through `$GLOBALS['name']`, without the
+    /// alias spelling — `$GLOBALS['app']` contributes `app`.
+    ///
+    /// IR lowering needs this to keep a top-level `$app` and a function's
+    /// `$GLOBALS['app']` on ONE `_eir_global_app` slot; without it the top-level
+    /// write lands in a `main` frame slot the function never reads.
+    pub(crate) globals_keys: HashSet<String>,
 }
 
 impl Usage {
@@ -36,6 +43,7 @@ impl Usage {
     pub(crate) fn merge(&mut self, other: Self) {
         self.functions.extend(other.functions);
         self.dynamic_function_call |= other.dynamic_function_call;
+        self.globals_keys.extend(other.globals_keys);
     }
 
     /// Returns true when a PHP function is referenced case-insensitively.
@@ -58,6 +66,18 @@ pub(crate) fn collect_stmt(stmt: &Stmt) -> Usage {
     let mut usage = Usage::default();
     scan_stmt(stmt, &mut usage);
     usage
+}
+
+/// Records a variable name when it is a `$GLOBALS['…']` alias.
+///
+/// Called for every position that names a variable with a bare `String` rather
+/// than an `ExprKind::Variable` node (assignment targets, array-write receivers,
+/// `foreach` binders), so an alias is collected no matter which syntactic form
+/// the parser folded it into.
+fn record_variable_name(usage: &mut Usage, name: &str) {
+    if let Some(target) = crate::globals_array::alias_target(name) {
+        usage.globals_keys.insert(target.to_string());
+    }
 }
 
 /// Records one normalized PHP function name.
@@ -134,20 +154,34 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             }
             scan_expr(value, usage);
         }
+        StmtKind::Assign { name, value }
+        | StmtKind::TypedAssign { name, value, .. } => {
+            record_variable_name(usage, name);
+            scan_expr(value, usage);
+        }
+        StmtKind::ArrayPush { array, value } => {
+            record_variable_name(usage, array);
+            scan_expr(value, usage);
+        }
+        StmtKind::ListUnpack { vars, value } => {
+            for var in vars {
+                record_variable_name(usage, var);
+            }
+            scan_expr(value, usage);
+        }
         StmtKind::Echo(expr)
         | StmtKind::Throw(expr)
         | StmtKind::ExprStmt(expr)
         | StmtKind::ConstDecl { value: expr, .. }
-        | StmtKind::Assign { value: expr, .. }
-        | StmtKind::TypedAssign { value: expr, .. }
         | StmtKind::StaticVar { init: expr, .. }
-        | StmtKind::ListUnpack { value: expr, .. }
         | StmtKind::Return(Some(expr))
-        | StmtKind::ArrayPush { value: expr, .. }
         | StmtKind::StaticPropertyAssign { value: expr, .. }
         | StmtKind::StaticPropertyArrayPush { value: expr, .. }
         | StmtKind::Include { path: expr, .. } => scan_expr(expr, usage),
-        StmtKind::RefAssign { source, .. } => scan_expr(source, usage),
+        StmtKind::RefAssign { target, source, .. } => {
+            record_variable_name(usage, target);
+            scan_expr(source, usage);
+        }
         StmtKind::PropertyAssign { object, value, .. }
         | StmtKind::PropertyArrayPush { object, value, .. } => {
             scan_expr(object, usage);
@@ -163,8 +197,12 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             scan_expr(index, usage);
             scan_expr(value, usage);
         }
-        StmtKind::ArrayAssign { index, value, .. }
-        | StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
+        StmtKind::ArrayAssign { array, index, value } => {
+            record_variable_name(usage, array);
+            scan_expr(index, usage);
+            scan_expr(value, usage);
+        }
+        StmtKind::StaticPropertyArrayAssign { index, value, .. } => {
             scan_expr(index, usage);
             scan_expr(value, usage);
         }
@@ -219,8 +257,18 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
             }
             scan_program(body, usage);
         }
-        StmtKind::Foreach { array, body, .. } => {
+        StmtKind::Foreach {
+            array,
+            key_var,
+            value_var,
+            body,
+            ..
+        } => {
             scan_expr(array, usage);
+            if let Some(key_var) = key_var {
+                record_variable_name(usage, key_var);
+            }
+            record_variable_name(usage, value_var);
             scan_program(body, usage);
         }
         StmtKind::Switch {
@@ -320,7 +368,12 @@ fn scan_stmt(stmt: &Stmt, usage: &mut Usage) {
 fn scan_expr(expr: &Expr, usage: &mut Usage) {
     match &expr.kind {
         // Campaign expression forms: scan evaluated children.
-        ExprKind::ListUnpack { value, .. } => scan_expr(value, usage),
+        ExprKind::ListUnpack { vars, value } => {
+            for var in vars {
+                record_variable_name(usage, var);
+            }
+            scan_expr(value, usage);
+        }
         ExprKind::DynamicStaticPropertyAccess { property, .. } => scan_expr(property, usage),
         ExprKind::DynamicClassConstantAccess { object, .. } => scan_expr(object, usage),
         ExprKind::IncludeValue { path, .. } => scan_expr(path, usage),
@@ -363,8 +416,9 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_expr(arg, usage);
             }
         }
-        ExprKind::ClosureCall { args, .. } => {
+        ExprKind::ClosureCall { var, args } => {
             usage.dynamic_function_call = true;
+            record_variable_name(usage, var);
             for arg in args {
                 scan_expr(arg, usage);
             }
@@ -513,16 +567,16 @@ fn scan_expr(expr: &Expr, usage: &mut Usage) {
                 scan_expr(value, usage);
             }
         }
-        ExprKind::Variable(_) => {}
+        ExprKind::Variable(name)
+        | ExprKind::PreIncrement(name)
+        | ExprKind::PostIncrement(name)
+        | ExprKind::PreDecrement(name)
+        | ExprKind::PostDecrement(name) => record_variable_name(usage, name),
         ExprKind::StringLiteral(_)
         | ExprKind::IntLiteral(_)
         | ExprKind::FloatLiteral(_)
         | ExprKind::BoolLiteral(_)
         | ExprKind::Null
-        | ExprKind::PreIncrement(_)
-        | ExprKind::PostIncrement(_)
-        | ExprKind::PreDecrement(_)
-        | ExprKind::PostDecrement(_)
         | ExprKind::ConstRef(_)
         | ExprKind::This
         | ExprKind::StaticPropertyAccess { .. }

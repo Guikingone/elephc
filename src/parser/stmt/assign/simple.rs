@@ -47,6 +47,20 @@ pub(in crate::parser::stmt) fn parse_variable_stmt(
         _ => unreachable!(),
     };
 
+    // A statement beginning with `$GLOBALS` never reaches the expression parser's own refusal,
+    // so the same rule is applied here. Without it `$GLOBALS = [...]` compiled and kept running
+    // past the point where PHP raises its fatal — a silent divergence, and the single shape this
+    // module must never allow. `$GLOBALS['name'] = ...` is the supported form and is left alone.
+    if name == "GLOBALS" {
+        let next = tokens.get(*pos + 1).map(|(t, _)| t);
+        if let Some(message) = crate::globals_array::unsupported_use_message(
+            matches!(next, Some(Token::LBracket)),
+            matches!(next, Some(Token::Assign)),
+        ) {
+            return Err(CompileError::new(span, message));
+        }
+    }
+
     if let Some(stmt) = postfix::try_parse_postfix_assignment(tokens, pos, span)? {
         return Ok(stmt);
     }

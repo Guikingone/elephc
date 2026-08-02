@@ -29,6 +29,8 @@ mod eval_aot;
 pub mod exports;
 /// Conditionally-injected dynamic-`$filter` `filter_var()` helper prelude.
 pub mod filter_var_prelude;
+/// `$GLOBALS` literal-key aliasing onto ordinary global storage.
+pub mod globals_array;
 mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
 pub mod image_prelude;
