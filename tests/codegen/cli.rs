@@ -8017,6 +8017,222 @@ BOLT, NUT, PIN
 1|hi|2.5|done
 "##;
 
+/// Proves a property read leaves no reference behind, by watching memory not grow.
+///
+/// The object is rebuilt each iteration so its property's backing array has to die with it. A
+/// read that retains twice leaves the array alive forever: measured at 98 pages against the bare
+/// loop's 3 before the fix, and 43 for a string property. Both are invisible in the output — the
+/// program prints the right answer either way, which is why this watches memory instead.
+#[test]
+fn test_cli_wasm_property_read_leaves_no_reference() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_prop_leak");
+    let runner_src = r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(readFileSync(process.argv[2])),
+  wasi.getImportObject(),
+);
+const code = wasi.start(instance);
+console.error(`pages=${instance.exports.memory.buffer.byteLength / 65536}`);
+process.exitCode = code;
+"#;
+    let runner = dir.join("run.mjs");
+    fs::write(&runner, runner_src).unwrap();
+
+    // `foreach (range(...))` rather than an unrolled program: thousands of statements do not
+    // compile fast enough to reach the 64 KiB page granularity a per-read leak needs.
+    let bodies = [
+        ("baseline", r#"if ($n === 999999) { echo "x"; }"#),
+        ("array property", r#"if (count($x->a) === 99) { echo "x"; }"#),
+        ("string property", r#"if ($x->s === "zz") { echo "x"; }"#),
+    ];
+    for (label, body) in bodies {
+        let php_path = dir.join("main.php");
+        fs::write(
+            &php_path,
+            format!(
+                "<?php\nclass Box {{ public function __construct(public string $s, public array $a) {{}} }}\n                 foreach (range(1, 30000) as $n) {{\n    $x = new Box(\"bolt\", [1,2,3]);\n    {body}\n}}\n                 echo \"ok\\n\";\n"
+            ),
+        )
+        .unwrap();
+
+        for extra in [vec!["--emit-asm"], vec![]] {
+            let mut command = elephc_cli_command(&dir);
+            command.arg("--target").arg("wasm32-wasi");
+            for flag in extra {
+                command.arg(flag);
+            }
+            let output = command
+                .arg(&php_path)
+                .output()
+                .unwrap_or_else(|error| panic!("{label}: failed to invoke elephc: {error}"));
+            assert!(
+                output.status.success(),
+                "{label} failed to compile: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .unwrap_or_else(|error| panic!("{label}: failed to run under Node: {error}"));
+        assert!(
+            run.status.success(),
+            "{label} trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(run.stdout, b"ok\n", "{label} printed the wrong thing");
+
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        let final_pages: usize = stderr
+            .split("pages=")
+            .nth(1)
+            .and_then(|rest| rest.trim().parse().ok())
+            .unwrap_or_else(|| panic!("{label}: the runner reported no page count"));
+        let wat = fs::read_to_string(dir.join("main.wat")).expect("the WAT was written");
+        let initial_pages: usize = wat
+            .split("(memory (export \"memory\") ")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("{label}: the module declares no initial memory"));
+
+        // The `range` array itself grows, so every case is compared against the bare loop.
+        assert_eq!(
+            final_pages - initial_pages,
+            3,
+            "{label}: 30000 reads grew memory by {} pages over the declared {initial_pages}, \
+             where the bare loop grows 3 — a reference is being left behind",
+            final_pages - initial_pages
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a property read RETAINS exactly once, and that copy-on-write follows from it.
+///
+/// `Op::PropGet` is always followed by `Op::Acquire` — checked across every use shape: store,
+/// echo, argument, concat, builtin argument, return, strict compare. The acquire persists a string
+/// and increfs a refcounted child, so the READ must only view them. Retaining in both places left
+/// one extra reference per read: measured at ~207 bytes per read of an array property, whose
+/// backing array was then never freed, and ~87 for a string.
+///
+/// The Throwable accessors share the same slot reader and need the OPPOSITE: no acquire follows
+/// them, and their result outlives the object it came from, so they own their copy. Reading
+/// `getMessage()` here is what catches getting that backwards — it answers dead bytes otherwise.
+///
+/// With the reference count finally right, `$c = $src; $c[] = "z";` gets PHP's value semantics:
+/// the push sees two owners and splits. Before, the push had no copy-on-write at all and simply
+/// grew the shared array in place, freeing the block the other reference still pointed at — which
+/// the extra retain had been hiding.
+#[test]
+fn test_cli_wasm_property_read_retains_once_and_arrays_copy_on_write() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_prop_retain");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, PROP_RETAIN_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the property-retain probe");
+    assert!(
+        output.status.success(),
+        "property-retain compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the property-retain probe under Node");
+    assert!(
+        run.status.success(),
+        "property-retain probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), PROP_RETAIN_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The probe: every property-read shape, the Throwable accessors, and copy-on-write on a copy.
+const PROP_RETAIN_SOURCE: &str = r##"<?php
+class C {
+    public function __construct(public string $s, public array $a, public mixed $m, public int $i) {}
+}
+function take(string $v): int { return strlen($v); }
+function give(C $c): string { return $c->s; }
+$x = new C("abc", [1,2,3], "boxed", 7);
+$a = $x->s;              echo "[", $a, "]";
+echo "[", $x->s, "]";
+echo "[", take($x->s), "]";
+echo "[", $x->s . "y", "]";
+echo "[", strtoupper($x->s), "]";
+echo "[", give($x), "]";
+echo "[", ($x->s === "abc") ? "y" : "n", "]";
+echo "[", count($x->a), "]";
+echo "[", implode(",", $x->a), "]";
+echo "[", $x->i, "]";
+echo "[", $x->m, "]";
+$b = $x->a; $b[] = 9; echo "[", count($b), ":", count($x->a), "]";
+echo "\n";
+try { throw new RuntimeException("boom", 42); }
+catch (RuntimeException $e) { echo $e->getMessage(), "|", $e->getCode(), "|", get_class($e), "\n"; }
+$src = ["a", "b"];
+$c = $src;
+$c[] = "z";
+echo count($c), ":", count($src), "|", implode(",", $c), ":", implode(",", $src), "|";
+$i = [1, 2];
+$j = $i; $j[] = 3;
+echo count($j), ":", count($i), "|", implode(",", $j), ":", implode(",", $i), "|";
+$k = $i; $k[] = 4; $k[] = 5;
+echo implode(",", $k), ":", implode(",", $i), "|";
+echo "\n";
+"##;
+
+/// php-src 8.5.6's own output for `PROP_RETAIN_SOURCE`.
+const PROP_RETAIN_EXPECTED: &str = r##"[abc][abc][3][abcy][ABC][abc][y][3][1,2,3][7][boxed][4:3]
+boom|42|RuntimeException
+3:2|a,b,z:a,b|3:2|1,2,3:1,2|1,2,4,5:1,2|
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

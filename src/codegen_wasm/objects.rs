@@ -256,7 +256,16 @@ pub(super) fn emit_throwable_intrinsic(
     if let Some(property) = property {
         let (_, offset, property_type) = resolve_property_slot(class_info, property)?;
         let property_type = property_type.codegen_repr();
-        return emit_declared_property_load(ctx, obj_ref, offset, &property_type, property);
+        // No `acquire` follows a Throwable accessor, and its result outlives the object it read
+        // from, so this one owns its copy.
+        return emit_declared_property_load(
+            ctx,
+            obj_ref,
+            offset,
+            &property_type,
+            property,
+            PropertyLoad::Owned,
+        );
     }
     match intrinsic {
         ThrowableIntrinsic::EmptyString => {
@@ -1412,25 +1421,50 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     let prop_type = prop_type.codegen_repr();
     let obj_ref = object_ptr_ref(ctx, object)?;
 
-    emit_declared_property_load(ctx, &obj_ref, offset, &prop_type, &property)?;
+    // `Op::PropGet` is always followed by `Op::Acquire`, which persists a string and increfs a
+    // refcounted child — so retaining here too would leave one extra reference per read.
+    emit_declared_property_load(
+        ctx,
+        &obj_ref,
+        offset,
+        &prop_type,
+        &property,
+        PropertyLoad::Borrowed,
+    )?;
 
     store_result(ctx, inst)?;
     Ok(())
 }
 
-/// Pushes one DECLARED property slot's value onto the stack as an OWNED value.
+/// Who owns the value a property read leaves on the stack.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum PropertyLoad {
+    /// The reader owns it: a string is persisted into a fresh heap copy and a refcounted child is
+    /// increfed. For callers that produce a result nothing else will acquire.
+    Owned,
+    /// The reader only views it: no copy and no incref. For `Op::PropGet`, which the EIR ALWAYS
+    /// follows with an `Op::Acquire` — verified across every use shape (store, echo, argument,
+    /// concat, builtin argument, return, strict compare).
+    Borrowed,
+}
+
+/// Pushes one DECLARED property slot's value onto the stack.
 ///
-/// Shared by `PropGet` and by the Throwable accessors that method-call lowering open-codes,
-/// so both obey one set of retain rules rather than two that can drift. Scalar arms
-/// (Int/Bool/Float) load directly with no incref because they are not refcounted; a string is
-/// persisted into a fresh heap copy, and a container or Mixed cell is increfed, so every
-/// result is the caller's to release.
+/// Shared by `PropGet` and by the Throwable accessors that method-call lowering open-codes. They
+/// need OPPOSITE ownership, which is the whole reason this takes a parameter: `PropGet` is
+/// followed by an `acquire` that persists or increfs, so retaining here as well left one extra
+/// reference per read — measured at ~207 bytes per read of an array property, whose backing array
+/// was then never freed, and ~87 for a string. The Throwable accessors have no such acquire and
+/// outlive the object they read from, so they must own their copy.
+///
+/// Scalar arms (Int/Bool/Float) are the same either way: they are not refcounted.
 fn emit_declared_property_load(
     ctx: &mut FnCtx,
     obj_ref: &str,
     offset: usize,
     prop_type: &PhpType,
     property: &str,
+    load: PropertyLoad,
 ) -> Result<()> {
     match prop_type {
         PhpType::Int | PhpType::Bool => {
@@ -1442,36 +1476,44 @@ fn emit_declared_property_load(
             ctx.fb.ins(&format!("f64.load offset={}", offset), "load float property value_lo");
         }
         PhpType::Str => {
-            // Persists a copy the reader owns. That is one allocation more than the EIR asks for
-            // — it follows `prop_get` with an `acquire`, which persists AGAIN, and only the second
-            // copy is released, so every string property read leaks ~31 bytes. Returning the
-            // BORROWED slot instead is NOT the fix: the Throwable accessors read a message and
-            // outlive the object that held it, so the borrowed pointer goes stale and
-            // `getMessage()` answers dead bytes. Closing this needs the EIR to stop asking for an
-            // acquire on an already-owned read, not a change here.
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.fb.ins(&format!("i32.load offset={}", offset), "load string property ptr (lo)");
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.fb.ins(&format!("i64.load offset={}", offset + 8), "load string property len (hi)");
-            ctx.fb.ins("call $__rt_str_persist", "persist string copy (ptr,len) -> (new_ptr,new_len)");
+            if load == PropertyLoad::Owned {
+                ctx.fb.ins(
+                    "call $__rt_str_persist",
+                    "persist string copy (ptr,len) -> (new_ptr,new_len)",
+                );
+            }
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Object(_) => {
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Object(_)
+        | PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Iterable => {
+            let what = if matches!(prop_type, PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable)
+            {
+                "mixed cell"
+            } else {
+                "container cell"
+            };
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
-            ctx.fb.ins(&format!("i32.load offset={}", offset), "load container property ptr (lo)");
-            let ptr_tmp = ctx.fresh_temp(ValType::I32);
-            ctx.fb.ins(&format!("local.set {}", ptr_tmp), "save container cell ptr");
-            ctx.fb.ins(&format!("local.get {}", ptr_tmp), "container cell ptr");
-            ctx.fb.ins("call $__rt_incref", "retain returned container cell (refcount++)");
-            ctx.fb.ins(&format!("local.get {}", ptr_tmp), "container cell ptr for result");
-        }
-        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable => {
-            ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
-            ctx.fb.ins(&format!("i32.load offset={}", offset), "load mixed property cell ptr (lo)");
-            let cell_tmp = ctx.fresh_temp(ValType::I32);
-            ctx.fb.ins(&format!("local.set {}", cell_tmp), "save mixed cell ptr");
-            ctx.fb.ins(&format!("local.get {}", cell_tmp), "mixed cell ptr");
-            ctx.fb.ins("call $__rt_incref", "retain returned mixed cell (refcount++)");
-            ctx.fb.ins(&format!("local.get {}", cell_tmp), "mixed cell ptr for result");
+            ctx.fb.ins(
+                &format!("i32.load offset={}", offset),
+                &format!("load {what} property ptr (lo)"),
+            );
+            if load == PropertyLoad::Owned {
+                let ptr_tmp = ctx.fresh_temp(ValType::I32);
+                ctx.fb
+                    .ins(&format!("local.set {}", ptr_tmp), &format!("save {what} ptr"));
+                ctx.fb.ins(&format!("local.get {}", ptr_tmp), what);
+                ctx.fb
+                    .ins("call $__rt_incref", &format!("retain returned {what} (refcount++)"));
+                ctx.fb
+                    .ins(&format!("local.get {}", ptr_tmp), &format!("{what} for result"));
+            }
         }
         other => {
             return Err(WasmError::Unsupported(format!(

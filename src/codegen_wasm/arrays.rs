@@ -248,6 +248,10 @@ const RT_ARRAY_PUSH_INT: &str = r#"(func $__rt_array_push_int (param $array i32)
   (local $len i64)
   (local $cap i64)
   (local $slot i32)
+  ;; Copy-on-write split, exactly as `__rt_array_set_*` does: a shared array must be
+  ;; cloned before it is appended to, or the append is visible through every other
+  ;; reference — and `__rt_array_grow` frees the old block under them.
+  (local.set $array (call $__rt_array_ensure_unique (local.get $array)))
   (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as a scalar array
     (then
       (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 8))  ;; elem_size = 8
@@ -275,6 +279,10 @@ const RT_ARRAY_PUSH_FLOAT: &str = r#"(func $__rt_array_push_float (param $array 
   (local $len i64)
   (local $cap i64)
   (local $slot i32)
+  ;; Copy-on-write split, exactly as `__rt_array_set_*` does: a shared array must be
+  ;; cloned before it is appended to, or the append is visible through every other
+  ;; reference — and `__rt_array_grow` frees the old block under them.
+  (local.set $array (call $__rt_array_ensure_unique (local.get $array)))
   (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as a float array
     (then
       (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 8))  ;; elem_size = 8
@@ -303,6 +311,10 @@ const RT_ARRAY_PUSH_OBJECT: &str = r#"(func $__rt_array_push_object (param $arra
   (local $len i64)
   (local $cap i64)
   (local $slot i32)
+  ;; Copy-on-write split, exactly as `__rt_array_set_*` does: a shared array must be
+  ;; cloned before it is appended to, or the append is visible through every other
+  ;; reference — and `__rt_array_grow` frees the old block under them.
+  (local.set $array (call $__rt_array_ensure_unique (local.get $array)))
   (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as an object array
     (then
       (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 8))  ;; elem_size = 8
@@ -408,6 +420,10 @@ const RT_ARRAY_PUSH_STR: &str = r#"(func $__rt_array_push_str (param $array i32)
   (local $slot i32)
   (local $newptr i32)
   (local $plen i64)
+  ;; Copy-on-write split, exactly as `__rt_array_set_*` does: a shared array must be
+  ;; cloned before it is appended to, or the append is visible through every other
+  ;; reference — and `__rt_array_grow` frees the old block under them.
+  (local.set $array (call $__rt_array_ensure_unique (local.get $array)))
   (if (i64.eqz (i64.load (local.get $array)))             ;; empty -> shape as a string array
     (then
       (i64.store (i32.add (local.get $array) (i32.const 8))
@@ -475,6 +491,10 @@ const RT_ARRAY_PUSH_MIXED: &str = r#"(func $__rt_array_push_mixed (param $array 
   (local $alen i64)
   (local $cap i64)
   (local $slot i32)
+  ;; Copy-on-write split, exactly as `__rt_array_set_*` does: a shared array must be
+  ;; cloned before it is appended to, or the append is visible through every other
+  ;; reference — and `__rt_array_grow` frees the old block under them.
+  (local.set $array (call $__rt_array_ensure_unique (local.get $array)))
   (if (i64.eqz (i64.load (local.get $array)))             ;; empty -> shape as a mixed-cell array (16B slots, value_type 7)
     (then
       (i64.store (i32.add (local.get $array) (i32.const 8))
