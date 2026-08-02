@@ -709,7 +709,27 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator, preceding_op: Option<Op>
             Ok(())
         }
 
-        Terminator::Fatal { .. } => Err(WasmError::Unsupported("fatal terminator".to_string())),
+        // A terminating PHP fatal whose message the EIR already interned — `match` with no
+        // arm taken is the one that reaches here. Writing that exact text and exiting 255 is
+        // what the native does, so the two targets report identically.
+        Terminator::Fatal { message } => {
+            let (pointer, length) = ctx.str_literal(*message)?;
+            ctx.fb.ins(
+                &format!(
+                    "(call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {pointer}) (i32.const {length}))"
+                ),
+                "the interned fatal message, on stderr",
+            );
+            ctx.fb.ins(
+                "(call $wasi_proc_exit (i32.const 255))",
+                "PHP's fatal exit status",
+            );
+            ctx.fb.ins(
+                "unreachable",
+                "elephc-trap:post-noreturn:fatal-terminator",
+            );
+            Ok(())
+        }
 
         Terminator::GeneratorSuspend { .. } => Err(WasmError::Unsupported(
             "generator-suspend terminator".to_string(),

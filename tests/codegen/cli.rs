@@ -8177,6 +8177,115 @@ echo "\n";
 /// php-src 8.5.6's own output for `ARRAY_PROPERTY_SOURCE`.
 const ARRAY_PROPERTY_EXPECTED: &str = "2,null;0;1111111111111111111111111111111111111111\n";
 
+/// `match` over an ENUM and over `true`, and the fatal an unmatched `match` raises.
+#[test]
+fn test_cli_wasm_match_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_match");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, MATCH_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the match probe");
+    assert!(
+        output.status.success(),
+        "match compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the match probe under Node");
+    assert!(
+        run.status.success(),
+        "match probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), MATCH_EXPECTED);
+
+    // A `match` with no arm taken terminates. PHP names the value and the file; the EIR
+    // interns the shorter text the NATIVE backend also prints, so the two targets agree.
+    let unmatched = dir.join("unmatched.php");
+    fs::write(
+        &unmatched,
+        "<?php\nfunction f(int $n): string { return match ($n) { 1 => \"one\" }; }\necho f(1);\necho f(9);\n",
+    )
+    .unwrap();
+    let compiled = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&unmatched)
+        .output()
+        .expect("failed to compile the unmatched probe");
+    assert!(compiled.status.success());
+    let fell_through = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("unmatched.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the unmatched probe under Node");
+    assert_eq!(
+        fell_through.status.code(),
+        Some(255),
+        "an unmatched match must exit with PHP's fatal status"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&fell_through.stdout),
+        "one",
+        "output before the fatal must still be flushed"
+    );
+    assert!(
+        String::from_utf8_lossy(&fell_through.stderr).contains("unhandled match case"),
+        "the interned fatal text must reach stderr: {}",
+        String::from_utf8_lossy(&fell_through.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The match probe. Matching on an ENUM compares singleton identity, and `match (true)` is
+/// PHP's idiom for a guard ladder.
+const MATCH_SOURCE: &str = r##"<?php
+enum Suit: string { case H = "h"; case S = "s"; case C = "c"; }
+function name(Suit $s): string { return match ($s) { Suit::H => "hearts", Suit::S => "spades", Suit::C => "clubs" }; }
+function grade(int $n): string { return match (true) { $n >= 90 => "A", $n >= 80 => "B", default => "C" }; }
+echo name(Suit::H), ",", name(Suit::S), ",", name(Suit::C), ";";
+echo grade(95), grade(85), grade(10), "\n";
+"##;
+
+/// php-src 8.5.6's own output for `MATCH_SOURCE`.
+const MATCH_EXPECTED: &str = "hearts,spades,clubs;ABC\n";
+
 /// Closures whose visible parameters are `mixed`, called with several tags and with a capture.
 #[test]
 fn test_cli_wasm_mixed_closure_parameters_match_php() {

@@ -12260,7 +12260,7 @@
           "name": "fatal",
           "family": "terminator",
           "enum_name": "Terminator",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "fatal PHP runtime error"
           ],
@@ -12268,7 +12268,13 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP control-flow terminator; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::function",
+            "lowerer": "codegen_wasm::function::lower_terminator",
+            "tests": [
+              "codegen::cli::test_cli_wasm_match_matches_php"
+            ]
+          }
         },
         {
           "name": "generator_suspend",
@@ -12890,14 +12896,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 204,
+    "supported": 205,
     "excluded": 47,
-    "missing": 461,
+    "missing": 460,
     "evidence_gaps": 169,
     "row_evidence_gaps": 168,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "461 reachable identities lack a WASM lowerer; 168 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "460 reachable identities lack a WASM lowerer; 168 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }

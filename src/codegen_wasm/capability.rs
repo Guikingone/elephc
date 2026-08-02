@@ -5431,9 +5431,9 @@ pub(super) fn terminator_is_supported(terminator: &Terminator) -> bool {
         | Terminator::Switch { .. }
         | Terminator::Return { .. }
         | Terminator::Throw { .. }
-        | Terminator::Unreachable => true,
-        Terminator::Fatal { .. }
-        | Terminator::GeneratorSuspend { .. } => false,
+        | Terminator::Unreachable
+        | Terminator::Fatal { .. } => true,
+        Terminator::GeneratorSuspend { .. } => false,
     }
 }
 
