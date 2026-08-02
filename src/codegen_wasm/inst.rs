@@ -1935,6 +1935,14 @@ fn lower_language_construct_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<
         })?;
     match name.as_str() {
         "exit" | "die" => lower_exit(ctx, inst),
+        // `isset($x)` is exactly "not null" for a variable the checker proved defined — an
+        // undefined one never reaches here, the front-end rejects it earlier.
+        "isset" => {
+            emit_is_null_test(ctx, operand(inst, 0)?)?;
+            ctx.fb.ins("i64.eqz", "isset is the negation of is-null");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+            store_result(ctx, inst)
+        }
         other => Err(WasmError::Unsupported(format!(
             "language construct {}",
             other
@@ -3685,7 +3693,15 @@ fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 
 /// Lowers `IsNull` from PHP type metadata and boxed/tagged runtime tags.
 fn lower_is_null(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let op0 = operand(inst, 0)?;
+    emit_is_null_test(ctx, operand(inst, 0)?)?;
+    store_result(ctx, inst)
+}
+
+/// Pushes 1 when the value is PHP `null`, 0 otherwise.
+///
+/// Shared by `Op::IsNull` and the `isset` language construct, which is its negation — one set of
+/// per-representation tag rules rather than two that can drift.
+fn emit_is_null_test(ctx: &mut FnCtx, op0: crate::ir::ValueId) -> Result<()> {
     let repr = ctx.value_repr(op0)?.clone();
     let php_type = ctx.value_php_type(op0)?.clone();
     let ir_type = ctx
@@ -3729,5 +3745,5 @@ fn lower_is_null(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins("i64.const 0", "statically non-null value");
         }
     }
-    store_result(ctx, inst)
+    Ok(())
 }

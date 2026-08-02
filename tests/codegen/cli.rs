@@ -8715,6 +8715,122 @@ echo Math::square(0), "|", Math::square(-4), "\n";
 const POLYMORPHIC_EXPECTED: &str = r##"9;10;16;|3|49|6|0|16
 "##;
 
+/// Verifies `isset`, which is exactly "not null" for a variable the checker proved defined.
+///
+/// It reuses `Op::IsNull`'s per-representation tag rules rather than growing a second copy — a
+/// Mixed cell tests tag 8, a tagged scalar its tag word, a nullable container its pointer, and a
+/// statically non-null value folds to true.
+///
+/// The audit confined EVERY language construct to `main`, because `exit`/`die` cannot unwind a
+/// caller's WASM frames. `isset` only reads a tag, so it is exempt — and
+/// `test_cli_wasm_rejects_exit_outside_main` still pins that `exit` is not.
+#[test]
+fn test_cli_wasm_isset_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_isset");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ISSET_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the isset probe");
+    assert!(
+        output.status.success(),
+        "isset compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the isset probe under Node");
+    assert!(
+        run.status.success(),
+        "isset probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), ISSET_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `exit` outside `main` is still refused, which the `isset` exemption must not relax.
+#[test]
+fn test_cli_wasm_rejects_exit_outside_main() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_exit_nested");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        "<?php\nfunction boom(): void { exit(1); }\nboom();\n",
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to invoke elephc");
+    assert!(
+        !output.status.success(),
+        "exit outside main cannot unwind caller-owned frames and must be refused"
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stderr)
+            .contains("exit/die outside main cannot unwind caller-owned WASM frames"),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The `isset` probe: every representation it can reach, inside and outside a function.
+const ISSET_SOURCE: &str = r##"<?php
+function mm(mixed $v): string { return isset($v) ? "y" : "n"; }
+class Box { public function __construct(public int $n) {} }
+$a = 5; $b = null; $s = "x"; $f = 1.5; $arr = [1,2]; $e = []; $o = new Box(1);
+echo isset($a) ? "y" : "n", isset($b) ? "y" : "n", isset($s) ? "y" : "n";
+echo isset($f) ? "y" : "n", isset($arr) ? "y" : "n", isset($e) ? "y" : "n";
+echo isset($o) ? "y" : "n", "|";
+echo mm(3), mm("z"), mm(0), mm(1.5), mm(""), "|";
+echo $a ?? 9, "|";
+$t = 0;
+foreach ([1, 2, 3] as $v) { if (isset($v)) { $t = $t + $v; } }
+echo $t, "\n";
+"##;
+
+/// php-src 8.5.6's own output for `ISSET_SOURCE`.
+const ISSET_EXPECTED: &str = r##"ynyyyyy|yyyyy|5|6
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —

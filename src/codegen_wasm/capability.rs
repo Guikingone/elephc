@@ -247,7 +247,22 @@ fn scan_function(
                     instruction.op.name()
                 ));
             }
-            if instruction.op == Op::LanguageConstructCall && !function.flags.is_main {
+            // `exit`/`die` cannot unwind a caller's WASM frames, so they stay confined to
+            // main. `isset` has no such constraint — it only reads a tag — so it is exempt.
+            let construct_name = if instruction.op == Op::LanguageConstructCall {
+                instruction.immediate.as_ref().and_then(|immediate| match immediate {
+                    Immediate::Data(data) => {
+                        module.data.function_names.get(data.as_raw() as usize).cloned()
+                    }
+                    _ => None,
+                })
+            } else {
+                None
+            };
+            if instruction.op == Op::LanguageConstructCall
+                && !function.flags.is_main
+                && construct_name.as_deref() != Some("isset")
+            {
                 issues.push(format!(
                     "{collection}::{} block#{} instruction#{}: exit/die outside main cannot unwind caller-owned WASM frames",
                     function.name,
