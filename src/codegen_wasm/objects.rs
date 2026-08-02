@@ -1610,10 +1610,25 @@ fn emit_declared_property_store(
     value: ValueId,
     property: &str,
 ) -> Result<()> {
+    // A Mixed source into a CONCRETE slot narrows the same way a local load does — `$this->n =
+    // $this->n + 1` widens the value to Mixed through the checked add, and the slot is still an
+    // int. Narrowing here rather than refusing keeps property counters working, and goes through
+    // the shared transfer layer so the rule lives in one place.
+    let narrows_from_mixed = matches!(
+        ctx.function.value(value).map(|v| v.ir_type),
+        Some(IrType::Heap(IrHeapKind::Mixed))
+    ) && !matches!(
+        prop_type,
+        PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
+    );
     match prop_type {
         PhpType::Int | PhpType::Bool => {
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
-            ctx.emit_load_value(value)?;
+            if narrows_from_mixed {
+                super::transfer::emit_narrow_mixed_into(ctx, value, prop_type)?;
+            } else {
+                ctx.emit_load_value(value)?;
+            }
             ctx.fb.ins(&format!("i64.store offset={}", offset), "store scalar property value_lo");
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.fb.ins("i64.const 0", "zero tag word");
@@ -1621,7 +1636,11 @@ fn emit_declared_property_store(
         }
         PhpType::Float => {
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
-            ctx.emit_load_value(value)?;
+            if narrows_from_mixed {
+                super::transfer::emit_narrow_mixed_into(ctx, value, prop_type)?;
+            } else {
+                ctx.emit_load_value(value)?;
+            }
             ctx.fb.ins(&format!("f64.store offset={}", offset), "store float property value_lo");
             ctx.fb.ins(&format!("local.get {}", obj_ref), "object base address");
             ctx.fb.ins("i64.const 0", "zero tag word");

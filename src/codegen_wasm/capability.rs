@@ -3233,6 +3233,18 @@ fn property_write_shape_issue(
         )
         .map(|issue| format!("mixed slot: {issue}"));
     }
+    // A Mixed source narrows into a concrete SCALAR slot, the same coercion a local load
+    // performs — `$this->n = $this->n + 1` widens through the checked add and the slot stays an
+    // int. Only scalars: a container slot has no narrowing to perform.
+    if source_ir == IrType::Heap(IrHeapKind::Mixed)
+        && source_php.codegen_repr() == PhpType::Mixed
+        && matches!(
+            property_type,
+            PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str
+        )
+    {
+        return None;
+    }
     let source_repr = source_php.codegen_repr();
     if &source_repr != property_type
         || transfer::validate_storage_pair(source_ir, source_php).is_err()

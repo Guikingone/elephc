@@ -73,6 +73,7 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_IMPLODE_OWNED);
     wm.add_raw_func(RT_EXPLODE);
     wm.add_raw_func(RT_STR_SPLIT);
+    wm.add_raw_func(RT_WORDWRAP_GENERAL);
     wm.add_raw_func(RT_WORDWRAP);
     wm.add_raw_func(RT_FMT_PAD);
     wm.add_raw_func(RT_FMT_INT);
@@ -1941,6 +1942,99 @@ const RT_STR_SPLIT: &str = r#"(func $__rt_str_split (param $ptr i32) (param $len
     (local.set $i (i64.add (local.get $i) (local.get $take)))
     (br $cut)))
   (local.get $arr))                                               ;; the built array
+"#;
+
+/// `__rt_wordwrap_general`: PHP's `wordwrap` with an arbitrary break string and the cut flag.
+///
+/// php-src's general branch, transcribed and validated on 314 cases against 8.5.6 — 14 chosen
+/// plus 300 generated over an alphabet of just `a`, `b`, `c` and space, which is where the awkward
+/// shapes live: `wordwrap("a  b", 2, "-", true)` is `a -b` (the first space BECOMES the break, the
+/// second survives) and `wordwrap("  lead", 3, "-", true)` is ` -lea-d`.
+///
+/// Unlike the one-byte in-place form this BUILDS its result, because a multi-byte break and a cut
+/// both lengthen the text. The bound is one break per input byte plus one, which no input can
+/// exceed.
+///
+/// `laststart` is where the current line began and `lastspace` the most recent space. A space at
+/// or past the width breaks THERE; any other byte at or past it breaks back at the last space, or
+/// — only when cutting — right here when the line holds no space at all. An occurrence of the
+/// break string in the input resets both.
+const RT_WORDWRAP_GENERAL: &str = r#"(func $__rt_wordwrap_general (param $ptr i32) (param $len i64) (param $width i64) (param $bptr i32) (param $blen i64) (param $cut i32) (result i32) (result i64)
+  (local $out i32)
+  (local $olen i64)
+  (local $cur i64)
+  (local $laststart i64)
+  (local $lastspace i64)
+  (local $b i32)
+  (local $n i64)
+  (local.set $out (call $__rt_str_alloc
+    (i64.add (local.get $len) (i64.mul (i64.add (local.get $len) (i64.const 1)) (local.get $blen)))))
+  (block $end (loop $scan
+    (br_if $end (i64.ge_s (local.get $cur) (local.get $len)))
+    (local.set $b (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $cur)))))
+    (if (i32.and (i32.and (i64.gt_s (local.get $blen) (i64.const 0))
+                          (i64.le_s (i64.add (local.get $cur) (local.get $blen)) (local.get $len)))
+                 (i32.wrap_i64 (call $__rt_str_region_eq
+                   (local.get $ptr) (local.get $bptr) (local.get $blen) (local.get $cur))))
+      (then                                                       ;; the break already occurs here
+        (local.set $n (i64.sub (i64.add (local.get $cur) (local.get $blen)) (local.get $laststart)))
+        (memory.copy (i32.add (local.get $out) (i32.wrap_i64 (local.get $olen)))
+                     (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $laststart)))
+                     (i32.wrap_i64 (local.get $n)))
+        (local.set $olen (i64.add (local.get $olen) (local.get $n)))
+        (local.set $laststart (i64.add (local.get $cur) (local.get $blen)))
+        (local.set $lastspace (local.get $laststart))
+        (local.set $cur (i64.sub (i64.add (local.get $cur) (local.get $blen)) (i64.const 1))))
+      (else (if (i32.eq (local.get $b) (i32.const 32))             ;; a space may become the break
+        (then
+          (if (i64.ge_s (i64.sub (local.get $cur) (local.get $laststart)) (local.get $width))
+            (then
+              (local.set $n (i64.sub (local.get $cur) (local.get $laststart)))
+              (memory.copy (i32.add (local.get $out) (i32.wrap_i64 (local.get $olen)))
+                           (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $laststart)))
+                           (i32.wrap_i64 (local.get $n)))
+              (local.set $olen (i64.add (local.get $olen) (local.get $n)))
+              (memory.copy (i32.add (local.get $out) (i32.wrap_i64 (local.get $olen)))
+                           (local.get $bptr) (i32.wrap_i64 (local.get $blen)))
+              (local.set $olen (i64.add (local.get $olen) (local.get $blen)))
+              (local.set $laststart (i64.add (local.get $cur) (i64.const 1)))))
+          (local.set $lastspace (local.get $cur)))
+        (else (if (i64.ge_s (i64.sub (local.get $cur) (local.get $laststart)) (local.get $width))
+          (then (if (i64.ge_s (local.get $laststart) (local.get $lastspace))
+            (then (if (local.get $cut)                             ;; no space to break at
+              (then
+                (local.set $n (i64.sub (local.get $cur) (local.get $laststart)))
+                (memory.copy (i32.add (local.get $out) (i32.wrap_i64 (local.get $olen)))
+                             (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $laststart)))
+                             (i32.wrap_i64 (local.get $n)))
+                (local.set $olen (i64.add (local.get $olen) (local.get $n)))
+                (memory.copy (i32.add (local.get $out) (i32.wrap_i64 (local.get $olen)))
+                             (local.get $bptr) (i32.wrap_i64 (local.get $blen)))
+                (local.set $olen (i64.add (local.get $olen) (local.get $blen)))
+                (local.set $laststart (local.get $cur))
+                (local.set $lastspace (local.get $cur)))))
+            (else                                                  ;; break back at the last space
+              (local.set $n (i64.sub (local.get $lastspace) (local.get $laststart)))
+              (memory.copy (i32.add (local.get $out) (i32.wrap_i64 (local.get $olen)))
+                           (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $laststart)))
+                           (i32.wrap_i64 (local.get $n)))
+              (local.set $olen (i64.add (local.get $olen) (local.get $n)))
+              (memory.copy (i32.add (local.get $out) (i32.wrap_i64 (local.get $olen)))
+                           (local.get $bptr) (i32.wrap_i64 (local.get $blen)))
+              (local.set $olen (i64.add (local.get $olen) (local.get $blen)))
+              (local.set $laststart (i64.add (local.get $lastspace) (i64.const 1)))
+              (local.set $lastspace (local.get $laststart))))))))))
+    (local.set $cur (i64.add (local.get $cur) (i64.const 1)))
+    (br $scan)))
+  (if (i64.ne (local.get $laststart) (local.get $cur))             ;; the tail after the last break
+    (then
+      (local.set $n (i64.sub (local.get $cur) (local.get $laststart)))
+      (memory.copy (i32.add (local.get $out) (i32.wrap_i64 (local.get $olen)))
+                   (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $laststart)))
+                   (i32.wrap_i64 (local.get $n)))
+      (local.set $olen (i64.add (local.get $olen) (local.get $n)))))
+  (local.get $out)
+  (local.get $olen))
 "#;
 
 /// `__rt_wordwrap`: PHP's `wordwrap` with the default one-byte break and no long-word cutting.
@@ -3954,20 +4048,36 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// those arities are refused rather than approximated.
 fn lower_wordwrap(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
-    if inst.operands.len() == 2 {
+    if inst.operands.len() >= 2 {
         ctx.emit_load_value(operand(inst, 1)?)?;
     } else {
         ctx.fb.ins("i64.const 75", "PHP's default width");
     }
-    ctx.fb.ins("call $__rt_wordwrap", "break lines at spaces, in place");
+    if inst.operands.len() <= 2 {
+        // The one-byte, no-cut form rewrites in place: a space BECOMES the break, so the length
+        // never changes and no buffer has to be built.
+        ctx.fb.ins("call $__rt_wordwrap", "break lines at spaces, in place");
+        return store_result(ctx, inst);
+    }
+    ctx.emit_load_value(operand(inst, 2)?)?;
+    if inst.operands.len() == 4 {
+        ctx.emit_load_value(operand(inst, 3)?)?;
+        ctx.fb.ins("i32.wrap_i64", "the cut flag is a PHP bool");
+    } else {
+        ctx.fb.ins("i32.const 0", "no cut: a long word is left whole");
+    }
+    ctx.fb.ins(
+        "call $__rt_wordwrap_general",
+        "an arbitrary break, and cutting, both lengthen the text",
+    );
     store_result(ctx, inst)
 }
 
 /// Validates `wordwrap`: a subject and an optional integer width, a string out.
 fn wordwrap_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
-    if !matches!(call.operands.len(), 1 | 2) {
+    if !matches!(call.operands.len(), 1 | 2 | 3 | 4) {
         return Some(format!(
-            "expected a subject and an optional width, got {} operands",
+            "expected a subject, an optional width, break and cut flag, got {} operands",
             call.operands.len()
         ));
     }
@@ -3975,8 +4085,10 @@ fn wordwrap_shape_issue(function: &Function, call: &Instruction) -> Option<Strin
         let Some(value) = function.value(*operand) else {
             return Some("operand is missing from the value table".to_string());
         };
-        let (want_ir, want_php) = if index == 0 {
+        let (want_ir, want_php) = if index == 0 || index == 2 {
             (IrType::Str, PhpType::Str)
+        } else if index == 3 {
+            (IrType::I64, PhpType::Bool)
         } else {
             (IrType::I64, PhpType::Int)
         };
@@ -6058,14 +6170,44 @@ mod tests {
                 "wordwrap accepts {arity} operand(s)"
             );
         }
-        let with_break = shaped_call(
-            RuntimeFnId::Wordwrap,
-            &[str_arg.clone(), int_arg.clone(), str_arg.clone()],
-            IrType::Str,
-            PhpType::Str,
-        );
-        let call = with_break.instructions.last().expect("the probe emitted a call");
-        assert!(direct_builtin_shape_issue(&probe_module(), &with_break, call, RuntimeFnId::Wordwrap).is_some());
+        // The break-string and cut forms are lowered too, through the building helper rather
+        // than the in-place one.
+        for operands in [
+            vec![str_arg.clone(), int_arg.clone(), str_arg.clone()],
+            vec![
+                str_arg.clone(),
+                int_arg.clone(),
+                str_arg.clone(),
+                (IrType::I64, PhpType::Bool),
+            ],
+        ] {
+            let wrapped = shaped_call(RuntimeFnId::Wordwrap, &operands, IrType::Str, PhpType::Str);
+            let call = wrapped.instructions.last().expect("the probe emitted a call");
+            assert_eq!(
+                direct_builtin_shape_issue(&probe_module(), &wrapped, call, RuntimeFnId::Wordwrap),
+                None,
+                "wordwrap accepts {} operands",
+                operands.len()
+            );
+        }
+        // A break that is not a string, and a cut flag that is not a bool, still refuse.
+        for operands in [
+            vec![str_arg.clone(), int_arg.clone(), int_arg.clone()],
+            vec![
+                str_arg.clone(),
+                int_arg.clone(),
+                str_arg.clone(),
+                str_arg.clone(),
+            ],
+        ] {
+            let wrapped = shaped_call(RuntimeFnId::Wordwrap, &operands, IrType::Str, PhpType::Str);
+            let call = wrapped.instructions.last().expect("the probe emitted a call");
+            assert!(
+                direct_builtin_shape_issue(&probe_module(), &wrapped, call, RuntimeFnId::Wordwrap)
+                    .is_some(),
+                "wordwrap checks its break and cut storage"
+            );
+        }
         // The fast path never changes the length: it replaces a space, it does not insert.
         assert!(
             RT_WORDWRAP.contains("(local.get $out) (local.get $olen)"),

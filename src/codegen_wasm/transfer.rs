@@ -685,6 +685,20 @@ fn repr_for_ir(ir: IrType) -> WasmRepr {
     }
 }
 
+/// Unboxes a Mixed cell onto the stack as `dest_php`'s concrete storage.
+///
+/// The property store needs the same narrowing a local load performs, so both go through
+/// `emit_unbox_mixed_to_concrete` rather than growing a second copy of the tag rules.
+pub(super) fn emit_narrow_mixed_into(
+    ctx: &mut FnCtx,
+    value: ValueId,
+    dest_php: &PhpType,
+) -> Result<()> {
+    let temps = load_value_to_temps(ctx, value)?;
+    let dest_ir = IrType::from_php(&dest_php.codegen_repr());
+    emit_unbox_mixed_to_concrete(ctx, &temps, &repr_for_ir(dest_ir), dest_ir, dest_php)
+}
+
 /// Loads a call argument and pushes it in the callee parameter's representation.
 ///
 /// Applies concrete-to-Mixed boxing or Mixed-to-concrete unboxing as needed so

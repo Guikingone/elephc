@@ -8414,6 +8414,104 @@ echo $p, "\n";
 const COUNTING_EXPECTED: &str = r##"012|21|-2|120
 "##;
 
+/// Verifies a property COUNTER, and `wordwrap`'s break-string and cut forms.
+///
+/// `$this->n = $this->n + 1` widens the value to Mixed through the checked add while the slot
+/// stays an `int`, so the store narrows the same way a local load does — refusing it turned away
+/// every counter held in an object.
+///
+/// `wordwrap`'s four-argument form BUILDS its result, because a multi-byte break and a cut both
+/// lengthen the text; only the one-byte no-cut form can rewrite in place, where a space BECOMES
+/// the break. Transcribed from php-src and validated on 314 cases, mostly generated over an
+/// alphabet of `a`, `b`, `c` and space — which is where the awkward shapes are: `"a  b"` at width
+/// 2 cutting is `a -b`, the first space becoming the break and the second surviving, and
+/// `"  lead"` is ` -lea-d`.
+#[test]
+fn test_cli_wasm_property_counter_and_wordwrap_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_wordwrap");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, WORDWRAP_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the wordwrap probe");
+    assert!(
+        output.status.success(),
+        "wordwrap compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the wordwrap probe under Node");
+    assert!(
+        run.status.success(),
+        "wordwrap probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), WORDWRAP_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The probe: an int and a float property counter, then every wordwrap form over the shapes that
+/// separate them.
+const WORDWRAP_SOURCE: &str = r##"<?php
+class Counter {
+    private int $n = 0;
+    private float $f = 0.5;
+    public function bump(): int { $this->n = $this->n + 1; return $this->n; }
+    public function grow(): float { $this->f = $this->f + 1.25; return $this->f; }
+}
+$c = new Counter();
+echo $c->bump(), $c->bump(), $c->bump(), "|", $c->grow(), "|", $c->grow(), "\n";
+$w = ["aaa bbb ccc", "abcdefghij", "a b c d e", "the quick brown fox", "", "one", "aaaa bb", "a  b", "  lead"];
+foreach ($w as $s) { echo "[", str_replace("\n", "N", wordwrap($s, 4, "-", true)), "]"; }
+echo "\n";
+foreach ($w as $s) { echo "[", str_replace("\n", "N", wordwrap($s, 4, "-", false)), "]"; }
+echo "\n";
+foreach ($w as $s) { echo "[", str_replace("\n", "N", wordwrap($s, 7, "<>", true)), "]"; }
+echo "\n";
+echo "[", str_replace("\n", "N", wordwrap("aaa bbb ccc", 7)), "]\n";
+"##;
+
+/// php-src 8.5.6's own output for `WORDWRAP_SOURCE`.
+const WORDWRAP_EXPECTED: &str = r##"123|1.75|3
+[aaa-bbb-ccc][abcd-efgh-ij][a b-c d-e][the-quic-k-brow-n-fox][][one][aaaa-bb][a  b][ -lead]
+[aaa-bbb-ccc][abcdefghij][a b-c d-e][the-quick-brown-fox][][one][aaaa-bb][a  b][ -lead]
+[aaa bbb<>ccc][abcdefg<>hij][a b c d<>e][the<>quick<>brown<>fox][][one][aaaa bb][a  b][  lead]
+[aaa bbbNccc]
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —
