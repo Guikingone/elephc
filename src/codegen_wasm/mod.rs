@@ -30,6 +30,7 @@ mod closures;
 mod context;
 mod float;
 mod function;
+mod gc;
 mod hashes;
 mod heap;
 mod inst;

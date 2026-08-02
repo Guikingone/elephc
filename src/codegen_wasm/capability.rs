@@ -890,7 +890,8 @@ fn value_transfer_shape_issue(
         Ok(
             transfer::TransferKind::Copy
             | transfer::TransferKind::BoxMixed
-            | transfer::TransferKind::WidenArrayToMixed { .. },
+            | transfer::TransferKind::WidenArrayToMixed { .. }
+            | transfer::TransferKind::NullPointer,
         ) => None,
         Err(error) => Some(error.to_string()),
     }
@@ -5264,6 +5265,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::HashSet
         | Op::HashUnset
         | Op::HashIsset
+        | Op::GcCollect
         | Op::ArrayPush
         | Op::ArrayToHash
         | Op::HashAppend
@@ -5433,7 +5435,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::IncludeOnceGuard
         | Op::FunctionVariantMark
         | Op::FunctionVariantDispatch
-        | Op::GcCollect
         | Op::EnsureOwned => false,
     }
 }

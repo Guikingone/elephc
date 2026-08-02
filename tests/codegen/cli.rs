@@ -8013,6 +8013,121 @@ BOLT, NUT, PIN
 1|hi|2.5|done
 "##;
 
+/// Proves the cycle collector actually reclaims a cycle, by watching memory not grow.
+///
+/// Two objects pointing at each other keep each other's refcount above zero forever, so
+/// refcounting alone can never free them — this is the one shape on this target that needs
+/// `__rt_gc_collect_cycles`, which `unset(...)` reaches. Measured: with the collector
+/// neutralized the loop grows 50 pages over its declared memory; with it, 2 — exactly what
+/// the same loop grows when the cycle is not formed at all. The program prints the right
+/// answer either way, which is why this watches memory rather than output.
+#[test]
+fn test_cli_wasm_unset_collects_reference_cycles() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_gc_cycle");
+    let runner_src = r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(readFileSync(process.argv[2])),
+  wasi.getImportObject(),
+);
+const code = wasi.start(instance);
+console.error(`pages=${instance.exports.memory.buffer.byteLength / 65536}`);
+process.exitCode = code;
+"#;
+    let runner = dir.join("run.mjs");
+    fs::write(&runner, runner_src).unwrap();
+
+    // The control forms no cycle, so refcounting alone frees both nodes. Anything the cycle
+    // case grows BEYOND it is a cycle the collector failed to reclaim.
+    let bodies = [
+        ("no cycle", ""),
+        ("cycle", "$b->next = $a;"),
+    ];
+    for (label, link_back) in bodies {
+        let php_path = dir.join("main.php");
+        fs::write(
+            &php_path,
+            format!(
+                "<?php\nclass Node {{ public ?Node $next = null; }}\n\
+                 $sum = 0;\n\
+                 foreach (range(1, 20000) as $i) {{\n\
+                 \x20   $a = new Node();\n\
+                 \x20   $b = new Node();\n\
+                 \x20   $a->next = $b;\n\
+                 \x20   {link_back}\n\
+                 \x20   $sum = $sum + 1;\n\
+                 \x20   unset($a);\n\
+                 \x20   unset($b);\n\
+                 }}\n\
+                 if ($sum === 20000) {{ echo \"ok\\n\"; }}\n"
+            ),
+        )
+        .unwrap();
+
+        for extra in [vec!["--emit-asm"], vec![]] {
+            let mut command = elephc_cli_command(&dir);
+            command.arg("--target").arg("wasm32-wasi");
+            for flag in extra {
+                command.arg(flag);
+            }
+            let output = command
+                .arg(&php_path)
+                .output()
+                .unwrap_or_else(|error| panic!("{label}: failed to invoke elephc: {error}"));
+            assert!(
+                output.status.success(),
+                "{label} failed to compile: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .unwrap_or_else(|error| panic!("{label}: failed to run under Node: {error}"));
+        assert!(
+            run.status.success(),
+            "{label} trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(run.stdout, b"ok\n", "{label} printed the wrong thing");
+
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        let final_pages: usize = stderr
+            .split("pages=")
+            .nth(1)
+            .and_then(|rest| rest.trim().parse().ok())
+            .unwrap_or_else(|| panic!("{label}: the runner reported no page count"));
+        let wat = fs::read_to_string(dir.join("main.wat")).expect("the WAT was written");
+        let initial_pages: usize = wat
+            .split("(memory (export \"memory\") ")
+            .nth(1)
+            .and_then(|rest| rest.split(')').next())
+            .and_then(|n| n.trim().parse().ok())
+            .unwrap_or_else(|| panic!("{label}: the module declares no initial memory"));
+
+        // 2 pages is the `range` array itself (20000 * 8 bytes), which both cases allocate.
+        assert_eq!(
+            final_pages - initial_pages,
+            2,
+            "{label}: 20000 iterations grew memory by {} pages over the declared \
+             {initial_pages}, where only the range array (2 pages) should — the cycle \
+             was not reclaimed",
+            final_pages - initial_pages
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Proves a property read leaves no reference behind, by watching memory not grow.
 ///
 /// The object is rebuilt each iteration so its property's backing array has to die with it. A

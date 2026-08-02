@@ -44,6 +44,12 @@ pub(super) enum TransferKind {
     ///
     /// `tag` is the cell tag every element gets and `elem_size` the source slot stride.
     WidenArrayToMixed { tag: i64, elem_size: i64 },
+    /// PHP `null` is stored into a heap-pointer destination.
+    ///
+    /// Null IS the zero pointer in every heap slot this backend emits — it is what the
+    /// refcount helpers guard on and what a missed object read already answers — so the
+    /// transfer is the i64 source dropped and a zero pointer pushed in its place.
+    NullPointer,
 }
 
 /// Returns the cell tag and source slot stride for widening an `array<T>` to `array<mixed>`.
@@ -221,6 +227,14 @@ pub(super) fn classify_transfer(
             ))
         })?;
         return Ok(TransferKind::WidenArrayToMixed { tag, elem_size });
+    }
+    // `unset($x)` on a heap-typed local stores PHP null over the released value.
+    if source_php == PhpType::Void
+        && matches!(source_ir, IrType::I64 | IrType::Void)
+        && matches!(dest_ir, IrType::Heap(_))
+        && matches!(dest_repr, WasmRepr::Ptr(_))
+    {
+        return Ok(TransferKind::NullPointer);
     }
     if reprs_match_for_copy(
         &source_repr,
@@ -508,6 +522,11 @@ fn convert_temps_to_dest(
                 "remember the widened array (the callee owns it and releases it)",
             );
             let _ = widened;
+            Ok(None)
+        }
+        TransferKind::NullPointer => {
+            ctx.fb
+                .ins("i32.const 0", "PHP null is the zero pointer in a heap slot");
             Ok(None)
         }
         TransferKind::UnboxMixed => {

@@ -114,6 +114,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::HashSet => super::inst_hash::lower_hash_set(ctx, &inst),
         Op::HashUnset => super::inst_hash::lower_hash_unset(ctx, &inst),
         Op::HashIsset => super::inst_hash::lower_hash_isset(ctx, &inst),
+        Op::GcCollect => lower_gc_collect(ctx),
         Op::HashAppend => super::inst_hash::lower_hash_append(ctx, &inst),
         Op::HashUnion => super::inst_hash::lower_hash_union(ctx, &inst),
         Op::ArrayUnion => super::inst_hash::lower_array_union(ctx, &inst),
@@ -2893,6 +2894,19 @@ fn emit_undefined_array_index_warning_if_null(
 ///
 /// Every other pair — anything involving a Mixed cell, an array, an object, or a bool against a
 /// number — needs the rest of PHP 8's comparison table and is refused by the capability gate.
+/// Lowers `Op::GcCollect`, the cycle-collection safe point `unset(...)` emits.
+///
+/// Refcounting cannot reclaim a reference cycle, so this is the only path on this target
+/// that frees one. The pass structure lives in `super::gc`; the safe point is just its
+/// call.
+fn lower_gc_collect(ctx: &mut FnCtx) -> Result<()> {
+    ctx.fb.ins(
+        "call $__rt_gc_collect_cycles",
+        "reclaim graphs only their own members still reference",
+    );
+    Ok(())
+}
+
 fn lower_loose_eq(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let left = operand(inst, 0)?;
     let right = operand(inst, 1)?;

@@ -239,6 +239,10 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // `(global.get $__float_scratch)` as the bignum scratch base.
     float::emit_float_runtime(&mut wm, runtime::FLOAT_SCRATCH_BASE as i32);
     strict::emit_strict_runtime(&mut wm);
+    // Cycle collector: `__rt_gc_collect_cycles` and its helpers. Emitted after every
+    // runtime it walks or releases through — the array/hash/mixed/object layouts and
+    // `__rt_decref_any` — because WAT requires each call target to be defined.
+    super::gc::emit_gc_runtime(&mut wm);
     super::builtins::emit_builtin_runtime(&mut wm, has_main);
 
     // Lower every user function; `main` becomes the WASI `_start` command entry.

@@ -4465,16 +4465,22 @@
           "name": "gc_collect",
           "family": "op",
           "enum_name": "Op",
-          "disposition": "missing",
-          "producers": [],
+          "disposition": "supported",
+          "producers": [
+            "the cycle-collection safe point unset(...) emits"
+          ],
           "execution_modes": [
             "command",
             "npm"
           ],
-          "evidence_gaps": [
-            "producers"
-          ],
-          "missing": "ordinary PHP reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::gc",
+            "lowerer": "codegen_wasm::inst::lower_gc_collect",
+            "tests": [
+              "codegen_wasm::gc::tests::collect_cycles_reclaims_a_two_block_cycle",
+              "codegen::cli::test_cli_wasm_unset_collects_reference_cycles"
+            ]
+          }
         },
         {
           "name": "move",
@@ -12866,14 +12872,14 @@
   },
   "totals": {
     "total": 712,
-    "supported": 200,
+    "supported": 201,
     "excluded": 47,
-    "missing": 465,
-    "evidence_gaps": 173,
-    "row_evidence_gaps": 172,
+    "missing": 464,
+    "evidence_gaps": 172,
+    "row_evidence_gaps": 171,
     "catalog_evidence_gaps": 1,
     "gate": "fail",
-    "gate_reason": "465 reachable identities lack a WASM lowerer; 172 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
+    "gate_reason": "464 reachable identities lack a WASM lowerer; 171 rows lack producer/mode/lowerer/test evidence; 1 required test categories are missing",
     "stale_literal_counts_rejected": true
   }
 }
