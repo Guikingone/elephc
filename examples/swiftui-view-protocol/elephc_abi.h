@@ -10,6 +10,7 @@
 #define ELEPHC_ABI_H
 
 #include <stddef.h>
+#include <stdint.h>
 
 /// What a string-returning `#[Export]` hands back: a pointer and a length.
 ///
@@ -20,5 +21,21 @@ typedef struct {
     const char *ptr;
     size_t len;
 } ElephcStr;
+
+// --- lifecycle -------------------------------------------------------------
+
+/// Prepares heap and globals. Returns 0 on success.
+int32_t elephc_init(void);
+
+/// Releases a buffer an export returned. Null-safe.
+void elephc_free(void *pointer);
+
+// --- the exports view.php declares with #[Export] ---------------------------
+
+/// Returns the current view tree as serialized JSON.
+ElephcStr render_view(void);
+
+/// Applies an action and returns the next view tree.
+ElephcStr dispatch(const char *action, size_t action_length);
 
 #endif /* ELEPHC_ABI_H */

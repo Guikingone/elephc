@@ -22,23 +22,24 @@ if [ ! -x "$ELEPHC" ]; then
   (cd "$PROJECT_DIR" && cargo build)
 fi
 
-echo "==> compiling view.php to a native library"
-(cd "$HERE" && "$ELEPHC" --emit cdylib view.php)
+echo "==> compiling view.php to a native static library"
+(cd "$HERE" && "$ELEPHC" --emit staticlib view.php)
 
 echo "==> compiling the SwiftUI host"
 # -import-objc-header brings in the C declaration of ElephcStr, without which
 # the @convention(c) signatures are rejected as not C-representable.
 # -parse-as-library is required by @main: it tells swiftc the file defines a
 # module rather than a script with top-level code.
+# The library is linked statically, the same delivery form an Xcode project
+# consumes, so the exports are ordinary C symbols rather than dlsym lookups.
 swiftc -O -parse-as-library \
        -import-objc-header "$HERE/elephc_abi.h" \
-       -o "$HERE/ViewProtocol" "$HERE/ViewProtocolApp.swift"
+       -o "$HERE/ViewProtocol" "$HERE/ViewProtocolApp.swift" "$HERE/libview.a"
 
 echo "==> assembling $APP"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS"
 mv "$HERE/ViewProtocol" "$APP/Contents/MacOS/ViewProtocol"
-cp "$HERE/libview.dylib" "$APP/Contents/MacOS/libview.dylib"
 
 # A SwiftUI app launched from a bundle gets a real activation policy, a Dock
 # entry and a focusable window; the bare executable does not.
@@ -60,7 +61,6 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 # Ad-hoc signature: unsigned bundles are refused on Apple Silicon.
-codesign --force --sign - "$APP/Contents/MacOS/libview.dylib" >/dev/null 2>&1 || true
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 
 echo "==> built $APP"

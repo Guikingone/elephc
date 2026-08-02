@@ -1,16 +1,31 @@
 # PHP-driven SwiftUI — the view-protocol spike
 
-A native macOS app whose entire interface is decided by compiled PHP. Swift draws;
-it does not decide.
+A native app whose entire interface is decided by compiled PHP. Swift draws; it
+does not decide. Runs on macOS **and** on iOS, from the same `view.php` and the
+same Swift.
 
 ```
-./run.sh                  # build and launch
-./run.sh --build-only     # build the .app without launching
-./ViewProtocol.app/Contents/MacOS/ViewProtocol --selftest    # headless check
+./run.sh                  # macOS: build and launch
+./run.sh --build-only     # macOS: build the .app without launching
+./ViewProtocol.app/Contents/MacOS/ViewProtocol --selftest
+
+./run-ios.sh              # iOS: build, install on a booted simulator, launch, screenshot
+./run-ios.sh --selftest   # iOS: headless round-trip check inside the simulator
 ```
 
-Needs only the Xcode Command Line Tools — `swiftc` ships with them and SwiftUI is
-a system framework, so there is no Xcode install and no `.xcodeproj` here.
+macOS needs only the Xcode Command Line Tools — `swiftc` ships with them and
+SwiftUI is a system framework. iOS needs full Xcode, an installed runtime and a
+booted simulator:
+
+```
+xcodebuild -downloadPlatform iOS
+xcrun simctl boot "iPhone 17 Pro"
+```
+
+Neither path involves an `.xcodeproj`. The library is linked **statically** — the
+delivery form an Xcode project would consume — so the exports are ordinary C
+symbols rather than `dlsym` lookups, which is also what lets the same Swift run
+unchanged on iOS.
 
 ## The idea
 
@@ -56,9 +71,10 @@ PASS: the view tree, the string ABI and PHP-side state all round-trip
 | | |
 |---|---|
 | `view.php` | the whole application: tree builders, state, action handling |
-| `ViewProtocolApp.swift` | library loading, JSON → SwiftUI, event dispatch |
-| `elephc_abi.h` | the C declaration of the `(ptr, len)` return type |
-| `run.sh` | compile both sides, assemble and sign a `.app` bundle |
+| `ViewProtocolApp.swift` | JSON → SwiftUI, event dispatch, the self-test |
+| `elephc_abi.h` | the C declarations of `ElephcStr` and the exports |
+| `run.sh` | macOS: compile both sides, assemble and sign a `.app` |
+| `run-ios.sh` | iOS: same, then install, launch and screenshot on a simulator |
 
 ## Two things that will bite you
 
@@ -71,10 +87,19 @@ rides the platform's aggregate-return registers. Hence `elephc_abi.h` and
 contain interior zero bytes, so the returned length is authoritative and
 `strlen` is wrong.
 
+**`-sdk` does not reach the link step.** `swiftc` drives `clang` to link, and
+that driver defaults to the *host* sysroot — so an iOS build warns *"using
+sysroot for 'MacOSX' but targeting 'iPhone'"* unless `-Xclang-linker -isysroot`
+passes the SDK through explicitly.
+
 ## Scope
 
-macOS on purpose. This proves the UI story with the toolchain that already
-works, leaving the iOS SDK as a separate question — see `scripts/ios-relink-spike.sh`
-and `IOS_TARGET_SPEC.md`. Nothing in the design is macOS-specific: the same
-library and the same protocol drive a UIKit or SwiftUI host on iOS once that
-target links.
+Both platforms, one source. The `--selftest` output is identical on macOS and
+inside the iOS Simulator, which is the point: nothing in the design is
+platform-specific.
+
+macOS on purpose for the original spike: it proved the UI story with the
+toolchain that already worked, leaving the iOS SDK as a separate question. That
+question is now answered — see `scripts/ios-relink-spike.sh` and
+`IOS_TARGET_SPEC.md` — and `run-ios.sh` runs the very same app on a device-class
+arm64 simulator.
