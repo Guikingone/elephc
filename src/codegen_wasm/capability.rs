@@ -2849,6 +2849,18 @@ fn object_new_shape_issue(
             Ok(literal) => literal,
             Err(error) => return Some(error.to_string()),
         };
+        // A `= []` default stays refused. It is a small emitter change on its own — allocate a
+        // fresh empty array into the slot — but it uncovers a LATENT use-after-free: with the
+        // slot holding the only reference, `__rt_array_push_*` reaches `__rt_array_grow`, which
+        // frees the old block, while the property slot still points at it until the following
+        // `prop_set` — whose lowering releases exactly that stale pointer. Measured on
+        // `foreach (range(1,40)) { $s = new T(); $s->push(1); }`: correct for 8 pushes, then a
+        // dispatch failure on an object allocated over the freed block. Disabling free-list
+        // reuse makes all 40 pass, which is what identifies it as a use-after-free rather than
+        // an overflow. Constructor promotion reaches the same slot WITHOUT the defect (verified
+        // leak-free over 30000 iterations), so it is the default's allocation order that
+        // exposes it. Closing it needs the push to write its result back into the PROPERTY
+        // slot, the analogue of the `value_source_slot` write-back locals already get.
         if !matches!(
             &literal,
             LiteralDefaultValue::Int(_)
@@ -3398,7 +3410,19 @@ fn property_write_shape_issue(
     {
         return None;
     }
+    // A literal `[]` is `array<never>`: no element, and no slot layout decided until the first
+    // push fixes it. Its pointer is therefore interchangeable with any element type's, which is
+    // what `public array $items = [];` assigns into an `array<mixed>` slot.
     let source_repr = source_php.codegen_repr();
+    if source_ir == IrType::Heap(IrHeapKind::Array)
+        && matches!(property_type, PhpType::Array(_))
+        && matches!(
+            &source_repr,
+            PhpType::Array(element) if matches!(element.codegen_repr(), PhpType::Void)
+        )
+    {
+        return None;
+    }
     if &source_repr != property_type
         || transfer::validate_storage_pair(source_ir, source_php).is_err()
     {
@@ -3776,10 +3800,15 @@ fn direct_method_result_shape_issue(
         ));
     }
     let has_exact_result = match body.return_type {
+        // A `void` body returns nothing, but PHP still gives its CALL EXPRESSION the value
+        // null — so the EIR materializes an `I64 php=null` result whenever it is used. Both
+        // shapes are exact; the emitter supplies the null the callee did not push.
         IrType::Void => {
-            inst.result.is_none()
+            (inst.result.is_none()
                 && inst.result_type == IrType::Void
-                && inst.result_php_type.codegen_repr() == PhpType::Void
+                && inst.result_php_type.codegen_repr() == PhpType::Void)
+                || (inst.result_type == IrType::I64
+                    && inst.result_php_type.codegen_repr() == PhpType::Void)
         }
         return_type => {
             inst.result.is_some()

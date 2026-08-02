@@ -150,7 +150,19 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     };
     let mode = if dynamic { "dispatch" } else { "direct" };
 
-    let return_arity = WasmRepr::val_types(inst.result_type).len();
+    // `void` bodies push nothing; the call expression's null is supplied after the call.
+    let body_returns_void = ctx
+        .module
+        .class_methods
+        .iter()
+        .find(|body| body.name == format!("{}::{}", impl_class, method_name))
+        .map(|body| body.return_type == IrType::Void)
+        .unwrap_or(false);
+    let return_arity = if body_returns_void {
+        0
+    } else {
+        WasmRepr::val_types(inst.result_type).len()
+    };
     ctx.emit_load_value(receiver)?;
     for &arg in inst.operands.iter().skip(1) {
         ctx.emit_load_value(arg)?;
@@ -160,6 +172,15 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         &format!("{}::{} ({})", class_name, method_name, mode),
     );
 
+    // A `void` method returns nothing, but PHP still gives its CALL EXPRESSION the value null —
+    // which is what the EIR materializes when the result is used. Nothing came back on the
+    // stack, so the null is supplied here.
+    if body_returns_void && inst.result.is_some() {
+        ctx.fb.ins(
+            "i64.const 9223372036854775806",
+            "null sentinel: a void method call evaluates to null",
+        );
+    }
     if let Some(r) = inst.result {
         ctx.emit_store_value(r)?;
     } else {
