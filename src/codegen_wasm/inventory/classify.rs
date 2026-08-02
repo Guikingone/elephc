@@ -254,7 +254,8 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             "codegen_wasm::builtins::lower_direct_builtin",
             &[
                 "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
-                "codegen_wasm::builtins::tests::in_array_is_admitted_only_when_strict_is_literally_true",
+                "codegen_wasm::builtins::tests::in_array_admits_only_the_pairs_whose_rule_was_measured",
+                "codegen::cli::test_cli_wasm_in_array_matches_php",
                 "codegen::cli::test_cli_wasm_direct_builtins_match_php",
             ][..],
         ),

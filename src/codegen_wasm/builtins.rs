@@ -64,6 +64,11 @@ pub(super) fn emit_builtin_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(RT_STR_FIND);
     wm.add_raw_func(RT_STR_RFIND);
     wm.add_raw_func(RT_IMPLODE);
+    if has_main {
+        // Compares through `__rt_str_loose_eq`, which lives in the command-only numeric runtime
+        // because its diagnostics write to stderr. A reactor module has no such scan to make.
+        wm.add_raw_func(RT_IN_ARRAY_STR);
+    }
     wm.add_raw_func(RT_IMPLODE_OWNED);
     wm.add_raw_func(RT_EXPLODE);
     wm.add_raw_func(RT_STR_SPLIT);
@@ -2669,6 +2674,35 @@ const RT_FMT_FLOAT: &str = r#"(func $__rt_fmt_float (param $bits i64) (param $pr
     (local.get $signch) (local.get $width) (local.get $pad) (local.get $left)))
 "#;
 
+/// `__rt_in_array_str`: `in_array` over 16-byte (pointer, length) string slots.
+///
+/// Lives here rather than beside the other two scans because it compares through
+/// `__rt_strict_str_eq` and `__rt_str_loose_eq`, which the array runtime is emitted before.
+///
+/// `$strict` picks the comparison: `===` is byte equality, while `==` is php-src's
+/// `zendi_smart_strcmp` — so `in_array("1e1", ["10"])` is TRUE loosely and FALSE strictly.
+const RT_IN_ARRAY_STR: &str = r#"(func $__rt_in_array_str (param $nptr i32) (param $nlen i64) (param $array i32) (param $strict i32) (result i64)
+  (local $i i64) (local $len i64) (local $slot i32) (local $ep i32) (local $el i64)
+  (if (i32.eqz (local.get $array))
+    (then (return (i64.const 0))))
+  (local.set $len (i64.load (local.get $array)))
+  (block $done (loop $scan
+    (br_if $done (i64.ge_s (local.get $i) (local.get $len)))
+    (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24))
+                              (i32.wrap_i64 (i64.mul (local.get $i) (i64.const 16)))))
+    (local.set $ep (i32.wrap_i64 (i64.load (local.get $slot))))
+    (local.set $el (i64.load (i32.add (local.get $slot) (i32.const 8))))
+    (if (local.get $strict)
+      (then
+        (if (call $__rt_strict_str_eq (local.get $nptr) (local.get $nlen) (local.get $ep) (local.get $el))
+          (then (return (i64.const 1)))))
+      (else
+        (if (i64.ne (call $__rt_str_loose_eq (local.get $nptr) (local.get $nlen) (local.get $ep) (local.get $el)) (i64.const 0))
+          (then (return (i64.const 1))))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $scan)))
+  (i64.const 0))
+"#;
 /// `__rt_implode_owned`: joins an array whose elements must be CONVERTED to strings first.
 ///
 /// `$kind` selects the conversion: 0 renders an integer slot, 1 casts a boxed `Mixed` cell. PHP
@@ -3568,54 +3602,6 @@ fn indexed_array_result_shape_issue(
     None
 }
 
-/// Validates `in_array($needle, $haystack, true)` against the one comparison the scan performs.
-///
-/// The third argument must be the literal `true`: PHP's LOOSE form applies type juggling that an
-/// identity comparison over raw slots does not, so admitting a runtime-valued or absent `$strict`
-/// would answer the wrong question whenever it turned out to be false.
-fn in_array_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
-    let [needle, haystack, strict] = call.operands.as_slice() else {
-        return Some(format!(
-            "expected needle, haystack and an explicit strict flag, got {} operands",
-            call.operands.len()
-        ));
-    };
-    let Some(needle) = function.value(*needle) else {
-        return Some("needle is missing from the value table".to_string());
-    };
-    if needle.ir_type != IrType::I64 || needle.php_type.codegen_repr() != PhpType::Int {
-        return Some(format!(
-            "expected an int needle, got {:?}/{:?}",
-            needle.ir_type,
-            needle.php_type.codegen_repr()
-        ));
-    }
-    let Some(haystack) = function.value(*haystack) else {
-        return Some("haystack is missing from the value table".to_string());
-    };
-    if !indexed_int_array(haystack) {
-        return Some(format!(
-            "expected a statically typed array<int> haystack, got {:?}/{:?}",
-            haystack.ir_type,
-            haystack.php_type.codegen_repr()
-        ));
-    }
-    if !literal_true(function, *strict) {
-        return Some("only the strict form is lowered; $strict must be the literal true".to_string());
-    }
-    if call.result.is_none()
-        || call.result_type != IrType::I64
-        || call.result_php_type.codegen_repr() != PhpType::Bool
-    {
-        return Some(format!(
-            "result {:?}/{:?} is not the expected I64/Bool",
-            call.result_type,
-            call.result_php_type.codegen_repr()
-        ));
-    }
-    None
-}
-
 /// Returns whether `value` is the constant `true`, following ownership forwarding.
 fn literal_true(function: &Function, value: crate::ir::ValueId) -> bool {
     let Some(defined) = function.value(value) else {
@@ -4160,6 +4146,188 @@ fn lower_array_slice(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "copy the window into a fresh mixed-cell array",
     );
     store_result(ctx, inst)
+}
+
+/// How `in_array` scans, for one (needle, element) pair.
+///
+/// `blocks_strict` marks a pair whose types DIFFER: `===` compares types first, so a strict
+/// request there can never match and the scan is skipped. `widen_elements` marks the one mix that
+/// converts the elements rather than the needle.
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) struct InArrayScan {
+    kind: InArrayKind,
+    blocks_strict: bool,
+    widen_elements: bool,
+}
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+pub(super) enum InArrayKind {
+    /// 8-byte slots compared as integers; loose and strict agree.
+    Int,
+    /// 8-byte slots compared as doubles.
+    Float,
+    /// 16-byte (pointer, length) slots; loose uses the numeric-string rule.
+    Str,
+}
+
+/// Classifies an `in_array` call, or `None` when the pair has no measured rule here.
+///
+/// PHP's table is wider than this: a string against a number, a bool against a number, and
+/// anything boxed each need their own measured behaviour. An EMPTY haystack (`Void`, what an empty
+/// literal's `Never` normalizes to) always answers false, but the scan still has to type-check —
+/// the helper takes the needle BY VALUE — so its kind follows the needle.
+fn in_array_scan(needle: &PhpType, element: &PhpType) -> Option<InArrayScan> {
+    let scan = |kind, blocks_strict, widen_elements| {
+        Some(InArrayScan { kind, blocks_strict, widen_elements })
+    };
+    match (needle.codegen_repr(), element.codegen_repr()) {
+        // An empty haystack never matches, but the scan still has to TYPE-CHECK: the helper takes
+        // the needle by value, so the kind follows the needle rather than the (absent) elements.
+        (PhpType::Int | PhpType::Bool, PhpType::Void) => scan(InArrayKind::Int, false, false),
+        (PhpType::Float, PhpType::Void) => scan(InArrayKind::Float, false, false),
+        (PhpType::Str, PhpType::Void) => scan(InArrayKind::Str, false, false),
+        (PhpType::Int, PhpType::Int) => scan(InArrayKind::Int, false, false),
+        (PhpType::Bool, PhpType::Bool) => scan(InArrayKind::Int, false, false),
+        (PhpType::Float, PhpType::Float) => scan(InArrayKind::Float, false, false),
+        (PhpType::Str, PhpType::Str) => scan(InArrayKind::Str, false, false),
+        // Mixed numbers: PHP widens and compares as doubles, and `===` can never match.
+        (PhpType::Int, PhpType::Float) => scan(InArrayKind::Float, true, false),
+        (PhpType::Float, PhpType::Int) => scan(InArrayKind::Float, true, true),
+        _ => None,
+    }
+}
+
+/// Validates `in_array`: a needle, an indexed haystack, and an optional strict flag.
+fn in_array_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let (needle, haystack, strict) = match call.operands.as_slice() {
+        [needle, haystack] => (needle, haystack, None),
+        [needle, haystack, strict] => (needle, haystack, Some(strict)),
+        other => {
+            return Some(format!(
+                "in_array takes a needle, an array and an optional strict flag, got {} operands",
+                other.len()
+            ))
+        }
+    };
+    let Some(needle_value) = function.value(*needle) else {
+        return Some("in_array needle is missing from the value table".to_string());
+    };
+    let Some(haystack_value) = function.value(*haystack) else {
+        return Some("in_array haystack is missing from the value table".to_string());
+    };
+    if haystack_value.ir_type != IrType::Heap(IrHeapKind::Array) {
+        return Some(format!(
+            "in_array takes an indexed array, got {:?}",
+            haystack_value.ir_type
+        ));
+    }
+    let PhpType::Array(element) = haystack_value.php_type.codegen_repr() else {
+        return Some(format!(
+            "in_array takes an indexed array, got {:?}",
+            haystack_value.php_type.codegen_repr()
+        ));
+    };
+    if in_array_scan(&needle_value.php_type, &element).is_none() {
+        return Some(format!(
+            "in_array has no measured rule for {:?} against elements of {:?}",
+            needle_value.php_type.codegen_repr(),
+            element
+        ));
+    }
+    if let Some(strict) = strict {
+        let Some(value) = function.value(*strict) else {
+            return Some("in_array strict flag is missing from the value table".to_string());
+        };
+        if value.ir_type != IrType::I64
+            || !matches!(value.php_type.codegen_repr(), PhpType::Bool)
+        {
+            return Some(format!(
+                "in_array strict flag is {:?}/{:?}, expected I64/Bool",
+                value.ir_type,
+                value.php_type.codegen_repr()
+            ));
+        }
+    }
+    None
+}
+
+/// Lowers `in_array` by scanning the haystack with the pair's measured comparison.
+fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let needle = operand(inst, 0)?;
+    let haystack = operand(inst, 1)?;
+    let needle_php = ctx
+        .function
+        .value(needle)
+        .map(|v| v.php_type.codegen_repr())
+        .unwrap_or(PhpType::Mixed);
+    let element = match ctx.function.value(haystack).map(|v| v.php_type.codegen_repr()) {
+        Some(PhpType::Array(element)) => *element,
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "in_array takes an indexed array, got {other:?}"
+            )))
+        }
+    };
+    let scan = in_array_scan(&needle_php, &element).ok_or_else(|| {
+        WasmError::Unsupported(format!(
+            "in_array has no rule for {needle_php:?} against {element:?}"
+        ))
+    })?;
+
+    // The strict flag is a runtime value, so park it: the helpers branch on it.
+    let strict = ctx.fresh_temp(super::wat::ValType::I32);
+    if inst.operands.len() == 3 {
+        ctx.emit_load_value(operand(inst, 2)?)?;
+        ctx.fb.ins("i32.wrap_i64", "the strict flag is a PHP bool");
+        ctx.fb.ins(&format!("local.set {}", strict), "strict comparison requested");
+    } else {
+        ctx.fb.ins("i32.const 0", "no strict flag: loose comparison");
+        ctx.fb.ins(&format!("local.set {}", strict), "strict comparison requested");
+    }
+
+    match scan.kind {
+        InArrayKind::Int => {
+            ctx.emit_load_value(needle)?;
+            ctx.emit_load_value(haystack)?;
+            emit_strict_block(ctx, &strict, scan.blocks_strict);
+            ctx.fb.ins("call $__rt_in_array_int", "scan comparing as integers");
+        }
+        InArrayKind::Float => {
+            ctx.emit_load_value(needle)?;
+            if needle_php.codegen_repr() == PhpType::Int {
+                ctx.fb
+                    .ins("f64.convert_i64_s", "PHP widens the needle to compare");
+            }
+            ctx.emit_load_value(haystack)?;
+            emit_strict_block(ctx, &strict, scan.blocks_strict);
+            ctx.fb.ins(
+                &format!("i32.const {}", i32::from(scan.widen_elements)),
+                "the elements are integers to convert",
+            );
+            ctx.fb.ins("call $__rt_in_array_float", "scan comparing as doubles");
+        }
+        InArrayKind::Str => {
+            ctx.emit_load_value(needle)?;
+            ctx.emit_load_value(haystack)?;
+            ctx.fb.ins(&format!("local.get {}", strict), "=== or ==");
+            ctx.fb.ins(
+                "call $__rt_in_array_str",
+                "scan; loose uses the numeric-string rule",
+            );
+        }
+    }
+    store_result(ctx, inst)
+}
+
+/// Pushes the "a strict request cannot match" flag: the strict flag itself when the needle and the
+/// elements are different types, and a constant zero otherwise.
+fn emit_strict_block(ctx: &mut FnCtx, strict: &str, blocks: bool) {
+    if blocks {
+        ctx.fb
+            .ins(&format!("local.get {}", strict), "types differ: === can never match");
+    } else {
+        ctx.fb.ins("i32.const 0", "same types: === and == agree");
+    }
 }
 
 /// Validates `range`: two integer bounds. The step form does not exist — the front-end rejects
@@ -4992,15 +5160,6 @@ fn lower_string_predicate(
     ctx.fb
         .ins("call $__rt_str_region_eq", "compare the one candidate region");
     ctx.fb.ins("end", "end needle-length guard");
-    store_result(ctx, inst)
-}
-
-/// Lowers strict `in_array($needle, $haystack, true)` to an identity scan.
-fn lower_in_array(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 1)?)?;
-    ctx.emit_load_value(operand(inst, 0)?)?;
-    ctx.fb
-        .ins("call $__rt_array_contains_int", "strict in_array over raw i64 slots");
     store_result(ctx, inst)
 }
 
@@ -6157,21 +6316,51 @@ mod tests {
         }
     }
 
-    /// Verifies `in_array` is lowered only in its STRICT form.
+    /// Verifies `in_array` admits every (needle, element) pair whose rule was MEASURED, in both
+    /// the loose and the strict form, and refuses the rest.
     ///
-    /// PHP's loose comparison applies type juggling that an identity scan over raw slots does
-    /// not perform, so a `$strict` that is not the literal `true` has to be refused rather than
-    /// answered with the wrong comparison.
+    /// The loose form is no longer an identity scan: it reuses the same comparison `==` lowers, so
+    /// `in_array("1e1", ["10"])` is true loosely and false strictly. What is still refused is the
+    /// pairs PHP's table handles differently — a string against a number, a bool against a number,
+    /// and anything boxed — because guessing there answers the wrong question silently.
     #[test]
-    fn in_array_is_admitted_only_when_strict_is_literally_true() {
-        let strict = in_array_call(true);
-        assert_eq!(verdict(&strict, RuntimeFnId::InArray), None);
-
-        let loose = in_array_call(false);
-        assert!(
-            verdict(&loose, RuntimeFnId::InArray).is_some(),
-            "the loose form needs PHP's juggling rules, which this scan does not implement"
+    fn in_array_admits_only_the_pairs_whose_rule_was_measured() {
+        assert_eq!(verdict(&in_array_call(true), RuntimeFnId::InArray), None);
+        assert_eq!(
+            verdict(&in_array_call(false), RuntimeFnId::InArray),
+            None,
+            "the loose form now goes through the measured comparison"
         );
+
+        for (needle, element) in [
+            (PhpType::Int, PhpType::Int),
+            (PhpType::Bool, PhpType::Bool),
+            (PhpType::Float, PhpType::Float),
+            (PhpType::Str, PhpType::Str),
+            (PhpType::Int, PhpType::Float),
+            (PhpType::Float, PhpType::Int),
+            // An empty haystack never matches, so any needle is safe.
+            (PhpType::Str, PhpType::Never),
+            (PhpType::Float, PhpType::Never),
+        ] {
+            assert!(
+                in_array_scan(&needle, &element).is_some(),
+                "{needle:?} against elements of {element:?} was measured"
+            );
+        }
+        for (needle, element) in [
+            (PhpType::Str, PhpType::Int),
+            (PhpType::Int, PhpType::Str),
+            (PhpType::Bool, PhpType::Int),
+            (PhpType::Int, PhpType::Bool),
+            (PhpType::Mixed, PhpType::Int),
+            (PhpType::Int, PhpType::Mixed),
+        ] {
+            assert!(
+                in_array_scan(&needle, &element).is_none(),
+                "{needle:?} against elements of {element:?} still needs its measured table"
+            );
+        }
     }
 
     /// Verifies each inline builtin admits exactly the storage its lowering can emit.

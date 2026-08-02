@@ -7645,6 +7645,93 @@ const LOOSE_EQ_EXPECTED: &str = r##"10000000000000000000000000000000000000000111
 1001101001|1010100|101|101100|10101
 "##;
 
+/// Verifies `in_array` in BOTH forms, over the (needle, element) pairs whose rule was measured.
+///
+/// It used to be lowered only as a strict identity scan over int slots, because the loose form
+/// needs PHP's juggling. It now reuses the very comparison `==` lowers, so the loose form answers
+/// the numeric-string rule: `in_array("1e1", ["a","10","b"])` is TRUE loosely and FALSE strictly,
+/// and so is `in_array(" 10", ...)` — leading whitespace and all.
+///
+/// A needle and elements of DIFFERENT types short-circuit under `===`: PHP compares types first,
+/// so `in_array(1, [1.0, 2.0], true)` is false without looking at a single element, while the
+/// loose form widens and finds it.
+///
+/// The empty-haystack cases are here because they still have to TYPE-CHECK: the scan takes the
+/// needle by value, so its shape follows the needle even when there is nothing to compare against.
+#[test]
+fn test_cli_wasm_in_array_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_in_array");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, IN_ARRAY_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the in_array probe");
+    assert!(
+        output.status.success(),
+        "in_array compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the in_array probe under Node");
+    assert!(
+        run.status.success(),
+        "in_array probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(String::from_utf8_lossy(&run.stdout), IN_ARRAY_EXPECTED);
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The `in_array` probe: each lowered pair, in both forms, plus the empty haystack.
+const IN_ARRAY_SOURCE: &str = r##"<?php
+$i = [10, 20, 30];      $e = [];
+$s = ["a", "10", "b"];  $f = [1.5, 2.5];
+echo in_array(20, $i)?"1":"0", in_array(99, $i)?"1":"0", in_array(20, $i, true)?"1":"0", in_array(20, $e)?"1":"0", "|";
+echo in_array("a", $s)?"1":"0", in_array("10", $s)?"1":"0", in_array("1e1", $s)?"1":"0", in_array("1e1", $s, true)?"1":"0", in_array("z", $s)?"1":"0", "|";
+echo in_array(" 10", $s)?"1":"0", in_array(" 10", $s, true)?"1":"0", in_array("10.0", $s)?"1":"0", "|";
+echo in_array(1.5, $f)?"1":"0", in_array(3.5, $f)?"1":"0", in_array(1.5, $f, true)?"1":"0", in_array(1.5, $e)?"1":"0", "|";
+echo in_array(1, [1.0, 2.0])?"1":"0", in_array(1, [1.0, 2.0], true)?"1":"0", in_array(1.0, [1, 2])?"1":"0", in_array(1.0, [1, 2], true)?"1":"0", "|";
+echo in_array(3, [1.0, 2.0])?"1":"0", in_array(3.0, [1, 2])?"1":"0", "|";
+echo "\n";
+"##;
+
+/// php-src 8.5.6's own output for `IN_ARRAY_SOURCE`.
+const IN_ARRAY_EXPECTED: &str = r##"1010|11100|101|1010|1010|00|
+"##;
+
 /// Verifies `strrpos` finds the RIGHTMOST match and answers php-src's `int|false`.
 ///
 /// Scanning right to left is what makes overlapping matches resolve to the last one —
