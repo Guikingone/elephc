@@ -445,7 +445,8 @@ impl Checker {
             match narrowings.iter().position(|(v, _)| *v == guard.var) {
                 Some(idx) => {
                     let existing = narrowings[idx].1.clone();
-                    narrowings[idx].1 = self.narrow_to(&existing, &guard.else_ty);
+                    narrowings[idx].1 =
+                        intersect_complement_types(self, &existing, &guard.else_ty);
                 }
                 None => narrowings.push((guard.var, guard.else_ty)),
             }
@@ -876,6 +877,15 @@ fn strict_comparison_guard_receiver(expr: &Expr) -> Option<&Expr> {
 /// classes already present in a union. The compiler's `Callable` representation is the same
 /// closure descriptor used for anonymous and first-class callables, so it matches nominal
 /// `Closure` guards as well.
+///
+/// A UNION target is deliberately NOT decomposed here. A guard's target union is a PROOF that
+/// replaces the receiver's type rather than a set to intersect with it: `is_numeric($x)` targets
+/// `Int|Float|Str` precisely so a guarded `string` widens to the numeric family and arithmetic
+/// selects mixed numeric dispatch (see the `is_numeric` arm in `guard_receiver_and_type`).
+/// Matching a union target member-wise makes `narrow_to` keep the plain `Str` instead, which
+/// measurably re-breaks that path (`Cache\ParameterNormalizer::normalizeDuration` returns a
+/// numeric string from a `: int` method, plus six arithmetic sites). Complement types that DO
+/// need intersecting are handled by `intersect_complement_types`, which does not go through here.
 fn guard_matches(member: &PhpType, target: &PhpType) -> bool {
     match (member, target) {
         (PhpType::Callable, PhpType::Object(target_class))
@@ -894,5 +904,35 @@ fn guard_matches(member: &PhpType, target: &PhpType) -> bool {
         ) => true,
         (PhpType::False, PhpType::Bool) => true,
         _ => member == target,
+    }
+}
+
+/// Intersects two guard-FALSE types computed for the SAME binding against the SAME entry
+/// environment, as produced by the disjuncts of one `||` chain.
+///
+/// De Morgan makes the fall-through edge of `if (A || B || …)` the conjunction `!A && !B && …`,
+/// so the binding's type there is the INTERSECTION of the per-disjunct complements. Both sides
+/// are subsets of the binding's entry type, so intersecting is a plain member-set operation —
+/// unlike `narrow_to`, which answers the different question "what does this GUARD prove" and
+/// treats a union target as a replacement proof rather than a set (see `guard_matches`).
+///
+/// An empty intersection means the disjuncts jointly exclude every arm, i.e. the fall-through
+/// edge is unreachable. That is not representable here, so the accumulated `current` is kept:
+/// narrowing may only ever refine, never invent an arm the entry type did not have.
+fn intersect_complement_types(checker: &Checker, current: &PhpType, next: &PhpType) -> PhpType {
+    let (PhpType::Union(current_members), PhpType::Union(next_members)) = (current, next) else {
+        // A non-union side is already as narrow as this representation gets; keeping the
+        // accumulated type preserves any refinement an earlier disjunct contributed.
+        return current.clone();
+    };
+    let kept: Vec<PhpType> = current_members
+        .iter()
+        .filter(|member| next_members.contains(member))
+        .cloned()
+        .collect();
+    if kept.is_empty() {
+        current.clone()
+    } else {
+        checker.normalize_union_type(kept)
     }
 }

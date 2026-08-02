@@ -255,3 +255,44 @@ fn test_or_chain_diverging_complement_applied_once() {
          }",
     );
 }
+
+/// EVERY disjunct's complement survives, not just the last one. `!(A || B)` is `!A && !B`, so the
+/// fall-through edge of `if ($x instanceof Rr || $x instanceof Ss)` must drop BOTH classes and
+/// leave `string|null`, which `take()` accepts.
+///
+/// The per-disjunct complements used to be combined with `narrow_to`, whose union target is a
+/// replacement proof rather than a set (see `guard_matches`): intersecting `string|Ss|null` with
+/// `string|Rr|null` matched no member and fell back to returning the second operand whole, so
+/// `Rr` came back and only `Ss` was ever subtracted. This is Symfony
+/// `DependencyInjection\Definition::setFactory`'s shape, where the leaked `Reference` arm made the
+/// `string|array|null` property store fail.
+#[test]
+fn test_or_chain_complement_subtracts_every_disjunct() {
+    expect_ok(
+        "<?php \
+         class Rr {} \
+         class Ss {} \
+         class Sink { public function take(string|null $v): string { return $v ?? 'n'; } } \
+         function f(string|Rr|Ss|null $x): string { \
+             if ($x instanceof Rr || $x instanceof Ss) { return 'obj'; } \
+             return (new Sink())->take($x); \
+         }",
+    );
+}
+
+/// The complement intersection may only REFINE: a disjunct that constrains a different binding
+/// contributes no fact, so `$y` still carries its full declared union after the `if` and the
+/// `Tt`-only property access stays rejected.
+#[test]
+fn test_or_chain_complement_does_not_invent_facts_for_other_bindings() {
+    expect_error(
+        "<?php \
+         class Tt { public string $tag = 'T'; } \
+         class Uu { public string $other = 'U'; } \
+         function f(Tt|Uu $x, Tt|Uu $y): string { \
+             if ($x instanceof Tt || $x instanceof Uu) { return 'x'; } \
+             return $y->tag; \
+         }",
+        "Undefined property: Uu::tag",
+    );
+}

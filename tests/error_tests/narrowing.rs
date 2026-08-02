@@ -231,3 +231,29 @@ fn test_no_narrow_when_literal_true_loop_can_break() {
         "List unpacking requires an array",
     );
 }
+
+/// A guard whose target is a UNION replaces the receiver's type instead of intersecting with it.
+/// `is_numeric($d)` targets `int|float|string`, so a guarded `string` widens to the numeric family:
+/// arithmetic on it picks mixed numeric dispatch, and returning it from a `: int` function is the
+/// weak-mode numeric-string coercion PHP performs.
+///
+/// This is a TRIPWIRE for `guard_matches`. Teaching it to decompose a union target member-wise
+/// looks like a precision win — a numeric string really is still a string — but it makes
+/// `narrow_to` keep the plain `Str`, and both uses below start failing ("return type expects Int,
+/// got Str" and "Arithmetic operators require numeric operands"). Measured on
+/// `Cache\ParameterNormalizer::normalizeDuration`, which is exactly this shape. Complement types
+/// that DO need intersecting go through `intersect_complement_types` instead.
+#[test]
+fn test_union_guard_target_widens_receiver_rather_than_intersecting() {
+    expect_ok(
+        "<?php \
+         function normalize(string $d): int { \
+             if (is_numeric($d)) { return $d; } \
+             return 0; \
+         } \
+         function scale(string $d): int { \
+             if (is_numeric($d)) { return $d * 2; } \
+             return 0; \
+         }",
+    );
+}
