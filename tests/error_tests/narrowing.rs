@@ -257,3 +257,37 @@ fn test_union_guard_target_widens_receiver_rather_than_intersecting() {
          }",
     );
 }
+
+/// An assignment made INSIDE a branch whose guard narrows the assigned variable survives the `if`.
+///
+/// The post-`if` restore puts every narrowed variable back to its pre-`if` type, which is right for
+/// the NARROWING and was wrong for the ASSIGNMENT: `$loop` came out of this construct as `null`,
+/// so `sink($loop)` was rejected against `array` even though PHP's own flow type there is
+/// `array|null`. The tell was that guarding any OTHER variable kept the assignment — only a guard
+/// on `$loop` itself lost it.
+///
+/// Symfony's `PhpDumper::collectCircularReferences` builds its loop path in exactly this shape.
+#[test]
+fn test_assignment_under_a_guard_on_the_assigned_variable_survives_the_if() {
+    expect_ok(
+        "<?php function sink(?array $a): string { return 'n'; } \
+         function run(array $path, string $id): string { \
+           $loop = null; \
+           foreach ($path as $k => $v) { \
+             if (null !== $loop) { $loop[] = $k; } elseif ($k === $id) { $loop = []; } \
+           } \
+           return sink($loop); }",
+    );
+}
+
+/// The same repair with a plain `else` and no loop, which is the smallest shape that showed it.
+#[test]
+fn test_assignment_in_the_else_of_a_guard_on_the_assigned_variable_survives_the_if() {
+    expect_ok(
+        "<?php function sink(?array $a): string { return 'n'; } \
+         function run(string $id): string { \
+           $loop = null; \
+           if (null !== $loop) { } else { $loop = []; } \
+           return sink($loop); }",
+    );
+}

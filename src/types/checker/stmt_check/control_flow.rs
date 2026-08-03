@@ -760,9 +760,30 @@ impl Checker {
                             if !reassigned_in_branch.iter().any(|v| v == name) {
                                 continue;
                             }
-                            // Scope to object-bearing variables: the join fixes a stale object member
-                            // surviving the frame slot, so a scalar/gradual local is left untouched.
-                            if !env.get(name).is_some_and(type_is_object_bearing) {
+                            // Two reasons a name reaches the join, and they need different scoping.
+                            //
+                            // The original one is an OBJECT member going stale in the frame slot,
+                            // which is why a scalar/gradual local used to be left untouched here.
+                            //
+                            // The second is the one that gate silently swallowed: the restore above
+                            // puts every narrowed variable back to its PRE-`if` type, which is right
+                            // for the narrowing and wrong for an ASSIGNMENT made under it. `$loop =
+                            // null; if (null !== $loop) {} elseif (…) { $loop = []; }` came out of
+                            // the construct as `null` — PHP's own `array|null` was thrown away, and
+                            // only because the guard happened to test `$loop` itself (guarding any
+                            // OTHER variable kept the assignment). Symfony's `PhpDumper` builds its
+                            // circular-reference path in exactly that shape.
+                            //
+                            // So the join now also covers a narrowed variable whose branch-exit
+                            // types are not all the restored type. That is strictly the union over
+                            // the reaching branches, which is what the restored value was standing
+                            // in for.
+                            let restored = env.get(name);
+                            let assignment_changed_it = branch_exit_snapshots
+                                .iter()
+                                .any(|snapshot| snapshot.get(name) != restored);
+                            if !restored.is_some_and(type_is_object_bearing) && !assignment_changed_it
+                            {
                                 continue;
                             }
                             let mut members = Vec::with_capacity(branch_exit_snapshots.len());
