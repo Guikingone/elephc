@@ -10,7 +10,7 @@
 
 use super::*;
 use super::guards::{clear_guards_for_name, extend_guards};
-use super::state::GuardState;
+use super::state::{GuardState, RelSide};
 
 /// Invalidates guard state for any variable written by a statement.
 /// Collects all written variable names from the statement and removes
@@ -29,9 +29,22 @@ pub(super) fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
 /// written within the block. Returns a new guard state with guards for
 /// written variables removed; returns a clone of the input if no variables
 /// are written.
-fn invalidated_guards_for_block(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
+pub(super) fn invalidated_guards_for_block(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
     let mut written = Vec::new();
     collect_written_names_in_block(stmts, &mut written);
+    if written.is_empty() {
+        return guards.clone();
+    }
+
+    let mut next = guards.clone();
+    invalidate_guards_for_written_names(&mut next, &written);
+    next
+}
+
+/// Computes guard state after explicit writes performed while evaluating an expression.
+pub(super) fn invalidated_guards_for_expr(guards: &GuardState, expr: &Expr) -> GuardState {
+    let mut written = Vec::new();
+    collect_expr_written_names(expr, &mut written);
     if written.is_empty() {
         return guards.clone();
     }
@@ -374,6 +387,23 @@ fn invalidate_guards_for_written_names(guards: &mut GuardState, written: &[Strin
         .excluded_guards
         .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
     guards
+        .integer_domain_vars
+        .retain(|name| !written.iter().any(|written_name| written_name == name));
+    guards
+        .range_guards
+        .retain(|known| !written.iter().any(|written_name| written_name == &known.name));
+    guards.relational_guards.retain(|known| {
+        let mentions_left = match &known.left {
+            RelSide::Var(name) => written.iter().any(|written_name| written_name == name),
+            RelSide::Int(_) => false,
+        };
+        let mentions_right = match &known.right {
+            RelSide::Var(name) => written.iter().any(|written_name| written_name == name),
+            RelSide::Int(_) => false,
+        };
+        !mentions_left && !mentions_right
+    });
+    guards
         .condition_guards
         .retain(|known| !known.names.iter().any(|name| written.iter().any(|written_name| written_name == name)));
 }
@@ -399,6 +429,11 @@ fn collect_written_names(stmt: &Stmt, written: &mut Vec<String>) {
             push_written_name(written, array)
         }
         StmtKind::ListUnpack { vars, .. } => {
+            for name in vars {
+                push_written_name(written, name);
+            }
+        }
+        StmtKind::Global { vars } => {
             for name in vars {
                 push_written_name(written, name);
             }

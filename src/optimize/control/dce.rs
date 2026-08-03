@@ -502,58 +502,87 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 }]
             }
         }
-        StmtKind::While { condition, body } => vec![Stmt {
-            kind: StmtKind::While {
-                condition: prune_expr(condition),
-                body: dce_block_with_guards(body, guards.clone()),
-            },
-            span,
-            source_mode,
-            attributes: Vec::new(),
-        }],
-        StmtKind::DoWhile { body, condition } => vec![Stmt {
-            kind: StmtKind::DoWhile {
-                body: dce_block_with_guards(body, guards.clone()),
-                condition: prune_expr(condition),
-            },
-            span,
-            source_mode,
-            attributes: Vec::new(),
-        }],
+        StmtKind::While { condition, body } => {
+            let loop_guards = invalidated_guards_for_block(guards, &body);
+            let loop_guards = invalidated_guards_for_expr(&loop_guards, &condition);
+            vec![Stmt {
+                kind: StmtKind::While {
+                    condition: prune_expr(condition),
+                    body: dce_block_with_guards(body, loop_guards),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
+        StmtKind::DoWhile { body, condition } => {
+            let loop_guards = invalidated_guards_for_block(guards, &body);
+            let loop_guards = invalidated_guards_for_expr(&loop_guards, &condition);
+            vec![Stmt {
+                kind: StmtKind::DoWhile {
+                    body: dce_block_with_guards(body, loop_guards),
+                    condition: prune_expr(condition),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
         StmtKind::For {
             init,
             condition,
             update,
             body,
-        } => vec![Stmt {
-            kind: StmtKind::For {
-                init: init.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
-                condition: condition.map(prune_expr),
-                update: update.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
-                body: dce_block_with_guards(body, guards.clone()),
-            },
-            span,
-            source_mode,
-            attributes: Vec::new(),
-        }],
+        } => {
+            let mut loop_guards = invalidated_guards_for_block(guards, &body);
+            if let Some(stmt) = init.as_deref() {
+                invalidate_guards_for_stmt(stmt, &mut loop_guards);
+            }
+            if let Some(condition) = condition.as_ref() {
+                loop_guards = invalidated_guards_for_expr(&loop_guards, condition);
+            }
+            if let Some(stmt) = update.as_deref() {
+                invalidate_guards_for_stmt(stmt, &mut loop_guards);
+            }
+            vec![Stmt {
+                kind: StmtKind::For {
+                    init: init.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
+                    condition: condition.map(prune_expr),
+                    update: update
+                        .and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
+                    body: dce_block_with_guards(body, loop_guards),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
         StmtKind::Foreach {
             array,
             key_var,
             value_var,
             value_by_ref,
             body,
-        } => vec![Stmt {
-            kind: StmtKind::Foreach {
-                array: prune_expr(array),
-                key_var,
-                value_var,
-                value_by_ref,
-                body: dce_block_with_guards(body, guards.clone()),
-            },
-            span,
-            source_mode,
-            attributes: Vec::new(),
-        }],
+        } => {
+            let mut loop_guards = invalidated_guards_for_block(guards, &body);
+            loop_guards = invalidated_guards_for_expr(&loop_guards, &array);
+            if let Some(name) = key_var.as_deref() {
+                clear_guards_for_name(&mut loop_guards, name);
+            }
+            clear_guards_for_name(&mut loop_guards, &value_var);
+            vec![Stmt {
+                kind: StmtKind::Foreach {
+                    array: prune_expr(array),
+                    key_var,
+                    value_var,
+                    value_by_ref,
+                    body: dce_block_with_guards(body, loop_guards),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
         StmtKind::Switch {
             subject,
             cases,
@@ -583,22 +612,25 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             variadic_type,
             return_type,
             body,
-        } => vec![Stmt {
-            kind: StmtKind::FunctionDecl {
-                by_ref_return,
-                name,
-                params,
-                param_attributes,
-                variadic,
-                variadic_by_ref,
-                variadic_type,
-                return_type,
-                body: dce_block_with_guards(body, GuardState::default()),
-            },
-            span,
-            source_mode,
-            attributes: Vec::new(),
-        }],
+        } => {
+            let function_guards = GuardState::for_params(&params);
+            vec![Stmt {
+                kind: StmtKind::FunctionDecl {
+                    by_ref_return,
+                    name,
+                    params,
+                    param_attributes,
+                    variadic,
+                    variadic_by_ref,
+                    variadic_type,
+                    return_type,
+                    body: dce_block_with_guards(body, function_guards),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
         StmtKind::Return(expr) => vec![Stmt {
             kind: StmtKind::Return(expr.map(prune_expr)),
             span,

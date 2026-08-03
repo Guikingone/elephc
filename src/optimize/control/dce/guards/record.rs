@@ -15,14 +15,17 @@ use super::eval::{
     scalar_guard_value,
     strict_scalar_guard,
 };
+use super::range::{extend_range_guards, record_exact_int_range};
+use super::relational::extend_relational_guards;
 use super::super::*;
-use super::super::state::{ConditionGuard, ExactGuard, GuardLiteral, GuardState};
+use super::super::state::{ConditionGuard, ExactGuard, GuardLiteral, GuardState, RelSide};
 
 /// Removes all guard entries associated with a variable name.
 ///
 /// Clears the variable from `truthy_vars`, `falsy_vars`, `bool_true_vars`,
-/// `bool_false_vars`, `exact_guards`, `excluded_guards`, and any `condition_guards`
-/// that track the named variable. Called when a variable is reassigned.
+/// `bool_false_vars`, `exact_guards`, `excluded_guards`, `range_guards`,
+/// `integer_domain_vars`, `relational_guards`, and any `condition_guards` that track the named variable.
+/// Called when a variable is reassigned.
 pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.truthy_vars.retain(|known| known != name);
     guards.falsy_vars.retain(|known| known != name);
@@ -30,6 +33,13 @@ pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut Guar
     guards.bool_false_vars.retain(|known| known != name);
     guards.exact_guards.retain(|known| known.name != name);
     guards.excluded_guards.retain(|known| known.name != name);
+    guards.integer_domain_vars.retain(|known| known != name);
+    guards.range_guards.retain(|known| known.name != name);
+    guards.relational_guards.retain(|known| {
+        let mentions_left = matches!(&known.left, RelSide::Var(v) if v == name);
+        let mentions_right = matches!(&known.right, RelSide::Var(v) if v == name);
+        !mentions_left && !mentions_right
+    });
     guards
         .condition_guards
         .retain(|known| !known.names.iter().any(|known_name| known_name == name));
@@ -76,6 +86,9 @@ fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardL
         value: value.clone(),
     });
     record_truthy_guard(guards, name, guard_literal_truthy(&value));
+    if let GuardLiteral::Int(n) = value {
+        record_exact_int_range(guards, name, n);
+    }
 }
 
 /// Extracts the variable name and value from a strict-equality guard when the branch is taken.
@@ -430,6 +443,8 @@ pub(in crate::optimize::control::dce) fn extend_guards(guards: &GuardState, cond
     }
 
     record_condition_guard(&mut next, condition, branch_taken);
+    extend_range_guards(&mut next, condition, branch_taken);
+    extend_relational_guards(&mut next, condition, branch_taken);
 
     if let Some((name, truthy_if_true)) = guard_variable_name(condition) {
         let known_truthy = if branch_taken { truthy_if_true } else { !truthy_if_true };
