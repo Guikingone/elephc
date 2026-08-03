@@ -16,13 +16,24 @@ use super::state::{GuardState, RelSide};
 /// Collects all written variable names from the statement and removes
 /// corresponding entries from the guard state.
 pub(super) fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
-    let mut written = Vec::new();
-    collect_written_names(stmt, &mut written);
-    if written.is_empty() {
-        return;
-    }
+    apply_guard_invalidation(guards, stmt_invalidation(stmt));
+}
 
-    invalidate_guards_for_written_names(guards, &written);
+/// Advances guard state past one completed statement.
+///
+/// The statement's complete call-aware write set is invalidated first. An exact
+/// `int` typed local declaration then seeds the integer domain for subsequent
+/// statements, because reaching them proves the checked assignment completed.
+pub(super) fn advance_guards_after_stmt(stmt: &Stmt, guards: &mut GuardState) {
+    invalidate_guards_for_stmt(stmt, guards);
+    if let StmtKind::TypedAssign {
+        name,
+        type_expr: TypeExpr::Int,
+        ..
+    } = &stmt.kind
+    {
+        guards.record_integer_domain(name);
+    }
 }
 
 /// Computes guard state after a block of statements, accounting for variables
@@ -30,28 +41,27 @@ pub(super) fn invalidate_guards_for_stmt(stmt: &Stmt, guards: &mut GuardState) {
 /// written variables removed; returns a clone of the input if no variables
 /// are written.
 pub(super) fn invalidated_guards_for_block(guards: &GuardState, stmts: &[Stmt]) -> GuardState {
-    let mut written = Vec::new();
-    collect_written_names_in_block(stmts, &mut written);
-    if written.is_empty() {
-        return guards.clone();
-    }
-
     let mut next = guards.clone();
-    invalidate_guards_for_written_names(&mut next, &written);
+    apply_guard_invalidation(&mut next, block_invalidation(stmts));
     next
 }
 
 /// Computes guard state after explicit writes performed while evaluating an expression.
 pub(super) fn invalidated_guards_for_expr(guards: &GuardState, expr: &Expr) -> GuardState {
-    let mut written = Vec::new();
-    collect_expr_written_names(expr, &mut written);
-    if written.is_empty() {
-        return guards.clone();
-    }
-
     let mut next = guards.clone();
-    invalidate_guards_for_written_names(&mut next, &written);
+    apply_guard_invalidation(&mut next, expr_invalidation(expr));
     next
+}
+
+/// Applies a shared targeted invalidation to every GuardState fact domain.
+fn apply_guard_invalidation(guards: &mut GuardState, invalidation: Invalidation) {
+    match invalidation {
+        Invalidation::Names(names) => {
+            let names: Vec<String> = names.into_iter().collect();
+            invalidate_guards_for_written_names(guards, &names);
+        }
+        Invalidation::All => *guards = GuardState::default(),
+    }
 }
 
 /// Computes guard state after a block, assuming execution may throw at any point.

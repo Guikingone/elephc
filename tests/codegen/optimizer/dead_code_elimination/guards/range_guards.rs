@@ -220,3 +220,50 @@ run(12);
     assert!(user_asm.contains("whole"));
     assert!(user_asm.contains("fractional"));
 }
+
+/// Verifies an exact-`int` typed local enables transitive range pruning without an int parameter.
+#[test]
+fn test_dead_code_elimination_seeds_range_from_typed_local() {
+    let dir = make_cli_test_dir("elephc_dead_code_elimination_typed_local_range");
+    let (user_asm, _runtime_asm, required_libraries) = compile_source_to_asm_with_options(
+        r#"<?php
+int $x = $argc + 11;
+if ($x > 10) {
+    if ($x > 5) {
+        echo "a";
+    } else {
+        echo "dead-typed-local-range";
+    }
+}
+
+float $f = 10.5;
+if ($f > 10) {
+    if ($f >= 11) {
+        echo "whole";
+    } else {
+        echo "fractional";
+    }
+}
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let out = assemble_and_run(
+        &user_asm,
+        get_runtime_obj(),
+        &dir,
+        &required_libraries,
+        &default_link_paths(),
+        &[],
+    );
+    assert_eq!(out, "afractional");
+    assert!(
+        !user_asm.contains("dead-typed-local-range"),
+        "typed int local should seed transitive range pruning"
+    );
+    assert!(user_asm.contains("whole"));
+    assert!(user_asm.contains("fractional"));
+}

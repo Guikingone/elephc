@@ -69,7 +69,7 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
             .last()
             .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
         for stmt in &dce_stmt {
-            invalidate_guards_for_stmt(stmt, &mut guards);
+            advance_guards_after_stmt(stmt, &mut guards);
         }
         eliminated.extend(dce_stmt);
         if stops_here {
