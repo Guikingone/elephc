@@ -322,10 +322,10 @@ fn prune_switch_patterns_with_guards(
 
 /// Applies DCE to switch case bodies with guard state tracking across cases.
 ///
-/// Each case body is processed with `dce_block_with_guards` using guards extended
-/// for that case. Guard state is accumulated across cases to track which paths
-/// are reachable. Cases that terminate with `break` or exit are marked as
-/// direct-only, allowing subsequent cases to use accumulated guard state.
+/// A direct-only case body receives the accumulated no-match guards plus its
+/// matching case guard. Once a prior body can fall through, subsequent bodies
+/// use only the outer guards because their case patterns were not evaluated on
+/// every incoming path. Terminating cases preserve direct-only entry tracking.
 /// Switch-noop breaks (a break as the sole statement) are trimmed from bodies.
 fn dce_switch_cases_with_guards(
     subject: &Expr,
@@ -346,12 +346,11 @@ fn dce_switch_cases_with_guards(
 
     for (patterns, body) in cases {
         let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
-        let base_guards = if direct_only {
-            &direct_entry_guards
+        let case_guards = if direct_only {
+            extend_guards_for_switch_case(subject, &patterns, &direct_entry_guards)
         } else {
-            guards
+            guards.clone()
         };
-        let case_guards = extend_guards_for_switch_case(subject, &patterns, base_guards);
         let body = trim_switch_noop_break(dce_block_with_guards(body, case_guards));
         if direct_only {
             direct_entry_guards =
