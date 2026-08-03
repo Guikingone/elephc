@@ -1279,3 +1279,99 @@ foreach ($uasorted as $value) {
     );
     assert_eq!(out, "34:23:11,12,:321:321:321");
 }
+
+/// `func_num_args()` in an OVERRIDDEN method: the whole implementation family of the name is
+/// relaxed together (`types::checker::func_args_scan`), so every body gets the same lowered
+/// frame and dispatch cannot land on one laid out differently.
+///
+/// The union receiver is the sharpest form — it reaches the arity-hungry body and the plain one
+/// through the same call site. This shape used to be refused at compile time; the refusal was a
+/// limitation, not a semantic, and the values below are `php -n`'s.
+#[test]
+fn test_func_num_args_in_overridden_method_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+class C { function m($a) { return func_num_args(); } }
+class D extends C { function m($a) { return $a; } }
+$value = true ? new C() : new D();
+echo $value->m(1), "\n";
+$other = false ? new C() : new D();
+echo $other->m(7), "\n";
+echo (new C())->m(1, 2, 3), "\n";
+"#,
+    );
+    assert_eq!(out, "1\n7\n3\n");
+}
+
+/// The override reads an argument its BASE never declared — Symfony's
+/// `SymfonyStyle::createProgressBar(int $max = 0 /* , ?string $format = null */)` over
+/// `OutputStyle::createProgressBar(int $max = 0)`, which is the shape that motivated this.
+///
+/// Covers all four landings: the override called with and without the extra argument, the base
+/// body, an unrelated same-name implementation, and virtual dispatch through a base-typed
+/// parameter holding either one.
+#[test]
+fn test_func_num_args_override_reading_an_undeclared_argument_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Bar { public string $s = ""; public function __construct(string $s) { $this->s = $s; } }
+class Base { public function make(int $max = 0): Bar { return new Bar("base:" . $max); } }
+class Child extends Base {
+    public function make(int $max = 0): Bar {
+        $fmt = 2 <= func_num_args() ? func_get_arg(1) : "none";
+        return new Bar("child:" . $max . ":" . $fmt);
+    }
+}
+class Unrelated { public function make(int $max = 0): Bar { return new Bar("unrelated:" . $max); } }
+function run(Base $x): string { return $x->make(9)->s; }
+$c = new Child();
+echo $c->make(7, "custom")->s, "\n";
+echo $c->make(7)->s, "\n";
+echo (new Base())->make(7)->s, "\n";
+echo (new Unrelated())->make(7)->s, "\n";
+echo run($c), "\n";
+echo run(new Base()), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "child:7:custom\nchild:7:none\nbase:7\nunrelated:7\nchild:9:none\nbase:9\n"
+    );
+}
+
+/// The NAME-GLOBAL axis with no declared variadic anywhere — the case the ABI-neutral escape
+/// hatch could never cover, because relaxing it ADDS a parameter. Giving it to every
+/// implementation of the name is what makes that safe.
+#[test]
+fn test_func_num_args_shared_method_name_across_unrelated_classes_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Unrelated { public function grab(): array { return ['plain']; } }
+class Adapter { public function grab(): array { return [0 < \func_num_args() ? 'raw' : 'cooked']; } }
+echo implode(',', (new Unrelated())->grab()), "\n";
+echo implode(',', (new Adapter())->grab(true)), "\n";
+echo implode(',', (new Adapter())->grab()), "\n";
+"#,
+    );
+    assert_eq!(out, "plain\nraw\ncooked\n");
+}
+
+/// An optional parameter plus a declared variadic: `pick()` and `pick(0)` are indistinguishable
+/// from inside the frame, so this body genuinely needs the hidden argc operand — and so does the
+/// unrelated namesake it now shares a layout with.
+#[test]
+fn test_func_num_args_optional_param_with_variadic_and_shared_name_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+class Unrelated { public function pick(): string { return 'plain'; } }
+class Picker {
+    public function pick(int $max = 0, string ...$rest): string { return 'n=' . \func_num_args(); }
+}
+echo (new Unrelated())->pick(), "\n";
+echo (new Picker())->pick(1), "\n";
+echo (new Picker())->pick(1, "a", "b"), "\n";
+echo (new Picker())->pick(), "\n";
+"#,
+    );
+    assert_eq!(out, "plain\nn=1\nn=3\nn=0\n");
+}

@@ -118,8 +118,12 @@ array_map('dyn', [1, 2, 3]);
 /// Verifies an arity-hungry virtual method stays rejected when another runtime
 /// implementation can occupy the same dispatch slot.
 #[test]
-fn test_error_func_num_args_in_method_body() {
-    expect_error(
+fn test_func_num_args_in_method_body_with_union_receiver_is_accepted() {
+    // The sharpest shape of the old refusal: a UNION receiver that can dispatch to the
+    // arity-hungry `C::m` or the plain `D::m`. Relaxing the whole family gives both the same
+    // frame, so either landing is correct. Runtime output pinned in
+    // `tests/codegen/oop/callables/methods.rs`.
+    expect_ok(
         r#"<?php
 class C {
     function m($a) { return func_num_args(); }
@@ -130,7 +134,6 @@ class D extends C {
 $value = true ? new C() : new D();
 $value->m(1);
 "#,
-        "this compiler does not support in methods",
     );
 }
 
@@ -740,14 +743,17 @@ new Ctor(...$dynamic);
     );
 }
 
-/// Negative control for `func_args_scan`'s closed-world gate: a genuine polymorphic OVERRIDE
-/// (two real bodies behind one method name) must STILL be refused. A receiver typed as the
-/// base class can dispatch to either body at runtime and only one of them expects the hidden
-/// arity-count operand, so accepting this would be a silent ABI mismatch, not a fix. Guards
-/// the gate against being widened past "exactly one implementation".
+/// A genuine polymorphic OVERRIDE is now accepted: `func_args_scan` relaxes the WHOLE
+/// implementation family of a method name together, so both bodies get the same lowered shape
+/// and no dispatch can land on a frame laid out differently.
+///
+/// This used to be refused, and the refusal was a limitation rather than a semantic — the gate
+/// was really about UNIFORMITY, not singularity. The runtime behaviour is pinned in
+/// `tests/codegen/oop/callables/methods.rs`, which is where it belongs: acceptance alone would
+/// only prove the checker changed its mind.
 #[test]
-fn test_error_func_num_args_in_overriding_method_stays_refused() {
-    expect_error(
+fn test_func_num_args_in_overriding_method_is_accepted() {
+    expect_ok(
         r#"<?php
 abstract class BarBase {
     public function render(int $max = 0): string { return "base:$max"; }
@@ -761,24 +767,20 @@ class BarChild extends BarBase {
 }
 echo (new BarChild())->render(3);
 "#,
-        "does not support in methods",
     );
 }
 
-/// Negative control for the same gate on the NAME-GLOBAL axis: two unrelated classes sharing
-/// a method name, one arity-hungry, must stay refused. `crate::ir_lower::expr`'s
-/// `instance_method_arity_hungry_callee_key` resolves a gradual receiver by method NAME
-/// alone, so name-global uniqueness is a lockstep invariant of the marking rule.
+/// The NAME-GLOBAL axis: two UNRELATED classes sharing a method name, one arity-hungry. Also
+/// accepted now, and for the same reason — `Unrelated::pick` is relaxed alongside
+/// `Picker::pick`, so the gradual-receiver dispatch `ir_lower::expr` performs by method NAME
+/// finds one operand layout whichever body it reaches.
+///
+/// The optional-parameter detail this test was built around still holds: `pick()` and `pick(0)`
+/// are indistinguishable from inside the frame, so this method genuinely needs the hidden argc
+/// operand. It gets it — and so does its namesake.
 #[test]
-/// The ABI-neutral escape hatch (`func_args_scan::relaxation_is_abi_neutral`) needs BOTH of its
-/// conditions, and this pins the second one: a method that DOES declare a variadic tail but
-/// carries an OPTIONAL parameter cannot derive `func_num_args()` from its own frame — `pick()`
-/// and `pick(0)` look identical from inside — so it still needs the hidden argc operand, and
-/// therefore still needs the closed-world gate. Sharing the name with an unrelated class must
-/// keep it refused rather than silently pick one implementation's operand layout.
-#[test]
-fn test_error_func_num_args_optional_param_with_variadic_and_shared_name_stays_refused() {
-    expect_error(
+fn test_func_num_args_optional_param_with_variadic_and_shared_name_is_accepted() {
+    expect_ok(
         r#"<?php
 class Unrelated {
     public function pick(): string { return 'plain'; }
@@ -792,12 +794,18 @@ class Picker {
 echo (new Unrelated())->pick();
 echo (new Picker())->pick(1);
 "#,
-        "does not support in methods",
     );
 }
 
-fn test_error_func_num_args_name_shared_with_unrelated_class_stays_refused() {
-    expect_error(
+/// Same shape without any declared variadic — the case the ABI-neutral escape hatch could never
+/// cover, since relaxing it ADDS a parameter. Adding it to every implementation of the name is
+/// what makes that safe.
+///
+/// This one carried no `#[test]` attribute and had therefore never run; the two attributes on the
+/// test above are why it appeared twice in the failure list.
+#[test]
+fn test_func_num_args_name_shared_with_unrelated_class_is_accepted() {
+    expect_ok(
         r#"<?php
 class Unrelated {
     public function grab(): array { return ['plain']; }
@@ -811,6 +819,5 @@ class Adapter {
 echo implode(',', (new Unrelated())->grab());
 echo implode(',', (new Adapter())->grab(true));
 "#,
-        "does not support in methods",
     );
 }

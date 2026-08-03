@@ -490,12 +490,82 @@ pub(crate) fn mark_func_args_functions(
                 is_static,
             )
         {
+            // The gate is about UNIFORMITY, not singularity: what breaks is one implementation
+            // growing a synthetic tail while a sibling reached by the same name dispatch keeps
+            // the declared arity. Relaxing the WHOLE family restores that uniformity — every
+            // implementation of the name gets the same lowered shape, so no dispatch can land on
+            // a frame laid out differently. `SymfonyStyle::createProgressBar` overrides
+            // `OutputStyle::createProgressBar`, which is the only reason it was refused.
+            let Some(family) = whole_implementation_family_is_relaxable(
+                classes,
+                class_method_bodies,
+                &method_key,
+                is_static,
+            ) else {
+                continue;
+            };
+            for owner in &family {
+                relax_method_implementation_signatures(classes, owner, &method_key, is_static);
+                marked.insert(format!("{}::{}", owner, method_key));
+            }
             continue;
         }
         relax_method_implementation_signatures(classes, &class_name, &method_key, is_static);
         marked.insert(format!("{}::{}", class_name, method_key));
     }
     marked
+}
+
+/// Returns every implementation owner of `method_key` when the whole family can be relaxed
+/// together, or `None` when it cannot.
+///
+/// Relaxing one implementation of a name is what the closed-world gate forbids, because a sibling
+/// implementation reached by the same name dispatch would keep the declared arity and the two
+/// frames would disagree. Relaxing them ALL removes that disagreement by construction.
+///
+/// Refuses whenever any owner in the set has no BODY for the method — an interface member or an
+/// abstract declaration. `relax_method_implementation_signatures` documents why those must stay
+/// untouched: codegen sizes a call's operand list from the RECEIVER-typed declaration, so
+/// relaxing a bodyless one produces a checker/backend split rather than a working call.
+fn whole_implementation_family_is_relaxable(
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+    class_method_bodies: &std::collections::HashMap<String, Vec<(String, bool, Vec<crate::parser::ast::Stmt>)>>,
+    method_key: &str,
+    is_static: bool,
+) -> Option<Vec<String>> {
+    let mut owners = HashSet::new();
+    for class_info in classes.values() {
+        let (signatures, implementation_classes) = if is_static {
+            (
+                &class_info.static_methods,
+                &class_info.static_method_impl_classes,
+            )
+        } else {
+            (&class_info.methods, &class_info.method_impl_classes)
+        };
+        if !signatures.contains_key(method_key) {
+            continue;
+        }
+        let implementation = implementation_classes.get(method_key)?;
+        owners.insert(implementation.clone());
+    }
+    if owners.is_empty() {
+        return None;
+    }
+    for owner in &owners {
+        let has_body = class_method_bodies.get(owner).is_some_and(|methods| {
+            methods.iter().any(|(name, method_is_static, _)| {
+                *method_is_static == is_static
+                    && crate::names::php_symbol_key(name) == method_key
+            })
+        });
+        if !has_body {
+            return None;
+        }
+    }
+    let mut owners: Vec<String> = owners.into_iter().collect();
+    owners.sort();
+    Some(owners)
 }
 
 /// Returns whether every class exposing `method_key` dispatches to `owner`.
