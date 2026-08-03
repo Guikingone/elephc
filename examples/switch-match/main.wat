@@ -95,7 +95,7 @@
   (data (i32.const 84508) "F")
   (data (i32.const 84512) "Friday\0a")
   (data (i32.const 84520) "Go\0a")
-  (data (i32.const 84524) "Grade: F\0a")
+  (data (i32.const 84524) "Grade: B\0a")
   (data (i32.const 84536) "HTTP ")
   (data (i32.const 84544) "Monday\0a")
   (data (i32.const 84552) "Not Found")
