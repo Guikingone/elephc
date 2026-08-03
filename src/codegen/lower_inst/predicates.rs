@@ -119,7 +119,7 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_tagged_scalar_null_bool(ctx);
             Ok(())
         }
-        PhpType::Int | PhpType::Bool | PhpType::Callable => {
+        PhpType::Int | PhpType::Bool => {
             if crate::codegen::sentinels::null_repr_is_tagged() {
                 abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
                 return Ok(());
@@ -128,7 +128,24 @@ pub(super) fn emit_is_null_result(ctx: &mut FunctionContext<'_>, value: ValueId)
             emit_int_result_null_sentinel_bool(ctx);
             Ok(())
         }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable | PhpType::Object(_) => {
+        // `Callable` belongs with the POINTER kinds below, not with `Int`/`Bool` above. The
+        // constant-false fold is sound for a tagged-null `int`/`bool` — those can never hold null,
+        // null being a distinct tag — but a callable is a closure-descriptor ADDRESS, and a slot
+        // holding one is genuinely null before it is first written.
+        //
+        // Folding it made `self::$fn ??= <closure>` on an untyped static property emit
+        // `is_null -> mov x0, #0`, so the guard was false at COMPILE time, the store was never
+        // reached, and the later call dereferenced null: SIGSEGV on valid PHP. Declaring the
+        // property `?\Closure` hid it — that union carries `Void`, so this arm was never taken.
+        //
+        // ⚠️ Every type PREDICATE folds the same way, so neither `=== null` nor `is_callable()` can
+        // observe the defect; both report the assigned value. Only a real dereference does, and the
+        // emitted `is_null` sequence is the reliable witness.
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Iterable
+        | PhpType::Callable
+        | PhpType::Object(_) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_null_container_bool(ctx);
             Ok(())

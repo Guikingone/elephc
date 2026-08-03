@@ -1060,6 +1060,12 @@ fn ensure_static_property_type_supported(php_type: &PhpType, inst: &Instruction)
         | PhpType::Union(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
+        // A `Callable` is a closure-descriptor ADDRESS — one pointer word, the same storage class
+        // as `Object` and `Mixed` above, so the slot machinery already handles it. Its absence was
+        // an omission, not a representation gap: the singleton-closure idiom
+        // `self::$fn ??= static function (…) {…};` (Symfony's `AbstractAdapter::$mergeByLifetime`)
+        // reached the backend and was refused outright.
+        | PhpType::Callable
         | PhpType::Object(_) => Ok(()),
         _ => Err(CodegenIrError::unsupported(format!(
             "{} for static property PHP type {:?}",

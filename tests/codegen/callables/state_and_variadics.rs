@@ -1155,3 +1155,58 @@ echo $ok ? "yes" : "no";
     );
     assert_eq!(out, "42|yes");
 }
+
+/// A closure stored in an UNTYPED static property, initialized with `??=` and then invoked.
+///
+/// This is the singleton-closure idiom (Symfony's `AbstractAdapter::$mergeByLifetime`), and it used
+/// to SIGSEGV. Two independent defects stacked:
+///
+/// 1. `ensure_static_property_type_supported` omitted `PhpType::Callable`, so the store was refused
+///    outright — even though a callable is a descriptor ADDRESS, the same one-pointer storage class
+///    as the `Object` and `Mixed` entries beside it.
+/// 2. With that lifted, `emit_is_null_result` grouped `Callable` with `Int`/`Bool`, whose
+///    constant-false fold is sound only because a tagged-null int can never hold null. A callable
+///    slot IS null before its first write, so `is_null` folded to `mov x0, #0`, the `??=` guard was
+///    false at COMPILE time, the store never ran, and the call dereferenced null.
+///
+/// ⚠️ No type predicate can witness defect 2 — `=== null` and `is_callable()` fold the same way and
+/// both report the assigned value. Only a real dereference does, which is why this test CALLS.
+#[test]
+fn test_null_coalesce_init_of_untyped_static_closure_property_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static $f;
+    public static function init(): void { self::$f ??= static function (int $n): int { return $n + 1; }; }
+    public static function run(int $n): int { return (self::$f)($n); }
+}
+A::init();
+A::init();
+echo A::run(41), "\n";
+$s = 0;
+for ($i = 0; $i < 5; $i++) { $s += A::run($i); }
+echo $s, "\n";
+"#,
+    );
+    assert_eq!(out, "42\n15\n");
+}
+
+/// The plain-assignment sibling of the above: `self::$f = <closure>` with no null guard.
+///
+/// It was refused by the same missing `Callable` entry but, having no `??=` guard, never hit the
+/// fold — which is exactly why probing only this form gave a misleading all-green.
+#[test]
+fn test_plain_assignment_of_closure_to_untyped_static_property_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static $f;
+    public static function init(): void { self::$f = static function (int $n): int { return $n * 2; }; }
+    public static function run(int $n): int { return (self::$f)($n); }
+}
+A::init();
+echo A::run(21), "\n";
+"#,
+    );
+    assert_eq!(out, "42\n");
+}
