@@ -228,6 +228,7 @@ impl Checker {
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             declared_typed_locals: HashSet::new(),
+            static_property_callable_sigs: HashMap::new(),
             conditional_assignment_depth: 0,
             eval_barrier_active: false,
             break_continue_depth: 0,

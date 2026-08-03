@@ -46,6 +46,7 @@ pub(super) fn check_static_property_assign(
 ) -> Result<(), CompileError> {
     let val_ty = checker.infer_type_with_assignment_effects(value, env)?;
     let target = resolve_static_property_assignment_target(checker, receiver, property, span)?;
+    record_static_property_callable_sig(checker, &target.declaring_class, property, value, env)?;
 
     if target.property_has_declared_type {
         checker.require_compatible_arg_type(
@@ -364,6 +365,49 @@ fn resolve_dynamic_static_write_class(
 /// Returns `StaticPropertyAssignmentTarget` with class name, declaring class,
 /// declared-type flag, and current property type. Checks that the property exists
 /// and that the current context can access it per PHP visibility rules.
+/// Records the callable signature of a closure stored in a STATIC property, keyed so a later
+/// `(self::$prop)(…)` call site can find its by-reference parameters.
+///
+/// A closure in a static property is a program-wide singleton, which is why Symfony uses the shape:
+/// `AbstractAdapter::$mergeByLifetime` is assigned once in the constructor and invoked as
+/// `(self::$mergeByLifetime)($deferred, $ns, $expiredIds, …)`, where the third parameter is BY
+/// REFERENCE and therefore DEFINES `$expiredIds` in the caller. Without a recorded signature the
+/// call site cannot know that, and the caller's later `if ($expiredIds)` reads an undefined
+/// variable.
+///
+/// `??=` is unwrapped here rather than in `resolve_expr_callable_sig`: the parser lowers
+/// `self::$p ??= <closure>` to a null-coalesce whose LEFT branch is the target property itself, and
+/// the general resolver requires BOTH branches to agree. For a self-referential `??=` the null case
+/// means "not assigned yet", so the signature is the DEFAULT's alone. Narrowing the unwrap to this
+/// exact shape keeps the shared branch-matching rule untouched.
+fn record_static_property_callable_sig(
+    checker: &mut Checker,
+    declaring_class: &str,
+    property: &str,
+    value: &Expr,
+    env: &TypeEnv,
+) -> Result<(), CompileError> {
+    let source = match &value.kind {
+        ExprKind::NullCoalesce { value: current, default }
+            if matches!(
+                &current.kind,
+                ExprKind::StaticPropertyAccess { property: current_property, .. }
+                    if current_property == property
+            ) =>
+        {
+            default.as_ref()
+        }
+        _ => value,
+    };
+    let Some(sig) = checker.resolve_expr_callable_sig(source, env)? else {
+        return Ok(());
+    };
+    checker
+        .static_property_callable_sigs
+        .insert(format!("{}::${}", declaring_class, property), sig);
+    Ok(())
+}
+
 fn resolve_static_property_assignment_target(
     checker: &Checker,
     receiver: &StaticReceiver,

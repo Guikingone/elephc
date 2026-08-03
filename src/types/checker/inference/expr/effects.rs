@@ -636,6 +636,13 @@ impl Checker {
                         env.entry(output).or_insert(ty);
                     }
                 }
+                // `(self::$prop)(…)` — a closure held in a static property. This is the arm that
+                // runs for a statement-level call; the nested-expression walker has its own.
+                for (output, ty) in
+                    self.static_property_callee_by_ref_outputs(callee, &expanded_args, env)
+                {
+                    env.entry(output).or_insert(ty);
+                }
                 let skip_contextual_callback = self
                     .expr_targets_preg_replace_callback(callee);
                 for (idx, arg) in expanded_args.iter().enumerate() {

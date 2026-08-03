@@ -1210,3 +1210,40 @@ echo A::run(21), "\n";
     );
     assert_eq!(out, "42\n");
 }
+
+/// A closure held in a STATIC property, invoked as `(self::$fn)(…)`, whose by-reference parameter
+/// must define the caller's variable — through both `=` and `??=` initialization.
+///
+/// PHP defines `$res` here: the closure's second parameter is `&$out`. elephc reported
+/// `Undefined variable: $res` because the callee's signature was never recorded for a static
+/// property. Three pieces were missing, and the middle one is the subtle part:
+///
+/// - the signature must live in a map that SURVIVES the body that recorded it. `callable_sigs` is
+///   reset per function, so an entry written while checking `init()` was silently gone by the time
+///   `run()` was checked — it looked recorded and did nothing.
+/// - `??=` lowers to a null-coalesce whose LEFT branch is the target property itself, and the
+///   shared branch-matching resolver needs BOTH branches to agree. For a self-referential `??=` the
+///   null case means "not assigned yet", so the default's signature is the answer.
+/// - the call site that actually runs for a statement-level call is the `ExprCall` arm in
+///   `effects.rs`, not the nested-expression walker.
+#[test]
+fn test_by_ref_parameter_of_a_static_property_closure_defines_the_caller_variable() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static $f;
+    private static $g;
+    public static function init(): void {
+        self::$f = static function ($n, &$out) { $out = $n * 2; };
+        self::$g ??= static function ($n, &$out) { $out = $n + 1; };
+    }
+    public static function twice(int $n): int { (self::$f)($n, $res); return $res; }
+    public static function inc(int $n): int { (self::$g)($n, $res); return $res; }
+}
+A::init();
+echo A::twice(21), "\n";
+echo A::inc(41), "\n";
+"#,
+    );
+    assert_eq!(out, "42\n42\n");
+}

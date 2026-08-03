@@ -82,6 +82,15 @@ pub(crate) struct Checker {
     /// Tracks known callable signatures for variables holding first-class callables,
     /// keyed by variable name.
     pub callable_sigs: HashMap<String, FunctionSig>,
+    /// Callable signatures for closures stored in STATIC properties, keyed `Class::$prop`.
+    ///
+    /// Deliberately NOT part of the per-body save/restore that `callable_sigs` undergoes: a static
+    /// property is ONE program-wide slot, so a signature recorded while checking the constructor
+    /// must still be visible when a later method invokes `(self::$prop)(…)`. Keeping it in
+    /// `callable_sigs` looks right and silently does nothing — the entry is discarded with the body
+    /// that produced it. The `Class::$prop` key cannot collide with the bare-name keys that map
+    /// holds for locals.
+    pub static_property_callable_sigs: HashMap<String, FunctionSig>,
     /// Tracks source-declared callable parameters in the active function body.
     pub callable_param_names: HashSet<String>,
     /// Tracks callable signatures inferred for user-function callable parameters,

@@ -181,6 +181,40 @@ impl Checker {
         Self::sig_undefined_by_ref_variable_outputs(sig, args, env)
     }
 
+    /// Returns the by-reference outputs of a `(self::$prop)(…)` call — a closure held in a STATIC
+    /// property, invoked through a parenthesized callee.
+    ///
+    /// Its by-reference parameters define caller variables exactly as a local `$fn(…)` callee's do.
+    /// The signature was recorded under `Class::$prop` when the property was assigned (see
+    /// `record_static_property_callable_sig`), in a map that survives the body that produced it —
+    /// unlike `callable_sigs`, which is reset per function.
+    ///
+    /// Symfony's `AbstractAdapter::commit` is the motivating shape:
+    /// `(self::$mergeByLifetime)($deferred, $ns, $expiredIds, …)` followed by `if ($expiredIds)`,
+    /// where the closure declares that third parameter `&$expiredIds`.
+    ///
+    /// Returns empty for any other callee shape, so an ordinary parenthesized callee is unaffected.
+    pub(crate) fn static_property_callee_by_ref_outputs(
+        &self,
+        callee: &Expr,
+        args: &[Expr],
+        env: &TypeEnv,
+    ) -> Vec<(String, PhpType)> {
+        let ExprKind::StaticPropertyAccess { receiver, property } = &callee.kind else {
+            return Vec::new();
+        };
+        let Some(class) = self.resolve_static_receiver_class_for_by_ref(receiver) else {
+            return Vec::new();
+        };
+        let Some(sig) = self
+            .static_property_callable_sigs
+            .get(&format!("{}::${}", class, property))
+        else {
+            return Vec::new();
+        };
+        Self::sig_undefined_by_ref_variable_outputs(sig, args, env)
+    }
+
     /// Returns `(name, type)` promotions for already-defined plain `$variable` arguments a user
     /// function call passes to a declared by-reference parameter whose boxed/nullable storage the
     /// variable's current type cannot provide. The caller scope must promote each variable so the
@@ -608,6 +642,7 @@ impl Checker {
                 if let ExprKind::Variable(var) = &callee.kind {
                     out.extend(self.callable_variable_by_ref_outputs(var, args, env));
                 }
+                out.extend(self.static_property_callee_by_ref_outputs(callee, args, env));
                 self.collect_nested_by_ref_outputs(callee, env, out);
                 for arg in args {
                     self.collect_nested_by_ref_outputs(arg, env, out);
