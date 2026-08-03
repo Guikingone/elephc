@@ -72,7 +72,11 @@ fn record_truthy_guard(guards: &mut GuardState, name: &str, known_truthy: bool) 
 /// Clears all existing guards for the name, then adds the exact value to `exact_guards`,
 /// records the variable as bool-true/false if the value is boolean, and calls
 /// `record_truthy_guard` with the literal's truthiness.
-fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
+pub(super) fn record_exact_literal_guard(
+    guards: &mut GuardState,
+    name: &str,
+    value: GuardLiteral,
+) {
     clear_guards_for_name(guards, name);
     if let GuardLiteral::Bool(value) = &value {
         if *value {

@@ -19,8 +19,9 @@ use super::super::state::{GuardLiteral, GuardState, RelOp, RelSide, RelationalGu
 use super::eval::known_exact_guard;
 use super::range::{
     has_integer_domain, interval_entails_relational, interval_from_relational, known_range_guard,
-    record_exact_int_range, record_range_guard,
+    record_range_guard,
 };
+use super::record::record_exact_literal_guard;
 
 /// Converts a tracked `BinOp` into a `RelOp`.
 fn rel_op_from_binop(op: &BinOp) -> Option<RelOp> {
@@ -219,7 +220,7 @@ fn strengthen_variable_from_exact(
     );
 
     if matches!(op, RelOp::StrictEq) {
-        record_exact_int_range(guards, name, value);
+        record_exact_literal_guard(guards, name, GuardLiteral::Int(value));
         return;
     }
     if !has_integer_domain(guards, name) {
