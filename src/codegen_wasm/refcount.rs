@@ -513,6 +513,9 @@ mod tests {
         // never collide with the concat scratch (never written here) or the heap (>= 1024).
         wm.add_data(DataSegment { offset: 8, bytes: vec![1u8] });
         wm.add_data(DataSegment { offset: 12, bytes: 8u32.to_le_bytes().to_vec() });
+        // Class 0's layout metadata: one declared property, no dynamic-property tail. The
+        // release walk reads its count from HERE rather than from the block size.
+        wm.add_data(DataSegment { offset: 16, bytes: 1u32.to_le_bytes().to_vec() });
         wm.add_global(Global {
             name: "__gc_desc_ptrs".to_string(),
             ty: ValType::I32,
@@ -524,6 +527,12 @@ mod tests {
             ty: ValType::I32,
             mutable: false,
             init: 1,
+        });
+        wm.add_global(Global {
+            name: "__gc_desc_meta".to_string(),
+            ty: ValType::I32,
+            mutable: false,
+            init: 16,
         });
         // Static "hi" source for __rt_str_persist, also in the free [0, 64) region.
         wm.add_data(DataSegment { offset: 32, bytes: b"hi".to_vec() });

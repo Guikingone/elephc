@@ -156,6 +156,7 @@ const RT_GC_VISIT_CHILDREN: &str = r#"(func $__rt_gc_visit_children (param $ptr 
   (local $j i32)
   (local $ptag i32)
   (local $tail i32)
+  (local $meta i32)
   (local.set $hdr (i32.sub (local.get $ptr) (i32.const 16)))  ;; header of this block
   (local.set $kindw (i64.load (i32.add (local.get $hdr) (i32.const 8))))  ;; kind word @ H+8
   (local.set $kind (i32.and (i32.wrap_i64 (local.get $kindw)) (i32.const 255)))  ;; kind = low byte
@@ -224,10 +225,14 @@ const RT_GC_VISIT_CHILDREN: &str = r#"(func $__rt_gc_visit_children (param $ptr 
   (if (i32.ne (local.get $kind) (i32.const 4))
     (then (return)))                                          ;; nothing else has traversable children
   (local.set $cid (i32.wrap_i64 (i64.load (local.get $ptr))))  ;; class_id @ O+0
-  (local.set $n
-    (i32.shr_u
-      (i32.sub (i32.load (i32.sub (local.get $ptr) (i32.const 16))) (i32.const 8))
-      (i32.const 4)))                                         ;; property count = (size-8) >> 4
+  ;; The property count comes from the CLASS, not the block: the allocator reuses a free block
+  ;; without splitting it, so a size-derived count walks the previous occupant's bytes.
+  (local.set $meta (i32.const 0))
+  (if (i32.lt_u (local.get $cid) (global.get $__gc_desc_count))
+    (then
+      (local.set $meta
+        (i32.load (i32.add (global.get $__gc_desc_meta) (i32.mul (local.get $cid) (i32.const 4)))))))
+  (local.set $n (i32.and (local.get $meta) (i32.const 65535)))  ;; declared property count
   (if (i32.lt_u (local.get $cid) (global.get $__gc_desc_count))
     (then
       (local.set $desc
@@ -244,10 +249,9 @@ const RT_GC_VISIT_CHILDREN: &str = r#"(func $__rt_gc_visit_children (param $ptr 
               (local.get $mode))))                            ;; slot ptr @ O+8+j*16
         (local.set $j (i32.add (local.get $j) (i32.const 1)))  ;; j++
         (br $owalk)))))
-  ;; the dynamic-property hash tail, present when (size-8) & 15 == 8
-  (local.set $tail
-    (i32.sub (i32.load (i32.sub (local.get $ptr) (i32.const 16))) (i32.const 8)))  ;; tail_off = size - 8
-  (if (i32.eq (i32.and (local.get $tail) (i32.const 15)) (i32.const 8))
+  ;; the dynamic-property hash tail, which the CLASS metadata declares
+  (local.set $tail (i32.add (i32.const 8) (i32.mul (local.get $n) (i32.const 16))))  ;; right after the slots
+  (if (i32.ne (i32.and (local.get $meta) (i32.const 65536)) (i32.const 0))
     (then
       (call $__rt_gc_edge
         (i32.load (i32.add (local.get $ptr) (local.get $tail)))

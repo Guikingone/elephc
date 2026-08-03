@@ -24,11 +24,11 @@
 //!   a call to `__rt_call_object_destructor` (runs `__destruct` with the properties still
 //!   intact, before the walk), then a gc_desc-driven property walk that releases each refcounted
 //!   slot value (desc tag in {1,4,5,6,7}) before freeing the block via `__rt_heap_free` (unsafe;
-//!   refcount is already 0). The property count is derived from the object's own size header
-//!   (`n = (size-8) >> 4`), not from a terminator, so a scalar-then-refcounted property ordering
-//!   is handled correctly. P6g appends a dyn-tail release: when `(size-8) & 15 == 8` an ADP/
-//!   stdClass object carries a Mixed-cell hash at `[ptr + (size-8)]`, released via
-//!   `__rt_decref_any` before `__rt_heap_free` (the declared-slot walk truncates the +8 tail).
+//!   refcount is already 0). The property count and the dynamic-property tail come from the
+//!   CLASS metadata table, never from the block's size header: the allocator reuses a free
+//!   block without splitting it, so the header can be far larger than the object's payload.
+//!   An `AllowDynamicProperties`/stdClass object carries a Mixed-cell hash right after its
+//!   declared slots, released via `__rt_decref_any` before `__rt_heap_free`.
 //!   The gc_desc table is emitted by `emit_gc_desc_table` (one tag byte per property, indexed by
 //!   `class_id`); `emit_gc_desc_stub` declares empty-table globals for unit-test harnesses that
 //!   register no classes (the `cid < count` check is then false for every cid and the walk is
@@ -84,6 +84,12 @@ pub(super) fn emit_gc_desc_stub(wm: &mut WatModule) {
     });
     wm.add_global(Global {
         name: "__gc_desc_count".to_string(),
+        ty: ValType::I32,
+        mutable: false,
+        init: 0,
+    });
+    wm.add_global(Global {
+        name: "__gc_desc_meta".to_string(),
         ty: ValType::I32,
         mutable: false,
         init: 0,
@@ -413,6 +419,12 @@ pub(super) fn emit_gc_desc_table(
             mutable: false,
             init: 0,
         });
+        wm.add_global(Global {
+            name: "__gc_desc_meta".to_string(),
+            ty: ValType::I32,
+            mutable: false,
+            init: 0,
+        });
         return cursor;
     }
     let mut ordered_classes: Vec<_> = class_infos.iter().collect();
@@ -492,6 +504,47 @@ pub(super) fn emit_gc_desc_table(
         mutable: false,
         init: count as i64,
     });
+    // Per-class LAYOUT metadata: the declared property count in the low 16 bits, and whether
+    // the class carries a dynamic-property hash tail in bit 16.
+    //
+    // The release walk used to derive both from the heap block's size. That is wrong, because
+    // the allocator reuses a free block WITHOUT splitting it: an object asking for 24 bytes can
+    // be served a 152-byte block, and the header keeps 152. The walk then read nine phantom
+    // property slots of the previous occupant's bytes and released whatever pointers it found —
+    // freeing live blocks. An object's layout is a property of its CLASS, so it is read from
+    // here now.
+    let meta_off = cursor;
+    let mut meta_bytes = Vec::with_capacity(count as usize * 4);
+    for cid in 0..=max_id {
+        let value = match id_to_ci.get(&cid) {
+            Some(ci) => {
+                let name = ordered_classes
+                    .iter()
+                    .find(|(_, candidate)| candidate.class_id == cid)
+                    .map(|(name, _)| name.as_str())
+                    .unwrap_or("");
+                let mut value = ci.properties.len() as u32 & 0xffff;
+                if has_dynamic_properties(ci, name) {
+                    value |= 1 << 16;
+                }
+                value
+            }
+            // A gap class id has no layout; zero properties and no tail is the safe reading.
+            None => 0,
+        };
+        meta_bytes.extend_from_slice(&value.to_le_bytes());
+    }
+    wm.add_data(DataSegment {
+        offset: meta_off,
+        bytes: meta_bytes,
+    });
+    cursor += (count * 4) as u32;
+    wm.add_global(Global {
+        name: "__gc_desc_meta".to_string(),
+        ty: ValType::I32,
+        mutable: false,
+        init: meta_off as i64,
+    });
     cursor
 }
 
@@ -531,7 +584,7 @@ fn gc_desc_tag(ty: &PhpType) -> u8 {
 /// skipped. Finally the block is freed with `__rt_heap_free` (unsafe, no refcount guard) since the
 /// refcount is already 0.
 const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
-  (local $rc i32) (local $n i32) (local $cid i32) (local $desc i32) (local $i i32) (local $tag i32) (local $slot i32) (local $tail_off i32)
+  (local $rc i32) (local $n i32) (local $cid i32) (local $desc i32) (local $i i32) (local $tag i32) (local $slot i32) (local $tail_off i32) (local $meta i32)
   (if (i32.eqz (local.get $ptr)) (then (return)))                    ;; guard: null pointer
   (if (i32.lt_u (local.get $ptr) (i32.add (global.get $__heap_base) (i32.const 16)))
     (then (return)))                                                  ;; guard: below first payload (borrowed/literal)
@@ -546,7 +599,14 @@ const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
   (i32.store (i32.sub (local.get $ptr) (i32.const 12)) (i32.const 0))  ;; mark refcount 0 (re-entrancy guard)
   (call $__rt_call_object_destructor (local.get $ptr))          ;; run __destruct (if any) before the property walk
   (local.set $cid (i32.wrap_i64 (i64.load (local.get $ptr))))    ;; class_id = [ptr+0] (i64 -> i32)
-  (local.set $n (i32.shr_u (i32.sub (i32.load (i32.sub (local.get $ptr) (i32.const 16))) (i32.const 8)) (i32.const 4)))  ;; n = (size-8) >> 4
+  ;; The layout comes from the CLASS, never from the heap block: the allocator reuses a free
+  ;; block WITHOUT splitting it, so an object asking for 24 bytes can be served a 152-byte one
+  ;; and the header keeps 152. A size-derived count then walked nine phantom slots of the
+  ;; previous occupant and released whatever pointers it found, freeing live blocks.
+  (local.set $meta (i32.const 0))                                ;; no class table -> no slots
+  (if (i32.lt_u (local.get $cid) (global.get $__gc_desc_count)) (then
+    (local.set $meta (i32.load (i32.add (global.get $__gc_desc_meta) (i32.mul (local.get $cid) (i32.const 4)))))))
+  (local.set $n (i32.and (local.get $meta) (i32.const 65535)))   ;; declared property count
   (if (i32.lt_u (local.get $cid) (global.get $__gc_desc_count)) (then  ;; class_id within the descriptor table?
     (local.set $desc (i32.load (i32.add (global.get $__gc_desc_ptrs) (i32.mul (local.get $cid) (i32.const 4)))))  ;; desc = ptrs[cid]
     (local.set $i (i32.const 0))                                ;; property index = 0
@@ -570,8 +630,8 @@ const RT_DECREF_OBJECT: &str = r#"(func $__rt_decref_object (param $ptr i32)
   ;; number of 16-byte slots, (size-8) & 15 == 0 (no tail); an ADP/stdClass object adds an
   ;; 8-byte tail so (size-8) & 15 == 8. The declared-slot walk above ignores it ((n = (size-8)
   ;; >> 4) truncates the +8), so release the hash here before freeing the storage.
-  (local.set $tail_off (i32.sub (i32.load (i32.sub (local.get $ptr) (i32.const 16))) (i32.const 8)))  ;; tail_off = size - 8 (dyn hash offset when present)
-  (if (i32.eq (i32.and (local.get $tail_off) (i32.const 15)) (i32.const 8)) (then  ;; (size-8) & 15 == 8 -> dyn hash tail present
+  (local.set $tail_off (i32.add (i32.const 8) (i32.mul (local.get $n) (i32.const 16))))  ;; the tail sits right after the declared slots
+  (if (i32.ne (i32.and (local.get $meta) (i32.const 65536)) (i32.const 0)) (then  ;; the CLASS declares a dyn-prop tail
     (call $__rt_decref_any (i32.load (i32.add (local.get $ptr) (local.get $tail_off))))  ;; release the dyn hash at [ptr + (size-8)]
   )                                                              ;; close then (dyn tail)
   )                                                              ;; close if (dyn tail)
@@ -1236,6 +1296,17 @@ pub(super) fn emit_scalar_default(
         }
         LiteralDefaultValue::Null => {
             // The zeroing loop already wrote (0, 0); skip.
+        }
+        LiteralDefaultValue::Array { elements, .. } if elements.is_empty() => {
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins("i64.const 0", "capacity 0");
+            ctx.fb.ins("i64.const 16", "default elem_size");
+            ctx.fb.ins("call $__rt_array_new", "fresh empty array for the default");
+            ctx.fb.ins("i64.extend_i32_u", "widen the pointer");
+            ctx.fb.ins(&format!("i64.store offset={}", offset), "store the pointer");
+            ctx.fb.ins(&format!("local.get {}", obj), "object base address");
+            ctx.fb.ins("i64.const 4", "container runtime tag");
+            ctx.fb.ins(&format!("i64.store offset={}", offset + 8), "store the tag");
         }
         LiteralDefaultValue::BoxedNull => {
             emit_boxed_scalar_default(ctx, obj, offset, 8, 0, "null");

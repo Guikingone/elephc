@@ -3061,7 +3061,8 @@ fn object_new_shape_issue(
                 | LiteralDefaultValue::BoxedFloat(_)
                 | LiteralDefaultValue::Str(_)
                 | LiteralDefaultValue::BoxedStr(_)
-        ) {
+        ) && !matches!(&literal, LiteralDefaultValue::Array { elements, .. } if elements.is_empty())
+        {
             return Some(format!(
                 "property ${property} has a non-scalar default unsupported by WASM object construction"
             ));

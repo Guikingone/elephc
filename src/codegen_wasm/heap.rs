@@ -10,7 +10,10 @@
 //! Key details:
 //! - All "pointers" are absolute i32 byte offsets into linear memory. Each block
 //!   carries a 16-byte header immediately before the user pointer:
-//!     H+0  i32 size      (payload bytes, the 8-rounded request, header excluded)
+//!     H+0  i32 size      (payload bytes, header excluded). This is the BLOCK's capacity,
+//!                        not the caller's request: the free list reuses a larger block
+//!                        without splitting it, so nothing may derive a value's SHAPE from
+//!                        it — an object's property count comes from its class, never here.
 //!     H+4  i32 refcount   (1 on allocation; 0 marks the block free)
 //!     H+8  i64 kind       (type/GC metadata word; the allocator zeroes it)
 //!   The user pointer is `H+16`. This is the SAME header `incref`/`decref` mutate.
