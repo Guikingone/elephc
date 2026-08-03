@@ -2103,15 +2103,22 @@ pub(crate) fn lower_is_array(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     store_if_result(ctx, inst)
 }
 
-/// Lowers `is_object()`: true for statically-known objects, or a boxed Mixed/Union value whose
-/// runtime tag is an object (6).
+/// Lowers `is_object()`: true for statically-known objects and closures, or a boxed Mixed/Union
+/// value whose runtime tag is an object (6) or a closure descriptor (10).
+///
+/// A `Closure` IS an object in PHP — `is_object(fn() => 1)` is `true`, and `Closure` is a real
+/// class with methods. Tag 10 only ever holds a closure or a first-class-callable descriptor (a
+/// function-name callable is tagged as a string, and the `[obj, 'm']` forms as arrays), so
+/// admitting it here does not let any non-object through. Symfony's `PhpFileLoader` turns on this
+/// exact answer: `\is_object($result) && \is_callable($result)` decides whether a config file's
+/// returned closure is applied at all, and answering `false` skipped the whole configurator.
 pub(crate) fn lower_is_object(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_object", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.value_php_type(value)? {
-        PhpType::Object(_) => emit_static_bool(ctx, true),
+        PhpType::Object(_) | PhpType::Callable => emit_static_bool(ctx, true),
         PhpType::Mixed | PhpType::Union(_) => {
-            predicates::emit_mixed_tag_membership(ctx, value, &[6])?;
+            predicates::emit_mixed_tag_membership(ctx, value, &[6, 10])?;
         }
         _ => emit_static_bool(ctx, false),
     }

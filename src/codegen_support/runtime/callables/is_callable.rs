@@ -531,8 +531,14 @@ fn emit_mixed_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_is_callable_mixed_assoc");                   // associative arrays may carry numeric 0/1 callable keys
     emitter.instruction("cmp x0, #6");                                          // is the mixed payload an object?
     emitter.instruction("b.eq __rt_is_callable_mixed_object");                  // objects may be invokable through public __invoke
+    emitter.instruction("cmp x0, #10");                                         // is the mixed payload a closure descriptor?
+    emitter.instruction("b.eq __rt_is_callable_mixed_closure");                 // a Closure is callable by construction
     emitter.instruction("mov x0, #0");                                          // unsupported mixed payloads are not callable
     emitter.instruction("b __rt_is_callable_mixed_done");                       // restore frame before returning false
+
+    emitter.label("__rt_is_callable_mixed_closure");
+    emitter.instruction("mov x0, #1");                                          // every closure/first-class-callable descriptor is callable
+    emitter.instruction("b __rt_is_callable_mixed_done");                       // restore frame after the closure answer
 
     emitter.label("__rt_is_callable_mixed_string");
     emitter.instruction("mov x0, x1");                                          // pass unboxed string pointer to string callable lookup
@@ -1123,8 +1129,14 @@ fn emit_mixed_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_is_callable_mixed_assoc_x86_64");              // associative arrays may be method callables
     emitter.instruction("cmp rax, 6");                                          // is the mixed payload an object?
     emitter.instruction("je __rt_is_callable_mixed_object_x86_64");             // objects may be invokable through public __invoke
+    emitter.instruction("cmp rax, 10");                                         // is the mixed payload a closure descriptor?
+    emitter.instruction("je __rt_is_callable_mixed_closure_x86_64");            // a Closure is callable by construction
     emitter.instruction("xor eax, eax");                                        // unsupported mixed payloads are not callable
     emitter.instruction("jmp __rt_is_callable_mixed_done_x86_64");              // restore frame before returning false
+
+    emitter.label("__rt_is_callable_mixed_closure_x86_64");
+    emitter.instruction("mov eax, 1");                                          // every closure/first-class-callable descriptor is callable
+    emitter.instruction("jmp __rt_is_callable_mixed_done_x86_64");              // restore frame after the closure answer
 
     emitter.label("__rt_is_callable_mixed_string_x86_64");
     emitter.instruction("mov rsi, rdx");                                        // pass unboxed string length to string callable lookup
