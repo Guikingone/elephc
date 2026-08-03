@@ -303,12 +303,25 @@ fn check_object_property_write(
             ));
         }
         if class_info.visible_property_is_declared(property) {
-            checker.require_compatible_arg_type(
+            // A declared property type is a RUNTIME check in PHP, not a static one: assigning an
+            // ancestor-typed value to a narrower slot raises a catchable
+            // `TypeError: Cannot assign A to property C::$p of type B` at the write, and elephc
+            // now emits exactly that guard at this same boundary. Gated on
+            // `checked_downcast_guardable` so acceptance and emission read ONE predicate — a flow
+            // admitted here but not guarded there would be an unguarded representation change, not
+            // a compile error.
+            if !checker.checked_downcast_guardable(
                 &expected_ty,
                 val_ty,
-                span,
-                &format!("Property {}::${}", class_name, property),
-            )?;
+                crate::types::checked_downcast::GuardPosition::PropertyStore,
+            ) {
+                checker.require_compatible_arg_type(
+                    &expected_ty,
+                    val_ty,
+                    span,
+                    &format!("Property {}::${}", class_name, property),
+                )?;
+            }
         }
     }
     Ok(())

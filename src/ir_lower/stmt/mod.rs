@@ -4916,10 +4916,15 @@ fn lower_property_assign(
         lower_property_hook_set(ctx, object.value, property, value, span);
         return;
     }
+    // The declared-type boundary. PHP checks a property's declared type at the WRITE and raises a
+    // catchable `TypeError` when the value does not fit, so an ancestor-typed value reaching a
+    // narrower slot is guarded here rather than refused at compile time. A no-op for every flow the
+    // checker already proved sound (see `emit_checked_downcast`'s PHASE 0).
+    let stored = guarded_property_store_value(ctx, object.value, property, value, span);
     let data = ctx.intern_string(property);
     ctx.emit_void(
         Op::PropSet,
-        vec![object.value, value.value],
+        vec![object.value, stored.value],
         Some(Immediate::Data(data)),
         Op::PropSet.default_effects(),
         Some(span),
@@ -4927,6 +4932,99 @@ fn lower_property_assign(
     if let Some(property_ty) = object_property_type(ctx, object.value, property) {
         release_property_assignment_source_after_retaining_store(ctx, &property_ty, value, span);
     }
+}
+
+/// Inserts the declared-property-type checked downcast around a property write, and returns the
+/// value to store.
+///
+/// The DECLARING class is what PHP names in the message, not the receiver's static type: writing
+/// through a subclass handle still reports the class that declared the slot. `object_property_type`
+/// resolves the declared type through the same inheritance walk, so the two agree.
+///
+/// Emits nothing for a receiver whose class is unknown, for an undeclared (dynamic) property, and —
+/// through `emit_checked_downcast`'s own fast path — for every flow the checker already proved
+/// sound.
+fn guarded_property_store_value(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    property: &str,
+    value: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    let Some(property_ty) = object_property_type(ctx, object, property) else {
+        return value;
+    };
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object).codegen_repr() else {
+        return value;
+    };
+    let declaring = property_declaring_class(ctx, &class_name, property).unwrap_or(class_name);
+    let guarded = crate::ir_lower::checked_downcast::emit_checked_downcast(
+        ctx,
+        value,
+        &property_ty,
+        crate::ir_lower::checked_downcast::DowncastPosition::PropertyStore {
+            class: &declaring,
+            property,
+        },
+        Some(span),
+    );
+    narrow_object_store_value_to_property_type(ctx, guarded, &property_ty, span)
+}
+
+/// Re-types an object value to the property's DECLARED type on the edge where that type is proven,
+/// and returns the value to store.
+///
+/// `Op::Borrow` is a pure forward at the backend (`ownership::lower_forward`), so this changes only
+/// the SSA value's static type — which is exactly what is missing: the guard chain for a raw-object
+/// source passes the value through UNCHANGED, so `Op::PropSet` still saw the ancestor type and the
+/// backend refused the store it had just been proven safe to make.
+///
+/// Sound on BOTH edges that reach here, and for the same reason each time: either the guard's
+/// `Op::InstanceOf` chain proved the class at runtime, or `emit_checked_downcast`'s PHASE 0 skipped
+/// the chain precisely because the STATIC type already proved it. A borrow rather than a move
+/// deliberately: the original value keeps its owner, so the store's own
+/// `release_property_assignment_source_after_retaining_store` still balances against it.
+fn narrow_object_store_value_to_property_type(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    property_ty: &PhpType,
+    span: Span,
+) -> LoweredValue {
+    let actual = ctx.builder.value_php_type(value.value);
+    if !matches!(property_ty.codegen_repr(), PhpType::Object(_))
+        || !matches!(actual.codegen_repr(), PhpType::Object(_))
+        || actual.codegen_repr() == property_ty.codegen_repr()
+    {
+        return value;
+    }
+    ctx.emit_value(
+        Op::Borrow,
+        vec![value.value],
+        None,
+        property_ty.clone(),
+        Op::Borrow.default_effects(),
+        Some(span),
+    )
+}
+
+/// Returns the class that DECLARES `property`, walking the parent chain from `class_name`.
+fn property_declaring_class(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> Option<String> {
+    let mut current = Some(class_name.trim_start_matches('\\').to_string());
+    while let Some(name) = current {
+        let class_info = ctx.classes.get(&name)?;
+        if let Some(declaring) = class_info.property_declaring_classes.get(property) {
+            return Some(declaring.clone());
+        }
+        if class_info.properties.iter().any(|(own, _)| own == property) {
+            return Some(name);
+        }
+        current = class_info.parent.clone();
+    }
+    None
 }
 
 /// Returns true when a property write should dispatch to `__set`.

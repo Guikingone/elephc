@@ -4918,6 +4918,9 @@ pub(super) fn lower_throw_checked_return_type_error(
     let data = expect_data(inst)?;
     let (prefix_label, prefix_len) = ctx.intern_string_data(data)?;
     let value_ty = ctx.value_php_type(value)?;
+    // Operand 1 is OPTIONAL: the return position bakes its `" returned"` tail, while the
+    // property-store position supplies a suffix naming the property and its declared type.
+    let suffix = inst.operands.get(1).copied();
     ctx.load_value_to_result(value)?;
     return_type_guard::emit_throw_checked_return_type_error(
         ctx,
@@ -4925,6 +4928,7 @@ pub(super) fn lower_throw_checked_return_type_error(
         prefix_len,
         value,
         &value_ty,
+        suffix,
     )
 }
 

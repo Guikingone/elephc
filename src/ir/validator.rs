@@ -477,11 +477,22 @@ fn validate_opcode_rules(
         | StoreReflectionStaticProperty | ExternGlobalStore | StoreRefCell | BindRefCellPtr
         | AdoptRefCell | Acquire | Release | Move | Borrow | EnsureOwned | EchoValue
         | PrintValue | WriteStdout | WriteStrStdout | VarDump | PrintR | ThrowException
-        | GeneratorReturn | PtrCheckNonnull | ThrowCheckedReturnTypeError => {
+        | GeneratorReturn | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
-        // TWO operands, unlike the one-operand return variant: the mismatched value plus the
-        // message suffix string the fail path appends after the runtime type name.
+        // The mismatched value, plus an OPTIONAL message suffix the fail path appends after the
+        // runtime type name. The RETURN position supplies none and keeps its baked `" returned"`,
+        // which is what keeps its emitted assembly byte-for-byte what it was; the property store
+        // supplies one naming the property and its declared type.
+        ThrowCheckedReturnTypeError => {
+            if inst.operands.len() == 1 {
+                check_count(inst_id, inst, 1, "1")
+            } else {
+                check_count(inst_id, inst, 2, "1 or 2")
+            }
+        }
+        // TWO operands, unlike the return variant's optional suffix: this position always has a
+        // suffix to append, because neither of its two wordings ends at the runtime type name.
         ThrowCheckedTypeError => check_count(inst_id, inst, 2, "2"),
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
         | MixedCastString => {

@@ -68,6 +68,8 @@ pub(crate) enum GuardPosition {
     Return,
     /// A call argument against the callee's declared parameter type.
     Argument,
+    /// A write against a declared instance-property type.
+    PropertyStore,
 }
 
 /// Returns whether `position` guards `shape` — the ONE shape/position matrix, consulted by the
@@ -109,6 +111,16 @@ pub(crate) const fn shape_is_guardable_at(shape: GuardShape, position: GuardPosi
                 | GuardShape::RawObjectToBoxed
                 | GuardShape::BoxedToRawObject
                 | GuardShape::BoxedToBoxed
+        ),
+        // The property store guards only the RAW-pointer shapes. Its two boxed shapes are held
+        // back deliberately: `BoxedToRawObject`'s ok-edge UNBOXES, which would hand the store a
+        // value the surrounding `PropSet`/release pair did not lower, and the store's own
+        // ownership handling (`release_property_assignment_source_after_retaining_store`) is
+        // written against the value the caller produced. Neither is a hierarchy question, so
+        // neither belongs in the `RawObject` row.
+        GuardPosition::PropertyStore => matches!(
+            shape,
+            GuardShape::RawObject | GuardShape::RawObjectToBoxed
         ),
     }
 }

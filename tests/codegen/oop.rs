@@ -17,6 +17,8 @@ mod checked_downcast_argument;
 mod checked_downcast_return;
 #[path = "oop/scalar_coercion_refusal.rs"]
 mod scalar_coercion_refusal;
+#[path = "oop/checked_downcast_property_store.rs"]
+mod checked_downcast_property_store;
 #[path = "oop/traits.rs"]
 mod traits;
 #[path = "oop/inheritance.rs"]

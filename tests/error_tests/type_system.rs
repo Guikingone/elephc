@@ -1584,23 +1584,41 @@ fn test_object_base_into_derived_param_accepted_with_runtime_guard() {
     );
 }
 
-/// A base/interface-typed value flowing into a derived-class typed PROPERTY stays loud (`I`-typed
-/// value into `Impl $p`). A property write emits NO runtime instanceof guard (unlike the RETURN and
-/// ARGUMENT boundaries, which do — see `Checker::checked_downcast_guardable` and
-/// `crate::ir_lower::checked_downcast`), so the static property slot offset would be used to read
-/// fields that a non-`Impl` runtime value does not have, bit-reading off-layout memory (empirically
-/// a SIGSEGV / garbage read — verified with a `mixed`-boxed sibling object reaching the slot). PHP
-/// raises a catchable TypeError here instead of crashing, so elephc must stay loud rather than
-/// accept the unguarded base->derived downcast at a property write. Locks the property-position
-/// half of the object-downcast memory-safety boundary: acceptance may only follow emission.
+/// SUPERSEDED by the checked downcast at the PROPERTY-STORE position, the third and last value
+/// boundary to get one. This test used to lock the rule "acceptance may only follow emission" from
+/// the side that had no emission: a property write emitted no runtime `instanceof`, so accepting an
+/// `I`-typed value into an `Impl $p` slot would have let the slot offset bit-read fields a non-`Impl`
+/// runtime value does not have (empirically a SIGSEGV / garbage read).
+///
+/// The write now emits that guard, so the rule is SATISFIED rather than weakened: a mismatching
+/// value throws PHP's own `Cannot assign A to property C::$p of type B` before any offset is used,
+/// and keeping the compile error would falsely reject a program PHP runs. Exactly the transition
+/// the ARGUMENT and RETURN siblings above went through when their guards landed. End-to-end
+/// coverage — the mismatch that throws, the ownership of the value on the throw path, and the
+/// declaring-class wording — lives in `tests/codegen/oop/checked_downcast_property_store.rs`.
 #[test]
-fn test_error_base_into_derived_typed_property_stays_loud() {
-    expect_error(
+fn test_base_into_derived_typed_property_accepted_with_runtime_guard() {
+    expect_ok(
         "<?php interface I {} class Impl implements I { public int $sx = 5; } \
          class Holder { public Impl $p; } \
          function mk(int $n): I { return new Impl(); } \
          $h = new Holder(); $h->p = mk(1);",
-        "Property Holder::$p expects Object(\"Impl\"), got Object(\"I\")",
+    );
+}
+
+/// A SIDEWAYS store off a CLASS-typed source stays loud, and that asymmetry with the interface
+/// source is the point. A class fixes its whole ancestry, so `instanceof Other` against an
+/// unrelated target could never match and accepting the flow would trade a compile error for a
+/// guaranteed runtime throw — no program becomes runnable. An INTERFACE source fixes nothing of the
+/// sort (one concrete class routinely implements two unrelated interfaces), which is why only that
+/// half was relaxed. Locks the boundary of `Checker::checked_downcast_guardable`'s sideways arm.
+#[test]
+fn test_error_sideways_class_source_into_unrelated_typed_property_stays_loud() {
+    expect_error(
+        "<?php class Src {} class Other {} class Holder { public Other $p; } \
+         function mk(int $n): Src { return new Src(); } \
+         $h = new Holder(); $h->p = mk(1);",
+        "Property Holder::$p expects Object(\"Other\"), got Object(\"Src\")",
     );
 }
 

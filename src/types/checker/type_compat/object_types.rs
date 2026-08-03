@@ -588,7 +588,18 @@ impl Checker {
                 PhpType::Object(actual_name) => declared_arms.iter().any(|declared_name| {
                     declared_name != actual_name
                         && (self.is_subclass_of(declared_name, actual_name)
-                            || self.object_type_implements_interface(declared_name, actual_name))
+                            || self.object_type_implements_interface(declared_name, actual_name)
+                            // A SIDEWAYS guard off an INTERFACE-typed source. The descendant tests
+                            // above ask for a genuine downcast, which is the right bar for a CLASS
+                            // source: a class fixes the whole ancestry, so `instanceof` against an
+                            // unrelated target could never succeed and accepting the flow would
+                            // trade a compile error for a guaranteed runtime throw. An INTERFACE
+                            // source fixes nothing of the sort — one concrete class routinely
+                            // implements two unrelated interfaces (Symfony's
+                            // `NamespacedPoolInterface` and `AdapterInterface` on the same adapter)
+                            // — so the guard's `instanceof` can legitimately match, and PHP, which
+                            // performs no static check here at all, runs the program.
+                            || self.interfaces.contains_key(actual_name))
                 }),
                 PhpType::Union(source_members) => {
                     source_members

@@ -89,6 +89,18 @@ pub(crate) enum DowncastPosition<'a> {
         /// The declared parameter name, without its leading `$`.
         param: &'a str,
     },
+    /// A write against a declared instance-property type.
+    ///
+    /// The odd one out in message SHAPE: PHP names the runtime type in the MIDDLE
+    /// (`Cannot assign A to property C::$p of type B`), not at the end. The three-part
+    /// prefix/runtime-type/suffix machinery already covers that — it is only the suffix that
+    /// stops being a fixed word and starts carrying the property and its declared type.
+    PropertyStore {
+        /// The class DECLARING the property, as PHP spells it in the message.
+        class: &'a str,
+        /// The property name, without its leading `$`.
+        property: &'a str,
+    },
 }
 
 impl DowncastPosition<'_> {
@@ -102,6 +114,7 @@ impl DowncastPosition<'_> {
         match self {
             DowncastPosition::Return { .. } => "return_type_guard",
             DowncastPosition::Argument { .. } => "arg_type_guard",
+            DowncastPosition::PropertyStore { .. } => "prop_type_guard",
         }
     }
 
@@ -110,6 +123,7 @@ impl DowncastPosition<'_> {
     /// php-8.5.6 wording, verified against `php -n`:
     /// - return: `F(): Return value must be of type D, ` + `<runtime type>` + ` returned`
     /// - argument: `F(): Argument #N ($p) must be of type D, ` + `<runtime type>` + ` given`
+    /// - property: `Cannot assign ` + `<runtime type>` + ` to property C::$p of type D`
     ///
     /// PHP additionally appends `, called in <file> on line <n>` to the ARGUMENT form when the
     /// callee is userland. elephc does not reproduce that tail: it names the call site's file and
@@ -141,14 +155,21 @@ impl DowncastPosition<'_> {
                 param,
                 declared
             ),
+            DowncastPosition::PropertyStore { .. } => "Cannot assign ".to_string(),
         }
     }
 
-    /// Returns the fixed message tail this position appends after the runtime type name.
-    fn message_suffix(&self) -> &'static str {
+    /// Returns the message tail this position appends after the runtime type name.
+    fn message_suffix(&self, declared: &PhpType) -> String {
         match self {
-            DowncastPosition::Return { .. } => " returned",
-            DowncastPosition::Argument { .. } => " given",
+            DowncastPosition::Return { .. } => " returned".to_string(),
+            DowncastPosition::Argument { .. } => " given".to_string(),
+            DowncastPosition::PropertyStore { class, property } => format!(
+                " to property {}::${} of type {}",
+                class,
+                property,
+                format_declared_type_for_type_error(declared)
+            ),
         }
     }
 
@@ -157,6 +178,7 @@ impl DowncastPosition<'_> {
         match self {
             DowncastPosition::Return { .. } => GuardPosition::Return,
             DowncastPosition::Argument { .. } => GuardPosition::Argument,
+            DowncastPosition::PropertyStore { .. } => GuardPosition::PropertyStore,
         }
     }
 }
@@ -656,15 +678,29 @@ fn emit_phase_one_test(
 
 /// Emits the position-appropriate throw for a value that matched no declared arm.
 ///
-/// The return position uses `Op::ThrowCheckedReturnTypeError`, which RELEASES the mismatched
-/// value — sound there and only there, because a return value the caller never receives has no
-/// other owner. Every other position uses `Op::ThrowCheckedTypeError`, which does not: the
-/// caller's own local still owns the argument, and releasing it here is a double free.
+/// OWNERSHIP is the whole decision here, and it is NOT a property of the position alone:
+/// - RETURN always releases. A return value the caller never receives has no other owner, whatever
+///   produced it.
+/// - ARGUMENT never releases. The caller's own local still owns the argument, and releasing here
+///   is a double free.
+/// - A PROPERTY STORE is decided per VALUE. `$this->p = $x` leaves the local owning `$x`, so
+///   releasing would double-free it; `$this->p = f()` hands over an owning temporary whose only
+///   other release — `release_property_assignment_source_after_retaining_store`, emitted AFTER the
+///   store — the throw path never reaches, so not releasing leaks it.
 ///
-/// Neither op is told the source SHAPE, and neither needs to be: each reads the operand's own
-/// static type in codegen and picks its runtime-type-name table and (for the return op) its
-/// release helper from that. The ownership policy stays a property of the op, which is what keeps
-/// it a property of the position.
+/// That per-value test is `value_is_owning_temporary` MINUS `value_is_owned_unboxed_local_load`,
+/// the exact pair `lower_throw` uses for the same question about a thrown value. The subtraction is
+/// not cosmetic: `main` classifies a concrete-object LOCAL load as an owning temporary for its
+/// provisional unbox-release tracking, and taking that at face value made `$h->slot = $x` release a
+/// reference the local still holds — caught as `heap debug detected bad refcount` by a 300-iteration
+/// probe, not by any type or validation check.
+///
+/// The releasing op is REUSED rather than duplicated for the third position. Its `" returned"`
+/// tail used to be baked into codegen; it now takes an optional suffix operand, and the return
+/// position keeps supplying none — which is what keeps that position's emitted assembly
+/// byte-for-byte what it was. Releasing must stay INSIDE the throw op: the message names the
+/// value's ACTUAL runtime class, read from the object header, so any release emitted before the
+/// throw would be a use-after-free on exactly the path that needs the name.
 fn emit_mismatch_throw(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -674,35 +710,46 @@ fn emit_mismatch_throw(
 ) {
     let prefix_text = position.message_prefix(declared);
     let prefix = ctx.intern_string(&prefix_text);
-    match position {
-        DowncastPosition::Return { .. } => {
-            ctx.emit_void(
-                Op::ThrowCheckedReturnTypeError,
-                vec![value.value],
-                Some(Immediate::Data(prefix)),
-                Op::ThrowCheckedReturnTypeError.default_effects(),
-                span,
-            );
+    let releases = match position {
+        DowncastPosition::Return { .. } => true,
+        DowncastPosition::Argument { .. } => false,
+        DowncastPosition::PropertyStore { .. } => {
+            ctx.value_is_owning_temporary(value)
+                && !ctx.value_is_owned_unboxed_local_load(value.value)
         }
-        DowncastPosition::Argument { .. } => {
-            let suffix_data = ctx.intern_string(position.message_suffix());
-            let suffix = ctx.emit_value(
-                Op::ConstStr,
-                Vec::new(),
-                Some(Immediate::Data(suffix_data)),
-                PhpType::Str,
-                Op::ConstStr.default_effects(),
-                span,
-            );
-            ctx.emit_void(
-                Op::ThrowCheckedTypeError,
-                vec![value.value, suffix.value],
-                Some(Immediate::Data(prefix)),
-                Op::ThrowCheckedTypeError.default_effects(),
-                span,
-            );
+    };
+    // The return position is the one that supplies no suffix operand.
+    let suffix = match position {
+        DowncastPosition::Return { .. } => None,
+        other => {
+            let suffix_data = ctx.intern_string(&other.message_suffix(declared));
+            Some(
+                ctx.emit_value(
+                    Op::ConstStr,
+                    Vec::new(),
+                    Some(Immediate::Data(suffix_data)),
+                    PhpType::Str,
+                    Op::ConstStr.default_effects(),
+                    span,
+                )
+                .value,
+            )
         }
-    }
+    };
+    let mut operands = vec![value.value];
+    operands.extend(suffix);
+    let op = if releases {
+        Op::ThrowCheckedReturnTypeError
+    } else {
+        Op::ThrowCheckedTypeError
+    };
+    ctx.emit_void(
+        op,
+        operands,
+        Some(Immediate::Data(prefix)),
+        op.default_effects(),
+        span,
+    );
 }
 
 /// Re-materializes an owned raw object pointer out of the guarded box on the ok-edge.

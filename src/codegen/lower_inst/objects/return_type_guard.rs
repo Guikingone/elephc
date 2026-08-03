@@ -94,13 +94,22 @@ pub(super) fn emit_throw_checked_return_type_error(
     prefix_len: usize,
     value: ValueId,
     value_ty: &PhpType,
+    suffix: Option<ValueId>,
 ) -> Result<()> {
     let source_is_raw_object = matches!(
         value_ty.codegen_repr(),
         PhpType::Object(_) | PhpType::Packed(_)
     );
     let object_reg = abi::int_result_reg(ctx.emitter);
-    let (suffix_label, suffix_len) = ctx.data.add_string(b" returned");
+    // The RETURN position has no suffix operand and keeps its baked `" returned"`, which is what
+    // keeps its emitted assembly byte-for-byte what it was. A position that supplies one (the
+    // property store, whose PHP wording ends in the property name and the declared type) has its
+    // suffix materialized into the same static-string slot instead.
+    let baked_suffix = if suffix.is_none() {
+        Some(ctx.data.add_string(b" returned"))
+    } else {
+        None
+    };
 
     // -- park the mismatched value across the message-building/allocation calls, so it can be
     //    released once the exception object no longer needs it --
@@ -120,9 +129,13 @@ pub(super) fn emit_throw_checked_return_type_error(
     load_static_string_into(ctx, prefix_label, prefix_len, lhs_ptr, lhs_len);
     abi::emit_call_label(ctx.emitter, "__rt_concat");
 
-    // -- append the fixed " returned" suffix --
+    // -- append the position's suffix --
     let (rhs_ptr, rhs_len) = concat_rhs_regs(ctx);
-    load_static_string_into(ctx, &suffix_label, suffix_len, rhs_ptr, rhs_len);
+    match (&baked_suffix, suffix) {
+        (Some((label, len)), _) => load_static_string_into(ctx, label, *len, rhs_ptr, rhs_len),
+        (None, Some(suffix)) => ctx.load_string_value_to_regs(suffix, rhs_ptr, rhs_len)?,
+        (None, None) => unreachable!("one of the two suffix sources is always present"),
+    }
     abi::emit_call_label(ctx.emitter, "__rt_concat");
 
     // -- own a permanent heap copy of the assembled message --

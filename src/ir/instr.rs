@@ -639,6 +639,12 @@ pub enum Op {
     /// type to pick the type-name table (`get_class` vs the runtime-tag table) and the release
     /// helper (`__rt_decref_object` vs `__rt_decref_mixed`). The RELEASE is unconditional either
     /// way — that is the ownership policy this op exists to carry.
+    ///
+    /// An OPTIONAL second operand carries the message suffix. The return position supplies none
+    /// and keeps the baked `" returned"` tail; a PROPERTY STORE of an owning temporary reuses this
+    /// op — same ownership policy, since nothing else owns that value once the store is skipped —
+    /// with a suffix naming the property and its declared type. The suffix is what varies; the
+    /// release is not, which is why this stays one op and not two.
     ThrowCheckedReturnTypeError,
     /// Constructs and throws a catchable `\TypeError` for a checked-downcast guard mismatch at a
     /// position where the guarded value is STILL OWNED BY SOMEONE ELSE (a call argument, whose
