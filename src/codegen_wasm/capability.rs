@@ -453,7 +453,7 @@ fn check_instruction_shape(
         Op::StoreRefCell => store_ref_cell_shape_issue(function, inst),
         Op::Move | Op::Borrow | Op::Acquire => forward_transfer_shape_issue(function, inst),
         Op::UnsetLocal => unset_owned_temp_shape_issue(function, inst),
-        Op::Cast => cast_shape_issue(function, inst),
+        Op::Cast => cast_shape_issue(module, function, inst),
         Op::IToStr => int_like_to_string_shape_issue(function, inst),
         Op::StrictEq | Op::StrictNotEq => strict_compare_shape_issue(function, inst),
         Op::IsTruthy => truthiness_shape_issue(function, inst),
@@ -1177,7 +1177,68 @@ fn forward_transfer_shape_issue(function: &Function, inst: &Instruction) -> Opti
 }
 
 /// Validates the exact source/target pairs implemented by `lower_cast`.
-fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+/// Whether this cast is the IMPLICIT coercion PHP performs at a declared `int` return.
+///
+/// That coercion is a DIFFERENT operation from `(int)`, which is why it needs its own
+/// predicate rather than riding on the explicit cast: `(int)null` is 0 and `(int)"abc"` is 0,
+/// while RETURNING either from a function declared `int` raises a `TypeError`. Measured on
+/// php-src 8.5.6 and validated against a 1200-value random sweep; `__rt_mixed_return_int`
+/// carries the rules.
+///
+/// The diagnostic names the function, so only a name PHP would print is admitted. The EIR
+/// already spells a method `C::m`, which is PHP's text exactly, but a closure's name there is
+/// `{closure:<absolute path>:<line>}` — not derivable from the EIR — so closures and every
+/// other compiler-generated body stay refused.
+pub(super) fn cast_is_declared_int_return_coercion(
+    function: &Function,
+    inst: &Instruction,
+) -> bool {
+    // Under `declare(strict_types=1)` PHP performs NO coercion at all: `return 5.7` from a
+    // function declared `int` is an immediate `TypeError`, and so is `return "42"` and even
+    // `return true` — whose message names the VALUE (`true returned`), not the type. Those are
+    // different rules from the ones measured here, so a strict file stays refused rather than
+    // silently answering the weak-mode result.
+    if crate::codegen_support::strict_types() {
+        return false;
+    }
+    if !matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64))) {
+        return false;
+    }
+    if inst.result_type != IrType::I64 || inst.result_php_type.codegen_repr() != PhpType::Int {
+        return false;
+    }
+    if function.return_type != IrType::I64 || function.return_php_type != PhpType::Int {
+        return false;
+    }
+    let flags = &function.flags;
+    if flags.is_main
+        || flags.is_closure
+        || flags.is_synthetic
+        || flags.is_generator
+        || flags.is_fiber_wrapper
+        || flags.is_callback_wrapper
+        || flags.is_runtime_callable_invoker
+    {
+        return false;
+    }
+    let Some(result) = inst.result else {
+        return false;
+    };
+    // Only a value that is literally RETURNED gets the return rules; the same cast feeding
+    // anything else would be some other coercion with some other message.
+    function.blocks.iter().any(|block| {
+        matches!(
+            block.terminator,
+            Some(Terminator::Return { value: Some(value) }) if value == result
+        )
+    })
+}
+
+fn cast_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
     let [operand] = inst.operands.as_slice() else {
         return Some(format!(
             "expected one source operand, got {}",
@@ -1237,7 +1298,12 @@ fn cast_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
     // "Array", and the object arm raises PHP's fatal naming the class. What stays refused is
     // the IMPLICIT coercion, a different operation — the same value `(int)` turns into 0
     // makes a declared `int` return raise a `TypeError` this target cannot yet produce.
-    let admitted_mixed_scalar = (explicit || widened_by_checked_arithmetic)
+    // The IMPLICIT coercion at a declared `int` return has its own exact runtime, but its
+    // diagnostics go through WASI, so it needs a main-bearing command module the way every
+    // other diagnostic-producing rule here does.
+    let return_coercion = cast_is_declared_int_return_coercion(function, inst)
+        && module.functions.iter().any(|candidate| candidate.flags.is_main);
+    let admitted_mixed_scalar = (explicit || widened_by_checked_arithmetic || return_coercion)
         && matches!(target, IrType::I64 | IrType::F64)
         || ((explicit || cast_feeds_string_context(function, inst))
             && target == IrType::Str);
@@ -8484,7 +8550,9 @@ mod tests {
                 .iter()
                 .find(|instruction| instruction.op == Op::Cast)
                 .expect("cast instruction");
-            super::cast_shape_issue(function, cast)
+            // An empty module is enough here: these cases never reach the main-bearing gate,
+            // which only the declared-return coercion consults.
+            super::cast_shape_issue(&Module::new(Target::wasm()), function, cast)
         };
 
         for element in [PhpType::Bool, PhpType::Str] {

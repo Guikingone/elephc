@@ -122,6 +122,24 @@ const DEPRECATED_CHR_RANGE: &[u8] = b"Deprecated: chr(): Providing a value not i
 /// `ord()` on anything but exactly one byte still answers, but is deprecated since 8.5.
 const DEPRECATED_ORD_LENGTH: &[u8] =
     b"Deprecated: ord(): Providing a string that is not one byte long is deprecated. Use ord($str[0]) instead\n";
+/// PHP's IMPLICIT coercion at a declared `int` return, when the value still converts but
+/// loses its fraction on the way. Measured on 8.5.6: a float and a float-shaped string get
+/// different wordings, and both render the offending value between the fragments.
+const DEPRECATED_FLOAT_TO_INT_PREFIX: &[u8] = b"Deprecated: Implicit conversion from float ";
+const DEPRECATED_FLOAT_STR_TO_INT_PREFIX: &[u8] =
+    b"Deprecated: Implicit conversion from float-string \"";
+const DEPRECATED_TO_INT_SUFFIX: &[u8] = b" to int loses precision\n";
+const DEPRECATED_STR_TO_INT_SUFFIX: &[u8] = b"\" to int loses precision\n";
+/// A value no `int` can hold, returned from a function declared `int`, is a `TypeError`
+/// naming the FUNCTION — `f()` for a plain function, `C::m()` for a method, which is
+/// already how the EIR names both — and the type word that arrived.
+const ERR_RETURN_TYPE_PREFIX: &[u8] = b"PHP Fatal error: Uncaught TypeError: ";
+const ERR_RETURN_TYPE_MIDDLE: &[u8] = b"(): Return value must be of type int, ";
+const ERR_RETURN_TYPE_SUFFIX: &[u8] = b" returned\n";
+/// PHP names a closure by its CLASS in that message — measured: `Closure returned`, not
+/// `callable returned`. Every first-class closure PHP builds is a `Closure`, so the word is
+/// fixed even though this target keeps a callable as a descriptor rather than an object.
+const PHP_CLASS_CLOSURE: &[u8] = b"Closure";
 
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
@@ -169,7 +187,15 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + DEPRECATED_ORD_LENGTH.len() as u32
     + WARN_ARRAY_TO_STRING.len() as u32
     + ERR_OBJECT_TO_STRING_PREFIX.len() as u32
-    + ERR_OBJECT_TO_STRING_SUFFIX.len() as u32;
+    + ERR_OBJECT_TO_STRING_SUFFIX.len() as u32
+    + DEPRECATED_FLOAT_TO_INT_PREFIX.len() as u32
+    + DEPRECATED_FLOAT_STR_TO_INT_PREFIX.len() as u32
+    + DEPRECATED_TO_INT_SUFFIX.len() as u32
+    + DEPRECATED_STR_TO_INT_SUFFIX.len() as u32
+    + ERR_RETURN_TYPE_PREFIX.len() as u32
+    + ERR_RETURN_TYPE_MIDDLE.len() as u32
+    + ERR_RETURN_TYPE_SUFFIX.len() as u32
+    + PHP_CLASS_CLOSURE.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -296,6 +322,16 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_ARRAY_TO_STRING,
         ERR_OBJECT_TO_STRING_PREFIX,
         ERR_OBJECT_TO_STRING_SUFFIX,
+        // The declared-return coercion fragments come LAST so every index already in use
+        // above keeps pointing at the same message.
+        DEPRECATED_FLOAT_TO_INT_PREFIX,
+        DEPRECATED_FLOAT_STR_TO_INT_PREFIX,
+        DEPRECATED_TO_INT_SUFFIX,
+        DEPRECATED_STR_TO_INT_SUFFIX,
+        ERR_RETURN_TYPE_PREFIX,
+        ERR_RETURN_TYPE_MIDDLE,
+        ERR_RETURN_TYPE_SUFFIX,
+        PHP_CLASS_CLOSURE,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -343,7 +379,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     );
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
-    emit_undefined_array_key_warning_runtime(wm, &warning_offsets);
+    emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
+    emit_return_coercion_runtime(wm, &warning_offsets[17..25], &method_offsets[2..11]);
 }
 
 /// Emits the fatal path used when a `Mixed` receiver is not an object.
@@ -380,6 +417,152 @@ fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) 
     );
     wm.add_raw_func(&wat);
     emit_undefined_method_failure_runtime(wm, &offsets[11..14]);
+}
+
+/// Emits the runtime behind PHP's IMPLICIT coercion at a declared `int` return.
+///
+/// PHP does NOT convert there the way `(int)` does. Measured on php-src 8.5.6 and validated
+/// against a 1200-value random sweep: an int or bool passes through; a float in i64's range
+/// truncates, and a LOST FRACTION is a `Deprecated`, not a failure; a WHOLLY numeric string
+/// converts by the same rules; and everything else — null, a leading-numeric or non-numeric
+/// string, an out-of-range or non-finite float, a container, an object — is a `TypeError`
+/// naming the function and the type that arrived.
+///
+/// The message needs no interned per-function text: the function name travels as `(ptr, len)`
+/// from the call site, exactly as the non-object method-call fatal already does. An object
+/// contributes its CLASS name rather than the word "object", which is why this helper reaches
+/// for the class-name table like `__rt_fail_undefined_method` does.
+///
+/// The `TypeError` is raised as a deterministic fatal rather than a catchable throw: a raise
+/// site composing its message at runtime cannot go through `emit_runtime_error_throw`, which
+/// resolves a STATIC message from `default_strings`. The text and the 255 exit status are
+/// PHP's; only a `catch (TypeError)` around the call would notice the difference.
+fn emit_return_coercion_runtime(
+    wm: &mut WatModule,
+    offsets: &[(u32, u32)],
+    type_offsets: &[(u32, u32)],
+) {
+    debug_assert_eq!(offsets.len(), 8);
+    debug_assert_eq!(type_offsets.len(), 9);
+    let (float_prefix_ptr, float_prefix_len) = offsets[0];
+    let (str_prefix_ptr, str_prefix_len) = offsets[1];
+    let (float_suffix_ptr, float_suffix_len) = offsets[2];
+    let (str_suffix_ptr, str_suffix_len) = offsets[3];
+    let (err_prefix_ptr, err_prefix_len) = offsets[4];
+    let (err_middle_ptr, err_middle_len) = offsets[5];
+    let (err_suffix_ptr, err_suffix_len) = offsets[6];
+    let (closure_ptr, closure_len) = offsets[7];
+    // The shared `PHP_TYPE_*` words each end with the newline that terminates the method-call
+    // fatal; here a word sits mid-sentence, so the newline is dropped from the length.
+    let word = |index: usize| -> (u32, u32) {
+        let (ptr, len) = type_offsets[index];
+        debug_assert!(len > 1, "a type word is at least one byte plus its newline");
+        (ptr, len - 1)
+    };
+    let (string_word_ptr, string_word_len) = word(1);
+    let (float_word_ptr, float_word_len) = word(2);
+    let (array_word_ptr, array_word_len) = word(4);
+    let (null_word_ptr, null_word_len) = word(5);
+    let (resource_word_ptr, resource_word_len) = word(6);
+    let value_offset = super::mixed_numeric::CLASS_VALUE_OFFSET;
+
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_deprecate_return_float_to_int (param $bits i64)
+  (local $ptr i32) (local $len i32)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_prefix_ptr}) (i32.const {float_prefix_len}))  ;; "Deprecated: Implicit conversion from float "
+  (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096)))  ;; render the float the way PHP prints it
+  (local.set $len)                                                ;; ftoa returns (ptr, len): pop the length first
+  (local.set $ptr)                                                ;; then the pointer
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (local.get $len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_suffix_ptr}) (i32.const {float_suffix_len})))  ;; " to int loses precision\n""#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_deprecate_return_str_to_int (param $ptr i32) (param $len i32)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {str_prefix_ptr}) (i32.const {str_prefix_len}))  ;; ...from float-string "
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (local.get $len))  ;; the ORIGINAL bytes, padding included
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {str_suffix_ptr}) (i32.const {str_suffix_len})))  ;; " to int loses precision\n""#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_return_type_int (param $fn_ptr i32) (param $fn_len i32) (param $word_ptr i32) (param $word_len i32)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_prefix_ptr}) (i32.const {err_prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $fn_ptr) (local.get $fn_len)))    ;; "f" or "C::m"
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_middle_ptr}) (i32.const {err_middle_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $word_ptr) (local.get $word_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_suffix_ptr}) (i32.const {err_suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:return-type-fatal-exit
+)"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_return_int (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (result i64)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64) (local $t f64)
+  (local $cls i32) (local $cls_ptr i32) (local $cls_len i64)
+  (call $__rt_mixed_unbox (local.get $cell))                      ;; unbox -> stack: tag, lo, hi
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eqz (local.get $tag))                                  ;; tag 0 = int: already PHP's answer
+    (then (return (local.get $lo))))
+  (if (i64.eq (local.get $tag) (i64.const 3))                     ;; tag 3 = bool: stored normalized 0/1
+    (then (return (local.get $lo))))
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; tag 2 = float
+    (then
+      (local.set $f (f64.reinterpret_i64 (local.get $lo)))
+      (if (i32.and
+            (f64.eq (local.get $f) (local.get $f))                ;; NaN fits nothing
+            (i32.and
+              (f64.ge (local.get $f) (f64.const -9223372036854775808))   ;; -2^63 is IN range
+              (f64.lt (local.get $f) (f64.const 9223372036854775808))))  ;; 2^63 is NOT
+        (then
+          (local.set $t (f64.trunc (local.get $f)))
+          (if (f64.ne (local.get $t) (local.get $f))               ;; a lost fraction only DEPRECATES
+            (then (call $__rt_deprecate_return_float_to_int (local.get $lo))))
+          (return (i64.trunc_f64_s (local.get $t)))))
+      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {float_word_ptr}) (i32.const {float_word_len}))
+      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-float
+  (if (i64.eq (local.get $tag) (i64.const 1))                     ;; tag 1 = string
+    (then
+      (local.set $cls (call $__rt_str_numeric_class (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi))))
+      (if (i32.eq (local.get $cls) (i32.const 1))                 ;; wholly integral, and it fits i64
+        (then (return (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+      (if (i32.eq (local.get $cls) (i32.const 2))                 ;; wholly float-shaped (or an i64-overflowing integer text)
+        (then
+          (local.set $f (f64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))
+          (if (i32.and
+                (f64.eq (local.get $f) (local.get $f))
+                (i32.and
+                  (f64.ge (local.get $f) (f64.const -9223372036854775808))
+                  (f64.lt (local.get $f) (f64.const 9223372036854775808))))
+            (then
+              (local.set $t (f64.trunc (local.get $f)))
+              (if (f64.ne (local.get $t) (local.get $f))
+                (then (call $__rt_deprecate_return_str_to_int (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi)))))
+              (return (i64.trunc_f64_s (local.get $t)))))))
+      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {string_word_ptr}) (i32.const {string_word_len}))
+      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-string
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))  ;; array / hash
+    (then
+      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {array_word_ptr}) (i32.const {array_word_len}))
+      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-array
+  (if (i64.eq (local.get $tag) (i64.const 6))                     ;; tag 6 = object: PHP names the CLASS
+    (then
+      (call $__rt_class_name_by_cid (i64.load (i32.wrap_i64 (local.get $lo))))
+      (local.set $cls_len)
+      (local.set $cls_ptr)
+      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (local.get $cls_ptr) (i32.wrap_i64 (local.get $cls_len)))
+      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-object
+  (if (i64.eq (local.get $tag) (i64.const 9))                     ;; tag 9 = resource
+    (then
+      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {resource_word_ptr}) (i32.const {resource_word_len}))
+      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-resource
+  (if (i64.eq (local.get $tag) (i64.const 10))                    ;; tag 10 = callable, which PHP calls a Closure
+    (then
+      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {closure_ptr}) (i32.const {closure_len}))
+      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-closure
+  (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {null_word_ptr}) (i32.const {null_word_len}))  ;; tag 8 = null
+  unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-null
+"#
+    ));
 }
 
 /// Emits the fatal path used when an object has no matching method dispatch arm.

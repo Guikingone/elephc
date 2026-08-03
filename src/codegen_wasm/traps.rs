@@ -521,6 +521,18 @@ fn target_has_registered_noreturn_proof(
                     Some("$wasi_proc_exit"),
                 )
         }
+        // The declared-return `TypeError` writes its composed message and exits, so it is
+        // non-returning on the same proof as the other message-composing fatals: its own
+        // body ends in `wasi_proc_exit`.
+        "$__rt_fail_return_type_int" => {
+            proc_exit
+                && has_site(
+                    "$__rt_fail_return_type_int",
+                    TrapClass::PostNoreturn,
+                    "return-type-fatal-exit",
+                    Some("$wasi_proc_exit"),
+                )
+        }
         _ => false,
     }
 }
@@ -540,6 +552,7 @@ fn has_noreturn_predecessor(
         "$__rt_fail_method_call_non_object",
         "$__rt_fail_undefined_method",
         "$__rt_fail_object_to_string",
+        "$__rt_fail_return_type_int",
     ]
     .iter()
     .any(|target| {

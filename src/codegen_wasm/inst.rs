@@ -1671,6 +1671,26 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 ctx.fb
                     .ins("call $__rt_mixed_cast_bool", "cast boxed Mixed to bool");
             }
+            // PHP's coercion at a DECLARED return is not `(int)`: it raises where `(int)`
+            // answers 0, and only deprecates where `(int)` is silent.
+            IrType::I64
+                if super::capability::cast_is_declared_int_return_coercion(
+                    ctx.function,
+                    inst,
+                ) =>
+            {
+                let (name_ptr, name_len) = ctx.default_str_literal(&ctx.function.name)?;
+                ctx.fb.ins(
+                    &format!("i32.const {}", name_ptr),
+                    "the declaring function's name, for the TypeError text",
+                );
+                ctx.fb
+                    .ins(&format!("i32.const {}", name_len), "its byte length");
+                ctx.fb.ins(
+                    "call $__rt_mixed_return_int",
+                    "PHP's implicit coercion at a declared int return",
+                );
+            }
             IrType::I64 => {
                 ctx.fb
                     .ins("call $__rt_mixed_cast_int", "cast boxed Mixed to int");

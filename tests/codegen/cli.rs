@@ -11056,3 +11056,218 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies PHP's IMPLICIT coercion at a declared `int` return, on its accepting paths.
+///
+/// This is a DIFFERENT operation from `(int)`, which is why it has its own runtime: `(int)`
+/// truncates a float in silence, while a return that loses a fraction is `Deprecated`; and
+/// `(int)` reads a leading-numeric string as its prefix, while a return rejects it outright.
+/// Every value and every diagnostic below is php-src 8.5.6's own, in php-src's order; the
+/// rules were transcribed from `zend_verify_return_type` and validated against a 1200-value
+/// random sweep before any of this WAT was written.
+#[test]
+fn test_cli_wasm_declared_int_return_coerces_like_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_return_coercion");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function ri(mixed $v): int { return $v; }
+class Calc { public function pick(array $xs): int { $t = 0; foreach ($xs as $x) { $t = $x; } return $t; } }
+echo ri(7), "\n";
+echo ri(true), "\n";
+echo ri(false), "\n";
+echo ri(5.0), "\n";
+echo ri(5.7), "\n";
+echo ri(-5.7), "\n";
+echo ri("42"), "\n";
+echo ri("  8  "), "\n";
+echo ri("3.9"), "\n";
+echo ri("1e-3"), "\n";
+echo ri(-9223372036854775808.0), "\n";
+echo (new Calc())->pick([1, 7.5]), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the declared-int return coercion to WASM");
+    assert!(
+        output.status.success(),
+        "declared-int return coercion compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the return coercion under Node");
+    assert!(
+        run.status.success(),
+        "the accepting coercion paths must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // `-9223372036854775808.0` is exactly -2^63 and IS in range; `9223372036854775807.0`
+    // rounds UP to 2^63 as a double and is not, which the fatal test below covers.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "7\n", "1\n", "0\n", "5\n", "5\n", "-5\n", "42\n", "8\n", "3\n", "0\n",
+            "-9223372036854775808\n", "7\n",
+        )
+    );
+
+    // php-src reports exactly these five, in this order. A float and a float-shaped STRING
+    // carry different wordings, and the string is quoted with its original bytes, padding
+    // included. The project's WASM convention drops php-src's ` in <file> on line <n>` tail.
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert_eq!(
+        stderr.lines().collect::<Vec<&str>>(),
+        vec![
+            "Deprecated: Implicit conversion from float 5.7 to int loses precision",
+            "Deprecated: Implicit conversion from float -5.7 to int loses precision",
+            r#"Deprecated: Implicit conversion from float-string "3.9" to int loses precision"#,
+            r#"Deprecated: Implicit conversion from float-string "1e-3" to int loses precision"#,
+            "Deprecated: Implicit conversion from float 7.5 to int loses precision",
+        ],
+        "deprecations must match php-src's set and order"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the `TypeError` a declared `int` return raises for a value it cannot hold.
+///
+/// The message is composed at RUNTIME from the returning function's own name — which the EIR
+/// already spells the way PHP prints it, `f` for a function and `C::m` for a method — and the
+/// type word that arrived. An OBJECT contributes its class name rather than the word "object",
+/// measured on php-src: `Point returned`, not `object returned`.
+///
+/// The error is a deterministic fatal rather than a catchable throw, which is the documented
+/// fallback this backend already takes wherever a raise site cannot resolve a STATIC message.
+/// The text and the 255 exit status are php-src's.
+#[test]
+fn test_cli_wasm_declared_int_return_raises_php_type_error() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_return_type_error");
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let prelude = "<?php\nfunction ri(mixed $v): int { return $v; }\nclass Point { public int $x = 1; }\n";
+    for (stem, source, expected) in [
+        (
+            "n",
+            format!("{prelude}echo ri(null), \"\\n\";\n"),
+            "PHP Fatal error: Uncaught TypeError: ri(): Return value must be of type int, null returned\n",
+        ),
+        (
+            "s",
+            format!("{prelude}echo ri(\"12abc\"), \"\\n\";\n"),
+            "PHP Fatal error: Uncaught TypeError: ri(): Return value must be of type int, string returned\n",
+        ),
+        (
+            "f",
+            format!("{prelude}echo ri(9223372036854775807.0), \"\\n\";\n"),
+            "PHP Fatal error: Uncaught TypeError: ri(): Return value must be of type int, float returned\n",
+        ),
+        (
+            "a",
+            format!("{prelude}echo ri([1, 2]), \"\\n\";\n"),
+            "PHP Fatal error: Uncaught TypeError: ri(): Return value must be of type int, array returned\n",
+        ),
+        (
+            "o",
+            format!("{prelude}echo ri(new Point()), \"\\n\";\n"),
+            "PHP Fatal error: Uncaught TypeError: ri(): Return value must be of type int, Point returned\n",
+        ),
+        (
+            "m",
+            concat!(
+                "<?php\n",
+                "class Calc { public function pick(array $xs): int { $t = 0; foreach ($xs as $x) { $t = $x; } return $t; } }\n",
+                "echo (new Calc())->pick([1, \"abc\"]), \"\\n\";\n",
+            )
+            .to_string(),
+            "PHP Fatal error: Uncaught TypeError: Calc::pick(): Return value must be of type int, string returned\n",
+        ),
+    ] {
+        let php_path = dir.join(format!("{stem}.php"));
+        fs::write(&php_path, &source).unwrap();
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile a rejecting return coercion to WASM");
+        assert!(
+            output.status.success(),
+            "case {stem} failed to compile: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(format!("{stem}.wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run a rejecting return coercion under Node");
+        assert_eq!(
+            run.status.code(),
+            Some(255),
+            "case {stem} must exit with PHP's fatal status"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stderr), expected, "case {stem}");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "",
+            "case {stem} must produce no output before the fatal"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}

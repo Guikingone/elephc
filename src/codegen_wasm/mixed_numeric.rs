@@ -20,7 +20,7 @@ use super::wat::WatModule;
 /// The classifier reports a class plus the parsed value; the value lands here rather
 /// than in extra multi-value results so the arithmetic helpers can read whichever of
 /// the two representations the class selects.
-const CLASS_VALUE_OFFSET: i32 = 10496;
+pub(super) const CLASS_VALUE_OFFSET: i32 = 10496;
 
 /// Scratch offset where `__rt_str_numeric_class` publishes php-src's `oflow` alongside the parsed
 /// value: 0 when the text fits i64, 1 past `i64::MAX`, -1 below `i64::MIN`.
