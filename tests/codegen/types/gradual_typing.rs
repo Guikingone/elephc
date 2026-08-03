@@ -1002,3 +1002,22 @@ var_dump($b);
     );
     assert_eq!(out, "fNULL\n");
 }
+
+/// Indexing a value whose type is the literal-`false` subtype is a PHP MISS, not a fatal:
+/// `php -n -r '$x = false; var_dump($x[0]);'` warns `Trying to access array offset on false`
+/// and yields `NULL`. The bare-scalar receiver arm of the index-read inference already covered
+/// `bool`/`int`/`float`/`null` on exactly that rule, but omitted `PhpType::False` — the subtype a
+/// plain `$x = false;` (and an untyped property still holding its `false` default) actually
+/// infers — so this shape was refused with `Cannot index non-array`. `False` carries `Bool`'s
+/// runtime representation, so the same boxed-Mixed read path serves it.
+#[test]
+fn test_indexing_a_literal_false_value_is_a_miss_not_a_fatal() {
+    let out = compile_and_run(
+        r#"<?php
+$x = false;
+var_dump($x[0]);
+var_dump($x["k"]);
+"#,
+    );
+    assert_eq!(out, "NULL\nNULL\n");
+}

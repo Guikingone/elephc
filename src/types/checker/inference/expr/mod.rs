@@ -275,7 +275,10 @@ impl Checker {
                                 // fatal — same probe-verified matrix as the bare-scalar arm
                                 // above. Contributes a `Mixed` member so a union like
                                 // `int|false` isn't left with an empty result set.
-                                PhpType::Bool | PhpType::Int | PhpType::Float => {
+                                PhpType::Bool
+                                | PhpType::False
+                                | PhpType::Int
+                                | PhpType::Float => {
                                     saw_indexable_member = true;
                                     result_members.push(PhpType::Mixed);
                                 }
@@ -378,9 +381,15 @@ impl Checker {
                     // arm only widens reads. Ir_lower boxes the unboxed scalar into a transient
                     // `Mixed` cell (`Op::MixedBox`) before routing through the shared boxed-Mixed
                     // reader, which already yields `Mixed(null)` for any non-array/hash/object tag.
-                    PhpType::Bool | PhpType::Int | PhpType::Float | PhpType::Void => {
-                        Ok(PhpType::Mixed)
-                    }
+                    // `False` is the literal-`false` subtype (`$x = false;`, an untyped property
+                    // still holding its `false` default). It has `Bool`'s runtime representation
+                    // and PHP's very same miss behaviour, so it belongs in this list — leaving it
+                    // out made the exact probe quoted above a compile error.
+                    PhpType::Bool
+                    | PhpType::False
+                    | PhpType::Int
+                    | PhpType::Float
+                    | PhpType::Void => Ok(PhpType::Mixed),
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }
