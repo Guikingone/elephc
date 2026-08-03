@@ -11806,3 +11806,110 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `array_keys()` and `array_values()` over an ASSOCIATIVE array.
+///
+/// Both were limited to the indexed representation, where they are near-identities: a list's
+/// keys ARE its positions and its values are the list itself. A hash needs a real projection,
+/// and the order that projection must produce is php-src's INSERTION order — the order
+/// `foreach` walks — not the bucket table's, which is a hash artefact.
+#[test]
+fn test_cli_wasm_array_keys_and_values_project_a_hash() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_hash_projection");
+    // Two hashes with DIFFERENT value types in one scope hit `release_local_slot`, an
+    // unrelated gap, so the shapes are exercised in separate modules.
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$h = ["z" => 26, "a" => 1, "m" => 13];
+echo implode("-", array_keys($h)), "\n";
+foreach (array_values($h) as $v) { echo $v, ","; }
+echo "\n";
+$grown = [];
+$grown["k"] = 5;
+echo count(array_keys($grown)), "|", count(array_values($grown)), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the hash projections to WASM");
+    assert!(
+        output.status.success(),
+        "hash projection compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the hash projections under Node");
+    assert!(
+        run.status.success(),
+        "hash projections must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // `z-a-m`, not `a-m-z`: php-src answers in insertion order, never sorted.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!("z-a-m\n", "26,1,13,\n", "1|1\n"),
+    );
+
+    // A hash of STRING values projects through the 16-byte slot instead of the 8-byte one.
+    let words = dir.join("words.php");
+    fs::write(
+        &words,
+        "<?php\n$w = [\"x\" => \"one\", \"y\" => \"two\"];\nforeach (array_values($w) as $v) { echo $v, \",\"; }\necho \"\\n\";\n",
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&words)
+        .output()
+        .expect("failed to compile the string-valued projection");
+    assert!(
+        output.status.success(),
+        "string-valued projection failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("words.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the string-valued projection");
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "one,two,\n");
+
+    let _ = fs::remove_dir_all(&dir);
+}

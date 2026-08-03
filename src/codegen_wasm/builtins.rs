@@ -3799,22 +3799,35 @@ fn indexed_array_result_shape_issue(
     let Some(value) = function.value(*operand) else {
         return Some("array operand is missing from the value table".to_string());
     };
-    if !indexed_int_array(value) {
+    // A HASH operand is admitted too, and is a genuine projection rather than the list's
+    // identity: `array_keys` walks its keys and `array_values` its values, both in INSERTION
+    // order — the order `foreach` uses, not the bucket table's. The walk builds one fixed slot
+    // width, so the result's element type has to be one it can store.
+    let hash_projection = value.ir_type == IrType::Heap(IrHeapKind::Hash)
+        && matches!(value.php_type.codegen_repr(), PhpType::AssocArray { .. })
+        && matches!(
+            call.result_php_type.codegen_repr(),
+            PhpType::Array(element) if matches!(*element, PhpType::Int | PhpType::Str)
+        );
+    if !indexed_int_array(value) && !hash_projection {
         return Some(format!(
-            "expected a statically typed array<int>, got {:?}/{:?}",
+            "expected a statically typed array<int> or an associative array, got {:?}/{:?}",
             value.ir_type,
             value.php_type.codegen_repr()
         ));
     }
+    let result_element_ok = matches!(
+        call.result_php_type.codegen_repr(),
+        PhpType::Array(element)
+            if matches!(*element, PhpType::Int | PhpType::Never)
+                || (hash_projection && matches!(*element, PhpType::Str))
+    );
     if call.result.is_none()
         || call.result_type != IrType::Heap(IrHeapKind::Array)
-        || !matches!(
-            call.result_php_type.codegen_repr(),
-            PhpType::Array(element) if matches!(*element, PhpType::Int | PhpType::Never)
-        )
+        || !result_element_ok
     {
         return Some(format!(
-            "{target:?} result {:?}/{:?} is not the expected Heap(Array)/array<int>",
+            "{target:?} result {:?}/{:?} is not an expected Heap(Array) projection",
             call.result_type,
             call.result_php_type.codegen_repr()
         ));
@@ -3824,10 +3837,36 @@ fn indexed_array_result_shape_issue(
 
 /// Lowers `array_keys($list)` to the positional key array its representation implies.
 fn lower_array_keys(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 0)?)?;
-    ctx.fb
-        .ins("call $__rt_array_index_keys", "keys of a list are its positions");
+    let source = operand(inst, 0)?;
+    ctx.emit_load_value(source)?;
+    if hash_operand(ctx, source) {
+        // A hash's keys are real keys, not positions, and they carry their own storage.
+        let helper = match element_php_type(&inst.result_php_type) {
+            Some(PhpType::Str) => "call $__rt_hash_keys_str",
+            _ => "call $__rt_hash_keys_int",
+        };
+        ctx.fb.ins(helper, "the hash's keys, in insertion order");
+    } else {
+        ctx.fb
+            .ins("call $__rt_array_index_keys", "keys of a list are its positions");
+    }
     store_result(ctx, inst)
+}
+
+/// Whether a runtime-call operand is a hash rather than an indexed array.
+fn hash_operand(ctx: &FnCtx, value: crate::ir::ValueId) -> bool {
+    matches!(
+        ctx.function.value(value).map(|value| value.ir_type),
+        Some(IrType::Heap(IrHeapKind::Hash))
+    )
+}
+
+/// The element type of an `array<T>` result, if it is one.
+fn element_php_type(php_type: &PhpType) -> Option<PhpType> {
+    match php_type.codegen_repr() {
+        PhpType::Array(element) => Some(*element),
+        _ => None,
+    }
 }
 
 /// Lowers `array_values($list)` to a shallow clone.
@@ -3835,9 +3874,19 @@ fn lower_array_keys(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// Re-indexing a list changes nothing, so the values are the source's in order; the clone is
 /// what makes the result an independent owned array rather than an alias of the source.
 fn lower_array_values(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 0)?)?;
-    ctx.fb
-        .ins("call $__rt_array_clone_shallow", "values of a list are the list itself");
+    let source = operand(inst, 0)?;
+    ctx.emit_load_value(source)?;
+    if hash_operand(ctx, source) {
+        let helper = match element_php_type(&inst.result_php_type) {
+            Some(PhpType::Str) => "call $__rt_hash_values_str",
+            _ => "call $__rt_hash_values_int",
+        };
+        ctx.fb
+            .ins(helper, "the hash's values, in insertion order");
+    } else {
+        ctx.fb
+            .ins("call $__rt_array_clone_shallow", "values of a list are the list itself");
+    }
     store_result(ctx, inst)
 }
 

@@ -54,6 +54,7 @@ fn emit_hash_runtime_for_version(wm: &mut WatModule, _php_version: PhpVersion) {
     wm.add_raw_func(RT_HASH_NORMALIZE_KEY);
     wm.add_raw_func(RT_HASH_KEY_FROM_MIXED);
     wm.add_raw_func(RT_HASH_ITER_NEXT);
+    wm.add_raw_func(RT_HASH_PROJECTIONS);
     wm.add_raw_func(RT_HASH_META_ADDR);
     wm.add_raw_func(RT_HASH_ZEND_TABLE_SIZE);
     wm.add_raw_func(RT_HASH_NEW);
@@ -228,6 +229,80 @@ const RT_HASH_KEY_FROM_MIXED: &str = r#"(func $__rt_hash_key_from_mixed (param $
 /// head and next store slot indices with `-1` as the end sentinel, and the insertion
 /// list holds only live entries (unset splices removed ones out), so walking never
 /// lands on an empty/tombstone slot. `has_more` is `1` while `new_cursor != -1`.
+/// Walks a hash in INSERTION ORDER, building the indexed array `array_keys`/`array_values`
+/// answer.
+///
+/// PHP preserves insertion order for both, so the walk goes through `__rt_hash_iter_next` —
+/// the same cursor `foreach` uses — rather than over the bucket table, whose order is a hash
+/// artefact. An entry sits at `hash + 40 + cursor * 72`; its key is `(lo @ +8, hi @ +16)` with
+/// `hi == -1` marking an integer key, and its value is `(lo @ +24, hi @ +32)`.
+///
+/// One walk per element storage, because the destination array's slot width is fixed at
+/// creation: 8 bytes for an integer, 16 for a `(pointer, length)` string.
+const RT_HASH_PROJECTIONS: &str = r#"(func $__rt_hash_keys_int (param $hash i32) (result i32)
+  (local $arr i32) (local $cur i64) (local $more i64) (local $entry i32)
+  (local.set $arr (call $__rt_array_new (i64.load (local.get $hash)) (i64.const 8)))
+  (local.set $cur (i64.const -2))                                ;; before-first sentinel
+  (block $done (loop $next
+    (call $__rt_hash_iter_next (local.get $hash) (local.get $cur))
+    (local.set $more)                                            ;; results: (cursor, has_more)
+    (local.set $cur)
+    (br_if $done (i64.eqz (local.get $more)))
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))
+                               (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+    (local.set $arr (call $__rt_array_push_int (local.get $arr)
+      (i64.load (i32.add (local.get $entry) (i32.const 8)))))     ;; key_lo IS the integer key
+    (br $next)))
+  (local.get $arr))
+(func $__rt_hash_keys_str (param $hash i32) (result i32)
+  (local $arr i32) (local $cur i64) (local $more i64) (local $entry i32)
+  (local.set $arr (call $__rt_array_new (i64.load (local.get $hash)) (i64.const 16)))
+  (local.set $cur (i64.const -2))
+  (block $done (loop $next
+    (call $__rt_hash_iter_next (local.get $hash) (local.get $cur))
+    (local.set $more)
+    (local.set $cur)
+    (br_if $done (i64.eqz (local.get $more)))
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))
+                               (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+    (local.set $arr (call $__rt_array_push_str (local.get $arr)
+      (i32.wrap_i64 (i64.load (i32.add (local.get $entry) (i32.const 8))))   ;; key_lo = pointer
+      (i64.load (i32.add (local.get $entry) (i32.const 16)))))               ;; key_hi = length
+    (br $next)))
+  (local.get $arr))
+(func $__rt_hash_values_int (param $hash i32) (result i32)
+  (local $arr i32) (local $cur i64) (local $more i64) (local $entry i32)
+  (local.set $arr (call $__rt_array_new (i64.load (local.get $hash)) (i64.const 8)))
+  (local.set $cur (i64.const -2))
+  (block $done (loop $next
+    (call $__rt_hash_iter_next (local.get $hash) (local.get $cur))
+    (local.set $more)
+    (local.set $cur)
+    (br_if $done (i64.eqz (local.get $more)))
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))
+                               (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+    (local.set $arr (call $__rt_array_push_int (local.get $arr)
+      (i64.load (i32.add (local.get $entry) (i32.const 24)))))    ;; value_lo
+    (br $next)))
+  (local.get $arr))
+(func $__rt_hash_values_str (param $hash i32) (result i32)
+  (local $arr i32) (local $cur i64) (local $more i64) (local $entry i32)
+  (local.set $arr (call $__rt_array_new (i64.load (local.get $hash)) (i64.const 16)))
+  (local.set $cur (i64.const -2))
+  (block $done (loop $next
+    (call $__rt_hash_iter_next (local.get $hash) (local.get $cur))
+    (local.set $more)
+    (local.set $cur)
+    (br_if $done (i64.eqz (local.get $more)))
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))
+                               (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+    (local.set $arr (call $__rt_array_push_str (local.get $arr)
+      (i32.wrap_i64 (i64.load (i32.add (local.get $entry) (i32.const 24))))
+      (i64.load (i32.add (local.get $entry) (i32.const 32)))))
+    (br $next)))
+  (local.get $arr))
+"#;
+
 const RT_HASH_ITER_NEXT: &str = r#"(func $__rt_hash_iter_next (param $hash i32) (param $cursor i64) (result i64 i64)
   (local $next i64)                                            ;; next slot index to return
   (local $entry i32)                                           ;; address of the current entry
