@@ -141,6 +141,14 @@ const ERR_RETURN_TYPE_SUFFIX: &[u8] = b" returned\n";
 /// `callable returned`. Every first-class closure PHP builds is a `Closure`, so the word is
 /// fixed even though this target keeps a callable as a descriptor rather than an object.
 const PHP_CLASS_CLOSURE: &[u8] = b"Closure";
+/// `count()` names the VALUE for a boolean — `true given`, not `bool given` — which is the one
+/// place its word table parts ways with the declared-return one. Measured on php-src 8.5.6.
+const PHP_VALUE_TRUE: &[u8] = b"true";
+const PHP_VALUE_FALSE: &[u8] = b"false";
+/// The message carries no tail at all: an internal function's `TypeError` stops at the word.
+const ERR_COUNT_PREFIX: &[u8] =
+    b"PHP Fatal error: Uncaught TypeError: count(): Argument #1 ($value) must be of type Countable|array, ";
+const ERR_COUNT_SUFFIX: &[u8] = b" given\n";
 /// Reaching `string` or `bool` from a NaN still converts, but PHP 8.5 WARNS first — measured
 /// raw, since an error handler hides the level. There is no notice on the way to `float`, where
 /// NaN is an ordinary value.
@@ -204,7 +212,11 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + PHP_CLASS_CLOSURE.len() as u32
     + ERR_RETURN_TYPE_SEPARATOR.len() as u32
     + WARN_NAN_TO_STRING.len() as u32
-    + WARN_NAN_TO_BOOL.len() as u32;
+    + WARN_NAN_TO_BOOL.len() as u32
+    + PHP_VALUE_TRUE.len() as u32
+    + PHP_VALUE_FALSE.len() as u32
+    + ERR_COUNT_PREFIX.len() as u32
+    + ERR_COUNT_SUFFIX.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -344,6 +356,10 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_RETURN_TYPE_SEPARATOR,
         WARN_NAN_TO_STRING,
         WARN_NAN_TO_BOOL,
+        PHP_VALUE_TRUE,
+        PHP_VALUE_FALSE,
+        ERR_COUNT_PREFIX,
+        ERR_COUNT_SUFFIX,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -392,7 +408,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
-    emit_return_coercion_runtime(wm, &warning_offsets[17..28], &method_offsets[2..11]);
+    emit_return_coercion_runtime(wm, &warning_offsets[17..32], &method_offsets[2..11]);
 }
 
 /// Emits the fatal path used when a `Mixed` receiver is not an object.
@@ -454,7 +470,7 @@ fn emit_return_coercion_runtime(
     offsets: &[(u32, u32)],
     type_offsets: &[(u32, u32)],
 ) {
-    debug_assert_eq!(offsets.len(), 11);
+    debug_assert_eq!(offsets.len(), 15);
     debug_assert_eq!(type_offsets.len(), 9);
     let (float_prefix_ptr, float_prefix_len) = offsets[0];
     let (str_prefix_ptr, str_prefix_len) = offsets[1];
@@ -467,6 +483,10 @@ fn emit_return_coercion_runtime(
     let (err_sep_ptr, err_sep_len) = offsets[8];
     let (nan_string_ptr, nan_string_len) = offsets[9];
     let (nan_bool_ptr, nan_bool_len) = offsets[10];
+    let (true_ptr, true_len) = offsets[11];
+    let (false_ptr, false_len) = offsets[12];
+    let (count_prefix_ptr, count_prefix_len) = offsets[13];
+    let (count_suffix_ptr, count_suffix_len) = offsets[14];
     // The shared `PHP_TYPE_*` words each end with the newline that terminates the method-call
     // fatal; here a word sits mid-sentence, so the newline is dropped from the length.
     let word = |index: usize| -> (u32, u32) {
@@ -655,6 +675,46 @@ fn emit_return_coercion_runtime(
     (then (return (call $__rt_mixed_cast_string (local.get $cell)))))
   (call $__rt_fail_return_type (local.get $fn_ptr) (local.get $fn_len) (i32.const {string_word_ptr}) (i32.const {string_word_len}) (local.get $tag) (local.get $lo))
   unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-tostring
+"#
+    ));
+    // `count()` on a boxed value. Its own word table because a boolean is named by VALUE here,
+    // and its own message because an internal function's `TypeError` carries no location.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_count (param $cell i32) (result i64)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $word_ptr i32) (local $word_len i32) (local $cls_len i64)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))
+    (then (return (i64.load (i32.wrap_i64 (local.get $lo))))))    ;; element count @ +0
+  (if (i64.eq (local.get $tag) (i64.const 6))
+    (then
+      (call $__rt_fail (i32.const 9))                             ;; a Countable object is not lowered on this target
+      unreachable))                                               ;; elephc-trap:post-noreturn:count-object
+  (local.set $word_ptr (i32.const {null_word_ptr}))               ;; tag 8 = null, the default
+  (local.set $word_len (i32.const {null_word_len}))
+  (if (i64.eqz (local.get $tag))
+    (then (local.set $word_ptr (i32.const {int_word_ptr})) (local.set $word_len (i32.const {int_word_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 1))
+    (then (local.set $word_ptr (i32.const {string_word_ptr})) (local.set $word_len (i32.const {string_word_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 2))
+    (then (local.set $word_ptr (i32.const {float_word_ptr})) (local.set $word_len (i32.const {float_word_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 3))                     ;; a boolean is named by its VALUE
+    (then
+      (local.set $word_ptr (i32.const {false_ptr}))
+      (local.set $word_len (i32.const {false_len}))
+      (if (i64.ne (local.get $lo) (i64.const 0))
+        (then (local.set $word_ptr (i32.const {true_ptr})) (local.set $word_len (i32.const {true_len}))))))
+  (if (i64.eq (local.get $tag) (i64.const 9))
+    (then (local.set $word_ptr (i32.const {resource_word_ptr})) (local.set $word_len (i32.const {resource_word_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 10))
+    (then (local.set $word_ptr (i32.const {closure_ptr})) (local.set $word_len (i32.const {closure_len}))))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {count_prefix_ptr}) (i32.const {count_prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $word_ptr) (local.get $word_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {count_suffix_ptr}) (i32.const {count_suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable)                                                    ;; elephc-trap:post-noreturn:count-type-fatal-exit
 "#
     ));
 }

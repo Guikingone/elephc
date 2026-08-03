@@ -3297,7 +3297,7 @@ pub(super) fn direct_builtin_shape_issue(
     target: RuntimeFnId,
 ) -> Option<String> {
     if target == RuntimeFnId::Count {
-        return count_shape_issue(function, call);
+        return count_shape_issue(module, function, call);
     }
     if target == RuntimeFnId::ArrayIsList {
         return array_is_list_shape_issue(function, call);
@@ -3448,10 +3448,16 @@ pub(super) fn direct_builtin_shape_issue(
 
 /// Validates `count($array)` against the one shape its load can serve.
 ///
-/// The length is read straight from the container header, so the operand has to be a container
-/// this backend allocated. PHP's `count()` of a non-countable value is a `TypeError`, which a
-/// header load cannot raise, so any other operand type is refused rather than answering nonsense.
-fn count_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+/// A statically typed container reads its length straight from the header. A BOXED value goes
+/// through `__rt_mixed_count`, which reads the container the cell holds or raises php-src's own
+/// `TypeError` naming what arrived — measured: a boolean is named by VALUE there (`true given`,
+/// not `bool given`), and the message carries no location. An object stays out: a `Countable`
+/// receiver is not lowered on this target at all, so that tag fails loudly rather than guessing.
+fn count_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<String> {
     let [operand] = call.operands.as_slice() else {
         return Some(format!(
             "expected one container operand, got {}",
@@ -3466,7 +3472,14 @@ fn count_shape_issue(function: &Function, call: &Instruction) -> Option<String> 
     // `TypeError` this refusal protects against cannot arise.
     let boxed_container = value.ir_type == IrType::Heap(IrHeapKind::Mixed)
         && super::capability::value_is_container_by_construction(function, *operand);
+    // Any other boxed value counts too, at runtime: `__rt_mixed_count` reads the container the
+    // cell holds, or raises php-src's own `TypeError` naming what arrived. That diagnostic goes
+    // through WASI, so it needs a main-bearing command module.
+    let boxed_any = value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && value.php_type.codegen_repr() == PhpType::Mixed
+        && module.functions.iter().any(|candidate| candidate.flags.is_main);
     if !boxed_container
+        && !boxed_any
         && (!matches!(
             value.ir_type,
             IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash)
@@ -5584,17 +5597,25 @@ fn lower_string_predicate(
 /// Lowers `count($array)` to the container header's element count at `[ptr + 0]`.
 fn lower_count(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let container = operand(inst, 0)?;
-    ctx.emit_load_value(container)?;
-    // A boxed container carries the array pointer in the cell's low word; the capability rule
-    // is what guarantees the tag is a container's.
-    if matches!(
+    let boxed = matches!(
         ctx.function.value(container).map(|v| v.ir_type),
         Some(IrType::Heap(IrHeapKind::Mixed))
-    ) {
-        ctx.fb.ins(
-            "(i32.wrap_i64 (i64.load offset=8))",
-            "the container the cell holds",
-        );
+    );
+    ctx.emit_load_value(container)?;
+    if boxed {
+        // A cell PROVEN to hold a container reads through it directly; any other boxed value
+        // needs the runtime, which dispatches on the tag and raises PHP's TypeError for a
+        // value that has no count.
+        if super::capability::value_is_container_by_construction(ctx.function, container) {
+            ctx.fb.ins(
+                "(i32.wrap_i64 (i64.load offset=8))",
+                "the container the cell holds",
+            );
+        } else {
+            ctx.fb
+                .ins("call $__rt_mixed_count", "PHP's count() of a boxed value");
+            return store_result(ctx, inst);
+        }
     }
     ctx.fb.ins("i64.load", "container element count @ +0");
     store_result(ctx, inst)

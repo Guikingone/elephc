@@ -11608,3 +11608,112 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `count()` on a BOXED value: the container it holds, or php-src's own `TypeError`.
+///
+/// The message is a constant except for the word naming what arrived, and that word table is
+/// not the declared-return one: measured on php-src 8.5.6, `count()` names a boolean by VALUE
+/// (`true given`, not `bool given`). An internal function's `TypeError` also carries no
+/// location, so the whole text is composable here.
+#[test]
+fn test_cli_wasm_count_of_a_boxed_value_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_count_boxed");
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function c(mixed $v): int { return count($v); }
+$a = [1, 2, 3];
+$h = ["x" => 1, "y" => 2];
+echo c($a), "|", c($h), "|", c([]), "\n";
+"#,
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile count of a boxed value");
+    assert!(
+        output.status.success(),
+        "count of a boxed value failed to compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run count of a boxed value");
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "3|2|0\n");
+
+    for (stem, value, word) in [
+        ("i", "5", "int"),
+        ("f", "5.5", "float"),
+        ("t", "true", "true"),
+        ("z", "false", "false"),
+        ("n", "null", "null"),
+        ("s", "\"abc\"", "string"),
+    ] {
+        let path = dir.join(format!("{stem}.php"));
+        fs::write(
+            &path,
+            format!(
+                "<?php\nfunction c(mixed $v): int {{ return count($v); }}\necho c({value}), \"\\n\";\n"
+            ),
+        )
+        .unwrap();
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile a rejecting count");
+        assert!(
+            output.status.success(),
+            "case {stem} failed to compile: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(format!("{stem}.wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run a rejecting count");
+        assert_eq!(run.status.code(), Some(255), "case {stem}");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stderr),
+            format!(
+                "PHP Fatal error: Uncaught TypeError: count(): Argument #1 ($value) \
+                 must be of type Countable|array, {word} given\n"
+            ),
+            "case {stem}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
