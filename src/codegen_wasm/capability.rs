@@ -1250,6 +1250,88 @@ pub(super) fn object_to_string_impl(module: &Module, class_name: &str) -> Option
         .then_some(implementation)
 }
 
+/// The boxed value a cast is standing in for, when the cast exists only to feed a comparison.
+///
+/// `$n <= 1` with `$n` untyped lowers to `cast Mixed -> I64` then `icmp`, and that pair is NOT
+/// what PHP does: PHP compares without converting. Measured on php-src 8.5.6 — `"abc" <= 1` is
+/// FALSE, because a non-numeric string makes PHP render the LONG as a string and compare bytes,
+/// while the cast answers 0 and reports true. The native backend still takes the cast and gets
+/// both this and `[1] <= 1` wrong; this target answers PHP by comparing the box directly.
+///
+/// Returns the cast's SOURCE, and only when every use of the cast's result is such a comparison
+/// — otherwise the converted integer is genuinely wanted somewhere and the cast must stand.
+pub(super) fn cast_stands_in_for_mixed_comparison(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<ValueId> {
+    if !matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64))) {
+        return None; // an EXPLICIT `(int)` really is a conversion
+    }
+    if inst.result_type != IrType::I64 || inst.result_php_type.codegen_repr() != PhpType::Int {
+        return None;
+    }
+    let [source] = inst.operands.as_slice() else {
+        return None;
+    };
+    let value = function.value(*source)?;
+    if value.ir_type != IrType::Heap(IrHeapKind::Mixed)
+        || value.php_type.codegen_repr() != PhpType::Mixed
+    {
+        return None;
+    }
+    // The comparison reads the BOX, so the box has to still be alive when it runs. An owned
+    // temporary — a property read, a call result — is released right after the cast, BEFORE the
+    // comparison the EIR then performs on the converted integer. Reading it there is a
+    // use-after-free, so only a source nothing releases is admitted; a plain local, which is
+    // what an untyped parameter or variable gives, always qualifies.
+    if function
+        .instructions
+        .iter()
+        .any(|candidate| candidate.op == Op::Release && candidate.operands.contains(source))
+    {
+        return None;
+    }
+    let result = inst.result?;
+    let mut used = false;
+    for candidate in &function.instructions {
+        if !candidate.operands.contains(&result) {
+            continue;
+        }
+        if candidate.op != Op::ICmp {
+            return None;
+        }
+        used = true;
+    }
+    used.then_some(*source)
+}
+
+/// The operands of an `ICmp` that is really a PHP comparison against a boxed value.
+///
+/// Answers `(cell, other, mixed_on_left)`. Only ONE side may be boxed: comparing two boxes needs
+/// php-src's full cross-type table, which this target does not carry yet.
+pub(super) fn icmp_compares_a_boxed_value(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<(ValueId, ValueId, bool)> {
+    let [left, right] = inst.operands.as_slice() else {
+        return None;
+    };
+    let boxed = |value: ValueId| -> Option<ValueId> {
+        let defining = function
+            .instructions
+            .iter()
+            .find(|candidate| candidate.result == Some(value))?;
+        (defining.op == Op::Cast)
+            .then(|| cast_stands_in_for_mixed_comparison(function, defining))
+            .flatten()
+    };
+    match (boxed(*left), boxed(*right)) {
+        (Some(cell), None) => Some((cell, *right, true)),
+        (None, Some(cell)) => Some((cell, *left, false)),
+        _ => None,
+    }
+}
+
 /// The declared return type this cast is PHP's IMPLICIT coercion for, if it is one at all.
 ///
 /// That coercion is a DIFFERENT operation from a `(T)` cast, which is why it needs its own
@@ -1403,7 +1485,17 @@ fn cast_shape_issue(
     // other diagnostic-producing rule here does.
     let return_coercion = declared_return_coercion_target(function, inst).is_some()
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
-    let admitted_mixed_scalar = (explicit || widened_by_checked_arithmetic || return_coercion)
+    // A cast that only feeds a comparison is not emitted as a conversion at all: the comparison
+    // reads the box. Admitting it here is what lets the `ICmp` do PHP's own comparison.
+    let comparison_stand_in = cast_stands_in_for_mixed_comparison(function, inst).is_some()
+        && function.instructions.iter().any(|candidate| {
+            candidate.op == Op::ICmp && icmp_compares_a_boxed_value(function, candidate).is_some()
+        })
+        && module.functions.iter().any(|candidate| candidate.flags.is_main);
+    let admitted_mixed_scalar = (explicit
+        || widened_by_checked_arithmetic
+        || return_coercion
+        || comparison_stand_in)
         && matches!(target, IrType::I64 | IrType::F64)
         || ((explicit || cast_feeds_string_context(function, inst))
             && target == IrType::Str);

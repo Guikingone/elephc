@@ -1521,6 +1521,28 @@ fn float_cmp_op(pred: CmpPredicate) -> &'static str {
 /// Lowers `ICmp`: signed integer comparison yielding an i64 boolean (0/1).
 fn lower_int_cmp(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let wasm_op = int_cmp_op(cmp_immediate(inst)?)?;
+    // A comparison against a BOXED value is PHP's own, not a converted integer's: the runtime
+    // answers -1/0/1 for the pair and the original predicate is applied to that.
+    if let Some((cell, other, mixed_on_left)) =
+        super::capability::icmp_compares_a_boxed_value(ctx.function, inst)
+    {
+        ctx.emit_load_value(cell)?;
+        ctx.emit_load_value(other)?;
+        ctx.fb.ins(
+            "call $__rt_mixed_cmp_i64",
+            "PHP's comparison of a boxed value with an integer",
+        );
+        if !mixed_on_left {
+            // The helper always takes the box first, so a box on the RIGHT answers the
+            // opposite sign.
+            ctx.fb.ins("i64.const -1", "reversed operand order");
+            ctx.fb.ins("i64.mul", "flip the three-way result");
+        }
+        ctx.fb.ins("i64.const 0", "compare the three-way result with zero");
+        ctx.fb.ins(wasm_op, "the original predicate");
+        ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+        return store_result(ctx, inst);
+    }
     ctx.emit_load_value(operand(inst, 0)?)?;
     ctx.emit_load_value(operand(inst, 1)?)?;
     ctx.fb.ins(wasm_op, "integer comparison");
@@ -1673,6 +1695,19 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 return store_result(ctx, inst);
             }
         }
+    }
+    // A cast that exists only to feed a comparison emits no conversion: the comparison reads
+    // the box itself, so this result is dead and only needs to exist for the value table.
+    if super::capability::cast_stands_in_for_mixed_comparison(ctx.function, inst).is_some()
+        && ctx.function.instructions.iter().any(|candidate| {
+            candidate.op == Op::ICmp
+                && super::capability::icmp_compares_a_boxed_value(ctx.function, candidate)
+                    .is_some_and(|(_, _, _)| candidate.operands.contains(&inst.result.unwrap()))
+        })
+    {
+        ctx.fb
+            .ins("i64.const 0", "placeholder: the comparison reads the box");
+        return store_result(ctx, inst);
     }
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
         ctx.emit_load_value(value)?;

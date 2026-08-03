@@ -1232,6 +1232,59 @@
     (call $__rt_mixed_numeric_common (local.get $l) (local.get $r) (i32.const 1)))  ;; op 1 = sub
   (func $__rt_mixed_numeric_mul (param $l i32) (param $r i32) (result i32)
     (call $__rt_mixed_numeric_common (local.get $l) (local.get $r) (i32.const 2)))  ;; op 2 = mul
+  (func $__rt_i64_threeway (param $a i64) (param $b i64) (result i64)
+    (i64.sub
+      (i64.extend_i32_u (i64.gt_s (local.get $a) (local.get $b)))
+      (i64.extend_i32_u (i64.lt_s (local.get $a) (local.get $b)))))
+  (func $__rt_f64_threeway (param $a f64) (param $b f64) (result i64)
+    (if (i32.or (f64.ne (local.get $a) (local.get $a)) (f64.ne (local.get $b) (local.get $b)))
+      (then (return (i64.const 1))))                                ;; php-src answers 1 for a NaN
+    (i64.sub
+      (i64.extend_i32_u (f64.gt (local.get $a) (local.get $b)))
+      (i64.extend_i32_u (f64.lt (local.get $a) (local.get $b)))))
+  (func $__rt_mixed_cmp_i64 (param $cell i32) (param $r i64) (result i64)
+    (local $tag i64) (local $lo i64) (local $hi i64) (local $cls i32)
+    (local $sp i32) (local $sl i32) (local $bp i32) (local $bl i32) (local $lb i64)
+    (call $__rt_mixed_unbox (local.get $cell))
+    (local.set $hi)
+    (local.set $lo)
+    (local.set $tag)
+    (if (i64.eqz (local.get $tag))                                  ;; tag 0 = int: longs compare AS LONGS
+      (then (return (call $__rt_i64_threeway (local.get $lo) (local.get $r)))))
+    (if (i32.or (i64.eq (local.get $tag) (i64.const 3)) (i64.eq (local.get $tag) (i64.const 8)))
+      (then                                                         ;; bool or null: BOTH sides become booleans
+        (local.set $lb (i64.const 0))
+        (if (i64.eq (local.get $tag) (i64.const 3))
+          (then (local.set $lb (i64.extend_i32_u (i64.ne (local.get $lo) (i64.const 0))))))
+        (return (call $__rt_i64_threeway (local.get $lb)
+          (i64.extend_i32_u (i64.ne (local.get $r) (i64.const 0)))))))
+    (if (i64.eq (local.get $tag) (i64.const 2))                     ;; tag 2 = float
+      (then (return (call $__rt_f64_threeway
+        (f64.reinterpret_i64 (local.get $lo)) (f64.convert_i64_s (local.get $r))))))
+    (if (i64.eq (local.get $tag) (i64.const 1))                     ;; tag 1 = string
+      (then
+        (local.set $sp (i32.wrap_i64 (local.get $lo)))
+        (local.set $sl (i32.wrap_i64 (local.get $hi)))
+        (local.set $cls (call $__rt_str_numeric_class (local.get $sp) (local.get $sl)))
+        (if (i32.eq (local.get $cls) (i32.const 1))                 ;; wholly integral and inside i64
+          (then (return (call $__rt_i64_threeway
+            (i64.load (i32.add (global.get $__float_scratch) (i32.const 10496)))
+            (local.get $r)))))
+        (if (i32.eq (local.get $cls) (i32.const 2))                 ;; wholly float-shaped
+          (then (return (call $__rt_f64_threeway
+            (f64.load (i32.add (global.get $__float_scratch) (i32.const 10496)))
+            (f64.convert_i64_s (local.get $r))))))
+        (call $__rt_itoa (local.get $r) (i32.add (global.get $__float_scratch) (i32.const 9216)))
+        (local.set $bl)                                             ;; itoa returns (ptr, len)
+        (local.set $bp)
+        (return (call $__rt_i64_threeway                            ;; normalize the raw byte distance
+          (call $__rt_str_cmp (local.get $sp) (i64.extend_i32_u (local.get $sl))
+            (local.get $bp) (i64.extend_i32_u (local.get $bl)) (i32.const 0))
+          (i64.const 0)))))
+    (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))
+      (then (return (i64.const 1))))                                ;; an array outranks any scalar
+    (call $__rt_fail (i32.const 9))                                 ;; object/resource/callable: not modelled
+    unreachable)                                                    ;; elephc-trap:post-noreturn:mixed-compare
   (func $__rt_fail_return_type (param $fn_ptr i32) (param $fn_len i32) (param $target_ptr i32) (param $target_len i32) (param $tag i64) (param $lo i64)
     (local $word_ptr i32) (local $word_len i32) (local $cls_len i64)
     (local.set $word_ptr (i32.const 83122))               ;; tag 8 = null, the default
@@ -1724,6 +1777,9 @@
     (i32.store                                      ;; refcount[ptr-12] += 1
       (i32.sub (local.get $ptr) (i32.const 12))
       (i32.add (i32.load (i32.sub (local.get $ptr) (i32.const 12))) (i32.const 1))))
+  (func $__rt_incref_borrowed_return (param $ptr i32) (result i32)
+    (call $__rt_incref (local.get $ptr))
+    (local.get $ptr))
   (func $__rt_decref_any (param $ptr i32)
     (local $kind i32)
     (if (i32.eqz (local.get $ptr))                  ;; guard: null pointer

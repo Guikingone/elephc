@@ -34,6 +34,7 @@ use super::wat::WatModule;
 /// `__rt_heap_free_safe` these routines reference.
 pub(super) fn emit_refcount_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_INCREF);
+    wm.add_raw_func(RT_INCREF_BORROWED_RETURN);
     wm.add_raw_func(RT_DECREF_ANY);
     wm.add_raw_func(RT_REF_CELL_IS_LIVE);
     wm.add_raw_func(RT_REF_CELL_INCREF);
@@ -43,6 +44,13 @@ pub(super) fn emit_refcount_runtime(wm: &mut WatModule) {
 
 /// `__rt_incref`: increments the refcount of a live heap block; no-ops on a null,
 /// below-heap (data-segment / concat-scratch), or past-the-cursor pointer.
+/// Bumps a refcount and hands the pointer straight back, so a return site can transfer
+/// ownership of a BORROWED value without stashing it in a temporary.
+const RT_INCREF_BORROWED_RETURN: &str = r#"(func $__rt_incref_borrowed_return (param $ptr i32) (result i32)
+  (call $__rt_incref (local.get $ptr))
+  (local.get $ptr))
+"#;
+
 const RT_INCREF: &str = r#"(func $__rt_incref (param $ptr i32)
   (if (i32.eqz (local.get $ptr))                  ;; guard: null pointer
     (then (return)))

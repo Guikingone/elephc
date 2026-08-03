@@ -11717,3 +11717,92 @@ echo c($a), "|", c($h), "|", c([]), "\n";
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a relational comparison against a BOXED value, which is not a cast then a compare.
+///
+/// `$n <= 1` with `$n` untyped lowers to `cast Mixed -> I64` then `icmp`, and that pair is not
+/// what PHP does. Measured on php-src 8.5.6 and validated on 1200 random pairs across the i64
+/// boundary: a non-numeric string makes PHP render the LONG as a string and compare BYTES, so
+/// `"abc" <= 1` is false where the cast answers 0 and reports true; a bool or null turns BOTH
+/// sides into booleans; an array outranks any scalar; and a NaN answers 1 either way.
+///
+/// The native backend still takes the cast and gets `"abc"` and `0.5` wrong on both operators.
+#[test]
+fn test_cli_wasm_relational_comparison_of_a_boxed_value_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_boxed_comparison");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function le1($n) { return $n <= 1 ? "yes" : "no"; }
+function gt0($n) { return $n > 0 ? "Y" : "N"; }
+foreach ([0, 1, 2, "abc", "0", "2", 0.5, true, false, null, "", "7abc", " 7 "] as $v) {
+  echo le1($v), gt0($v), "|";
+}
+echo "\n";
+function fib($n) {
+    if ($n <= 1) { return $n; }
+    return fib($n - 1) + fib($n - 2);
+}
+echo fib(10), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the boxed comparisons to WASM");
+    assert!(
+        output.status.success(),
+        "boxed comparison compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the boxed comparisons under Node");
+    assert!(
+        run.status.success(),
+        "boxed comparisons must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // php-src's own answers. `"abc"` and `0.5` are the two the cast gets wrong.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "yesN|yesY|noY|noY|yesN|noY|yesY|yesY|yesN|yesN|yesN|noY|noY|\n",
+            "55\n",
+        ),
+        "the recursive fib exercises returning an untyped PARAMETER, which hands the caller a \
+         BORROW it would otherwise free while still holding it"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

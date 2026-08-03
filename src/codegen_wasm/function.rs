@@ -683,6 +683,19 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator, preceding_op: Option<Op>
             } else {
                 if let Some(v) = value {
                     ctx.emit_load_value(*v)?;
+                    // A PARAMETER slot is a BORROW: the caller owns the argument and releases
+                    // it after the call, while it treats the call's result as OWNED. Returning
+                    // such a slot's heap value therefore has to hand over a reference of its
+                    // own, or the caller's release of the argument frees what it just received
+                    // — `f($n - 1) + f($n - 2)` reads a freed cell and reports an operand-type
+                    // fatal. Ordinary locals need nothing: the epilogue above already skips the
+                    // slot this return moves out.
+                    if returned_from_parameter_slot(ctx.function, returned_slot)
+                        && matches!(ctx.function.value(*v).map(|value| value.ir_type),
+                            Some(IrType::Heap(_)))
+                    {
+                        ctx.fb.ins("call $__rt_incref_borrowed_return", "the caller owns the result");
+                    }
                 }
                 ctx.fb.ins("return", "return from function");
             }
@@ -745,6 +758,14 @@ fn lower_terminator(ctx: &mut FnCtx, term: &Terminator, preceding_op: Option<Op>
 /// `HashToMixed` in-place conversions and ownership-neutral `Move`/`Borrow`
 /// forwarding, mirroring the native `direct_return_local_slot`. `Acquire` is
 /// intentionally not followed because it creates an independent owned value.
+/// Whether the slot a return moves out of is a PARAMETER's.
+///
+/// Parameter slots are excluded from the epilogue cleanup because the caller owns the argument;
+/// that same fact is what makes returning one a borrow the caller cannot be handed as owned.
+fn returned_from_parameter_slot(function: &Function, slot: Option<LocalSlotId>) -> bool {
+    slot.is_some_and(|slot| (slot.as_raw() as usize) < function.params.len())
+}
+
 fn returned_local_slot(function: &Function, value: ValueId) -> Option<LocalSlotId> {
     let value = function.value(value)?;
     let ValueDef::Instruction { inst, .. } = value.def else {
