@@ -134,12 +134,18 @@ const DEPRECATED_STR_TO_INT_SUFFIX: &[u8] = b"\" to int loses precision\n";
 /// naming the FUNCTION — `f()` for a plain function, `C::m()` for a method, which is
 /// already how the EIR names both — and the type word that arrived.
 const ERR_RETURN_TYPE_PREFIX: &[u8] = b"PHP Fatal error: Uncaught TypeError: ";
-const ERR_RETURN_TYPE_MIDDLE: &[u8] = b"(): Return value must be of type int, ";
+const ERR_RETURN_TYPE_MIDDLE: &[u8] = b"(): Return value must be of type ";
+const ERR_RETURN_TYPE_SEPARATOR: &[u8] = b", ";
 const ERR_RETURN_TYPE_SUFFIX: &[u8] = b" returned\n";
 /// PHP names a closure by its CLASS in that message — measured: `Closure returned`, not
 /// `callable returned`. Every first-class closure PHP builds is a `Closure`, so the word is
 /// fixed even though this target keeps a callable as a descriptor rather than an object.
 const PHP_CLASS_CLOSURE: &[u8] = b"Closure";
+/// Reaching `string` or `bool` from a NaN still converts, but PHP 8.5 WARNS first — measured
+/// raw, since an error handler hides the level. There is no notice on the way to `float`, where
+/// NaN is an ordinary value.
+const WARN_NAN_TO_STRING: &[u8] = b"Warning: unexpected NAN value was coerced to string\n";
+const WARN_NAN_TO_BOOL: &[u8] = b"Warning: unexpected NAN value was coerced to bool\n";
 
 /// First byte available to PHP string literals in a command module.
 pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
@@ -195,7 +201,10 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_RETURN_TYPE_PREFIX.len() as u32
     + ERR_RETURN_TYPE_MIDDLE.len() as u32
     + ERR_RETURN_TYPE_SUFFIX.len() as u32
-    + PHP_CLASS_CLOSURE.len() as u32;
+    + PHP_CLASS_CLOSURE.len() as u32
+    + ERR_RETURN_TYPE_SEPARATOR.len() as u32
+    + WARN_NAN_TO_STRING.len() as u32
+    + WARN_NAN_TO_BOOL.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -332,6 +341,9 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_RETURN_TYPE_MIDDLE,
         ERR_RETURN_TYPE_SUFFIX,
         PHP_CLASS_CLOSURE,
+        ERR_RETURN_TYPE_SEPARATOR,
+        WARN_NAN_TO_STRING,
+        WARN_NAN_TO_BOOL,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -380,7 +392,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
-    emit_return_coercion_runtime(wm, &warning_offsets[17..25], &method_offsets[2..11]);
+    emit_return_coercion_runtime(wm, &warning_offsets[17..28], &method_offsets[2..11]);
 }
 
 /// Emits the fatal path used when a `Mixed` receiver is not an object.
@@ -442,7 +454,7 @@ fn emit_return_coercion_runtime(
     offsets: &[(u32, u32)],
     type_offsets: &[(u32, u32)],
 ) {
-    debug_assert_eq!(offsets.len(), 8);
+    debug_assert_eq!(offsets.len(), 11);
     debug_assert_eq!(type_offsets.len(), 9);
     let (float_prefix_ptr, float_prefix_len) = offsets[0];
     let (str_prefix_ptr, str_prefix_len) = offsets[1];
@@ -452,6 +464,9 @@ fn emit_return_coercion_runtime(
     let (err_middle_ptr, err_middle_len) = offsets[5];
     let (err_suffix_ptr, err_suffix_len) = offsets[6];
     let (closure_ptr, closure_len) = offsets[7];
+    let (err_sep_ptr, err_sep_len) = offsets[8];
+    let (nan_string_ptr, nan_string_len) = offsets[9];
+    let (nan_bool_ptr, nan_bool_len) = offsets[10];
     // The shared `PHP_TYPE_*` words each end with the newline that terminates the method-call
     // fatal; here a word sits mid-sentence, so the newline is dropped from the length.
     let word = |index: usize| -> (u32, u32) {
@@ -459,13 +474,53 @@ fn emit_return_coercion_runtime(
         debug_assert!(len > 1, "a type word is at least one byte plus its newline");
         (ptr, len - 1)
     };
+    let (int_word_ptr, int_word_len) = word(0);
     let (string_word_ptr, string_word_len) = word(1);
     let (float_word_ptr, float_word_len) = word(2);
+    let (bool_word_ptr, bool_word_len) = word(3);
     let (array_word_ptr, array_word_len) = word(4);
     let (null_word_ptr, null_word_len) = word(5);
     let (resource_word_ptr, resource_word_len) = word(6);
     let value_offset = super::mixed_numeric::CLASS_VALUE_OFFSET;
 
+    // One fatal serves all four targets. Measured: the word a tag contributes is the SAME
+    // whatever the declared type — only the target word and the set of ACCEPTED tags differ.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_return_type (param $fn_ptr i32) (param $fn_len i32) (param $target_ptr i32) (param $target_len i32) (param $tag i64) (param $lo i64)
+  (local $word_ptr i32) (local $word_len i32) (local $cls_len i64)
+  (local.set $word_ptr (i32.const {null_word_ptr}))               ;; tag 8 = null, the default
+  (local.set $word_len (i32.const {null_word_len}))
+  (if (i64.eq (local.get $tag) (i64.const 1))
+    (then (local.set $word_ptr (i32.const {string_word_ptr})) (local.set $word_len (i32.const {string_word_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 2))
+    (then (local.set $word_ptr (i32.const {float_word_ptr})) (local.set $word_len (i32.const {float_word_len}))))
+  (if (i64.eqz (local.get $tag))
+    (then (local.set $word_ptr (i32.const {int_word_ptr})) (local.set $word_len (i32.const {int_word_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 3))
+    (then (local.set $word_ptr (i32.const {bool_word_ptr})) (local.set $word_len (i32.const {bool_word_len}))))
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))
+    (then (local.set $word_ptr (i32.const {array_word_ptr})) (local.set $word_len (i32.const {array_word_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 9))
+    (then (local.set $word_ptr (i32.const {resource_word_ptr})) (local.set $word_len (i32.const {resource_word_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 10))                    ;; PHP names a closure by its class
+    (then (local.set $word_ptr (i32.const {closure_ptr})) (local.set $word_len (i32.const {closure_len}))))
+  (if (i64.eq (local.get $tag) (i64.const 6))                     ;; an object contributes its CLASS name
+    (then
+      (call $__rt_class_name_by_cid (i64.load (i32.wrap_i64 (local.get $lo))))
+      (local.set $cls_len)
+      (local.set $word_ptr)
+      (local.set $word_len (i32.wrap_i64 (local.get $cls_len)))))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_prefix_ptr}) (i32.const {err_prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $fn_ptr) (local.get $fn_len)))    ;; "f" or "C::m"
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_middle_ptr}) (i32.const {err_middle_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $target_ptr) (local.get $target_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_sep_ptr}) (i32.const {err_sep_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $word_ptr) (local.get $word_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_suffix_ptr}) (i32.const {err_suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:return-type-fatal-exit
+)"#
+    ));
     wm.add_raw_func(&format!(
         r#"(func $__rt_deprecate_return_float_to_int (param $bits i64)
   (local $ptr i32) (local $len i32)
@@ -483,20 +538,17 @@ fn emit_return_coercion_runtime(
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {str_suffix_ptr}) (i32.const {str_suffix_len})))  ;; " to int loses precision\n""#
     ));
     wm.add_raw_func(&format!(
-        r#"(func $__rt_fail_return_type_int (param $fn_ptr i32) (param $fn_len i32) (param $word_ptr i32) (param $word_len i32)
-  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_prefix_ptr}) (i32.const {err_prefix_len})))
-  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $fn_ptr) (local.get $fn_len)))    ;; "f" or "C::m"
-  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_middle_ptr}) (i32.const {err_middle_len})))
-  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $word_ptr) (local.get $word_len)))
-  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_suffix_ptr}) (i32.const {err_suffix_len})))
-  (call $wasi_proc_exit (i32.const 255))
-  unreachable ;; elephc-trap:post-noreturn:return-type-fatal-exit
-)"#
+        r#"(func $__rt_deprecate_nan_to_string
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {nan_string_ptr}) (i32.const {nan_string_len})))"#
     ));
     wm.add_raw_func(&format!(
+        r#"(func $__rt_deprecate_nan_to_bool
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {nan_bool_ptr}) (i32.const {nan_bool_len})))"#
+    ));
+
+    wm.add_raw_func(&format!(
         r#"(func $__rt_mixed_return_int (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (result i64)
-  (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64) (local $t f64)
-  (local $cls i32) (local $cls_ptr i32) (local $cls_len i64)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64) (local $t f64) (local $cls i32)
   (call $__rt_mixed_unbox (local.get $cell))                      ;; unbox -> stack: tag, lo, hi
   (local.set $hi)
   (local.set $lo)
@@ -517,9 +569,7 @@ fn emit_return_coercion_runtime(
           (local.set $t (f64.trunc (local.get $f)))
           (if (f64.ne (local.get $t) (local.get $f))               ;; a lost fraction only DEPRECATES
             (then (call $__rt_deprecate_return_float_to_int (local.get $lo))))
-          (return (i64.trunc_f64_s (local.get $t)))))
-      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {float_word_ptr}) (i32.const {float_word_len}))
-      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-float
+          (return (i64.trunc_f64_s (local.get $t)))))))
   (if (i64.eq (local.get $tag) (i64.const 1))                     ;; tag 1 = string
     (then
       (local.set $cls (call $__rt_str_numeric_class (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi))))
@@ -537,30 +587,74 @@ fn emit_return_coercion_runtime(
               (local.set $t (f64.trunc (local.get $f)))
               (if (f64.ne (local.get $t) (local.get $f))
                 (then (call $__rt_deprecate_return_str_to_int (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi)))))
-              (return (i64.trunc_f64_s (local.get $t)))))))
-      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {string_word_ptr}) (i32.const {string_word_len}))
-      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-string
-  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))  ;; array / hash
+              (return (i64.trunc_f64_s (local.get $t)))))))))
+  (call $__rt_fail_return_type (local.get $fn_ptr) (local.get $fn_len) (i32.const {int_word_ptr}) (i32.const {int_word_len}) (local.get $tag) (local.get $lo))
+  unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-int
+"#
+    ));
+    // A float target takes every numeric tag EXACTLY as `(float)` does — NaN and the infinities
+    // included, since none of them loses anything on the way to a float, so there is no notice
+    // here at all. Only a string needs gating: a leading-numeric one converts under `(float)`
+    // but is a `TypeError` at a return.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_return_float (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (result i64)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $cls i32)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i32.or (i64.eqz (local.get $tag))
+        (i32.or (i64.eq (local.get $tag) (i64.const 2)) (i64.eq (local.get $tag) (i64.const 3))))
+    (then (return (call $__rt_mixed_cast_float (local.get $cell)))))  ;; int / float / bool
+  (if (i64.eq (local.get $tag) (i64.const 1))
     (then
-      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {array_word_ptr}) (i32.const {array_word_len}))
-      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-array
-  (if (i64.eq (local.get $tag) (i64.const 6))                     ;; tag 6 = object: PHP names the CLASS
+      (local.set $cls (call $__rt_str_numeric_class (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi))))
+      (if (i32.or (i32.eq (local.get $cls) (i32.const 1)) (i32.eq (local.get $cls) (i32.const 2)))  ;; WHOLLY numeric only
+        (then (return (call $__rt_mixed_cast_float (local.get $cell)))))))
+  (call $__rt_fail_return_type (local.get $fn_ptr) (local.get $fn_len) (i32.const {float_word_ptr}) (i32.const {float_word_len}) (local.get $tag) (local.get $lo))
+  unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-tofloat
+"#
+    ));
+    // `string` and `bool` accept every scalar tag with the explicit cast's own value — the two
+    // operations only part ways on the tags PHP refuses outright, plus the NaN notice.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_return_bool (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (result i64)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 2))
     (then
-      (call $__rt_class_name_by_cid (i64.load (i32.wrap_i64 (local.get $lo))))
-      (local.set $cls_len)
-      (local.set $cls_ptr)
-      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (local.get $cls_ptr) (i32.wrap_i64 (local.get $cls_len)))
-      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-object
-  (if (i64.eq (local.get $tag) (i64.const 9))                     ;; tag 9 = resource
+      (local.set $f (f64.reinterpret_i64 (local.get $lo)))
+      (if (f64.ne (local.get $f) (local.get $f))                  ;; NaN still converts, after a notice
+        (then (call $__rt_deprecate_nan_to_bool)))))
+  (if (i32.or (i64.eqz (local.get $tag))
+        (i32.or (i64.eq (local.get $tag) (i64.const 1))
+          (i32.or (i64.eq (local.get $tag) (i64.const 2)) (i64.eq (local.get $tag) (i64.const 3)))))
+    (then (return (call $__rt_mixed_cast_bool (local.get $cell)))))
+  (call $__rt_fail_return_type (local.get $fn_ptr) (local.get $fn_len) (i32.const {bool_word_ptr}) (i32.const {bool_word_len}) (local.get $tag) (local.get $lo))
+  unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-tobool
+"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_return_string (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (result i32) (result i32)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 2))
     (then
-      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {resource_word_ptr}) (i32.const {resource_word_len}))
-      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-resource
-  (if (i64.eq (local.get $tag) (i64.const 10))                    ;; tag 10 = callable, which PHP calls a Closure
-    (then
-      (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {closure_ptr}) (i32.const {closure_len}))
-      unreachable))                                               ;; elephc-trap:post-noreturn:return-coerce-closure
-  (call $__rt_fail_return_type_int (local.get $fn_ptr) (local.get $fn_len) (i32.const {null_word_ptr}) (i32.const {null_word_len}))  ;; tag 8 = null
-  unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-null
+      (local.set $f (f64.reinterpret_i64 (local.get $lo)))
+      (if (f64.ne (local.get $f) (local.get $f))
+        (then (call $__rt_deprecate_nan_to_string)))))
+  (if (i32.or (i64.eqz (local.get $tag))
+        (i32.or (i64.eq (local.get $tag) (i64.const 1))
+          (i32.or (i64.eq (local.get $tag) (i64.const 2)) (i64.eq (local.get $tag) (i64.const 3)))))
+    (then (return (call $__rt_mixed_cast_string (local.get $cell)))))
+  (call $__rt_fail_return_type (local.get $fn_ptr) (local.get $fn_len) (i32.const {string_word_ptr}) (i32.const {string_word_len}) (local.get $tag) (local.get $lo))
+  unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-tostring
 "#
     ));
 }

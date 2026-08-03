@@ -11271,3 +11271,189 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the same declared-return coercion for the `float` and `bool` targets.
+///
+/// Their accepting paths coincide with the explicit cast's — a float loses nothing on the way
+/// to a float, and truthiness is truthiness — so those tags delegate to `__rt_mixed_cast_*` and
+/// only the REFUSED tags need their own arm. Two places still diverge from the cast and are
+/// pinned here: a leading-numeric string, which `(float)` reads as its prefix and a return
+/// rejects; and NaN, which converts to `bool` only after php-src's warning. `string` is
+/// deliberately absent — PHP reaches `__toString` there and this backend has no such dispatch.
+#[test]
+fn test_cli_wasm_declared_float_and_bool_returns_coerce_like_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_return_coercion_fb");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function rf(mixed $v): float { return $v; }
+function rb(mixed $v): bool { return $v; }
+echo rf(7), "|", rf(5.7), "|", rf(true), "|", rf(false), "|", rf("42"), "|", rf("3.9"), "|", rf("  8  "), "|", rf(1.0e20), "\n";
+echo "[", rb(7), "][", rb(0), "][", rb(0.0), "][", rb("0"), "][", rb(""), "][", rb("abc"), "][", rb(true), "][", rb(false), "]\n";
+echo "[", rb(NAN), "]\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the float/bool return coercions to WASM");
+    assert!(
+        output.status.success(),
+        "float/bool return coercion compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the float/bool coercions under Node");
+    assert!(
+        run.status.success(),
+        "the accepting paths must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src's own bytes: `false` renders as the empty string, and `1.0e20` keeps PHP's
+    // exponent form rather than a plain decimal.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "7|5.7|1|0|42|3.9|8|1.0E+20\n",
+            "[1][][][][][1][1][]\n",
+            "[1]\n",
+        )
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr),
+        "Warning: unexpected NAN value was coerced to bool\n",
+        "NaN converts, but only after php-src's warning — measured raw, since an error \
+         handler hides the level"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the `TypeError` the `float` and `bool` targets raise, naming their own type.
+///
+/// One runtime fatal serves all the targets: measured on php-src, the word a tag contributes is
+/// the same whatever the declared type — only the target word changes.
+#[test]
+fn test_cli_wasm_declared_float_and_bool_returns_raise_php_type_error() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_return_type_error_fb");
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let prelude = concat!(
+        "<?php\n",
+        "class Point { public int $x = 1; }\n",
+        "function rf(mixed $v): float { return $v; }\n",
+        "function rb(mixed $v): bool { return $v; }\n",
+    );
+    for (stem, call, expected) in [
+        (
+            "fn",
+            "rf(null)",
+            "PHP Fatal error: Uncaught TypeError: rf(): Return value must be of type float, null returned\n",
+        ),
+        (
+            "fs",
+            "rf(\"12abc\")",
+            "PHP Fatal error: Uncaught TypeError: rf(): Return value must be of type float, string returned\n",
+        ),
+        (
+            "fo",
+            "rf(new Point())",
+            "PHP Fatal error: Uncaught TypeError: rf(): Return value must be of type float, Point returned\n",
+        ),
+        (
+            "bn",
+            "rb(null)",
+            "PHP Fatal error: Uncaught TypeError: rb(): Return value must be of type bool, null returned\n",
+        ),
+        (
+            "ba",
+            "rb([1, 2])",
+            "PHP Fatal error: Uncaught TypeError: rb(): Return value must be of type bool, array returned\n",
+        ),
+        (
+            "bo",
+            "rb(new Point())",
+            "PHP Fatal error: Uncaught TypeError: rb(): Return value must be of type bool, Point returned\n",
+        ),
+    ] {
+        let php_path = dir.join(format!("{stem}.php"));
+        fs::write(&php_path, format!("{prelude}echo {call}, \"\\n\";\n")).unwrap();
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile a rejecting return coercion to WASM");
+        assert!(
+            output.status.success(),
+            "case {stem} failed to compile: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(format!("{stem}.wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run a rejecting return coercion under Node");
+        assert_eq!(
+            run.status.code(),
+            Some(255),
+            "case {stem} must exit with PHP's fatal status"
+        );
+        assert_eq!(String::from_utf8_lossy(&run.stderr), expected, "case {stem}");
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}

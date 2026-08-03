@@ -1177,38 +1177,63 @@ fn forward_transfer_shape_issue(function: &Function, inst: &Instruction) -> Opti
 }
 
 /// Validates the exact source/target pairs implemented by `lower_cast`.
-/// Whether this cast is the IMPLICIT coercion PHP performs at a declared `int` return.
+/// The declared return type this cast is PHP's IMPLICIT coercion for, if it is one at all.
 ///
-/// That coercion is a DIFFERENT operation from `(int)`, which is why it needs its own
-/// predicate rather than riding on the explicit cast: `(int)null` is 0 and `(int)"abc"` is 0,
-/// while RETURNING either from a function declared `int` raises a `TypeError`. Measured on
-/// php-src 8.5.6 and validated against a 1200-value random sweep; `__rt_mixed_return_int`
-/// carries the rules.
+/// That coercion is a DIFFERENT operation from a `(T)` cast, which is why it needs its own
+/// predicate rather than riding on the explicit one: `(int)null` is 0 and `(int)"abc"` is 0,
+/// while RETURNING either from a function declared `int` raises a `TypeError`; and `(string)`
+/// of an array answers "Array" with a warning where a declared `string` return refuses it.
+/// Measured on php-src 8.5.6 for all four scalar targets, with the `int` rules — the only ones
+/// with an accepting path that DIVERGES rather than merely narrowing — validated against a
+/// 1200-value random sweep. `runtime::emit_return_coercion_runtime` carries them.
 ///
 /// The diagnostic names the function, so only a name PHP would print is admitted. The EIR
 /// already spells a method `C::m`, which is PHP's text exactly, but a closure's name there is
 /// `{closure:<absolute path>:<line>}` — not derivable from the EIR — so closures and every
 /// other compiler-generated body stay refused.
-pub(super) fn cast_is_declared_int_return_coercion(
+pub(super) fn declared_return_coercion_target(
     function: &Function,
     inst: &Instruction,
-) -> bool {
+) -> Option<IrType> {
     // Under `declare(strict_types=1)` PHP performs NO coercion at all: `return 5.7` from a
     // function declared `int` is an immediate `TypeError`, and so is `return "42"` and even
     // `return true` — whose message names the VALUE (`true returned`), not the type. Those are
     // different rules from the ones measured here, so a strict file stays refused rather than
     // silently answering the weak-mode result.
     if crate::codegen_support::strict_types() {
-        return false;
+        return None;
     }
-    if !matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64))) {
-        return false;
+    let Some(Immediate::CastTarget(target)) = inst.immediate else {
+        return None; // an EXPLICIT cast keeps its own, silent rules
+    };
+    if inst.result_type != target || function.return_type != target {
+        return None;
     }
-    if inst.result_type != IrType::I64 || inst.result_php_type.codegen_repr() != PhpType::Int {
-        return false;
-    }
-    if function.return_type != IrType::I64 || function.return_php_type != PhpType::Int {
-        return false;
+    // A nullable or union return never reaches here: the EIR types `?int` as `TaggedScalar` and
+    // `int|string` as `Heap(Mixed)`, so neither matches a scalar target.
+    let declared = function.return_php_type.codegen_repr();
+    let matches_target = match target {
+        IrType::I64 => matches!(declared, PhpType::Int | PhpType::Bool),
+        IrType::F64 => declared == PhpType::Float,
+        // `string` stays out: PHP reaches `__toString` for an object at that boundary, and this
+        // backend has no such dispatch — it refuses every program declaring one, and that
+        // fail-closed behaviour is what must be preserved. Admitting the target would answer
+        // this site's `TypeError` where PHP calls the method. A compile-time gate cannot decide
+        // it either: the prelude's Throwable hierarchy declares `__toString`, so "does any class
+        // in the module have one" is always true. Closing it needs a per-class bit in
+        // `$__gc_desc_meta` so the object arm can fail LOUDLY on exactly those classes.
+        _ => false,
+    };
+    // A declared `bool` return leaves the EIR typing the cast's RESULT `int` — the two share
+    // `I64` storage, and the bool-ness lives on the function's return type, which is what a
+    // caller reads. So the result type is required to match the target's storage, not the
+    // declared PHP type.
+    let result_matches = match declared {
+        PhpType::Bool => matches!(inst.result_php_type.codegen_repr(), PhpType::Bool | PhpType::Int),
+        other => inst.result_php_type.codegen_repr() == other,
+    };
+    if !matches_target || !result_matches {
+        return None;
     }
     let flags = &function.flags;
     if flags.is_main
@@ -1219,19 +1244,21 @@ pub(super) fn cast_is_declared_int_return_coercion(
         || flags.is_callback_wrapper
         || flags.is_runtime_callable_invoker
     {
-        return false;
+        return None;
     }
-    let Some(result) = inst.result else {
-        return false;
-    };
+    let result = inst.result?;
     // Only a value that is literally RETURNED gets the return rules; the same cast feeding
     // anything else would be some other coercion with some other message.
-    function.blocks.iter().any(|block| {
-        matches!(
-            block.terminator,
-            Some(Terminator::Return { value: Some(value) }) if value == result
-        )
-    })
+    function
+        .blocks
+        .iter()
+        .any(|block| {
+            matches!(
+                block.terminator,
+                Some(Terminator::Return { value: Some(value) }) if value == result
+            )
+        })
+        .then_some(target)
 }
 
 fn cast_shape_issue(
@@ -1301,7 +1328,7 @@ fn cast_shape_issue(
     // The IMPLICIT coercion at a declared `int` return has its own exact runtime, but its
     // diagnostics go through WASI, so it needs a main-bearing command module the way every
     // other diagnostic-producing rule here does.
-    let return_coercion = cast_is_declared_int_return_coercion(function, inst)
+    let return_coercion = declared_return_coercion_target(function, inst).is_some()
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
     let admitted_mixed_scalar = (explicit || widened_by_checked_arithmetic || return_coercion)
         && matches!(target, IrType::I64 | IrType::F64)

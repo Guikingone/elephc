@@ -155,14 +155,15 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
-    // The implicit coercion at a declared `int` return composes its diagnostic at RUNTIME
+    // The implicit coercion at a declared scalar return composes its diagnostic at RUNTIME
     // from the function's own name — `f()` or `C::m()` — so every function that can raise it
     // needs those bytes addressable in static data.
     if has_main {
         for function in module.functions.iter().chain(module.class_methods.iter()) {
             let coerces = function.instructions.iter().any(|inst| {
                 inst.op == crate::ir::Op::Cast
-                    && super::capability::cast_is_declared_int_return_coercion(function, inst)
+                    && super::capability::declared_return_coercion_target(function, inst)
+                        .is_some()
             });
             if coerces && !layout_values.iter().any(|value| value == &function.name) {
                 layout_values.push(function.name.clone());

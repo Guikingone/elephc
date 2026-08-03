@@ -1671,13 +1671,10 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 ctx.fb
                     .ins("call $__rt_mixed_cast_bool", "cast boxed Mixed to bool");
             }
-            // PHP's coercion at a DECLARED return is not `(int)`: it raises where `(int)`
-            // answers 0, and only deprecates where `(int)` is silent.
-            IrType::I64
-                if super::capability::cast_is_declared_int_return_coercion(
-                    ctx.function,
-                    inst,
-                ) =>
+            // PHP's coercion at a DECLARED return is not a `(T)` cast: it raises where the
+            // cast answers a value, and deprecates where the cast is silent.
+            _ if super::capability::declared_return_coercion_target(ctx.function, inst)
+                .is_some() =>
             {
                 let (name_ptr, name_len) = ctx.default_str_literal(&ctx.function.name)?;
                 ctx.fb.ins(
@@ -1686,10 +1683,36 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 );
                 ctx.fb
                     .ins(&format!("i32.const {}", name_len), "its byte length");
+                let (helper, note) = match (target, ctx.function.return_php_type.codegen_repr()) {
+                    (IrType::I64, PhpType::Bool) => ("$__rt_mixed_return_bool", "bool"),
+                    (IrType::I64, _) => ("$__rt_mixed_return_int", "int"),
+                    (IrType::F64, _) => ("$__rt_mixed_return_float", "float"),
+                    (IrType::Str, _) => ("$__rt_mixed_return_string", "string"),
+                    (other, _) => {
+                        return Err(WasmError::Unsupported(format!(
+                            "declared return coercion to {:?}",
+                            other
+                        )));
+                    }
+                };
                 ctx.fb.ins(
-                    "call $__rt_mixed_return_int",
-                    "PHP's implicit coercion at a declared int return",
+                    &format!("call {}", helper),
+                    &format!("PHP's implicit coercion at a declared {} return", note),
                 );
+                if target == IrType::F64 {
+                    ctx.fb
+                        .ins("f64.reinterpret_i64", "reinterpret coerced float bits");
+                } else if target == IrType::Str {
+                    let len = ctx.fresh_temp(ValType::I32);
+                    let ptr = ctx.fresh_temp(ValType::I32);
+                    ctx.fb
+                        .ins(&format!("local.set {}", len), "capture coerced string length");
+                    ctx.fb
+                        .ins(&format!("local.set {}", ptr), "capture coerced string pointer");
+                    ctx.fb.ins(&format!("local.get {}", ptr), "coerced string pointer");
+                    ctx.fb.ins(&format!("local.get {}", len), "coerced string length");
+                    ctx.fb.ins("i64.extend_i32_u", "widen coerced string length");
+                }
             }
             IrType::I64 => {
                 ctx.fb
