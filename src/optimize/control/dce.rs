@@ -594,12 +594,14 @@ fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             value_by_ref,
             body,
         } => {
-            let mut loop_guards = invalidated_guards_for_block(guards, &body);
-            loop_guards = invalidated_guards_for_expr(&loop_guards, &array);
-            if let Some(name) = key_var.as_deref() {
-                clear_guards_for_name(&mut loop_guards, name);
-            }
-            clear_guards_for_name(&mut loop_guards, &value_var);
+            let loop_guards = invalidated_guards_for_foreach_body(
+                guards,
+                &array,
+                key_var.as_deref(),
+                &value_var,
+                value_by_ref,
+                &body,
+            );
             vec![Stmt {
                 kind: StmtKind::Foreach {
                     array: prune_expr(array),

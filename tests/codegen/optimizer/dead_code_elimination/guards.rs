@@ -5,7 +5,8 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for outer/excluded/composite/range/relational/loop guards.
+//! - Submodules group focused fixtures for outer/excluded/composite/range,
+//!   relational, loop, and foreach guard behavior.
 
 use super::*;
 
@@ -21,3 +22,5 @@ mod range_guards;
 mod relational_guards;
 #[path = "guards/loop_guards.rs"]
 mod loop_guards;
+#[path = "guards/foreach_guards.rs"]
+mod foreach_guards;
