@@ -2441,3 +2441,67 @@ echo ($instance instanceof Closure ? "C" : "?"), ":",
     );
     assert_eq!(out, "C:hi bob:HI a:YO b");
 }
+
+/// `Closure::bind()` on a closure that takes PARAMETERS and reads a private property of the
+/// REBOUND `$this`, with an explicit `$scope`.
+///
+/// The checker used to require an empty parameter list before it would type `$this` from
+/// `$newThis`, which left this whole shape with no bound-scope context at all — a body using
+/// `$this` can never fall through to the parameter-based relaxation, which excludes `$this`
+/// bodies by construction. Parameters are ordinary locals and say nothing about where `$this`
+/// comes from; `crate::ir_lower` already rebound the receiver whatever shape the body had.
+///
+/// Symfony's `ReverseContainer::__construct` is exactly this: it binds
+/// `fn (object $service): ?string => … $this->services …` to the container it was handed.
+#[test]
+fn test_closure_bind_with_parameters_reads_rebound_private_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Container {
+    private array $services = ['a' => 1, 'b' => 2];
+    private array $privates = ['p' => 9];
+}
+final class Reverse {
+    private \Closure $getServiceId;
+    public function __construct(Container $c) {
+        $this->getServiceId = \Closure::bind(
+            fn (string $k): int => $this->services[$k] ?? $this->privates[$k] ?? -1,
+            $c,
+            Container::class
+        );
+    }
+    public function get(string $k): int { return ($this->getServiceId)($k); }
+}
+$r = new Reverse(new Container());
+echo $r->get('a'), $r->get('b'), $r->get('p'), $r->get('zz');
+"#,
+    );
+    assert_eq!(out, "129-1");
+}
+
+/// The same rebind reached through a MULTI-statement body with several parameters, so the
+/// relaxation is not tied to the single-expression arrow-function shape.
+#[test]
+fn test_closure_bind_with_parameters_multi_statement_body() {
+    let out = compile_and_run(
+        r#"<?php
+class Store {
+    private array $rows = ['x' => 10, 'y' => 20];
+    private int $bonus = 3;
+}
+function make(Store $s): \Closure {
+    return \Closure::bind(
+        function (string $key, int $mul): int {
+            $base = $this->rows[$key] ?? 0;
+            return $base * $mul + $this->bonus;
+        },
+        $s,
+        Store::class
+    );
+}
+$f = make(new Store());
+echo $f('x', 2), ",", $f('y', 1), ",", $f('nope', 5);
+"#,
+    );
+    assert_eq!(out, "23,23,3");
+}

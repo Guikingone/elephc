@@ -1683,11 +1683,16 @@ impl Checker {
         // `closure_body_rebinds_this_only` keeps `self::`/`static::`/`parent::` bodies out: those
         // codegen resolves against the LEXICAL class, so the checker must not authorize them
         // against the rebound scope.
-        if params.is_empty()
-            && crate::types::checker::inference::expr::static_closure::closure_body_rebinds_this_only(
-                body,
-            )
-        {
+        // PARAMETERS are irrelevant to this branch: they are ordinary locals of the closure, and
+        // what is being decided here is only where `$this` comes from. The predicate's own
+        // contract says `crate::ir_lower` rebinds the receiver "whatever shape the body has", so
+        // requiring an empty parameter list left a whole shape with no context at all — a body
+        // using `$this` can never fall through to the parameter-based branch below, which
+        // excludes `$this` bodies by construction. Symfony's `ReverseContainer::__construct`
+        // binds `fn (object $service): ?string => … $this->services …` to the container.
+        if crate::types::checker::inference::expr::static_closure::closure_body_rebinds_this_only(
+            body,
+        ) {
             // PHP takes the rebound `$this` from `$newThis` (argument two). `$scope` only widens
             // the visibility the body is checked under, so resolve the two independently instead
             // of reading the property off the scope. `infer_type` already carries `instanceof`
