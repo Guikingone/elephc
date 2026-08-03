@@ -98,6 +98,68 @@ The durable tested inventory currently includes:
 It does not yet include a full php-src differential corpus or exhaustive EIR
 shape, ownership, argument/environment/preopen, and process-status coverage.
 
+### Measured parity against the example suite
+
+Parity is tracked against the repository's own examples rather than a prose
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **24
+compile to `wasm32-wasi`**, and **23 of those reproduce php-src's output byte
+for byte**. The twenty-fourth is `ifdef`, which uses an Elephc-only
+preprocessor form php-src cannot parse at all — so every example this target
+compiles, it also runs correctly.
+
+When comparing against php-src yourself, pass the script path as the module's
+first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
+host that starts the module with an empty argument vector makes both differ for
+reasons that have nothing to do with the backend.
+
+The dominant blockers behind the remaining examples, in the order they gate the
+most programs:
+
+| Blocker | Examples affected |
+|---|---|
+| Unregistered runtime function (streams, sockets, `unlink`, `gettype`, …) | 117 |
+| `Heap(Mixed)` operand shapes on supported builtins (`substr`, `array_values`, `array_keys`, …) | ~40 |
+| Method call, property read, and array read on a boxed receiver | ~40 |
+| Cast shapes not yet admitted | ~35 |
+
+Some examples will never compile to this target: `stream_socket_*`, FFI/`extern`
+calls, and process control have no WASI Preview 1 equivalent. The goal is
+everything WASI permits, not the whole example suite.
+
+### PHP semantics this target reproduces exactly
+
+Behaviour that a naive lowering gets wrong, and that this backend implements
+against measured php-src 8.5.6 output rather than by analogy:
+
+- **Coercion at a declared `int`, `float` or `bool` return.** This is not the
+  `(int)` cast: returning `null` from a function declared `int` is a
+  `TypeError`, and returning `5.7` deprecates before truncating. A non-numeric
+  string, an out-of-range or non-finite float, a container, and an object each
+  raise, with the object naming its class. `declare(strict_types=1)` performs no
+  coercion at all and is refused rather than answered with the weak-mode result.
+- **`__toString`.** `echo $obj`, `"x" . $obj` and `(string) $obj` call the
+  method when the class is statically known, and raise php-src's
+  `Error: Object of class X could not be converted to string` when the class
+  provably has none. A subclass that overrides `__toString` leaves the site
+  undecidable and is refused.
+- **`count()` of a boxed value.** Raises php-src's own `TypeError`, which names
+  a boolean by VALUE (`true given`, not `bool given`).
+- **Relational comparison against a boxed value.** PHP compares without
+  converting, so `"abc" <= 1` is false and `[1] <= 1` is false. A cast-then-
+  compare lowering answers both incorrectly.
+
+A shared front-end bug surfaced while measuring this and is fixed: an
+`if`/`elseif`/`else` chain whose FIRST condition folded to false propagated the
+`else` branch's constants, ignoring the elseifs entirely. Both backends then
+answered from the wrong branch — silently, since the branch itself was lowered
+correctly and only the propagated fact was wrong.
+
+Known divergence: an uncaught error prints a class-agnostic fatal, and
+diagnostics omit php-src's ` in <file> on line <n>` tail. A `TypeError` raised
+by a coercion or by `count()` is a deterministic fatal rather than a catchable
+throw, because a message composed at runtime cannot be resolved from the static
+error table.
+
 To select it:
 
 ```bash

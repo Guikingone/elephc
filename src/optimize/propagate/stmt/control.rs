@@ -294,7 +294,7 @@ pub(super) fn propagate_if_stmt(
 
     let (then_body, then_env) = propagate_block(then_body, base_env.clone());
     let mut propagated_elseifs = Vec::new();
-    let mut elseif_envs = Vec::new();
+    let mut elseif_envs: Vec<(Option<bool>, Option<ConstantEnv>)> = Vec::new();
     for (condition, body) in elseif_clauses {
         let condition = propagate_expr(condition, &base_env);
         let branch_env = {
@@ -303,9 +303,13 @@ pub(super) fn propagate_if_stmt(
             branch_env
         };
         let (body, env_after_body) = propagate_block(body, branch_env);
-        if matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough) {
-            elseif_envs.push(env_after_body.clone());
-        }
+        // Each clause is kept WITH the static truth of its condition: a chain whose first
+        // condition is statically false is decided by the elseifs, not by the else.
+        let truth = scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness());
+        let reachable_env =
+            matches!(block_terminal_effect(&body), TerminalEffect::FallsThrough)
+                .then_some(env_after_body);
+        elseif_envs.push((truth, reachable_env));
         propagated_elseifs.push((condition, body));
     }
 
@@ -317,16 +321,36 @@ pub(super) fn propagate_if_stmt(
         None => (None, Some(base_env.clone())),
     };
 
-    let next_env =
-        match scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness()) {
-        Some(true) => then_env,
-        Some(false) => else_env.unwrap_or_default(),
-        None => {
-            let mut paths = Vec::new();
-            if matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough) {
-                paths.push(then_env);
+    // Walk the chain in source order, keeping only the branches that can still be taken. A
+    // condition known FALSE drops its branch; one known TRUE decides the chain and stops the
+    // walk, so nothing after it — including the `else` — contributes. Anything unknown leaves
+    // its branch as one possibility among several and the facts are merged.
+    //
+    // Reading the first condition alone was wrong: `if (false) {} elseif (true) { $l = "B"; }
+    // else { $l = "F"; }` took the ELSE environment and propagated "F" into everything after
+    // the chain. Both backends then answered "F" — silently, since the branch itself was
+    // lowered correctly and only the propagated FACT was wrong.
+    let next_env = {
+        let then_truth = scalar_value(&condition).and_then(|value| value.diagnostic_free_truthiness());
+        let then_reachable_env =
+            matches!(block_terminal_effect(&then_body), TerminalEffect::FallsThrough)
+                .then_some(then_env);
+        let mut paths = Vec::new();
+        let mut decided = false;
+        for (truth, reachable_env) in
+            std::iter::once((then_truth, then_reachable_env)).chain(elseif_envs)
+        {
+            match truth {
+                Some(false) => continue,
+                Some(true) => {
+                    paths.extend(reachable_env);
+                    decided = true;
+                    break;
+                }
+                None => paths.extend(reachable_env),
             }
-            paths.extend(elseif_envs);
+        }
+        if !decided {
             if let Some(else_env) = else_env {
                 if else_body
                     .as_ref()
@@ -335,8 +359,8 @@ pub(super) fn propagate_if_stmt(
                     paths.push(else_env);
                 }
             }
-            merge_constant_env_paths(paths)
         }
+        merge_constant_env_paths(paths)
     };
 
     (
