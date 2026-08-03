@@ -11,12 +11,14 @@
 use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver};
 use crate::span::Span;
-use crate::types::{normalized_array_key_type, PhpType, TypeEnv};
+use crate::types::{
+    normalized_array_key_type, static_array_key_forces_hash_storage, PhpType, TypeEnv,
+};
 
 use super::super::super::Checker;
 use super::properties::{
-    array_family_bool_void_union_accepts_write, is_php_array_key_type,
-    type_satisfies_array_access,
+    array_family_bool_void_union_accepts_write, assoc_property_type_after_keyed_write,
+    is_php_array_key_type, type_satisfies_array_access,
 };
 
 /// Internal data for static property assignment resolution.
@@ -162,6 +164,7 @@ pub(super) fn check_static_property_array_assign(
         return Err(CompileError::new(span, "Array index must be integer"));
     }
 
+    let declared_prop_ty = target.prop_ty.clone();
     let updated_prop_ty = match target.prop_ty {
         PhpType::Array(elem_ty) => {
             if target.property_has_declared_type {
@@ -171,8 +174,26 @@ pub(super) fn check_static_property_array_assign(
                     span,
                     &format!("Static property {}::${}[]", target.class_name, property),
                 )?;
-                PhpType::Array(elem_ty)
-            } else if *elem_ty == val_ty {
+            }
+            // A key that is not an integer — or a static key that forces hash storage into a
+            // still-empty (`Never`-element) array — makes this container associative, exactly as
+            // it does for an instance property. PHP has one array type: an empty `[]` becomes a
+            // hash the moment a string key lands in it. Promoting the static slot here is the
+            // same program-wide de-pack the reference-alias slice performs through
+            // `update_static_property_type`, so codegen loads/stores/frees it as a hash and the
+            // write lowers to `hash_set` instead of the integer-key-only `array_set`.
+            if !matches!(normalized_idx_ty, PhpType::Int)
+                || (matches!(elem_ty.as_ref(), PhpType::Never)
+                    && static_array_key_forces_hash_storage(index))
+            {
+                assoc_property_type_after_keyed_write(
+                    checker,
+                    &elem_ty,
+                    target.property_has_declared_type,
+                    &normalized_idx_ty,
+                    &val_ty,
+                )
+            } else if target.property_has_declared_type || *elem_ty == val_ty {
                 PhpType::Array(elem_ty)
             } else {
                 let merged_ty = checker
@@ -225,7 +246,17 @@ pub(super) fn check_static_property_array_assign(
         }
     };
 
-    if !target.property_has_declared_type {
+    // A property declared as the unconstrained PHP `array` may still be re-storaged as a hash: a
+    // bare `array` hint says nothing about keys, so `AssocArray<_, Mixed>` is the same contract in
+    // a representation the string-key write can actually use. Any narrower declared element type
+    // keeps its packed storage (`declared_generic_array_can_use_assoc_storage` refuses it), which
+    // is the same guard instance properties use.
+    if !target.property_has_declared_type
+        || super::properties::declared_generic_array_can_use_assoc_storage(
+            &declared_prop_ty,
+            &updated_prop_ty,
+        )
+    {
         update_static_property_type(
             checker,
             property,

@@ -534,6 +534,16 @@ pub(in crate::parser::stmt) fn try_parse_scoped_property_assignment(
     }
     let rhs = parse_assignment_value_expr(tokens, pos)?;
     expect_semicolon(tokens, pos)?;
+    // `self::$a[$k][] = $v` — an append into a NESTED element of a static-property array.
+    // `is_append` names the trailing `[]` and `lhs_expr` is the CONTAINER (`self::$a[$k]`), so
+    // without this the `ArrayAccess` arm of the assign match below would drop the append and
+    // store `$v` straight into `self::$a[$k]` — a silent one-level-too-shallow write. Route it
+    // through the same read-modify-write lowering the unscoped parser uses for `$a[$k][] = $v`;
+    // its write-back re-enters `assignment_target_store_stmt`, whose static-property arm emits
+    // the `StaticPropertyArrayAssign` that stores the appended-to container back.
+    if is_append && matches!(lhs_expr.kind, ExprKind::ArrayAccess { .. }) {
+        return lower_nested_append_assignment(lhs_expr, rhs, span).map(Some);
+    }
     if op != AssignmentOperator::Assign && !can_replay_assignment_target(&lhs_expr) {
         return lower_effectful_static_assignment(lhs_expr, op, rhs, span).map(Some);
     }

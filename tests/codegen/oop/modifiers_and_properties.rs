@@ -628,3 +628,79 @@ var_dump($b->v);
     );
     assert_eq!(out, "bool(true)\n");
 }
+
+/// A string key written into a static property that was initialized to the empty array `[]`.
+///
+/// PHP has a single array type: `[]` is neither packed nor associative until a key lands in it,
+/// so `self::$cache[$k] = 1` with a string `$k` simply makes the container a hash. The checker
+/// used to keep the slot's inferred indexed `array<never>` type here — a shape whose write path
+/// accepts only integer offsets — so the program was refused at the backend with
+/// `array_set index PHP type Str` even though the identical code on an *instance* property, on a
+/// local, and with an integer key all compiled and ran. Pins the string-key form to `php -n`.
+#[test]
+fn test_static_property_empty_array_accepts_a_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    private static $cache = [];
+    public static function put(string $k, int $v): void { self::$cache[$k] = $v; }
+    public static function get(string $k): int { return self::$cache[$k]; }
+    public static function n(): int { return count(self::$cache); }
+}
+C::put('alpha', 10);
+C::put('beta', 20);
+echo C::get('alpha'), ",", C::get('beta'), ",", C::n(), "\n";
+"#,
+    );
+    assert_eq!(out, "10,20,2\n");
+}
+
+/// The same string-key write through a static property carrying an explicit `array` type hint.
+///
+/// A bare `array` hint constrains nothing about keys, so re-storaging the slot as a hash keeps the
+/// declared contract intact; only a narrower declared element type must stay packed. Without this
+/// the declared form stayed indexed and hit the same backend refusal as the untyped one above.
+#[test]
+fn test_declared_array_static_property_accepts_a_string_key() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    private static array $m = [];
+    public static function put(string $k, int $v): void { self::$m[$k] = $v; }
+    public static function get(string $k): int { return self::$m[$k]; }
+}
+C::put('a', 7);
+echo C::get('a'), "\n";
+"#,
+    );
+    assert_eq!(out, "7\n");
+}
+
+/// `self::$m[$k][] = $v` — an append into a NESTED element of a static-property array.
+///
+/// The scoped (`self::`/`static::`/`Class::`) assignment parser recognised the trailing `[]` only
+/// when the target was the static property itself; with an index in between it fell through to the
+/// plain indexed-assign lowering, which DROPPED the append and stored the value one level too
+/// shallow (`self::$m[$k] = $v`). That was silent — an int key never even reached a backend
+/// refusal. Pins both the values and their integer sub-keys to `php -n`.
+#[test]
+fn test_nested_append_into_a_static_property_array_keeps_the_inner_level() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    private static array $m = [];
+    public static function put(string $k, int $v): void { self::$m[$k][] = $v; }
+    public static function read(string $k): string {
+        $r = '';
+        foreach (self::$m[$k] as $i => $x) { $r .= "$i=$x;"; }
+        return $r;
+    }
+}
+C::put('a', 10);
+C::put('a', 20);
+C::put('b', 30);
+echo C::read('a'), "|", C::read('b'), "\n";
+"#,
+    );
+    assert_eq!(out, "0=10;1=20;|0=30;\n");
+}

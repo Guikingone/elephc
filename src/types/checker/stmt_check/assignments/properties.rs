@@ -852,7 +852,7 @@ pub(super) fn type_satisfies_array_access(checker: &Checker, ty: &PhpType) -> bo
 /// write operands). Otherwise merges the element type with the assigned value type via
 /// `merge_array_element_type`. If the property has a declared `Mixed` element type, returns
 /// a fully `Mixed` `AssocArray` to preserve type soundness.
-fn assoc_property_type_after_keyed_write(
+pub(super) fn assoc_property_type_after_keyed_write(
     checker: &Checker,
     elem_ty: &PhpType,
     property_has_declared_type: bool,
@@ -918,7 +918,10 @@ fn update_object_property_type(
 /// Currently returns true only when the property is declared as `array<PhpType::Mixed>` and the
 /// updated type is an `AssocArray` with `PhpType::Mixed` values. This guards against widening
 /// a typed array to an associative storage with a narrower element type.
-fn declared_generic_array_can_use_assoc_storage(current: &PhpType, updated: &PhpType) -> bool {
+pub(super) fn declared_generic_array_can_use_assoc_storage(
+    current: &PhpType,
+    updated: &PhpType,
+) -> bool {
     matches!(
         (current, updated),
         (
