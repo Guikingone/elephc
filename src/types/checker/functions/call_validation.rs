@@ -415,6 +415,8 @@ impl Checker {
             Err(err) => {
                 if self.weak_boundary_coercion_accepts(expected, actual)
                     || (param_is_declared && self.call_arg_downcast_guardable(expected, actual))
+                    || (param_is_declared
+                        && Self::call_arg_weak_refusal_guardable(expected, actual))
                 {
                     Ok(())
                 } else {
@@ -422,6 +424,41 @@ impl Checker {
                 }
             }
         }
+    }
+
+    /// Returns true when a call ARGUMENT may flow into a declared weak-CONVERSION parameter
+    /// (`string`/`int`/`float`/`bool`/`array`, or their `?T` spellings) behind the runtime REFUSAL
+    /// guard `crate::ir_lower::checked_downcast::emit_scalar_coercion_refusal_guard` emits at this
+    /// same boundary.
+    ///
+    /// This is the acceptance half of the observation that a declared type is a RUNTIME check in
+    /// PHP, not a static one. Symfony's `ParameterBagInterface::get()` returns
+    /// `array|bool|string|int|float|\UnitEnum|null` and hands it straight to a `?string` parameter;
+    /// `php -n` runs that, converting the scalars, passing a string or null through, and raising a
+    /// catchable `TypeError` for an array or a non-`Stringable` object. Refusing it at COMPILE time
+    /// rejected a program PHP runs.
+    ///
+    /// Gated on `weak_boundary_is_tag_decidable`, which is strictly stronger than what the emitter
+    /// needs, and the asymmetry is the whole point: EMITTING refusals is always an improvement (each
+    /// one turns a silent miscompile into PHP's own `TypeError`), while ACCEPTING a flow the checker
+    /// used to reject is only sound when the refusal list is COMPLETE. A `string` member reaching an
+    /// `int` parameter is the boundary that keeps failing that gate — `f("7")` converts and
+    /// `f("abc")` throws, and no runtime TAG test can tell them apart — so such a flow stays loud.
+    ///
+    /// Deliberately NOT wired into `weak_boundary_coercion_accepts`, whose other caller is the
+    /// RETURN boundary (`crate::types::checker::functions::returns`). That boundary emits no refusal
+    /// guard, so widening it there would trade a compile error for a silent wrong value — which is
+    /// exactly what `tests/error_tests/weak_coercion_negatives.rs` pins.
+    fn call_arg_weak_refusal_guardable(expected: &PhpType, actual: &PhpType) -> bool {
+        // The guard reads a runtime tag, so the argument must arrive BOXED. A concretely-typed
+        // argument has no tag to test and keeps the strict check.
+        if actual.codegen_repr() != PhpType::Mixed {
+            return false;
+        }
+        let Some(target) = crate::types::checked_downcast::weak_coercion_target(expected) else {
+            return false;
+        };
+        crate::types::checked_downcast::weak_boundary_is_tag_decidable(target, actual)
     }
 
     /// Returns true when a call ARGUMENT may flow into `expected` behind the runtime checked

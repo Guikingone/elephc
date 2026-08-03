@@ -154,6 +154,69 @@ echo "alive";
     assert_eq!(out, "caught TypeError\nalive");
 }
 
+/// An OBJECT payload at a declared `string` parameter is decided by `instanceof Stringable` —
+/// PHP's own rule, not an approximation: a `__toString`-bearing class converts, a plain one throws.
+///
+/// Before this, the plain-object case died with an UNCATCHABLE `Fatal error: Object could not be
+/// converted to string`, so a `catch (\Throwable)` around it never ran and the process exited 1.
+#[test]
+fn test_object_payload_at_a_string_parameter_is_decided_by_stringable() {
+    let out = compile_and_run(
+        r#"<?php
+class Plain {}
+class Strish { public function __toString(): string { return "S"; } }
+function fs(string $v): string { return "s:" . $v; }
+function plain(): mixed { return new Plain(); }
+function strish(): mixed { return new Strish(); }
+try { echo fs(strish()), "\n"; } catch (\Throwable $e) { echo "unexpected\n"; }
+try { echo fs(plain()), "\n"; } catch (\TypeError $e) { echo $e->getMessage(), "\n"; }
+echo "alive";
+"#,
+    );
+    assert_eq!(
+        out,
+        "s:S\nfs(): Argument #1 ($v) must be of type string, Plain given\nalive"
+    );
+}
+
+/// The whole point of the family, in Symfony's own shape: a parameter-bag-style
+/// `array|bool|string|int|float|<interface>|null` return handed to a `?string` and a `?array`
+/// parameter. PHP RUNS this — converting the scalars, passing string/null through, and throwing a
+/// catchable `TypeError` for the payloads the declaration refuses — so refusing it at COMPILE time
+/// rejected a program PHP accepts.
+#[test]
+fn test_wide_union_argument_into_a_narrow_declared_parameter_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+interface Marker {}
+class Enumish implements Marker {}
+class Bag {
+    private array $vals = [];
+    public function set(string $k, mixed $v): void { $this->vals[$k] = $v; }
+    public function get(string $k): array|bool|string|int|float|Marker|null {
+        return $this->vals[$k] ?? null;
+    }
+}
+function useEnv(?string $env): string { return "e:" . ($env ?? 'NULL'); }
+function useArr(?array $a): string { return "a:" . ($a === null ? 'NULL' : count($a)); }
+$b = new Bag();
+$b->set('s', 'prod');
+$b->set('i', 7);
+$b->set('arr', [1, 2, 3]);
+$b->set('obj', new Enumish());
+// Direct calls on purpose: a `$fn(...)` variable-callable routes through the uniform invoker,
+// which is a DIFFERENT boundary with no signature and therefore no guard.
+foreach (['s', 'i', 'arr', 'obj', 'missing'] as $k) {
+    try { echo useEnv($b->get($k)), "|"; } catch (\TypeError $e) { echo "T|"; }
+    try { echo useArr($b->get($k)), "|"; } catch (\TypeError $e) { echo "T|"; }
+}
+echo "\nalive";
+"#,
+    );
+    // Per key: (?string, ?array). string→e:prod/T, int→e:7/T, array→T/a:3, object→T/T, null→both NULL.
+    assert_eq!(out, "e:prod|T|e:7|T|T|a:3|T|T|e:NULL|a:NULL|\nalive");
+}
+
 /// A statically-proven-good argument pays nothing: a `mixed` whose declared parameter is not a
 /// scalar conversion boundary, and a concrete scalar source, both emit ZERO refusal blocks.
 #[test]

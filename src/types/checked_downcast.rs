@@ -242,112 +242,238 @@ pub(crate) fn source_member_is_guard_routable(member: &PhpType) -> bool {
     )
 }
 
-/// A declared type PHP's weak mode treats as a CONVERSION site rather than a match site: exactly
-/// one scalar arm, optionally joined by `null`.
+/// A declared type PHP's weak mode treats as a CONVERSION site rather than a match site: one
+/// scalar arm, or one `array` arm, optionally joined by `null`.
 ///
 /// `guard_is_php_faithful` keeps such a declaration off the arm-chain guard precisely because no
 /// arm test can see a conversion. That is the right call for the arms PHP CONVERTS — but PHP also
 /// REFUSES payloads at the very same boundary, and those refusals are invisible to the arm chain
-/// for the same reason. This type names the boundary so `scalar_coercion_refusals` can state which
-/// payloads it rejects.
-#[derive(Clone, Debug, PartialEq)]
-pub(crate) struct ScalarCoercionTarget {
-    /// The single scalar arm the declaration converts INTO (`Str`, `Int`, `Float` or `Bool`).
-    pub scalar: PhpType,
+/// for the same reason. This type names the boundary so `weak_boundary_refusals` can state which
+/// payloads it rejects and `weak_boundary_is_tag_decidable` can state when that rejection list is
+/// COMPLETE.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WeakTargetKind {
+    /// `string`: converts every scalar and a `Stringable` object; refuses array, null, plain object.
+    Str,
+    /// `int` or `float`: converts int/float/bool and a NUMERIC string; refuses array, null, object.
+    /// A non-numeric string is refused too, which no runtime tag test can see — see
+    /// `weak_boundary_is_tag_decidable`.
+    Number,
+    /// `bool`: converts every scalar including ANY string; refuses array, null, object.
+    Bool,
+    /// `array`: matches an array and nothing else. The only kind whose verdict is total.
+    Array,
+}
+
+/// A declared weak-conversion boundary: its target kind plus whether it also admits `null`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct WeakCoercionTarget {
+    /// What the declaration converts INTO.
+    pub kind: WeakTargetKind,
     /// Whether the declaration also carries a `null` arm (`?string`, `string|null`).
     pub accepts_null: bool,
 }
 
-/// A runtime payload PHP REFUSES at a scalar conversion boundary, raising a catchable `TypeError`.
+/// A runtime payload PHP REFUSES at a weak-conversion boundary, raising a catchable `TypeError`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum CoercionRefusal {
-    /// A `null` payload reaching a NON-nullable scalar declaration.
+    /// A `null` payload reaching a NON-nullable declaration.
     Null,
     /// An array payload, refused by every scalar declaration.
     Array,
+    /// ANY object payload — the `int`/`float`/`bool` targets, which never accept one.
+    Object,
+    /// An object payload that is not `Stringable` — the `string` target. PHP 8 makes every class
+    /// declaring `__toString()` an implicit `Stringable`, so `instanceof Stringable` IS this
+    /// verdict rather than an approximation of it (verified: elephc answers `N`/`Y` exactly as
+    /// `php -n` for a plain and a `__toString`-bearing class).
+    ObjectUnlessStringable,
+    /// Anything that is NOT an array and NOT null — the `array` target's complement, expressed as
+    /// one refusal because an accept-chain also catches the tags no other refusal names (a closure,
+    /// a resource, a future tag).
+    NotArray,
 }
 
-/// Returns the scalar conversion boundary `declared` describes, or `None` when it is not one.
+/// Returns the weak-conversion boundary `declared` describes, or `None` when it is not one.
 ///
-/// Accepts `string`/`int`/`float`/`bool` and their `?T` spellings, and nothing else. A declaration
-/// with a second non-null arm (`string|array`, `string|D`) is deliberately excluded: an array
-/// reaching `string|array` is MATCHED, not refused, so the uniform refusal table below does not
+/// Accepts `string`/`int`/`float`/`bool`/`array` and their `?T` spellings, and nothing else. A
+/// declaration with a second non-null arm (`string|array`, `string|D`) is deliberately excluded: an
+/// array reaching `string|array` is MATCHED, not refused, so the verdict table below does not
 /// describe it and it needs its own proof.
-pub(crate) fn scalar_coercion_target(declared: &PhpType) -> Option<ScalarCoercionTarget> {
-    /// Returns whether a member is one of the four scalars PHP weak-converts into.
-    fn is_coercion_scalar(member: &PhpType) -> bool {
-        matches!(
-            member,
-            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
-        )
+pub(crate) fn weak_coercion_target(declared: &PhpType) -> Option<WeakCoercionTarget> {
+    /// Maps one declared arm to its target kind, or `None` when it is not a conversion arm.
+    fn arm_kind(member: &PhpType) -> Option<WeakTargetKind> {
+        match member {
+            PhpType::Str => Some(WeakTargetKind::Str),
+            PhpType::Int | PhpType::Float => Some(WeakTargetKind::Number),
+            PhpType::Bool => Some(WeakTargetKind::Bool),
+            // `iterable` is excluded on purpose: it also admits a `Traversable` OBJECT, so the
+            // array tag is not its whole accept set.
+            PhpType::Array(_) | PhpType::AssocArray { .. } => Some(WeakTargetKind::Array),
+            _ => None,
+        }
     }
     match declared {
-        single if is_coercion_scalar(single) => Some(ScalarCoercionTarget {
-            scalar: single.clone(),
-            accepts_null: false,
-        }),
         PhpType::Union(members) => {
-            let mut scalar = None;
+            let mut kind = None;
             let mut accepts_null = false;
             for member in members {
                 match member {
                     PhpType::Void => accepts_null = true,
-                    other if is_coercion_scalar(other) && scalar.is_none() => {
-                        scalar = Some(other.clone());
-                    }
-                    // A second scalar arm, a class arm, an array arm: not this shape.
-                    _ => return None,
+                    other => match (arm_kind(other), kind) {
+                        (Some(found), None) => kind = Some(found),
+                        // A second non-null arm: not this shape.
+                        _ => return None,
+                    },
                 }
             }
-            scalar.map(|scalar| ScalarCoercionTarget {
-                scalar,
-                accepts_null,
-            })
+            kind.map(|kind| WeakCoercionTarget { kind, accepts_null })
         }
-        _ => None,
+        single => arm_kind(single).map(|kind| WeakCoercionTarget {
+            kind,
+            accepts_null: false,
+        }),
     }
 }
 
-/// Returns the payloads `target` refuses, in the order a guard must test them.
+/// PHP's verdict for ONE payload kind at a weak-conversion boundary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum WeakVerdict {
+    /// PHP converts it (or matches it outright); the boundary's existing coercion is correct.
+    Converts,
+    /// PHP raises a catchable `TypeError`; the named refusal test decides it at runtime.
+    Refuses(CoercionRefusal),
+    /// PHP's verdict depends on something no runtime TAG test can read — today only the
+    /// numeric-ness of a string reaching `int`/`float`.
+    Undecidable,
+}
+
+/// Returns PHP's verdict for a source union MEMBER at `target`.
 ///
-/// MEASURED against `php -n` (php-8.5.6) for all four scalar targets crossed with a boxed `null`,
-/// `int`, `float`, `bool`, numeric string, non-numeric string, array, plain object and `Stringable`
-/// object source. Two refusals hold for EVERY target and are therefore stated once here:
-/// - `null` into a non-nullable scalar — `fs(null)`, `fi(null)`, `ff(null)`, `fb(null)` all throw.
-/// - an array into any scalar — `fs(arr)`, `fi(arr)`, `ff(arr)`, `fb(arr)` all throw.
-///
-/// The refusals that are NOT uniform are deliberately absent, because a guard that states them
-/// here would have to state them per target: a non-numeric string is refused by `int`/`float` but
-/// converted by `string`/`bool`; a plain object is refused by all four but a `Stringable` one is
-/// converted by `string` alone. Those need the numeric-string and `__toString` probes a tag test
-/// cannot express, so they stay out rather than be approximated.
-pub(crate) fn scalar_coercion_refusals(target: &ScalarCoercionTarget) -> Vec<CoercionRefusal> {
-    let mut refusals = Vec::new();
-    if !target.accepts_null {
-        refusals.push(CoercionRefusal::Null);
+/// MEASURED against `php -n` (php-8.5.6): every scalar target crossed with a boxed `null`, `int`,
+/// `float`, `bool`, numeric string, non-numeric string, array, plain object and `Stringable`
+/// object. The two rows that are NOT uniform across the scalar targets are the reason this is a
+/// per-kind table rather than one list: a non-numeric string is refused by `int`/`float` but
+/// converted by `string`/`bool`, and a plain object is refused by all four while a `Stringable` one
+/// is converted by `string` alone.
+pub(crate) fn weak_member_verdict(target: WeakCoercionTarget, member: &PhpType) -> WeakVerdict {
+    if target.kind == WeakTargetKind::Array {
+        // The only TOTAL row: an array matches, null matches when declared, everything else —
+        // including tags this module does not enumerate — is refused by the accept-chain.
+        return match member {
+            PhpType::Array(_) | PhpType::AssocArray { .. } => WeakVerdict::Converts,
+            PhpType::Void | PhpType::Never if target.accepts_null => WeakVerdict::Converts,
+            _ => WeakVerdict::Refuses(CoercionRefusal::NotArray),
+        };
     }
-    refusals.push(CoercionRefusal::Array);
+    match member {
+        PhpType::Void | PhpType::Never => {
+            if target.accepts_null {
+                WeakVerdict::Converts
+            } else {
+                WeakVerdict::Refuses(CoercionRefusal::Null)
+            }
+        }
+        PhpType::Int | PhpType::Float | PhpType::Bool | PhpType::False => WeakVerdict::Converts,
+        PhpType::Str => match target.kind {
+            WeakTargetKind::Str | WeakTargetKind::Bool => WeakVerdict::Converts,
+            // `fi("7")` converts, `fi("abc")` throws — a tag test sees only "string".
+            WeakTargetKind::Number => WeakVerdict::Undecidable,
+            WeakTargetKind::Array => unreachable!("handled above"),
+        },
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            WeakVerdict::Refuses(CoercionRefusal::Array)
+        }
+        PhpType::Object(_) => match target.kind {
+            WeakTargetKind::Str => WeakVerdict::Refuses(CoercionRefusal::ObjectUnlessStringable),
+            WeakTargetKind::Number | WeakTargetKind::Bool => {
+                WeakVerdict::Refuses(CoercionRefusal::Object)
+            }
+            WeakTargetKind::Array => unreachable!("handled above"),
+        },
+        // A closure boxes under its own tag, which none of the tests above reads, and `Mixed`
+        // absorbs every kind at once.
+        _ => WeakVerdict::Undecidable,
+    }
+}
+
+/// Returns the source's union members, or the source itself when it is not a union.
+fn source_members(source: &PhpType) -> &[PhpType] {
+    match source {
+        PhpType::Union(members) => members,
+        single => std::slice::from_ref(single),
+    }
+}
+
+/// Returns the refusal tests a guard must emit for `source` at `target`, deduped, in the fixed
+/// order `null`, array, object, not-array.
+///
+/// Only the refusals the SOURCE can actually reach are returned, which is what keeps a `?string`
+/// argument from paying for an array test it can never fail. A `Mixed` source can reach every
+/// refusal, since it absorbs every kind.
+pub(crate) fn weak_boundary_refusals(
+    target: WeakCoercionTarget,
+    source: &PhpType,
+) -> Vec<CoercionRefusal> {
+    /// Ranks a refusal for the emitted test order. `null` must settle before anything reads a
+    /// payload, and the array tag before the object tag so neither reaches the other's test.
+    fn rank(refusal: CoercionRefusal) -> u8 {
+        match refusal {
+            CoercionRefusal::Null => 0,
+            CoercionRefusal::Array => 1,
+            CoercionRefusal::Object | CoercionRefusal::ObjectUnlessStringable => 2,
+            CoercionRefusal::NotArray => 3,
+        }
+    }
+    let mut refusals: Vec<CoercionRefusal> = Vec::new();
+    let members: Vec<&PhpType> = if matches!(source, PhpType::Mixed) {
+        // `Mixed` is every kind at once; enumerate the representatives so each reachable refusal
+        // is named exactly as a union source would name it.
+        vec![
+            &PhpType::Void,
+            &PhpType::Int,
+            &PhpType::Str,
+            &MIXED_ARRAY_REPRESENTATIVE,
+            &MIXED_OBJECT_REPRESENTATIVE,
+        ]
+    } else {
+        source_members(source).iter().collect()
+    };
+    for member in members {
+        if let WeakVerdict::Refuses(refusal) = weak_member_verdict(target, member) {
+            if !refusals.contains(&refusal) {
+                refusals.push(refusal);
+            }
+        }
+    }
+    refusals.sort_by_key(|refusal| rank(*refusal));
     refusals
 }
 
-/// Returns whether a value statically typed `actual` could carry `refusal`'s payload at runtime.
+/// The `array` member a bare `Mixed` source stands in for when enumerating reachable refusals.
+const MIXED_ARRAY_REPRESENTATIVE: PhpType = PhpType::Iterable;
+/// The object member a bare `Mixed` source stands in for when enumerating reachable refusals.
+static MIXED_OBJECT_REPRESENTATIVE: PhpType = PhpType::Object(String::new());
+
+/// Returns whether every payload `source` can carry has a verdict the emitted refusal tests
+/// DECIDE — the gate a CHECKER relaxation must consult before admitting the flow.
 ///
-/// Only a BOXED source is ever asked: the caller gates on `codegen_repr() == Mixed`, because a
-/// refusal test reads a runtime tag and only a box has one. Within that, `Mixed` itself could hold
-/// anything, while a union source is decided by its members — which is what keeps a `?string`
-/// argument from paying for an array test it can never fail.
-pub(crate) fn boxed_source_may_hold(actual: &PhpType, refusal: CoercionRefusal) -> bool {
-    match actual {
-        PhpType::Mixed => true,
-        PhpType::Union(members) => members
-            .iter()
-            .any(|member| boxed_source_may_hold(member, refusal)),
-        PhpType::Void | PhpType::Never => refusal == CoercionRefusal::Null,
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
-            refusal == CoercionRefusal::Array
-        }
-        _ => false,
+/// This is the difference between the guard's two jobs. Emitting refusals is always safe and
+/// always an improvement: each one turns a silent miscompile into PHP's own `TypeError`. ACCEPTING
+/// a flow the checker used to reject is only safe when the refusal list is COMPLETE, because any
+/// payload left undecided reaches the boundary's unguarded coercion — which is exactly the silent
+/// divergence this family exists to remove.
+pub(crate) fn weak_boundary_is_tag_decidable(
+    target: WeakCoercionTarget,
+    source: &PhpType,
+) -> bool {
+    if matches!(source, PhpType::Mixed) {
+        // A bare `mixed` can hold a closure, and (at a numeric target) a non-numeric string.
+        return false;
     }
+    source_members(source)
+        .iter()
+        .all(|member| weak_member_verdict(target, member) != WeakVerdict::Undecidable)
 }
 
 /// Returns the `Object(name)` arms of `ty` with a NON-EMPTY name, in declared order, deduped —
@@ -560,75 +686,177 @@ mod tests {
         ))));
     }
 
-    /// The four scalars and their `?T` spellings are conversion boundaries; a declaration with a
-    /// second non-null arm is not, because an array reaching `string|array` is MATCHED there.
+    /// The four scalars, `array`, and their `?T` spellings are conversion boundaries; a declaration
+    /// with a second non-null arm is not, because an array reaching `string|array` is MATCHED.
     #[test]
-    fn scalar_coercion_targets_are_the_four_scalars_and_their_nullable_spellings() {
-        for scalar in [PhpType::Str, PhpType::Int, PhpType::Float, PhpType::Bool] {
-            let bare = scalar_coercion_target(&scalar).expect("a bare scalar is a boundary");
-            assert_eq!(bare.scalar, scalar);
+    fn weak_coercion_targets_are_the_single_arm_conversion_declarations() {
+        for (declared, kind) in [
+            (PhpType::Str, WeakTargetKind::Str),
+            (PhpType::Int, WeakTargetKind::Number),
+            (PhpType::Float, WeakTargetKind::Number),
+            (PhpType::Bool, WeakTargetKind::Bool),
+            (PhpType::Array(Box::new(PhpType::Mixed)), WeakTargetKind::Array),
+        ] {
+            let bare = weak_coercion_target(&declared).expect("a single conversion arm");
+            assert_eq!(bare.kind, kind);
             assert!(!bare.accepts_null);
 
-            let nullable = PhpType::Union(vec![scalar.clone(), PhpType::Void]);
-            let nullable = scalar_coercion_target(&nullable).expect("`?T` is a boundary");
-            assert_eq!(nullable.scalar, scalar);
+            let nullable = PhpType::Union(vec![declared.clone(), PhpType::Void]);
+            let nullable = weak_coercion_target(&nullable).expect("`?T` is a boundary");
+            assert_eq!(nullable.kind, kind);
             assert!(nullable.accepts_null);
         }
-        assert!(scalar_coercion_target(&PhpType::Mixed).is_none());
-        assert!(scalar_coercion_target(&PhpType::Object("D".to_string())).is_none());
+        assert!(weak_coercion_target(&PhpType::Mixed).is_none());
+        assert!(weak_coercion_target(&PhpType::Object("D".to_string())).is_none());
         assert!(
-            scalar_coercion_target(&PhpType::Union(vec![
+            weak_coercion_target(&PhpType::Iterable).is_none(),
+            "`iterable` also admits a Traversable OBJECT, so the array tag is not its accept set"
+        );
+        assert!(
+            weak_coercion_target(&PhpType::Union(vec![
                 PhpType::Str,
                 PhpType::Array(Box::new(PhpType::Mixed)),
                 PhpType::Void,
             ]))
             .is_none(),
-            "an array arm MATCHES an array payload, so the uniform refusal table does not apply"
-        );
-        assert!(
-            scalar_coercion_target(&PhpType::Union(vec![PhpType::Str, PhpType::Int])).is_none(),
-            "two scalar arms need a per-arm decision this shape does not carry"
+            "an array arm MATCHES an array payload, so the verdict table does not describe it"
         );
     }
 
-    /// Null is refused only by a non-nullable declaration; an array is refused by every one.
+    /// The measured php-8.5.6 verdict table, per target kind.
     #[test]
-    fn scalar_coercion_refusals_follow_the_measured_php_matrix() {
-        let non_nullable = scalar_coercion_target(&PhpType::Str).expect("boundary");
+    fn weak_member_verdicts_follow_the_measured_php_matrix() {
+        let string_target = weak_coercion_target(&PhpType::Str).expect("boundary");
+        let int_target = weak_coercion_target(&PhpType::Int).expect("boundary");
+        let bool_target = weak_coercion_target(&PhpType::Bool).expect("boundary");
+        let array = PhpType::Array(Box::new(PhpType::Mixed));
+        let array_target = weak_coercion_target(&array).expect("boundary");
+        let object = PhpType::Object("D".to_string());
+
+        // Every scalar converts into every scalar target, except a string into a numeric one.
+        for member in [&PhpType::Int, &PhpType::Float, &PhpType::Bool] {
+            for target in [string_target, int_target, bool_target] {
+                assert_eq!(weak_member_verdict(target, member), WeakVerdict::Converts);
+            }
+        }
         assert_eq!(
-            scalar_coercion_refusals(&non_nullable),
-            vec![CoercionRefusal::Null, CoercionRefusal::Array]
+            weak_member_verdict(string_target, &PhpType::Str),
+            WeakVerdict::Converts
         );
-        let nullable = scalar_coercion_target(&PhpType::Union(vec![PhpType::Int, PhpType::Void]))
-            .expect("boundary");
         assert_eq!(
-            scalar_coercion_refusals(&nullable),
-            vec![CoercionRefusal::Array]
+            weak_member_verdict(bool_target, &PhpType::Str),
+            WeakVerdict::Converts
+        );
+        assert_eq!(
+            weak_member_verdict(int_target, &PhpType::Str),
+            WeakVerdict::Undecidable,
+            "`fi(\"7\")` converts and `fi(\"abc\")` throws — a tag test sees only \"string\""
+        );
+
+        // An array is refused by every scalar target; an object is refused by all four, but the
+        // `string` one has to consult `Stringable` at runtime to say so.
+        for target in [string_target, int_target, bool_target] {
+            assert_eq!(
+                weak_member_verdict(target, &array),
+                WeakVerdict::Refuses(CoercionRefusal::Array)
+            );
+        }
+        assert_eq!(
+            weak_member_verdict(string_target, &object),
+            WeakVerdict::Refuses(CoercionRefusal::ObjectUnlessStringable)
+        );
+        assert_eq!(
+            weak_member_verdict(int_target, &object),
+            WeakVerdict::Refuses(CoercionRefusal::Object)
+        );
+
+        // The `array` target is the one TOTAL row: array matches, everything else is refused.
+        assert_eq!(weak_member_verdict(array_target, &array), WeakVerdict::Converts);
+        for member in [&PhpType::Int, &PhpType::Str, &object, &PhpType::Void] {
+            assert_eq!(
+                weak_member_verdict(array_target, member),
+                WeakVerdict::Refuses(CoercionRefusal::NotArray)
+            );
+        }
+    }
+
+    /// Null is refused only by a non-nullable declaration, at every target kind.
+    #[test]
+    fn null_is_refused_only_by_a_non_nullable_declaration() {
+        let non_nullable = weak_coercion_target(&PhpType::Str).expect("boundary");
+        assert_eq!(
+            weak_member_verdict(non_nullable, &PhpType::Void),
+            WeakVerdict::Refuses(CoercionRefusal::Null)
+        );
+        let nullable =
+            weak_coercion_target(&PhpType::Union(vec![PhpType::Str, PhpType::Void])).expect("b");
+        assert_eq!(
+            weak_member_verdict(nullable, &PhpType::Void),
+            WeakVerdict::Converts
         );
     }
 
-    /// A union source pays only for the tests its own members can fail.
+    /// A union source pays only for the tests its own members can fail, and the emitted order is
+    /// `null`, array, object — null before anything reads a payload, array before the object tag.
     #[test]
-    fn boxed_source_may_hold_is_decided_by_the_source_members() {
-        assert!(boxed_source_may_hold(&PhpType::Mixed, CoercionRefusal::Null));
-        assert!(boxed_source_may_hold(&PhpType::Mixed, CoercionRefusal::Array));
-
-        let string_or_null = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
-        assert!(boxed_source_may_hold(
-            &string_or_null,
-            CoercionRefusal::Null
-        ));
-        assert!(
-            !boxed_source_may_hold(&string_or_null, CoercionRefusal::Array),
-            "a `?string` source can never be an array, so it must not pay for the array test"
-        );
-
-        let array_or_int = PhpType::Union(vec![
+    fn weak_boundary_refusals_are_scoped_to_the_source_and_ordered() {
+        let string_target = weak_coercion_target(&PhpType::Str).expect("boundary");
+        let wide = PhpType::Union(vec![
             PhpType::Array(Box::new(PhpType::Mixed)),
-            PhpType::Int,
+            PhpType::Str,
+            PhpType::Object("UnitEnum".to_string()),
+            PhpType::Void,
         ]);
-        assert!(boxed_source_may_hold(&array_or_int, CoercionRefusal::Array));
-        assert!(!boxed_source_may_hold(&array_or_int, CoercionRefusal::Null));
+        assert_eq!(
+            weak_boundary_refusals(string_target, &wide),
+            vec![
+                CoercionRefusal::Null,
+                CoercionRefusal::Array,
+                CoercionRefusal::ObjectUnlessStringable
+            ]
+        );
+
+        let nullable_string =
+            weak_coercion_target(&PhpType::Union(vec![PhpType::Str, PhpType::Void])).expect("b");
+        assert_eq!(
+            weak_boundary_refusals(
+                nullable_string,
+                &PhpType::Union(vec![PhpType::Str, PhpType::Void])
+            ),
+            Vec::new(),
+            "a `?string` source at a `?string` target can fail no test, so it pays for none"
+        );
+    }
+
+    /// The checker gate is STRICTER than the emitter: emitting refusals is always an improvement,
+    /// but ACCEPTING a previously-rejected flow requires the refusal list to be COMPLETE.
+    #[test]
+    fn tag_decidability_gates_the_checker_not_the_emitter() {
+        let string_target = weak_coercion_target(&PhpType::Str).expect("boundary");
+        let int_target = weak_coercion_target(&PhpType::Int).expect("boundary");
+        let wide = PhpType::Union(vec![
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            PhpType::Bool,
+            PhpType::Str,
+            PhpType::Int,
+            PhpType::Float,
+            PhpType::Object("UnitEnum".to_string()),
+            PhpType::Void,
+        ]);
+        assert!(
+            weak_boundary_is_tag_decidable(string_target, &wide),
+            "every member of Symfony's parameter-bag union has a tag-decidable verdict at `string`"
+        );
+        assert!(
+            !weak_boundary_is_tag_decidable(int_target, &wide),
+            "the `string` member's verdict at `int` needs a numeric probe"
+        );
+        assert!(
+            !weak_boundary_is_tag_decidable(string_target, &PhpType::Mixed),
+            "a bare `mixed` can hold a closure, whose tag no refusal test reads"
+        );
+        // ... yet the emitter still guards a bare `mixed`, which is what closes the silent family.
+        assert!(!weak_boundary_refusals(string_target, &PhpType::Mixed).is_empty());
     }
 
     /// Repeated arms are deduped so a guard emits one test per distinct check.

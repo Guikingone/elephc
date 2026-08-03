@@ -348,11 +348,11 @@ fn emit_guard_chain(
     value
 }
 
-/// Inserts the REFUSAL half of a weak-mode scalar conversion boundary: the runtime tags PHP
-/// rejects outright at a declared `string`/`int`/`float`/`bool` slot, raising the same catchable
+/// Inserts the REFUSAL half of a weak-mode conversion boundary: the runtime payloads PHP rejects
+/// outright at a declared `string`/`int`/`float`/`bool`/`array` slot, raising the same catchable
 /// `\TypeError` the arm chain does.
 ///
-/// This is the complement of `emit_checked_downcast`, not a variant of it. A scalar declaration is
+/// This is the complement of `emit_checked_downcast`, not a variant of it. Such a declaration is
 /// where PHP stops MATCHING and starts CONVERTING, so `guard_is_php_faithful` keeps it off the arm
 /// chain entirely — an arm test cannot see a conversion and would throw where PHP quietly converts.
 /// But the same boundary also REFUSES payloads, and those refusals were invisible for exactly the
@@ -360,18 +360,23 @@ fn emit_guard_chain(
 /// boundary's `IToStr` coercion and silently became `""`, and one reaching a declared `int` became
 /// its element COUNT. Both continued with exit 0 where PHP throws.
 ///
-/// Only the refusals that hold for EVERY scalar target are emitted (`null` into a non-nullable
-/// slot, and an array into any of the four) — see `scalar_coercion_refusals` for the measured
-/// matrix and for why the per-target ones (non-numeric string into `int`, plain object into
-/// anything) are deliberately left out rather than approximated.
+/// Which payloads are refused is `crate::types::checked_downcast::weak_boundary_refusals`, over the
+/// measured per-target verdict table; only the refusals the SOURCE can actually reach are emitted.
+/// The object refusal at a `string` target is decided by `instanceof Stringable`, which is PHP's
+/// OWN rule rather than an approximation of it: PHP 8 makes every class declaring `__toString()` an
+/// implicit `Stringable`, and elephc's runtime answers that test exactly as `php -n` does.
+///
+/// The `array` target inverts the chain: it emits an ACCEPT chain (`null` when declared, then the
+/// array tag) and throws on fall-through, because `array` matches an array and NOTHING else — so
+/// one accept-chain also catches the tags no refusal names (a closure, a resource, a future tag).
 ///
 /// Only a BOXED source is guarded: the tests read a runtime tag, and a raw scalar has none. That is
 /// also exactly the family that was silent — a statically-typed array reaching a `string` parameter
 /// is a compile error the checker still raises.
 ///
 /// Emits nothing and leaves lowering positioned where it found it when the declaration is not a
-/// scalar boundary, when the source is not boxed, or when the source's static type proves it cannot
-/// hold any refused payload.
+/// weak-conversion boundary, when the source is not boxed, or when the source's static type proves
+/// it cannot hold any refused payload.
 pub(crate) fn emit_scalar_coercion_refusal_guard(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -379,19 +384,14 @@ pub(crate) fn emit_scalar_coercion_refusal_guard(
     position: DowncastPosition<'_>,
     span: Option<Span>,
 ) {
-    let Some(target) = crate::types::checked_downcast::scalar_coercion_target(declared) else {
+    let Some(target) = crate::types::checked_downcast::weak_coercion_target(declared) else {
         return;
     };
     let actual = ctx.builder.value_php_type(value.value);
     if actual.codegen_repr() != PhpType::Mixed {
         return;
     }
-    let refused: Vec<CoercionRefusal> = crate::types::checked_downcast::scalar_coercion_refusals(
-        &target,
-    )
-    .into_iter()
-    .filter(|refusal| crate::types::checked_downcast::boxed_source_may_hold(&actual, *refusal))
-    .collect();
+    let refused = crate::types::checked_downcast::weak_boundary_refusals(target, &actual);
     if refused.is_empty() {
         return;
     }
@@ -401,39 +401,18 @@ pub(crate) fn emit_scalar_coercion_refusal_guard(
     let fail_block = ctx.builder.create_named_block(&format!("{}.fail", prefix), Vec::new());
     let total = refused.len();
     for (emitted, refusal) in refused.into_iter().enumerate() {
-        // Inverted relative to the arm chain: a REFUSAL test that MATCHES goes to the throw, and
-        // falling through every test is what continues into the coercion.
-        let (op, immediate) = match refusal {
-            CoercionRefusal::Null => (Op::IsNull, None),
-            CoercionRefusal::Array => (
-                Op::TypePredicate,
-                Some(Immediate::TypePredicate(PhpTypePredicate::Array)),
-            ),
-        };
-        let matched = ctx.emit_value(
-            op,
-            vec![value.value],
-            immediate,
-            PhpType::Bool,
-            op.default_effects(),
-            span,
-        );
         let is_last = emitted + 1 == total;
-        let else_target = if is_last {
+        let next_block = if is_last {
             ok_block
         } else {
             ctx.builder
                 .create_named_block(&format!("{}.check", prefix), Vec::new())
         };
-        ctx.builder.terminate(Terminator::CondBr {
-            cond: matched.value,
-            then_target: fail_block,
-            then_args: Vec::new(),
-            else_target,
-            else_args: Vec::new(),
-        });
+        emit_refusal_test(
+            ctx, value, refusal, target, fail_block, next_block, ok_block, span,
+        );
         if !is_last {
-            ctx.builder.position_at_end(else_target);
+            ctx.builder.position_at_end(next_block);
         }
     }
 
@@ -441,6 +420,136 @@ pub(crate) fn emit_scalar_coercion_refusal_guard(
     emit_mismatch_throw(ctx, value, declared, &position, span);
     ctx.builder.terminate(Terminator::Unreachable);
     ctx.builder.position_at_end(ok_block);
+}
+
+/// Emits one refusal test and terminates the current block.
+///
+/// A REFUSAL test that MATCHES branches to `fail_block`; falling through every test is what
+/// continues into the boundary's coercion. `CoercionRefusal::NotArray` inverts that — it is the
+/// `array` target's ACCEPT test, so a match continues and a miss throws.
+#[allow(clippy::too_many_arguments)]
+fn emit_refusal_test(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    refusal: CoercionRefusal,
+    target: crate::types::checked_downcast::WeakCoercionTarget,
+    fail_block: crate::ir::BlockId,
+    next_block: crate::ir::BlockId,
+    ok_block: crate::ir::BlockId,
+    span: Option<Span>,
+) {
+    // `ObjectUnlessStringable` needs TWO runtime reads (the object tag, then `instanceof
+    // Stringable`), so it terminates its own blocks rather than sharing the single-test shape.
+    if refusal == CoercionRefusal::ObjectUnlessStringable {
+        let is_object = emit_tag_test(ctx, value, PhpTypePredicate::Object, span);
+        let stringable_check = ctx
+            .builder
+            .create_named_block("arg_coercion_guard.stringable", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_object,
+            then_target: stringable_check,
+            then_args: Vec::new(),
+            else_target: next_block,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(stringable_check);
+        let stringable = ctx.intern_class_name("Stringable");
+        let matched = ctx.emit_value(
+            Op::InstanceOf,
+            vec![value.value],
+            Some(Immediate::Data(stringable)),
+            PhpType::Bool,
+            Op::InstanceOf.default_effects(),
+            span,
+        );
+        // A `Stringable` object is CONVERTED by `__toString`, so it rejoins the boundary directly:
+        // the remaining refusal tests are all about non-object tags it cannot carry.
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: matched.value,
+            then_target: ok_block,
+            then_args: Vec::new(),
+            else_target: fail_block,
+            else_args: Vec::new(),
+        });
+        return;
+    }
+
+    // `NotArray` is the `array` target's ACCEPT chain, so a NULLABLE declaration has to let a real
+    // null through BEFORE the array tag is read — otherwise `?array` throws on the very null it
+    // declares. The scalar targets never need this: their `null` handling is a REFUSAL test that
+    // `weak_boundary_refusals` only lists for a non-nullable declaration.
+    if refusal == CoercionRefusal::NotArray && target.accepts_null {
+        let is_null = ctx
+            .emit_value(
+                Op::IsNull,
+                vec![value.value],
+                None,
+                PhpType::Bool,
+                Op::IsNull.default_effects(),
+                span,
+            )
+            .value;
+        let array_check = ctx
+            .builder
+            .create_named_block("arg_coercion_guard.array", Vec::new());
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: is_null,
+            then_target: ok_block,
+            then_args: Vec::new(),
+            else_target: array_check,
+            else_args: Vec::new(),
+        });
+        ctx.builder.position_at_end(array_check);
+    }
+
+    let matched = match refusal {
+        CoercionRefusal::Null => ctx
+            .emit_value(
+                Op::IsNull,
+                vec![value.value],
+                None,
+                PhpType::Bool,
+                Op::IsNull.default_effects(),
+                span,
+            )
+            .value,
+        CoercionRefusal::Array | CoercionRefusal::NotArray => {
+            emit_tag_test(ctx, value, PhpTypePredicate::Array, span)
+        }
+        CoercionRefusal::Object => emit_tag_test(ctx, value, PhpTypePredicate::Object, span),
+        CoercionRefusal::ObjectUnlessStringable => unreachable!("handled above"),
+    };
+    // The `array` target's accept-chain: matching the array tag CONTINUES, missing it throws.
+    let (then_target, else_target) = if refusal == CoercionRefusal::NotArray {
+        (ok_block, fail_block)
+    } else {
+        (fail_block, next_block)
+    };
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: matched,
+        then_target,
+        then_args: Vec::new(),
+        else_target,
+        else_args: Vec::new(),
+    });
+}
+
+/// Emits one `Op::TypePredicate` runtime tag test and returns its boolean result.
+fn emit_tag_test(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    predicate: PhpTypePredicate,
+    span: Option<Span>,
+) -> crate::ir::ValueId {
+    ctx.emit_value(
+        Op::TypePredicate,
+        vec![value.value],
+        Some(Immediate::TypePredicate(predicate)),
+        PhpType::Bool,
+        Op::TypePredicate.default_effects(),
+        span,
+    )
+    .value
 }
 
 /// Terminates the current block with the guard's `matched ? ok : next-check` branch, creating the
