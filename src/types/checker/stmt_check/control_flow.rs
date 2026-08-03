@@ -804,7 +804,7 @@ impl Checker {
                             }
                         }
                         for (name, ty) in joined {
-                            env.insert(name, ty);
+                            self.assign_post_if_flow_type(env, name, ty);
                         }
                     }
                 }
@@ -813,13 +813,17 @@ impl Checker {
                 // that precise flow type after the `if`, even though its frame slot remains
                 // conservatively widened while each conditional store is checked.
                 if let Some(first) = branch_overwrites.first() {
-                    for (name, ty) in first {
-                        if branch_overwrites
-                            .iter()
-                            .all(|path| path.get(name) == Some(ty))
-                        {
-                            env.insert(name.clone(), ty.clone());
-                        }
+                    let precise: Vec<(String, PhpType)> = first
+                        .iter()
+                        .filter(|(name, ty)| {
+                            branch_overwrites
+                                .iter()
+                                .all(|path| path.get(*name) == Some(*ty))
+                        })
+                        .map(|(name, ty)| (name.clone(), ty.clone()))
+                        .collect();
+                    for (name, ty) in precise {
+                        self.assign_post_if_flow_type(env, name, ty);
                     }
                 }
 
@@ -1269,6 +1273,42 @@ impl Checker {
     }
 
     /// Joins one switch path into the conservative environment used after the switch.
+    /// Writes a post-`if` flow type, honouring an ENCLOSING conditional.
+    ///
+    /// Both post-`if` writers compute a type that is exact for every branch continuing past THIS
+    /// `if`. That is not the same as exact after the ENCLOSING construct: in
+    /// `if ($tag) { if ($a) { $x = new T(); } else { throw; } }` the inner chain does make `T`
+    /// definite — every arm that continues assigns it — but the OUTER branch may be skipped
+    /// entirely, so after the outer `if` the type is `T` joined with what `$x` already was.
+    ///
+    /// A plain assignment already obeys that rule: `check_assign` unions with the existing type
+    /// whenever `conditional_assignment_depth > 0`. These two writers used a bare `env.insert` and
+    /// replaced it outright, so `$x` left the outer `if` as `T` alone. The damage was SILENT — a
+    /// later `$x['k']` read compiled against an object and produced `0` instead of the element,
+    /// with no diagnostic. Symfony's `ContentLoaderTrait::resolveServices` is exactly this shape,
+    /// which is why the same root also surfaced as `Cannot index non-array` there once the wrong
+    /// type reached a stricter position.
+    ///
+    /// A throwing arm is what exposes it: without one, the chain's implicit false edge contributes
+    /// the original type to the join and the union comes out right by accident.
+    fn assign_post_if_flow_type(&self, env: &mut TypeEnv, name: String, ty: PhpType) {
+        if self.conditional_assignment_depth == 0 {
+            env.insert(name, ty);
+            return;
+        }
+        let Some(existing) = env.get(&name).cloned() else {
+            env.insert(name, ty);
+            return;
+        };
+        if existing == ty {
+            return;
+        }
+        let resolved = self
+            .merged_assignment_type(&existing, &ty)
+            .unwrap_or_else(|| self.normalize_union_type(vec![existing, ty]));
+        env.insert(name, resolved);
+    }
+
     fn merge_switch_path_env(&self, merged: &mut TypeEnv, path: &TypeEnv) {
         for (name, path_ty) in path {
             let Some(existing) = merged.get(name).cloned() else {

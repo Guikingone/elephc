@@ -290,3 +290,37 @@ echo ($a[$hit_i][$miss_j] ?? 'dflt');
     );
     assert!(out.success, "program should exit successfully");
 }
+
+/// A branch-definite assignment must not escape the conditional that may skip it.
+///
+/// `if ($tag) { if ($a) { $x = new T(); } else { throw; } }` makes `T` definite for the INNER `if`
+/// — the throwing arm contributes no continuing path, so the sole remaining arm looks unanimous —
+/// but the OUTER branch may be skipped entirely. The post-`if` writer replaced `$x`'s type outright
+/// instead of unioning it the way a plain assignment does under `conditional_assignment_depth`, so
+/// `$x` left the outer `if` typed as the object alone.
+///
+/// The damage was SILENT: the `$x['class']` read below compiled against an object and produced `0`
+/// with no diagnostic, where PHP reads the element. Symfony's
+/// `DependencyInjection\Loader\ContentLoaderTrait::resolveServices` is exactly this shape.
+///
+/// A throwing arm is what exposes it — without one, the chain's implicit false edge contributes the
+/// original type and the union comes out right by accident, which is why the sibling below (no
+/// `else`) passed throughout.
+#[test]
+fn test_branch_definite_assignment_does_not_escape_the_skippable_outer_if() {
+    let out = compile_and_run(
+        r#"<?php
+class T {}
+function f(mixed $v, string $tag, bool $a): string {
+    $arg = $v;
+    if ('iter' === $tag) {
+        if ($a) { $arg = new T(); } else { throw new InvalidArgumentException('x'); }
+    }
+    return (string)($arg['class'] ?? 'none');
+}
+echo f(['class' => 'hit'], 'svc', true), "\n";
+echo f(['class' => 'kept'], 'other', true), "\n";
+"#,
+    );
+    assert_eq!(out, "hit\nkept\n");
+}
