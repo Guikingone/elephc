@@ -147,6 +147,10 @@ So elephc is not a drop-in replacement for an entire dynamic framework today. Th
 - A native assembler and linker for your host/target
 - On macOS: Xcode Command Line Tools (`xcode-select --install`)
 - On Linux: a standard native toolchain (`as`, `ld`, libc development files)
+- To install curated native packages: a POSIX shell, Make, target `cc`, `ar`, and `ranlib`
+
+Native packages such as PCRE2 are built from Elephc's pinned catalog; a system
+PCRE2 package is not a production prerequisite.
 
 ## Install
 
@@ -223,6 +227,13 @@ elephc app.php --with-pdo --with-crypto
 # --with-eval force-links Magician; normal eval use is detected automatically
 elephc app.php --with-eval
 
+# Declare, lock, and install the managed PCRE2 package for a regex project
+elephc native add pcre2
+elephc regex.php
+
+# Reproduce committed native state in CI (add --offline when already cached)
+elephc native install --locked
+
 # Explicit target selection
 # Supported targets today: macos-aarch64, linux-aarch64, linux-x86_64
 elephc --target linux-aarch64 hello.php
@@ -233,6 +244,33 @@ elephc --web app.php
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
 ```
+
+For the smallest regex first run:
+
+```bash
+cd examples/hello-preg
+elephc native add pcre2
+elephc main.php
+./main
+```
+
+`elephc native` manages a small, runtime/builtin-oriented catalog of verified C
+sources: PCRE2 10.47 and zlib 1.3.2. It is intentionally **not** the mechanism
+used for Composer packages, Rust bridge crates, compilers/SDKs, or arbitrary FFI
+libraries:
+
+| Need | Mechanism |
+|---|---|
+| Curated runtime/builtin C package | `elephc native` + `elephc.toml`/`elephc.lock` |
+| PHP source dependency | Composer + Elephc's compile-time autoloader |
+| Optional Rust implementation | Auto-detected bridge or `--with-<crate>` |
+| Compiler, SDK, Make, cross tools | Install and configure the toolchain yourself |
+
+The DOOM and SDL examples are user FFI workflows; SDL is **not** installed,
+locked, or satisfied by `elephc native`; they use `extern` plus
+`--link`/`--link-path`/`--framework`. Ordinary compilation never downloads or
+builds a native package. See [Native
+dependencies](docs/compiling/native-dependencies.md).
 
 Or via cargo:
 
@@ -403,7 +441,7 @@ User-defined constants are also supported via `const NAME = value;` and `define(
 ## How it works
 
 ```
-Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → runtime cache → as + ld → native executable
+Physical source (`.php` or `.lfc`) → source classification → Lexer → Parser (AST) → Magic constants (per-file) → strict-PHP audit (PHP files only) → Conditional (ifdef/--define) → Autoload registry build (Composer + SPL rules) → Resolver (include declaration discovery, include/require inlining, per-file constants, once guards, function variant marks) → NameResolver (namespaces/use/FQNs) → Autoload run (class-triggered file insertion) → Optimizer (constant folding) → Type Checker → Optimizer (constant propagation) → Optimizer (control-flow pruning) → Optimizer (control-flow normalization) → Optimizer (dead-code elimination) → EIR lowering + validation → register allocation → EIR codegen → runtime cache → read-only native requirement resolution → typed link plan → as + ld → native executable
 ```
 
 The compiler emits human-readable assembly for the selected target. You can inspect the `.s` file to see exactly what your PHP becomes:
@@ -481,7 +519,10 @@ src/
 ├── main.rs              # CLI binary entry point
 ├── cli.rs               # Command-line argument parsing and options
 ├── pipeline.rs          # Frontend/backend compilation pipeline
-├── linker.rs            # Assembler + linker invocation
+├── link_plan.rs         # Ordered typed archives/libraries and Linux link mode
+├── link_planning.rs     # Compiler inputs to one final ordered link plan
+├── linker/              # Assembler/linker rendering, bridges, SDK, archive handling
+├── native_deps/         # Curated native CLI/catalog/cache/recipe/resolver
 ├── timings.rs           # Phase timing collection/reporting
 ├── span.rs              # Source position tracking (line, col)
 ├── conditional/         # Build-time `ifdef` pass driven by --define
@@ -642,10 +683,7 @@ MIT
 
 ## Star History
 
-<a href="https://www.star-history.com/?type=date&repos=illegalstudio%2Felephc">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&theme=dark&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
- </picture>
-</a>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/traffic/star-history-dark.svg" />
+  <img alt="Elephc star history chart" src=".github/traffic/star-history-light.svg" />
+</picture>

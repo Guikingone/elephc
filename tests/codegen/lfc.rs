@@ -6,6 +6,7 @@
 //!
 //! Key details:
 //! - The real CLI selects each physical file's mode and derives normal output paths from its stem.
+//! - Dynamic-eval coverage uses CLI assembly output plus the test-only native linker provider.
 
 use crate::support::*;
 
@@ -44,6 +45,67 @@ fn compile_lfc_project_and_run(
         String::from_utf8_lossy(&output.stderr)
     );
     let stdout = String::from_utf8(output.stdout).expect("program output should be UTF-8");
+    let _ = fs::remove_dir_all(dir);
+    stdout
+}
+
+/// Compiles a mixed-source project through the CLI and links its dynamic-eval assembly with test providers.
+fn compile_lfc_eval_project_and_run(
+    files: &[(&str, &str)],
+    entry: &str,
+    flags: &[&str],
+) -> String {
+    let dir = make_cli_test_dir("elephc_cli_lfc_eval");
+    for (path, source) in files {
+        let path = dir.join(path);
+        if let Some(parent) = path.parent() {
+            fs::create_dir_all(parent).expect("project directory should be created");
+        }
+        fs::write(path, source).expect("project source should be written");
+    }
+
+    let entry_path = dir.join(entry);
+    let compile = elephc_cli_command(&dir)
+        .args(flags)
+        .arg("--emit-asm")
+        .arg(&entry_path)
+        .output()
+        .expect("elephc CLI should run");
+    assert!(
+        compile.status.success(),
+        "LFC eval assembly compilation failed: {}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let user_asm = fs::read_to_string(entry_path.with_extension("s"))
+        .expect("CLI should emit LFC eval assembly");
+    let runtime_features = elephc::codegen::RuntimeFeatures {
+        regex: true,
+        mb_strlen: false,
+        phar_archive: false,
+        descriptor_invoker: true,
+        eval_bridge: true,
+        eval_scope: true,
+        web: false,
+    };
+    let runtime_asm =
+        elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);
+    let mut checker_libraries = vec!["elephc_tz".to_string()];
+    if target().platform == Platform::MacOS {
+        checker_libraries.push("iconv".to_string());
+    }
+    let requirements = TestLinkRequirements::new(
+        checker_libraries,
+        elephc::codegen::link_requirements_for_runtime_features(runtime_features),
+    );
+    let stdout = assemble_and_run(
+        &user_asm,
+        &runtime_obj_for_asm(&runtime_asm),
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+    );
     let _ = fs::remove_dir_all(dir);
     stdout
 }
@@ -212,12 +274,7 @@ require "leaf.php";"#,
 /// Verifies runtime eval dispatch restores the caller's PHP/LFC builtin profile each time.
 #[test]
 fn lfc_and_strict_php_eval_calls_do_not_leak_profiles() {
-    ensure_cli_bridge_staticlibs(&[
-        "elephc_crypto",
-        "elephc_tz",
-        "elephc_magician",
-    ]);
-    let output = compile_lfc_project_and_run(
+    let output = compile_lfc_eval_project_and_run(
         &[
             (
                 "main.php",
