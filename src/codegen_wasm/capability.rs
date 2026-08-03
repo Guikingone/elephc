@@ -937,6 +937,38 @@ fn cast_feeds_string_context(function: &Function, inst: &Instruction) -> bool {
     consumed
 }
 
+/// Returns whether a `Heap(Mixed)` value is PROVABLY a boxed container.
+///
+/// Some builtins answer `mixed` in the EIR for a reason that is about their CALLBACK, not
+/// their result: `array_map`'s result type is deliberately Mixed because a string callback
+/// picks its element ABI at runtime (see `src/builtins/array/array_map.rs`). The value is
+/// still always an array. Where that is provable from the defining instruction a consumer can
+/// unbox it with no runtime check — and, more importantly, with no `TypeError` to raise, which
+/// is what makes admitting it exact rather than approximate.
+///
+/// Only builtins whose runtime helper ALWAYS answers a fresh `array<mixed>` qualify, and only
+/// those this target actually lowers — `array_filter` would belong here too but is not yet
+/// admitted as a builtin, and claiming it would be claiming something unreachable.
+pub(super) fn value_is_container_by_construction(function: &Function, value: ValueId) -> bool {
+    let Some(defining) = function
+        .instructions
+        .iter()
+        .find(|instruction| instruction.result == Some(value))
+    else {
+        return false;
+    };
+    if defining.op != Op::RuntimeCall {
+        return false;
+    }
+    // The lowerer emits either target form depending on whether the call carries a profile.
+    let target = match &defining.immediate {
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(target))) => *target,
+        Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction { target, .. })) => *target,
+        _ => return false,
+    };
+    matches!(target, RuntimeFnId::ArrayMap)
+}
+
 /// Returns whether this value is a Mixed that INTEGER arithmetic produced, rather than one PHP
 /// would coerce.
 ///
@@ -4218,20 +4250,28 @@ fn array_map_shape_issue(
             ))
         }
     };
-    if !matches!(element_type, PhpType::Int | PhpType::Str) {
+    // `Void` is what an empty literal's `Never` normalizes to: there is no element to convert
+    // and the map answers an empty array, so no representation is needed.
+    if !matches!(element_type, PhpType::Int | PhpType::Str | PhpType::Void) {
         return Some(format!(
             "source element type {element_type:?} is not represented exactly by the map runtime"
         ));
     }
+    // The EIR types this result `mixed` DELIBERATELY — a string callback picks its element ABI
+    // at runtime — so the boxed form is the ordinary one and the array form is the narrowed
+    // one. Both are materialized here; the lowering boxes when the slot is Mixed.
+    let boxed_result = call.result_type == IrType::Heap(IrHeapKind::Mixed)
+        && call.result_php_type.codegen_repr() == PhpType::Mixed;
     if call.result.is_none()
-        || call.result_type != IrType::Heap(IrHeapKind::Array)
-        || !matches!(
-            call.result_php_type.codegen_repr(),
-            PhpType::Array(_) | PhpType::AssocArray { .. }
-        )
+        || (!boxed_result
+            && (call.result_type != IrType::Heap(IrHeapKind::Array)
+                || !matches!(
+                    call.result_php_type.codegen_repr(),
+                    PhpType::Array(_) | PhpType::AssocArray { .. }
+                )))
     {
         return Some(format!(
-            "array_map must materialize an indexed-array result, got {:?}/{:?}",
+            "array_map must materialize an indexed-array or boxed result, got {:?}/{:?}",
             call.result_type,
             call.result_php_type.codegen_repr()
         ));
@@ -4249,11 +4289,15 @@ fn array_map_shape_issue(
     }
     if let Some(param) = callback_function.params.first() {
         let param_type = param.php_type.codegen_repr();
-        let compatible = match element_type {
-            PhpType::Int => param_type == PhpType::Int,
-            PhpType::Str => param_type == PhpType::Str,
-            _ => false,
-        };
+        // A `mixed` parameter takes any element with NO coercion: the map's argument buffer
+        // holds Mixed cells, so boxing the element is the whole conversion, and PHP performs
+        // none of its own there.
+        let compatible = param_type == PhpType::Mixed
+            || match element_type {
+                PhpType::Int => param_type == PhpType::Int,
+                PhpType::Str => param_type == PhpType::Str,
+                _ => false,
+            };
         if !compatible {
             return Some(format!(
                 "callback parameter {:?} cannot receive source element {:?} without PHP coercion",

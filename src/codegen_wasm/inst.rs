@@ -2075,6 +2075,29 @@ fn lower_array_map(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         ),
         "map each element through the callback into a fresh array<mixed>",
     );
+    // The EIR's result slot is Mixed unless the checker narrowed it, so the fresh array is
+    // boxed under the container tag. `__rt_mixed_from_value` increfs a refcounted child, so
+    // the map's own reference is dropped right after to leave the cell the only owner.
+    if inst.result_type == IrType::Heap(IrHeapKind::Mixed) {
+        let mapped = ctx.fresh_temp(ValType::I32);
+        ctx.fb
+            .ins(&format!("local.set {}", mapped), "the mapped array");
+        ctx.fb.ins("i64.const 4", "container tag (array)");
+        ctx.fb.ins(
+            &format!("(i64.extend_i32_u (local.get {}))", mapped),
+            "the array pointer as the cell's low word",
+        );
+        ctx.fb.ins("i64.const 0", "no high payload");
+        ctx.fb
+            .ins("call $__rt_mixed_from_value", "box the mapped array");
+        let cell = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(&format!("local.set {}", cell), "the boxed result");
+        ctx.fb
+            .ins(&format!("local.get {}", mapped), "the map's own reference");
+        ctx.fb
+            .ins("call $__rt_decref_any", "the cell owns the array now");
+        ctx.fb.ins(&format!("local.get {}", cell), "the boxed result");
+    }
     store_result(ctx, inst)
 }
 

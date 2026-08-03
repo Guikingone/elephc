@@ -3461,13 +3461,20 @@ fn count_shape_issue(function: &Function, call: &Instruction) -> Option<String> 
     let Some(value) = function.value(*operand) else {
         return Some("container operand is missing from the value table".to_string());
     };
-    if !matches!(
-        value.ir_type,
-        IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash)
-    ) || !matches!(
-        value.php_type.codegen_repr(),
-        PhpType::Array(_) | PhpType::AssocArray { .. }
-    ) {
+    // A boxed container counts too when the box is PROVABLY one — `array_map` types its result
+    // `mixed` because of its CALLBACK, never because the value might not be an array — so the
+    // `TypeError` this refusal protects against cannot arise.
+    let boxed_container = value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && super::capability::value_is_container_by_construction(function, *operand);
+    if !boxed_container
+        && (!matches!(
+            value.ir_type,
+            IrType::Heap(IrHeapKind::Array | IrHeapKind::Hash)
+        ) || !matches!(
+            value.php_type.codegen_repr(),
+            PhpType::Array(_) | PhpType::AssocArray { .. }
+        ))
+    {
         return Some(format!(
             "expected a statically typed array or hash, got {:?}/{:?}",
             value.ir_type,
@@ -4280,16 +4287,35 @@ fn lower_implode(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let array = operand(inst, 1)?;
     // A string element needs no conversion; an int, a float or a Mixed cell does, and the
     // converted piece is owned so the shared helper releases it.
-    let element_kind = match ctx.function.value(array).map(|v| &v.php_type) {
-        Some(PhpType::Array(element)) => match **element {
-            PhpType::Int => Some(0),
-            PhpType::Mixed => Some(1),
-            PhpType::Float => Some(2),
+    let boxed_container = matches!(
+        ctx.function.value(array).map(|v| v.ir_type),
+        Some(IrType::Heap(IrHeapKind::Mixed))
+    );
+    let element_kind = if boxed_container {
+        // The admitted boxes come from `array_map`/`array_filter`, whose runtime always
+        // answers a fresh Mixed-CELL array; the capability rule is what guarantees it.
+        Some(1)
+    } else {
+        match ctx.function.value(array).map(|v| &v.php_type) {
+            Some(PhpType::Array(element)) => match **element {
+                PhpType::Int => Some(0),
+                PhpType::Mixed => Some(1),
+                PhpType::Float => Some(2),
+                _ => None,
+            },
             _ => None,
-        },
-        _ => None,
+        }
     };
-    ctx.emit_load_value(array)?;
+    if boxed_container {
+        // The cell's low word IS the array pointer; nothing else in it is read.
+        ctx.emit_load_value(array)?;
+        ctx.fb.ins(
+            "(i32.wrap_i64 (i64.load offset=8))",
+            "the array the cell holds (tag 4 low word)",
+        );
+    } else {
+        ctx.emit_load_value(array)?;
+    }
     ctx.emit_load_value(operand(inst, 0)?)?;
     match element_kind {
         Some(kind) => {
@@ -4886,6 +4912,14 @@ fn implode_shape_issue(function: &Function, call: &Instruction) -> Option<String
     let Some(array_value) = function.value(*array) else {
         return Some("array is missing from the value table".to_string());
     };
+    // A boxed container answers here too, when the box is PROVABLY one: `array_map` and
+    // `array_filter` type their result `mixed` because of their CALLBACK, never because the
+    // value might not be an array — so there is no `TypeError` path to get wrong.
+    if array_value.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && super::capability::value_is_container_by_construction(function, *array)
+    {
+        return None;
+    }
     if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
         return Some(format!(
             "implode takes an indexed array, got {:?}",
@@ -5549,7 +5583,19 @@ fn lower_string_predicate(
 
 /// Lowers `count($array)` to the container header's element count at `[ptr + 0]`.
 fn lower_count(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 0)?)?;
+    let container = operand(inst, 0)?;
+    ctx.emit_load_value(container)?;
+    // A boxed container carries the array pointer in the cell's low word; the capability rule
+    // is what guarantees the tag is a container's.
+    if matches!(
+        ctx.function.value(container).map(|v| v.ir_type),
+        Some(IrType::Heap(IrHeapKind::Mixed))
+    ) {
+        ctx.fb.ins(
+            "(i32.wrap_i64 (i64.load offset=8))",
+            "the container the cell holds",
+        );
+    }
     ctx.fb.ins("i64.load", "container element count @ +0");
     store_result(ctx, inst)
 }

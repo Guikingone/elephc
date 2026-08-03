@@ -1936,15 +1936,13 @@ fn unbox_arg_wat(ir: &IrType, php: &PhpType) -> Result<String> {
                 }
                 IrHeapKind::Mixed => {
                     // The argument buffer already holds CELLS, so a Mixed parameter needs no
-                    // unboxing at all — only the reference the body will release at its
-                    // epilogue, exactly as the container arm above takes one.
-                    s.push_str(&wat_ins("i64.extend_i32_u", "cell ptr -> i64 for the scratch local"));
-                    s.push_str(&wat_ins("local.set $ub_lo", "save the cell pointer"));
-                    s.push_str(&wat_ins("local.get $ub_lo", "cell pointer"));
-                    s.push_str(&wat_ins("i32.wrap_i64", "ptr -> i32 for incref"));
-                    s.push_str(&wat_ins("call $__rt_incref", "own a ref for the body param"));
-                    s.push_str(&wat_ins("local.get $ub_lo", "cell pointer"));
-                    s.push_str(&wat_ins("i32.wrap_i64", "the cell IS the parameter"));
+                    // unboxing at all — and no reference either: unlike a container parameter,
+                    // which the callee OWNS, a Mixed cell is BORROWED, and the call site
+                    // releases what it synthesized. Taking one here leaked the whole cell per
+                    // call, which `array_map` made visible at 55 bytes an element.
+                    //
+                    // The cell is already on the stack in the parameter's representation, so
+                    // there is nothing to emit.
                 }
                 IrHeapKind::Iterable | IrHeapKind::Union | IrHeapKind::Buffer => {
                     return Err(WasmError::Unsupported(format!(
