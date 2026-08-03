@@ -1881,3 +1881,22 @@ fn test_error_globals_bare_use_is_refused() {
         "Unsupported use of $GLOBALS",
     );
 }
+
+/// Negative control for the erased-object union deferral
+/// (`inference::objects::methods::infer_method_call_on_object_union`): a union of two KNOWN
+/// classes that both lack the method stays LOUD. The deferral is keyed on an erased member — a
+/// type that fixes no class — not on union-ness, so a union whose every member is settled keeps
+/// its diagnostic.
+#[test]
+fn test_error_method_on_union_of_known_classes_without_it_stays_loud() {
+    expect_error(
+        r#"<?php
+class A { public int $n = 1; }
+class B { public int $n = 2; }
+function pick(bool $c): A|B { return $c ? new A() : new B(); }
+$x = pick(true);
+echo $x->missingMethod();
+"#,
+        "Undefined method",
+    );
+}

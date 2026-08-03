@@ -275,3 +275,34 @@ fn test_inferred_mixed_receiver_method_in_concat() {
     );
     assert_eq!(out, "hello world");
 }
+
+/// A method call on a union that contains the ERASED object type (`object`, `is_object()`,
+/// `(object)` — modelled as the empty class name) defers to runtime dispatch instead of being
+/// refused, matching what a receiver typed as the erased object ALONE already did.
+///
+/// The erased member fixes no class, so the union cannot settle the lookup — and PHP does not
+/// settle it statically either. Symfony's `ResolveInstanceofConditionalsPass` hits this through
+/// `$definition = (new DeepCloner($definition))->cloneAs(ChildDefinition::class)`: `cloneAs()` is
+/// declared `: object`, so the branch join is `Definition|<erased>` while `setParent()` lives
+/// only on `ChildDefinition`.
+#[test]
+fn test_method_on_union_with_erased_object_member_dispatches_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+class Def { public string $p = ""; }
+class ChildDef extends Def { public function setParent(string $p): static { $this->p = $p; return $this; } }
+function cloneAs(): object { return new ChildDef(); }
+function pick(): Def { return new Def(); }
+function run(bool $cond): string {
+    $d = pick();
+    if ($cond) {
+        $d = cloneAs();
+        return $d->setParent("x")->p;
+    }
+    return "none";
+}
+echo run(true), ",", run(false);
+"#,
+    );
+    assert_eq!(out, "x,none");
+}

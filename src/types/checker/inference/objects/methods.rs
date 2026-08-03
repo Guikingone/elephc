@@ -333,6 +333,20 @@ impl Checker {
             .cloned()
             .collect();
         if resolving.is_empty() {
+            // An ERASED member (`object`, `is_object()`, `(object)` — modelled as the empty class
+            // name) fixes no class, so the union cannot settle the lookup and PHP does not settle
+            // it either: it dispatches on the runtime class. A receiver typed as the erased object
+            // ALONE already defers this way, warns, and lowers to a working dynamic dispatch —
+            // refusing the union was the inconsistent half.
+            //
+            // Symfony's `ResolveInstanceofConditionalsPass` reaches it through
+            // `$definition = (new DeepCloner($definition))->cloneAs(ChildDefinition::class)`:
+            // `cloneAs()` is declared `: object`, so the branch join is
+            // `Definition|<erased>` and `setParent()` lives only on `ChildDefinition`.
+            if object_classes.iter().any(|class_name| class_name.is_empty()) {
+                self.warn_absent_class(expr.span, "");
+                return Ok(PhpType::Mixed);
+            }
             let union_ty = PhpType::Union(
                 object_classes
                     .iter()
