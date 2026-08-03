@@ -67,11 +67,6 @@ mod state;
 
 use state::opcache_cache_enabled;
 
-/// The `PHP_VERSION_ID` the eval interpreter reports for OPcache state. Fixed to the
-/// newest maintained profile (8.5), matching the native default target and the value the
-/// sibling OPcache eval handlers report.
-const EVAL_OPCACHE_PHP_VERSION_ID: u32 = 80500;
-
 /// Returns whether `name` (already lowercased and unqualified) is one of the five OPcache
 /// file/script functions, so `function_exists` reports it as existing even though none is a
 /// PHP-visible eval builtin.
@@ -92,7 +87,7 @@ pub(in crate::interpreter) fn eval_opcache_file_function_exists(name: &str) -> b
 fn eval_opcache_file_disabled_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let enabled = opcache_cache_enabled(EVAL_OPCACHE_PHP_VERSION_ID, false);
+    let enabled = opcache_cache_enabled(crate::eval_php_profile::eval_php_version_id(), false);
     // Disabled cache (the eval/CLI default): every file function's correct result is
     // `false` — nothing is cached, invalidate reports not-found, compile cannot run.
     debug_assert!(!enabled, "eval reports the CLI default, which is disabled");
