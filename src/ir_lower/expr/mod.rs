@@ -7678,8 +7678,36 @@ fn array_literal_element_type_for_ir(
             property,
         )
         .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item))),
+        // An ENUM CASE is an object, not its backing value. The syntactic fallback types every
+        // `A::B` as `string` — right for an ordinary class constant, wrong here — which collapsed
+        // `[Suit::Hearts, Suit::Spades]` to `array<string>` and made `$case->value` read a
+        // property off a string.
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            enum_case_receiver_type(ctx, receiver, name)
+                .unwrap_or_else(|| ir_array_storage_type(infer_expr_type_syntactic(item)))
+        }
         _ => ir_array_storage_type(infer_expr_type_syntactic(item)),
     }
+}
+
+/// Returns the enum's object type when `receiver::name` names one of its cases.
+///
+/// Only a NAMED receiver resolves: `static::`/`self::` depend on the calling scope, and an
+/// ordinary class constant is not an enum case and keeps the syntactic reading.
+fn enum_case_receiver_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    name: &str,
+) -> Option<PhpType> {
+    let StaticReceiver::Named(class_name) = receiver else {
+        return None;
+    };
+    let class_name = class_name.as_str().trim_start_matches('\\');
+    let info = ctx.enums.get(class_name)?;
+    info.cases
+        .iter()
+        .any(|case| case.name == name)
+        .then(|| PhpType::Object(class_name.to_string()))
 }
 
 /// Returns the EIR array storage type for a resolved element type, or `None` when the type

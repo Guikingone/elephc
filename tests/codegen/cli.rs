@@ -8613,6 +8613,93 @@ echo "\n";
 /// php-src 8.5.6's own output for `MIXED_CAST_SOURCE`.
 const MIXED_CAST_EXPECTED: &str = "1|1|T|1;-5|-5|T|-5;0|0|F|0;1|1.5|T|1.5;-2|-2.7|T|-2.7;1|1|T|1;0|0|F|;0|0|F|;42|42|T|42;3|3.9|T|3.9;0|0|T|abc;0|0|F|;0|0|F|0;1|1|T|Array;0|0|F|Array;\n1;x;Array;2.5;\nArray;Array;\n";
 
+/// Enum cases held in an ARRAY, over string-backed, int-backed and pure enums.
+#[test]
+fn test_cli_wasm_enum_collections_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_enum_arrays");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, ENUM_COLLECTION_SOURCE).unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the enum-collection probe");
+    assert!(
+        output.status.success(),
+        "enum-collection compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the enum-collection probe under Node");
+    assert!(
+        run.status.success(),
+        "enum-collection probe trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // php-src 8.5.6's own bytes for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        ENUM_COLLECTION_EXPECTED
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// The enum-collection probe. Reading `->name` and `->value` off each element is the point:
+/// the literal used to be typed `array<string>`, which made those reads land on a string.
+const ENUM_COLLECTION_SOURCE: &str = r##"<?php
+enum Suit: string { case Hearts = "H"; case Spades = "S"; case Clubs = "C"; }
+enum Level: int { case Low = 1; case High = 10; }
+enum Flag { case On; case Off; }
+$suits = [Suit::Hearts, Suit::Spades, Suit::Clubs];
+foreach ($suits as $s) { echo $s->name, "=", $s->value, ";"; }
+echo "|", count($suits), "|";
+$levels = [Level::Low, Level::High];
+$total = 0;
+foreach ($levels as $l) { $total = $total + $l->value; }
+echo $total, "|";
+$flags = [Flag::On, Flag::Off];
+foreach ($flags as $f) { echo $f->name, ","; }
+echo "|";
+$acc = [];
+foreach ($suits as $s2) { $acc[] = $s2->value; }
+echo implode("", $acc), "|";
+$one = Suit::Hearts;
+echo $one === Suit::Hearts ? "id" : "no", "\n";
+"##;
+
+/// php-src 8.5.6's own output for `ENUM_COLLECTION_SOURCE`.
+const ENUM_COLLECTION_EXPECTED: &str = "Hearts=H;Spades=S;Clubs=C;|3|11|On,Off,|HSC|id\n";
+
 /// Enums: string-backed, int-backed and pure, read through `->value` and `->name`, compared
 /// by identity, and passed to a typed parameter.
 #[test]
