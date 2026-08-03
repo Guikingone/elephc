@@ -15,10 +15,11 @@ use super::guards::{
     extend_guards_for_switch_case_no_match_subject,
     guard_literal_truthy,
     has_excluded_guard,
+    known_range_guard,
     known_condition_value,
     scalar_guard_value,
 };
-use super::state::{GuardState, TailSinkTarget};
+use super::state::{GuardLiteral, GuardState, TailSinkTarget};
 use super::tail::sink_tail_into_terminal_path;
 
 /// Classifies switch pattern matching against a known scalar subject value.
@@ -108,6 +109,14 @@ fn classify_switch_patterns_with_guards(
 
         if has_excluded_guard(guards, name, &pattern_value) {
             continue;
+        }
+
+        if let (Some(interval), GuardLiteral::Int(pattern_int)) =
+            (known_range_guard(guards, name), &pattern_value)
+        {
+            if !interval.contains(*pattern_int) {
+                continue;
+            }
         }
 
         has_unknown = true;
