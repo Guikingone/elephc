@@ -1177,6 +1177,79 @@ fn forward_transfer_shape_issue(function: &Function, inst: &Instruction) -> Opti
 }
 
 /// Validates the exact source/target pairs implemented by `lower_cast`.
+/// The class whose `__toString` a string conversion of `class_name` must call, when that call
+/// is decidable here.
+///
+/// PHP converts an object at a string boundary by CALLING `__toString`, and raises
+/// `Error: Object of class X could not be converted to string` only when there is none. The EIR
+/// hands this cast a STATICALLY known class — `Heap(Object)/Object("Talks")`, not a Mixed — so
+/// no dynamic dispatch is involved: the conversion is a direct call to an ordinary method body
+/// already in the module.
+///
+/// A method that a subclass could still override is refused: the receiver's static class is not
+/// then the class PHP would dispatch on, and answering the base implementation would be wrong
+/// for an instance of the subclass. That is the same `vtable_slots` / `final_methods` test
+/// `methods::lower_method_call` makes before binding a call directly.
+/// Whether a string conversion of `class_name` is PHP's `Error`, decidably and for every
+/// instance the receiver could hold.
+///
+/// PHP raises `Object of class X could not be converted to string` when there is no
+/// `__toString`. Answering it needs the same certainty the direct call needs, in reverse: no
+/// class the receiver could BE may declare one, or a subclass would convert where this says it
+/// cannot. The check is therefore rooted at the whole known class table rather than at the one
+/// static class.
+pub(super) fn object_never_stringifies(module: &Module, class_name: &str) -> bool {
+    let key = crate::names::php_symbol_key("__toString");
+    let Some(info) = module.class_infos.get(class_name) else {
+        return false;
+    };
+    if info.methods.contains_key(&key) {
+        return false;
+    }
+    !module.class_infos.iter().any(|(candidate, candidate_info)| {
+        candidate_info.methods.contains_key(&key)
+            && class_descends_from(module, candidate, class_name)
+    })
+}
+
+pub(super) fn object_to_string_impl(module: &Module, class_name: &str) -> Option<String> {
+    let key = crate::names::php_symbol_key("__toString");
+    let info = module.class_infos.get(class_name)?;
+    let signature = info.methods.get(&key)?;
+    if !signature.params.is_empty() || signature.return_type.codegen_repr() != PhpType::Str {
+        return None;
+    }
+    let implementation = info
+        .method_impl_classes
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    // A non-final method owns a vtable slot whether or not anything overrides it, so the slot
+    // alone does not make the call dynamic. What matters is whether every class the receiver
+    // could BE — this class and its descendants, nothing above it — resolves to the same body:
+    // PHP dispatches on the RUNTIME class, and answering the base implementation would be wrong
+    // for a subclass that overrides it. A sibling branch of the hierarchy cannot reach this
+    // receiver, so it does not count against the call.
+    let overridden_below = module.class_infos.iter().any(|(candidate, candidate_info)| {
+        candidate != class_name
+            && class_descends_from(module, candidate, class_name)
+            && candidate_info
+                .method_impl_classes
+                .get(&key)
+                .is_some_and(|candidate_impl| *candidate_impl != implementation)
+    });
+    if overridden_below {
+        return None;
+    }
+    // The body must exist with the exact shape the direct call assumes: a lone receiver in,
+    // a string out.
+    let body = find_method_function(module, &implementation, &key)?;
+    (body.params.len() == 1
+        && body.params[0].ir_type == IrType::Heap(IrHeapKind::Object)
+        && body.return_type == IrType::Str)
+        .then_some(implementation)
+}
+
 /// The declared return type this cast is PHP's IMPLICIT coercion for, if it is one at all.
 ///
 /// That coercion is a DIFFERENT operation from a `(T)` cast, which is why it needs its own
@@ -1355,6 +1428,21 @@ fn cast_shape_issue(
             "implicit float-to-int casts require exact profile-specific out-of-range diagnostics"
                 .to_string(),
         );
+    }
+    // `(string)$obj` and `echo $obj` reach PHP's `__toString`. With the class known statically
+    // that is an ordinary direct call, so the conversion is exact whenever the call is decidable.
+    if source.ir_type == IrType::Heap(IrHeapKind::Object) && target == IrType::Str {
+        if let PhpType::Object(class_name) = &source_php {
+            let has_main = module.functions.iter().any(|f| f.flags.is_main);
+            // A class that provably has none raises PHP's `Error` instead — the same certainty,
+            // in reverse. That fatal writes through WASI, so it needs a command module.
+            if result_php == PhpType::Str
+                && (object_to_string_impl(module, class_name).is_some()
+                    || (has_main && object_never_stringifies(module, class_name)))
+            {
+                return None;
+            }
+        }
     }
     let supported = match (source.ir_type, target) {
         (IrType::TaggedScalar, IrType::I64) => {

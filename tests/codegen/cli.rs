@@ -11457,3 +11457,154 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies PHP's `__toString` conversion of a statically known object.
+///
+/// The EIR hands this cast the CLASS — `Heap(Object)/Object("Talks")`, not a Mixed — so the
+/// conversion is an ordinary direct call to a method body already in the module, with no
+/// dispatch involved. `echo $obj` reaches it without a cast node at all, since the echo does
+/// its own conversion; both sites share one emitter.
+///
+/// A class that provably has none raises php-src's `Error` instead, and a subclass that
+/// OVERRIDES `__toString` makes the receiver's body undecidable here, so such a program stays
+/// refused rather than answering the base implementation.
+#[test]
+fn test_cli_wasm_object_to_string_calls_php_tostring() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_object_to_string");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Talks { public function __toString(): string { return "I talk"; } }
+class Money {
+    public function __construct(private int $cents) {}
+    public function __toString(): string { return "$" . $this->cents; }
+}
+class Base { public function __toString(): string { return "base"; } }
+class Sub extends Base {}
+$t = new Talks();
+echo $t, "\n";
+echo "x" . $t, "\n";
+echo (string) $t, "\n";
+echo new Base(), "|", new Sub(), "\n";
+foreach (range(1, 3) as $i) { echo new Money($i), "\n"; }
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the __toString conversions to WASM");
+    assert!(
+        output.status.success(),
+        "__toString compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the __toString conversions under Node");
+    assert!(
+        run.status.success(),
+        "__toString conversions must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "I talk\n",
+            "xI talk\n",
+            "I talk\n",
+            "base|base\n",
+            "$1\n",
+            "$2\n",
+            "$3\n",
+        ),
+        "php-src's own bytes: an inherited __toString resolves to the parent body, and a \
+         __toString that BUILDS its string round-trips"
+    );
+
+    // A class with none is php-src's Error, raised with its own text rather than refused.
+    let missing = dir.join("missing.php");
+    fs::write(
+        &missing,
+        "<?php\nclass Plain { public int $x = 1; }\necho new Plain(), \"\\n\";\n",
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&missing)
+        .output()
+        .expect("failed to compile the missing-__toString case");
+    assert!(
+        output.status.success(),
+        "a class without __toString must still compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("missing.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the missing-__toString case");
+    assert_eq!(run.status.code(), Some(255));
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr),
+        "PHP Fatal error: Uncaught Error: Object of class Plain could not be converted to string\n"
+    );
+
+    // An overriding subclass makes the receiver's body undecidable at the `Base` site, so the
+    // program is refused rather than answered with the wrong implementation.
+    let overridden = dir.join("overridden.php");
+    fs::write(
+        &overridden,
+        concat!(
+            "<?php\n",
+            "class B { public function __toString(): string { return \"b\"; } }\n",
+            "class S extends B { public function __toString(): string { return \"s\"; } }\n",
+            "echo new B(), \"|\", new S(), \"\\n\";\n",
+        ),
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&overridden)
+        .output()
+        .expect("failed to run the overriding-subclass case");
+    assert!(
+        !output.status.success(),
+        "an overriding subclass must not compile to the base body"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

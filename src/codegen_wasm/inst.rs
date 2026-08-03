@@ -1664,6 +1664,16 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .value(value)
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("cast source {:?} is missing", value)))?;
+    // A string conversion of a statically known object is PHP's `__toString`, and the EIR
+    // already carries the class, so it lowers to an ordinary direct call rather than any
+    // dispatch. The callee's `(ptr i32, len i64)` result IS this backend's string storage.
+    if source.ir_type == IrType::Heap(IrHeapKind::Object) && target == IrType::Str {
+        if let PhpType::Object(class_name) = source.php_type.clone() {
+            if emit_object_to_string(ctx, value, &class_name)? {
+                return store_result(ctx, inst);
+            }
+        }
+    }
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
         ctx.emit_load_value(value)?;
         match target {
@@ -2636,6 +2646,40 @@ fn lower_exit(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// Floats render as `%.14G` text via `__rt_echo_f64`; mixed values defer to the
 /// tag-dispatching `__rt_mixed_write_stdout`. Array and object output still need
 /// more runtime support and are not handled yet.
+/// Emits PHP's string conversion of a statically known object, or its `Error` when the class
+/// has none.
+///
+/// Leaves this backend's string storage — `(ptr i32, len i64)` — on the stack, which is exactly
+/// what a `__toString` body returns, so the conversion needs no repacking. The `Error` path
+/// never returns, so the stack it leaves is the polymorphic one after `unreachable`.
+fn emit_object_to_string(ctx: &mut FnCtx, object: ValueId, class_name: &str) -> Result<bool> {
+    if let Some(implementation) = super::capability::object_to_string_impl(ctx.module, class_name)
+    {
+        let symbol = super::symbols::method_symbol(&format!("{}::__toString", implementation));
+        ctx.emit_load_value(object)?;
+        ctx.fb.ins(
+            &format!("call ${}", symbol),
+            "PHP converts an object to a string through __toString",
+        );
+        return Ok(true);
+    }
+    if super::capability::object_never_stringifies(ctx.module, class_name) {
+        ctx.emit_load_value(object)?;
+        ctx.fb
+            .ins("i64.load", "runtime class id, which the fatal names");
+        ctx.fb.ins(
+            "call $__rt_fail_object_to_string",
+            "PHP's Error for a class with no __toString",
+        );
+        ctx.fb.ins(
+            "unreachable ;; elephc-trap:post-noreturn:object-to-string",
+            "the fatal exits",
+        );
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let op0 = operand(inst, 0)?;
     let php = ctx
@@ -2704,6 +2748,19 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb
                 .ins("call $__rt_echo_i64", "echo non-null tagged integer");
             ctx.fb.ins("end", "end tagged scalar echo");
+            Ok(())
+        }
+        // `echo $obj` is PHP's `__toString`, reached without a cast node: the echo itself does
+        // the conversion. With the class known statically it is the same direct call the cast
+        // arm makes, and the callee's `(ptr, len)` result is exactly what `__rt_echo_str` wants.
+        PhpType::Object(ref class_name) => {
+            if !emit_object_to_string(ctx, op0, class_name)? {
+                return Err(WasmError::Unsupported(format!(
+                    "echo of {:?} without a decidable string conversion",
+                    php
+                )));
+            }
+            ctx.fb.ins("call $__rt_echo_str", "echo the converted string");
             Ok(())
         }
         other => Err(WasmError::Unsupported(format!("echo of {:?}", other))),
