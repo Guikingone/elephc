@@ -261,6 +261,9 @@ struct ClassEffectContext {
 struct FunctionEffectBody {
     body: Vec<Stmt>,
     declared_never: bool,
+    /// Whether calling it can raise a `TypeError` that the BODY does not contain — see
+    /// `declared_type_boundary_may_throw`.
+    declared_boundary: bool,
 }
 
 /// Holds the body, class context, and never-return metadata for a static method during effect analysis.
@@ -269,6 +272,9 @@ struct StaticMethodBody {
     context: ClassEffectContext,
     body: Vec<Stmt>,
     declared_never: bool,
+    /// Whether calling it can raise a `TypeError` that the BODY does not contain — see
+    /// `declared_type_boundary_may_throw`.
+    declared_boundary: bool,
 }
 
 /// Maps names to scalar constants during constant propagation.
@@ -376,7 +382,10 @@ fn compute_program_callable_effects(
                         instance_slot.replace(Some(private_instance_method_snapshot));
 
                     for (name, function) in &function_bodies {
-                        let effect = never_declared_effect(function.declared_never, block_effect(&function.body));
+                        let effect = declared_boundary_effect(
+                            function.declared_boundary,
+                            never_declared_effect(function.declared_never, block_effect(&function.body)),
+                        );
                         if function_effects.get(name).copied() != Some(effect) {
                             function_effects.insert(name.clone(), effect);
                             changed = true;
@@ -387,7 +396,10 @@ fn compute_program_callable_effects(
                         let effect = with_class_effect_context(Some(method.context.clone()), || {
                             block_effect(&method.body)
                         });
-                        let effect = never_declared_effect(method.declared_never, effect);
+                        let effect = declared_boundary_effect(
+                            method.declared_boundary,
+                            never_declared_effect(method.declared_never, effect),
+                        );
                         if static_method_effects.get(name).copied() != Some(effect) {
                             static_method_effects.insert(name.clone(), effect);
                             changed = true;
@@ -398,7 +410,10 @@ fn compute_program_callable_effects(
                         let effect = with_class_effect_context(Some(method.context.clone()), || {
                             block_effect(&method.body)
                         });
-                        let effect = never_declared_effect(method.declared_never, effect);
+                        let effect = declared_boundary_effect(
+                            method.declared_boundary,
+                            never_declared_effect(method.declared_never, effect),
+                        );
                         if private_instance_method_effects.get(name).copied() != Some(effect) {
                             private_instance_method_effects.insert(name.clone(), effect);
                             changed = true;
@@ -428,6 +443,7 @@ fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Fun
         match &stmt.kind {
             StmtKind::FunctionDecl {
                 name,
+                params,
                 body,
                 return_type,
                 ..
@@ -437,6 +453,7 @@ fn collect_program_function_bodies(stmts: &[Stmt], out: &mut HashMap<String, Fun
                     FunctionEffectBody {
                         body: body.clone(),
                         declared_never: is_never_return_type(return_type),
+                        declared_boundary: declared_type_boundary_may_throw(params, return_type),
                     },
                 );
             }
@@ -471,6 +488,10 @@ fn collect_program_static_method_bodies(
                                 context: context.clone(),
                                 body: method.body.clone(),
                                 declared_never: is_never_return_type(&method.return_type),
+                                declared_boundary: declared_type_boundary_may_throw(
+                                    &method.params,
+                                    &method.return_type,
+                                ),
                             },
                         );
                     }
@@ -510,6 +531,10 @@ fn collect_program_private_instance_method_bodies(
                                 context: context.clone(),
                                 body: method.body.clone(),
                                 declared_never: is_never_return_type(&method.return_type),
+                                declared_boundary: declared_type_boundary_may_throw(
+                                    &method.params,
+                                    &method.return_type,
+                                ),
                             },
                         );
                     }
@@ -531,6 +556,36 @@ fn method_effect_key(class_name: &str, method_name: &str) -> String {
 /// Returns true if the type expression is `Never`.
 fn is_never_return_type(return_type: &Option<TypeExpr>) -> bool {
     matches!(return_type, Some(TypeExpr::Never))
+}
+
+/// Returns whether CALLING a callable with these declared parameter/return types can raise a
+/// `TypeError` that no statement of its BODY contains.
+///
+/// A declared type is a runtime check in PHP, not a static one: an argument that does not fit a
+/// declared parameter throws at the boundary, and a returned value that does not fit a declared
+/// return type throws at the `return`. Neither throw is visible to `block_effect`, which only
+/// walks the body — so a `try { f($x); } catch (TypeError $e) {}` around a call to a
+/// declaration-carrying function had its catch clauses pruned as unreachable, and the handler
+/// disappeared with them.
+///
+/// Deliberately keyed on the DECLARATION rather than on the call site's argument types: this
+/// summary is computed once per callable, before any caller is known, and the elephc guards that
+/// materialize these throws (`crate::ir_lower::checked_downcast`) are emitted per call site from
+/// the very same declarations.
+fn declared_type_boundary_may_throw(
+    params: &[(String, Option<TypeExpr>, Option<Expr>, bool)],
+    return_type: &Option<TypeExpr>,
+) -> bool {
+    params.iter().any(|(_, ty, _, _)| ty.is_some()) || return_type.is_some()
+}
+
+/// Adds the declared-type boundary throw to a callable's summary effect.
+fn declared_boundary_effect(declared_boundary: bool, effect: Effect) -> Effect {
+    if declared_boundary {
+        effect.with_may_throw()
+    } else {
+        effect
+    }
 }
 
 /// Adjusts an effect when the callable has a `never` return type. A `never` function is

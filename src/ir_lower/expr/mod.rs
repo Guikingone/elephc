@@ -14,7 +14,9 @@ use crate::ir::{
     BlockId, CmpPredicate, Effects, Immediate, IrHeapKind, IrType, LocalKind, LocalSlotId,
     MixedNumericOp, Op, Ownership, StrBitKind, Terminator, ValueId,
 };
-use crate::ir_lower::checked_downcast::{CalleeLabel, DowncastPosition, emit_checked_downcast};
+use crate::ir_lower::checked_downcast::{
+    CalleeLabel, DowncastPosition, emit_checked_downcast, emit_scalar_coercion_refusal_guard,
+};
 use crate::ir_lower::context::{
     value_ir_type, ByRefPropWriteback, ClosureCapture, LoweredValue, LoweringContext,
     StaticCallableBinding,
@@ -6404,11 +6406,21 @@ fn coerce_scalar_arg_to_param_storage(
         return coerce_to_float(ctx, value, arg);
     }
     let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    // A BOXED source is deferred to `coerce_operands_to_params`: only a box can carry the array or
+    // null payload PHP REFUSES at a `string` parameter, coercing here would consume the runtime tag
+    // that refusal guard has to read, and only that site knows the callee's name to put in the
+    // `TypeError`. Every other source kind is a conversion PHP always performs, so it still happens
+    // here.
+    //
+    // The deferral is safe because every `lower_args_with_signature_labeled` path ends in
+    // `coerce_operands_to_params`. The two direct `lower_arg_with_signature` callers that do NOT
+    // (`lower_user_value_sort_args`, for `usort`/`uasort`) are unaffected on a different ground:
+    // their declared parameters are `array` and `callable`, so `param_ty` is never `Str` there and
+    // this branch cannot be the one that would have converted.
     if param_ty == PhpType::Str
         && matches!(
             source_ty,
-            PhpType::Mixed
-                | PhpType::Union(_)
+            PhpType::Union(_)
                 | PhpType::Int
                 | PhpType::Float
                 // `source_ty` is a `codegen_repr()`, which folds `false` into `bool`; a
@@ -6475,6 +6487,26 @@ fn coerce_operands_to_params(
                 None,
             );
             operands[index] = guarded.value;
+            // The REFUSAL half of the same boundary. A declared SCALAR never reaches the arm chain
+            // above (`guard_is_php_faithful` keeps a conversion site off it), so until this guard
+            // existed nothing tested the payloads PHP REJECTS there: an array reaching a declared
+            // `string` fell straight into the `IToStr` coercion below and became `""`, and one
+            // reaching a declared `int` became its element count — both continuing with exit 0
+            // where PHP raises a catchable `TypeError`.
+            emit_scalar_coercion_refusal_guard(
+                ctx,
+                LoweredValue {
+                    value: operands[index],
+                    ir_type: ctx.builder.value_type(operands[index]),
+                },
+                param_ty,
+                DowncastPosition::Argument {
+                    callee,
+                    index,
+                    param: param_name,
+                },
+                None,
+            );
         }
         let value = operands[index];
         let operand_ty = ctx.builder.value_php_type(value).codegen_repr();

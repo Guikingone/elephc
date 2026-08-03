@@ -242,6 +242,114 @@ pub(crate) fn source_member_is_guard_routable(member: &PhpType) -> bool {
     )
 }
 
+/// A declared type PHP's weak mode treats as a CONVERSION site rather than a match site: exactly
+/// one scalar arm, optionally joined by `null`.
+///
+/// `guard_is_php_faithful` keeps such a declaration off the arm-chain guard precisely because no
+/// arm test can see a conversion. That is the right call for the arms PHP CONVERTS — but PHP also
+/// REFUSES payloads at the very same boundary, and those refusals are invisible to the arm chain
+/// for the same reason. This type names the boundary so `scalar_coercion_refusals` can state which
+/// payloads it rejects.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct ScalarCoercionTarget {
+    /// The single scalar arm the declaration converts INTO (`Str`, `Int`, `Float` or `Bool`).
+    pub scalar: PhpType,
+    /// Whether the declaration also carries a `null` arm (`?string`, `string|null`).
+    pub accepts_null: bool,
+}
+
+/// A runtime payload PHP REFUSES at a scalar conversion boundary, raising a catchable `TypeError`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CoercionRefusal {
+    /// A `null` payload reaching a NON-nullable scalar declaration.
+    Null,
+    /// An array payload, refused by every scalar declaration.
+    Array,
+}
+
+/// Returns the scalar conversion boundary `declared` describes, or `None` when it is not one.
+///
+/// Accepts `string`/`int`/`float`/`bool` and their `?T` spellings, and nothing else. A declaration
+/// with a second non-null arm (`string|array`, `string|D`) is deliberately excluded: an array
+/// reaching `string|array` is MATCHED, not refused, so the uniform refusal table below does not
+/// describe it and it needs its own proof.
+pub(crate) fn scalar_coercion_target(declared: &PhpType) -> Option<ScalarCoercionTarget> {
+    /// Returns whether a member is one of the four scalars PHP weak-converts into.
+    fn is_coercion_scalar(member: &PhpType) -> bool {
+        matches!(
+            member,
+            PhpType::Str | PhpType::Int | PhpType::Float | PhpType::Bool
+        )
+    }
+    match declared {
+        single if is_coercion_scalar(single) => Some(ScalarCoercionTarget {
+            scalar: single.clone(),
+            accepts_null: false,
+        }),
+        PhpType::Union(members) => {
+            let mut scalar = None;
+            let mut accepts_null = false;
+            for member in members {
+                match member {
+                    PhpType::Void => accepts_null = true,
+                    other if is_coercion_scalar(other) && scalar.is_none() => {
+                        scalar = Some(other.clone());
+                    }
+                    // A second scalar arm, a class arm, an array arm: not this shape.
+                    _ => return None,
+                }
+            }
+            scalar.map(|scalar| ScalarCoercionTarget {
+                scalar,
+                accepts_null,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Returns the payloads `target` refuses, in the order a guard must test them.
+///
+/// MEASURED against `php -n` (php-8.5.6) for all four scalar targets crossed with a boxed `null`,
+/// `int`, `float`, `bool`, numeric string, non-numeric string, array, plain object and `Stringable`
+/// object source. Two refusals hold for EVERY target and are therefore stated once here:
+/// - `null` into a non-nullable scalar — `fs(null)`, `fi(null)`, `ff(null)`, `fb(null)` all throw.
+/// - an array into any scalar — `fs(arr)`, `fi(arr)`, `ff(arr)`, `fb(arr)` all throw.
+///
+/// The refusals that are NOT uniform are deliberately absent, because a guard that states them
+/// here would have to state them per target: a non-numeric string is refused by `int`/`float` but
+/// converted by `string`/`bool`; a plain object is refused by all four but a `Stringable` one is
+/// converted by `string` alone. Those need the numeric-string and `__toString` probes a tag test
+/// cannot express, so they stay out rather than be approximated.
+pub(crate) fn scalar_coercion_refusals(target: &ScalarCoercionTarget) -> Vec<CoercionRefusal> {
+    let mut refusals = Vec::new();
+    if !target.accepts_null {
+        refusals.push(CoercionRefusal::Null);
+    }
+    refusals.push(CoercionRefusal::Array);
+    refusals
+}
+
+/// Returns whether a value statically typed `actual` could carry `refusal`'s payload at runtime.
+///
+/// Only a BOXED source is ever asked: the caller gates on `codegen_repr() == Mixed`, because a
+/// refusal test reads a runtime tag and only a box has one. Within that, `Mixed` itself could hold
+/// anything, while a union source is decided by its members — which is what keeps a `?string`
+/// argument from paying for an array test it can never fail.
+pub(crate) fn boxed_source_may_hold(actual: &PhpType, refusal: CoercionRefusal) -> bool {
+    match actual {
+        PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| boxed_source_may_hold(member, refusal)),
+        PhpType::Void | PhpType::Never => refusal == CoercionRefusal::Null,
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            refusal == CoercionRefusal::Array
+        }
+        _ => false,
+    }
+}
+
 /// Returns the `Object(name)` arms of `ty` with a NON-EMPTY name, in declared order, deduped —
 /// the classes/interfaces a guard can spell as `Op::InstanceOf` targets.
 pub(crate) fn declared_instanceof_targets(ty: &PhpType) -> Vec<String> {
@@ -450,6 +558,77 @@ mod tests {
         assert!(source_member_is_guard_routable(&PhpType::Array(Box::new(
             PhpType::Mixed
         ))));
+    }
+
+    /// The four scalars and their `?T` spellings are conversion boundaries; a declaration with a
+    /// second non-null arm is not, because an array reaching `string|array` is MATCHED there.
+    #[test]
+    fn scalar_coercion_targets_are_the_four_scalars_and_their_nullable_spellings() {
+        for scalar in [PhpType::Str, PhpType::Int, PhpType::Float, PhpType::Bool] {
+            let bare = scalar_coercion_target(&scalar).expect("a bare scalar is a boundary");
+            assert_eq!(bare.scalar, scalar);
+            assert!(!bare.accepts_null);
+
+            let nullable = PhpType::Union(vec![scalar.clone(), PhpType::Void]);
+            let nullable = scalar_coercion_target(&nullable).expect("`?T` is a boundary");
+            assert_eq!(nullable.scalar, scalar);
+            assert!(nullable.accepts_null);
+        }
+        assert!(scalar_coercion_target(&PhpType::Mixed).is_none());
+        assert!(scalar_coercion_target(&PhpType::Object("D".to_string())).is_none());
+        assert!(
+            scalar_coercion_target(&PhpType::Union(vec![
+                PhpType::Str,
+                PhpType::Array(Box::new(PhpType::Mixed)),
+                PhpType::Void,
+            ]))
+            .is_none(),
+            "an array arm MATCHES an array payload, so the uniform refusal table does not apply"
+        );
+        assert!(
+            scalar_coercion_target(&PhpType::Union(vec![PhpType::Str, PhpType::Int])).is_none(),
+            "two scalar arms need a per-arm decision this shape does not carry"
+        );
+    }
+
+    /// Null is refused only by a non-nullable declaration; an array is refused by every one.
+    #[test]
+    fn scalar_coercion_refusals_follow_the_measured_php_matrix() {
+        let non_nullable = scalar_coercion_target(&PhpType::Str).expect("boundary");
+        assert_eq!(
+            scalar_coercion_refusals(&non_nullable),
+            vec![CoercionRefusal::Null, CoercionRefusal::Array]
+        );
+        let nullable = scalar_coercion_target(&PhpType::Union(vec![PhpType::Int, PhpType::Void]))
+            .expect("boundary");
+        assert_eq!(
+            scalar_coercion_refusals(&nullable),
+            vec![CoercionRefusal::Array]
+        );
+    }
+
+    /// A union source pays only for the tests its own members can fail.
+    #[test]
+    fn boxed_source_may_hold_is_decided_by_the_source_members() {
+        assert!(boxed_source_may_hold(&PhpType::Mixed, CoercionRefusal::Null));
+        assert!(boxed_source_may_hold(&PhpType::Mixed, CoercionRefusal::Array));
+
+        let string_or_null = PhpType::Union(vec![PhpType::Str, PhpType::Void]);
+        assert!(boxed_source_may_hold(
+            &string_or_null,
+            CoercionRefusal::Null
+        ));
+        assert!(
+            !boxed_source_may_hold(&string_or_null, CoercionRefusal::Array),
+            "a `?string` source can never be an array, so it must not pay for the array test"
+        );
+
+        let array_or_int = PhpType::Union(vec![
+            PhpType::Array(Box::new(PhpType::Mixed)),
+            PhpType::Int,
+        ]);
+        assert!(boxed_source_may_hold(&array_or_int, CoercionRefusal::Array));
+        assert!(!boxed_source_may_hold(&array_or_int, CoercionRefusal::Null));
     }
 
     /// Repeated arms are deduped so a guard emits one test per distinct check.

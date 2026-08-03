@@ -15,6 +15,8 @@ mod instanceof;
 mod checked_downcast_argument;
 #[path = "oop/checked_downcast_return.rs"]
 mod checked_downcast_return;
+#[path = "oop/scalar_coercion_refusal.rs"]
+mod scalar_coercion_refusal;
 #[path = "oop/traits.rs"]
 mod traits;
 #[path = "oop/inheritance.rs"]

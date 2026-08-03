@@ -6,10 +6,14 @@
 //! inserts a chain of runtime checks that passes the value through on a match and throws a
 //! catchable `\TypeError` (naming the ACTUAL runtime type) when every declared arm mismatches.
 //!
+//! It also owns the boundary's REFUSAL half (`emit_scalar_coercion_refusal_guard`): a declared
+//! SCALAR is a conversion site the arm chain deliberately never guards, but PHP still rejects a
+//! `null` or array payload there, and those rejections need the same catchable `\TypeError`.
+//!
 //! Called from:
 //! - `crate::ir_lower::stmt::return_type_guard::emit_checked_downcast_return_guard` (return
 //!   position).
-//! - `crate::ir_lower::expr::coerce_operands_to_params` (call-argument position).
+//! - `crate::ir_lower::expr::coerce_operands_to_params` (call-argument position, BOTH halves).
 //!
 //! Key details:
 //! - ONE chain for every position. The message wording and the ownership policy of the throw
@@ -50,8 +54,8 @@ use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::span::Span;
 use crate::types::PhpType;
 use crate::types::checked_downcast::{
-    GuardArm, GuardPosition, GuardShape, declared_guard_arms, downcast_guard_shape,
-    guard_is_php_faithful, shape_is_guardable_at,
+    CoercionRefusal, GuardArm, GuardPosition, GuardShape, declared_guard_arms,
+    downcast_guard_shape, guard_is_php_faithful, shape_is_guardable_at,
 };
 
 /// How the callee of a guarded call argument is spelled in the `TypeError` message.
@@ -342,6 +346,101 @@ fn emit_guard_chain(
         return unbox_guarded_object(ctx, value, declared, span);
     }
     value
+}
+
+/// Inserts the REFUSAL half of a weak-mode scalar conversion boundary: the runtime tags PHP
+/// rejects outright at a declared `string`/`int`/`float`/`bool` slot, raising the same catchable
+/// `\TypeError` the arm chain does.
+///
+/// This is the complement of `emit_checked_downcast`, not a variant of it. A scalar declaration is
+/// where PHP stops MATCHING and starts CONVERTING, so `guard_is_php_faithful` keeps it off the arm
+/// chain entirely — an arm test cannot see a conversion and would throw where PHP quietly converts.
+/// But the same boundary also REFUSES payloads, and those refusals were invisible for exactly the
+/// same reason: nothing tested them, so an array reaching a declared `string` was handed to the
+/// boundary's `IToStr` coercion and silently became `""`, and one reaching a declared `int` became
+/// its element COUNT. Both continued with exit 0 where PHP throws.
+///
+/// Only the refusals that hold for EVERY scalar target are emitted (`null` into a non-nullable
+/// slot, and an array into any of the four) — see `scalar_coercion_refusals` for the measured
+/// matrix and for why the per-target ones (non-numeric string into `int`, plain object into
+/// anything) are deliberately left out rather than approximated.
+///
+/// Only a BOXED source is guarded: the tests read a runtime tag, and a raw scalar has none. That is
+/// also exactly the family that was silent — a statically-typed array reaching a `string` parameter
+/// is a compile error the checker still raises.
+///
+/// Emits nothing and leaves lowering positioned where it found it when the declaration is not a
+/// scalar boundary, when the source is not boxed, or when the source's static type proves it cannot
+/// hold any refused payload.
+pub(crate) fn emit_scalar_coercion_refusal_guard(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    declared: &PhpType,
+    position: DowncastPosition<'_>,
+    span: Option<Span>,
+) {
+    let Some(target) = crate::types::checked_downcast::scalar_coercion_target(declared) else {
+        return;
+    };
+    let actual = ctx.builder.value_php_type(value.value);
+    if actual.codegen_repr() != PhpType::Mixed {
+        return;
+    }
+    let refused: Vec<CoercionRefusal> = crate::types::checked_downcast::scalar_coercion_refusals(
+        &target,
+    )
+    .into_iter()
+    .filter(|refusal| crate::types::checked_downcast::boxed_source_may_hold(&actual, *refusal))
+    .collect();
+    if refused.is_empty() {
+        return;
+    }
+
+    let prefix = "arg_coercion_guard";
+    let ok_block = ctx.builder.create_named_block(&format!("{}.ok", prefix), Vec::new());
+    let fail_block = ctx.builder.create_named_block(&format!("{}.fail", prefix), Vec::new());
+    let total = refused.len();
+    for (emitted, refusal) in refused.into_iter().enumerate() {
+        // Inverted relative to the arm chain: a REFUSAL test that MATCHES goes to the throw, and
+        // falling through every test is what continues into the coercion.
+        let (op, immediate) = match refusal {
+            CoercionRefusal::Null => (Op::IsNull, None),
+            CoercionRefusal::Array => (
+                Op::TypePredicate,
+                Some(Immediate::TypePredicate(PhpTypePredicate::Array)),
+            ),
+        };
+        let matched = ctx.emit_value(
+            op,
+            vec![value.value],
+            immediate,
+            PhpType::Bool,
+            op.default_effects(),
+            span,
+        );
+        let is_last = emitted + 1 == total;
+        let else_target = if is_last {
+            ok_block
+        } else {
+            ctx.builder
+                .create_named_block(&format!("{}.check", prefix), Vec::new())
+        };
+        ctx.builder.terminate(Terminator::CondBr {
+            cond: matched.value,
+            then_target: fail_block,
+            then_args: Vec::new(),
+            else_target,
+            else_args: Vec::new(),
+        });
+        if !is_last {
+            ctx.builder.position_at_end(else_target);
+        }
+    }
+
+    ctx.builder.position_at_end(fail_block);
+    emit_mismatch_throw(ctx, value, declared, &position, span);
+    ctx.builder.terminate(Terminator::Unreachable);
+    ctx.builder.position_at_end(ok_block);
 }
 
 /// Terminates the current block with the guard's `matched ? ok : next-check` branch, creating the

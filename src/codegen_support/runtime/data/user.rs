@@ -2448,6 +2448,7 @@ mod tests {
             allow_dynamic_properties: false,
             constants: HashMap::new(),
             constant_types: HashMap::new(),
+            constant_order: Vec::new(),
             constant_visibilities: HashMap::new(),
             final_constants: HashSet::new(),
             attribute_names: Vec::new(),
