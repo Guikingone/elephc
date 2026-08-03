@@ -4,6 +4,11 @@
 > broader range reasoning and multi-variable facts beyond current strict-scalar,
 > boolean, loose-comparison, and safe relational-complement guards.
 
+> **Status:** completed, including the bounded follow-up slices for exact-`int`
+> local seeding, full exact coupling after strict substitution, and pure
+> pre-tested `while` / `for` body-entry guards. Shallow multi-hop was reviewed
+> and intentionally not opened without a concrete fixture.
+
 ## Context
 
 AST dead-code elimination (`src/optimize/control/dce/`) already tracks
@@ -19,7 +24,7 @@ and later relational/loose slices) is:
 | Loose-comparison complement | `condition_guards` (AST-structural) | `$x == 0` ⇒ nested `$x != 0` false (same AST shape) |
 | Safe relational complement | `condition_guards` (AST-structural, NaN-gated) | taken-true `$x > 10` ⇒ nested `$x <= 10` false; taken-false refuses the inverse |
 
-Two structural ceilings remain, both named by the ROADMAP item and by
+At the time this plan was written, two structural ceilings remained, both named by the ROADMAP item and by
 `docs/internals/the-optimizer.md` ("What the optimizer does not do yet"):
 
 1. **No range / interval domain.** `$x > 10` only records the structural
@@ -61,8 +66,9 @@ Extend `src/optimize/control/dce/` so that:
 
 - EIR port of the guard lattice (EIR already has const-fold / branch-simplify /
   DCE; the ROADMAP item is AST DCE).
-- Loop-condition strengthening (`While` / `For` currently clone outer guards
-  into the body and do not extend from the loop condition — leave that alone).
+- General loop/backedge fixed-point reasoning. The bounded follow-up now extends
+  pure, non-throwing `While` / `For` body entries from the taken-true condition;
+  `DoWhile` remains excluded because its first body execution precedes the test.
 - General CFG join / meet of `GuardState` across arbitrary merges (still
   path-cloned; no new fixed-point over blocks).
 - Float interval domain as a first-class lattice. Float relational complements
@@ -117,7 +123,8 @@ Add `range_guards: Vec<RangeGuard>` to `GuardState`.
 **Recording** (in `extend_guards`, after exact/excluded handling), when the
 condition is a pure relational `BinOp` with one `Variable` side and one
 `IntLiteral` side (either order), and the variable already has a proven integer
-domain from an `int` parameter, an exact-int guard, or an existing range. Both
+domain from an `int` parameter, a completed exact-`int` typed local declaration,
+an exact-int guard, or an existing range. Both
 branch polarities are then total; mixed, float, and string domains record no
 discrete interval:
 
@@ -138,7 +145,9 @@ invent a new "bottom" control-flow rewrite in this slice beyond what DCE
 already does when a condition is known.
 
 **Exact-guard coupling:** recording `exact_guards` with `GuardLiteral::Int(n)`
-also sets `range_guards` to `[n, n]`. Clearing a name clears its range fact.
+also sets `range_guards` to `[n, n]`. A strict-equality atom reduced to
+`$name === n` by relational substitution uses this same full recorder, including
+truthiness and integer-domain facts. Clearing a name clears its range fact.
 An excluded int does **not** punch a hole in the interval (holes need a
 different domain); exclusions continue to work through `excluded_guards`.
 
@@ -457,6 +466,19 @@ fn swap_rel(op: RelOp) -> RelOp; // for operand swap normalization
 - Modify: `CHANGELOG.md` (`[Unreleased]`)
 
 - [x] Update; `git diff --check`; commit `docs: guard reasoning v2 internals and ROADMAP`.
+
+## Follow-up completion
+
+- [x] Slice A — seed the discrete integer domain after completed exact-`int`
+  typed local declarations; keep nullable/non-int locals unseeded; route normal,
+  foreach, global, clear-by-name, and by-reference-call writes through guard invalidation.
+- [x] Slice B — route strict relational substitution to the shared exact-literal
+  recorder so exact, truthiness, point-range, integer-domain, switch, and strict
+  comparison queries agree.
+- [x] Slice C — extend pure, non-throwing `while` / `for` body entries from the
+  taken-true condition after loop-carried invalidation; keep `do...while` unchanged.
+- Slice D — intentionally skipped: no concrete one-hop fixture justified widening
+  the relational protocol, so no octagon/DBM-style or speculative v3 work was added.
 
 ## Focused verification (per implementation PR)
 
