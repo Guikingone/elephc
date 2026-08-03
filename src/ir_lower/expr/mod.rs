@@ -13322,6 +13322,33 @@ fn release_owned_call_arg_temporaries_with_signature(
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
             if !independently_boxed && result_reuses_arg {
+                // Both suppression reasons above are MAY facts, so an unconditional skip is
+                // right only on the calls that actually hand the payload back. Emitting a
+                // conditional release instead lets each call decide at runtime: the codegen
+                // compares the returned payload against this argument and releases it only
+                // when they differ (issue #619). On a callee that genuinely always returns
+                // the parameter the comparison always matches, so the #604 behaviour is
+                // unchanged.
+                // Only when the two payloads are directly comparable as single pointers. A
+                // boxed `Mixed` result that *wraps* the argument's container holds a different
+                // pointer than the container itself, so comparing them would read "not aliased"
+                // for a value the result does own, and release it twice. Same restriction the
+                // ABI-side cleanup slots already apply via `call_result_can_alias_mixed_temp`.
+                if let Some(result) = result {
+                    let arg_repr = ctx.builder.value_php_type(lowered.value).codegen_repr();
+                    let result_repr = ctx.builder.value_php_type(result).codegen_repr();
+                    let comparable = matches!(arg_repr, PhpType::Mixed | PhpType::Union(_))
+                        && matches!(result_repr, PhpType::Mixed | PhpType::Union(_));
+                    if comparable {
+                        ctx.emit_void(
+                            Op::ReleaseUnlessAliases,
+                            vec![lowered.value, result],
+                            None,
+                            Op::ReleaseUnlessAliases.default_effects(),
+                            Some(span),
+                        );
+                    }
+                }
                 continue;
             }
             crate::ir_lower::ownership::release_if_owned(ctx, lowered, Some(span));
