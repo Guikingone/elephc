@@ -3075,3 +3075,35 @@ var_dump($s);
     );
     assert_eq!(out, "int(1)\nint(2)\n");
 }
+
+/// A reference into a local array element whose SOURCE is a nullable hash read must fail with a
+/// diagnostic, never an internal compiler panic.
+///
+/// The checker types `$v` here `Mixed` (one word) so its word-count guard cannot see the problem,
+/// but lowering runs its OWN inference and types the slot `TaggedScalar` (`int|null`: an inline
+/// payload + tag pair). Codegen then asked `runtime_value_tag` for a STATIC tag of a type whose tag
+/// only exists in a register at runtime and hit its `unreachable!` — a compiler crash on valid PHP.
+///
+/// `#[should_panic]` pins the MESSAGE, not merely the failure: if the `unreachable!` ever comes
+/// back, the panic text changes and this test fails. Widening the slot to `Mixed` instead of
+/// refusing was measured and rejected — it agrees with `php -n` for an int payload but returns an
+/// EMPTY string for a string payload, trading a crash for a silent wrong answer.
+#[test]
+#[should_panic(expected = "reference cell for multi-word local")]
+fn test_ref_into_local_array_element_from_nullable_hash_read_is_refused_not_an_ice() {
+    compile_and_run(
+        r#"<?php
+function f(): string {
+    $h = [];
+    $h['n'] = 1;
+    $h['s'] = "hi";
+    $v = $h['n'];
+    $a = [];
+    $a['x'] = &$v;
+    $v = 42;
+    return (string)$a['x'];
+}
+echo f(), "\n";
+"#,
+    );
+}

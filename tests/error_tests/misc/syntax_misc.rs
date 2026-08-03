@@ -501,3 +501,19 @@ fn test_error_expr_destructure_empty_pattern_rejected() {
         "Cannot use empty list",
     );
 }
+
+/// Tests that the SLICE-2 one-word-cell rule is enforced by WORD COUNT, not by naming `Str`.
+///
+/// A kind-6 reference cell holds a single inner value word. `Str` (pointer + length) was the only
+/// multi-word source the guard named, but `TaggedScalar` — the representation of `?int`, an inline
+/// payload + tag pair — is equally multi-word, and it slipped through to codegen where
+/// `runtime_value_tag` has no static tag for a runtime-tagged type and hit its `unreachable!`,
+/// crashing the compiler on valid PHP. The refusal must name the type so the diagnostic is
+/// actionable.
+#[test]
+fn test_error_ref_entry_nullable_int_source_is_refused_by_word_count() {
+    expect_error(
+        "<?php function f(?int $p): void { $a = []; $a['x'] = &$p; }",
+        "Reference to a multi-word source (int|null) in a local array element is not yet supported",
+    );
+}

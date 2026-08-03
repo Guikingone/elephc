@@ -797,6 +797,20 @@ fn check_ref_assign_local_array_element(
             "Reference to a string-valued source in a local array element is not yet supported",
         ));
     }
+    // The word-count rule above is not specific to `Str`: EVERY multi-word representation loses its
+    // second word through a one-word cell. `TaggedScalar` (`int|null`, an inline payload + tag pair,
+    // and the repr a nullable hash read infers) is the other one, and naming `Str` instead of
+    // counting words let it through to codegen — where `runtime_value_tag` has no static answer for
+    // a runtime-tagged type and hit an `unreachable!`, crashing the compiler on valid PHP. Refusing
+    // here keeps the same limit these slices already document, but as a diagnostic instead of an ICE.
+    if element_ty.codegen_repr().register_count() > 1 {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "Reference to a multi-word source ({element_ty}) in a local array element is not yet supported"
+            ),
+        ));
+    }
     // De-pack retype (checker soundness only; codegen re-derives the de-pack via
     // `set_local_type_exact`). Taking a reference into an indexed array promotes it to a hash so
     // downstream reads, cleanup, and `array_is_list()` agree with the runtime representation. A

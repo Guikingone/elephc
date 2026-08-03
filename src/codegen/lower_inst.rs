@@ -8071,6 +8071,21 @@ fn lower_local_ref_ensure(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     let (main_slot, owner_slot) = expect_local_slot_pair(inst)?;
     let main_offset = ctx.local_offset(main_slot)?;
     let owner_offset = ctx.local_offset(owner_slot)?;
+    // `__rt_ref_cell_ensure` takes ONE static tag describing the cell's single inner value word, so
+    // a multi-word representation has nothing to pass: `Str` is a pointer + length pair and
+    // `TaggedScalar` a payload + tag pair whose tag only exists in a register at runtime. Asking
+    // `runtime_value_tag` for the latter used to hit its `unreachable!` and crash the compiler on
+    // valid PHP (`$v = $hash[$k]; $a['x'] = &$v;`, where lowering's own inference types `$v`
+    // `int|null` while the checker types it `Mixed`, so the checker-side word-count guard cannot see
+    // it). Refuse loudly here instead. Widening the slot to `Mixed` was measured and REJECTED: it
+    // makes the int payload agree with `php -n` but returns an EMPTY string for a string payload —
+    // trading a crash for a silent wrong answer.
+    if inst.result_php_type.codegen_repr().register_count() > 1 {
+        return Err(CodegenIrError::unsupported(format!(
+            "reference cell for multi-word local of PHP type {:?}",
+            inst.result_php_type
+        )));
+    }
     let tag = crate::codegen::runtime_value_tag(&inst.result_php_type.codegen_repr()) as i64;
     let scratch = abi::tertiary_scratch_reg(ctx.emitter);
     match ctx.emitter.target.arch {
