@@ -169,6 +169,10 @@ against measured php-src 8.5.6 output rather than by analogy:
   The same reasoning retires PHP's implicit `= null` on an untyped property: once
   the constructor always overwrites it, no reader can observe the null, which is
   what makes `class Node { public $value; public $next; }` constructible here.
+  Inside the constructor the store must be shown to come FIRST, which is a
+  question about the individual read rather than about the class:
+  `__construct(string $n) { $this->name = $n; echo $this->name; }` is admitted,
+  and a read placed before the store is not.
 - **Reading an untyped property.** The read is an ownership question, not an
   opcode one. `ir_lower` stabilizes a borrowed result with an `Op::Acquire` and
   skips that when the result is already owned — which is what an untyped property
