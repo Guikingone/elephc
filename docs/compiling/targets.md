@@ -180,6 +180,11 @@ against measured php-src 8.5.6 output rather than by analogy:
   loop itself can reach are refused, since those have no PHP snapshot to write
   against. An iterator's live range ends where its own `IterStart` runs again, so
   a `foreach` nested in a `while` does not make the whole outer body untouchable.
+  Refusal covers the mutations that are not written at the loop: every in-place
+  builtin (`sort`, `shuffle`, `array_splice`, …), a call that RECEIVES the
+  container — whether its parameter is declared `&` is not visible at the call
+  site — and any reference bound to it, since an alias has its own slot and would
+  otherwise pass every slot-keyed check.
 - **`round($value, $places)`.** Not `round($value)` with a default argument.
   Scaling is inexact — `0.285 * 1e10` is `2849999999.9999995` — so php-src
   extracts the integral part and then repairs the extraction, which is why

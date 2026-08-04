@@ -12702,6 +12702,26 @@ fn test_cli_wasm_refuses_mutating_an_iterated_container_it_cannot_see() {
         );
     }
 
+    // A by-VALUE callee cannot mutate anything, so it must still compile. This is the half that
+    // keeps the widening honest: the callee's own signature decides, not the fact of a call.
+    let by_value = dir.join("byvalue.php");
+    fs::write(
+        &by_value,
+        "<?php\nfunction look(array $a): int { return count($a); }\n$h = [5, 3, 9, 1];\nforeach ($h as $v) { echo $v, \" \"; echo look($h), \" \"; }\necho \"\\n\";\n",
+    )
+    .unwrap();
+    let accepted = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&by_value)
+        .output()
+        .expect("failed to compile the by-value call in a loop");
+    assert!(
+        accepted.status.success(),
+        "a by-value callee must not be refused: {}",
+        String::from_utf8_lossy(&accepted.stderr)
+    );
+
     // The same shapes with the mutation AFTER the loop stay compilable — the widening has to end
     // where the iterator does.
     let after = dir.join("after.php");

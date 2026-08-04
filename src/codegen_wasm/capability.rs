@@ -461,7 +461,7 @@ fn check_instruction_shape(
         Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
         Op::ArrayToMixed => array_to_mixed_shape_issue(function, inst),
         Op::LooseEq | Op::LooseNotEq => loose_eq_shape_issue(function, inst),
-        Op::IterStart => iter_start_shape_issue(function, inst),
+        Op::IterStart => iter_start_shape_issue(module, function, inst),
         Op::IterCurrentValueRef => iter_current_value_ref_shape_issue(function, inst),
         Op::ArrayGet | Op::ArrayGetSilent => {
             array_get_shape_issue(module, function, block, inst)
@@ -2296,7 +2296,11 @@ fn scoped_constant_shape_issue(module: &Module, inst: &Instruction) -> Option<St
 }
 
 /// Validates iterator creation against the concrete layouts implemented by WASM.
-fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+fn iter_start_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
     let [source] = inst.operands.as_slice() else {
         return Some(format!(
             "iterator start expects one source, got {} operands",
@@ -2359,7 +2363,7 @@ fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
     if source_shape.is_some() {
         return source_shape;
     }
-    iterator_alias_mutation_issue(function, inst, *inst.operands.first()?)
+    iterator_alias_mutation_issue(module, function, inst, *inst.operands.first()?)
 }
 
 /// Rejects mutations that can invalidate a live iterator snapshot.
@@ -2371,6 +2375,7 @@ fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
 /// reachable from the header that also reach it back, plus the tail of the block that starts the
 /// iterator, where the source pointer is already captured but iteration has not begun.
 fn iterator_alias_mutation_issue(
+    module: &Module,
     function: &Function,
     start: &Instruction,
     source: ValueId,
@@ -2407,11 +2412,12 @@ fn iterator_alias_mutation_issue(
         .iter()
         .filter_map(|id| function.instruction(*id))
     {
-        // A CALL that receives the container can take it BY REFERENCE, and the mutation then
-        // happens in a body this scan never sees. Measured: `function bump(array &$a) { $a[] = 99; }`
-        // called from the loop grew the array the loop was reading and exhausted memory, where
-        // php-src walks its snapshot and stops at four. Whether the parameter is declared `&` is
-        // not visible here, so passing the container to anything at all ends the proof.
+        // A CALL that receives the container BY REFERENCE mutates it in a body this scan never
+        // sees. Measured: `function bump(array &$a) { $a[] = 99; }` called from the loop grew the
+        // array the loop was reading and exhausted memory, where php-src walks its snapshot and
+        // stops at four. A BY-VALUE call cannot do that, and refusing those too turned away
+        // `foreach ($h as $v) { echo count_of($h); }` — ordinary PHP — so the callee's own
+        // signature decides, and only a callee this module cannot resolve is refused wholesale.
         if matches!(
             candidate.op,
             Op::Call
@@ -2420,14 +2426,25 @@ fn iterator_alias_mutation_issue(
                 | Op::StaticMethodCall
                 | Op::EvalStaticMethodCall
                 | Op::IteratorMethodCall
-        ) && candidate.operands.iter().any(|operand| {
-            *operand == source
-                || (source_slot.is_some() && value_local_origin(function, *operand) == source_slot)
-        }) {
-            return Some(format!(
-                "{} receives the iterated container and may mutate it by reference",
-                candidate.op.name()
-            ));
+        ) {
+            let passed: Vec<usize> = candidate
+                .operands
+                .iter()
+                .enumerate()
+                .filter(|(_, operand)| {
+                    **operand == source
+                        || (source_slot.is_some()
+                            && value_local_origin(function, **operand) == source_slot)
+                })
+                .map(|(index, _)| index)
+                .collect();
+            if !passed.is_empty() && call_can_take_argument_by_reference(module, candidate, &passed)
+            {
+                return Some(format!(
+                    "{} receives the iterated container by reference and may mutate it",
+                    candidate.op.name()
+                ));
+            }
         }
         if matches!(
             candidate.op,
@@ -2482,6 +2499,40 @@ fn iterator_alias_mutation_issue(
         }
     }
     None
+}
+
+/// Whether a call could bind one of `positions` to a by-reference parameter.
+///
+/// A DIRECT call resolves through the same `resolve_direct_call` the lowering uses, so the
+/// declared parameters are the ones that will actually be bound. Everything else — a method whose
+/// receiver this pass does not track, a dynamic target — answers YES: an accepting gate cannot
+/// treat "I could not find out" as "no".
+///
+/// Note the callee name lives in `module.data.function_names`, a different pool from
+/// `module.data.strings`; reading the wrong one resolves every call to the empty string and
+/// refuses them all, which is how `foreach ($h as $v) { echo look($h); }` briefly stopped
+/// compiling for a by-VALUE callee that cannot mutate anything.
+fn call_can_take_argument_by_reference(
+    module: &Module,
+    call: &Instruction,
+    positions: &[usize],
+) -> bool {
+    if call.op != Op::Call {
+        return true;
+    }
+    let Ok(target) = crate::codegen_wasm::calls::resolve_direct_call(module, call) else {
+        return true;
+    };
+    positions.iter().any(|position| {
+        // The operand list and the parameter list are aligned for a plain call; a variadic tail
+        // takes the last declared parameter's contract.
+        let declared = target
+            .function
+            .params
+            .get(*position)
+            .or_else(|| target.function.params.last());
+        declared.is_none_or(|param| param.by_ref)
+    })
 }
 
 /// Whether an instruction's slot immediate mentions `slot`, in either the single or paired form.
@@ -4257,7 +4308,7 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
         .filter_map(|inst_id| constructor.instruction(*inst_id))
         .find(|candidate| {
             matches!(candidate.op, Op::PropSet | Op::PropGet | Op::NullsafePropGet)
-                || instruction_can_observe_this(candidate)
+                || instruction_can_observe_this(constructor, candidate)
         })
         .is_some_and(|first| {
             first.op == Op::PropSet
@@ -4279,8 +4330,14 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
 /// constructor binds `$this` implicitly, with no operand naming it anywhere, and php-src prints
 /// NULL at each comparison. So closure creation counts, and so does `RuntimeCall` — a builtin
 /// taking a callback runs user code from inside what looks like one instruction.
-fn instruction_can_observe_this(inst: &Instruction) -> bool {
-    matches!(
+///
+/// Parking `$this` somewhere reachable — `$arr[] = $this;`, `$GLOBALS['x'] = $this;`,
+/// `self::$last = $this;` — escapes it too, but ONLY when `$this` is what is being stored.
+/// Listing those opcodes outright would refuse `__construct() { $a = [1,2]; $this->list = $a; }`,
+/// which builds an array before the first property write and is entirely ordinary; so the operand
+/// decides, not the opcode.
+fn instruction_can_observe_this(function: &Function, inst: &Instruction) -> bool {
+    if matches!(
         inst.op,
         Op::MethodCall
             | Op::NullsafeMethodCall
@@ -4299,7 +4356,22 @@ fn instruction_can_observe_this(inst: &Instruction) -> bool {
             | Op::LoadPropRefCell
             | Op::BindRefCellPtr
             | Op::ObjectCloneShallow
-    )
+    ) {
+        return true;
+    }
+    matches!(
+        inst.op,
+        Op::ArraySet
+            | Op::ArrayPush
+            | Op::HashSet
+            | Op::HashAppend
+            | Op::StoreGlobal
+            | Op::StoreStaticProperty
+    ) && inst
+        .operands
+        .iter()
+        .skip(1)
+        .any(|operand| value_local_origin(function, *operand) == Some(0))
 }
 
 /// Whether a property's NULL default is unobservable because the constructor always overwrites it.
