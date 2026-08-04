@@ -293,7 +293,7 @@ pub(super) fn lower_array_get_for_write(
             elem_ty
         ))
     })?;
-    separate_array_get_for_write_receiver(ctx, array)?;
+    separate_get_for_write_receiver(ctx, array, "__rt_array_ensure_unique")?;
     lower_array_get_in_mode(ctx, inst, true, ArrayGetMode::ForWrite { helper })
 }
 
@@ -310,16 +310,20 @@ pub(super) fn lower_array_get_for_write(
 /// reading the old one. A chained receiver needs no split at this point anyway — the lowering
 /// walks `$a[0][0]` down to its base local and fetches every level for write on the way back up,
 /// so an inner level always hands the next one a container that is already unique.
-fn separate_array_get_for_write_receiver(
+///
+/// `helper` selects the copy-on-write split matching the receiver's own container kind:
+/// `__rt_array_ensure_unique` for an indexed receiver, `__rt_hash_ensure_unique` for a hash one.
+pub(super) fn separate_get_for_write_receiver(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
+    helper: &str,
 ) -> Result<()> {
     let Some(slot) = source_load_local_slot(ctx, array)? else {
         return Ok(());
     };
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, arg_reg)?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    abi::emit_call_label(ctx.emitter, helper);
     ctx.store_result_value(array)?;
     ctx.store_value_to_local(slot, array)?;
     ctx.writeback_global_array_source(array)
@@ -331,7 +335,10 @@ fn separate_array_get_for_write_receiver(
 /// each with its own clone helper. Everything else is rejected. `Mixed` in particular is not a
 /// single container to separate: its slot can hold an invoker ref-cell marker whose read
 /// materializes a freshly boxed value instead of the slot's own storage.
-fn array_get_for_write_cow_helper(elem_ty: &PhpType) -> Option<&'static str> {
+///
+/// Shared with the hash receiver path: what selects the helper is the ELEMENT's container kind,
+/// which is independent of whether the receiver holding it is indexed or associative.
+pub(super) fn array_get_for_write_cow_helper(elem_ty: &PhpType) -> Option<&'static str> {
     match elem_ty.codegen_repr() {
         PhpType::Array(_) => Some("__rt_array_ensure_unique"),
         PhpType::AssocArray { .. } => Some("__rt_hash_ensure_unique"),

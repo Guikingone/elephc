@@ -510,6 +510,13 @@ fn validate_opcode_rules(
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
             check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
         }
+        // The hash counterpart of the fetch-for-write read, emitted from the same single site.
+        // Its key stays in whatever form `hash_get` accepts (string or integer) rather than being
+        // int-coerced, because the hash lookup normalizes the key itself.
+        HashGetForWrite => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")
+        }
         LoadArrayElemRefCell => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;

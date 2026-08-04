@@ -543,6 +543,7 @@ across a reset point.
 | `ArrayGet` | array, index | element type | `reads_heap`, `may_warn`, maybe `may_fatal` |
 | `ArrayGetForWrite` | array, index (`I64`) | element type, **borrowed** | `reads_heap`, `writes_heap`, `writes_local`, `alloc_heap`, `refcount_op`, `may_warn` |
 | `HashGet` | hash, key | value type | `reads_heap`, `may_warn`, maybe `may_fatal` |
+| `HashGetForWrite` | hash, key | value type, **borrowed** | `reads_heap`, `writes_heap`, `writes_local`, `alloc_heap`, `refcount_op`, `may_warn` |
 | `ArraySet` | array, index, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `HashSet` | hash, key, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `ArrayPush`, `HashAppend` | container, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
@@ -558,18 +559,29 @@ All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
 
-`ArrayGetForWrite` is the read side of that rule for a container element that is
-about to be mutated through an alias — today, the source of a by-reference
-`foreach` (issue #580). Unlike `ArrayGet` it takes no reference for the caller;
-it separates the receiver, then splits the element from any co-owner and stores
-the separated container back into the receiver's element slot, so the result is
-owned by the parent and unique. That is what lets `foreach ($a[0] as &$v)` write
-through to `$a[0]`: the plain retaining read left the element shared, and
+`ArrayGetForWrite` and `HashGetForWrite` are the read side of that rule for a
+container element that is about to be mutated through an alias — today, the
+source of a by-reference `foreach` (issue #580). Unlike `ArrayGet`/`HashGet` they
+take no reference for the caller; they separate the receiver, then split the
+element from any co-owner and store the separated container back into the
+receiver's element slot, so the result is owned by the parent and unique. That is
+what lets `foreach ($a[0] as &$v)` and `foreach ($h['a'] as &$v)` write through
+to their sources: the plain retaining read left the element shared, and
 `IterStart`'s own copy-on-write split then gave the loop a private copy to mutate
-and discard. The op is restricted to indexed receivers with an integer key and an
-array or hash element (each split with its own runtime helper); every other shape
-keeps the retaining read. The receiver split only happens for a receiver that
-came from a local slot, since the new container has to be published somewhere.
+and discard.
+
+The two differ only in how they address the element slot. `ArrayGetForWrite`
+scales an integer key into the indexed payload, so it requires an `I64` key.
+`HashGetForWrite` cannot compute an address, so it takes the matching entry's
+address from `__rt_hash_get` (returned in `x4` on AArch64, `r8` on x86_64, null
+on a miss) and splits the container that entry holds; string and integer keys are
+both fine, since the lookup normalizes them. Both require an array or hash
+element, each split with its own runtime helper, and both keep the plain read's
+missing-key warning and null-container sentinel. Every other shape — a `Mixed`
+element in particular, whose read can materialize a fresh box instead of the
+slot's own storage — keeps the retaining read. The receiver split only happens
+for a receiver that came from a local slot, since the new container has to be
+published somewhere.
 
 Because the result is borrowed, the parent's element slot is its only owner, and
 the loop body can drop that parent (`$a = []`, `unset($a)`) while the iterator is

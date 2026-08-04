@@ -340,6 +340,7 @@ pub enum Op {
     ArrayGetSilent,
     ArrayGetForWrite,
     HashGet,
+    HashGetForWrite,
     HashGetSilent,
     ArrayIsset,
     HashIsset,
@@ -600,7 +601,7 @@ impl Op {
             // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
             // element slot (and the receiver's own local slot), so it must never be treated as
             // reorderable or redundant against the plain reads around it.
-            ArrayGetForWrite => {
+            ArrayGetForWrite | HashGetForWrite => {
                 E::READS_HEAP | E::WRITES_HEAP | E::WRITES_LOCAL | E::ALLOC_HEAP
                     | E::REFCOUNT_OP | E::MAY_WARN
             }
@@ -827,6 +828,7 @@ impl Op {
             ArrayGetSilent => "array_get_silent",
             ArrayGetForWrite => "array_get_for_write",
             HashGet => "hash_get",
+            HashGetForWrite => "hash_get_for_write",
             HashGetSilent => "hash_get_silent",
             ArrayIsset => "array_isset",
             HashIsset => "hash_isset",

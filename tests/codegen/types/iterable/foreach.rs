@@ -635,12 +635,18 @@ fn test_iterable_variadic_arg_stays_boxed_in_runtime_array() {
 // A plain local source worked because loading a local yields the local's storage with no retain,
 // leaving refcount 1 and no copy.
 //
-// The by-ref source now takes `Op::ArrayGetForWrite`, which does the copy-on-write split itself
+// The by-ref source now takes a fetch-for-write read, which does the copy-on-write split itself
 // — receiver first, then element, publishing each back into the slot it came from — and returns
 // the element borrowed. Note that merely dropping the retain would be WORSE than the original
 // bug: `__rt_array_ensure_unique` consumes one reference from the shared source when it splits,
 // so a read that never took one would have the split cannibalize the parent's own reference.
-// `array_get`'s missing-key warning and null-container sentinel are reused unchanged.
+// The plain read's missing-key warning and null-container sentinel are reused unchanged.
+//
+// Both receiver kinds are covered. `Op::ArrayGetForWrite` reaches an indexed element slot with
+// pointer arithmetic; `Op::HashGetForWrite` takes the matching entry's address from
+// `__rt_hash_get` and splits the container that entry holds. The hash half never needed the
+// reference BINDING the checker rejects for `$r = &$h['k'];` — that binds a hash slot into a
+// local, whereas this only separates storage the parent already owns.
 
 /// Regression for issue #580: by-ref `foreach` over an indexed element must mutate the parent
 /// array in place. Pre-fix the loop ran and assigned `$v` but `$a[0]` stayed `[1, 2]`.
@@ -657,14 +663,16 @@ echo implode(',', $a[0]);
     assert_eq!(out, "2,4");
 }
 
-/// Documents the hash half of issue #580, which this fix deliberately does NOT cover: binding a
-/// reference to a hash element is not implemented at all, so there is no alias to iterate (an
-/// explicit `$r = &$h['a'];` is rejected by the checker with "requires an indexed array").
+/// Regression for the hash half of issue #580: a by-ref `foreach` over a HASH element must
+/// mutate the parent too. The defect was the same one the indexed half had — `Op::HashGet`
+/// hands back the parent's container with a retain, so `iter_start` copy-on-writes it — but the
+/// fetch-for-write read was gated to indexed receivers, so this shape kept losing every write.
 ///
-/// The assertion pins the *current* wrong result on purpose. It exists so the borrowed element
-/// read stays restricted to the shapes where the parent really does share the storage.
+/// Note this never needed the reference *binding* the checker rejects for `$r = &$h['k'];`:
+/// the fix separates the element and iterates the parent's own storage, it does not alias a
+/// hash slot into a local.
 #[test]
-fn test_by_ref_foreach_over_hash_element_source_still_compiles_without_aliasing() {
+fn test_regression_580_by_ref_foreach_over_hash_element_source() {
     let out = compile_and_run(
         r#"<?php
 $h = ['a' => [1, 2]];
@@ -673,7 +681,7 @@ unset($w);
 echo implode(',', $h['a']);
 "#,
     );
-    assert_eq!(out, "1,2");
+    assert_eq!(out, "10,20");
 }
 
 /// Regression for issue #580: the mutation must be visible to the parent *during* the loop,
@@ -807,8 +815,8 @@ echo implode(',', $a[0]), '|', implode(',', $a[1]);
 /// `array<array{...}>` reaches the same fetch-for-write path as a nested indexed array, but its
 /// element is hash storage: splitting it with `__rt_array_ensure_unique` would hand a hash
 /// pointer to the indexed shallow-clone helper. Pairing the helper with the element's container
-/// kind is what keeps this shape correct — and this is the hash half that IS in scope, unlike a
-/// hash RECEIVER (`$h['a']`), which has no reference binding in elephc at all.
+/// kind is what keeps this shape correct, and it is what lets the hash RECEIVER path reuse the
+/// same helper selection.
 #[test]
 fn test_regression_580_by_ref_foreach_over_hash_element_of_indexed_source() {
     let out = compile_and_run_with_heap_debug(
@@ -855,6 +863,178 @@ echo 'after:', implode(',', $a[0]);
         "expected a clean heap-debug leak summary, got: {}",
         out.stderr
     );
+}
+
+/// Regression for issue #580: the hash receiver must make the mutation visible to the parent
+/// *during* the loop, not only after it, exactly like the indexed one.
+#[test]
+fn test_regression_580_by_ref_foreach_hash_element_mutation_visible_during_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ['a' => [1, 2]];
+foreach ($h['a'] as &$w) { $w = $w * 10; echo $h['a'][0], ';'; }
+unset($w);
+echo implode(',', $h['a']);
+"#,
+    );
+    assert_eq!(out, "10;10;10,20");
+}
+
+/// Regression for issue #580: a HASH element of a HASH receiver must be separated with the hash
+/// copy-on-write helper, pairing the split helper with the element's container kind on the hash
+/// receiver path too.
+#[test]
+fn test_regression_580_by_ref_foreach_over_hash_element_of_hash_source() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$h = ['a' => ['x' => 1, 'y' => 2]];
+foreach ($h['a'] as $k => &$w) { $w = $w * 10; }
+unset($w);
+echo $h['a']['x'], ',', $h['a']['y'];
+"#,
+    );
+    assert_eq!(out.stdout, "10,20");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580: a chain mixing hash and hash levels must fetch every level for
+/// write, so the innermost split is published into storage the outer levels really share.
+#[test]
+fn test_regression_580_by_ref_foreach_over_nested_hash_element_source() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ['a' => ['b' => [1, 2]]];
+foreach ($h['a']['b'] as &$w) { $w = $w * 10; }
+unset($w);
+echo implode(',', $h['a']['b']);
+"#,
+    );
+    assert_eq!(out, "10,20");
+}
+
+/// Regression for issue #580: selecting a later key of a multi-entry hash must separate that
+/// entry's own slot, not whichever entry the probe happens to land on first.
+#[test]
+fn test_regression_580_by_ref_foreach_hash_element_source_selects_the_right_entry() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ['a' => [1, 2], 'b' => [3, 4]];
+foreach ($h['b'] as &$w) { $w = $w * 10; }
+unset($w);
+echo implode(',', $h['a']), '|', implode(',', $h['b']);
+"#,
+    );
+    assert_eq!(out, "1,2|30,40");
+}
+
+/// Guard for issue #580: a by-VALUE `foreach` over a hash element must NOT mutate the parent.
+/// Only the by-ref source takes the fetch-for-write read.
+#[test]
+fn test_regression_580_by_value_foreach_over_hash_element_does_not_mutate() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ['a' => [1, 2]];
+foreach ($h['a'] as $w) { $w = $w * 10; }
+echo implode(',', $h['a']);
+"#,
+    );
+    assert_eq!(out, "1,2");
+}
+
+/// Guard for issue #580: a missing hash KEY must keep warning and skipping the loop instead of
+/// separating a slot the probe never found. `__rt_hash_get` reports the miss with a null entry
+/// address, which the fetch-for-write read routes to the same warning and null-container
+/// sentinel `hash_get` produces.
+#[test]
+fn test_regression_580_by_ref_foreach_over_missing_hash_key_warns_and_skips() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$h = ['a' => [1, 2]];
+foreach ($h['zz'] as &$w) { $w = $w * 10; }
+echo 'after:', implode(',', $h['a']);
+"#,
+    );
+    assert_eq!(out.stdout, "after:1,2");
+    assert!(
+        out.stderr.contains("Undefined array key \"zz\""),
+        "expected the missing-key warning to survive the fetch-for-write read, got: {}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580: the hash element must reach the loop mutable when a SECOND owner
+/// holds it, the case where a plain non-retaining read would have the split cannibalize the
+/// parent's own reference. Mirrors the indexed shared-owner regression.
+#[test]
+fn test_regression_580_by_ref_foreach_hash_element_shared_with_another_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$h = ['a' => [1, 2]];
+$keep = $h['a'];
+foreach ($h['a'] as &$w) { $w = $w * 10; }
+unset($w);
+echo implode(',', $h['a']), '|', implode(',', $keep);
+"#,
+    );
+    assert_eq!(out.stdout, "10,20|1,2");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580: the loop's lifetime pin must cover the hash receiver path too.
+///
+/// `HashGetForWrite` hands the loop the entry's own container, borrowed, so dropping the parent
+/// hash mid-body would leave the iterator on freed storage exactly as it did for an indexed
+/// receiver. The pin is keyed on the source's `Borrowed` ownership rather than on the specific
+/// op, so it applies here unchanged — this test is what holds that true.
+#[test]
+fn test_regression_580_by_ref_foreach_hash_element_source_survives_parent_replacement() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$h = ['a' => [1, 2]];
+foreach ($h['a'] as &$w) {
+    echo $w, ',';
+    if ($w === 1) $h = [];
+    $w *= 10;
+}
+unset($w);
+echo 'done';
+"#,
+    );
+    assert_eq!(out.stdout, "1,2,done");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Guard for issue #580: separating the hash element must separate the RECEIVER first, so a
+/// second owner of the hash itself keeps observing the unmutated storage.
+#[test]
+fn test_regression_580_by_ref_foreach_hash_element_separates_shared_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+$h = ['a' => [1, 2]];
+$copy = $h;
+foreach ($h['a'] as &$w) { $w = $w * 10; }
+unset($w);
+echo implode(',', $h['a']), '|', implode(',', $copy['a']);
+"#,
+    );
+    assert_eq!(out, "10,20|1,2");
 }
 
 /// Regression for issue #580: the RECEIVER must be separated too, so the write is not visible

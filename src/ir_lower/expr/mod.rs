@@ -8029,11 +8029,17 @@ fn lower_array_access(
 /// from — and returns the element borrowed, so the loop mutates the very container the parent
 /// holds, exactly like PHP.
 ///
+/// Both receiver kinds take this path. An indexed receiver reaches its element slot with pointer
+/// arithmetic (`Op::ArrayGetForWrite`); a hash entry has to be probed for, so it goes through
+/// `Op::HashGetForWrite`, which separates the container the matching entry holds. The hash form
+/// never needed the reference BINDING the checker rejects for `$r = &$h['k'];` — nothing here
+/// aliases a hash slot into a local, the loop simply iterates the parent's own storage.
+///
 /// Falls back to the ordinary retaining read whenever the fetch-for-write would not be sound or
-/// the codegen cannot express it: a non-indexed receiver (hash elements have no reference
-/// binding in elephc at all), a non-integer key, a `Mixed` element (its read can materialize a
-/// fresh box rather than the slot's own storage), or a subscript chain not rooted in a local.
-/// The receiver is evaluated exactly once on both paths.
+/// the codegen cannot express it: a non-container receiver, an indexed receiver with a
+/// non-integer key, a `Mixed` element (its read can materialize a fresh box rather than the
+/// slot's own storage), or a subscript chain not rooted in a local. The receiver is evaluated
+/// exactly once on every path.
 pub(crate) fn lower_by_ref_foreach_element_source(
     ctx: &mut LoweringContext<'_, '_>,
     array: &Expr,
@@ -8041,21 +8047,32 @@ pub(crate) fn lower_by_ref_foreach_element_source(
     expr: &Expr,
 ) -> LoweredValue {
     let array_value = lower_by_ref_foreach_source_receiver(ctx, array);
-    if !element_fetch_for_write_applies(ctx, &array_value, index, expr) {
+    let Some(op) = element_fetch_for_write_op(ctx, &array_value, index, expr) else {
         if value_is_nullable(ctx, array_value.value) {
             return lower_nullable_array_access(ctx, array_value, index, expr, true);
         }
         return lower_array_access_from_value(ctx, array_value, index, expr, true);
-    }
+    };
     let index_value = lower_expr(ctx, index);
-    let index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
-    let result_type = array_access_result_type(ctx, array_value.value, Op::ArrayGet, expr);
+    // The hash lookup normalizes its own key, so only the indexed slot arithmetic needs an
+    // int-coerced one.
+    let index_value = if op == Op::ArrayGetForWrite {
+        coerce_to_int_at_span(ctx, index_value, Some(index.span))
+    } else {
+        index_value
+    };
+    let read_op = if op == Op::ArrayGetForWrite {
+        Op::ArrayGet
+    } else {
+        Op::HashGet
+    };
+    let result_type = array_access_result_type(ctx, array_value.value, read_op, expr);
     let result = ctx.emit_value(
-        Op::ArrayGetForWrite,
+        op,
         vec![array_value.value, index_value.value],
         None,
         result_type,
-        Op::ArrayGetForWrite.default_effects(),
+        op.default_effects(),
         Some(expr.span),
     );
     // The separated element belongs to the parent's slot, not to this read — pin that explicitly
@@ -8097,38 +8114,46 @@ fn lower_by_ref_foreach_source_receiver(
     lower_expr(ctx, array)
 }
 
-/// Returns whether a by-reference `foreach` source can take the fetch-for-write element read.
+/// Returns the fetch-for-write element read a by-reference `foreach` source can take, if any.
 ///
-/// Requires an indexed receiver with an integer key (the shapes `Op::ArrayGetForWrite` lowers),
-/// a statically-known container element — an indexed array or a hash, the two kinds with a
-/// copy-on-write helper to split them — and a subscript chain rooted in a plain variable. The
-/// last condition is what makes dropping an intermediate receiver safe: a chain over a temporary
-/// — `f()[0]` — has no owner once the read returns, so borrowing out of it would leave the loop
-/// iterating freed storage.
-fn element_fetch_for_write_applies(
+/// Requires a statically-known container element — an indexed array or a hash, the two kinds
+/// with a copy-on-write helper to split them — and a subscript chain rooted in a plain variable.
+/// That last condition is what makes dropping an intermediate receiver safe: a chain over a
+/// temporary — `f()[0]` — has no owner once the read returns, so borrowing out of it would leave
+/// the loop iterating freed storage.
+///
+/// An indexed receiver additionally needs an integer key, because its element slot is reached by
+/// scaling the key into the payload. A hash receiver has no such restriction: `__rt_hash_get`
+/// normalizes string and integer keys alike and reports the matching entry's address.
+fn element_fetch_for_write_op(
     ctx: &LoweringContext<'_, '_>,
     array_value: &LoweredValue,
     index: &Expr,
     expr: &Expr,
-) -> bool {
-    if array_value.ir_type != IrType::Heap(IrHeapKind::Array) {
-        return false;
-    }
+) -> Option<Op> {
     if value_is_nullable(ctx, array_value.value) {
-        return false;
+        return None;
     }
-    if index_expr_key_type(ctx, index) != PhpType::Int {
-        return false;
-    }
-    let PhpType::Array(elem_ty) = ctx.builder.value_php_type(array_value.value).codegen_repr()
-    else {
-        return false;
+    let (op, elem_ty) = match (
+        array_value.ir_type,
+        ctx.builder.value_php_type(array_value.value).codegen_repr(),
+    ) {
+        (IrType::Heap(IrHeapKind::Array), PhpType::Array(elem_ty)) => {
+            if index_expr_key_type(ctx, index) != PhpType::Int {
+                return None;
+            }
+            (Op::ArrayGetForWrite, elem_ty)
+        }
+        (IrType::Heap(IrHeapKind::Hash), PhpType::AssocArray { value, .. }) => {
+            (Op::HashGetForWrite, value)
+        }
+        _ => return None,
     };
     let elem_ty = normalize_value_php_type(*elem_ty).codegen_repr();
     if !matches!(elem_ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
-        return false;
+        return None;
     }
-    subscript_chain_is_variable_rooted(expr)
+    subscript_chain_is_variable_rooted(expr).then_some(op)
 }
 
 /// Returns whether a subscript expression bottoms out in a plain variable receiver.
