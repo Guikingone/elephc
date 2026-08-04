@@ -1039,8 +1039,8 @@ fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// Emits one EIR basic block.
 fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     ctx.emitter.comment(&format!("@block name={}", block.name));
-    ctx.emitter
-        .label(&ctx.block_label(&block.name, block.id.as_raw()));
+    let block_label = ctx.block_label_for_id(block.id)?;
+    ctx.emitter.label(&block_label);
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         lower_inst::lower_instruction(ctx, *inst_id)?;

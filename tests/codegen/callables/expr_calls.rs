@@ -11,7 +11,7 @@ use crate::support::*;
 
 /// Returns true when assembly contains a valid invokable object dispatch path.
 fn asm_has_invokable_object_call(user_asm: &str, class_name: &str) -> bool {
-    let eir_method = format!("_method_{}__u__u_invoke", class_name);
+    let eir_method = elephc::names::method_symbol(class_name, "__invoke");
     (user_asm.contains("callable_instance_method") && user_asm.contains("callable_invoker"))
         || user_asm.contains(&eir_method)
 }

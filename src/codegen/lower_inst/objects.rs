@@ -25,7 +25,7 @@ use crate::codegen::{
 };
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::{method_symbol, php_symbol_key};
+use crate::names::{label_fragment, method_symbol, php_symbol_key};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::context::FunctionContext;
@@ -3828,13 +3828,6 @@ fn emit_branch_if_dynamic_name_matches(
     }
 }
 
-/// Converts arbitrary names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Lowers a declared object property write for statically known object receivers.
 pub(super) fn lower_prop_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {

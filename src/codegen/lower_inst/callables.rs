@@ -18,7 +18,7 @@ use crate::codegen::{
     emit_release_pushed_refcounted_temp_after_array_push,
 };
 use crate::ir::{Instruction, Op, ValueDef, ValueId};
-use crate::names::{function_symbol, method_symbol, php_symbol_key};
+use crate::names::{function_symbol, label_fragment, method_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::{FunctionSig, PhpType};
 
@@ -2718,13 +2718,6 @@ fn runtime_string_result_type_supported(result_ty: &PhpType, return_ty: &PhpType
     result_ty == return_ty || matches!(result_ty, PhpType::Mixed | PhpType::Union(_))
 }
 
-/// Converts arbitrary PHP function names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits one branch comparing the saved callable name with a candidate function name.
 fn emit_branch_if_runtime_callable_name_matches(
