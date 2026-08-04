@@ -79,6 +79,7 @@ pub(crate) fn emit_json_throw_error(emitter: &mut Emitter) {
     emitter.instruction("str x2, [x0, #16]");                                   // obj.message_len
     emitter.instruction("ldr x10, [sp, #0]");                                   // reload the saved error code for $code field
     emitter.instruction("str x10, [x0, #24]");                                  // obj.code (matches Exception's `code` property layout)
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
     emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
 
     // Publish the new exception object via _exc_value and longjmp to the
@@ -179,6 +180,7 @@ fn emit_json_throw_error_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax + 16], r11");                       // obj.message_len
     emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the saved error code for $code field
     emitter.instruction("mov QWORD PTR [rax + 24], rcx");                       // obj.code (matches Exception's `code` property layout)
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
     emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
 
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0);             // _exc_value = JsonException pointer

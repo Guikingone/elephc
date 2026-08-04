@@ -11,10 +11,15 @@ use super::super::*;
 use super::support::*;
 
 /// Verifies nested eval calls parse and execute against the same dynamic scope.
+///
+/// The inner fragment is SINGLE-quoted because PHP interpolates a double-quoted eval
+/// argument before `eval()` ever sees it: measured on PHP 8.5.6,
+/// `$x = 1; eval("$x = $x + 4;");` expands to `eval("1 = 1 + 4;")` and dies with
+/// `syntax error, unexpected token "="`. The single-quoted form is the one that yields 5.
 #[test]
 fn execute_program_nested_eval_uses_same_scope() {
     let program =
-        parse_fragment(br#"eval("$x = $x + 4;"); return $x;"#).expect("parse eval fragment");
+        parse_fragment(br#"eval('$x = $x + 4;'); return $x;"#).expect("parse eval fragment");
     let mut scope = ElephcEvalScope::new();
     let mut values = FakeOps::default();
     let x = values.int(1).expect("create fake int");

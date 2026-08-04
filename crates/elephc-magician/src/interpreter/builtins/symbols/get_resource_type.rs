@@ -36,13 +36,14 @@ pub(in crate::interpreter) fn eval_get_resource_type_declared_call(
 /// Evaluates materialized `get_resource_type(...)` arguments through the `get_resource_id` owner.
 pub(in crate::interpreter) fn eval_get_resource_type_declared_values_result(
     evaluated_args: &[RuntimeCellHandle],
-    _context: &mut ElephcEvalContext,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
         [resource] => super::get_resource_id::eval_resource_introspection_result(
             "get_resource_type",
             *resource,
+            context,
             values,
         ),
         _ => Err(EvalStatus::RuntimeFatal),

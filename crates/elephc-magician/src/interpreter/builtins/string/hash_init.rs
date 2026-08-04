@@ -40,6 +40,12 @@ pub(in crate::interpreter) fn eval_builtin_hash_init(
 }
 
 /// Opens an incremental hash context resource.
+///
+/// Boxes the table key through `values.hash_context()`, NOT `values.resource()`:
+/// PHP 8's `hash_init()` returns a `HashContext` OBJECT and consumes nothing from the
+/// per-request resource counter, so binding a PHP resource id here shifted every later
+/// `fopen()` — inside the same `eval()` and in the host program around it, which share
+/// one counter. See `elephc::codegen_support::runtime::arrays::mixed_from_value`.
 pub(in crate::interpreter) fn eval_hash_init_result(
     algo: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -47,7 +53,7 @@ pub(in crate::interpreter) fn eval_hash_init_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let algo = values.string_bytes(algo)?;
     match context.stream_resources_mut().open_hash_context(&algo) {
-        Some(id) => values.resource(id),
+        Some(id) => values.hash_context(id),
         None => Err(EvalStatus::RuntimeFatal),
     }
 }

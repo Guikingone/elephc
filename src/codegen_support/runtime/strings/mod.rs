@@ -79,6 +79,7 @@ mod rtrim_mask;
 mod ltrim_mask;
 mod trim_mask;
 mod resource_to_string;
+mod resource_type_name;
 mod resource_write_stdout;
 
 pub use itoa::emit_itoa;
@@ -222,4 +223,6 @@ pub use trim_mask::emit_trim_mask;
 /// Emit trim with custom mask helper.
 pub use resource_to_string::emit_resource_to_string;
 /// Emit resource-to-string conversion.
+pub use resource_type_name::emit_resource_type_name;
+/// Emit the resource type-name resolver (`stream` when open, `Unknown` once closed).
 pub use resource_write_stdout::emit_resource_write_stdout;

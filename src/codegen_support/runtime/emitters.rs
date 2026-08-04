@@ -41,6 +41,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // String runtime functions
     strings::emit_itoa(emitter);
     strings::emit_resource_to_string(emitter);
+    strings::emit_resource_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
@@ -176,6 +177,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
+    exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
 

@@ -105,6 +105,7 @@ Codegen:
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
+  --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
   --link LIB, -l LIB      Extra library to link
@@ -130,6 +131,13 @@ pub(crate) struct CliConfig {
     pub(crate) heap_size: usize,
     pub(crate) gc_stats: bool,
     pub(crate) heap_debug: bool,
+    /// Opt-in: make the one documented OPcache divergence (D5) LOUD instead of silent.
+    ///
+    /// Code compiled into the binary cannot be evicted, so `opcache_invalidate()` on a
+    /// manifest member can never do what the caller is asking for. Off (the default) it
+    /// reports success exactly as reference PHP does; on, it throws so a program that
+    /// RELIES on invalidation fails loudly rather than silently running stale code.
+    pub(crate) strict_opcache: bool,
     pub(crate) emit_ir: bool,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
@@ -214,6 +222,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
     let mut heap_debug = false;
+    let mut strict_opcache = false;
     let mut emit_ir = false;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
@@ -275,6 +284,8 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             gc_stats = true;
         } else if arg == "--heap-debug" {
             heap_debug = true;
+        } else if arg == "--strict-opcache" {
+            strict_opcache = true;
         } else if arg == "--emit-ir" {
             emit_ir = true;
         } else if arg == "--emit-asm" {
@@ -420,6 +431,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         heap_size,
         gc_stats,
         heap_debug,
+        strict_opcache,
         emit_ir,
         null_repr,
         emit_asm,

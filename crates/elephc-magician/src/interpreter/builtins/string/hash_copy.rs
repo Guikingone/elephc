@@ -33,6 +33,10 @@ pub(in crate::interpreter) fn eval_builtin_hash_copy(
 }
 
 /// Clones a materialized incremental hash context into a new resource.
+///
+/// The clone is boxed the same inert way as `hash_init()`'s original: PHP's
+/// `hash_copy()` returns another `HashContext` OBJECT, so it consumes no PHP resource
+/// id either. Using `values.resource()` here leaked one id per copy.
 pub(in crate::interpreter) fn eval_hash_copy_result(
     hash_context: RuntimeCellHandle,
     context: &mut ElephcEvalContext,
@@ -40,7 +44,7 @@ pub(in crate::interpreter) fn eval_hash_copy_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = super::hash_init::eval_hash_context_resource_id(hash_context, values)?;
     match context.stream_resources_mut().copy_hash_context(id) {
-        Some(copy_id) => values.resource(copy_id),
+        Some(copy_id) => values.hash_context(copy_id),
         None => Err(EvalStatus::RuntimeFatal),
     }
 }

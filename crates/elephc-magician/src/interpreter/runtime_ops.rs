@@ -443,6 +443,24 @@ pub trait RuntimeValueOps {
     /// Creates a runtime resource cell with a zero-based native resource payload.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
 
+    /// Creates a runtime cell for an eval-owned incremental hash context.
+    ///
+    /// SEPARATE FROM `resource()` ON PURPOSE. PHP 8's `hash_init()` returns a
+    /// `HashContext` OBJECT, which draws from the object-handle space and consumes
+    /// nothing from the per-request RESOURCE counter that `get_resource_id()` and
+    /// `var_dump()` report. Routing hash contexts through `resource()` made
+    /// `eval('hash_init("md5"); $x = fopen(...);')` report an id one higher than PHP
+    /// for `$x`, and shifted the host program's later `fopen()`s too, because eval and
+    /// the compiled program share one id counter.
+    ///
+    /// The cell still carries runtime tag 9, because that is the shape
+    /// `eval_resource_payload` reads the table key back out of; what changes is the
+    /// resource KIND word, which becomes 5 = eval-owned inert handle: no PHP id is
+    /// bound and no destructor runs. `value` is a key into `EvalStreamResources`, which
+    /// owns the real `elephc_crypto` handle and frees it in its own `Drop` — this cell
+    /// must never free anything.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
+
     /// Creates a runtime float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus>;
 

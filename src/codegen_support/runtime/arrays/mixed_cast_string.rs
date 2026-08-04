@@ -7,6 +7,20 @@
 //!
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
+//! - OWNERSHIP OF THE RESULT IS PER-TAG, and every caller already depends on the split:
+//!   tag 1 (string) is the ONLY arm that allocates — `__rt_str_persist` hands back a fresh
+//!   `__rt_heap_alloc` block the caller owns. Tags 0 (int), 2 (float), 3-true (bool) and 9
+//!   (resource) all format into the SHARED `_concat_buf` scratch and return a BORROWED
+//!   pointer; tag 3-false and every non-scalar tag return a null pointer with length 0.
+//!   `__rt_implode` is the one caller that releases the result, and it does so through
+//!   `__rt_heap_free`, which by contract ignores anything that is not a live heap block
+//!   (AArch64 range-checks `_heap_buf`, x86_64 checks the heap magic marker) — precisely so
+//!   concat-buffer scratch can be passed to it. Adding a scratch-returning arm therefore
+//!   cannot leak (nothing was allocated) and cannot wild-free (nothing frees scratch).
+//! - The tag-9 arm reuses `__rt_resource_to_string`, the SAME helper the statically-typed
+//!   `PhpType::Resource` path already calls from `lower_resource_to_string` /
+//!   `lower_cast_to_string` / `emit_settype_string_conversion`. Boxed and unboxed resources
+//!   consequently render through one formatter with one ownership contract.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -14,7 +28,8 @@ use crate::codegen_support::platform::Arch;
 /// Converts a boxed Mixed value to a string by dispatching on the unboxed tag.
 /// Input: x0 = boxed mixed pointer. Output: x1 = string pointer, x2 = string length (ARM64).
 /// Handles int (tag 0 → itoa), string (tag 1 → persisted copy), float (tag 2 → ftoa),
-/// bool (tag 3 → "1" or ""), and null/unsupported (→ empty string).
+/// bool (tag 3 → "1" or ""), resource (tag 9 → `Resource id #N`), and null/unsupported
+/// (→ empty string).
 /// Dispatches to `emit_mixed_cast_string_linux_x86_64` on x86_64; ARM64 emits inline.
 pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -38,6 +53,8 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_cast_string_from_float");              // floats cast through ftoa
     emitter.instruction("cmp x0, #3");                                          // does the mixed payload hold a bool?
     emitter.instruction("b.eq __rt_mixed_cast_string_from_bool");               // bools cast to "1" or ""
+    emitter.instruction("cmp x0, #9");                                          // does the mixed payload hold a resource?
+    emitter.instruction("b.eq __rt_mixed_cast_string_from_resource");           // resources render as PHP's "Resource id #N"
     emitter.instruction("mov x1, xzr");                                         // unsupported and null payloads produce an empty string pointer
     emitter.instruction("mov x2, xzr");                                         // unsupported and null payloads produce an empty string length
     emitter.instruction("b __rt_mixed_cast_string_done");                       // return the normalized empty-string result
@@ -50,6 +67,11 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_cast_string_from_string");
     emitter.instruction("bl __rt_str_persist");                                 // detach the string payload from the source mixed owner
     emitter.instruction("b __rt_mixed_cast_string_done");                       // return the persisted string copy
+
+    emitter.label("__rt_mixed_cast_string_from_resource");
+    emitter.instruction("mov x0, x1");                                          // move the native resource payload into the formatter argument register
+    emitter.instruction("bl __rt_resource_to_string");                          // format the payload as "Resource id #N" in the shared concat scratch
+    emitter.instruction("b __rt_mixed_cast_string_done");                       // return the borrowed resource display string
 
     emitter.label("__rt_mixed_cast_string_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
@@ -75,7 +97,8 @@ pub fn emit_mixed_cast_string(emitter: &mut Emitter) {
 /// x86_64 variant of `emit_mixed_cast_string`: converts a boxed Mixed value to a string.
 /// Input: RDI = boxed mixed pointer. Output: RAX = string pointer, RDX = string length (System V ABI).
 /// Handles int (tag 0 → itoa), string (tag 1 → persisted copy), float (tag 2 → ftoa),
-/// bool (tag 3 → "1" or ""), and null/unsupported (→ empty string).
+/// bool (tag 3 → "1" or ""), resource (tag 9 → `Resource id #N`), and null/unsupported
+/// (→ empty string).
 fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_string ---");
@@ -92,6 +115,8 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_cast_string_from_float");                // floats cast through ftoa
     emitter.instruction("cmp rax, 3");                                          // does the mixed payload hold a bool?
     emitter.instruction("je __rt_mixed_cast_string_from_bool");                 // bools cast to \"1\" or \"\"
+    emitter.instruction("cmp rax, 9");                                          // does the mixed payload hold a resource?
+    emitter.instruction("je __rt_mixed_cast_string_from_resource");             // resources render as PHP's \"Resource id #N\"
     emitter.instruction("xor rax, rax");                                        // unsupported and null payloads produce an empty string pointer
     emitter.instruction("xor rdx, rdx");                                        // unsupported and null payloads produce an empty string length
     emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the normalized empty-string result
@@ -105,6 +130,11 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the unboxed string pointer into the ABI string result register
     emitter.instruction("call __rt_str_persist");                               // detach the string payload from the source mixed owner
     emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the persisted string copy
+
+    emitter.label("__rt_mixed_cast_string_from_resource");
+    emitter.instruction("mov rax, rdi");                                        // move the native resource payload into the formatter input register
+    emitter.instruction("call __rt_resource_to_string");                        // format the payload as \"Resource id #N\" in the shared concat scratch
+    emitter.instruction("jmp __rt_mixed_cast_string_done");                     // return the borrowed resource display string
 
     emitter.label("__rt_mixed_cast_string_from_float");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the FP register file
@@ -125,4 +155,92 @@ fn emit_mixed_cast_string_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_cast_string_done");
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the string cast result in rax/rdx
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits `__rt_mixed_cast_string` for one target and returns the assembly text.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_mixed_cast_string(&mut emitter);
+        emitter.output()
+    }
+
+    /// Pins the AArch64 tag-9 arm: a boxed resource must reach
+    /// `__rt_resource_to_string` with its native payload in `x0`, and rejoin the shared
+    /// epilogue so the display string comes back in the standard `x1`/`x2` pair.
+    ///
+    /// Without this arm every boxed resource fell through to the null/unsupported tail
+    /// and `"$r"`, `"" . $r`, `(string) $r` and `strval($r)` all produced the EMPTY
+    /// string while PHP 8.5.6 produced `Resource id #5`.
+    #[test]
+    fn test_mixed_cast_string_arm64_dispatches_the_resource_tag() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(
+            asm.contains("    cmp x0, #9\n    b.eq __rt_mixed_cast_string_from_resource\n"),
+            "{asm}"
+        );
+        assert!(asm.contains("__rt_mixed_cast_string_from_resource:\n"), "{asm}");
+        assert!(asm.contains("bl __rt_resource_to_string"), "{asm}");
+        assert_eq!(asm.matches("bl __rt_resource_to_string").count(), 1, "{asm}");
+        assert_eq!(asm.matches("sub sp, sp, #32").count(), 1, "{asm}");
+    }
+
+    /// Pins the x86_64 tag-9 arm, the half a comparable fix silently lost before: the
+    /// #601 implode ownership work was removed on BOTH arches precisely because only the
+    /// AArch64 sequence had ever been asserted. Same dispatch, same single call, same
+    /// unchanged frame.
+    #[test]
+    fn test_mixed_cast_string_x86_64_dispatches_the_resource_tag() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(
+            asm.contains("    cmp rax, 9\n    je __rt_mixed_cast_string_from_resource\n"),
+            "{asm}"
+        );
+        assert!(asm.contains("__rt_mixed_cast_string_from_resource:\n"), "{asm}");
+        assert!(asm.contains("mov rax, rdi"), "{asm}");
+        assert!(asm.contains("call __rt_resource_to_string"), "{asm}");
+        assert_eq!(asm.matches("call __rt_resource_to_string").count(), 1, "{asm}");
+        assert_eq!(asm.matches("push rbp").count(), 1, "{asm}");
+        assert_eq!(asm.matches("pop rbp").count(), 1, "{asm}");
+    }
+
+    /// Pins the OWNERSHIP contract of the resource arm on both targets: it must return
+    /// BORROWED `_concat_buf` scratch, exactly like the int/float/bool arms, and must
+    /// never route through `__rt_str_persist` the way the tag-1 string arm does.
+    ///
+    /// This is the invariant `__rt_implode` depends on. Implode records whatever
+    /// `__rt_mixed_cast_string` returns and hands it to `__rt_heap_free`, which ignores
+    /// pointers outside the live heap by contract. A resource arm that allocated instead
+    /// would be freed correctly there but LEAKED at the ~20 other call sites that never
+    /// release the result; an arm that allocated and was NOT recorded would leak
+    /// everywhere. Scratch is the only contract every existing caller already honours.
+    #[test]
+    fn test_mixed_cast_string_resource_arm_borrows_scratch_on_both_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            let arm = asm
+                .split("__rt_mixed_cast_string_from_resource:\n")
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing resource arm for {target:?}:\n{asm}"));
+            let arm = arm
+                .split("__rt_mixed_cast_string_from_float:\n")
+                .next()
+                .expect("resource arm must precede the float arm");
+            assert!(
+                !arm.contains("__rt_str_persist"),
+                "the resource arm must not allocate an owned copy ({target:?}):\n{arm}"
+            );
+            assert!(
+                !arm.contains("__rt_heap_alloc") && !arm.contains("__rt_heap_free"),
+                "the resource arm must not touch the heap allocator ({target:?}):\n{arm}"
+            );
+        }
+    }
 }

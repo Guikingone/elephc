@@ -419,7 +419,11 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
 
-The fatal uncaught-exception path writes `Fatal error: uncaught exception` to stderr and exits with status 1. The runtime also resets the concat-buffer cursor before the final `longjmp`, so partially built string state from the throwing frame does not leak into the resumed catch/finally code.
+The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `": "` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.
+
+Codegen guards in `codegen::lower_inst::exceptions` have their OWN uncaught path: they write a fatal message baked at emit time and exit before the throwable is ever allocated, so they never reach this helper. They share `UNCAUGHT_EXIT_STATUS` with it so the status a script observes does not depend on which kind of exception escaped.
+
+The runtime also resets the concat-buffer cursor before the final `longjmp`, so partially built string state from the throwing frame does not leak into the resumed catch/finally code.
 
 ### Date/time routines
 

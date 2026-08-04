@@ -45,6 +45,7 @@ pub(crate) fn compile(config: CliConfig) {
         heap_size,
         gc_stats,
         heap_debug,
+        strict_opcache,
         emit_ir,
         null_repr,
         emit_asm,
@@ -289,6 +290,7 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_manifest,
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
+        strict_opcache,
     );
     timings.record_since("opcache-prelude", phase_started);
 
@@ -397,6 +399,7 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_manifest,
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
+        strict_opcache,
     );
     timings.record_since("opcache-manifest-bake", phase_started);
 
