@@ -8,6 +8,8 @@
 //! Key details:
 //! - Parser output preserves spans and PHP syntax shape for later passes to rewrite safely.
 
+/// PHP alternative control-structure syntax (`:` … `endif;`) body parsing helpers.
+mod alt_syntax;
 /// Defines AST node types representing the PHP syntax tree produced by the parser.
 pub mod ast;
 mod attributes;

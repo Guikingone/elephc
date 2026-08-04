@@ -11,6 +11,7 @@
 mod assign;
 mod declare;
 mod ffi;
+mod goto_unsupported;
 mod namespace_use;
 mod oop;
 /// Parameter parsing helpers for function declarations, including typed parameters and return types.
@@ -155,6 +156,25 @@ fn parse_stmt_dispatch(
             } else {
                 assign::parse_static_var(tokens, pos, span)
             }
+        }
+        Token::EndIf
+        | Token::EndWhile
+        | Token::EndFor
+        | Token::EndForeach
+        | Token::EndSwitch
+        | Token::EndDeclare => {
+            let keyword = tokens[*pos]
+                .0
+                .canonical_word_spelling()
+                .unwrap_or("end-block keyword");
+            *pos += 1;
+            Err(crate::parser::alt_syntax::unopened_terminator_error(
+                keyword, span,
+            ))
+        }
+        Token::Goto => Err(goto_unsupported::reject_goto_statement(span)),
+        Token::Identifier(label) if goto_unsupported::starts_goto_label(tokens, *pos) => {
+            Err(goto_unsupported::reject_goto_label(label, span))
         }
         Token::LBracket => assign::parse_list_unpack(tokens, pos, span),
         Token::Identifier(_)
@@ -328,7 +348,14 @@ pub(crate) fn recover_to_statement_boundary(tokens: &[SpannedToken], pos: &mut u
             Token::RBrace if paren_depth == 0 && bracket_depth == 0 => {
                 break;
             }
-            Token::EndDeclare if paren_depth == 0 && bracket_depth == 0 => {
+            Token::EndDeclare
+            | Token::EndIf
+            | Token::EndWhile
+            | Token::EndFor
+            | Token::EndForeach
+            | Token::EndSwitch
+                if paren_depth == 0 && bracket_depth == 0 =>
+            {
                 break;
             }
             Token::Eof if paren_depth == 0 && bracket_depth == 0 => {
@@ -361,6 +388,7 @@ pub(crate) fn recover_to_statement_boundary(tokens: &[SpannedToken], pos: &mut u
             | Token::Const
             | Token::Global
             | Token::Static
+            | Token::Goto
             | Token::Identifier(_)
             | Token::Self_
             | Token::Parent
