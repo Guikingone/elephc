@@ -4166,6 +4166,12 @@ fn property_get_shape_issue(
         // materializer, and `scoped_constant_get` is the ONLY way to obtain a case object,
         // so no read can precede those writes.
         && !module.enum_infos.contains_key(&class_name)
+        // An ABSTRACT declaration cannot be instantiated, so what matters is what its concrete
+        // descendants do. `abstract class Shape { abstract public int $sides { get; set; } }`
+        // with `class Triangle extends Shape { public int $sides = 3; }` has no instance whose
+        // slot is unwritten, and refusing `Shape::describe()` for the abstract declaration's own
+        // lack of a default answers a question no object can ask.
+        && !every_concrete_descendant_initializes(module, &class_name, property)
         // ...and a CONSTRUCTOR that writes it unconditionally is a third: every path out of
         // `new` has passed that store, so no read from outside the constructor can precede it.
         // INSIDE the constructor the store has to be shown to come first, which is a question
@@ -4454,6 +4460,61 @@ fn include_once_mark_shape_issue(module: &Module) -> Option<String> {
     guarded.then(|| {
         "include_once_mark needs real storage once include_once_guard reads it".to_string()
     })
+}
+
+/// Whether `class_name` is abstract and every concrete class below it initializes `property`.
+///
+/// "Initializes" means the same two things it means anywhere else here: a literal default on the
+/// slot, or a constructor that writes it before anything can read. A hierarchy with no concrete
+/// descendant at all answers false — there is nothing to instantiate, but there is also nothing
+/// to prove, and claiming otherwise would rest on an empty set.
+fn every_concrete_descendant_initializes(
+    module: &Module,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let Some(declaring) = module.class_infos.get(class_name) else {
+        return false;
+    };
+    if !declaring.is_abstract {
+        return false;
+    }
+    let descends_from = |candidate: &crate::types::ClassInfo| -> bool {
+        let mut parent = candidate.parent.clone();
+        for _ in 0..module.class_infos.len() {
+            let Some(name) = parent.clone() else { return false };
+            if crate::names::php_symbol_key(&name) == crate::names::php_symbol_key(class_name) {
+                return true;
+            }
+            parent = module
+                .class_infos
+                .get(&name)
+                .and_then(|info| info.parent.clone());
+        }
+        false
+    };
+    let mut concrete = 0usize;
+    for (name, info) in &module.class_infos {
+        if info.is_abstract || !descends_from(info) {
+            continue;
+        }
+        concrete += 1;
+        let Some(index) = info.properties.iter().position(|(slot, _)| slot == property) else {
+            return false;
+        };
+        let has_default = info
+            .defaults
+            .get(index)
+            .map(|default| default.is_some())
+            .unwrap_or(false);
+        if !has_default
+            && !info.promoted_properties.contains(property)
+            && !constructor_initializes_property(module, name, property)
+        {
+            return false;
+        }
+    }
+    concrete > 0
 }
 
 /// Whether the constructor's own store of `property` dominates this read.

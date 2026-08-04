@@ -13206,3 +13206,111 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
+///
+/// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,
+/// and reading one before it is written is `Error: Typed property C::$p must not be accessed
+/// before initialization` — a check this backend cannot make, since the allocator zeroes the slot
+/// and zero is a legitimate int. But an abstract class cannot be instantiated, so what decides is
+/// what its CONCRETE descendants do: with every one of them giving the slot a default, no instance
+/// exists whose slot is unwritten, and refusing `Shape::describe()` answers a question no object
+/// can ask. One descendant that leaves it uninitialized brings the refusal straight back, which
+/// the second case pins.
+#[test]
+fn test_cli_wasm_reads_an_abstract_property_every_subclass_initializes() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_abstract_property");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+abstract class Shape {
+    abstract public int $sides { get; set; }
+    abstract public string $name { get; set; }
+    public function describe(): string { return $this->name . " has " . $this->sides . " sides"; }
+}
+class Triangle extends Shape { public int $sides = 3; public string $name = "triangle"; }
+class Square extends Shape { public int $sides = 4; public string $name = "square"; }
+foreach ([new Triangle(), new Square()] as $shape) { echo $shape->describe(), "\n"; }
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the abstract-property probe to WASM");
+    assert!(
+        output.status.success(),
+        "abstract-property compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the abstract-property probe under Node");
+    assert!(
+        run.status.success(),
+        "the abstract-property reads must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "triangle has 3 sides\nsquare has 4 sides\n",
+        "php-src's own answers"
+    );
+
+    // One descendant that leaves the slot uninitialized is enough to make an instance whose read
+    // php-src raises on, so the whole hierarchy goes back to refused.
+    let partial = dir.join("partial.php");
+    fs::write(
+        &partial,
+        r#"<?php
+abstract class S { abstract public int $n { get; set; } public function show(): int { return $this->n; } }
+class Good extends S { public int $n = 3; }
+class Bad extends S { public int $n; }
+echo (new Good())->show(), "\n";
+"#,
+    )
+    .unwrap();
+    let refused = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&partial)
+        .output()
+        .expect("failed to run the compiler over the partial hierarchy");
+    assert!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr).contains("may be uninitialized"),
+        "a descendant that does not initialize must refuse the read: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
