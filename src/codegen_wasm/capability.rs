@@ -5980,7 +5980,8 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Crc32
         | RuntimeFnId::Sha1
         | RuntimeFnId::Md5
-        | RuntimeFnId::Htmlspecialchars => true,
+        | RuntimeFnId::Htmlspecialchars
+        | RuntimeFnId::Gettype => true,
         RuntimeFnId::ArrayFilter
         | RuntimeFnId::Uasort
         | RuntimeFnId::Uksort
@@ -6353,7 +6354,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Usleep
         | RuntimeFnId::GetResourceId
         | RuntimeFnId::GetResourceType
-        | RuntimeFnId::Gettype
         | RuntimeFnId::IsCallable
         | RuntimeFnId::IsFinite
         | RuntimeFnId::IsInfinite

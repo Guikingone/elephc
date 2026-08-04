@@ -209,6 +209,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
             &["codegen_wasm::closures::tests::array_map_lowering_via_builtin_call_returns_4220"]
                 [..],
         ),
+        RuntimeFnId::Gettype => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_gettype",
+            &[
+                "codegen_wasm::builtins::tests::gettype_admits_settled_and_boxed_values_but_not_a_resource",
+                "codegen::cli::test_cli_wasm_gettype_names_every_type_the_way_php_does",
+            ][..],
+        ),
         RuntimeFnId::Round => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_direct_builtin",

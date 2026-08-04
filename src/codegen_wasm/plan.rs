@@ -144,6 +144,33 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // `gettype()` answers one of a fixed set of php-src spellings. Any module that calls it needs
+    // those bytes addressable, whether the answer is settled at compile time or picked by a tag.
+    if module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .any(|function| {
+            function.instructions.iter().any(|inst| {
+                matches!(
+                    inst.immediate.as_ref(),
+                    Some(crate::ir::Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Gettype)
+                            | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                                target: crate::ir::RuntimeFnId::Gettype,
+                                ..
+                            }
+                    ))
+                )
+            })
+        })
+    {
+        for name in ["integer", "double", "boolean", "string", "array", "object", "NULL"] {
+            if !layout_values.iter().any(|value| value == name) {
+                layout_values.push(name.to_string());
+            }
+        }
+    }
     layout_values.sort();
     if has_main
         && super::function::module_uses_exceptions(module)

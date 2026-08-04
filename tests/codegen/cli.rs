@@ -12816,3 +12816,92 @@ fn test_cli_wasm_refuses_a_constructor_that_leaks_this_before_its_store() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `gettype()` answers php-src's own spellings, settled or boxed.
+///
+/// These are historical names, not the type names PHP 8 prints elsewhere: an int is "integer", a
+/// float "double", a bool "boolean", and null "NULL" in capitals. A settled EIR type answers at
+/// compile time — the type is already decided, and a dispatch would be a slower route to the same
+/// string — while a boxed value reads the cell tag. A RESOURCE is refused rather than answered,
+/// because php-src distinguishes an open handle from `"resource (closed)"` and the tag alone
+/// cannot tell them apart.
+#[test]
+fn test_cli_wasm_gettype_names_every_type_the_way_php_does() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_gettype");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+echo gettype(42), "|", gettype(3.14), "|", gettype("hi"), "|", gettype(true), "\n";
+echo gettype(false), "|", gettype(null), "|", gettype([1, 2]), "|", gettype(["a" => 1]), "\n";
+function pick(int $i) {
+    if ($i === 0) { return 7; }
+    if ($i === 1) { return "s"; }
+    if ($i === 2) { return 1.5; }
+    if ($i === 3) { return true; }
+    if ($i === 4) { return null; }
+    return [1];
+}
+$j = 0;
+while ($j <= 5) { echo gettype(pick($j)), " "; $j = $j + 1; }
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the gettype probe to WASM");
+    assert!(
+        output.status.success(),
+        "gettype compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the gettype probe under Node");
+    assert!(
+        run.status.success(),
+        "gettype must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "integer|double|string|boolean\n",
+            "boolean|NULL|array|array\n",
+            "integer string double boolean NULL array \n",
+        ),
+        "php-src 8.5.6's own answers"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

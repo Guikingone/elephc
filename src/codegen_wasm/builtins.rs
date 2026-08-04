@@ -3295,6 +3295,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
     matches!(
         target,
         RuntimeFnId::Abs
+            | RuntimeFnId::Gettype
             | RuntimeFnId::Floor
             | RuntimeFnId::Round
             | RuntimeFnId::Ceil
@@ -3422,6 +3423,9 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::Round && call.operands.len() == 2 {
         return round_places_shape_issue(function, call);
+    }
+    if target == RuntimeFnId::Gettype {
+        return gettype_shape_issue(function, call);
     }
     if target == RuntimeFnId::StrRepeat {
         return str_repeat_shape_issue(function, call);
@@ -3686,6 +3690,9 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::Substr {
         return lower_substr(ctx, inst);
+    }
+    if target == RuntimeFnId::Gettype {
+        return lower_gettype(ctx, inst);
     }
     // `round($v, $p)` is a different function from `round($v)`, not the same one with a default:
     // php-src extracts the integral part and then REPAIRS the extraction, which is what makes
@@ -4207,6 +4214,66 @@ fn lower_trim(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Resul
 /// runs to the end, while a NEGATIVE length names an end offset from the right. A single flag
 /// tells the helper which rule to apply rather than inventing a length that would have to encode
 /// both.
+/// Lowers `gettype($value)`.
+///
+/// A settled EIR type answers with a constant string: the type is already decided, and emitting a
+/// dispatch would only be a slower way to reach the same answer. A boxed value dispatches on the
+/// cell tag through a chain of comparisons, which is exact for every tag this target can build —
+/// `resource (closed)` is the one php-src answer no tag carries, so a resource is refused rather
+/// than reported as an open handle it might not be.
+fn lower_gettype(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let declared = ctx.value_php_type(value)?.clone();
+    if let Some(name) = gettype_declared_name(&declared) {
+        let (ptr, len) = ctx.default_str_literal(name)?;
+        ctx.fb
+            .ins(&format!("i32.const {ptr}"), "gettype: the EIR type already decides this");
+        ctx.fb.ins(&format!("i64.const {len}"), "its length");
+        return store_result(ctx, inst);
+    }
+    // tag -> name, in the order the tags are numbered. Tag 7 (nested) and tag 10 (callable) are
+    // internal shapes PHP has no separate name for: a nested container is an array and a callable
+    // descriptor reaches PHP as an object.
+    const TAGGED: &[(i64, &str)] = &[
+        (0, "integer"),
+        (1, "string"),
+        (2, "double"),
+        (3, "boolean"),
+        (4, "array"),
+        (5, "array"),
+        (6, "object"),
+        (7, "array"),
+        (8, "NULL"),
+        (10, "object"),
+    ];
+    let tag = ctx.fresh_temp(super::wat::ValType::I64);
+    ctx.emit_load_value(value)?;
+    ctx.fb.ins("call $__rt_mixed_unbox", "unbox -> (tag, lo, hi)");
+    ctx.fb.ins("drop", "discard hi");
+    ctx.fb.ins("drop", "discard lo");
+    ctx.fb.ins(&format!("local.set {tag}"), "the cell's runtime tag");
+    // A resource has no static answer: php-src says "resource" or "resource (closed)" depending on
+    // a liveness this tag does not carry, so the runtime refuses rather than guess.
+    ctx.fb.ins(
+        &format!("(if (i64.eq (local.get {tag}) (i64.const 9)) (then (call $__rt_fail (i32.const 9)) unreachable))"),
+        "elephc-trap:post-noreturn:gettype-resource",
+    );
+    let (fallback_ptr, fallback_len) = ctx.default_str_literal("object")?;
+    ctx.fb
+        .ins(&format!("i32.const {fallback_ptr}"), "default: object");
+    ctx.fb.ins(&format!("i64.const {fallback_len}"), "its length");
+    for (candidate, name) in TAGGED.iter().rev() {
+        let (ptr, len) = ctx.default_str_literal(name)?;
+        ctx.fb.ins(
+            &format!(
+                "(if (param i32 i64) (result i32 i64) (i64.eq (local.get {tag}) (i64.const {candidate})) (then (drop) (drop) (i32.const {ptr}) (i64.const {len})))"
+            ),
+            &format!("tag {candidate} is \"{name}\""),
+        );
+    }
+    store_result(ctx, inst)
+}
+
 fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
     ctx.emit_load_value(operand(inst, 1)?)?;
@@ -5519,6 +5586,73 @@ fn trim_shape_issue(
     None
 }
 
+/// The exact string php-src's `gettype()` answers for a settled PHP type.
+///
+/// These are php-src's historical spellings, not the type names PHP 8 prints elsewhere: an int is
+/// "integer", a float is "double", a bool is "boolean", and null is "NULL" in capitals. Measured
+/// on php-src 8.5.6 rather than transcribed from the manual.
+fn gettype_name(php_type: &PhpType) -> Option<&'static str> {
+    Some(match php_type {
+        // A resource reprs as `Int`, and php-src answers "resource" or "resource (closed)"
+        // depending on a liveness nothing here carries — so it has no settled name.
+        PhpType::Resource(_) => return None,
+        PhpType::Int => "integer",
+        PhpType::Float => "double",
+        PhpType::Bool | PhpType::False => "boolean",
+        PhpType::Str => "string",
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "array",
+        PhpType::Object(_) => "object",
+        PhpType::Void | PhpType::Never => "NULL",
+        _ => return None,
+    })
+}
+
+/// `gettype_name` over the DECLARED type, so a resource is seen before `codegen_repr` flattens
+/// it into `Int` and it silently becomes "integer".
+fn gettype_declared_name(php_type: &PhpType) -> Option<&'static str> {
+    if matches!(php_type, PhpType::Resource(_)) {
+        return None;
+    }
+    gettype_name(&php_type.codegen_repr())
+}
+
+/// Validates `gettype($value)`: one operand answering a string.
+///
+/// A settled type answers at compile time. A boxed one dispatches on the cell tag, which decides
+/// every case this target can produce — except a RESOURCE, where php-src distinguishes an open
+/// handle from `"resource (closed)"` and the tag alone cannot.
+fn gettype_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "gettype takes exactly one value, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("gettype operand is missing from the value table".to_string());
+    };
+    if call.result_type != IrType::Str || call.result_php_type.codegen_repr() != PhpType::Str {
+        return Some(format!(
+            "gettype result {:?}/{:?} is not the expected Str/Str",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    // The check reads the DECLARED type, not `codegen_repr()`: a resource reprs as `Int`, so
+    // asking the repr would answer "integer" for a handle php-src calls "resource".
+    if gettype_declared_name(&value.php_type).is_some() {
+        return None;
+    }
+    let source = value.php_type.codegen_repr();
+    if source == PhpType::Mixed && value.ir_type == IrType::Heap(IrHeapKind::Mixed) {
+        return None;
+    }
+    Some(format!(
+        "gettype over {:?} has no settled php-src name",
+        value.php_type
+    ))
+}
+
 /// Validates `round($value, $places)`: a float value and an integer precision.
 ///
 /// `|places| > 22` is refused. php-src reaches for `pow(10.0, places)` past its lookup table, and
@@ -6359,6 +6493,54 @@ mod tests {
             )
             .is_some(),
             "array_slice takes an integer offset"
+        );
+    }
+
+    /// Verifies `gettype()` admits a settled type and a boxed one, and refuses a resource.
+    ///
+    /// php-src answers `"resource"` or `"resource (closed)"` depending on a liveness the cell tag
+    /// does not carry, so the settled resource type has no name this backend can promise.
+    #[test]
+    fn gettype_admits_settled_and_boxed_values_but_not_a_resource() {
+        for (ir, php) in [
+            (IrType::I64, PhpType::Int),
+            (IrType::F64, PhpType::Float),
+            (IrType::Str, PhpType::Str),
+            (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed),
+            (IrType::Heap(IrHeapKind::Array), PhpType::Array(Box::new(PhpType::Int))),
+        ] {
+            let probe = shaped_call(
+                RuntimeFnId::Gettype,
+                &[(ir, php.clone())],
+                IrType::Str,
+                PhpType::Str,
+            );
+            let call = probe.instructions.last().expect("the probe emitted a call");
+            assert_eq!(
+                direct_builtin_shape_issue(&probe_module(), &probe, call, RuntimeFnId::Gettype),
+                None,
+                "gettype over {php:?} should be admitted"
+            );
+        }
+
+        // php-src's own spellings, not PHP 8's type names.
+        assert_eq!(gettype_name(&PhpType::Int), Some("integer"));
+        assert_eq!(gettype_name(&PhpType::Float), Some("double"));
+        assert_eq!(gettype_name(&PhpType::Bool), Some("boolean"));
+        assert_eq!(gettype_name(&PhpType::Void), Some("NULL"));
+        assert_eq!(gettype_name(&PhpType::Resource(None)), None);
+
+        let resource = shaped_call(
+            RuntimeFnId::Gettype,
+            &[(IrType::I64, PhpType::Resource(None))],
+            IrType::Str,
+            PhpType::Str,
+        );
+        let call = resource.instructions.last().expect("the probe emitted a call");
+        assert!(
+            direct_builtin_shape_issue(&probe_module(), &resource, call, RuntimeFnId::Gettype)
+                .is_some_and(|issue| issue.contains("no settled php-src name")),
+            "a resource has no name the tag can promise"
         );
     }
 
