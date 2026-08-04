@@ -462,6 +462,7 @@ fn check_instruction_shape(
         Op::ArrayToMixed => array_to_mixed_shape_issue(function, inst),
         Op::LooseEq | Op::LooseNotEq => loose_eq_shape_issue(function, inst),
         Op::IterStart => iter_start_shape_issue(module, function, inst),
+        Op::IncludeOnceMark => include_once_mark_shape_issue(module),
         Op::IterCurrentValueRef => iter_current_value_ref_shape_issue(function, inst),
         Op::ArrayGet | Op::ArrayGetSilent => {
             array_get_shape_issue(module, function, block, inst)
@@ -4433,6 +4434,28 @@ fn instruction_can_observe_this(function: &Function, inst: &Instruction) -> bool
         .any(|operand| value_local_origin(function, *operand) == Some(0))
 }
 
+/// Validates `IncludeOnceMark`, which records that one include site has run.
+///
+/// Its ONLY reader is `IncludeOnceGuard`, and that op is refused on this target, so in any module
+/// that compiles the mark is unobservable and needs no storage. That is an invariant, not a
+/// convention: it is checked here, so admitting the guard later fails this rule rather than
+/// silently leaving the mark a no-op the guard would then read as zero.
+fn include_once_mark_shape_issue(module: &Module) -> Option<String> {
+    let guarded = module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .any(|function| {
+            function
+                .instructions
+                .iter()
+                .any(|inst| inst.op == Op::IncludeOnceGuard)
+        });
+    guarded.then(|| {
+        "include_once_mark needs real storage once include_once_guard reads it".to_string()
+    })
+}
+
 /// Whether the constructor's own store of `property` dominates this read.
 ///
 /// `constructor_initializes_property` has already shown the store is the FIRST property event in
@@ -6599,7 +6622,8 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::StrCharAt
         | Op::TypePredicate
         | Op::Nop
-        | Op::ConstClassName => true,
+        | Op::ConstClassName
+        | Op::IncludeOnceMark => true,
         Op::ConstEnumCase
         | Op::LoadCalledClassId
         | Op::DataAddr
@@ -6715,7 +6739,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::GeneratorYield
         | Op::GeneratorYieldFrom
         | Op::GeneratorReturn
-        | Op::IncludeOnceMark
         | Op::IncludeOnceGuard
         | Op::FunctionVariantMark
         | Op::FunctionVariantDispatch

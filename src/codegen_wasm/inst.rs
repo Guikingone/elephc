@@ -93,6 +93,10 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::StrCharAt => lower_str_char_at(ctx, &inst),
         Op::TypePredicate => lower_type_predicate(ctx, &inst),
         Op::ConstClassName => lower_const_class_name(ctx, &inst),
+        // The mark records that an include site ran, and its only reader — `IncludeOnceGuard` —
+        // is refused on this target, which `include_once_mark_shape_issue` enforces. So in any
+        // module that compiles it has no observable effect and needs no storage.
+        Op::IncludeOnceMark => Ok(()),
         Op::FToI => lower_ftoi(ctx, &inst),
         Op::Cast => lower_cast(ctx, &inst),
         Op::IsTruthy => lower_is_truthy(ctx, &inst),

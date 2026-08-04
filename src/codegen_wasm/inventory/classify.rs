@@ -701,6 +701,7 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "store_ref_cell_shape_issue",
         "forward_transfer_shape_issue",
         "cast_shape_issue",
+        "include_once_mark_shape_issue",
         "int_like_to_string_shape_issue",
         "strict_compare_shape_issue",
         "truthiness_shape_issue",
