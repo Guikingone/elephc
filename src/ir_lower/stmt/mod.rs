@@ -1775,7 +1775,13 @@ fn lower_foreach_source(
             return (source, is_borrowed_element);
         }
         if let ExprKind::PropertyAccess { object, property } = &array.kind {
-            return lower_by_ref_foreach_property_source(ctx, object, property, array);
+            let source = lower_by_ref_foreach_property_source(ctx, object, property, array);
+            // A property source that came back borrowed is owned by the property slot alone,
+            // exactly like a borrowed element, so the loop owes it the same lifetime reference:
+            // a body that drops the receiver would otherwise leave the iterator on freed storage.
+            let is_borrowed_property =
+                ctx.builder.value_ownership(source.value) == Ownership::Borrowed;
+            return (source, is_borrowed_property);
         }
     }
     (lower_expr(ctx, array), false)

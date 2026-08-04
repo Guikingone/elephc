@@ -1265,6 +1265,9 @@ echo implode(',', $a[0]);
         out.stderr.contains("leak summary: clean"),
         "expected a clean heap-debug leak summary, got: {}",
         out.stderr
+    );
+}
+
 // --- Issue #642: by-ref foreach over an OBJECT PROPERTY source ---
 //
 // The property receiver is the sibling of #580's element receiver, and strictly worse: the
@@ -1968,5 +1971,35 @@ foreach ($o->x as &$v) { $v = $v * 2; }
     assert!(
         !body.contains("str x0, [x9, #8]") && !body.contains("mov QWORD PTR [r11 + 8], rax"),
         "the separated container must never overwrite the ref-cell pointer in the slot:\n{body}"
+    );
+}
+
+/// Regression for issue #642 (integration follow-up): a body that replaces the RECEIVER must not
+/// leave the iterator on freed storage.
+///
+/// `PropGetForWrite` hands the loop the property's own container BORROWED, so the property slot is
+/// its only owner — the same situation `ArrayGetForWrite` creates for an element. Dropping the
+/// receiver therefore drops the container out from under a running iterator, which is why the loop
+/// takes the same lifetime pin here as it does for a borrowed element source.
+#[test]
+fn test_regression_642_by_ref_foreach_property_source_survives_receiver_replacement() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) {
+    echo $v, ',';
+    if ($v === 1) $o = new C();
+    $v *= 2;
+}
+unset($v);
+echo 'done';
+"#,
+    );
+    assert_eq!(out.stdout, "1,2,done");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
     );
 }
