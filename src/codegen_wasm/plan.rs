@@ -171,6 +171,25 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // `Foo::class` answers a compile-time string, so every class name an EIR `ConstClassName`
+    // names needs its bytes addressable in static data.
+    for function in module.functions.iter().chain(module.class_methods.iter()) {
+        for inst in &function.instructions {
+            if inst.op != crate::ir::Op::ConstClassName {
+                continue;
+            }
+            let Some(crate::ir::Immediate::Data(data)) = inst.immediate else {
+                continue;
+            };
+            let Some(name) = module.data.class_names.get(data.as_raw() as usize) else {
+                continue;
+            };
+            let name = name.trim_start_matches('\\').to_string();
+            if name != "static" && !layout_values.contains(&name) {
+                layout_values.push(name);
+            }
+        }
+    }
     layout_values.sort();
     if has_main
         && super::function::module_uses_exceptions(module)

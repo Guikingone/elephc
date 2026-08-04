@@ -6533,9 +6533,9 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::FToStr
         | Op::StrCharAt
         | Op::TypePredicate
-        | Op::Nop => true,
-        Op::ConstClassName
-        | Op::ConstEnumCase
+        | Op::Nop
+        | Op::ConstClassName => true,
+        Op::ConstEnumCase
         | Op::LoadCalledClassId
         | Op::DataAddr
         | Op::StoreGlobal

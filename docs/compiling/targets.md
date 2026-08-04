@@ -101,7 +101,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **32
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **33
 compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
 php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
 php-src cannot parse at all, so it has no php-src output to match — meaning
@@ -112,7 +112,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 158 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 157 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -192,6 +192,11 @@ against measured php-src 8.5.6 output rather than by analogy:
   handle from `resource (closed)`, and the tag does not carry that. The check
   reads the DECLARED type rather than its codegen representation, since a
   resource represents as an integer and would otherwise answer `integer`.
+- **`Foo::class` and `self::class`.** Resolved at compile time to a data-segment
+  address, since the EIR already carries the class. `static::class` is refused:
+  late static binding resolves it from the CALLED class, which this target does
+  not forward, and answering the defining class instead would be wrong for every
+  subclass.
 - **`round($value, $places)`.** Not `round($value)` with a default argument.
   Scaling is inexact — `0.285 * 1e10` is `2849999999.9999995` — so php-src
   extracts the integral part and then repairs the extraction, which is why

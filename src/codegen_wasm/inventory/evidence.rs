@@ -43,6 +43,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::FToStr => &["float in a string context"],
         Op::StrCharAt => &["$s[$i] string offset read"],
         Op::TypePredicate => &["is_int(), is_string(), and the rest of that family"],
+        Op::ConstClassName => &["Foo::class and self::class"],
         Op::LoadRefCell => &["read through a PHP reference"],
         Op::StoreRefCell => &["assignment through a PHP reference"],
         Op::PromoteLocalRefCell => &["first by-reference use of a local"],
@@ -322,6 +323,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::FToStr => "codegen_wasm::inst::lower_float_to_string",
         Op::StrCharAt => "codegen_wasm::inst::lower_str_char_at",
         Op::TypePredicate => "codegen_wasm::inst::lower_type_predicate",
+        Op::ConstClassName => "codegen_wasm::inst::lower_const_class_name",
         Op::IAdd | Op::ISub | Op::IMul | Op::IBitAnd | Op::IBitOr | Op::IBitXor => {
             "codegen_wasm::inst::lower_int_binop"
         }
@@ -462,6 +464,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         Op::IToF => "itof",
         Op::IToStr | Op::FToStr | Op::StrCharAt => "string",
         Op::TypePredicate => "mixed",
+        Op::ConstClassName => "string",
         Op::Cast => "cast",
         Op::MixedBox
         | Op::MixedTagOf

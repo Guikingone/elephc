@@ -12905,3 +12905,78 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `Foo::class` and `self::class` answer the resolved name at compile time.
+///
+/// The EIR already carries the class, so there is nothing to compute: the answer is a data-segment
+/// address and a length. `static::class` is the exception — late static binding resolves it from
+/// the CALLED class at runtime, which this target does not forward, so it stays refused rather
+/// than quietly answering the defining class instead.
+#[test]
+fn test_cli_wasm_class_constant_resolves_at_compile_time() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_class_constant");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Logger { public function name(): string { return self::class; } }
+class Child extends Logger {}
+echo Logger::class, "|", Child::class, "\n";
+echo (new Logger())->name(), "|", (new Child())->name(), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the class-constant probe to WASM");
+    assert!(
+        output.status.success(),
+        "class-constant compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the class-constant probe under Node");
+    assert!(
+        run.status.success(),
+        "the class constants must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // `self::class` is the DEFINING class, so the inherited method answers Logger for both.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "Logger|Child\nLogger|Logger\n",
+        "php-src's own answers"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

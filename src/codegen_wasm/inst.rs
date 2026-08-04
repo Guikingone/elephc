@@ -92,6 +92,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::FToStr => lower_float_to_string(ctx, &inst),
         Op::StrCharAt => lower_str_char_at(ctx, &inst),
         Op::TypePredicate => lower_type_predicate(ctx, &inst),
+        Op::ConstClassName => lower_const_class_name(ctx, &inst),
         Op::FToI => lower_ftoi(ctx, &inst),
         Op::Cast => lower_cast(ctx, &inst),
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
@@ -1726,6 +1727,39 @@ fn boxed_predicate_tags(predicate: crate::ir::PhpTypePredicate) -> Option<&'stat
         // `is_iterable()` also accepts a Traversable object, which the tag cannot distinguish.
         P::Iterable => return None,
     })
+}
+
+/// Lowers `ConstClassName`: `Foo::class` and `self::class`, a compile-time string.
+///
+/// The EIR already carries the resolved class name, so the answer is a data-segment address and a
+/// length — nothing to compute. `static::class` is the exception: late static binding resolves it
+/// from the CALLED class at runtime, which this target does not carry, so it stays refused rather
+/// than silently answering the defining class instead.
+fn lower_const_class_name(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let Some(Immediate::Data(data)) = inst.immediate else {
+        return Err(WasmError::Unsupported(
+            "const_class_name without a class-name Data immediate".to_string(),
+        ));
+    };
+    let name = ctx
+        .module
+        .data
+        .class_names
+        .get(data.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!("const_class_name references unknown class data {data:?}"))
+        })?;
+    if name == "static" {
+        return Err(WasmError::Unsupported(
+            "static::class needs the called class, which this target does not forward".to_string(),
+        ));
+    }
+    let (ptr, len) = ctx.default_str_literal(name.trim_start_matches('\\'))?;
+    ctx.fb
+        .ins(&format!("i32.const {ptr}"), "the class name, resolved at compile time");
+    ctx.fb.ins(&format!("i64.const {len}"), "its length");
+    store_result(ctx, inst)
 }
 
 /// Lowers `StrCharAt`: `$s[$i]`, PHP's one-byte string offset read.
