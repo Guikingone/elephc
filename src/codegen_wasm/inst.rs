@@ -91,6 +91,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IToStr => lower_int_like_to_string(ctx, &inst),
         Op::FToStr => lower_float_to_string(ctx, &inst),
         Op::StrCharAt => lower_str_char_at(ctx, &inst),
+        Op::TypePredicate => lower_type_predicate(ctx, &inst),
         Op::FToI => lower_ftoi(ctx, &inst),
         Op::Cast => lower_cast(ctx, &inst),
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
@@ -1620,6 +1621,111 @@ fn lower_int_like_to_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         "persist formatted PHP string before scratch reuse",
     );
     store_result(ctx, inst)
+}
+
+/// Lowers `TypePredicate`: `is_int()`, `is_string()`, and the rest of that family.
+///
+/// A value whose EIR type is already concrete answers at COMPILE time — `is_int($n)` on an
+/// `int` local is `true` and nothing is tested. Only a boxed value reaches a runtime test, and
+/// there the cell's tag is the whole answer.
+///
+/// `is_iterable()` on a boxed value stays refused: PHP also accepts an object implementing
+/// `Traversable`, which the tag alone cannot tell from any other object.
+fn lower_type_predicate(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let Some(Immediate::TypePredicate(predicate)) = inst.immediate else {
+        return Err(WasmError::Unsupported(
+            "type predicate without a PhpTypePredicate immediate".to_string(),
+        ));
+    };
+    let value = operand(inst, 0)?;
+    let source = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| WasmError::Unsupported(format!("type predicate source {:?} is missing", value)))?
+        .php_type
+        .codegen_repr();
+    if source != PhpType::Mixed {
+        let answer = static_type_predicate(&source, predicate).ok_or_else(|| {
+            WasmError::Unsupported(format!(
+                "type predicate {:?} over {:?}",
+                predicate, source
+            ))
+        })?;
+        ctx.fb.ins(
+            &format!("i64.const {}", i64::from(answer)),
+            "the EIR type already decides this predicate",
+        );
+        return store_result(ctx, inst);
+    }
+    let tags = boxed_predicate_tags(predicate).ok_or_else(|| {
+        WasmError::Unsupported(format!("type predicate {:?} over a boxed value", predicate))
+    })?;
+    let tag = ctx.fresh_temp(ValType::I64);
+    ctx.emit_load_value(value)?;
+    ctx.fb.ins("i64.load", "the cell's runtime tag");
+    ctx.fb.ins(&format!("local.set {}", tag), "hold the tag");
+    let mut first = true;
+    for candidate in tags {
+        ctx.fb.ins(&format!("local.get {}", tag), "compare the tag");
+        ctx.fb
+            .ins(&format!("i64.const {}", candidate), "candidate runtime tag");
+        ctx.fb.ins("i64.eq", "tag matches");
+        if !first {
+            ctx.fb.ins("i32.or", "any candidate tag answers true");
+        }
+        first = false;
+    }
+    ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+    store_result(ctx, inst)
+}
+
+/// The answer a predicate has for an EIR type that is already concrete, if it has one.
+fn static_type_predicate(
+    source: &PhpType,
+    predicate: crate::ir::PhpTypePredicate,
+) -> Option<bool> {
+    use crate::ir::PhpTypePredicate as P;
+    let answer = match (predicate, source) {
+        (P::Int, PhpType::Int) | (P::Bool, PhpType::Bool) | (P::Float, PhpType::Float) => true,
+        (P::String, PhpType::Str) => true,
+        (P::Array, PhpType::Array(_) | PhpType::AssocArray { .. }) => true,
+        (P::Iterable, PhpType::Array(_) | PhpType::AssocArray { .. }) => true,
+        (P::Object, PhpType::Object(_)) => true,
+        (P::Resource, PhpType::Resource(_)) => true,
+        (P::Scalar, PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool) => true,
+        // Anything else this backend can name is decidably NOT the tested category.
+        (
+            _,
+            PhpType::Int
+            | PhpType::Float
+            | PhpType::Str
+            | PhpType::Bool
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Object(_)
+            | PhpType::Resource(_)
+            | PhpType::Void,
+        ) => false,
+        _ => return None,
+    };
+    Some(answer)
+}
+
+/// The Mixed-cell tags a predicate accepts, when the tag alone decides it.
+fn boxed_predicate_tags(predicate: crate::ir::PhpTypePredicate) -> Option<&'static [i64]> {
+    use crate::ir::PhpTypePredicate as P;
+    Some(match predicate {
+        P::Int => &[0],
+        P::String => &[1],
+        P::Float => &[2],
+        P::Bool => &[3],
+        P::Array => &[4, 5],
+        P::Object => &[6],
+        P::Resource => &[9],
+        P::Scalar => &[0, 1, 2, 3],
+        // `is_iterable()` also accepts a Traversable object, which the tag cannot distinguish.
+        P::Iterable => return None,
+    })
 }
 
 /// Lowers `StrCharAt`: `$s[$i]`, PHP's one-byte string offset read.

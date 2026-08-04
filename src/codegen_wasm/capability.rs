@@ -5942,6 +5942,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::ReleaseLocalSlot
         | Op::FToStr
         | Op::StrCharAt
+        | Op::TypePredicate
         | Op::Nop => true,
         Op::ConstClassName
         | Op::ConstEnumCase
@@ -5960,7 +5961,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::StrCmp
         | Op::StrLooseEq
         | Op::Spaceship
-        | Op::TypePredicate
+
         | Op::IsEmpty
         | Op::FToI
 

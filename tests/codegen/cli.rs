@@ -12088,3 +12088,89 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies the `is_*()` type-predicate family, boxed and statically typed.
+///
+/// A value whose EIR type is already concrete answers at COMPILE time and tests nothing;
+/// only a boxed value reaches a runtime test, and there the cell's tag is the whole answer.
+/// `is_iterable()` on a boxed value stays refused, since PHP also accepts a `Traversable`
+/// object and the tag cannot tell one object from another.
+#[test]
+fn test_cli_wasm_type_predicates_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_type_predicates");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class P {}
+function k(mixed $v): string {
+  $r = "";
+  $r .= is_int($v) ? "i" : "-";
+  $r .= is_string($v) ? "s" : "-";
+  $r .= is_float($v) ? "f" : "-";
+  $r .= is_bool($v) ? "b" : "-";
+  $r .= is_array($v) ? "a" : "-";
+  $r .= is_object($v) ? "o" : "-";
+  $r .= is_scalar($v) ? "S" : "-";
+  return $r;
+}
+foreach ([1, "x", 1.5, true, [1], new P(), null] as $v) { echo k($v), "|"; }
+echo "\n";
+$n = 5; $t = "z"; $g = 1.25; $arr = [1, 2];
+echo is_int($n) ? "1" : "0", is_string($t) ? "1" : "0", is_float($g) ? "1" : "0", is_array($arr) ? "1" : "0";
+echo is_string($n) ? "1" : "0", is_int($t) ? "1" : "0", "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the type predicates to WASM");
+    assert!(
+        output.status.success(),
+        "type-predicate compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the type predicates under Node");
+    assert!(run.status.success());
+    // `null` answers every predicate false, and `is_scalar` covers exactly int/string/float/bool.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "i-----S|-s----S|--f---S|---b--S|----a--|-----o-|-------|\n",
+            "111100\n",
+        )
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
