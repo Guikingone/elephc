@@ -218,6 +218,15 @@ against measured php-src 8.5.6 output rather than by analogy:
   magnitude. A precision outside php_intpow10's exact 0..22 table is refused
   rather than answered nearly-right.
 
+Known shared defect, measured and not yet fixed: PHP's `null` is dropped when a
+possibly-missing array element crosses a **function return**. A direct read keeps
+it — `$v = $a[5]; $v === null` is true — but `function pick($i) { return
+$a[$i]; }` is typed `int`, so `pick(5) === null` answers false on BOTH backends
+where php-src answers true. The checker infers the read as `int` while the EIR
+produces `int|null`, and the signature is what the call site believes. Anything
+reading that type inherits the wrong answer, `gettype()` included; patching it in
+one consumer would hide it from the others.
+
 Known WASM-only defect, refused rather than answered: a **by-reference container
 parameter**. The ref cell a caller synthesizes and the writeback that follows it
 do not round-trip an array — `function m(array &$a) { $a[] = 41; } $v = [7];
