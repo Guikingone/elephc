@@ -15,6 +15,8 @@
 //!   pre-existing ownership gap that would mask the behavior under test.
 //! - The scalar fixtures exercise `__rt_array_slice`/`__rt_array_splice`, the `[[1], ...]` fixtures
 //!   exercise the refcounted variants, and the `$m["arr"]` fixture exercises the boxed-`Mixed` path.
+//! - The `PHP_INT_MAX`/`PHP_INT_MIN` fixture derives its bounds from `$argc` so the frontend cannot
+//!   fold the extreme offsets and lengths away before they reach the runtime helpers.
 
 use super::*;
 
@@ -543,6 +545,54 @@ c=2 2 3
 d=3 2 3 4
 e=4 1 2 3 4
 f=3 1 2 3
+"#
+    );
+}
+
+/// Regression: `PHP_INT_MAX`/`PHP_INT_MIN` offsets and lengths must clamp, not wrap.
+///
+/// The normalization adds `count + $offset` and `available + $length`; both additions mix a
+/// non-negative operand with a negative one, so neither can overflow a signed 64-bit word. The
+/// bounds come from `$argc` so the frontend cannot fold them away before codegen.
+#[test]
+fn test_slice_splice_extreme_offsets_and_lengths_clamp_without_overflow() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc - 1;
+$max = PHP_INT_MAX - $n;
+$min = PHP_INT_MIN + $n;
+echo count(array_slice([1,2,3,4], 0, $max)), "\n";
+echo count(array_slice([1,2,3,4], 0, $min)), "\n";
+echo count(array_slice([1,2,3,4], $min, $max)), "\n";
+echo count(array_slice([1,2,3,4], $max, 2)), "\n";
+echo count(array_slice([1,2,3,4], $min)), "\n";
+echo count(array_slice([1,2,3,4], 2, $min)), "\n";
+$a = [1,2,3,4];
+$r = array_splice($a, 0, $min);
+echo count($r), " ", count($a), "\n";
+$b = [1,2,3,4];
+$r = array_splice($b, $min, $max);
+echo count($r), " ", count($b), "\n";
+$c = [1,2,3,4];
+$r = array_splice($c, $max, $min);
+echo count($r), " ", count($c), "\n";
+$d = [1,2,3,4];
+$r = array_splice($d, 2, $min);
+echo count($r), " ", count($d), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"4
+0
+4
+0
+4
+0
+0 4
+4 0
+0 4
+0 4
 "#
     );
 }

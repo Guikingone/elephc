@@ -229,7 +229,7 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_combine()` | `array_combine($keys, $values): array` | Create array from keys/values |
 | `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values. A negative `$num` throws `\ValueError`. |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |
-| `array_pad()` | `array_pad($arr, $size, $value): array` | Pad to length |
+| `array_pad()` | `array_pad($arr, $size, $value): array` | Pad to length; a negative `$size` pads on the left. A `$size` whose magnitude exceeds `1073741824` — including `PHP_INT_MIN`, whose magnitude is not representable — throws `\ValueError`. |
 | `range()` | `range($start, $end): array` | Sequential integers |
 | `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2 |
 | `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values in both |

@@ -95,15 +95,19 @@ fn test_range_descending_wrapping_element_count_is_fatal() {
     );
 }
 
-/// Verifies `array_pad()` with a target length whose payload size wraps aborts instead of writing
-/// pad values past the allocated block.
+/// Verifies `array_pad()` with a target length whose payload size wraps never reaches the
+/// allocator at all: reference PHP rejects any `$length` past the maximum allowed array size with a
+/// catchable `ValueError`, so the lowering guard raises that before `__rt_array_new` is asked for an
+/// impossible capacity. See `arrays::indexed::pad_bounds` for the full bounds matrix.
 #[test]
 fn test_array_pad_overflowing_length_is_fatal() {
     let err = compile_and_run_expect_failure(
         "<?php $a = array_pad([1, 2], 0x2000000000000004, 0); echo count($a);",
     );
     assert!(
-        err.contains("requested array size exceeds the maximum allowed array size"),
+        err.contains(
+            "Uncaught ValueError: array_pad(): Argument #2 ($length) must not exceed the maximum allowed array size"
+        ),
         "{}",
         err
     );

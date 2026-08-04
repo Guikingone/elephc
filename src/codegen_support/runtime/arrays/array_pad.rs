@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Array helpers operate on runtime array headers and element cells; mutations must respect capacity and COW contracts.
+//! - `abs(size)` is clamped: `INT64_MIN` has no representable magnitude, so the negation is
+//!   forced to zero instead of wrapping back to a negative destination length. Callers still
+//!   bound `$length` in lowering, where PHP's `ValueError` is raised.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -15,6 +18,8 @@ use crate::codegen_support::platform::Arch;
 /// Input: x0 = array pointer, x1 = size (negative = pad left), x2 = pad value
 /// Output: x0 = pointer to new padded array
 /// If abs(size) <= current length, returns a copy of the original array.
+/// The absolute size is computed once, clamped to a non-negative value, and reused for both
+/// the destination capacity and the destination header length so neither can go negative.
 pub fn emit_array_pad(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_array_pad_linux_x86_64(emitter);
@@ -26,9 +31,9 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     emitter.label_global("__rt_array_pad");
 
     // -- set up stack frame, save arguments --
-    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // set up new frame pointer
+    emitter.instruction("sub sp, sp, #80");                                     // allocate 80 bytes on the stack
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // set up new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save source array pointer
     emitter.instruction("str x1, [sp, #8]");                                    // save size argument
     emitter.instruction("str x2, [sp, #16]");                                   // save pad value
@@ -39,6 +44,8 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     emitter.instruction("cmp x1, #0");                                          // check if size is negative
     emitter.instruction("b.ge __rt_array_pad_positive");                        // if non-negative, pad right
     emitter.instruction("neg x3, x1");                                          // x3 = abs(size) for negative case
+    emitter.instruction("cmp x3, #0");                                          // INT64_MIN has no representable magnitude and stays negative here
+    emitter.instruction("csel x3, x3, xzr, ge");                                // clamp that wrapped magnitude to zero so no length is ever negative
     emitter.instruction("mov x4, #1");                                          // x4 = 1 (flag: pad left)
     emitter.instruction("b __rt_array_pad_check");                              // continue to size check
 
@@ -48,24 +55,22 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
 
     // -- check if padding is needed --
     emitter.label("__rt_array_pad_check");
+    emitter.instruction("str x3, [sp, #48]");                                   // keep the clamped abs(size) so no later path recomputes it
     emitter.instruction("cmp x3, x9");                                          // compare abs(size) with current length
     emitter.instruction("b.le __rt_array_pad_copy");                            // if abs(size) <= length, just copy
-    emitter.instruction("str x3, [sp, #32]");                                   // save abs(size) = new array size
     emitter.instruction("str x4, [sp, #40]");                                   // save pad direction flag
 
     // -- create new array with capacity = abs(size) --
     emitter.instruction("mov x0, x3");                                          // x0 = capacity = abs(size)
     emitter.instruction("mov x1, #8");                                          // x1 = elem_size = 8 (integers)
     emitter.instruction("bl __rt_array_new");                                   // allocate new array
-    emitter.instruction("str x0, [sp, #32]");                                   // reuse slot to save new array ptr temporarily
+    emitter.instruction("str x0, [sp, #32]");                                   // save new array ptr
 
     // -- determine pad count and data offset --
     emitter.instruction("ldr x9, [sp, #24]");                                   // x9 = source length
     emitter.instruction("ldr x4, [sp, #40]");                                   // x4 = pad direction (0=right, 1=left)
-    emitter.instruction("ldr x3, [sp, #8]");                                    // x3 = original size argument
-    emitter.instruction("cmp x3, #0");                                          // recheck sign for abs
-    emitter.instruction("b.ge __rt_array_pad_calc_right");                      // positive = pad right
-    emitter.instruction("neg x3, x3");                                          // x3 = abs(size)
+    emitter.instruction("ldr x3, [sp, #48]");                                   // x3 = clamped abs(size)
+    emitter.instruction("cbz x4, __rt_array_pad_calc_right");                   // pad-right flag = 0 selects the append layout
 
     // -- pad left: fill pad values first, then copy source --
     emitter.instruction("sub x5, x3, x9");                                      // x5 = pad_count = abs(size) - length
@@ -126,12 +131,10 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
     // -- set total length and return --
     emitter.label("__rt_array_pad_finish");
     emitter.instruction("ldr x0, [sp, #32]");                                   // x0 = new array pointer
-    emitter.instruction("ldr x3, [sp, #8]");                                    // x3 = original size argument
-    emitter.instruction("cmp x3, #0");                                          // check sign
-    emitter.instruction("cneg x3, x3, lt");                                     // x3 = abs(size)
+    emitter.instruction("ldr x3, [sp, #48]");                                   // x3 = clamped abs(size), never negative
     emitter.instruction("str x3, [x0]");                                        // set array length = abs(size)
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = padded array
 
     // -- no padding needed: just create a copy --
@@ -155,8 +158,8 @@ pub fn emit_array_pad(emitter: &mut Emitter) {
 
     emitter.label("__rt_array_pad_copy_done");
     emitter.instruction("str x9, [x0]");                                        // set array length = source length
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = copied array
 }
 
@@ -181,6 +184,9 @@ fn emit_array_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 0");                                          // detect whether the caller requested left padding by passing a negative target size
     emitter.instruction("jge __rt_array_pad_abs_ready_x86");                    // skip the absolute-value conversion when the requested target size is already non-negative
     emitter.instruction("neg r11");                                             // convert the negative target size into its absolute padded length
+    emitter.instruction("xor eax, eax");                                        // stage a zero for the magnitude that INT64_MIN cannot represent
+    emitter.instruction("test r11, r11");                                       // detect the wrapped negation that leaves the magnitude negative
+    emitter.instruction("cmovs r11, rax");                                      // clamp that wrapped magnitude to zero so no padded length is ever negative
 
     emitter.label("__rt_array_pad_abs_ready_x86");
     emitter.instruction("cmp r11, r10");                                        // compare the absolute requested target length against the current source indexed-array length

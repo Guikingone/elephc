@@ -5756,8 +5756,44 @@ fn lower_array_pad_call(
             ctx.load_value_to_reg(pad_value, "rdx")?;
         }
     }
+    emit_array_pad_length_guard(ctx);
     abi::emit_call_label(ctx.emitter, array_pad_runtime_helper(source_elem_ty));
     Ok(())
+}
+
+/// The largest `array_pad()` `$length` magnitude reference PHP will build an array for.
+///
+/// php-src rejects anything past `HT_MAX_SIZE / 2` before it looks at the input array, so
+/// the bound is a plain constant: `array_pad($a, 1073741824, …)` is accepted (and then
+/// fails on memory), `array_pad($a, 1073741825, …)` is a `ValueError` for every `$a`.
+const ARRAY_PAD_MAX_LENGTH: i64 = 1_073_741_824;
+
+/// php-src's verbatim `ValueError` wording for an oversized `array_pad()` `$length`.
+const ARRAY_PAD_LENGTH_TOO_LARGE_MESSAGE: &str =
+    "array_pad(): Argument #2 ($length) must not exceed the maximum allowed array size";
+
+/// Rejects the `array_pad()` `$length` magnitudes reference PHP refuses to build an array for.
+///
+/// The pad helpers derive the destination capacity and the destination header length from
+/// `abs($length)`, and that absolute value was never bounded: a huge magnitude asked the
+/// allocator for a payload the process cannot own, and `PHP_INT_MIN` has no representable
+/// magnitude at all, so the negation wrapped straight back to a negative "length". Bounding
+/// the signed argument here — before it reaches either helper — keeps both out of reach and
+/// raises PHP's catchable `ValueError` in their place. `$length` sits in the second ABI
+/// argument register for every pad helper on every supported target.
+fn emit_array_pad_length_guard(ctx: &mut FunctionContext<'_>) {
+    let length_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rsi",
+    };
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::SignedMagnitudeAtMost(
+            length_reg,
+            ARRAY_PAD_MAX_LENGTH,
+        ),
+        ARRAY_PAD_LENGTH_TOO_LARGE_MESSAGE,
+    );
 }
 
 /// Returns the helper that matches the chunk source element ownership representation.
