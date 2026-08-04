@@ -181,6 +181,32 @@ mechanism:
 Shared libraries (`--emit cdylib`) keep the full runtime, since any exported
 symbol may be reached by a host the linker cannot see.
 
+## Binary hardening
+
+Compiled binaries are hardened by default. There is no flag: the options below
+are always applied and cannot be turned off.
+
+On **Linux**, every executable and shared library is linked with:
+
+| Option | Effect |
+|---|---|
+| `-z noexecstack` | Marks the stack non-executable (`PT_GNU_STACK` `RW`). elephc assembles its objects with `as`, which emits no `.note.GNU-stack` section, so without this GNU ld infers an **executable** stack and warns. Nothing elephc produces needs one: there is no JIT, and Fiber stacks are mapped read/write with a guard page. |
+| `-z relro` | Maps the relocated head of the data segment read-only once startup relocation is done. |
+| `-z now` | Resolves all relocations eagerly at load time, so `relro` can cover the GOT (full RELRO). |
+
+Whether the executable is also position-independent is decided by the system
+toolchain, not by elephc: Linux executables are linked `-static` whenever the
+program needs no dynamic library, and a driver configured with default-PIE (for
+example Alpine/musl) turns that into a **static PIE**, while a driver without it
+(for example Debian/Ubuntu glibc) produces a classic non-PIE static executable.
+elephc does not force `-static-pie`, because it requires a libc built with
+static-PIE support (`rcrt1.o`) that many distributions do not ship, and a
+missing one is a hard link failure.
+
+On **macOS** these options do not apply: `ld64` does not accept `-z`, binaries
+are position-independent by default, and the stack is non-executable at the
+platform level.
+
 ## Conditional compilation
 
 elephc supports compile-time feature branches with `ifdef`. Symbols are defined
