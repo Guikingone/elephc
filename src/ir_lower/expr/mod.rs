@@ -339,7 +339,7 @@ fn lower_numeric_binary(
             vec![lhs.value, rhs.value],
             None,
             PhpType::Int,
-            Op::ISMod.default_effects(),
+            arithmetic_effects(Op::ISMod, right),
             Some(expr.span),
         );
     }
@@ -362,7 +362,7 @@ fn lower_numeric_binary(
             vec![lhs.value, rhs.value],
             None,
             PhpType::Int,
-            iop.default_effects(),
+            arithmetic_effects(iop, right),
             Some(expr.span),
         );
     }
@@ -386,7 +386,7 @@ fn lower_numeric_binary(
             BinOp::Div => Op::FDiv,
             _ => Op::RuntimeCall,
         };
-        return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span));
+        return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, arithmetic_effects(fop, right), Some(expr.span));
     }
     if matches!(op, BinOp::Div) && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64) {
         let lhs = coerce_to_float(ctx, lhs, left);
@@ -396,7 +396,7 @@ fn lower_numeric_binary(
             vec![lhs.value, rhs.value],
             None,
             PhpType::Float,
-            Op::FDiv.default_effects(),
+            arithmetic_effects(Op::FDiv, right),
             Some(expr.span),
         );
     }
@@ -454,7 +454,7 @@ fn lower_numeric_binary(
         let ownership = Ownership::for_php_type(&php_type);
         let value = ctx
             .builder
-            .emit_with_effects(iop, vec![lhs.value, rhs.value], None, result_type, php_type, ownership, iop.default_effects(), Some(expr.span))
+            .emit_with_effects(iop, vec![lhs.value, rhs.value], None, result_type, php_type, ownership, arithmetic_effects(iop, right), Some(expr.span))
             .expect("numeric binary produces a value");
         return LoweredValue { value, ir_type: result_type };
     }
@@ -474,6 +474,38 @@ fn lower_numeric_binary(
         effects_lookup::runtime_effects(),
         Some(expr.span),
     )
+}
+
+/// Returns the effect set for one arithmetic opcode, dropping `MAY_THROW` when the right
+/// operand is a literal that provably cannot raise PHP's arithmetic errors.
+///
+/// `Op::default_effects()` is opcode-level and must stay conservative: `/`, `%`, `<<`, and `>>`
+/// can all raise a catchable error, so a value produced by them is not removable, hoistable, or
+/// CSE-able. That would needlessly pessimize the common `$x << 3` / `$x / 2` shapes, where the
+/// literal right operand rules the error out at compile time — the same test the AST effect
+/// model (`optimize::effects::binary_op_may_throw`) applies. `MAY_FATAL` is left untouched so
+/// the division opcodes keep exactly the impurity they had before the guards existed.
+fn arithmetic_effects(op: Op, right: &Expr) -> Effects {
+    let cannot_raise = match op {
+        Op::IDiv | Op::ISDiv | Op::ISMod | Op::FDiv => matches!(
+            &right.kind,
+            ExprKind::IntLiteral(value) if *value != 0
+        ) || matches!(
+            &right.kind,
+            ExprKind::FloatLiteral(value) if *value != 0.0
+        ),
+        Op::IShl | Op::IShrA => matches!(
+            &right.kind,
+            ExprKind::IntLiteral(value) if *value >= 0
+        ),
+        _ => false,
+    };
+    let effects = op.default_effects();
+    if cannot_raise {
+        effects.difference(Effects::MAY_THROW)
+    } else {
+        effects
+    }
 }
 
 /// Returns the EIR opcode and result type for PHP array union operands.

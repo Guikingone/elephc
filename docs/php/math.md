@@ -9,7 +9,7 @@ sidebar:
 
 | Function | Signature | Description |
 |---|---|---|
-| `abs()` | `abs($val): int\|float` | Absolute value (preserves type) |
+| `abs()` | `abs($val): int\|float` | Absolute value (preserves type); `abs(PHP_INT_MIN)` has no `int` result and promotes to `float` |
 | `floor()` | `floor($val): float` | Round down |
 | `ceil()` | `ceil($val): float` | Round up |
 | `round()` | `round($val [, $precision]): float` | Round to nearest |

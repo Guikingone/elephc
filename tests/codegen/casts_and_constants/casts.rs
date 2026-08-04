@@ -224,3 +224,34 @@ echo (BOOLEAN)0 ? "true" : "false";
 }
 
 // --- gettype ---
+
+// --- PHP float->int cast edge cases ---
+
+/// Verifies `(int)` and `intval()` on NaN/±INF return `0` like PHP, on both supported targets.
+///
+/// AArch64 `fcvtzs` saturates and x86_64 `cvttsd2si` returns `INT64_MIN`, so both targets used
+/// to disagree with PHP and with each other. Values go through `$argc` so the folders cannot
+/// evaluate the cast at compile time.
+#[test]
+fn test_cast_int_from_nan_and_infinity_is_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+echo (int)(NAN * $n), ':', (int)(INF * $n), ':', (int)(-INF * $n);
+echo ':', intval(NAN * $n), ':', intval(INF * $n);
+"#,
+    );
+    assert_eq!(out, "0:0:0:0:0");
+}
+
+/// Verifies `(int)` of a float far outside the int64 range matches PHP's modulo-2^64 result.
+#[test]
+fn test_cast_int_from_out_of_range_float() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+echo (int)(1e300 * $n), ':', (int)(-1e300 * $n), ':', (int)(1.5e19 * $n);
+"#,
+    );
+    assert_eq!(out, "0:0:-3446744073709551616");
+}

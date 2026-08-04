@@ -370,3 +370,66 @@ fn test_checked_op_constant_folds_no_overflow_var_dump() {
     let out = compile_and_run(r#"<?php $x = 42 + 8; var_dump($x);"#);
     assert_eq!(out, "int(50)\n");
 }
+
+// --- abs() overflow promotion (PHP_INT_MIN) ---
+
+/// Verifies `abs(PHP_INT_MIN)` promotes to float like PHP instead of wrapping to a negative int.
+///
+/// `PHP_INT_MIN` is the one input with no `int` absolute value; PHP returns
+/// `float(9.2233720368547758E+18)`. The `intdiv(..., $argc)` keeps the operand an `int`-typed
+/// runtime value so the folders cannot evaluate `abs()` at compile time.
+#[test]
+fn test_abs_int_min_promotes_to_float() {
+    let out = compile_and_run(
+        r#"<?php
+$min = intdiv(PHP_INT_MIN, $argc);
+var_dump(gettype(abs($min)));
+var_dump(abs($min) > 9.223372036854e18);
+var_dump(abs(PHP_INT_MIN) > 9.223372036854e18);
+var_dump(gettype(abs(PHP_INT_MIN)));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(6) \"double\"\nbool(true)\nbool(true)\nstring(6) \"double\"\n"
+    );
+}
+
+/// Verifies `abs()` on a boxed Mixed `PHP_INT_MIN` payload promotes to float as well.
+///
+/// Runtime int arithmetic that can overflow is typed `Mixed`, so `abs()` on it goes through
+/// `__rt_abs_mixed` rather than the inline integer lowering.
+#[test]
+fn test_abs_mixed_int_min_promotes_to_float() {
+    let out = compile_and_run(
+        r#"<?php
+$min = PHP_INT_MIN * $argc;
+var_dump(gettype(abs($min)));
+var_dump(abs($min) > 9.223372036854e18);
+"#,
+    );
+    assert_eq!(out, "string(6) \"double\"\nbool(true)\n");
+}
+
+/// Verifies every non-overflowing `abs()` input keeps PHP's exact value and type.
+#[test]
+fn test_abs_keeps_int_and_float_results() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+var_dump(abs(-42));
+var_dump(abs(42));
+var_dump(abs(0));
+var_dump(abs(-3.5));
+var_dump(abs(intdiv(-7, $n)));
+var_dump(gettype(abs(intdiv(-7, $n))));
+var_dump(abs(PHP_INT_MAX * $n));
+echo abs(-42), '|', abs(intdiv(-7, $n)), '|', abs(-2.5);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(42)\nint(42)\nint(0)\nfloat(3.5)\nint(7)\nstring(7) \"integer\"\n\
+         int(9223372036854775807)\n42|7|2.5"
+    );
+}

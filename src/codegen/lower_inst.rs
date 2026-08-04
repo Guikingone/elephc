@@ -24,7 +24,8 @@ use crate::ir::{
     IrType, LocalKind, LocalSlotId, Module, Op, Ownership, Terminator, ValueDef, ValueId,
 };
 use crate::names::{
-    function_symbol, ir_global_symbol, method_symbol, php_symbol_key, static_method_symbol,
+    function_symbol, ir_global_symbol, label_fragment, method_symbol, php_symbol_key,
+    static_method_symbol,
 };
 use crate::types::{callable_wrapper_sig, first_class_callable_builtin_sig, FunctionSig, PhpType};
 
@@ -102,13 +103,13 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::IBitOr => arithmetic::lower_int_binop(ctx, &inst, "orr", "or"),
         Op::IBitXor => arithmetic::lower_int_binop(ctx, &inst, "eor", "xor"),
         Op::IBitNot => arithmetic::lower_int_unary(ctx, &inst, "mvn", "not"),
-        Op::IShl => arithmetic::lower_int_shift(ctx, &inst, "lsl", "shl"),
-        Op::IShrA => arithmetic::lower_int_shift(ctx, &inst, "asr", "sar"),
+        Op::IShl => arithmetic::lower_int_shift(ctx, &inst, true),
+        Op::IShrA => arithmetic::lower_int_shift(ctx, &inst, false),
         Op::MixedNumericBinop => arithmetic::lower_mixed_numeric_binop(ctx, &inst),
         Op::FAdd => floats::lower_float_binop(ctx, &inst, "fadd", "addsd"),
         Op::FSub => floats::lower_float_binop(ctx, &inst, "fsub", "subsd"),
         Op::FMul => floats::lower_float_binop(ctx, &inst, "fmul", "mulsd"),
-        Op::FDiv => floats::lower_float_binop(ctx, &inst, "fdiv", "divsd"),
+        Op::FDiv => arithmetic::lower_float_div(ctx, &inst),
         Op::FPow => floats::lower_float_pow(ctx, &inst),
         Op::FNeg => floats::lower_float_neg(ctx, &inst),
         Op::ICmp => lower_int_compare(ctx, &inst),
@@ -3408,13 +3409,6 @@ fn emit_mixed_method_class_dispatch(
     abi::emit_jump(ctx.emitter, no_match_label);
 }
 
-/// Returns a label-safe fragment for class names and method metadata keys.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Lowers an instance-method call through interface metadata.
 fn lower_interface_method_call(

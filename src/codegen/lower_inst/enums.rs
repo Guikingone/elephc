@@ -652,11 +652,11 @@ fn emit_float_payload_to_int(ctx: &mut FunctionContext<'_>, bits_reg: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("fmov d0, {}", bits_reg));         // move the raw double bits into the float register
-            ctx.emitter.instruction("fcvtzs x0, d0");                           // truncate the double toward zero into the int result
+            abi::emit_php_float_to_int(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("movq xmm0, {}", bits_reg));       // move the raw double bits into the float register
-            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // truncate the double toward zero into the int result
+            abi::emit_php_float_to_int(ctx.emitter, "rax");
         }
     }
 }

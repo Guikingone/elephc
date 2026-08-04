@@ -12,8 +12,8 @@ sidebar:
 | `+` | `$a + $b` | Numeric addition, or PHP array union when both operands are arrays. Integer overflow promotes to `double`. |
 | `-` | `$a - $b` | Subtraction. Integer overflow promotes to `double`. |
 | `*` | `$a * $b` | Multiplication. Integer overflow promotes to `double`. |
-| `/` | `$a / $b` | Division (always returns float) |
-| `%` | `$a % $b` | Modulo |
+| `/` | `$a / $b` | Division (always returns float). A zero divisor raises a catchable `DivisionByZeroError` ("Division by zero"). |
+| `%` | `$a % $b` | Modulo. A zero divisor raises a catchable `DivisionByZeroError` ("Modulo by zero"); `PHP_INT_MIN % -1` is `0`. |
 | `**` | `$a ** $b` | Exponentiation (right-associative, returns float) |
 | `-$x` | `-$x` | Unary negation |
 
@@ -44,8 +44,8 @@ Direct object values and boxed `mixed` / nullable / union values are checked at 
 | `\|` | `$a \| $b` | Bitwise OR |
 | `^` | `$a ^ $b` | Bitwise XOR |
 | `~` | `~$a` | Bitwise NOT |
-| `<<` | `$a << $b` | Left shift |
-| `>>` | `$a >> $b` | Arithmetic right shift |
+| `<<` | `$a << $b` | Left shift. A shift count of 64 or more yields `0`; a negative count raises a catchable `ArithmeticError` ("Bit shift by negative number"). |
+| `>>` | `$a >> $b` | Arithmetic right shift. A shift count of 64 or more yields `0` for a non-negative value and `-1` for a negative one; a negative count raises a catchable `ArithmeticError`. |
 
 ## Logical
 

@@ -723,3 +723,117 @@ fn test_nullable_throwable_get_message_via_previous() {
     );
     assert_eq!(out, "inner");
 }
+
+// --- PHP 8 arithmetic errors (`DivisionByZeroError` / `ArithmeticError`) ---
+
+/// Verifies `%` by zero throws a catchable `DivisionByZeroError` with php-src's wording.
+///
+/// elephc used to return `0`, so no `catch` clause could ever observe the error. The divisor
+/// comes from `$argc - 1` so the constant folders cannot evaluate it at compile time.
+#[test]
+fn test_modulo_by_zero_throws_division_by_zero_error() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+try { echo 1 % $z; } catch (DivisionByZeroError $e) { echo get_class($e), ':', $e->getMessage(); }
+echo '|';
+$a = 7;
+try { $a %= $z; } catch (DivisionByZeroError $e) { echo 'compound:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "DivisionByZeroError:Modulo by zero|compound:Modulo by zero"
+    );
+}
+
+/// Verifies `/` by zero throws a catchable `DivisionByZeroError` for int and float operands.
+///
+/// PHP throws for `1/0`, `1.0/0`, `1/0.0`, `0/0`, and `-1.0/0.0` alike — the IEEE `INF`/`NaN`
+/// result is only reachable through `fdiv()`. elephc used to hand back `INF`.
+#[test]
+fn test_division_by_zero_throws_for_int_and_float_operands() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+$zf = 0.0 * $argc;
+try { echo 1 / $z; } catch (DivisionByZeroError $e) { echo 'i:', $e->getMessage(); }
+echo '|';
+try { echo 1.0 / $zf; } catch (DivisionByZeroError $e) { echo 'f:', $e->getMessage(); }
+echo '|';
+try { echo 1 / $zf; } catch (DivisionByZeroError $e) { echo 'if:', $e->getMessage(); }
+echo '|';
+try { echo $zf / $zf; } catch (DivisionByZeroError $e) { echo 'ff:', $e->getMessage(); }
+echo '|';
+try { echo -1.0 / $zf; } catch (DivisionByZeroError $e) { echo 'nf:', $e->getMessage(); }
+echo '|';
+$b = 7;
+try { $b /= $z; } catch (DivisionByZeroError $e) { echo 'compound:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "i:Division by zero|f:Division by zero|if:Division by zero|\
+         ff:Division by zero|nf:Division by zero|compound:Division by zero"
+    );
+}
+
+/// Verifies the arithmetic `DivisionByZeroError` is a real `ArithmeticError`/`Throwable`.
+#[test]
+fn test_division_by_zero_error_matches_parent_handlers() {
+    let out = compile_and_run(
+        r#"<?php
+$z = $argc - 1;
+try { echo 1 % $z; } catch (ArithmeticError $e) { echo 'arithmetic'; }
+echo '|';
+try { echo 1 / $z; } catch (Error $e) { echo 'error'; }
+echo '|';
+try { echo 1 % $z; } catch (Throwable $e) { echo get_class($e); }
+echo '|';
+try { echo intdiv(1, $z); } catch (DivisionByZeroError $e) { echo 'intdiv:', $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "arithmetic|error|DivisionByZeroError|intdiv:Division by zero"
+    );
+}
+
+/// Verifies a negative shift count throws a catchable `ArithmeticError` for `<<` and `>>`.
+///
+/// The hardware shift masks the count, so `1 << -1` used to evaluate to `PHP_INT_MIN`.
+#[test]
+fn test_negative_shift_count_throws_arithmetic_error() {
+    let out = compile_and_run(
+        r#"<?php
+$neg = -1 * $argc;
+try { echo (1 * $argc) << $neg; } catch (ArithmeticError $e) { echo get_class($e), ':', $e->getMessage(); }
+echo '|';
+try { echo (1 * $argc) >> $neg; } catch (ArithmeticError $e) { echo 'shr:', $e->getMessage(); }
+echo '|';
+$c = 5;
+try { $c <<= $neg; } catch (ArithmeticError $e) { echo 'compound:', $e->getMessage(); }
+echo '|';
+try { echo (1 * $argc) << $neg; } catch (Throwable $e) { echo get_class($e); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "ArithmeticError:Bit shift by negative number|\
+         shr:Bit shift by negative number|\
+         compound:Bit shift by negative number|ArithmeticError"
+    );
+}
+
+/// Verifies non-zero divisors and non-negative shift counts keep working after the guards.
+#[test]
+fn test_arithmetic_guards_do_not_disturb_normal_operands() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+echo 7 % 3, '|', (7 * $n) % (3 * $n), '|', 8 / 2, '|', (7.5 * $n) / (2.5 * $n);
+echo '|', intdiv(7, 2), '|', fdiv(1, 0), '|', (1 * $n) << (3 * $n), '|', (-8 * $n) >> (1 * $n);
+"#,
+    );
+    assert_eq!(out, "1|1|4|3|3|INF|8|-4");
+}

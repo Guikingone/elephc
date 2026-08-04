@@ -519,12 +519,9 @@ impl Op {
             | IBitOr
             | IBitXor
             | IBitNot
-            | IShl
-            | IShrA
             | FAdd
             | FSub
             | FMul
-            | FDiv
             | FPow
             | FNeg
             | ICmp
@@ -544,7 +541,12 @@ impl Op {
             | Move
             | Borrow
             | Nop => E::PURE,
-            IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
+            // PHP 8 raises catchable errors here, so these are never removable, hoistable,
+            // or CSE-able: `/` and `%` throw `DivisionByZeroError` for a zero divisor and
+            // `<<` / `>>` throw `ArithmeticError` for a negative shift count.
+            IDiv | ISDiv | ISMod => E::MAY_FATAL | E::MAY_THROW,
+            IShl | IShrA | FDiv => E::MAY_THROW,
+            PtrCheckNonnull => E::MAY_FATAL,
             ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
@@ -684,10 +686,22 @@ impl Op {
     }
 
     /// Returns true when the builder may replace the conservative default effects.
+    ///
+    /// The arithmetic opcodes below default to `MAY_THROW` because PHP raises a catchable
+    /// `DivisionByZeroError` / `ArithmeticError` for a zero divisor or a negative shift count.
+    /// `ir_lower::expr::arithmetic_effects()` drops that bit when the right operand is a literal
+    /// that rules the error out, so `$x << 3` and `$x / 2` stay removable, hoistable, and
+    /// CSE-able exactly as they were before the guards existed.
     pub fn allows_effect_refinement(self) -> bool {
         matches!(
             self,
-            Op::Call
+            Op::IDiv
+                | Op::ISDiv
+                | Op::ISMod
+                | Op::FDiv
+                | Op::IShl
+                | Op::IShrA
+                | Op::Call
                 | Op::FunctionVariantCall
                 | Op::ClosureBind
                 | Op::LanguageConstructCall

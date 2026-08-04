@@ -50,6 +50,21 @@ pub(super) fn emit_division_by_zero_error(ctx: &mut FunctionContext<'_>, message
     );
 }
 
+/// Throws a catchable PHP `ArithmeticError` carrying a static message.
+///
+/// Reference PHP raises this for arithmetic that has no representable result but is not a
+/// division by zero — currently `<<`/`>>` with a negative shift count
+/// (`ArithmeticError: Bit shift by negative number`). `catch (ArithmeticError $e)`,
+/// `catch (Error $e)`, and `catch (Throwable $e)` all match; `DivisionByZeroError` does not.
+pub(super) fn emit_arithmetic_error(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception(
+        ctx,
+        "ArithmeticError",
+        "_spl_arithmetic_error_class_id",
+        message,
+    );
+}
+
 /// Throws a catchable PHP `Error` whose message is a runtime string value.
 pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) -> Result<()> {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);

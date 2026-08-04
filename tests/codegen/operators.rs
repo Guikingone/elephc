@@ -264,6 +264,73 @@ fn test_concat_negative_int() {
     assert_eq!(out, "num: -7");
 }
 
+// --- Concatenation beyond the 64 KiB concat scratch buffer ---
+
+/// Verifies a single `.` chain whose result exceeds the shared 64 KiB concat scratch buffer keeps
+/// every byte instead of writing past the scratch end into the adjacent BSS globals. This exact
+/// program used to segfault before `__rt_concat` reserved bounded destination storage.
+#[test]
+fn test_concat_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$long = str_repeat("Z", 100000);
+$s = "A" . $long . "B";
+echo strlen($s), "|", $s[0], "|", $s[100001];
+"#,
+    );
+    assert_eq!(out, "100002|A|B");
+}
+
+/// Verifies a `.=` accumulation loop that grows well past the 64 KiB concat scratch buffer stays
+/// byte-exact. Every append beyond the scratch capacity takes the heap fallback, and the appended
+/// result is taken over in place by `__rt_str_persist` so the loop does not exhaust the heap.
+#[test]
+fn test_concat_assign_loop_past_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "";
+for ($i = 0; $i < 200; $i++) { $s .= str_repeat("ab", 250); }
+echo strlen($s), "|", substr($s, 0, 4), "|", substr($s, -4);
+"#,
+    );
+    assert_eq!(out, "100000|abab|abab");
+}
+
+/// Verifies a `.=` accumulation loop that grows past one mebibyte — more than sixteen times the
+/// concat scratch capacity — produces the exact PHP result. This is the shape reported as `.=`
+/// heap corruption around 30 KB.
+#[test]
+fn test_concat_assign_loop_past_one_mebibyte() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "";
+for ($i = 0; $i < 1500; $i++) { $s .= str_repeat("xy", 500); }
+echo strlen($s), "|", substr($s, 0, 4), "|", substr($s, -4), "|", $s[1499999];
+"#,
+    );
+    assert_eq!(out, "1500000|xyxy|xyxy|y");
+}
+
+/// Verifies an oversized concat result survives another string builtin running in between and a
+/// later large allocation, which is the classic concat-scratch invalidation shape: a scratch-backed
+/// result would have been overwritten, a heap-backed one must stay intact.
+#[test]
+fn test_concat_result_survives_later_string_work() {
+    let out = compile_and_run(
+        r#"<?php
+$a = str_repeat("a", 40000);
+$b = str_repeat("b", 40000);
+$s = $a . $b;
+$t = strtoupper($a);
+$u = $s . $t;
+$v = str_repeat("z", 70000);
+echo strlen($s), "|", strlen($u), "|", $s[0], $s[39999], $s[40000], $s[79999];
+echo "|", $u[0], $u[80000], $u[119999], "|", strlen($v);
+"#,
+    );
+    assert_eq!(out, "80000|120000|aabb|aAA|70000");
+}
+
 // --- Modulo ---
 
 /// Verifies integer modulo: 10 % 3 = 1.
@@ -644,4 +711,80 @@ check([1]);
 "#,
     );
     assert_eq!(out, "bool(false)\nbool(true)\nbool(false)\nbool(true)\n");
+}
+
+// --- PHP shift-count semantics (`<<` / `>>`) ---
+
+/// Verifies `<<` with a shift count of 64 or more yields `0` instead of masking the count.
+///
+/// Raw AArch64 `lsl` / x86_64 `shl` by register mask the count to six bits, so `1 << 64` used
+/// to produce `1` and `1 << 100` produced `68719476736`. Operands go through `$argc` so the
+/// constant folders cannot evaluate the shift at compile time.
+#[test]
+fn test_shift_left_count_at_or_above_word_size_is_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+var_dump((1 * $n) << (64 * $n));
+var_dump((1 * $n) << (100 * $n));
+var_dump((-8 * $n) << (64 * $n));
+var_dump((1 * $n) << (63 * $n));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(0)\nint(0)\nint(0)\nint(-9223372036854775808)\n"
+    );
+}
+
+/// Verifies `>>` with a shift count of 64 or more saturates to a full sign fill like PHP.
+///
+/// PHP yields `0` for a non-negative value and `-1` for a negative one; the masked hardware
+/// shift produced whatever `count % 64` happened to give.
+#[test]
+fn test_shift_right_count_at_or_above_word_size_saturates_to_sign() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+var_dump((8 * $n) >> (64 * $n));
+var_dump((-8 * $n) >> (64 * $n));
+var_dump((-8 * $n) >> (100 * $n));
+var_dump((-1 * $n) >> (64 * $n));
+var_dump(PHP_INT_MIN >> (65 * $n));
+"#,
+    );
+    assert_eq!(out, "int(0)\nint(-1)\nint(-1)\nint(-1)\nint(-1)\n");
+}
+
+/// Verifies ordinary in-range shift counts are unaffected by the PHP shift guards.
+#[test]
+fn test_shift_in_range_counts_are_unchanged() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+echo (1 * $n) << (0 * $n), "|", (1 * $n) << (3 * $n), "|", (-8 * $n) >> (2 * $n);
+$a = 5; $a <<= (2 * $n);
+$b = 40; $b >>= (3 * $n);
+echo "|", $a, "|", $b;
+"#,
+    );
+    assert_eq!(out, "1|8|-2|20|5");
+}
+
+/// Verifies `PHP_INT_MIN % -1` evaluates to `0` on both supported targets.
+///
+/// x86_64 `idiv` raises `#DE` (SIGFPE) for that operand pair, so the lowering must answer the
+/// `-1` divisor without reaching the divide unit; AArch64's `sdiv`/`msub` already wraps to `0`.
+#[test]
+fn test_int_min_modulo_negative_one_is_zero() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+$min = intdiv(PHP_INT_MIN, $n);
+var_dump($min % (-1 * $n));
+var_dump((-7 * $n) % (-1 * $n));
+var_dump((7 * $n) % (-3 * $n));
+"#,
+    );
+    assert_eq!(out, "int(0)\nint(0)\nint(1)\n");
 }

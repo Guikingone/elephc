@@ -181,6 +181,12 @@ $a = (array)42;      // [42]
 Cast names and aliases are case-insensitive, matching PHP. For example,
 `(INT)`, `(Integer)`, and `(integer)` are equivalent.
 
+`(int)` and `intval()` on a `float` follow PHP's `zend_dval_to_lval` rules on every supported
+target: `NAN` and `±INF` become `0`, an in-range value truncates toward zero, and any other
+out-of-range value is reduced modulo 2^64 before being read back as a signed 64-bit integer
+(so `(int)1e300` is `0` and `(int)1.5e19` is `-3446744073709551616`). The same conversion is
+used for float array keys, so `$a[NAN]` and `$a[INF]` both write index `0`.
+
 Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 
 ### Type functions
