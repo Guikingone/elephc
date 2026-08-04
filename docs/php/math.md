@@ -42,6 +42,7 @@ sidebar:
 | `deg2rad()` | `deg2rad($degrees): float` | Degrees to radians |
 | `rad2deg()` | `rad2deg($radians): float` | Radians to degrees |
 | `pi()` | `pi(): float` | Returns M_PI |
+| `base_convert()` | `base_convert($num, $from_base, $to_base): string` | Re-render a numeral between two bases from 2 to 36. Letter digits are case-insensitive and characters that are not digits of `$from_base` are ignored. A base outside 2-36 throws `\ValueError`. |
 
 `clamp()` validates the bounds before selecting a result. It throws `ValueError` if `$min > $max` or if either bound is `NAN`. Selection checks the upper bound first, then the lower bound.
 
@@ -50,6 +51,23 @@ echo clamp(15, 0, 10);      // 10
 echo clamp(3.5, 0.0, 10.0); // 3.5
 echo clamp("P", "A", "Z");  // "P"
 ```
+
+### base_convert()
+
+`base_convert()` parses `$num` in `$from_base` and re-renders it in `$to_base`. Digits above
+`9` use the letters `a`-`z` in either case, and any character that is not a digit of
+`$from_base` is skipped rather than ending the scan.
+
+```php
+echo base_convert("ff", 16, 10);      // 255
+echo base_convert("a37334", 16, 2);   // 101000110111001100110100
+echo base_convert("zz", 36, 10);      // 1295
+```
+
+A value larger than `PHP_INT_MAX` widens to a float during the parse, exactly as in reference
+PHP, and the rendered digits are then rounded rather than exact — `base_convert("ffffffffffffffff", 16, 10)`
+is `"18446744073709552046"`, not `"18446744073709551615"`. The float render also stops after 64
+digits.
 
 ### min() and max()
 

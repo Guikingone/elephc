@@ -826,3 +826,79 @@ fn test_error_array_count_values_wrong_type() {
         "array_count_values() argument must be array",
     );
 }
+
+// --- internal array pointer family (key/current/next/prev/reset/end) ---
+
+/// Verifies each internal-array-pointer builtin reports PHP's exact-one-argument arity.
+///
+/// PHP raises `ArgumentCountError` at run time; elephc is ahead of the program and
+/// rejects the call at compile time with the registry's shared arity phrasing.
+#[test]
+fn test_error_array_pointer_wrong_arg_count() {
+    for name in ["key", "current", "next", "prev", "reset", "end"] {
+        expect_error(
+            &format!("<?php {}();", name),
+            &format!("{}() takes exactly 1 argument", name),
+        );
+        expect_error(
+            &format!("<?php $a = [1, 2]; {}($a, 1);", name),
+            &format!("{}() takes exactly 1 argument", name),
+        );
+    }
+}
+
+/// Verifies a non-array receiver is rejected, mirroring PHP's `TypeError`.
+/// Fixture: a string local passed to each member of the family.
+#[test]
+fn test_error_array_pointer_non_array_receiver() {
+    for name in ["key", "current", "next", "prev", "reset", "end"] {
+        expect_error(
+            &format!("<?php $s = \"str\"; {}($s);", name),
+            &format!("{}() argument must be array", name),
+        );
+    }
+}
+
+/// Verifies an object-property receiver is a named compile error rather than a silently
+/// detached cursor.
+///
+/// elephc keeps the internal pointer in a hidden slot beside the array LOCAL, so a
+/// property has nowhere to store one. PHP accepts this shape, so the divergence is
+/// deliberate and must stay loud.
+#[test]
+fn test_error_array_pointer_property_receiver() {
+    expect_error(
+        r#"<?php class C { public array $p = [1, 2]; } $o = new C(); echo key($o->p);"#,
+        "key() argument must be an array variable",
+    );
+}
+
+/// Verifies an array-element receiver is a named compile error for the same reason.
+/// Fixture: `next($a[0])` on a nested indexed array.
+#[test]
+fn test_error_array_pointer_element_receiver() {
+    expect_error(
+        r#"<?php $a = [[1, 2], [3, 4]]; next($a[0]);"#,
+        "next() argument must be an array variable",
+    );
+}
+
+/// Verifies a call-result receiver is a named compile error for the same reason.
+/// Fixture: `current(f())` where `f()` returns a fresh array.
+#[test]
+fn test_error_array_pointer_call_result_receiver() {
+    expect_error(
+        r#"<?php function f(): array { return [1, 2]; } echo current(f());"#,
+        "current() argument must be an array variable",
+    );
+}
+
+/// Verifies an array literal receiver is a named compile error for the same reason.
+/// Fixture: `reset([1, 2, 3])`, which PHP itself also rejects for the by-reference members.
+#[test]
+fn test_error_array_pointer_literal_receiver() {
+    expect_error(
+        r#"<?php reset([1, 2, 3]);"#,
+        "reset() argument must be an array variable",
+    );
+}

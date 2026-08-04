@@ -19,6 +19,21 @@ pub(super) fn lower(
     target: RuntimeFnId,
 ) -> Option<Result<()>> {
     match target {
+        RuntimeFnId::ArrayPtrSeek => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_ptr_seek(ctx, inst)
+        }),
+        RuntimeFnId::ArrayPtrKey => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_ptr_key(ctx, inst)
+        }),
+        RuntimeFnId::ArrayPtrValue => Some({
+            crate::codegen::lower_inst::builtins::arrays::lower_array_ptr_value(ctx, inst)
+        }),
+        RuntimeFnId::BaseConvert => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base_convert(ctx, inst)
+        }),
+        RuntimeFnId::ChunkSplit => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_chunk_split(ctx, inst)
+        }),
         RuntimeFnId::MethodExists => Some({
             crate::codegen::lower_inst::builtins::lower_member_exists(
                 ctx,

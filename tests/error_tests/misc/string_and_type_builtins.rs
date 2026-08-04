@@ -318,3 +318,17 @@ expect_builtin_arity_error!(
     "<?php is_callable();",
     "is_callable() takes exactly 1 argument"
 );
+
+// Tests quotemeta() arity error when called with no arguments.
+expect_builtin_arity_error!(
+    test_error_quotemeta_wrong_args,
+    "<?php quotemeta();",
+    "quotemeta() takes exactly 1 argument"
+);
+
+// Tests chunk_split() arity error when called with too many arguments (accepts 1 to 3).
+expect_builtin_arity_error!(
+    test_error_chunk_split_wrong_args,
+    "<?php chunk_split(\"a\", 1, \"-\", 5);",
+    "chunk_split() takes 1 to 3 arguments"
+);

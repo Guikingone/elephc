@@ -2,7 +2,7 @@
 title: "get_class()"
 description: "Returns the name of the class of an object."
 sidebar:
-  order: 78
+  order: 84
 ---
 
 ## get_class()

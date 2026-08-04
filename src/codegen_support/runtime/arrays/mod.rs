@@ -38,6 +38,7 @@ mod array_free_deep;
 mod array_get_mixed_key;
 mod array_grow;
 mod array_hash_union;
+mod array_internal_pointer;
 mod array_intersect;
 mod array_intersect_refcounted;
 mod array_intersect_key;
@@ -195,6 +196,12 @@ pub use array_diff_key::emit_array_diff_key;
 /// Emit array difference by key helper.
 pub use array_edge_key::emit_array_edge_key;
 /// Emit array first/last key helper (array_key_first / array_key_last).
+pub use array_internal_pointer::emit_array_ptr_key;
+/// Emit the internal-array-pointer key boxing helper (key()).
+pub use array_internal_pointer::emit_array_ptr_seek;
+/// Emit the internal-array-pointer seek helper (reset/end/next/prev).
+pub use array_internal_pointer::emit_array_ptr_value;
+/// Emit the internal-array-pointer value boxing helper (current() and friends).
 pub use array_ensure_unique::emit_array_ensure_unique;
 /// Emit array uniqueness enforcement helper.
 pub use array_fill::emit_array_fill;

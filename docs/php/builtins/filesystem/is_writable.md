@@ -2,7 +2,7 @@
 title: "is_writable()"
 description: "Tells whether the filename is writable."
 sidebar:
-  order: 134
+  order: 140
 ---
 
 ## is_writable()

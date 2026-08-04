@@ -2,7 +2,7 @@
 title: "ksort()"
 description: "Sorts an array by key in ascending order."
 sidebar:
-  order: 55
+  order: 58
 ---
 
 ## ksort()

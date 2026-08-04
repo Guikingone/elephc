@@ -2,7 +2,7 @@
 title: "gethostbyname() — internals"
 description: "Compiler internals for gethostbyname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 185
+  order: 191
 ---
 
 ## `gethostbyname()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/gethostbyname.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/gethostbyname.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

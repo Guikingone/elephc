@@ -536,6 +536,56 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_bound_locals.contains(name)
     }
 
+    /// Returns the hidden internal-array-pointer cursor slot for `variable`, declaring it
+    /// on first use.
+    ///
+    /// PHP keeps the internal pointer on the hashtable itself. elephc's array and hash
+    /// headers have no room for it — widening either would shift every offset in every
+    /// runtime helper and inline lowering — so the cursor lives in a hidden `Int` frame
+    /// slot beside the array local, named after that local so repeated calls on the same
+    /// variable share one cursor.
+    ///
+    /// The slot is seeded with `0` at the END of the entry block, which is where PHP's
+    /// freshly-created array starts its pointer. Appending there (rather than at the call
+    /// site) is what makes `while (current($a) !== false) { next($a); }` work: a call-site
+    /// seed inside a loop body would rewind the cursor on every iteration. The entry block
+    /// stores its terminator separately from its instruction list, so appending after it
+    /// has been terminated still lands before the branch and dominates every use.
+    pub(crate) fn array_pointer_cursor_slot(&mut self, variable: &str) -> LocalSlotId {
+        let name = Self::array_pointer_cursor_name(variable);
+        if let Some(slot) = self.local_slots.get(&name) {
+            return *slot;
+        }
+        let slot = self.declare_local_with_kind(&name, PhpType::Int, LocalKind::HiddenTemp);
+        self.builder.seed_entry_int_local(slot, 0);
+        self.initialized_slots.insert(slot);
+        slot
+    }
+
+    /// Rewinds a local's internal-array-pointer cursor to the first element, if it has one.
+    ///
+    /// PHP resets the internal pointer whenever the variable is bound to a different array
+    /// (`$a = [1,2,3]; next($a); $a = [4,5,6];` leaves `key($a)` at `0`), because the new
+    /// value carries its own hashtable. Assignments lowered BEFORE the variable's first
+    /// pointer call see no slot yet and skip this, which is harmless: the cursor is still
+    /// sitting on its entry-block seed of `0` at that point.
+    pub(crate) fn reset_array_pointer_cursor(&mut self, variable: &str) {
+        let name = Self::array_pointer_cursor_name(variable);
+        let Some(slot) = self.local_slots.get(&name).copied() else {
+            return;
+        };
+        let zero = self.builder.emit_const_i64(0);
+        self.builder.emit_store_local(slot, zero);
+    }
+
+    /// Builds the reserved frame-slot name holding one local's internal-array-pointer cursor.
+    ///
+    /// The `__eir_` prefix cannot appear in PHP source, so the cursor can never collide
+    /// with a user variable.
+    fn array_pointer_cursor_name(variable: &str) -> String {
+        format!("__eir_aptr_{}", variable)
+    }
+
     /// Declares a fresh hidden temporary slot and returns its synthetic name.
     pub(crate) fn declare_hidden_temp(&mut self, php_type: PhpType) -> String {
         let name = format!("__eir_tmp{}", self.hidden_temp_counter);
@@ -1063,6 +1113,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.should_store_to_eval_scope(name) {
             return self.store_eval_scope_name(name, value, span);
         }
+        // Binding the variable to a different array gives it a different hashtable, and
+        // PHP's internal pointer belongs to the hashtable: rewind the hidden cursor so
+        // `$a = [1,2,3]; next($a); $a = [4,5,6];` leaves `key($a)` at `0` like PHP.
+        self.reset_array_pointer_cursor(name);
         let previous_slot = self.local_slots.get(name).copied();
         let previous_type = self.local_type(name);
         let previous_kind = self

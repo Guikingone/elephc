@@ -2,7 +2,7 @@
 title: "disk_total_space() — internals"
 description: "Compiler internals for disk_total_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 114
+  order: 120
 ---
 
 ## `disk_total_space()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/disk_total_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/disk_total_space.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

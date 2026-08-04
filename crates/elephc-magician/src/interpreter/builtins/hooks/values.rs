@@ -47,6 +47,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     ArrayUnique,
     /// Dispatches `array_values(...)`.
     ArrayValues,
+    /// Dispatches `base_convert(...)`.
+    BaseConvert,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -59,6 +61,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Ceil,
     /// Dispatches `chr(...)`.
     Chr,
+    /// Dispatches `chunk_split(...)`.
+    ChunkSplit,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -197,6 +201,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Pow,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    /// Dispatches `quotemeta(...)`.
+    QuoteMeta,
     /// Dispatches `rad2deg(...)`.
     Rad2deg,
     /// Dispatches `rand(...)`.
@@ -353,12 +359,23 @@ impl EvalValuesHook {
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
             Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
+            Self::BaseConvert => three_args(evaluated_args, values, eval_base_convert_result),
             Self::Base64Decode => one_arg(evaluated_args, values, eval_base64_decode_result),
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
             Self::Boolval => one_arg(evaluated_args, values, eval_boolval_result),
             Self::Ceil => one_arg(evaluated_args, values, eval_ceil_result),
             Self::Chr => one_arg(evaluated_args, values, eval_chr_result),
+            Self::ChunkSplit => match evaluated_args {
+                [subject] => eval_chunk_split_result(*subject, None, None, values),
+                [subject, length] => {
+                    eval_chunk_split_result(*subject, Some(*length), None, values)
+                }
+                [subject, length, separator] => {
+                    eval_chunk_split_result(*subject, Some(*length), Some(*separator), values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Clamp => three_args(evaluated_args, values, eval_clamp_result),
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
@@ -490,6 +507,7 @@ impl EvalValuesHook {
             }
             Self::Printf => eval_printf_result(evaluated_args, values),
             Self::Pow => two_args(evaluated_args, values, eval_pow_result),
+            Self::QuoteMeta => one_arg(evaluated_args, values, eval_quotemeta_result),
             Self::Rad2deg => one_arg(evaluated_args, values, eval_rad2deg_result),
             Self::Rand => eval_rand_values_result(evaluated_args, values),
             Self::RandomInt => eval_random_int_values_result(evaluated_args, values),

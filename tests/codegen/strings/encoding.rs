@@ -605,3 +605,108 @@ echo strlen($u), "|", substr($u, 0, 4), "|", substr($u, -4);
     );
     assert_eq!(out, "60000|A A |A A ");
 }
+
+/// Verifies `quotemeta()` escapes every php-src metacharacter and leaves other bytes alone.
+#[test]
+fn test_quotemeta() {
+    let out = compile_and_run(
+        r#"<?php echo quotemeta("Hello world. (can you hear me?) [yes] \$5 + 3 * 2 = 11 \\ ^end");"#,
+    );
+    assert_eq!(
+        out,
+        r#"Hello world\. \(can you hear me\?\) \[yes\] \$5 \+ 3 \* 2 = 11 \\ \^end"#
+    );
+}
+
+/// Verifies `quotemeta()` returns an empty string unchanged and passes non-metacharacters through.
+#[test]
+fn test_quotemeta_empty_and_plain() {
+    let out = compile_and_run(
+        r#"<?php echo "|", quotemeta(""), "|", quotemeta("no specials here"), "|";"#,
+    );
+    assert_eq!(out, "||no specials here|");
+}
+
+/// Verifies `quotemeta()` resolves through case-insensitive and namespaced call forms.
+#[test]
+fn test_quotemeta_case_insensitive_and_namespaced() {
+    let out = compile_and_run(r#"<?php echo QuoteMeta("A.B"), "|", \quotemeta("C*D");"#);
+    assert_eq!(out, "A\\.B|C\\*D");
+}
+
+/// Verifies `quotemeta()` of a payload whose worst-case 2x expansion exceeds the 64 KiB concat
+/// scratch buffer keeps every escape intact through the bounded heap fallback.
+#[test]
+fn test_quotemeta_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$q = quotemeta(str_repeat("a.b(c)", 20000));
+echo strlen($q), "|", substr($q, 0, 10), "|", substr($q, -10);
+"#,
+    );
+    assert_eq!(out, "180000|a\\.b\\(c\\)a|)a\\.b\\(c\\)");
+}
+
+/// Verifies `chunk_split()` appends the separator after every chunk, including the trailing
+/// partial one, and reproduces php-src's lone-separator result for an empty subject.
+#[test]
+fn test_chunk_split() {
+    let out = compile_and_run(
+        r#"<?php
+echo chunk_split("abcdefgh", 3, "-"), "|";
+echo chunk_split("abcdef", 3, "-"), "|";
+echo chunk_split("", 3, "-"), "|";
+echo chunk_split("ab", 5, "|");
+"#,
+    );
+    assert_eq!(out, "abc-def-gh-|abc-def-|-|ab|");
+}
+
+/// Verifies `chunk_split()` defaults to 76-byte chunks joined by CRLF and accepts an empty
+/// separator without inserting anything.
+#[test]
+fn test_chunk_split_defaults_and_empty_separator() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(chunk_split("abc")), "|", chunk_split("abcdefgh", 3, "");
+"#,
+    );
+    assert_eq!(out, "6162630d0a|abcdefgh");
+}
+
+/// Verifies `chunk_split()` resolves through case-insensitive and namespaced call forms.
+#[test]
+fn test_chunk_split_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php echo Chunk_Split("xyz", 1, "."), "|", \chunk_split("xyz", 2, ".");"#,
+    );
+    assert_eq!(out, "x.y.z.|xy.z.");
+}
+
+/// Verifies `chunk_split()` raises php-src's `ValueError` for a non-positive `$length`.
+#[test]
+fn test_chunk_split_non_positive_length_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try { chunk_split("ab", 0, "|"); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { chunk_split("ab", -1, "|"); } catch (\ValueError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "chunk_split(): Argument #2 ($length) must be greater than 0\nchunk_split(): Argument #2 ($length) must be greater than 0"
+    );
+}
+
+/// Verifies `chunk_split()` of a result larger than the 64 KiB concat scratch buffer keeps
+/// every chunk boundary intact through the bounded heap fallback.
+#[test]
+fn test_chunk_split_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = chunk_split(str_repeat("A", 80000), 40, "==");
+echo strlen($s), "|", substr($s, 38, 6), "|", substr($s, -5);
+"#,
+    );
+    assert_eq!(out, "84000|AA==AA|AAA==");
+}

@@ -2,7 +2,7 @@
 title: "stream_socket_get_name() — internals"
 description: "Compiler internals for stream_socket_get_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 239
+  order: 245
 ---
 
 ## `stream_socket_get_name()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_socket_get_name.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_socket_get_name.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

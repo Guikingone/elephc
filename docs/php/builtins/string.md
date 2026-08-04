@@ -15,6 +15,7 @@ sidebar:
 | [`bin2hex()`](./string/bin2hex.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`chop()`](./string/chop.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`chr()`](./string/chr.md) | `(int $codepoint): string` | `string` | ✓ | ✓ |
+| [`chunk_split()`](./string/chunk_split.md) | `(string $string, int $length = 76, string $separator = '\r\n'): string` | `string` | ✓ | ✓ |
 | [`crc32()`](./string/crc32.md) | `(string $string): int` | `int` | ✓ | ✓ |
 | [`explode()`](./string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
@@ -48,6 +49,7 @@ sidebar:
 | [`number_format()`](./string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`ord()`](./string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`printf()`](./string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
+| [`quotemeta()`](./string/quotemeta.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurldecode()`](./string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rtrim()`](./string/rtrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |

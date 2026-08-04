@@ -771,3 +771,83 @@ array(3) {\n  [0]=>\n  int(255)\n  [1]=>\n  int(15)\n  [2]=>\n  float(1.84467440
 a/12\n"
     );
 }
+
+/// Verifies `base_convert()` re-renders numerals across bases, ignoring characters that are
+/// not digits of the source base and treating letter digits case-insensitively.
+#[test]
+fn test_base_convert() {
+    let out = compile_and_run(
+        r#"<?php
+echo base_convert("ff", 16, 10), "|", base_convert("255", 10, 16), "|",
+     base_convert("a37334", 16, 2), "|", base_convert("FF", 16, 10), "|",
+     base_convert("zz", 36, 10), "|", base_convert("", 10, 16), "|",
+     base_convert("0", 10, 2), "|", base_convert("123abcz", 16, 7);
+"#,
+    );
+    assert_eq!(out, "255|ff|101000110111001100110100|255|1295|0|0|13104021");
+}
+
+/// Verifies `base_convert()` reproduces php-src's lossy float render for values past
+/// `PHP_INT_MAX`, where the parse widens to `double` and the digits come out rounded.
+#[test]
+fn test_base_convert_widens_past_int_max() {
+    let out = compile_and_run(
+        r#"<?php
+echo base_convert("7fffffffffffffff", 16, 10), "\n",
+     base_convert("ffffffffffffffff", 16, 10), "\n",
+     base_convert("18446744073709551615", 10, 16), "\n",
+     base_convert("ffffffffffffffffffffffffffffff", 16, 10), "\n",
+     base_convert("ffffffffffffffffffffffffffffff", 16, 36);
+"#,
+    );
+    assert_eq!(
+        out,
+        "9223372036854775807\n18446744073709552046\n10000000000000000\n\
+         1329227995784916008062602462446642046\n24q5bylddqn4ggg0sw8k8s0s"
+    );
+}
+
+/// Verifies `base_convert()` stops at php-src's 64-digit float buffer bound.
+#[test]
+fn test_base_convert_float_digit_cap() {
+    let out = compile_and_run(
+        r#"<?php $r = base_convert(str_repeat("z", 40), 36, 2); echo strlen($r), "|", $r;"#,
+    );
+    assert_eq!(
+        out,
+        "64|0000000000000000000000000000000000000000000000000000000000000000"
+    );
+}
+
+/// Verifies `base_convert()` resolves through case-insensitive, namespaced, and
+/// named-argument call forms.
+#[test]
+fn test_base_convert_case_insensitive_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+echo Base_Convert("ff", 16, 10), "|", \base_convert("ff", 16, 8), "|",
+     base_convert(num: "ff", from_base: 16, to_base: 10);
+"#,
+    );
+    assert_eq!(out, "255|377|255");
+}
+
+/// Verifies `base_convert()` raises php-src's `ValueError` for either base outside 2..36.
+#[test]
+fn test_base_convert_base_out_of_range_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try { base_convert("f", 1, 10); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { base_convert("f", 37, 10); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { base_convert("f", 16, 1); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { base_convert("f", 16, 37); } catch (\ValueError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)\n\
+         base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)\n\
+         base_convert(): Argument #3 ($to_base) must be between 2 and 36 (inclusive)\n\
+         base_convert(): Argument #3 ($to_base) must be between 2 and 36 (inclusive)"
+    );
+}

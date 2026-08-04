@@ -199,3 +199,21 @@ fn test_error_bindec_too_many_args() {
 fn test_error_octdec_wrong_args() {
     expect_error("<?php octdec();", "octdec() takes exactly 1 argument");
 }
+
+/// Verifies that `base_convert()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_base_convert_wrong_args() {
+    expect_error(
+        "<?php base_convert(\"ff\", 16);",
+        "base_convert() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies that `base_convert()` with four arguments produces the correct arity error.
+#[test]
+fn test_error_base_convert_too_many_args() {
+    expect_error(
+        "<?php base_convert(\"ff\", 16, 10, 2);",
+        "base_convert() takes exactly 3 arguments",
+    );
+}

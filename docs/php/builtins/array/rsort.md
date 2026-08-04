@@ -2,7 +2,7 @@
 title: "rsort()"
 description: "Sorts an array in descending order."
 sidebar:
-  order: 59
+  order: 65
 ---
 
 ## rsort()

@@ -2,7 +2,7 @@
 title: "is_file()"
 description: "Tells whether the filename is a regular file."
 sidebar:
-  order: 131
+  order: 137
 ---
 
 ## is_file()

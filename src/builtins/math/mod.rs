@@ -25,6 +25,7 @@ pub mod acos;
 pub mod asin;
 pub mod atan;
 pub mod atan2;
+pub mod base_convert;
 pub mod bindec;
 pub mod ceil;
 pub mod clamp;

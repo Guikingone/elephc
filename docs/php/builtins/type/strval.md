@@ -2,7 +2,7 @@
 title: "strval()"
 description: "Gets the string value of a variable."
 sidebar:
-  order: 471
+  order: 480
 ---
 
 ## strval()

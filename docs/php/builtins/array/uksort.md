@@ -2,7 +2,7 @@
 title: "uksort()"
 description: "Sorts an array by keys using a user-defined comparison function."
 sidebar:
-  order: 63
+  order: 69
 ---
 
 ## uksort()

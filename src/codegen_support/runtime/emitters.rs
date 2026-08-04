@@ -98,10 +98,13 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);
+    strings::emit_chunk_split(emitter);
+    strings::emit_quotemeta(emitter);
     strings::emit_wordwrap(emitter);
     strings::emit_bin2hex(emitter);
     strings::emit_dec_to_base(emitter);
     strings::emit_base_to_number(emitter);
+    strings::emit_base_convert(emitter);
     strings::emit_long2ip(emitter);
     strings::emit_ip2long(emitter);
     strings::emit_inet_ntop(emitter);
@@ -286,6 +289,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_diff_refcounted(emitter);
     arrays::emit_array_is_list(emitter);
     arrays::emit_array_edge_key(emitter);
+    arrays::emit_array_ptr_seek(emitter);
+    arrays::emit_array_ptr_key(emitter);
+    arrays::emit_array_ptr_value(emitter);
     arrays::emit_array_intersect(emitter);
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);

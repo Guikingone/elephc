@@ -2,7 +2,7 @@
 title: "stream_context_get_default()"
 description: "Retrieves the default stream context."
 sidebar:
-  order: 212
+  order: 218
 ---
 
 ## stream_context_get_default()

@@ -877,6 +877,18 @@ const STR_PAD_INVALID_PAD_TYPE_MESSAGE: &str =
 const STR_SPLIT_NON_POSITIVE_LENGTH_MESSAGE: &str =
     "str_split(): Argument #2 ($length) must be greater than 0";
 
+/// php-src's verbatim `ValueError` wording for a `base_convert()` `$from_base` outside 2..36.
+const BASE_CONVERT_FROM_BASE_MESSAGE: &str =
+    "base_convert(): Argument #2 ($from_base) must be between 2 and 36 (inclusive)";
+
+/// php-src's verbatim `ValueError` wording for a `base_convert()` `$to_base` outside 2..36.
+const BASE_CONVERT_TO_BASE_MESSAGE: &str =
+    "base_convert(): Argument #3 ($to_base) must be between 2 and 36 (inclusive)";
+
+/// php-src's verbatim `ValueError` wording for `chunk_split()` with a non-positive `$length`.
+const CHUNK_SPLIT_NON_POSITIVE_LENGTH_MESSAGE: &str =
+    "chunk_split(): Argument #2 ($length) must be greater than 0";
+
 /// php-src's verbatim `ValueError` wording for `str_repeat()` with a negative `$times`.
 const STR_REPEAT_NEGATIVE_TIMES_MESSAGE: &str =
     "str_repeat(): Argument #2 ($times) must be greater than or equal to 0";
@@ -1492,6 +1504,158 @@ fn emit_wordwrap_argument_guards(ctx: &mut FunctionContext<'_>) {
     }
     super::super::exceptions::emit_value_error(ctx, WORDWRAP_ZERO_WIDTH_CUT_MESSAGE);
     ctx.emitter.label(&width_ok_label);
+}
+
+/// Lowers `base_convert(num, from_base, to_base)` through the shared runtime helper.
+///
+/// php-src validates `$from_base` first and `$to_base` second, before touching `$num`, so the
+/// two guards are emitted in that order once both bases sit in their runtime argument
+/// registers.
+pub(crate) fn lower_base_convert(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() != 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "base_convert expected 3 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_base_convert_aarch64(ctx, inst)?,
+        Arch::X86_64 => lower_base_convert_x86_64(ctx, inst)?,
+    }
+    let (from_base_reg, to_base_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x3", "x4"),
+        Arch::X86_64 => ("rdx", "rcx"),
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedInRange(from_base_reg, 2, 36),
+        BASE_CONVERT_FROM_BASE_MESSAGE,
+    );
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedInRange(to_base_reg, 2, 36),
+        BASE_CONVERT_TO_BASE_MESSAGE,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_base_convert");
+    store_if_result(ctx, inst)
+}
+
+/// Materializes AArch64 `base_convert()` runtime arguments.
+///
+/// Both bases are materialized after the numeral, so each one is parked on the stack while
+/// the next operand is lowered: `load_as_int` may call `__rt_str_to_int`, which clobbers
+/// every scratch register the earlier arguments were sitting in.
+fn lower_base_convert_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_string_arg_to_regs(ctx, inst, 0, "base_convert", "x1", "x2")?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    let from_base = expect_operand(inst, 1)?;
+    load_as_int(ctx, from_base, "base_convert from_base")?;
+    abi::emit_push_reg_pair(ctx.emitter, "x0", "xzr");
+    let to_base = expect_operand(inst, 2)?;
+    load_as_int(ctx, to_base, "base_convert to_base")?;
+    ctx.emitter.instruction("mov x4, x0");                                      // pass the target base to the runtime helper
+    abi::emit_pop_reg_pair(ctx.emitter, "x3", "x9");
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    Ok(())
+}
+
+/// Materializes x86_64 `base_convert()` runtime arguments.
+///
+/// Same staging as the AArch64 path: the numeral and the source base wait on the stack until
+/// the target base has been materialized, then everything lands in the System V registers
+/// `__rt_base_convert` reads.
+fn lower_base_convert_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    load_string_arg_to_regs(ctx, inst, 0, "base_convert", "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    let from_base = expect_operand(inst, 1)?;
+    load_as_int(ctx, from_base, "base_convert from_base")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rax");
+    let to_base = expect_operand(inst, 2)?;
+    load_as_int(ctx, to_base, "base_convert to_base")?;
+    ctx.emitter.instruction("mov rcx, rax");                                    // pass the target base to the runtime helper
+    abi::emit_pop_reg_pair(ctx.emitter, "rdx", "r9");
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+    Ok(())
+}
+
+/// Lowers `chunk_split(string, length?, separator?)` through the shared runtime helper.
+pub(crate) fn lower_chunk_split(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "chunk_split expected 1 to 3 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_chunk_split_aarch64(ctx, inst)?,
+        Arch::X86_64 => lower_chunk_split_x86_64(ctx, inst)?,
+    }
+    // `__rt_chunk_split` divides the subject length by the chunk length, so a zero length
+    // would trap and a negative one would make the unsigned compare copy the whole subject
+    // forever. Reference PHP rejects both before touching the subject.
+    let length_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 1),
+        CHUNK_SPLIT_NON_POSITIVE_LENGTH_MESSAGE,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_chunk_split");
+    store_if_result(ctx, inst)
+}
+
+/// Materializes AArch64 `chunk_split()` runtime arguments.
+fn lower_chunk_split_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let subject = expect_string_operand(ctx, inst, 0, "chunk_split")?;
+    ctx.load_string_value_to_regs(subject, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the subject while materializing the length and separator
+    if inst.operands.len() >= 2 {
+        let length = expect_operand(inst, 1)?;
+        load_as_int(ctx, length, "chunk_split length")?;
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the requested chunk length to the runtime helper
+    } else {
+        ctx.emitter.instruction("mov x3, #76");                                 // use PHP's default 76-byte chunk length when omitted
+    }
+    if inst.operands.len() >= 3 {
+        let separator = expect_string_operand(ctx, inst, 2, "chunk_split")?;
+        ctx.load_string_value_to_regs(separator, "x1", "x2")?;
+        ctx.emitter.instruction("mov x4, x1");                                  // pass the separator pointer to the runtime helper
+        ctx.emitter.instruction("mov x5, x2");                                  // pass the separator length to the runtime helper
+    } else {
+        let (label, len) = ctx.data.add_string(b"\r\n");
+        abi::emit_symbol_address(ctx.emitter, "x4", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "x5", len as i64);
+    }
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the subject into the primary runtime argument registers
+    Ok(())
+}
+
+/// Materializes x86_64 `chunk_split()` runtime arguments.
+fn lower_chunk_split_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let subject = expect_string_operand(ctx, inst, 0, "chunk_split")?;
+    ctx.load_string_value_to_regs(subject, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    if inst.operands.len() >= 2 {
+        let length = expect_operand(inst, 1)?;
+        load_as_int(ctx, length, "chunk_split length")?;
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the requested chunk length to the runtime helper
+    } else {
+        ctx.emitter.instruction("mov rdi, 76");                                 // use PHP's default 76-byte chunk length when omitted
+    }
+    if inst.operands.len() >= 3 {
+        let separator = expect_string_operand(ctx, inst, 2, "chunk_split")?;
+        ctx.load_string_value_to_regs(separator, "rax", "rdx")?;
+        ctx.emitter.instruction("mov rcx, rax");                                // pass the separator pointer to the runtime helper
+        ctx.emitter.instruction("mov r8, rdx");                                 // pass the separator length to the runtime helper
+    } else {
+        let (label, len) = ctx.data.add_string(b"\r\n");
+        abi::emit_symbol_address(ctx.emitter, "rcx", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "r8", len as i64);
+    }
+    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    Ok(())
 }
 
 /// Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper.

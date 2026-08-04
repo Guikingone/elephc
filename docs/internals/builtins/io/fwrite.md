@@ -2,7 +2,7 @@
 title: "fwrite() — internals"
 description: "Compiler internals for fwrite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 183
+  order: 189
 ---
 
 ## `fwrite()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fwrite.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fwrite.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

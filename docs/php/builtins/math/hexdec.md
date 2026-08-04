@@ -2,7 +2,7 @@
 title: "hexdec()"
 description: "Converts a hexadecimal string to its decimal number."
 sidebar:
-  order: 273
+  order: 280
 ---
 
 ## hexdec()

@@ -2,7 +2,7 @@
 title: "fopen()"
 description: "Opens file or URL."
 sidebar:
-  order: 172
+  order: 178
 ---
 
 ## fopen()

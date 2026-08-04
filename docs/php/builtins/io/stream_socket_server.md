@@ -2,7 +2,7 @@
 title: "stream_socket_server()"
 description: "Create an Internet or Unix domain server socket."
 sidebar:
-  order: 243
+  order: 249
 ---
 
 ## stream_socket_server()

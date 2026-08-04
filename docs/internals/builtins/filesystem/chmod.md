@@ -2,7 +2,7 @@
 title: "chmod() — internals"
 description: "Compiler internals for chmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 108
+  order: 114
 ---
 
 ## `chmod()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/chmod.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/chmod.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

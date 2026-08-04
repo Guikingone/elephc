@@ -2,7 +2,7 @@
 title: "number_format()"
 description: "Formats a number with grouped thousands."
 sidebar:
-  order: 404
+  order: 412
 ---
 
 ## number_format()

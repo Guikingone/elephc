@@ -288,6 +288,12 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_is_list()` | `array_is_list($arr): bool` | `true` if the keys are exactly `0..count-1` in order (the empty array is a list) |
 | `array_key_first()` | `array_key_first($arr): int\|string\|null` | First key in insertion order, or `null` if the array is empty |
 | `array_key_last()` | `array_key_last($arr): int\|string\|null` | Last key in insertion order, or `null` if the array is empty |
+| `key()` | `key($arr): int\|string\|null` | Key under the array's internal pointer, or `null` once the pointer is off either end |
+| `current()` | `current($arr): mixed` | Element under the array's internal pointer, or `false` once the pointer is off either end |
+| `next()` | `next(&$arr): mixed` | Advance the internal pointer one position and return the new element, or `false` |
+| `prev()` | `prev(&$arr): mixed` | Rewind the internal pointer one position and return the new element, or `false` |
+| `reset()` | `reset(&$arr): mixed` | Move the internal pointer to the first element and return it, or `false` for an empty array |
+| `end()` | `end(&$arr): mixed` | Move the internal pointer to the last element and return it, or `false` for an empty array |
 | `sort()` | `sort($arr): void` | Sort ascending (in-place) |
 | `rsort()` | `rsort($arr): void` | Sort descending |
 | `asort()` | `asort($arr): void` | Sort by value, maintain keys |
@@ -324,6 +330,77 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 Unannotated callback parameters are typed from the array in every array builtin that takes a callback — `array_all()`, `array_any()`, `array_filter()`, `array_find()`, `array_map()`, `array_reduce()`, `array_udiff()`, `array_uintersect()`, `array_walk()`, `array_walk_recursive()`, `uasort()`, `uksort()` and `usort()`. Value parameters get the element type and key parameters get the key type, so `array_filter($words, fn($v) => strlen($v) > 3)`, `uksort($byName, fn($a, $b) => strlen($a) <=> strlen($b))` and `array_walk($byName, function ($v, $k) { echo strlen($k); })` all check without hand-written type hints. Explicit hints stay authoritative.
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. Sorting an array of **strings** with a user comparator is not yet supported and reports a clear unsupported-feature error.
+
+## The internal array pointer
+
+`key()`, `current()`, `next()`, `prev()`, `reset()` and `end()` operate on PHP's internal
+array pointer:
+
+```php
+$stock = ["apples" => 3, "pears" => 7, "plums" => 0];
+
+reset($stock);
+while (($qty = current($stock)) !== false) {
+    echo key($stock), "=", $qty, " ";   // apples=3 pears=7 plums=0
+    next($stock);
+}
+
+echo end($stock);                        // 0
+echo key($stock);                        // plums
+```
+
+Semantics match PHP exactly for the supported receiver shape:
+
+- A freshly built array starts with its pointer on the first element, so `current()` and
+  `key()` work without calling `reset()` first.
+- There is a single invalid position, and it is one-way. Running off the back with
+  `next()` or off the front with `prev()` leaves the pointer invalid; the opposite
+  direction does **not** walk back in. Only `reset()` and `end()` restore a valid pointer.
+- While invalid, `current()`/`next()`/`prev()`/`reset()`/`end()` return `false` and `key()`
+  returns `null`. An empty array is always in that state.
+- `foreach` never moves the pointer, by value or by reference — PHP 7+ iterates an
+  internal copy, and elephc's `foreach` keeps its cursor in the stack frame.
+- Binding the variable to a different array rewinds its pointer to the first element,
+  because in PHP the pointer belongs to the hashtable that was replaced.
+- Associative arrays are walked in insertion order and `key()` reports the real key.
+
+### Receiver must be a plain variable
+
+PHP stores the pointer inside the array's hashtable. elephc's array and hash headers have
+no room for it — widening either would shift every offset in every runtime helper — so the
+pointer lives in a hidden cursor slot the compiler allocates **beside the array local**.
+
+The direct consequence is that the argument must be a plain variable. A property, an array
+element, a call result, or any other expression has nowhere to keep a cursor, so elephc
+reports a compile error rather than silently operating on a detached one:
+
+```php
+echo key($obj->rows);      // compile error: key() argument must be an array variable
+echo current(rows());      // compile error: current() argument must be an array variable
+next($grid[0]);            // compile error: next() argument must be an array variable
+```
+
+Copy the value into a local first (`$rows = $obj->rows;`) and walk that.
+
+### Known incompatibilities
+
+Because the cursor is attached to the variable instead of to the array value, three PHP
+behaviours differ. All three involve a pointer that has been moved away from the first
+element and then observed through a *different* variable.
+
+| Situation | PHP | elephc |
+|---|---|---|
+| `$a = [1,2,3]; next($a); $b = $a; echo key($b);` | `1` — the copy inherits the pointer at copy time | `0` — `$b` starts its own cursor |
+| `function f($x) { return key($x); } $a = [1,2,3]; next($a); echo f($a);` | `1` — the by-value parameter inherits the caller's pointer | `0` — the parameter's cursor starts fresh |
+| `$a = [3,1,2]; next($a); sort($a); echo key($a);` | `0` — `sort()`/`array_shift()`/`array_splice()` rewind the pointer | `1` — those builtins leave the cursor untouched |
+
+Everything else — including `$a[] = x` and `$a[$k] = v` **keeping** the pointer where it
+is, which PHP also does — behaves the same.
+
+One performance note: reading through the cursor is `O(1)` for indexed arrays but walks
+the insertion-order chain for associative arrays, so `current()`/`key()` on a hash cost
+`O(position)`. A full `while (current(...)) { next(...); }` traversal of a large hash is
+therefore quadratic; prefer `foreach` when you do not need the pointer.
 
 **Not supported yet:** `compact()` and `extract()` need dynamic access to the
 current variable scope. Magician's materialized named scope makes that behavior

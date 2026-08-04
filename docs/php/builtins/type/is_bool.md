@@ -2,7 +2,7 @@
 title: "is_bool()"
 description: "Checks whether a variable is a boolean."
 sidebar:
-  order: 455
+  order: 464
 ---
 
 ## is_bool()

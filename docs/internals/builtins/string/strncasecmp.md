@@ -2,7 +2,7 @@
 title: "strncasecmp() — internals"
 description: "Compiler internals for strncasecmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 425
+  order: 434
 ---
 
 ## `strncasecmp()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/string/strncasecmp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/strncasecmp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

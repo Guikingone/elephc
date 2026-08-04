@@ -161,6 +161,54 @@ pub enum BuiltinArgumentLowering {
     PositionalRegex,
     /// Preserve by-reference array storage while lowering user-comparator sorts.
     UserValueSort,
+    /// Bind the receiver to its hidden internal-array-pointer cursor slot.
+    ///
+    /// PHP's `key`/`current`/`next`/`prev`/`reset`/`end` read and move a per-array
+    /// cursor that has no place in elephc's array headers, so lowering resolves the
+    /// receiver to a plain local and pairs it with a compiler-allocated cursor slot
+    /// instead of passing the array alone.
+    ArrayInternalPointer(ArrayPointerOp),
+}
+
+/// One PHP internal-array-pointer operation, selected by the registry declaration.
+///
+/// Lowering reads this instead of matching on the PHP function name, so the six
+/// builtins stay distinguishable through typed metadata all the way to EIR.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ArrayPointerOp {
+    /// `key($array)`: box the key under the cursor, or null when it is invalid.
+    Key,
+    /// `current($array)`: box the value under the cursor, or false when it is invalid.
+    Current,
+    /// `next(&$array)`: advance the cursor one position, then read it.
+    Next,
+    /// `prev(&$array)`: rewind the cursor one position, then read it.
+    Prev,
+    /// `reset(&$array)`: move the cursor to the first element, then read it.
+    Reset,
+    /// `end(&$array)`: move the cursor to the last element, then read it.
+    End,
+}
+
+impl ArrayPointerOp {
+    /// Returns the seek mode consumed by `__rt_array_ptr_seek`, or `None` for pure reads.
+    ///
+    /// `Key` and `Current` never move the cursor, so they have no seek mode; the other
+    /// four map onto the `ARRAY_PTR_SEEK_*` constants owned by the runtime emitter.
+    pub const fn seek_mode(self) -> Option<i64> {
+        match self {
+            ArrayPointerOp::Key | ArrayPointerOp::Current => None,
+            ArrayPointerOp::Reset => Some(0),
+            ArrayPointerOp::End => Some(1),
+            ArrayPointerOp::Next => Some(2),
+            ArrayPointerOp::Prev => Some(3),
+        }
+    }
+
+    /// Returns whether the operation reports the cursor's key rather than its value.
+    pub const fn reads_key(self) -> bool {
+        matches!(self, ArrayPointerOp::Key)
+    }
 }
 
 impl BuiltinRuntimeFunctions {
@@ -373,6 +421,41 @@ pub const fn runtime_fn_semantics(target: RuntimeFnId) -> BuiltinSemantics {
                 "typed backend operation has no runtime-selected wrapper contract",
             )
         },
+        lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)),
+    }
+}
+
+/// Builds the complete shared descriptor for one PHP internal-array-pointer builtin.
+///
+/// The six pointer builtins are lowered as a unit by
+/// `BuiltinArgumentLowering::ArrayInternalPointer`, which resolves the receiver to a
+/// plain local, pairs it with that local's hidden cursor slot, and emits the typed
+/// `ArrayPtrSeek` / `ArrayPtrKey` / `ArrayPtrValue` runtime calls itself. Two
+/// consequences are encoded here:
+///
+/// - `runtime_functions` stays `None`. The declared arity is one PHP argument, but the
+///   emitted runtime calls carry two or three operands; publishing an inventory entry
+///   would bind that one-argument arity onto the runtime signature and fail EIR
+///   validation.
+/// - `callable` is `StaticOnly`. A runtime-selected name has no receiver expression, so
+///   there is no local to attach a cursor to.
+pub const fn array_pointer_semantics(
+    op: ArrayPointerOp,
+    target: RuntimeFnId,
+) -> BuiltinSemantics {
+    BuiltinSemantics {
+        validation: BuiltinValidation::SignatureOnly,
+        result_type: BuiltinResultType::Declared,
+        effects: BuiltinEffects::Static(target.effects()),
+        result_ownership: BuiltinResultOwnership::Fresh,
+        requirements: BuiltinRequirements::Static(&[]),
+        target_strategy: BuiltinTargetStrategy::RuntimeCall,
+        target_support: BuiltinTargetSupport::All,
+        runtime_functions: BuiltinRuntimeFunctions::None,
+        argument_lowering: BuiltinArgumentLowering::ArrayInternalPointer(op),
+        callable: BuiltinCallablePolicy::StaticOnly(
+            "the internal array pointer needs a named array variable receiver",
+        ),
         lowering: BuiltinLowering::Runtime(RuntimeCallTarget::Function(target)),
     }
 }

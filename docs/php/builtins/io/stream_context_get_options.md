@@ -2,7 +2,7 @@
 title: "stream_context_get_options()"
 description: "Retrieves options for the specified stream context."
 sidebar:
-  order: 213
+  order: 219
 ---
 
 ## stream_context_get_options()

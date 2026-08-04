@@ -76,6 +76,12 @@ pub enum RuntimeFnId {
     ArrayMultisort,
     ArrayPad,
     ArrayPop,
+    /// Resolves the next internal-array-pointer cursor for `reset`/`end`/`next`/`prev`.
+    ArrayPtrSeek,
+    /// Boxes the key at an internal-array-pointer cursor for `key()`.
+    ArrayPtrKey,
+    /// Boxes the value at an internal-array-pointer cursor for `current()` and friends.
+    ArrayPtrValue,
     ArrayProduct,
     ArrayPush,
     ArrayRand,
@@ -307,6 +313,7 @@ pub enum RuntimeFnId {
     Asin,
     Atan,
     Atan2,
+    BaseConvert,
     Ceil,
     Clamp,
     Cos,
@@ -383,6 +390,7 @@ pub enum RuntimeFnId {
     SplObjectId,
     Chop,
     Chr,
+    ChunkSplit,
     Crc32,
     CtypeAlnum,
     CtypeAlpha,
@@ -504,12 +512,15 @@ pub enum RuntimeFnId {
 impl RuntimeFnId {
     /// Returns the central logical ABI and backend contract for this runtime function.
     pub fn descriptor(self) -> RuntimeFnDescriptor {
-        let logical_signature = crate::builtins::registry::runtime_fn_arity_bounds(self).map(
-            |(min_operands, max_operands)| crate::ir::RuntimeCallSignature::Polymorphic {
-                min_operands,
-                max_operands,
-            },
-        );
+        let logical_signature = self
+            .lowering_owned_arity_bounds()
+            .or_else(|| crate::builtins::registry::runtime_fn_arity_bounds(self))
+            .map(
+                |(min_operands, max_operands)| crate::ir::RuntimeCallSignature::Polymorphic {
+                    min_operands,
+                    max_operands,
+                },
+            );
         RuntimeFnDescriptor {
             id: self,
             eir_name: self.as_eir(),
@@ -519,6 +530,23 @@ impl RuntimeFnId {
             requirements: self.requirements(),
             backend_mapping: RuntimeFnBackendMapping::TargetAwareEmitter,
             target_support: RuntimeFnTargetSupport::AllSupported,
+        }
+    }
+
+    /// Returns the operand bounds for runtime functions whose arity is owned by lowering
+    /// rather than by a PHP builtin's declared parameter list.
+    ///
+    /// The registry normally supplies these bounds by reading the declared arity of every
+    /// builtin that lists the target in its runtime-function inventory. That derivation
+    /// cannot describe the internal-array-pointer family: `key`/`current`/`next`/`prev`/
+    /// `reset`/`end` all take one PHP argument, but their lowering appends the hidden
+    /// cursor (and, for a seek, the seek mode) as extra operands. Declaring the real
+    /// runtime arity here keeps EIR validation meaningful instead of switching it off.
+    const fn lowering_owned_arity_bounds(self) -> Option<(usize, Option<usize>)> {
+        match self {
+            RuntimeFnId::ArrayPtrSeek => Some((3, Some(3))),
+            RuntimeFnId::ArrayPtrKey | RuntimeFnId::ArrayPtrValue => Some((2, Some(2))),
+            _ => None,
         }
     }
 
@@ -767,6 +795,8 @@ impl RuntimeFnId {
             | RuntimeFnId::Strncasecmp
             | RuntimeFnId::Strncmp
             | RuntimeFnId::SubstrCount
+            | RuntimeFnId::BaseConvert
+            | RuntimeFnId::ChunkSplit
             | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
@@ -1070,6 +1100,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArrayMerge
                 | RuntimeFnId::ArrayPad
                 | RuntimeFnId::ArrayPop
+                // `key()`/`current()` and the seek family all hand back a cell built by
+                // `__rt_mixed_from_value`, which persists strings and increfs containers, so
+                // the box is independently owned and never aliases the receiving array.
+                | RuntimeFnId::ArrayPtrKey
+                | RuntimeFnId::ArrayPtrValue
                 | RuntimeFnId::ArrayReplace
                 | RuntimeFnId::ArrayReplaceRecursive
                 | RuntimeFnId::ArrayReverse
@@ -1155,7 +1190,14 @@ impl RuntimeFnId {
             BuiltinResultOwnership::Fresh
         } else if matches!(
             self,
-            RuntimeFnId::Decbin
+            RuntimeFnId::BaseConvert
+                // `__rt_chunk_split` always writes into a reservation taken from
+                // `__rt_concat_reserve`, so the split result can never alias the subject or
+                // the separator. The default `MayAliasArguments` bucket kept an owned subject
+                // temporary alive for the result's whole lifetime, leaking one block per
+                // `chunk_split(build())` call.
+                | RuntimeFnId::ChunkSplit
+                | RuntimeFnId::Decbin
                 | RuntimeFnId::Dechex
                 | RuntimeFnId::Decoct
                 | RuntimeFnId::Htmlentities
@@ -1199,6 +1241,9 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayMultisort => "array_multisort",
             RuntimeFnId::ArrayPad => "array_pad",
             RuntimeFnId::ArrayPop => "array_pop",
+            RuntimeFnId::ArrayPtrSeek => "array_ptr_seek",
+            RuntimeFnId::ArrayPtrKey => "array_ptr_key",
+            RuntimeFnId::ArrayPtrValue => "array_ptr_value",
             RuntimeFnId::ArrayProduct => "array_product",
             RuntimeFnId::ArrayPush => "array_push",
             RuntimeFnId::ArrayRand => "array_rand",
@@ -1435,6 +1480,7 @@ impl RuntimeFnId {
             RuntimeFnId::Cos => "cos",
             RuntimeFnId::Cosh => "cosh",
             RuntimeFnId::Bindec => "bindec",
+            RuntimeFnId::BaseConvert => "base_convert",
             RuntimeFnId::Decbin => "decbin",
             RuntimeFnId::Dechex => "dechex",
             RuntimeFnId::Decoct => "decoct",
@@ -1505,6 +1551,7 @@ impl RuntimeFnId {
             RuntimeFnId::SplObjectId => "spl_object_id",
             RuntimeFnId::Chop => "chop",
             RuntimeFnId::Chr => "chr",
+            RuntimeFnId::ChunkSplit => "chunk_split",
             RuntimeFnId::Crc32 => "crc32",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",

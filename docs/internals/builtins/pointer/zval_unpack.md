@@ -2,7 +2,7 @@
 title: "zval_unpack() — internals"
 description: "Compiler internals for zval_unpack(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 332
+  order: 339
 ---
 
 ## `zval_unpack()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/zval_unpack.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/zval_unpack.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

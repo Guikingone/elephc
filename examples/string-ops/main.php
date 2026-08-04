@@ -46,6 +46,19 @@ echo "\n--- Wrap ---\n";
 echo "wordwrap(15):\n" . wordwrap("The quick brown fox jumped", 15) . "\n";
 echo "wordwrap(8, cut):\n" . wordwrap("A verylongword", 8, "\n", true) . "\n";
 
+// Chunking and escaping
+echo "\n--- Chunk/Escape ---\n";
+// chunk_split() appends the separator after every chunk, including the trailing partial one
+echo "chunk_split(3): " . chunk_split("abcdefgh", 3, "-") . "\n";
+// quotemeta() backslash-escapes the regular-expression metacharacters
+echo "quotemeta: " . quotemeta('cost: $5 (approx.) [net]') . "\n";
+// A $length below 1 is a catchable \ValueError
+try {
+    chunk_split("abc", 0);
+} catch (\ValueError $e) {
+    echo "caught: " . $e->getMessage() . "\n";
+}
+
 // Split and join
 echo "\n--- Split/Join ---\n";
 $csv = "one,two,three";

@@ -71,6 +71,7 @@ fn unary_string_symbol(runtime: UnaryStringRuntime) -> &'static str {
         UnaryStringRuntime::HexToBin => "__rt_hex2bin",
         UnaryStringRuntime::HtmlEntityDecode => "__rt_html_entity_decode",
         UnaryStringRuntime::NlToBr => "__rt_nl2br",
+        UnaryStringRuntime::QuoteMeta => "__rt_quotemeta",
         UnaryStringRuntime::RawUrlDecode => "__rt_urldecode",
         UnaryStringRuntime::RawUrlEncode => "__rt_rawurlencode",
         UnaryStringRuntime::StripSlashes => "__rt_stripslashes",

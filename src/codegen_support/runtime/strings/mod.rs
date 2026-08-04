@@ -53,6 +53,9 @@ mod str_split;
 mod addslashes;
 mod stripslashes;
 mod nl2br;
+mod base_convert;
+mod chunk_split;
+mod quotemeta;
 mod wordwrap;
 mod bin2hex;
 mod base_to_number;
@@ -179,6 +182,12 @@ pub use addslashes::emit_addslashes;
 pub use stripslashes::emit_stripslashes;
 /// Emit stripslashes unescaping helper.
 pub use nl2br::emit_nl2br;
+/// Emit the base_convert numeral re-renderer.
+pub use base_convert::emit_base_convert;
+/// Emit the chunk_split fixed-length splitter.
+pub use chunk_split::emit_chunk_split;
+/// Emit the quotemeta regular-expression metacharacter escaper.
+pub use quotemeta::emit_quotemeta;
 /// Emit newline to `<br>` conversion.
 pub use wordwrap::emit_wordwrap;
 /// Emit wordwrap helper.

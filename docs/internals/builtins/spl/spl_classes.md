@@ -2,7 +2,7 @@
 title: "spl_classes() — internals"
 description: "Compiler internals for spl_classes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 359
+  order: 366
 ---
 
 ## `spl_classes()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/spl/spl_classes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/spl/spl_classes.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

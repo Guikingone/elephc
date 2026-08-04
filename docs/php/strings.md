@@ -200,6 +200,8 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
 | `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at word boundaries; set `$cut` to break over-long words. An empty `$break`, or a `$width` of `0` together with `$cut`, throws `\ValueError`. |
+| `chunk_split()` | `chunk_split($str [, $length [, $separator]]): string` | Split into fixed-length chunks, appending `$separator` after every chunk including the last. Defaults to 76-byte chunks joined by `\r\n`. An empty subject yields a single separator; a `$length` below `1` throws `\ValueError`. |
+| `quotemeta()` | `quotemeta($str): string` | Prefix each of `. \ + * ? [ ^ ] $ ( )` with a backslash |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
 | `long2ip()` | `long2ip($ip): string` | Format a 32-bit integer as a dotted-quad IPv4 address |

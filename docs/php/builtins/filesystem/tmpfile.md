@@ -2,7 +2,7 @@
 title: "tmpfile()"
 description: "Creates a temporary file."
 sidebar:
-  order: 156
+  order: 162
 ---
 
 ## tmpfile()

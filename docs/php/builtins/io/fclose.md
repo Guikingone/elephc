@@ -2,7 +2,7 @@
 title: "fclose()"
 description: "Closes an open file pointer."
 sidebar:
-  order: 161
+  order: 167
 ---
 
 ## fclose()

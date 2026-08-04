@@ -2,7 +2,7 @@
 title: "cosh()"
 description: "Returns the hyperbolic cosine of a number."
 sidebar:
-  order: 264
+  order: 271
 ---
 
 ## cosh()

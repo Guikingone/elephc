@@ -2,7 +2,7 @@
 title: "class_attribute_names() — internals"
 description: "Compiler internals for class_attribute_names(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 69
+  order: 75
 ---
 
 ## `class_attribute_names()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/class_attribute_names.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/class_attribute_names.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

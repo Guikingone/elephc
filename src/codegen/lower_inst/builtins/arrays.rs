@@ -27,6 +27,7 @@ use super::super::callables::runtime_string_descriptor_cases;
 use super::super::{expect_operand, resolve_int_operand_to_result, store_if_result};
 
 mod column;
+mod internal_pointer;
 mod key_exists;
 mod keys;
 mod search;
@@ -1486,6 +1487,27 @@ pub(crate) fn lower_array_is_list(ctx: &mut FunctionContext<'_>, inst: &Instruct
     ctx.load_value_to_reg(array, arg0)?;
     abi::emit_call_label(ctx.emitter, "__rt_array_is_list");
     store_if_result(ctx, inst)
+}
+
+/// Lowers `ArrayPtrSeek` through the internal-array-pointer backend.
+pub(crate) fn lower_array_ptr_seek(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    internal_pointer::lower_array_ptr_seek(ctx, inst)
+}
+
+/// Lowers `ArrayPtrKey` through the internal-array-pointer backend.
+pub(crate) fn lower_array_ptr_key(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    internal_pointer::lower_array_ptr_key(ctx, inst)
+}
+
+/// Lowers `ArrayPtrValue` through the internal-array-pointer backend.
+pub(crate) fn lower_array_ptr_value(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    internal_pointer::lower_array_ptr_value(ctx, inst)
 }
 
 /// Lowers `array_key_first()` through the shared edge-key helper with selector `0`.

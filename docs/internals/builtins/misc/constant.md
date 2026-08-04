@@ -2,7 +2,7 @@
 title: "constant() — internals"
 description: "Compiler internals for constant(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 298
+  order: 305
 ---
 
 ## `constant()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/constant.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/constant.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -46,7 +46,8 @@ function constant(string $name): mixed
 
 ## Eval interpreter (magician)
 
-_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
+- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/core/constant.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/core/constant.rs) (`eval_builtin!`)
+- **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references
 

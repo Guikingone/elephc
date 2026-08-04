@@ -2,7 +2,7 @@
 title: "decoct()"
 description: "Converts an integer to its octal string representation."
 sidebar:
-  order: 267
+  order: 274
 ---
 
 ## decoct()

@@ -14,7 +14,7 @@ sidebar:
 | [`array_chunk()`](./array/array_chunk.md) | `(array $array, int $length): array` | `array` | ✓ | ✓ |
 | [`array_column()`](./array/array_column.md) | `(array $array, string $column_key): array` | `array` | ✓ | ✓ |
 | [`array_combine()`](./array/array_combine.md) | `(array $keys, array $values): array` | `array` | ✓ | ✓ |
-| [`array_count_values()`](./array/array_count_values.md) | `(array $array): array` | `array` | ✓ | — |
+| [`array_count_values()`](./array/array_count_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_diff()`](./array/array_diff.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_diff_assoc()`](./array/array_diff_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
 | [`array_diff_key()`](./array/array_diff_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
@@ -61,12 +61,18 @@ sidebar:
 | [`call_user_func()`](./array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` | ✓ | ✓ |
 | [`call_user_func_array()`](./array/call_user_func_array.md) | `(callable $callback, array $args): mixed` | `mixed` | ✓ | ✓ |
 | [`count()`](./array/count.md) | `(array $value, int $mode = 0): int` | `int` | ✓ | ✓ |
+| [`current()`](./array/current.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
+| [`end()`](./array/end.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`in_array()`](./array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): bool` | `bool` | ✓ | ✓ |
+| [`key()`](./array/key.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`krsort()`](./array/krsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`ksort()`](./array/ksort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`natcasesort()`](./array/natcasesort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`natsort()`](./array/natsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`next()`](./array/next.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
+| [`prev()`](./array/prev.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`range()`](./array/range.md) | `(mixed $start, mixed $end): array` | `array` | ✓ | ✓ |
+| [`reset()`](./array/reset.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`rsort()`](./array/rsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`shuffle()`](./array/shuffle.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`sort()`](./array/sort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |

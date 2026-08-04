@@ -2,7 +2,7 @@
 title: "class_implements()"
 description: "Returns the interfaces which are implemented by the given class or its parents."
 sidebar:
-  order: 72
+  order: 78
 ---
 
 ## class_implements()

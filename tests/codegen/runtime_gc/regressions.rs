@@ -4420,3 +4420,33 @@ echo implode("", $r), "\n";
         out.stderr
     );
 }
+
+/// Ownership regression for the newly added bounded-scratch string producers.
+///
+/// `chunk_split()`, `quotemeta()`, and `base_convert()` all write into a reservation taken
+/// from `__rt_concat_reserve`, so none of them can alias an argument. Leaving `chunk_split`
+/// in the default `MayAliasArguments` bucket suppressed the release of its owned subject
+/// temporary and leaked one block per call; `Independent`/`Fresh` ownership keeps the loop
+/// below clean.
+#[test]
+fn test_scratch_string_builtins_release_owned_argument_temporaries() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function build(): string { return str_repeat("a.b(", 30) . "c"; }
+$total = 0;
+for ($i = 0; $i < 20; $i++) {
+    $total += strlen(chunk_split(build(), 7, "=="));
+    $total += strlen(quotemeta(build()));
+    $total += strlen(base_convert("ff", 16, 2));
+}
+echo $total, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "6920\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected scratch string builtins to release their argument temporaries, got: {}",
+        out.stderr
+    );
+}

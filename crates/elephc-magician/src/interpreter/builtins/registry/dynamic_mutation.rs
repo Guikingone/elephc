@@ -32,6 +32,9 @@ pub(in crate::interpreter) fn eval_mutating_builtin_with_call_array_args(
             eval_dynamic_array_push_unshift_call(name, evaluated_args, context, values)?
         }
         "array_splice" => eval_dynamic_array_splice_call(evaluated_args, context, values)?,
+        "end" | "next" | "prev" | "reset" => {
+            eval_dynamic_array_pointer_call(name, evaluated_args, context, values)?
+        }
         "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
         | "shuffle" | "sort" => {
             eval_dynamic_array_sort_call(name, evaluated_args, context, values)?
@@ -173,6 +176,23 @@ fn eval_dynamic_array_splice_call(
     )?;
     eval_write_direct_ref_target(target, replacement, context, values, None)?;
     Ok(Some(removed))
+}
+
+/// Evaluates a dynamic internal array pointer call against a writable array.
+fn eval_dynamic_array_pointer_call(
+    name: &str,
+    evaluated_args: &[EvaluatedCallArg],
+    context: &mut ElephcEvalContext,
+    values: &mut impl RuntimeValueOps,
+) -> Result<Option<RuntimeCellHandle>, EvalStatus> {
+    let (bound, _) = bind_evaluated_ref_builtin_args(&["array"], evaluated_args, false)?;
+    let array = required_evaluated_ref_arg(&bound, 0)?;
+    if array.ref_target.is_none() {
+        return Ok(None);
+    }
+    let (cursor, result) = eval_array_pointer_move(name, array.value, context, values)?;
+    context.set_array_cursor(array.value, cursor);
+    Ok(Some(result))
 }
 
 /// Evaluates a dynamic standard array sort call against a writable array.

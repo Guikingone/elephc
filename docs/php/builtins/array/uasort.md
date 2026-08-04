@@ -2,7 +2,7 @@
 title: "uasort()"
 description: "Sorts an array with a user-defined comparison function and maintains index association."
 sidebar:
-  order: 62
+  order: 68
 ---
 
 ## uasort()

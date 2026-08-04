@@ -2,7 +2,7 @@
 title: "localtime()"
 description: "Returns the local time."
 sidebar:
-  order: 100
+  order: 106
 ---
 
 ## localtime()

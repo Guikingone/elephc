@@ -44,6 +44,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     ArrayUnique,
     /// Dispatches `array_values(...)`.
     ArrayValues,
+    /// Dispatches `base_convert(...)`.
+    BaseConvert,
     /// Dispatches `base64_decode(...)`.
     Base64Decode,
     /// Dispatches `base64_encode(...)`.
@@ -56,6 +58,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Ceil,
     /// Dispatches `chr(...)`.
     Chr,
+    /// Dispatches `chunk_split(...)`.
+    ChunkSplit,
     /// Dispatches `clamp(...)`.
     Clamp,
     /// Dispatches `count(...)`.
@@ -194,6 +198,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Pow,
     /// Dispatches `mt_rand(...)`.
     MtRand,
+    /// Dispatches `quotemeta(...)`.
+    QuoteMeta,
     /// Dispatches `rad2deg(...)`.
     Rad2deg,
     /// Dispatches `rand(...)`.
@@ -346,12 +352,14 @@ impl EvalDirectHook {
             Self::Asin => eval_builtin_asin(args, context, scope, values),
             Self::Atan => eval_builtin_atan(args, context, scope, values),
             Self::Atan2 => eval_builtin_atan2(args, context, scope, values),
+            Self::BaseConvert => eval_builtin_base_convert(args, context, scope, values),
             Self::Base64Decode => eval_builtin_base64_decode(args, context, scope, values),
             Self::Base64Encode => eval_builtin_base64_encode(args, context, scope, values),
             Self::Bin2Hex => eval_builtin_bin2hex(args, context, scope, values),
             Self::Boolval => eval_builtin_boolval(args, context, scope, values),
             Self::Ceil => eval_builtin_ceil(args, context, scope, values),
             Self::Chr => eval_builtin_chr(args, context, scope, values),
+            Self::ChunkSplit => eval_builtin_chunk_split(args, context, scope, values),
             Self::Clamp => eval_builtin_clamp(args, context, scope, values),
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),
@@ -444,6 +452,7 @@ impl EvalDirectHook {
             Self::Pi => eval_builtin_pi(args, values),
             Self::Printf => eval_builtin_printf(args, context, scope, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),
+            Self::QuoteMeta => eval_builtin_quotemeta(args, context, scope, values),
             Self::Rad2deg => eval_builtin_rad2deg(args, context, scope, values),
             Self::Rand => eval_builtin_rand(args, context, scope, values),
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),

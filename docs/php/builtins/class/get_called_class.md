@@ -2,7 +2,7 @@
 title: "get_called_class()"
 description: "get_called_class() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet."
 sidebar:
-  order: 77
+  order: 83
 ---
 
 ## get_called_class()

@@ -14,7 +14,7 @@ sidebar:
 | [`array_chunk()`](./builtins/array/array_chunk.md) | `(array $array, int $length): array` | `array` | ✓ | ✓ |
 | [`array_column()`](./builtins/array/array_column.md) | `(array $array, string $column_key): array` | `array` | ✓ | ✓ |
 | [`array_combine()`](./builtins/array/array_combine.md) | `(array $keys, array $values): array` | `array` | ✓ | ✓ |
-| [`array_count_values()`](./builtins/array/array_count_values.md) | `(array $array): array` | `array` | ✓ | — |
+| [`array_count_values()`](./builtins/array/array_count_values.md) | `(array $array): array` | `array` | ✓ | ✓ |
 | [`array_diff()`](./builtins/array/array_diff.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_diff_assoc()`](./builtins/array/array_diff_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
 | [`array_diff_key()`](./builtins/array/array_diff_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
@@ -61,12 +61,18 @@ sidebar:
 | [`call_user_func()`](./builtins/array/call_user_func.md) | `(callable $callback, ...$args): mixed` | `mixed` | ✓ | ✓ |
 | [`call_user_func_array()`](./builtins/array/call_user_func_array.md) | `(callable $callback, array $args): mixed` | `mixed` | ✓ | ✓ |
 | [`count()`](./builtins/array/count.md) | `(array $value, int $mode = 0): int` | `int` | ✓ | ✓ |
+| [`current()`](./builtins/array/current.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
+| [`end()`](./builtins/array/end.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`in_array()`](./builtins/array/in_array.md) | `(mixed $needle, array $haystack, bool $strict = false): bool` | `bool` | ✓ | ✓ |
+| [`key()`](./builtins/array/key.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`krsort()`](./builtins/array/krsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`ksort()`](./builtins/array/ksort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`natcasesort()`](./builtins/array/natcasesort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`natsort()`](./builtins/array/natsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
+| [`next()`](./builtins/array/next.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
+| [`prev()`](./builtins/array/prev.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`range()`](./builtins/array/range.md) | `(mixed $start, mixed $end): array` | `array` | ✓ | ✓ |
+| [`reset()`](./builtins/array/reset.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`rsort()`](./builtins/array/rsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`shuffle()`](./builtins/array/shuffle.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`sort()`](./builtins/array/sort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
@@ -268,6 +274,7 @@ sidebar:
 | [`asin()`](./builtins/math/asin.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan()`](./builtins/math/atan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan2()`](./builtins/math/atan2.md) | `(float $y, float $x): float` | `float` | ✓ | ✓ |
+| [`base_convert()`](./builtins/math/base_convert.md) | `(string $num, int $from_base, int $to_base): string` | `string` | ✓ | ✓ |
 | [`bindec()`](./builtins/math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | — |
 | [`ceil()`](./builtins/math/ceil.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clamp()`](./builtins/math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` | ✓ | ✓ |
@@ -306,7 +313,7 @@ sidebar:
 | [`tan()`](./builtins/math/tan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tanh()`](./builtins/math/tanh.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`buffer_new()`](./builtins/misc/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
-| [`constant()`](./builtins/misc/constant.md) | `(string $name): mixed` | `mixed` | ✓ | — |
+| [`constant()`](./builtins/misc/constant.md) | `(string $name): mixed` | `mixed` | ✓ | ✓ |
 | [`define()`](./builtins/misc/define.md) | `(string $constant_name, mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`defined()`](./builtins/misc/defined.md) | `(string $constant_name): bool` | `bool` | ✓ | ✓ |
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
@@ -382,6 +389,7 @@ sidebar:
 | [`bin2hex()`](./builtins/string/bin2hex.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`chop()`](./builtins/string/chop.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`chr()`](./builtins/string/chr.md) | `(int $codepoint): string` | `string` | ✓ | ✓ |
+| [`chunk_split()`](./builtins/string/chunk_split.md) | `(string $string, int $length = 76, string $separator = '\r\n'): string` | `string` | ✓ | ✓ |
 | [`crc32()`](./builtins/string/crc32.md) | `(string $string): int` | `int` | ✓ | ✓ |
 | [`explode()`](./builtins/string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./builtins/string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
@@ -415,6 +423,7 @@ sidebar:
 | [`number_format()`](./builtins/string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
+| [`quotemeta()`](./builtins/string/quotemeta.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurldecode()`](./builtins/string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./builtins/string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rtrim()`](./builtins/string/rtrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |

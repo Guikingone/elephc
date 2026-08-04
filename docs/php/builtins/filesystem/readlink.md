@@ -2,7 +2,7 @@
 title: "readlink()"
 description: "Returns the target of a symbolic link."
 sidebar:
-  order: 145
+  order: 151
 ---
 
 ## readlink()

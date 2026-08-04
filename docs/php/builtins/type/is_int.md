@@ -2,7 +2,7 @@
 title: "is_int()"
 description: "Checks whether a variable is an integer."
 sidebar:
-  order: 459
+  order: 468
 ---
 
 ## is_int()

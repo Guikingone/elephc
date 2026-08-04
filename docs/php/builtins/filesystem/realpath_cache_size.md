@@ -2,7 +2,7 @@
 title: "realpath_cache_size()"
 description: "Returns the amount of memory used by the realpath cache."
 sidebar:
-  order: 148
+  order: 154
 ---
 
 ## realpath_cache_size()

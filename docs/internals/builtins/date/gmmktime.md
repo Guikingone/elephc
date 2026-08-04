@@ -2,7 +2,7 @@
 title: "gmmktime() — internals"
 description: "Compiler internals for gmmktime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 98
+  order: 104
 ---
 
 ## `gmmktime()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/gmmktime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/gmmktime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:506](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L506) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

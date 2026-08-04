@@ -14,6 +14,7 @@ sidebar:
 | [`asin()`](./math/asin.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan()`](./math/atan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan2()`](./math/atan2.md) | `(float $y, float $x): float` | `float` | ✓ | ✓ |
+| [`base_convert()`](./math/base_convert.md) | `(string $num, int $from_base, int $to_base): string` | `string` | ✓ | ✓ |
 | [`bindec()`](./math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | — |
 | [`ceil()`](./math/ceil.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clamp()`](./math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` | ✓ | ✓ |
