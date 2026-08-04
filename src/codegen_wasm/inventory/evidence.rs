@@ -40,6 +40,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::StoreLocal => &["local variable assignment"],
         Op::UnsetLocal => &["unset($local)"],
         Op::ReleaseLocalSlot => &["scope exit for an owned local"],
+        Op::FToStr => &["float in a string context"],
         Op::LoadRefCell => &["read through a PHP reference"],
         Op::StoreRefCell => &["assignment through a PHP reference"],
         Op::PromoteLocalRefCell => &["first by-reference use of a local"],
@@ -316,6 +317,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::StoreLocal => "codegen_wasm::inst::lower_store_local",
         Op::UnsetLocal => "codegen_wasm::inst::lower_unset_local",
         Op::ReleaseLocalSlot => "codegen_wasm::inst::lower_release_local_slot",
+        Op::FToStr => "codegen_wasm::inst::lower_float_to_string",
         Op::IAdd | Op::ISub | Op::IMul | Op::IBitAnd | Op::IBitOr | Op::IBitXor => {
             "codegen_wasm::inst::lower_int_binop"
         }
@@ -454,7 +456,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::IsTruthy => "compare",
         Op::InstanceOf => "instanceof",
         Op::IToF => "itof",
-        Op::IToStr => "string",
+        Op::IToStr | Op::FToStr => "string",
         Op::Cast => "cast",
         Op::MixedBox
         | Op::MixedTagOf

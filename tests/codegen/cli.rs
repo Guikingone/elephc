@@ -11913,3 +11913,87 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a float reaching a string, and `echo` of a `void` call's value.
+///
+/// `(string) $f` and `"$f"` render through the same `__rt_ftoa` an `echo` of a float uses, so
+/// the three spellings cannot disagree — including php-src's exponent form for large and small
+/// magnitudes, and `100` rather than `100.0` for an integral value.
+///
+/// A `void` method call still has an expression value in PHP, and that value is null, which
+/// `echo` renders as nothing at all.
+#[test]
+fn test_cli_wasm_float_to_string_and_void_echo_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_float_to_string");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function s(float $f): string { return (string) $f; }
+echo s(1.5), "|", s(-0.0), "|", s(1.0e20), "|", s(0.1), "|", s(100.0), "|", s(1.0e-7), "\n";
+$x = 3.25;
+echo "v=" . $x . "!\n";
+class C { public function go(): void { echo "go\n"; } }
+echo (new C())->go();
+echo "end\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the float-to-string cases to WASM");
+    assert!(
+        output.status.success(),
+        "float-to-string compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the float-to-string cases under Node");
+    assert!(
+        run.status.success(),
+        "float-to-string cases must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "1.5|-0|1.0E+20|0.1|100|1.0E-7\n",
+            "v=3.25!\n",
+            "go\n",
+            "end\n",
+        ),
+        "php-src's own bytes for every rendering"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

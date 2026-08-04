@@ -89,6 +89,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::StrictEq | Op::StrictNotEq => super::strict::lower_strict_compare(ctx, &inst),
         Op::IToF => lower_itof(ctx, &inst),
         Op::IToStr => lower_int_like_to_string(ctx, &inst),
+        Op::FToStr => lower_float_to_string(ctx, &inst),
         Op::FToI => lower_ftoi(ctx, &inst),
         Op::Cast => lower_cast(ctx, &inst),
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
@@ -1620,6 +1621,34 @@ fn lower_int_like_to_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
+/// Lowers `FToStr`: a PHP float to its string form.
+///
+/// The formatting is `__rt_ftoa`'s, the same one `echo` of a float uses, so a rendered float
+/// is identical whichever way it reaches output — including PHP's exponent form for large
+/// magnitudes. The result is persisted before anything else can reuse the scratch buffer.
+fn lower_float_to_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let bits = ctx.fresh_temp(ValType::I64);
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.fb
+        .ins("i64.reinterpret_f64", "ftoa reads the raw f64 bits");
+    ctx.fb
+        .ins(&format!("local.set {}", bits), "hold the bits for the call");
+    ctx.fb.ins(
+        &format!(
+            "(call $__rt_ftoa (local.get {}) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096)))",
+            bits
+        ),
+        "format the float the way PHP prints it",
+    );
+    ctx.fb
+        .ins("i64.extend_i32_u", "widen the formatted length");
+    ctx.fb.ins(
+        "call $__rt_str_persist",
+        "persist formatted PHP string before scratch reuse",
+    );
+    store_result(ctx, inst)
+}
+
 /// Pushes one canonical i64 boolean for an integer-backed EIR value.
 fn emit_normalized_bool(ctx: &mut FnCtx, value: ValueId) -> Result<()> {
     ctx.emit_load_value(value)?;
@@ -1690,6 +1719,11 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // A string conversion of a statically known object is PHP's `__toString`, and the EIR
     // already carries the class, so it lowers to an ordinary direct call rather than any
     // dispatch. The callee's `(ptr i32, len i64)` result IS this backend's string storage.
+    // A float reaching a string is the same rendering `FToStr` performs; routing it here keeps
+    // `(string) $f` and `"$f"` byte-identical.
+    if source.ir_type == IrType::F64 && target == IrType::Str {
+        return lower_float_to_string(ctx, inst);
+    }
     if source.ir_type == IrType::Heap(IrHeapKind::Object) && target == IrType::Str {
         if let PhpType::Object(class_name) = source.php_type.clone() {
             if emit_object_to_string(ctx, value, &class_name)? {
@@ -2822,6 +2856,9 @@ fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb.ins("call $__rt_echo_str", "echo the converted string");
             Ok(())
         }
+        // A `void` method call still has an EXPRESSION value in PHP, and that value is null,
+        // which `echo` renders as nothing at all.
+        PhpType::Void => Ok(()),
         other => Err(WasmError::Unsupported(format!("echo of {:?}", other))),
     }
 }

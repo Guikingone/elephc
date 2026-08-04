@@ -1556,6 +1556,11 @@ fn cast_shape_issue(
         (IrType::I64, IrType::F64) => {
             source_php == PhpType::Int && result_php == PhpType::Float
         }
+        // `(string) $float` renders through the same `__rt_ftoa` a float in a string context
+        // uses, so the two spellings cannot disagree.
+        (IrType::F64, IrType::Str) => {
+            source_php == PhpType::Float && result_php == PhpType::Str
+        }
         // Only the explicit `(int)` cast is admitted: the implicit coercion is
         // rejected above because its diagnostics differ from this one.
         (IrType::F64, IrType::I64) => {
@@ -5886,6 +5891,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::CatchCurrent
         | Op::CatchBind
         | Op::ReleaseLocalSlot
+        | Op::FToStr
         | Op::Nop => true,
         Op::ConstClassName
         | Op::ConstEnumCase
@@ -5907,7 +5913,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::TypePredicate
         | Op::IsEmpty
         | Op::FToI
-        | Op::FToStr
+
         | Op::BoolToStr
         | Op::StrToI
         | Op::StrToF
