@@ -428,6 +428,7 @@ pub enum RuntimeFnId {
     Strrpos,
     Strstr,
     Substr,
+    SubstrCount,
     SubstrReplace,
     Trim,
     Ucfirst,
@@ -696,9 +697,7 @@ impl RuntimeFnId {
             RuntimeFnId::Log2 |
             RuntimeFnId::Long2ip |
             RuntimeFnId::Ltrim |
-            RuntimeFnId::Max |
             RuntimeFnId::Md5 |
-            RuntimeFnId::Min |
             RuntimeFnId::NumberFormat |
             RuntimeFnId::Ord |
             RuntimeFnId::Pi |
@@ -733,7 +732,9 @@ impl RuntimeFnId {
             // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
             // empty separator, `str_pad()` empty pad string or bad pad type,
             // `str_repeat()` negative count, `str_split()` non-positive length,
-            // `wordwrap()` empty break or zero cutting width), so they must not be treated
+            // `substr_count()` empty needle or out-of-subject offset/length,
+            // `wordwrap()` empty break or zero cutting width, `min()`/`max()` over an
+            // empty array), so they must not be treated
             // as removable pure calls: dead-code elimination would drop the diagnostic, and
             // the try-prefix hoist would move the call out of the `try` that must catch it.
             RuntimeFnId::ArrayChunk
@@ -741,9 +742,12 @@ impl RuntimeFnId {
             | RuntimeFnId::ArrayPad
             | RuntimeFnId::Clamp
             | RuntimeFnId::Explode
+            | RuntimeFnId::Max
+            | RuntimeFnId::Min
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrRepeat
             | RuntimeFnId::StrSplit
+            | RuntimeFnId::SubstrCount
             | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
@@ -1508,6 +1512,7 @@ impl RuntimeFnId {
             RuntimeFnId::Strrpos => "strrpos",
             RuntimeFnId::Strstr => "strstr",
             RuntimeFnId::Substr => "substr",
+            RuntimeFnId::SubstrCount => "substr_count",
             RuntimeFnId::SubstrReplace => "substr_replace",
             RuntimeFnId::Trim => "trim",
             RuntimeFnId::Ucfirst => "ucfirst",

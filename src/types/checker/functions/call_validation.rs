@@ -130,10 +130,16 @@ impl Checker {
             CallArgPlanError::SpreadAfterNamed { span } => {
                 spread_after_named_error(span, callee_desc)
             }
-            other => CompileError::new(
-                crate::span::Span::dummy(),
-                &format!("{} has invalid arguments: {:?}", callee_desc, other),
-            ),
+            // The rule only reports `SpreadAfterNamed`; the remaining variants
+            // need a signature to plan against and cannot originate here. Keep
+            // the match exhaustive so a future rule still reports a real span.
+            CallArgPlanError::UnknownNamed { span, .. }
+            | CallArgPlanError::Duplicate { span, .. }
+            | CallArgPlanError::PositionalAfterNamed { span }
+            | CallArgPlanError::PositionalAfterSpread { span }
+            | CallArgPlanError::MissingRequired { span, .. } => {
+                CompileError::new(span, &format!("{} has invalid arguments", callee_desc))
+            }
         })
     }
 

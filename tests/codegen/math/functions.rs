@@ -490,7 +490,9 @@ var_dump(min($n, 5), max($n, 5));
 }
 
 /// Verifies an empty array raises PHP's catchable `ValueError` with php-src's exact
-/// message, for both `min()` and `max()` and for a literal and a variable.
+/// message, for both `min()` and `max()` and for a literal and a variable. The third case
+/// discards the result: `min`/`max` are modeled as `MAY_THROW`, so dead-code elimination
+/// must not drop the call and with it the diagnostic.
 #[test]
 fn test_min_max_empty_array_throws_value_error() {
     let out = compile_and_run(
@@ -498,11 +500,13 @@ fn test_min_max_empty_array_throws_value_error() {
 try { var_dump(min([])); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
 $empty = [];
 try { var_dump(max($empty)); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+try { min([]); } catch (ValueError $e) { echo "discarded: ", $e->getMessage(), "\n"; }
 "#,
     );
     assert_eq!(
         out,
         "ValueError: min(): Argument #1 ($value) must contain at least one element\n\
-         ValueError: max(): Argument #1 ($value) must contain at least one element\n"
+         ValueError: max(): Argument #1 ($value) must contain at least one element\n\
+         discarded: min(): Argument #1 ($value) must contain at least one element\n"
     );
 }

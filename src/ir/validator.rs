@@ -329,6 +329,9 @@ fn validate_instruction_immediate(
         MixedNumericBinop => require_immediate(inst_id, inst, "mixed numeric op", |imm| {
             matches!(imm, Imm::MixedNumericOp(_))
         }),
+        StrIncDec => require_immediate(inst_id, inst, "increment delta", |imm| {
+            matches!(imm, Imm::I64(1) | Imm::I64(-1))
+        }),
         Cast => require_immediate(inst_id, inst, "cast target", |imm| {
             matches!(imm, Imm::CastTarget(_))
         }),
@@ -423,6 +426,9 @@ fn validate_opcode_rules(
         }
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),
         MixedNumericBinop => check_count(inst_id, inst, 2, "2"),
+        // The operand is either a concrete `Str` payload or a boxed Mixed cell, so only
+        // the arity is pinned here; the backend dispatches on the operand's EIR type.
+        StrIncDec => check_count(inst_id, inst, 1, "1"),
         INeg | IBitNot => check_unary(function, inst_id, inst, IrType::I64, "I64"),
         FNeg => check_unary(function, inst_id, inst, IrType::F64, "F64"),
         ICmp => check_binary(function, inst_id, inst, IrType::I64, "I64"),

@@ -293,6 +293,7 @@ pub enum Op {
     FPow,
     FNeg,
     MixedNumericBinop,
+    StrIncDec,
     ICmp,
     FCmp,
     StrEq,
@@ -644,6 +645,10 @@ impl Op {
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
+            // `++`/`--` on a string reads the operand's payload, may write the shared
+            // concat scratch while building the carried result, and always allocates the
+            // boxed Mixed cell the new value is returned in.
+            StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
             IterCurrentValueRef | IterNext | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
@@ -792,6 +797,7 @@ impl Op {
             FPow => "fpow",
             FNeg => "fneg",
             MixedNumericBinop => "mixed_numeric_binop",
+            StrIncDec => "str_inc_dec",
             ICmp => "icmp",
             FCmp => "fcmp",
             StrEq => "str_eq",

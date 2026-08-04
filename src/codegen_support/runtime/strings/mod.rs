@@ -43,6 +43,7 @@ mod implode_bool;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
+mod substr_count;
 mod substr_replace;
 mod str_pad;
 mod str_split;
@@ -154,6 +155,8 @@ pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
 /// Emit case-insensitive string replace.
+pub use substr_count::emit_substr_count;
+/// Emit the non-overlapping substring occurrence counter.
 pub use substr_replace::emit_substr_replace;
 /// Emit substring replace helper.
 pub use str_pad::emit_str_pad;

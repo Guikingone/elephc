@@ -243,18 +243,24 @@ pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
-/// Lowers `implode(glue, array)` by selecting the string or integer array helper.
+/// Lowers `implode(glue, array)` / `join(array)` by selecting the array-element helper.
+///
+/// The typed target is shared by both PHP names, so the operand roles are derived from the
+/// argument count rather than the source spelling: a single operand is the ARRAY and the glue
+/// is the empty string (`join(["a","b"]) === "ab"`), while two operands keep the ordinary
+/// `(glue, array)` order. The reversed PHP 7 order was removed in PHP 8.0 and is not accepted.
 pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.len() != 2 {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
-            "implode expected 2 args, got {}",
+            "implode expected 1 or 2 args, got {}",
             inst.operands.len()
         )));
     }
-    let runtime_label = implode_runtime_label(ctx, inst)?;
+    let array_index = inst.operands.len() - 1;
+    let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_implode_aarch64(ctx, inst)?,
-        Arch::X86_64 => lower_implode_x86_64(ctx, inst)?,
+        Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index)?,
+        Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
     }
     abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
@@ -728,6 +734,18 @@ const WORDWRAP_ZERO_WIDTH_CUT_MESSAGE: &str =
 const EXPLODE_EMPTY_SEPARATOR_MESSAGE: &str =
     "explode(): Argument #1 ($separator) must not be empty";
 
+/// php-src's verbatim `ValueError` wording for `substr_count()` with an empty `$needle`.
+const SUBSTR_COUNT_EMPTY_NEEDLE_MESSAGE: &str =
+    "substr_count(): Argument #2 ($needle) must not be empty";
+
+/// php-src's verbatim `ValueError` wording for a `substr_count()` `$offset` outside the subject.
+const SUBSTR_COUNT_OFFSET_OUT_OF_RANGE_MESSAGE: &str =
+    "substr_count(): Argument #3 ($offset) must be contained in argument #1 ($haystack)";
+
+/// php-src's verbatim `ValueError` wording for a `substr_count()` `$length` outside the subject.
+const SUBSTR_COUNT_LENGTH_OUT_OF_RANGE_MESSAGE: &str =
+    "substr_count(): Argument #4 ($length) must be contained in argument #1 ($haystack)";
+
 /// Parses the conversion categories consumed by the runtime sprintf scanner, indexed by the
 /// argument position each conversion consumes.
 ///
@@ -921,6 +939,240 @@ pub(crate) fn lower_substr_replace(ctx: &mut FunctionContext<'_>, inst: &Instruc
     }
     abi::emit_call_label(ctx.emitter, "__rt_substr_replace");
     store_if_result(ctx, inst)
+}
+
+/// Lowers `substr_count(haystack, needle, offset?, length?)` through the shared counter.
+///
+/// `$offset`/`$length` are normalized here rather than inside `__rt_substr_count` because
+/// every out-of-range value is a catchable `ValueError` in reference PHP, and only the
+/// backend can emit a throw the surrounding `try` will see. The helper therefore receives a
+/// window that is already known to sit inside the subject.
+pub(crate) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.len() < 2 || inst.operands.len() > 4 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "substr_count expected 2 to 4 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    let has_length = substr_count_has_length(ctx, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_substr_count_aarch64(ctx, inst, has_length)?,
+        Arch::X86_64 => lower_substr_count_x86_64(ctx, inst, has_length)?,
+    }
+    emit_substr_count_argument_guards(ctx, has_length);
+    abi::emit_call_label(ctx.emitter, "__rt_substr_count");
+    store_if_result(ctx, inst)
+}
+
+/// Reports whether `substr_count()` was given a `$length` that actually bounds the window.
+///
+/// PHP's default is `null`, meaning "to the end of the subject", and an explicitly written
+/// `null` behaves identically. A statically-null operand (checker type `Void`/`Never`) is
+/// therefore treated exactly like an omitted argument instead of being coerced to `0`, which
+/// would have counted matches inside an empty window.
+fn substr_count_has_length(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    let Some(length) = inst.operands.get(3) else {
+        return Ok(false);
+    };
+    Ok(!matches!(
+        ctx.value_php_type(*length)?.codegen_repr(),
+        PhpType::Void | PhpType::Never
+    ))
+}
+
+/// Materializes AArch64 `substr_count()` arguments into the counter's ABI registers.
+///
+/// Leaves `x1`/`x2` = subject, `x3`/`x4` = needle, `x5` = raw `$offset`, and `x6` = raw
+/// `$length` when one was supplied. The guards that follow turn the subject plus the raw
+/// offset/length pair into the window the runtime helper scans.
+fn lower_substr_count_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    has_length: bool,
+) -> Result<()> {
+    let haystack = expect_operand(inst, 0)?;
+    let needle = expect_operand(inst, 1)?;
+    load_value_as_string_to_regs(ctx, haystack, "substr_count", "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the subject string while materializing the remaining arguments
+    load_value_as_string_to_regs(ctx, needle, "substr_count", "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the needle string while materializing the window bounds
+    if inst.operands.len() >= 3 {
+        let offset = expect_operand(inst, 2)?;
+        load_as_int(ctx, offset, "substr_count offset")?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+    }
+    abi::emit_push_reg(ctx.emitter, "x0");
+    if has_length {
+        let length = expect_operand(inst, 3)?;
+        load_as_int(ctx, length, "substr_count length")?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+    }
+    ctx.emitter.instruction("mov x6, x0");                                      // park the raw window length until the subject length is known
+    abi::emit_pop_reg(ctx.emitter, "x5");
+    ctx.emitter.instruction("ldp x3, x4, [sp], #16");                           // restore the needle into the secondary runtime string argument
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the subject into the primary runtime string argument
+    Ok(())
+}
+
+/// Materializes x86_64 `substr_count()` arguments into the counter's ABI registers.
+///
+/// Leaves `rdi`/`rsi` = subject, `rdx`/`rcx` = needle, `r8` = raw `$offset`, and `r9` = raw
+/// `$length` when one was supplied, mirroring the AArch64 emitter's register roles.
+fn lower_substr_count_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    has_length: bool,
+) -> Result<()> {
+    let haystack = expect_operand(inst, 0)?;
+    let needle = expect_operand(inst, 1)?;
+    load_value_as_string_to_regs(ctx, haystack, "substr_count", "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    load_value_as_string_to_regs(ctx, needle, "substr_count", "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    if inst.operands.len() >= 3 {
+        let offset = expect_operand(inst, 2)?;
+        load_as_int(ctx, offset, "substr_count offset")?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+    }
+    abi::emit_push_reg(ctx.emitter, "rax");
+    if has_length {
+        let length = expect_operand(inst, 3)?;
+        load_as_int(ctx, length, "substr_count length")?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+    }
+    ctx.emitter.instruction("mov r9, rax");                                     // park the raw window length until the subject length is known
+    abi::emit_pop_reg(ctx.emitter, "r8");
+    abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+    Ok(())
+}
+
+/// Validates and normalizes the `substr_count()` window, raising PHP's `ValueError`s.
+///
+/// php-src checks in exactly this order: the empty `$needle` first, then `$offset` (negative
+/// values count back from the subject end and must not underflow it, positive values must not
+/// pass its end), then `$length` (negative values are measured back from the subject end, so
+/// they are added to the bytes remaining after `$offset`, and neither direction may leave the
+/// subject). Afterwards the subject registers hold the window the counter scans.
+fn emit_substr_count_argument_guards(ctx: &mut FunctionContext<'_>, has_length: bool) {
+    emit_substr_count_needle_guard(ctx);
+    emit_substr_count_offset_guard(ctx);
+    emit_substr_count_length_guard(ctx, has_length);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("add x1, x1, x5");                          // slide the subject pointer to the start of the counted window
+            ctx.emitter.instruction("mov x2, x6");                              // pass the resolved window length to the counter
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add rdi, r8");                             // slide the subject pointer to the start of the counted window
+            ctx.emitter.instruction("mov rsi, r9");                             // pass the resolved window length to the counter
+        }
+    }
+}
+
+/// Rejects the empty `substr_count()` needle reference PHP refuses to count.
+fn emit_substr_count_needle_guard(ctx: &mut FunctionContext<'_>) {
+    let ok_label = ctx.next_label("substr_count_needle_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x4, {}", ok_label));         // a non-empty needle can be counted
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rcx, rcx");                           // is the needle zero-length?
+            ctx.emitter.instruction(&format!("jnz {}", ok_label));              // a non-empty needle can be counted
+        }
+    }
+    super::super::exceptions::emit_value_error(ctx, SUBSTR_COUNT_EMPTY_NEEDLE_MESSAGE);
+    ctx.emitter.label(&ok_label);
+}
+
+/// Normalizes `substr_count()`'s `$offset` and rejects one that leaves the subject.
+fn emit_substr_count_offset_guard(ctx: &mut FunctionContext<'_>) {
+    let non_negative_label = ctx.next_label("substr_count_offset_non_negative");
+    let bad_label = ctx.next_label("substr_count_offset_bad");
+    let ok_label = ctx.next_label("substr_count_offset_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x5, #0");                              // is the requested offset measured from the subject end?
+            ctx.emitter.instruction(&format!("b.ge {}", non_negative_label));   // a non-negative offset is already absolute
+            ctx.emitter.instruction("add x5, x5, x2");                          // resolve a negative offset against the subject length
+            ctx.emitter.instruction("cmp x5, #0");                              // did the negative offset reach past the subject start?
+            ctx.emitter.instruction(&format!("b.ge {}", ok_label));             // an offset still inside the subject is usable
+            ctx.emitter.instruction(&format!("b {}", bad_label));               // an offset before the subject start is rejected
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp x5, x2");                              // compare the absolute offset against the subject length
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // an offset at or before the subject end is usable
+            ctx.emitter.label(&bad_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp r8, 0");                               // is the requested offset measured from the subject end?
+            ctx.emitter.instruction(&format!("jge {}", non_negative_label));    // a non-negative offset is already absolute
+            ctx.emitter.instruction("add r8, rsi");                             // resolve a negative offset against the subject length
+            ctx.emitter.instruction("cmp r8, 0");                               // did the negative offset reach past the subject start?
+            ctx.emitter.instruction(&format!("jge {}", ok_label));              // an offset still inside the subject is usable
+            ctx.emitter.instruction(&format!("jmp {}", bad_label));             // an offset before the subject start is rejected
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp r8, rsi");                             // compare the absolute offset against the subject length
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // an offset at or before the subject end is usable
+            ctx.emitter.label(&bad_label);
+        }
+    }
+    super::super::exceptions::emit_value_error(ctx, SUBSTR_COUNT_OFFSET_OUT_OF_RANGE_MESSAGE);
+    ctx.emitter.label(&ok_label);
+}
+
+/// Resolves `substr_count()`'s `$length` into a window size and rejects out-of-subject values.
+///
+/// With no explicit `$length` the window simply runs to the subject end. Otherwise a negative
+/// length is measured back from that end, which is why it is added to the remaining byte count
+/// rather than to the offset.
+fn emit_substr_count_length_guard(ctx: &mut FunctionContext<'_>, has_length: bool) {
+    let non_negative_label = ctx.next_label("substr_count_length_non_negative");
+    let bad_label = ctx.next_label("substr_count_length_bad");
+    let ok_label = ctx.next_label("substr_count_length_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub x9, x2, x5");                          // compute the bytes remaining after the resolved offset
+            if !has_length {
+                ctx.emitter.instruction("mov x6, x9");                          // an omitted or null length runs to the subject end
+                return;
+            }
+            ctx.emitter.instruction("cmp x6, #0");                              // is the requested length measured back from the subject end?
+            ctx.emitter.instruction(&format!("b.ge {}", non_negative_label));   // a non-negative length is already a window size
+            ctx.emitter.instruction("add x6, x6, x9");                          // resolve a negative length against the remaining bytes
+            ctx.emitter.instruction("cmp x6, #0");                              // did the negative length cross back before the offset?
+            ctx.emitter.instruction(&format!("b.ge {}", ok_label));             // a window that still has a non-negative size is usable
+            ctx.emitter.instruction(&format!("b {}", bad_label));               // a window that ends before it starts is rejected
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp x6, x9");                              // compare the requested window against the remaining bytes
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // a window inside the subject is usable
+            ctx.emitter.label(&bad_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, rsi");                            // copy the subject length before deriving the remaining bytes
+            ctx.emitter.instruction("sub r10, r8");                             // compute the bytes remaining after the resolved offset
+            if !has_length {
+                ctx.emitter.instruction("mov r9, r10");                         // an omitted or null length runs to the subject end
+                return;
+            }
+            ctx.emitter.instruction("cmp r9, 0");                               // is the requested length measured back from the subject end?
+            ctx.emitter.instruction(&format!("jge {}", non_negative_label));    // a non-negative length is already a window size
+            ctx.emitter.instruction("add r9, r10");                             // resolve a negative length against the remaining bytes
+            ctx.emitter.instruction("cmp r9, 0");                               // did the negative length cross back before the offset?
+            ctx.emitter.instruction(&format!("jge {}", ok_label));              // a window that still has a non-negative size is usable
+            ctx.emitter.instruction(&format!("jmp {}", bad_label));             // a window that ends before it starts is rejected
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp r9, r10");                             // compare the requested window against the remaining bytes
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // a window inside the subject is usable
+            ctx.emitter.label(&bad_label);
+        }
+    }
+    super::super::exceptions::emit_value_error(ctx, SUBSTR_COUNT_LENGTH_OUT_OF_RANGE_MESSAGE);
+    ctx.emitter.label(&ok_label);
 }
 
 /// Lowers `str_repeat(string, times)` through the shared runtime helper.
@@ -2635,8 +2887,15 @@ fn materialize_str_split_length_x86_64(
 }
 
 /// Returns the runtime helper label required for an `implode()` array operand.
-fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<&'static str> {
-    let array = expect_operand(inst, 1)?;
+///
+/// `array_index` is 1 for the ordinary `(glue, array)` call and 0 for the single-argument
+/// `join($array)` form, whose only operand is the array itself.
+fn implode_runtime_label(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<&'static str> {
+    let array = expect_operand(inst, array_index)?;
     match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
             // PHP stringifies bool elements as "1"/"" — NOT as the "1"/"0" that
@@ -2644,7 +2903,13 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
             // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
             PhpType::Bool => Ok("__rt_implode_bool"),
             PhpType::Int => Ok("__rt_implode_int"),
-            PhpType::Str | PhpType::Mixed | PhpType::Never => Ok("__rt_implode"),
+            // An empty array literal carries an uninhabited element type (`Never`, or
+            // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
+            // dereference an element, so the generic string helper is the safe choice and
+            // keeps `implode("", [])` / `join([])` from being rejected at lowering time.
+            PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => {
+                Ok("__rt_implode")
+            }
             other => Err(CodegenIrError::unsupported(format!(
                 "implode array element PHP type {:?}",
                 other
@@ -2659,10 +2924,23 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
 }
 
 /// Materializes AArch64 glue and array arguments for `implode()`.
-fn lower_implode_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let glue = expect_string_operand(ctx, inst, 0, "implode")?;
-    let array = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(glue, "x1", "x2")?;
+///
+/// `array_index` is 0 for the single-argument `join($array)` form, which joins with an empty
+/// separator, and 1 for the ordinary `(glue, array)` call.
+fn lower_implode_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<()> {
+    let array = expect_operand(inst, array_index)?;
+    if array_index == 0 {
+        let (label, _) = ctx.data.add_string(b"");
+        abi::emit_symbol_address(ctx.emitter, "x1", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
+    } else {
+        let glue = expect_operand(inst, 0)?;
+        load_value_as_string_to_regs(ctx, glue, "implode", "x1", "x2")?;
+    }
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the glue string while materializing the array argument
     load_implode_array_aarch64(ctx, array)?;
     ctx.emitter.instruction("mov x3, x0");                                      // pass the indexed array pointer as the third implode argument
@@ -2671,10 +2949,23 @@ fn lower_implode_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
 }
 
 /// Materializes x86_64 glue and array arguments for `implode()`.
-fn lower_implode_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let glue = expect_string_operand(ctx, inst, 0, "implode")?;
-    let array = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(glue, "rax", "rdx")?;
+///
+/// `array_index` follows the same convention as the AArch64 emitter: 0 selects the
+/// single-argument `join($array)` form with an empty separator, 1 the `(glue, array)` call.
+fn lower_implode_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<()> {
+    let array = expect_operand(inst, array_index)?;
+    if array_index == 0 {
+        let (label, _) = ctx.data.add_string(b"");
+        abi::emit_symbol_address(ctx.emitter, "rax", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", 0);
+    } else {
+        let glue = expect_operand(inst, 0)?;
+        load_value_as_string_to_regs(ctx, glue, "implode", "rax", "rdx")?;
+    }
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_implode_array_x86_64(ctx, array)?;
     ctx.emitter.instruction("mov rdx, rax");                                    // pass the indexed array pointer as the third implode argument
