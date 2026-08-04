@@ -413,5 +413,6 @@ fn mixed_numeric_helper(op: MixedNumericOp) -> &'static str {
         MixedNumericOp::Add => "__rt_mixed_numeric_add",
         MixedNumericOp::Sub => "__rt_mixed_numeric_sub",
         MixedNumericOp::Mul => "__rt_mixed_numeric_mul",
+        MixedNumericOp::Pow => "__rt_mixed_numeric_pow",
     }
 }

@@ -433,3 +433,19 @@ echo abs(-42), '|', abs(intdiv(-7, $n)), '|', abs(-2.5);
          int(9223372036854775807)\n42|7|2.5"
     );
 }
+
+/// Verifies `fmod()` keeps the sign of the dividend, including the negative zero PHP
+/// prints as `-0`. Computing it as `x - trunc(x / y) * y` silently produces `+0.0`
+/// instead, which is why both targets call libc `fmod`. `* $argc` keeps the operands on
+/// the runtime path.
+#[test]
+fn test_fmod_preserves_negative_zero_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+echo fmod(-7.5 * $n, 2.5), "|", fmod(7.5 * $n, 2.5), "|", fmod(-5.5 * $n, 2.0), "|", fmod(5.5 * $n, 2.0), "|", fmod(1.0 * $n, 0.0), "|";
+var_dump(fmod(-7.5 * $n, 2.5));
+"#,
+    );
+    assert_eq!(out, "-0|0|-1.5|1.5|NAN|float(-0)\n");
+}
