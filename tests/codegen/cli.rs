@@ -12174,3 +12174,73 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies reading an element out of an `array<mixed>`.
+///
+/// The historical refusal was that PHP answers NULL for a missing index while the EIR types
+/// the result non-null — true for an `array<int>`, whose element storage has no null. It does
+/// not hold here: the element is already a Mixed cell, so the miss and the hit meet in the same
+/// representation, exactly as the bool and string element arms already do.
+#[test]
+fn test_cli_wasm_reads_an_element_of_a_mixed_array() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_element");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$a = [1, "x", 2.5];
+echo $a[0], "|", $a[1], "|", $a[2], "\n";
+foreach ([0, 1, 2, 5, -1] as $i) { echo "[", $a[$i], "]"; }
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the mixed-array reads to WASM");
+    assert!(
+        output.status.success(),
+        "mixed-array read compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the mixed-array reads under Node");
+    assert!(run.status.success());
+    // A missing or negative index echoes nothing, which is what `echo null` prints.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!("1|x|2.5\n", "[1][x][2.5][][]\n"),
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

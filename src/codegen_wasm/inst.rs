@@ -3207,6 +3207,14 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb
                 .ins("call $__rt_array_get_mixed_bool", "indexed array get (boxed bool|null)");
         }
+        (PhpType::Mixed, WasmRepr::Ptr(_)) => {
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(index)?;
+            ctx.fb.ins(
+                "call $__rt_array_get_mixed_cell",
+                "indexed array get (stored cell, or boxed null)",
+            );
+        }
         (PhpType::Str, WasmRepr::Ptr(_)) => {
             ctx.emit_load_value(array)?;
             ctx.emit_load_value(index)?;

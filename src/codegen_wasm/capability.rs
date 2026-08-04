@@ -2439,7 +2439,9 @@ fn array_get_shape_issue(
         PhpType::Int => {
             inst.result_type == IrType::TaggedScalar && result_php == PhpType::TaggedScalar
         }
-        PhpType::Bool | PhpType::Str => {
+        // An element that is ALREADY a Mixed cell meets the missing-index null in the same
+        // representation: the miss boxes null, the hit hands back the stored cell.
+        PhpType::Bool | PhpType::Str | PhpType::Mixed => {
             inst.result_type == IrType::Heap(IrHeapKind::Mixed) && result_php == PhpType::Mixed
         }
         _ => false,
@@ -2452,7 +2454,7 @@ fn array_get_shape_issue(
     }
     let ownership_is_supported = match &element_type {
         PhpType::Int => inst.result_ownership == Ownership::NonHeap,
-        PhpType::Bool | PhpType::Str => matches!(
+        PhpType::Bool | PhpType::Str | PhpType::Mixed => matches!(
             inst.result_ownership,
             Ownership::Owned | Ownership::MaybeOwned
         ),

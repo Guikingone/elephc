@@ -40,6 +40,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_PUSH_PTR);
     wm.add_raw_func(RT_ARRAY_GET_OBJECT);
     wm.add_raw_func(RT_ARRAY_GET_FLOAT);
+    wm.add_raw_func(RT_ARRAY_GET_MIXED_CELL);
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
     wm.add_raw_func(RT_ARRAY_SLICE);
@@ -495,6 +496,28 @@ const RT_ARRAY_GET_MIXED_STR: &str = r#"(func $__rt_array_get_mixed_str (param $
 /// `__rt_mixed_from_value` and transfers that ownership to the array, whose
 /// `__rt_array_free_deep` (reached through `__rt_decref_any` kind-2) releases every
 /// cell. Returns the (possibly new) array pointer.
+/// `__rt_array_get_mixed_cell`: reads one element of an `array<mixed>`.
+///
+/// The slot already holds a Mixed cell, so the miss and the hit meet in the same
+/// representation: a negative or out-of-range index answers a freshly boxed null, exactly what
+/// PHP reads for an absent key, and a hit hands back the STORED cell. The array owns its cells
+/// — `__rt_array_push_mixed` stores each one borrowed — so the read takes a reference of its
+/// own for the caller to release.
+const RT_ARRAY_GET_MIXED_CELL: &str = r#"(func $__rt_array_get_mixed_cell (param $array i32) (param $index i64) (result i32)
+  (local $len i64)
+  (local $cell i32)
+  (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (local.set $len (i64.load (local.get $array)))            ;; length
+  (if (i64.ge_u (local.get $index) (local.get $len))        ;; out of bounds -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (local.set $cell (i32.wrap_i64 (i64.load                  ;; cell pointer at slot+0
+    (i32.add (i32.add (local.get $array) (i32.const 24))
+             (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 16)))))))
+  (call $__rt_incref (local.get $cell))                     ;; the caller owns what it reads
+  (local.get $cell))
+"#;
+
 const RT_ARRAY_PUSH_MIXED: &str = r#"(func $__rt_array_push_mixed (param $array i32) (param $cell i32) (result i32)
   (local $alen i64)
   (local $cap i64)
