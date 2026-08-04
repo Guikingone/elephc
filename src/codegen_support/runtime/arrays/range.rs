@@ -7,9 +7,14 @@
 //!
 //! Key details:
 //! - Range allocation must size the output array before filling so capacity and heap accounting stay consistent.
+//! - The inclusive element count `|end - start| + 1` is computed in signed 64-bit arithmetic and can
+//!   overflow for wide intervals. A real count is always >= 1, so a computed count <= 0 means the
+//!   interval wrapped and the range is rejected instead of allocating a mis-sized array.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::data::RANGE_SIZE_MSG;
 
 /// Dispatches to the architecture-specific range-emitter implementation.
 pub fn emit_range(emitter: &mut Emitter) {
@@ -47,6 +52,8 @@ pub fn emit_range(emitter: &mut Emitter) {
 
     // -- allocate array --
     emitter.label("__rt_range_alloc");
+    emitter.instruction("cmp x2, #0");                                          // an inclusive range always holds at least one element
+    emitter.instruction("b.le __rt_range_size_fail");                           // a non-positive count means end - start + 1 overflowed
     emitter.instruction("str x2, [sp, #16]");                                   // save count
     emitter.instruction("str x7, [sp, #8]");                                    // save step (reuse end slot, no longer needed)
     emitter.instruction("mov x0, x2");                                          // x0 = capacity = count
@@ -79,6 +86,15 @@ pub fn emit_range(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = array [start..end]
+
+    // -- fatal error: the inclusive range does not fit in an array --
+    emitter.label("__rt_range_size_fail");
+    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    abi::emit_symbol_address(emitter, "x1", "_range_size_err_msg");
+    emitter.instruction(&format!("mov x2, #{}", RANGE_SIZE_MSG.len()));         // pass the exact range-size diagnostic byte count
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #1");                                          // exit code 1
+    emitter.syscall(1);
 }
 
 /// Emits the x86_64 Linux implementation of `__rt_range` for both ascending and descending integer ranges.
@@ -112,6 +128,8 @@ fn emit_range_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], -1");                        // preserve the descending traversal step so the fill loop can advance by -1
     emitter.label("__rt_range_alloc_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the final integer range length as the destination indexed-array capacity to the constructor
+    emitter.instruction("cmp rdi, 0");                                          // an inclusive range always holds at least one element
+    emitter.instruction("jle __rt_range_size_fail");                            // a non-positive count means end - start + 1 overflowed
     emitter.instruction("mov rsi, 8");                                          // use 8-byte payload slots because the range helper produces an indexed array of integers
     emitter.instruction("call __rt_array_new");                                 // allocate the destination integer range array through the shared x86_64 indexed-array constructor
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the destination integer range array pointer while the fill loop writes payload slots
@@ -134,4 +152,15 @@ fn emit_range_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 40");                                         // release the range-construction spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the constructed integer range array pointer in rax
+
+    // -- fatal error: the inclusive range does not fit in an array --
+    emitter.label("__rt_range_size_fail");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr for the range-size fatal error message
+    abi::emit_symbol_address(emitter, "rsi", "_range_size_err_msg");
+    emitter.instruction(&format!("mov edx, {}", RANGE_SIZE_MSG.len()));         // pass the exact range-size diagnostic byte count
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");                                             // print the fatal range-size message to stderr
+    emitter.instruction("mov edi, 1");                                          // exit code 1 for an unrepresentable range size
+    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("syscall");                                             // terminate the process after reporting the range-size failure
 }
