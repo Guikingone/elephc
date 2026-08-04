@@ -399,6 +399,26 @@ fn record_static_property_callable_sig(
         }
         _ => value,
     };
+    // `\Closure::bind(<closure>, $newThis, $scope)` / `\Closure::fromCallable(<closure>)` keep the
+    // wrapped closure's parameters — rebinding `$this` or a scope changes neither the parameter
+    // list nor which parameters are by-reference. Symfony writes exactly
+    // `self::$mergeByLifetime ??= \Closure::bind(static function (…, &$expiredIds, …) {…}, null,
+    // CacheItem::class)`, so the wrapper has to be seen through for the by-reference parameter to
+    // register.
+    //
+    // ⚠️ The signature is read STRUCTURALLY here, never through `resolve_expr_callable_sig`.
+    // Resolving a closure node CHECKS ITS BODY, and a `Closure::bind` body is written against the
+    // scope it is about to be bound INTO — re-checking it here, outside that scope, turns the very
+    // protected accesses `Closure::bind` exists to grant into errors. Routing this through the
+    // general resolver was measured at ledger 68 -> 98 (ten `CacheItem::$expiry`/`$key` access
+    // errors plus cascades) before being backed out.
+    let bound = closure_behind_bind_wrapper(source).unwrap_or(source);
+    if let Some(sig) = structural_closure_by_ref_sig(bound) {
+        checker
+            .static_property_callable_sigs
+            .insert(format!("{}::${}", declaring_class, property), sig);
+        return Ok(());
+    }
     let Some(sig) = checker.resolve_expr_callable_sig(source, env)? else {
         return Ok(());
     };
@@ -406,6 +426,76 @@ fn record_static_property_callable_sig(
         .static_property_callable_sigs
         .insert(format!("{}::${}", declaring_class, property), sig);
     Ok(())
+}
+
+/// Unwraps `\Closure::bind(<expr>, …)` / `\Closure::fromCallable(<expr>)` to their first argument.
+///
+/// Only a NAMED `Closure` receiver qualifies: `self::`/`static::`/`parent::` inside `Closure` is
+/// not a shape user code writes, and treating them as `Closure` would misread an unrelated class.
+fn closure_behind_bind_wrapper(expr: &Expr) -> Option<&Expr> {
+    let ExprKind::StaticMethodCall { receiver, method, args, .. } = &expr.kind else {
+        return None;
+    };
+    let StaticReceiver::Named(name) = receiver else {
+        return None;
+    };
+    if crate::names::php_symbol_key(name.as_str().trim_start_matches('\\')) != "closure" {
+        return None;
+    }
+    if !matches!(
+        crate::names::php_symbol_key(method).as_str(),
+        "bind" | "fromcallable"
+    ) {
+        return None;
+    }
+    args.first()
+}
+
+/// Builds a by-reference-only signature for a closure LITERAL, straight from its parameter list.
+///
+/// This reads the AST and nothing else: no body check, no type-hint resolution, no diagnostics —
+/// which is the whole point (see the caller). It carries just what
+/// `sig_undefined_by_ref_variable_outputs` consults: `ref_params`, and `declared_params` left all
+/// false so every defined variable is inserted as `Mixed`.
+///
+/// Returns `None` when the expression is not a closure literal, when it has no by-reference
+/// parameter (nothing to record), or when a by-reference parameter carries a TYPE HINT — that last
+/// case would need the declared type inserted verbatim so call validation and the caller's storage
+/// agree, and deriving it needs the resolver this function deliberately avoids.
+fn structural_closure_by_ref_sig(expr: &Expr) -> Option<crate::types::FunctionSig> {
+    let ExprKind::Closure { params, variadic, variadic_by_ref, .. } = &expr.kind else {
+        return None;
+    };
+    let mut names = Vec::with_capacity(params.len());
+    let mut ref_params = Vec::with_capacity(params.len());
+    for (name, type_ann, _default, is_ref) in params {
+        if *is_ref && type_ann.is_some() {
+            return None;
+        }
+        names.push((name.clone(), PhpType::Mixed));
+        ref_params.push(*is_ref);
+    }
+    if let Some(name) = variadic {
+        names.push((name.clone(), PhpType::Array(Box::new(PhpType::Mixed))));
+        ref_params.push(*variadic_by_ref);
+    }
+    if !ref_params.iter().any(|is_ref| *is_ref) {
+        return None;
+    }
+    let count = names.len();
+    Some(crate::types::FunctionSig {
+        params: names,
+        param_type_exprs: vec![None; count],
+        param_attributes: Vec::new(),
+        defaults: vec![None; count],
+        return_type: PhpType::Mixed,
+        declared_return: false,
+        by_ref_return: false,
+        ref_params,
+        declared_params: vec![false; count],
+        variadic: variadic.clone(),
+        deprecation: None,
+    })
 }
 
 fn resolve_static_property_assignment_target(

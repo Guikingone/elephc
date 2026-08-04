@@ -1111,6 +1111,9 @@ fn ensure_static_property_value_supported(
     if property_values::can_unbox_mixed_to_object_property(value_ty, &slot.php_type) {
         return Ok(());
     }
+    if property_values::can_unbox_mixed_to_callable_property(value_ty, &slot.php_type) {
+        return Ok(());
+    }
     Err(CodegenIrError::unsupported(format!(
         "{} assigning PHP type {:?} to {}::${} with PHP type {:?}",
         inst.op.name(),
@@ -1220,6 +1223,9 @@ fn load_static_property_store_value_to_result(
             PhpType::Float => abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float"),
             PhpType::Object(_) => {
                 property_values::emit_mixed_object_for_property_store(ctx)
+            }
+            PhpType::Callable => {
+                property_values::emit_mixed_callable_for_property_store(ctx)
             }
             _ => {}
         }

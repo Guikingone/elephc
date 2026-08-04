@@ -1247,3 +1247,41 @@ echo A::inc(41), "\n";
     );
     assert_eq!(out, "42\n42\n");
 }
+
+/// The full singleton-closure idiom as Symfony writes it: a closure wrapped in `\Closure::bind`,
+/// installed into an untyped static property with `??=`, invoked through a parenthesized callee,
+/// with a BY-REFERENCE parameter that must define the caller's variable.
+///
+/// This is `Cache\Adapter\AbstractAdapter::$mergeByLifetime` verbatim in shape. Three layers had to
+/// line up, and each was invisible until the one before it was fixed:
+///
+/// - the signature must be read THROUGH the `Closure::bind` wrapper, and STRUCTURALLY. Routing it
+///   through `resolve_expr_callable_sig` re-checks the closure body outside the scope it is about
+///   to be bound into, which turns the very protected accesses `Closure::bind` exists to grant into
+///   errors — measured at ledger 68 -> 98 before being backed out.
+/// - `??=` types its value as the union of the slot's null and the closure, so the store faces a
+///   boxed Mixed against a `Callable` slot. The dispatch had no arm for that and would have stored
+///   the box POINTER raw as if it were a descriptor.
+/// - the object unbox beside it cannot be reused: it tests the runtime OBJECT tag and normalizes
+///   everything else to null, so a boxed closure would have become silently null.
+#[test]
+fn test_closure_bind_into_static_property_with_by_ref_parameter_runs() {
+    let out = compile_and_run(
+        r#"<?php
+class A {
+    private static $f;
+    public static function init(): void {
+        self::$f ??= \Closure::bind(static function ($n, &$out) { $out = $n * 2; }, null, A::class);
+    }
+    public static function run(int $n): int { (self::$f)($n, $res); return $res; }
+}
+A::init();
+A::init();
+echo A::run(21), "\n";
+$s = 0;
+for ($i = 0; $i < 4; $i++) { $s += A::run($i); }
+echo $s, "\n";
+"#,
+    );
+    assert_eq!(out, "42\n12\n");
+}
