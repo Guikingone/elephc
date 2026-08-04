@@ -671,6 +671,21 @@ fn test_error_stream_bucket_prepend_wrong_args() {
     );
 }
 
+/// Verifies the arity diagnostic for `stream_bucket_append()` (exactly 2 args).
+#[test]
+fn test_error_stream_bucket_append_wrong_args() {
+    expect_error(
+        "<?php stream_bucket_append(1);",
+        "stream_bucket_append() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies `pfsockopen()` requires a hostname and port and accepts at most five arguments.
+#[test]
+fn test_error_pfsockopen_wrong_args() {
+    expect_error("<?php pfsockopen(\"localhost\");", "pfsockopen() takes 2 to 5 arguments");
+}
+
 // stream_filter_append() with an unknown filter name no longer fails at
 // compile time: unknown built-in names are routed through the user-filter
 // registry (Phase 10 tier 3), and an unregistered name resolves to PHP

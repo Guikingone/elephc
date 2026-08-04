@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Verifies `method_exists()` requires both a class/object and method name.
+#[test]
+fn test_error_method_exists_wrong_args() {
+    expect_error(
+        "<?php method_exists(new stdClass());",
+        "method_exists() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies `property_exists()` requires both a class/object and property name.
+#[test]
+fn test_error_property_exists_wrong_args() {
+    expect_error(
+        "<?php property_exists(new stdClass());",
+        "property_exists() takes exactly 2 arguments",
+    );
+}
+
 /// Verifies the error diagnostic for instanceof self outside class scope.
 #[test]
 fn test_error_instanceof_self_outside_class_scope() {
