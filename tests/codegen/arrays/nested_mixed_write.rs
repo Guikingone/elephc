@@ -398,3 +398,38 @@ foreach ([['x']] as $k => $row) {
     );
     assert_eq!(out, "1");
 }
+
+/// `foreach` over an array whose element type is still `Never` must bind the loop value as `Mixed`.
+///
+/// `Never` is what an empty `[]` literal — or an `array`-hinted parameter no call site specialized —
+/// carries, and it means "nothing written yet", not "uninhabited". Binding the value to `Never` made
+/// it unusable in the body: `DependencyInjection\Definition::setMethodCalls` does
+/// `foreach ($calls as $call) { $this->addMethodCall($call[0], …); }` and was reported as
+/// "Cannot index non-array" on a program `php -n` runs. `Mixed` is what the same element already
+/// reads as through `$calls[$i]`.
+#[test]
+fn test_foreach_over_never_element_binds_value_as_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+class D {
+    private array $calls = [];
+    public function addMethodCall(string $m, array $a = [], bool $r = false): static {
+        $this->calls[] = [$m, $a, $r];
+        return $this;
+    }
+    public function setMethodCalls(array $calls = []): static {
+        $this->calls = [];
+        foreach ($calls as $call) {
+            $this->addMethodCall($call[0], $call[1], $call[2] ?? false);
+        }
+        return $this;
+    }
+    public function total(): int { return count($this->calls); }
+}
+$d = new D();
+$d->setMethodCalls([['m1', ['x'], false], ['m2', [], true]]);
+echo $d->total();
+"#,
+    );
+    assert_eq!(out, "2");
+}

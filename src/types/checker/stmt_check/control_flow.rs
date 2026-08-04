@@ -313,7 +313,18 @@ impl Checker {
                         env.insert(k.clone(), key_ty);
                         self.clear_foreach_callable_metadata(k);
                     }
-                    let value_ty = *elem_ty.clone();
+                    // A `Never` element means "nothing written into this array yet" — what an empty
+                    // `[]` literal, or an `array`-hinted parameter no call site specialized, infers
+                    // to. Binding the loop value to `Never` makes it unusable in the body:
+                    // `foreach ($calls as $call) { $this->addMethodCall($call[0], …); }`
+                    // (`DependencyInjection\Definition::setMethodCalls`) reports "Cannot index
+                    // non-array" on a program PHP runs. `Mixed` is what the same element already
+                    // reads as through `$calls[$i]`.
+                    let value_ty = if matches!(elem_ty.as_ref(), PhpType::Never) {
+                        PhpType::Mixed
+                    } else {
+                        *elem_ty.clone()
+                    };
                     env.insert(value_var.clone(), value_ty.clone());
                     self.update_foreach_callable_metadata(value_var, array, &value_ty);
                 } else if let PhpType::AssocArray { key, value } = &arr_ty {
