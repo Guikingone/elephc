@@ -334,6 +334,10 @@ pub enum RuntimeFnId {
     Sqrt,
     Tan,
     Tanh,
+    ElephcObjectIsEnum,
+    ElephcObjectPropCount,
+    ElephcObjectPropName,
+    ElephcObjectPropValue,
     ElephcPtrIsNull,
     ElephcPtrReadString,
     ElephcPtrWriteString,
@@ -749,7 +753,14 @@ impl RuntimeFnId {
             ),
             RuntimeFnId::GetClass
             | RuntimeFnId::GetParentClass
+            | RuntimeFnId::ElephcObjectIsEnum
+            | RuntimeFnId::ElephcObjectPropCount
+            | RuntimeFnId::ElephcObjectPropName
             | RuntimeFnId::SplObjectId => crate::ir::Effects::READS_HEAP,
+            // Re-boxing a property slot allocates the Mixed cell it hands back.
+            RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
+            ),
             RuntimeFnId::SplObjectHash => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
@@ -1027,6 +1038,11 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArraySlice
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
+                // Every property slot is re-boxed through `__rt_mixed_from_value`,
+                // which persists strings and increfs containers, so the cell handed
+                // back is independently owned and never aliases the source object's
+                // storage — the caller may release it like any other temporary.
+                | RuntimeFnId::ElephcObjectPropValue
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
@@ -1383,6 +1399,10 @@ impl RuntimeFnId {
             RuntimeFnId::Sqrt => "sqrt",
             RuntimeFnId::Tan => "tan",
             RuntimeFnId::Tanh => "tanh",
+            RuntimeFnId::ElephcObjectIsEnum => "__elephc_object_is_enum",
+            RuntimeFnId::ElephcObjectPropCount => "__elephc_object_prop_count",
+            RuntimeFnId::ElephcObjectPropName => "__elephc_object_prop_name",
+            RuntimeFnId::ElephcObjectPropValue => "__elephc_object_prop_value",
             RuntimeFnId::ElephcPtrIsNull => "__elephc_ptr_is_null",
             RuntimeFnId::ElephcPtrReadString => "__elephc_ptr_read_string",
             RuntimeFnId::ElephcPtrWriteString => "__elephc_ptr_write_string",

@@ -38,6 +38,7 @@ mod isset;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
+pub(crate) mod object_props;
 pub(crate) mod output_buffering;
 pub(crate) mod pointers;
 pub(crate) mod regex;

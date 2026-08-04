@@ -18,7 +18,12 @@
 //!   the object tag, the same entry point a nested object reaches, so top-level
 //!   and nested dumps share one renderer. The class name, per-property body and
 //!   `*RECURSION*` guard all come from `codegen_support::runtime::io::
-//!   var_dump_object`. KNOWN DIVERGENCE: no `#id` handle — see that module.
+//!   var_dump_object`. An ENUM case is intercepted inside that shared renderer
+//!   and printed as `enum(E::C)`, so this file needs no enum-specific arm.
+//! - `print_r` of an object works the same way: `__rt_print_r_object` in
+//!   `codegen_support::runtime::objects::print_r_object` owns the header, the
+//!   parenthesized body and the recursion guard, and is reached both from here
+//!   (base indent 0) and from the tag-6 branch of `__rt_print_r_value`.
 
 use crate::codegen::abi;
 use crate::codegen::data_section::DataSection;
@@ -260,6 +265,10 @@ fn emit_print_r_loaded_value(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Res
             emit_write_literal(ctx, b"Array\n");
             Ok(())
         }
+        PhpType::Object(_) => {
+            emit_print_r_object(ctx);
+            Ok(())
+        }
         PhpType::Mixed | PhpType::Union(_) => {
             emit_print_r_mixed(ctx);
             Ok(())
@@ -333,6 +342,27 @@ fn emit_print_r_mixed(ctx: &mut FunctionContext<'_>) {
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_print_r_value");
+}
+
+/// Emits `print_r` output for an object pointer in the integer result register.
+///
+/// Hands the instance to `__rt_print_r_object` with a base indent of 0 — the SAME
+/// entry point a nested object reaches from the array, hash and object walkers, so
+/// a top-level render and a render at depth cannot drift apart. That helper owns
+/// the whole layout: the `ClassName Object` header (or PHP's `ClassName Enum[:t]`
+/// for an enum case), the `(` / `)` lines, the per-property body and the
+/// `*RECURSION*` guard.
+fn emit_print_r_object(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #0");                              // base indent = 0 for the top-level object
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // object pointer → SysV first argument register
+            ctx.emitter.instruction("mov esi, 0");                              // base indent = 0 for the top-level object
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_print_r_object");
 }
 
 /// Emits `var_dump` output for a boxed Mixed payload in the integer result register.
