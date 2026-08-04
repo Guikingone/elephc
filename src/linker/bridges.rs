@@ -13,6 +13,7 @@
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::{Mutex, OnceLock};
 
 use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan};
 
@@ -298,6 +299,35 @@ fn bridge_for_library(name: &str) -> Option<&'static BridgeStaticlib> {
     BRIDGES.iter().find(|bridge| bridge.lib_name == name)
 }
 
+/// Returns whether any file under `directory` was modified after `instant`.
+///
+/// Stops at the first one, so an up-to-date tree costs a full walk and a stale one usually
+/// costs much less. An unreadable entry is skipped rather than treated as newer: this decides
+/// whether to SPAWN CARGO, and a directory elephc cannot read is not evidence of an edit.
+fn any_file_newer_than(directory: &Path, instant: std::time::SystemTime) -> bool {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return false;
+    };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let Ok(metadata) = entry.metadata() else {
+            continue;
+        };
+        // A nested `target/` is this bridge's own build output, never its input.
+        if metadata.is_dir() {
+            if path.file_name().is_some_and(|name| name == "target") {
+                continue;
+            }
+            if any_file_newer_than(&path, instant) {
+                return true;
+            }
+        } else if metadata.modified().is_ok_and(|modified| modified > instant) {
+            return true;
+        }
+    }
+    false
+}
+
 impl BridgeStaticlib {
     /// Returns the archive filename produced by this bridge's Cargo package.
     pub(super) fn archive_filename(&self) -> String {
@@ -312,7 +342,7 @@ impl BridgeStaticlib {
             }
         }
         if let Some(archive) = self.find_archive() {
-            return self.validate_archive(archive);
+            return self.validate_archive(self.refreshed_if_stale(archive));
         }
         if let Some(workspace) = self.find_workspace() {
             self.build_staticlib(&workspace);
@@ -362,12 +392,90 @@ impl BridgeStaticlib {
             .find(|candidate| candidate.exists())
     }
 
-    /// Finds the nearest ancestor containing this bridge's Cargo package.
+    /// Rebuilds `archive` when this checkout's sources have moved past it.
+    ///
+    /// An EXISTING archive used to be trusted unconditionally, so a bridge edited after the
+    /// last `cargo build` was linked in its old form. That fails as `Undefined symbols` naming
+    /// a symbol the source plainly defines — a message that accuses the code rather than the
+    /// stale file, and `cargo test` never refreshes a staticlib because it only needs the
+    /// crate's rlib.
+    ///
+    /// Cargo is the real staleness oracle, but asking it costs a process spawn on every link,
+    /// and elephc is spawned once per compiled program. The mtime comparison is the cheap
+    /// pre-filter that decides whether that spawn is worth making: it stays silent on the
+    /// overwhelmingly common up-to-date path, and the rebuild it does trigger makes the
+    /// archive newer than the sources, so the next link goes quiet again.
+    ///
+    /// Every failure here — no workspace, unreadable metadata, a build that does not help —
+    /// falls through to the archive we already had. This can only improve on the old
+    /// behaviour, never replace a working link with an error.
+    /// The attempt is made AT MOST ONCE per process, and that bound is load-bearing rather
+    /// than an optimisation. Cargo, not this check, decides whether to rebuild; when it
+    /// declines, the archive keeps its old timestamp and still looks stale. Without the bound
+    /// every link would spawn cargo again forever, turning a rare staleness into a permanent
+    /// tax on a compiler's hot path.
+    fn refreshed_if_stale(&self, archive: PathBuf) -> PathBuf {
+        let Some(workspace) = self.find_workspace() else {
+            return archive;
+        };
+        if !self.sources_are_newer_than(&workspace, &archive) {
+            return archive;
+        }
+        if !self.claim_rebuild_attempt() {
+            return archive;
+        }
+        self.build_staticlib(&workspace);
+        self.find_archive().unwrap_or(archive)
+    }
+
+    /// Registers this bridge as rebuild-attempted, returning whether the caller won the claim.
+    fn claim_rebuild_attempt(&self) -> bool {
+        static ATTEMPTED: OnceLock<Mutex<HashSet<&'static str>>> = OnceLock::new();
+        ATTEMPTED
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .is_ok_and(|mut attempted| attempted.insert(self.crate_name))
+    }
+
+    /// Returns whether any file under this bridge's crate is newer than `archive`.
+    ///
+    /// The whole crate directory is walked, not just `src`, because `Cargo.toml` and build
+    /// scripts change what the archive contains too. The walk stops at the first newer file.
+    fn sources_are_newer_than(&self, workspace: &Path, archive: &Path) -> bool {
+        let Ok(built_at) = std::fs::metadata(archive).and_then(|meta| meta.modified()) else {
+            return false;
+        };
+        let crate_dir = workspace.join("crates").join(self.crate_name);
+        any_file_newer_than(&crate_dir, built_at)
+    }
+
+    /// Finds the checkout this elephc was built from, if it was built from one.
+    ///
+    /// The EXECUTABLE is asked first and the working directory only as a fallback, because
+    /// they answer different questions. `current_exe()` is a fact about which build produced
+    /// this compiler; the working directory is the user's PHP project, which has no reason to
+    /// sit inside elephc's source tree. Asking the project first meant that compiling from
+    /// anywhere else — every integration test runs from a temp directory — found no workspace
+    /// and silently gave up on rebuilding.
+    ///
+    /// An installed binary has neither, and correctly gets `None`: `/usr/local/bin/elephc` has
+    /// no ancestor carrying elephc's crates, so nothing tries to run cargo on a user's machine.
     fn find_workspace(&self) -> Option<PathBuf> {
         let manifest = format!("crates/{}/Cargo.toml", self.crate_name);
-        let cwd = std::env::current_dir().ok()?;
-        cwd.ancestors()
-            .find(|directory| directory.join(&manifest).exists())
+        let from_executable = std::env::current_exe()
+            .ok()
+            .and_then(|executable| Self::ancestor_carrying(&executable, &manifest));
+        from_executable.or_else(|| {
+            let cwd = std::env::current_dir().ok()?;
+            Self::ancestor_carrying(&cwd, &manifest)
+        })
+    }
+
+    /// Returns the nearest ancestor of `start` that carries `manifest`.
+    fn ancestor_carrying(start: &Path, manifest: &str) -> Option<PathBuf> {
+        start
+            .ancestors()
+            .find(|directory| directory.join(manifest).exists())
             .map(Path::to_path_buf)
     }
 
@@ -389,6 +497,68 @@ impl BridgeStaticlib {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Creates an empty directory unique across parallel test threads.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "elephc_bridges_{}_{}_{:?}",
+            name,
+            std::process::id(),
+            std::thread::current().id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("create scratch dir");
+        dir
+    }
+
+    /// The checkout root is found from a nested starting point, and absent trees answer `None`.
+    ///
+    /// This is what lets an elephc invoked from a temp directory — every integration test —
+    /// still locate the crates it was built from, by asking its own executable path.
+    #[test]
+    fn ancestor_carrying_finds_the_checkout_root() {
+        let root = scratch("workspace");
+        let manifest = "crates/elephc-magician/Cargo.toml";
+        std::fs::create_dir_all(root.join("crates/elephc-magician")).expect("create crate dir");
+        std::fs::write(root.join(manifest), "[package]").expect("write manifest");
+        let nested = root.join("deep/deeper");
+        std::fs::create_dir_all(&nested).expect("create nested dir");
+
+        assert_eq!(
+            BridgeStaticlib::ancestor_carrying(&nested, manifest).as_deref(),
+            Some(root.as_path())
+        );
+        assert!(BridgeStaticlib::ancestor_carrying(&scratch("bare"), manifest).is_none());
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Staleness is decided by modification time, and a nested `target/` never counts.
+    ///
+    /// The `target/` exclusion is what keeps the check from seeing the bridge's own build
+    /// output as a reason to rebuild it, which would make every link rebuild forever.
+    #[test]
+    fn any_file_newer_than_ignores_build_output() {
+        let root = scratch("staleness");
+        std::fs::write(root.join("lib.rs"), "// source").expect("write source");
+        let source_time = std::fs::metadata(root.join("lib.rs"))
+            .and_then(|meta| meta.modified())
+            .expect("read source mtime");
+
+        assert!(any_file_newer_than(&root, std::time::SystemTime::UNIX_EPOCH));
+        assert!(!any_file_newer_than(&root, source_time));
+
+        let output = scratch("staleness_output");
+        std::fs::create_dir_all(output.join("target")).expect("create target dir");
+        std::fs::write(output.join("target/libx.a"), "archive").expect("write archive");
+        assert!(!any_file_newer_than(
+            &output,
+            std::time::SystemTime::UNIX_EPOCH
+        ));
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&output);
+    }
 
     /// Verifies every bridge flag maps back to the table's linker library name.
     #[test]

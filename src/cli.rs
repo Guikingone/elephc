@@ -152,6 +152,9 @@ pub(crate) struct CliConfig {
     /// PHP compatibility profile used by version-dependent language/runtime
     /// surfaces. Session behavior under `--web` currently consumes it.
     pub(crate) php_version: crate::web_prelude::PhpVersion,
+    /// Where [`Self::php_version`] came from, so the compiler can distinguish a profile the
+    /// user chose from one it assumed. Reported by `php_profile::report`.
+    pub(crate) php_version_provenance: crate::php_profile::Provenance,
     pub(crate) extra_link_libs: Vec<String>,
     pub(crate) extra_link_paths: Vec<String>,
     pub(crate) extra_frameworks: Vec<String>,
@@ -230,6 +233,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut php_version = crate::web_prelude::PhpVersion::default();
+    let mut php_version_provenance = crate::php_profile::Provenance::Default;
     let mut extra_link_libs: Vec<String> = Vec::new();
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
@@ -272,8 +276,10 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         } else if arg == "--php-version" {
             i += 1;
             php_version = parse_required_php_version(args, i);
+            php_version_provenance = crate::php_profile::Provenance::Flag;
         } else if let Some(value) = arg.strip_prefix("--php-version=") {
             php_version = parse_php_version(value);
+            php_version_provenance = crate::php_profile::Provenance::Flag;
         } else if arg == "--gc-stats" {
             gc_stats = true;
         } else if arg == "--heap-debug" {
@@ -404,6 +410,22 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
     if web && emit_ir {
         fail("--web cannot be combined with --emit-ir");
     }
+
+    // With no explicit `--php-version`, take the profile the project already declares. Every
+    // source is optional at every level, so a lone `.php` file still resolves to the default
+    // without needing a manifest — see `php_profile::resolve`.
+    if php_version_provenance == crate::php_profile::Provenance::Default {
+        let resolved = crate::php_profile::resolve::resolve(std::path::Path::new(&filename));
+        php_version = resolved.profile;
+        php_version_provenance = resolved.provenance;
+        // Emitted here rather than carried into the config: these report how the ANSWER was
+        // reached (a clamped pin, an unreadable manifest), so they belong with the decision
+        // and are silent whenever it was unambiguous.
+        for note in resolved.notes {
+            eprintln!("  note: {note}");
+        }
+    }
+
     CliConfig {
         filename,
         heap_size,
@@ -422,6 +444,7 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         ir_opt,
         target,
         php_version,
+        php_version_provenance,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,

@@ -496,6 +496,28 @@ fn assignment_target_invalidation(target: &Expr) -> Invalidation {
     }
 }
 
+/// Computes all locals invalidated by a `foreach`, including an iterable root
+/// exposed through a by-reference value and the loop's key/value bindings.
+pub(crate) fn foreach_invalidation(
+    array: &Expr,
+    key_var: Option<&str>,
+    value_var: &str,
+    value_by_ref: bool,
+    body: &[Stmt],
+) -> Invalidation {
+    let mut inv = expr_invalidation(array).union(block_invalidation(body));
+    if value_by_ref {
+        if let Some(root) = lvalue_root(array) {
+            inv.add(root);
+        }
+    }
+    inv.add(value_var);
+    if let Some(key_var) = key_var {
+        inv.add(key_var);
+    }
+    inv
+}
+
 /// Computes the caller locals a statement can write, with the same call-aware
 /// precision as `expr_invalidation`.
 pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
@@ -549,19 +571,13 @@ pub(crate) fn stmt_invalidation(stmt: &Stmt) -> Invalidation {
             value_var,
             value_by_ref,
             body,
-        } => {
-            let mut inv = expr_invalidation(array).union(block_invalidation(body));
-            if *value_by_ref {
-                if let Some(root) = lvalue_root(array) {
-                    inv.add(root);
-                }
-            }
-            inv.add(value_var);
-            if let Some(key_var) = key_var {
-                inv.add(key_var);
-            }
-            inv
-        }
+        } => foreach_invalidation(
+            array,
+            key_var.as_deref(),
+            value_var,
+            *value_by_ref,
+            body,
+        ),
         StmtKind::While { condition, body } | StmtKind::DoWhile { body, condition } => {
             expr_invalidation(condition).union(block_invalidation(body))
         }

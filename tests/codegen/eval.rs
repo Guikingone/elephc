@@ -7052,10 +7052,9 @@ echo function_exists("sys_get_temp_dir");');
 "#,
     );
     // `phpversion()` reports the PHP LANGUAGE version, not elephc's package version. The eval
-    // interpreter is a separate crate with no access to `--php-version`, so it reports the
-    // default profile (8.5) — identical to native here, since this program compiles with the
-    // default profile. See `EVAL_PHP_VERSION` in the magician for the documented divergence
-    // when `--php-version` is not 8.5.
+    // interpreter cannot read `--php-version` itself, so the compiler forwards the profile to
+    // it; this program compiles with the default, hence 8.5.0. `eval_follows_a_non_default_profile`
+    // in `php_version_surface_tests` is where the forwarding itself is measured.
     assert_eq!(out, "time:8.5.0:/tmp:cwd:call-time:8.5.0:call-cwd:/tmp:1111");
 }
 

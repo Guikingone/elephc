@@ -577,13 +577,24 @@ fn emit_var_dump_null(ctx: &mut FunctionContext<'_>) {
 /// global: it is set to 2 (PHP's one nesting level) for the duration of the walk
 /// and back to 0 before the closing brace, which sits at the header's indent.
 /// Nested containers manage their own deeper indents inside `__rt_var_dump_value`.
+///
+/// The container payload is checked for BOTH null shapes before the header walk
+/// (issue #581). A zero pointer is what an untyped null-defaulted property rebound
+/// to array storage reads before its first write. The in-band null-container
+/// sentinel is what a missed element read materializes: it is non-zero, so the
+/// plain zero check let it through and the header load dereferenced it after
+/// `array(` had already been written. PHP dumps both as `NULL`.
 fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    // An untyped null-defaulted property rebound to array storage reads a null
-    // pointer before its first write; PHP var_dumps that value as NULL.
     let null_label = ctx.next_label("var_dump_array_null");
     let done_label = ctx.next_label("var_dump_array_done");
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_label);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"array(");
     abi::emit_pop_reg(ctx.emitter, result_reg);

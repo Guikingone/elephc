@@ -48,18 +48,10 @@ pub(crate) fn safe_foreach_env(
     value_by_ref: bool,
     body: &[Stmt],
 ) -> ConstantEnv {
-    let mut inv = expr_invalidation(array).union(block_invalidation(body));
-    inv.add(value_var);
-    if let Some(key_var) = key_var {
-        inv.add(key_var);
-    }
-    if value_by_ref {
-        // Writes through the by-ref value var mutate the array invisibly.
-        if let Some(root) = lvalue_root(array) {
-            inv.add(root);
-        }
-    }
-    filter_written(env, inv)
+    filter_written(
+        env,
+        foreach_invalidation(array, key_var, value_var, value_by_ref, body),
+    )
 }
 
 /// Returns `env` minus the names in `inv` (`All` empties it).
