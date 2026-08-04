@@ -320,6 +320,36 @@ fn lower_numeric_binary(
         }
     }
     if matches!(op, BinOp::Pow) {
+        // PHP's `**` is int-preserving (`2 ** 3` is `int(8)`), so an int/int power goes
+        // through the checked helper that reproduces `zend_pow_function_base`: it keeps an
+        // `i64` while the value fits and promotes to a double at the exact multiplication
+        // that overflows, or immediately for a negative exponent. Only that case can be an
+        // int, and the type checker marks it `Mixed` for the same reason it marks
+        // overflow-capable `+`/`-`/`*` operands `Mixed`.
+        if lhs.ir_type == IrType::I64
+            && rhs.ir_type == IrType::I64
+            && fallback_expr_type(expr) == PhpType::Mixed
+        {
+            return ctx.emit_value(
+                Op::ICheckedPow,
+                vec![lhs.value, rhs.value],
+                None,
+                PhpType::Mixed,
+                Op::ICheckedPow.default_effects(),
+                Some(expr.span),
+            );
+        }
+        // A boxed operand (any non-`I64`/`F64` storage, typically an overflow-capable
+        // `Mixed` int) keeps the int-preserving behavior through the runtime dispatcher,
+        // which only takes the integer path when both payloads really are integers.
+        if should_use_mixed_numeric_binop(lhs.ir_type, rhs.ir_type) {
+            let result = lower_mixed_numeric_binary(ctx, lhs, rhs, MixedNumericOp::Pow, expr);
+            release_binary_operand_temporary(ctx, lhs, expr.span);
+            if rhs.value != lhs.value {
+                release_binary_operand_temporary(ctx, rhs, expr.span);
+            }
+            return result;
+        }
         let lhs = coerce_to_float(ctx, lhs, expr);
         let rhs = coerce_to_float(ctx, rhs, expr);
         return ctx.emit_value(
@@ -634,6 +664,7 @@ fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         BinOp::Add => Some(MixedNumericOp::Add),
         BinOp::Sub => Some(MixedNumericOp::Sub),
         BinOp::Mul => Some(MixedNumericOp::Mul),
+        BinOp::Pow => Some(MixedNumericOp::Pow),
         _ => None,
     }
 }
@@ -3005,7 +3036,74 @@ fn lower_lazy_property_isset_operand(
             lower_expr(ctx, object);
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
+        IssetPropertyAction::Initialized => {
+            let object = lower_expr(ctx, object);
+            Some(lower_initialized_property_isset(ctx, object, property, arg))
+        }
     }
+}
+
+/// Lowers `isset($object->declaredProperty)` for a DECLARED (typed) property slot.
+///
+/// PHP answers `false` for a typed property that is uninitialized — either because it
+/// never got a value or because `unset()` removed it — WITHOUT raising the
+/// "must not be accessed before initialization" error that a plain read raises. The
+/// slot probe therefore runs first, and the ordinary null-check read is only reached
+/// on the initialized branch.
+fn lower_initialized_property_isset(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    property: &str,
+    arg: &Expr,
+) -> LoweredValue {
+    let temp_name = ctx.declare_hidden_temp(PhpType::Bool);
+    let uninitialized_block = ctx
+        .builder
+        .create_named_block("isset.property.uninitialized", Vec::new());
+    let read_block = ctx
+        .builder
+        .create_named_block("isset.property.read", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("isset.property.merge", Vec::new());
+    let data = ctx.intern_string(property);
+    let initialized = ctx.emit_value(
+        Op::PropInitialized,
+        vec![object.value],
+        Some(Immediate::Data(data)),
+        PhpType::Bool,
+        Op::PropInitialized.default_effects(),
+        Some(arg.span),
+    );
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: initialized.value,
+        then_target: read_block,
+        then_args: Vec::new(),
+        else_target: uninitialized_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(uninitialized_block);
+    let false_value = emit_bool_literal(ctx, false, Some(arg.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, false_value, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(read_block);
+    let read_value = lower_property_get_from_value(ctx, object, property, Op::PropGet, arg);
+    let is_set = emit_builtin_call_value(
+        ctx,
+        "isset",
+        vec![read_value.value],
+        PhpType::Int,
+        arg.span,
+        None,
+    );
+    let is_set = ctx.truthy_consuming(is_set, Some(arg.span));
+    store_value_into_temp(ctx, &temp_name, PhpType::Bool, is_set, arg.span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, arg.span)
 }
 
 /// Describes how `isset($object->property)` should be lowered for a known receiver class.
@@ -3013,6 +3111,9 @@ enum IssetPropertyAction {
     Fallback,
     Magic,
     AlwaysFalse,
+    /// A declared (typed) property slot, which can be uninitialized: probe the slot
+    /// before reading it so `isset()` never raises the uninitialized-read error.
+    Initialized,
 }
 
 /// Selects the PHP-visible `isset()` behavior for a statically known object property operand.
@@ -3030,6 +3131,9 @@ fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
+        if class_info.visible_property_is_declared(property) {
+            return Some(IssetPropertyAction::Initialized);
+        }
         return Some(IssetPropertyAction::Fallback);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__isset")).is_some() {
@@ -5100,7 +5204,11 @@ fn unset_property_access_has_direct_lowering(
 ) -> bool {
     matches!(
         property_unset_action(ctx, object, property),
-        Some(UnsetPropertyAction::Magic | UnsetPropertyAction::Noop)
+        Some(
+            UnsetPropertyAction::Magic
+                | UnsetPropertyAction::Noop
+                | UnsetPropertyAction::ClearTyped
+        )
     )
 }
 
@@ -5119,6 +5227,17 @@ fn lower_unset_property_access(
         Some(UnsetPropertyAction::Noop) => {
             lower_expr(ctx, object);
         }
+        Some(UnsetPropertyAction::ClearTyped) => {
+            let object = lower_expr(ctx, object);
+            let data = ctx.intern_string(property);
+            ctx.emit_void(
+                Op::PropUnset,
+                vec![object.value],
+                Some(Immediate::Data(data)),
+                Op::PropUnset.default_effects(),
+                Some(expr.span),
+            );
+        }
         Some(UnsetPropertyAction::Fallback) | None => {}
     }
 }
@@ -5128,6 +5247,9 @@ enum UnsetPropertyAction {
     Fallback,
     Magic,
     Noop,
+    /// The property has a DECLARED type, so PHP's `unset()` leaves it uninitialized —
+    /// a state elephc's fixed property slots represent exactly.
+    ClearTyped,
 }
 
 /// Selects the PHP-visible `unset()` behavior for a statically known object property operand.
@@ -5145,7 +5267,20 @@ fn property_unset_action(
         return Some(UnsetPropertyAction::Fallback);
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
-        return Some(UnsetPropertyAction::Fallback);
+        // PHP does NOT consult `__unset` for a property it can see: it removes the
+        // property itself. A DECLARED (typed) property becomes uninitialized, which
+        // elephc's fixed slots can represent exactly; an untyped property is nulled,
+        // which keeps reads and `isset()` PHP-correct on a slot that has no
+        // uninitialized state.
+        return Some(if class_info.visible_property_is_declared(property) {
+            UnsetPropertyAction::ClearTyped
+        } else {
+            // An UNTYPED property slot has no uninitialized state and no null-capable
+            // storage, so there is no sound way to make a later read answer PHP's
+            // "Undefined property" null. Keep the explicit unsupported diagnostic
+            // rather than leaving a stale value or a garbage payload behind.
+            UnsetPropertyAction::Fallback
+        });
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__unset")).is_some() {
         Some(UnsetPropertyAction::Magic)

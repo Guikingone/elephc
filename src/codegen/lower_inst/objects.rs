@@ -2788,6 +2788,54 @@ pub(super) fn lower_prop_initialized(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `unset($object->property)` for a declared, accessible instance property.
+///
+/// PHP removes the property from the instance; a *typed* property becomes
+/// "uninitialized" again. elephc renders declared properties from a fixed per-class
+/// descriptor and cannot drop a slot, so the slot is stamped with the shared
+/// uninitialized-typed-property marker — exactly the state a typed property without
+/// a default starts in. `isset()` then answers false, `print_r`/`var_export` skip the
+/// property, and a later read raises the "must not be accessed before initialization"
+/// diagnostic. Any refcounted payload the slot owned is released first, so the write
+/// cannot leak a string/array/object.
+///
+/// A slot that is not declared (a `__get`/`__set`-backed or dynamic name) has no
+/// storage to clear, so the lowering is a no-op there.
+pub(super) fn lower_prop_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    if !slot.is_declared || slot.is_packed || slot.is_reference {
+        return Ok(());
+    }
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
+    emit_property_uninitialized_marker(ctx, &slot, base_reg);
+    Ok(())
+}
+
+/// Stamps a declared property slot with the uninitialized-typed-property marker.
+///
+/// The payload word is zeroed and the high word receives
+/// `UNINITIALIZED_TYPED_PROPERTY_SENTINEL`, the same encoding a typed property without
+/// a default carries, so every existing consumer (`PropInitialized`, the read guard,
+/// `__rt_obj_prop_name`/`__rt_obj_prop_value`) already understands the state.
+fn emit_property_uninitialized_marker(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    base_reg: &str,
+) {
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        marker_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    abi::emit_store_to_address(ctx.emitter, marker_reg, base_reg, slot.offset + 8);
+}
+
 /// Returns the receiver class when an undeclared property should route through `__get`.
 fn magic_get_receiver_class(
     ctx: &FunctionContext<'_>,

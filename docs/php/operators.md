@@ -14,15 +14,15 @@ sidebar:
 | `*` | `$a * $b` | Multiplication. Integer overflow promotes to `double`. |
 | `/` | `$a / $b` | Division (always returns float). A zero divisor raises a catchable `DivisionByZeroError` ("Division by zero"). |
 | `%` | `$a % $b` | Modulo. A zero divisor raises a catchable `DivisionByZeroError` ("Modulo by zero"); `PHP_INT_MIN % -1` is `0`. |
-| `**` | `$a ** $b` | Exponentiation (right-associative, returns float) |
+| `**` | `$a ** $b` | Exponentiation (right-associative). Int-preserving like PHP: two `int` operands with a non-negative exponent give an `int` while the result fits (`2 ** 3` is `int(8)`), and promote to `double` at the multiplication that overflows (`2 ** 63`). A negative exponent or a `float` operand always gives a `float`. |
 | `-$x` | `-$x` | Unary negation |
 
 ## Comparison
 
 | Operator | Example | Notes |
 |---|---|---|
-| `==` | `$a == $b` | Loose equality using PHP-style scalar coercions for bool, null, numeric `int`/`float` comparison, numeric strings, and non-numeric strings |
-| `!=` | `$a != $b` | Loose inequality using the same scalar coercions as `==` |
+| `==` | `$a == $b` | Loose equality using PHP-style coercions for bool, null, numeric `int`/`float` comparison, numeric strings, non-numeric strings, arrays, and objects |
+| `!=` | `$a != $b` | Loose inequality using the same coercions as `==` |
 | `===` | `$a === $b` | Strict equality (type and value) |
 | `!==` | `$a !== $b` | Strict inequality |
 | `<` | `$a < $b` | Less than |
@@ -35,6 +35,60 @@ sidebar:
 `instanceof` supports named class/interface targets plus `self`, `parent`, and `static`. It also supports dynamic targets such as `$obj instanceof $className`, `$obj instanceof $otherObject`, and parenthesized target expressions like `$obj instanceof ($prefix . $suffix)`.
 
 Direct object values and boxed `mixed` / nullable / union values are checked at runtime; scalar, array, and null payloads return `false` after the dynamic target has been validated. Dynamic string targets are matched case-insensitively against class/interface names; unknown class strings return `false`. Dynamic object targets use the target object's runtime class. If a dynamic target is neither a string nor an object, the program exits with a fatal runtime diagnostic.
+
+### Loose equality for arrays and objects
+
+`==` follows PHP 8's comparison table for non-scalar operands as well.
+
+**Arrays.** An array converts to `bool` only against `null` and `bool`; against
+anything else it is simply not equal.
+
+```php
+<?php
+var_dump([] == null);      // true  — both convert to false
+var_dump([] == false);     // true
+var_dump([0] == true);     // true  — a non-empty array is truthy
+var_dump([] == 0);         // false — an array is never equal to a number
+var_dump([1] == "1");      // false
+var_dump([] == new stdClass()); // false
+```
+
+Two arrays are loosely equal when they hold the same number of entries and every
+key of the left array exists in the right one with a loosely equal value. Order
+does **not** matter (unlike `===`), and a missing key never matches a stored
+`null`:
+
+```php
+<?php
+var_dump(["a" => 1, "b" => 2] == ["b" => 2, "a" => 1]); // true
+var_dump([1, 2] == [2 => 1, 3 => 2]);                   // false — different keys
+var_dump([1] == ["1"]);                                 // true  — values compare loosely
+var_dump(["a" => null] == ["b" => null]);               // false — different keys
+```
+
+**Objects.** Two objects are loosely equal when they are the same instance, or
+when they share a class and every property compares loosely. `===` keeps meaning
+instance identity. Enum cases are singletons, so they compare by identity in both
+forms.
+
+```php
+<?php
+class Point { public int $x = 1; }
+$a = new Point();
+$b = new Point();
+var_dump($a == $b);   // true
+var_dump($a === $b);  // false
+$b->x = 2;
+var_dump($a == $b);   // false
+```
+
+Known divergence: PHP raises `Fatal error: Nesting level too deep - recursive
+dependency?` when `==` meets a cyclic array/object graph. elephc's comparison
+walker stops at a fixed nesting depth and reports "not equal" instead of failing,
+so a cyclic comparison terminates normally rather than aborting the program.
+
+`===` on two arrays is not yet supported by the backend and reports an
+unsupported-feature diagnostic at compile time.
 
 ## Bitwise
 

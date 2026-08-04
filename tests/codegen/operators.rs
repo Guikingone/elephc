@@ -788,3 +788,58 @@ var_dump((7 * $n) % (-3 * $n));
     );
     assert_eq!(out, "int(0)\nint(0)\nint(1)\n");
 }
+
+/// Verifies PHP 8's `==` table for an array against a non-array operand.
+///
+/// An array converts to bool only against `null`/`bool` (`[] == null` and
+/// `[] == false` are true, `[0] == true` is true), and is never loosely equal to
+/// an int, float or string — `[] == 0` and `[1] == "1"` are both false. Values are
+/// derived from `$argc` so the comparison survives AST folding and exercises the
+/// EIR backend path.
+#[test]
+fn test_loose_equality_array_versus_scalar() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+$e = [];
+$a = [1, 2, $n];
+var_dump($e == null, $e == false, $e == true, $e == 0, $e == "");
+var_dump([0 * $n] == true, [$n] == "1", 1 == [$n], $a == null);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\nbool(false)\n\
+         bool(true)\nbool(false)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies PHP's order-independent `==` between two arrays.
+///
+/// `==` requires equal counts and, for every key of the left array, the same key on
+/// the right with a loosely equal value: `["a"=>1,"b"=>2] == ["b"=>2,"a"=>1]` is
+/// true while `[1,2] == [2=>1,3=>2]` is false. `["a"=>null] == ["b"=>null]` pins
+/// that a MISSING key never matches a stored `null`.
+#[test]
+fn test_loose_equality_array_versus_array() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+$a = [1, 2, $n];
+$b = [1, 2, $n];
+$c = [$n + 9, 2, 1];
+var_dump($a == $b, $a == $c, $a != $c, $a == [1, 2]);
+var_dump(["a" => $n, "b" => 2] == ["b" => 2, "a" => $n]);
+var_dump([1, 2] == [2 => 1, 3 => 2]);
+var_dump([[1, $n], [3]] == [[1, $n], [3]], [[1, $n], [3]] == [[1, $n], [4]]);
+var_dump([null] == [0 * $n], ["a" => null] == ["b" => null]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\nbool(false)\n\
+         bool(true)\nbool(false)\n\
+         bool(true)\nbool(false)\n\
+         bool(true)\nbool(false)\n"
+    );
+}

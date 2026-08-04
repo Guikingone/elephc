@@ -474,3 +474,70 @@ echo $box->value;
     );
     assert_eq!(out, "7");
 }
+
+/// Verifies `unset($obj->prop)` on a declared (typed) property.
+///
+/// PHP leaves the property UNINITIALIZED rather than nulled: `isset()` answers false,
+/// `print_r` omits it, reading it raises `Error: Typed property … must not be accessed
+/// before initialization`, and assigning again brings it back. `unset($a, $b)` clears
+/// both targets.
+#[test]
+fn test_unset_declared_typed_property_leaves_it_uninitialized() {
+    let out = compile_and_run(
+        r#"<?php
+class T { public int $n = 3; public string $s = "x"; public array $a = [1, 2]; }
+$t = new T();
+unset($t->n, $t->s);
+var_dump(isset($t->n), isset($t->s), isset($t->a));
+print_r($t);
+try { echo $t->n; } catch (\Error $e) { echo "ERR:", $e->getMessage(), "\n"; }
+$t->n = 9;
+var_dump(isset($t->n), $t->n);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(true)\n\
+         T Object\n(\n    [a] => Array\n        (\n            [0] => 1\n            [1] => 2\n        )\n\n)\n\
+         ERR:Typed property T::$n must not be accessed before initialization\n\
+         bool(true)\nint(9)\n"
+    );
+}
+
+/// Verifies `unset()` on a property the caller cannot see still routes to `__unset`.
+///
+/// PHP calls `__unset` only for an INACCESSIBLE (or absent) property; a property the
+/// caller can see is removed directly and `__unset` is never consulted.
+#[test]
+fn test_unset_inaccessible_property_calls_magic_unset() {
+    let out = compile_and_run(
+        r#"<?php
+class Pv {
+    private $secret = 1;
+    public int $open = 2;
+    public function __unset($k) { echo "magic:$k\n"; }
+}
+$p = new Pv();
+unset($p->secret);
+unset($p->open);
+var_dump(isset($p->open));
+"#,
+    );
+    assert_eq!(out, "magic:secret\nbool(false)\n");
+}
+
+/// Verifies `isset()` on a never-initialized typed property answers false instead of
+/// raising the uninitialized-read error, matching PHP.
+#[test]
+fn test_isset_on_uninitialized_typed_property_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+class U { public ?int $v; public int $w = 1; }
+$u = new U();
+var_dump(isset($u->v), isset($u->w));
+$u->v = 5;
+var_dump(isset($u->v), $u->v);
+"#,
+    );
+    assert_eq!(out, "bool(false)\nbool(true)\nbool(true)\nint(5)\n");
+}

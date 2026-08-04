@@ -168,6 +168,7 @@ pub enum MixedNumericOp {
     Add,
     Sub,
     Mul,
+    Pow,
 }
 
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
@@ -208,6 +209,7 @@ impl MixedNumericOp {
             MixedNumericOp::Add => "add",
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
+            MixedNumericOp::Pow => "pow",
         }
     }
 }
@@ -272,6 +274,7 @@ pub enum Op {
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
+    ICheckedPow,
     IDiv,
     ISDiv,
     ISMod,
@@ -383,6 +386,11 @@ pub enum Op {
     PropGet,
     PropInitialized,
     PropSet,
+    /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
+    /// refcounted payload the slot owned and stamps the uninitialized-typed-property
+    /// marker, so the property stops being reported by `isset()` and by the
+    /// descriptor walkers. Operand: object; immediate: property name data id.
+    PropUnset,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
@@ -547,7 +555,7 @@ impl Op {
             IDiv | ISDiv | ISMod => E::MAY_FATAL | E::MAY_THROW,
             IShl | IShrA | FDiv => E::MAY_THROW,
             PtrCheckNonnull => E::MAY_FATAL,
-            ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
+            ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
@@ -615,7 +623,7 @@ impl Op {
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
-            | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
+            | PropUnset | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             ArrayElemAddr | ArraySetMixedKey => {
@@ -765,6 +773,7 @@ impl Op {
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
+            ICheckedPow => "ichecked_pow",
             IDiv => "idiv",
             ISDiv => "isdiv",
             ISMod => "ismod",
@@ -878,6 +887,7 @@ impl Op {
             PropGet => "prop_get",
             PropInitialized => "prop_initialized",
             PropSet => "prop_set",
+            PropUnset => "prop_unset",
             LoadPropRefCell => "load_prop_ref_cell",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",

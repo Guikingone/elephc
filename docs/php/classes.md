@@ -874,10 +874,43 @@ echo isset($config->debug) ? "on" : "off";  // off → __isset
 
 `isset($obj->prop)` returns the boolean result of `__isset`; `unset($obj->prop)`
 runs `__unset` for its side effects. Both fire only for properties the class does
-not declare — accessing a declared property uses it directly.
+not declare *or cannot access from the calling scope* — a property the caller can
+see is read, tested, and removed directly, exactly as in PHP.
 
 Contract: `__isset` and `__unset` must be non-static and public, and each takes
 exactly one argument (the property name). `__isset` returns `bool`.
+
+### `unset()` on a declared property
+
+`unset($obj->prop)` on a property the caller can see removes it from the instance
+without consulting `__unset`. For a **typed** property PHP returns the slot to its
+*uninitialized* state, and elephc reproduces that exactly:
+
+```php
+<?php
+class Row { public int $id = 3; public string $label = "a"; }
+$row = new Row();
+unset($row->id, $row->label);
+
+var_dump(isset($row->id));  // false
+print_r($row);              // Row Object ( )  — both properties are gone
+echo $row->id;              // Error: Typed property Row::$id must not be
+                            //        accessed before initialization
+$row->id = 9;               // assigning again brings the property back
+var_dump(isset($row->id));  // true
+```
+
+`isset()` on a typed property that was never initialized (or was unset) answers
+`false` without raising the uninitialized-read error, matching PHP.
+
+Known limitation: `unset()` on an **untyped** declared property
+(`public $foo = 1;`) is rejected at compile time with an unsupported-feature
+diagnostic. elephc renders declared properties from a fixed per-class descriptor
+whose untyped slots carry no "removed" state, so there is no representation that
+would make a later read answer PHP's `Warning: Undefined property` plus `null`.
+Declare a type (`public ?int $foo = 1;`) when the property needs to be unset.
+Dynamic (undeclared) properties are also not tracked, so `unset()` on a
+`stdClass` property is not supported either.
 
 ## Static call interception (`__callStatic`)
 

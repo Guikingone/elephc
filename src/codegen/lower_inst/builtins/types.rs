@@ -46,12 +46,18 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Rejects `unset()` calls that were not converted into direct EIR unbind operations.
+///
+/// Reaching this lowering means `crate::ir_lower::expr` could not turn the target
+/// into a slot clear, a hash/array removal, an `offsetUnset()` call or a `__unset()`
+/// call, so the message lists the shapes that do lower directly.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     Err(CodegenIrError::unsupported(format!(
-        "unset target shape with {} lowered operands",
+        "unset target shape with {} lowered operands (supported: variables, \
+         array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
+         and declared typed object properties)",
         inst.operands.len()
     )))
 }

@@ -11,6 +11,7 @@
 use super::arrays;
 use super::buffers;
 use super::callables;
+use super::compare;
 use super::diagnostics;
 use super::eval_bridge;
 use super::eval_scope;
@@ -49,7 +50,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
+    strings::emit_php_num_scan(emitter);
     strings::emit_ftoa(emitter);
+    strings::emit_ftoa_repr(emitter);
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
@@ -177,6 +180,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
         system::emit_preg_split(emitter);
     }
     system::emit_match_unhandled(emitter);
+    system::emit_stack_limit_init(emitter);
+    system::emit_stack_overflow(emitter);
 
     // Exception runtime functions
     exceptions::emit_exception_cleanup_frames(emitter);
@@ -338,6 +343,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_is_empty(emitter);
     arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_int_checked_binops(emitter);
+    arrays::emit_int_pow_checked(emitter);
+    arrays::emit_mixed_numeric_pow(emitter);
     arrays::emit_mixed_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
@@ -386,6 +393,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     objects::emit_obj_prop_name(emitter);
     objects::emit_obj_prop_value(emitter);
     objects::emit_json_encode_stdclass(emitter);
+
+    // PHP `==` walkers: one boxed-Mixed dispatcher plus the array and object
+    // recursion it delegates to. Emitted after the object property accessors it calls.
+    compare::emit_mixed_loose_eq(emitter);
+    compare::emit_mixed_array_loose_eq(emitter);
+    compare::emit_obj_loose_eq(emitter);
 
     // Buffer runtime functions
     buffers::emit_buffer_new(emitter);
