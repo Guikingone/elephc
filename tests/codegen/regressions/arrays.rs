@@ -782,21 +782,70 @@ echo $r["a"];
     assert_eq!(out, "10");
 }
 
-/// Regression: `array_fill()` with a negative count must terminate and yield an empty array on
-/// every target. The ARM64 string-value path used an unsigned `cbz` loop guard, so a negative
-/// count never reached zero and looped until heap exhaustion; it now matches the x86_64 signed
-/// guard.
+/// Regression: `array_chunk()` with a non-positive `$length` must raise PHP's catchable
+/// `ValueError` instead of looping until the heap is exhausted.
+///
+/// The chunk helpers advance their cursor by `$length`, so `0` never reached the end of the
+/// source array and kept allocating empty chunks, and a negative length walked the cursor
+/// backwards.
+#[test]
+fn test_array_chunk_non_positive_length_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2, 3, 4];
+foreach ([0, -1] as $len) {
+    try {
+        var_dump(array_chunk($a, $len));
+    } catch (ValueError $e) {
+        echo get_class($e), "|", $e->getMessage(), "\n";
+    }
+}
+echo count(array_chunk($a, 2)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|array_chunk(): Argument #2 ($length) must be greater than 0\n\
+         ValueError|array_chunk(): Argument #2 ($length) must be greater than 0\n\
+         2\n"
+    );
+}
+
+/// Regression: an uncaught non-positive `array_chunk()` length reports PHP's uncaught-`ValueError`
+/// fatal instead of `Fatal error: heap memory exhausted`.
+#[test]
+fn test_array_chunk_zero_length_uncaught_reports_value_error_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php var_dump(array_chunk([1, 2], 0));"#);
+    assert!(err.contains(
+        "Fatal error: Uncaught ValueError: array_chunk(): Argument #2 ($length) must be greater than 0"
+    ));
+}
+
+/// Regression: `array_fill()` with a negative count must raise PHP's catchable `ValueError`
+/// instead of building an array whose header claims a negative length.
+///
+/// The ARM64 string-value path once used an unsigned `cbz` loop guard, so a negative count
+/// looped until heap exhaustion; the signed guard that replaced it still wrote `-1` into the
+/// array header, which made `count()` answer `-1`. The count is now screened at the call site,
+/// and `@` does not suppress the resulting exception in PHP either.
 #[test]
 fn test_array_fill_negative_count_string_value() {
     let out = compile_and_run(
         r#"<?php
-$r = @array_fill(0, -1, "x");
-echo is_array($r) ? "arr" : "no", ":", count($r);
+try {
+    $r = @array_fill(0, -1, "x");
+    echo "no-throw";
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
 $ok = array_fill(0, 3, "ab");
 echo "|", count($ok), ":", $ok[0], $ok[2];
 "#,
     );
-    assert_eq!(out, "arr:0|3:abab");
+    assert_eq!(
+        out,
+        "ValueError|array_fill(): Argument #2 ($count) must be greater than or equal to 0|3:abab"
+    );
 }
 
 /// Regression (issue #407): reading a typed `array` property by a *variable* string key must

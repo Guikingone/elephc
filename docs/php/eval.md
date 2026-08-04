@@ -892,7 +892,7 @@ as AOT `define()`.
 
 Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
 `PHP_INT_MAX`, `INF`, `NAN`, the `PHP_VERSION*` / `PHP_SAPI` version surface,
-`PATHINFO_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `COUNT_*`, and the supported
+`PATHINFO_*`, `FNM_*`, `ARRAY_FILTER_USE_*`, `STR_PAD_*`, `COUNT_*`, and the supported
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
 optional leading `\`, and `define()` cannot replace them.
 

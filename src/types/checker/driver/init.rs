@@ -19,6 +19,7 @@ use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -81,6 +82,9 @@ impl Checker {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in STREAM_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in STRING_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in PREG_INT_CONSTANTS {

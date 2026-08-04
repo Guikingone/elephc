@@ -151,9 +151,9 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `ltrim()` | `ltrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the left |
 | `rtrim()` | `rtrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the right |
 | `chop()` | `chop($str [, $chars]): string` | Alias of `rtrim()` |
-| `str_repeat()` | `str_repeat($str, $times): string` | Repeat a string |
-| `str_pad()` | `str_pad($str, $len [, $pad, $type]): string` | Pad string to length |
-| `str_split()` | `str_split($str [, $len]): array` | Split into chunks |
+| `str_repeat()` | `str_repeat($str, $times): string` | Repeat a string. A negative `$times` throws `\ValueError`. |
+| `str_pad()` | `str_pad($str, $len [, $pad, $type]): string` | Pad string to length. When padding is actually needed, an empty `$pad` or a `$type` outside `STR_PAD_LEFT`/`STR_PAD_RIGHT`/`STR_PAD_BOTH` throws `\ValueError`. |
+| `str_split()` | `str_split($str [, $len]): array` | Split into chunks. A `$len` of `0` or less throws `\ValueError`. |
 | `strrev()` | `strrev($str): string` | Reverse a string |
 | `grapheme_strrev()` | `grapheme_strrev($str): string\|false` | Reverse a UTF-8 string by grapheme clusters, preserving embedded NUL bytes and keeping combining marks, emoji modifiers, and ZWJ sequences with their base cluster. Returns `false` on malformed UTF-8. |
 | `strcmp()` | `strcmp($a, $b): int` | Binary-safe string comparison |
@@ -163,9 +163,9 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `str_ends_with()` | `str_ends_with($hay, $suffix): bool` | Check suffix |
 | `ord()` | `ord($char): int` | ASCII value of first character |
 | `chr()` | `chr($code): string` | Character from ASCII code |
-| `explode()` | `explode($delim, $str): array` | Split string into array |
+| `explode()` | `explode($separator, $str [, $limit]): array` | Split string into array. An empty `$separator` throws `\ValueError`. |
 | `implode()` | `implode($glue, $arr): string` | Join array into string |
-| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number |
+| `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number. A negative `$dec` is not an error: it rounds to that power of ten and formats with no decimals. |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) |
 | `printf()` | `printf($fmt, ...): int` | Format and print |
 | `vsprintf()` | `vsprintf($fmt, array $values): string` | Like `sprintf()`, with the arguments supplied as an array. Each element becomes one format argument — int/float/bool/string, including the elements of a mixed array. |
@@ -174,7 +174,7 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `addslashes()` | `addslashes($str): string` | Escape quotes and backslashes |
 | `stripslashes()` | `stripslashes($str): string` | Remove escape backslashes |
 | `nl2br()` | `nl2br($str): string` | Insert `<br />` before newlines |
-| `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at word boundaries; set `$cut` to break over-long words |
+| `wordwrap()` | `wordwrap($str [, $width [, $break [, $cut]]]): string` | Wrap text at word boundaries; set `$cut` to break over-long words. An empty `$break`, or a `$width` of `0` together with `$cut`, throws `\ValueError`. |
 | `bin2hex()` | `bin2hex($str): string` | Convert binary to hex |
 | `hex2bin()` | `hex2bin($str): string` | Convert hex to binary |
 | `long2ip()` | `long2ip($ip): string` | Format a 32-bit integer as a dotted-quad IPv4 address |
@@ -193,6 +193,51 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `hash_update()` | `hash_update($context, $data): bool` | Feed data into an incremental hashing context. |
 | `hash_final()` | `hash_final($context, $binary = false): string` | Finalize a context and return the digest (hex, or raw bytes when `$binary`). |
 | `hash_copy()` | `hash_copy($context): HashContext` | Clone an incremental hashing context so the original and copy can diverge. |
+
+#### `explode()` and the `$limit` argument
+
+`explode()` takes PHP's optional third argument:
+
+```php
+explode(",", "a,b,c");      // ["a", "b", "c"]
+explode(",", "a,b,c", 2);   // ["a", "b,c"]  — the last element keeps the rest
+explode(",", "a,b,c", 0);   // ["a,b,c"]     — 0 behaves exactly like 1
+explode(",", "a,b,c", -1);  // ["a", "b"]    — drops the last element
+explode(",", "a,b,c", -9);  // []            — drops every element
+```
+
+An empty `$separator` throws `\ValueError: explode(): Argument #1 ($separator) must not be empty`.
+
+#### `str_pad()` padding modes
+
+`STR_PAD_RIGHT` (`1`, the default), `STR_PAD_LEFT` (`0`), and `STR_PAD_BOTH` (`2`)
+are predefined constants:
+
+```php
+str_pad("x", 4, "-", STR_PAD_LEFT);  // "---x"
+str_pad("x", 5, "ab", STR_PAD_BOTH); // "abxab"
+```
+
+Both value checks follow PHP's order: a `$len` that cannot grow the input returns
+the input untouched *before* either check runs, so `str_pad("xyz", 1, "")` is
+`"xyz"` and not an error. Once padding is actually required, an empty `$pad`
+throws `\ValueError: str_pad(): Argument #3 ($pad_string) must not be empty` and a
+`$type` outside `0..2` throws
+`\ValueError: str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH`.
+
+#### `number_format()` and negative `$decimals`
+
+A negative `$decimals` is not an error in PHP. The number is rounded to that power
+of ten (half away from zero, applied to the magnitude) and then formatted with no
+decimals:
+
+```php
+number_format(1234.5678, -1);  // "1,230"
+number_format(1234.5678, -2);  // "1,200"
+number_format(-1234.5678, -1); // "-1,230"
+number_format(-4.9, -1);       // "0"  — never "-0"
+number_format(1234.5678, -9);  // "0"
+```
 
 #### The `HashContext` object
 

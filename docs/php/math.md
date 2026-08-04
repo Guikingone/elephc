@@ -22,8 +22,8 @@ sidebar:
 | `fmod()` | `fmod($a, $b): float` | Float modulo |
 | `fdiv()` | `fdiv($a, $b): float` | Float division (returns INF for /0) |
 | `rand()` | `rand([$min, $max]): int` | Random integer |
-| `mt_rand()` | `mt_rand([$min, $max]): int` | Alias for rand() |
-| `random_int()` | `random_int($min, $max): int` | Cryptographic random |
+| `mt_rand()` | `mt_rand([$min, $max]): int` | Alias for rand(), except that `$min > $max` throws `\ValueError` instead of swapping the bounds |
+| `random_int()` | `random_int($min, $max): int` | Cryptographic random. `$min > $max` throws `\ValueError`. |
 | `sin()` | `sin($angle): float` | Sine (radians) |
 | `cos()` | `cos($angle): float` | Cosine (radians) |
 | `tan()` | `tan($angle): float` | Tangent (radians) |

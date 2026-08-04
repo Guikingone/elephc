@@ -164,16 +164,42 @@ pub(crate) fn lower_binary_string_runtime(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `explode(delimiter, string)` into the shared string-array splitter helper.
+/// Lowers `explode(separator, string, limit?)` into the shared string-array splitter helper.
 pub(crate) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cleanups = plan_split_string_temp_cleanups(ctx, inst)?;
     if !cleanups.is_empty() {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanups.bytes);
     }
     load_split_pair_args(ctx, inst, "explode", &cleanups)?;
+    emit_explode_separator_guard(ctx, &cleanups);
     abi::emit_call_label(ctx.emitter, "__rt_explode");
     emit_split_string_temp_cleanups(ctx, &cleanups);
     store_if_result(ctx, inst)
+}
+
+/// Rejects the empty `explode()` separator reference PHP refuses to split on.
+///
+/// A zero-length separator matches at every position, so the pre-guard splitter advanced its
+/// cursor by zero bytes and pushed empty segments until the heap was exhausted. The guard
+/// runs after argument materialization, so any owned string temporaries are released on the
+/// throwing path before the unwinder takes over.
+fn emit_explode_separator_guard(
+    ctx: &mut FunctionContext<'_>,
+    cleanups: &SplitStringTempCleanups,
+) {
+    let ok_label = ctx.next_label("explode_separator_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x2, {}", ok_label));         // a non-empty separator can split the subject
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdx, rdx");                           // is the separator zero-length?
+            ctx.emitter.instruction(&format!("jnz {}", ok_label));              // a non-empty separator can split the subject
+        }
+    }
+    emit_split_string_temp_cleanups(ctx, cleanups);
+    super::super::exceptions::emit_value_error(ctx, EXPLODE_EMPTY_SEPARATOR_MESSAGE);
+    ctx.emitter.label(&ok_label);
 }
 
 /// Lowers `sscanf(string, format)` into the shared scanner helper.
@@ -201,6 +227,18 @@ pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => lower_str_split_aarch64(ctx, inst)?,
         Arch::X86_64 => lower_str_split_x86_64(ctx, inst)?,
     }
+    // `__rt_str_split` advances its cursor by the chunk length, so a zero length spins
+    // forever pushing empty chunks until the heap is exhausted and a negative one walks
+    // the cursor backwards off the string. Reference PHP rejects both up front.
+    let length_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 1),
+        STR_SPLIT_NON_POSITIVE_LENGTH_MESSAGE,
+    );
     abi::emit_call_label(ctx.emitter, "__rt_str_split");
     store_if_result(ctx, inst)
 }
@@ -662,6 +700,34 @@ pub(super) fn sprintf_spec_cats_for_format(
 /// packing and are rejected by the runtime's argument-count check.
 const MAX_TRACKED_SPRINTF_ARGS: usize = 4096;
 
+/// php-src's verbatim `ValueError` wording for `str_pad()` with an empty `$pad_string`.
+const STR_PAD_EMPTY_PAD_STRING_MESSAGE: &str =
+    "str_pad(): Argument #3 ($pad_string) must not be empty";
+
+/// php-src's verbatim `ValueError` wording for a `str_pad()` `$pad_type` outside 0..2.
+const STR_PAD_INVALID_PAD_TYPE_MESSAGE: &str =
+    "str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH";
+
+/// php-src's verbatim `ValueError` wording for `str_split()` with a non-positive `$length`.
+const STR_SPLIT_NON_POSITIVE_LENGTH_MESSAGE: &str =
+    "str_split(): Argument #2 ($length) must be greater than 0";
+
+/// php-src's verbatim `ValueError` wording for `str_repeat()` with a negative `$times`.
+const STR_REPEAT_NEGATIVE_TIMES_MESSAGE: &str =
+    "str_repeat(): Argument #2 ($times) must be greater than or equal to 0";
+
+/// php-src's verbatim `ValueError` wording for `wordwrap()` with an empty `$break`.
+const WORDWRAP_EMPTY_BREAK_MESSAGE: &str =
+    "wordwrap(): Argument #3 ($break) must not be empty";
+
+/// php-src's verbatim `ValueError` wording for a zero-width cutting `wordwrap()`.
+const WORDWRAP_ZERO_WIDTH_CUT_MESSAGE: &str =
+    "wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0";
+
+/// php-src's verbatim `ValueError` wording for `explode()` with an empty `$separator`.
+const EXPLODE_EMPTY_SEPARATOR_MESSAGE: &str =
+    "explode(): Argument #1 ($separator) must not be empty";
+
 /// Parses the conversion categories consumed by the runtime sprintf scanner, indexed by the
 /// argument position each conversion consumes.
 ///
@@ -869,6 +935,18 @@ pub(crate) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction
         Arch::AArch64 => lower_str_repeat_aarch64(ctx, inst)?,
         Arch::X86_64 => lower_str_repeat_x86_64(ctx, inst)?,
     }
+    // `__rt_str_repeat` still carries its own negative-count fatal as a backstop, but that
+    // fatal is not catchable. Reference PHP raises a ValueError here, so screen the count
+    // before the helper ever sees it.
+    let times_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(times_reg, 0),
+        STR_REPEAT_NEGATIVE_TIMES_MESSAGE,
+    );
     abi::emit_call_label(ctx.emitter, "__rt_str_repeat");
     store_if_result(ctx, inst)
 }
@@ -957,8 +1035,44 @@ pub(crate) fn lower_wordwrap(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         Arch::AArch64 => lower_wordwrap_aarch64(ctx, inst)?,
         Arch::X86_64 => lower_wordwrap_x86_64(ctx, inst)?,
     }
+    emit_wordwrap_argument_guards(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_wordwrap");
     store_if_result(ctx, inst)
+}
+
+/// Rejects the `wordwrap()` argument values reference PHP refuses to wrap with.
+///
+/// An empty `$break` gives the wrapper nothing to insert, so it silently returned the input
+/// unwrapped where PHP raises a `ValueError`; a zero `$width` combined with `$cut_long_words`
+/// asks for progress-free cutting. php-src checks `$break` first, then the width/cut pair.
+fn emit_wordwrap_argument_guards(ctx: &mut FunctionContext<'_>) {
+    let break_ok_label = ctx.next_label("wordwrap_break_ok");
+    let width_ok_label = ctx.next_label("wordwrap_width_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x5, {}", break_ok_label));   // a non-empty break string can be inserted
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test r8, r8");                             // is the break string empty?
+            ctx.emitter.instruction(&format!("jnz {}", break_ok_label));        // a non-empty break string can be inserted
+        }
+    }
+    super::super::exceptions::emit_value_error(ctx, WORDWRAP_EMPTY_BREAK_MESSAGE);
+    ctx.emitter.label(&break_ok_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x3, {}", width_ok_label));   // a non-zero width always makes progress
+            ctx.emitter.instruction(&format!("cbz x6, {}", width_ok_label));    // a zero width is only rejected together with $cut_long_words
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdi, rdi");                           // is the requested wrap width zero?
+            ctx.emitter.instruction(&format!("jnz {}", width_ok_label));        // a non-zero width always makes progress
+            ctx.emitter.instruction("test r9, r9");                             // was $cut_long_words requested?
+            ctx.emitter.instruction(&format!("jz {}", width_ok_label));         // a zero width is only rejected together with $cut_long_words
+        }
+    }
+    super::super::exceptions::emit_value_error(ctx, WORDWRAP_ZERO_WIDTH_CUT_MESSAGE);
+    ctx.emitter.label(&width_ok_label);
 }
 
 /// Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper.
@@ -973,8 +1087,54 @@ pub(crate) fn lower_str_pad(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         Arch::AArch64 => lower_str_pad_aarch64(ctx, inst)?,
         Arch::X86_64 => lower_str_pad_x86_64(ctx, inst)?,
     }
+    emit_str_pad_argument_guards(ctx, inst.operands.len() >= 4);
     abi::emit_call_label(ctx.emitter, "__rt_str_pad");
     store_if_result(ctx, inst)
+}
+
+/// Rejects the `str_pad()` argument values reference PHP refuses to pad with.
+///
+/// `__rt_str_pad` copies `length - strlen($string)` bytes out of the pad string, so an
+/// empty `$pad_string` would make it read whatever happens to follow the zero-length
+/// buffer — that is the uninitialized `"xUUU"` output this guard removes. php-src checks
+/// in exactly this order: a `$length` that cannot grow the input returns the input
+/// untouched *before* either value check, then `$pad_string` emptiness, then `$pad_type`.
+/// `has_pad_type` suppresses the fourth-argument guard for calls that leave `$pad_type`
+/// defaulted, where `STR_PAD_RIGHT` is materialized as a constant and can never fail.
+fn emit_str_pad_argument_guards(ctx: &mut FunctionContext<'_>, has_pad_type: bool) {
+    let ok_label = ctx.next_label("str_pad_args_ok");
+    let empty_pad_label = ctx.next_label("str_pad_empty_pad_string");
+    let bad_type_label = ctx.next_label("str_pad_bad_pad_type");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x5, x2");                              // compare the requested length against the input length
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // PHP returns the input unchanged before validating anything else
+            ctx.emitter.instruction(&format!("cbz x4, {}", empty_pad_label));   // an empty pad string cannot supply the missing bytes
+            if has_pad_type {
+                ctx.emitter.instruction("cmp x7, #2");                          // STR_PAD_LEFT/RIGHT/BOTH occupy 0..2
+                ctx.emitter.instruction(&format!("b.hi {}", bad_type_label));   // any other pad mode, including negatives, is rejected
+            }
+            ctx.emitter.instruction(&format!("b {}", ok_label));                // both padding arguments are usable, so run the helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rcx, rdx");                            // compare the requested length against the input length
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // PHP returns the input unchanged before validating anything else
+            ctx.emitter.instruction("test rsi, rsi");                           // is the pad string empty?
+            ctx.emitter.instruction(&format!("jz {}", empty_pad_label));        // an empty pad string cannot supply the missing bytes
+            if has_pad_type {
+                ctx.emitter.instruction("cmp r8, 2");                           // STR_PAD_LEFT/RIGHT/BOTH occupy 0..2
+                ctx.emitter.instruction(&format!("ja {}", bad_type_label));     // any other pad mode, including negatives, is rejected
+            }
+            ctx.emitter.instruction(&format!("jmp {}", ok_label));              // both padding arguments are usable, so run the helper
+        }
+    }
+    ctx.emitter.label(&empty_pad_label);
+    super::super::exceptions::emit_value_error(ctx, STR_PAD_EMPTY_PAD_STRING_MESSAGE);
+    if has_pad_type {
+        ctx.emitter.label(&bad_type_label);
+        super::super::exceptions::emit_value_error(ctx, STR_PAD_INVALID_PAD_TYPE_MESSAGE);
+    }
+    ctx.emitter.label(&ok_label);
 }
 
 /// Lowers `ord()` by returning the first byte of a string or zero for empty input.
@@ -1837,24 +1997,25 @@ fn lower_hash_hmac_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     Ok(())
 }
 
-/// Materializes delimiter/payload string pairs for split-style array helpers.
+/// Materializes delimiter/payload string pairs plus the optional `$limit` for `explode()`.
 fn load_split_pair_args(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
     cleanups: &SplitStringTempCleanups,
 ) -> Result<()> {
-    if inst.operands.len() != 2 {
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
-            "{} expected 2 args, got {}",
+            "{} expected 2 or 3 args, got {}",
             name,
             inst.operands.len()
         )));
     }
     match ctx.emitter.target.arch {
-        Arch::AArch64 => load_split_pair_args_aarch64(ctx, inst, name, cleanups),
-        Arch::X86_64 => load_split_pair_args_x86_64(ctx, inst, name, cleanups),
+        Arch::AArch64 => load_split_pair_args_aarch64(ctx, inst, name, cleanups)?,
+        Arch::X86_64 => load_split_pair_args_x86_64(ctx, inst, name, cleanups)?,
     }
+    load_split_limit_arg(ctx, inst, name)
 }
 
 /// Materializes AArch64 delimiter and subject strings for `explode()`.
@@ -1897,6 +2058,47 @@ fn load_split_pair_args_x86_64(
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
     if let Some(offset) = cleanups.subject_offset {
         save_split_string_temp(ctx, offset, "rdi", "rsi");
+    }
+    Ok(())
+}
+
+/// Materializes the optional `explode()` `$limit` into the splitter's extra argument register.
+///
+/// The already-materialized separator/subject pairs are parked while `$limit` is evaluated,
+/// because coercing a non-integer limit can call runtime helpers that clobber the very
+/// argument registers those pairs occupy. An omitted `$limit` becomes `PHP_INT_MAX`, which is
+/// exactly how php-src spells "no limit" and lets the runtime helper share one code path.
+fn load_split_limit_arg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    let limit_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x5",
+        Arch::X86_64 => "rcx",
+    };
+    if inst.operands.len() < 3 {
+        abi::emit_load_int_immediate(ctx.emitter, limit_reg, i64::MAX);
+        return Ok(());
+    }
+    let limit = expect_operand(inst, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // park the separator while the limit is materialized
+            ctx.emitter.instruction("stp x3, x4, [sp, #-16]!");                 // park the subject string while the limit is materialized
+            load_as_int(ctx, limit, &format!("{} limit", name))?;
+            ctx.emitter.instruction("mov x5, x0");                              // pass the element limit as the extra splitter argument
+            ctx.emitter.instruction("ldp x3, x4, [sp], #16");                   // restore the subject string into its splitter argument registers
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the separator into its splitter argument registers
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // park the separator while the limit is materialized
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");                 // park the subject string while the limit is materialized
+            load_as_int(ctx, limit, &format!("{} limit", name))?;
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the element limit as the extra splitter argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // restore the subject string into its splitter argument registers
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                  // restore the separator into its splitter argument registers
+        }
     }
     Ok(())
 }

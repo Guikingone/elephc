@@ -19,6 +19,19 @@ fn test_assoc_array_mixed_type_checks() {
     );
 }
 
+/// Verifies a negative literal `array_fill()` count stays a runtime `ValueError`, not a diagnostic.
+///
+/// PHP reports it as a catchable `ValueError` at run time, so the checker must keep accepting the
+/// call; the codegen guard covered by `test_array_fill_negative_count_string_value` owns the
+/// rejection.
+#[test]
+fn test_array_fill_negative_count_is_not_a_compile_error() {
+    assert!(
+        check_source(r#"<?php $a = array_fill(0, -1, "x");"#).is_ok(),
+        "array_fill() with a negative count must type-check and fail at run time",
+    );
+}
+
 // Regression test: array union with a non-array right operand produces a type error.
 /// Verifies that error array union requires array operands.
 #[test]

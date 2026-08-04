@@ -221,13 +221,13 @@ PHP does not allow keyed and unkeyed entries in the same destructuring pattern, 
 | `array_search()` | `array_search($needle, $arr): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
-| `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks |
+| `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks. A `$size` of `0` or less throws `\ValueError`. |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
 | `array_merge_recursive()` | `array_merge_recursive($arr1, $arr2): array` | Recursively merge two arrays: integer keys append (renumbered), string keys that collide recurse when both values are arrays and otherwise combine into a list. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed-array values are treated as opaque. |
 | `array_replace()` | `array_replace($arr, $replacements): array` | Overwrite matching keys in `$arr` (in place, keeping position) and append new keys from `$replacements`; later values win. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_replace_recursive()` | `array_replace_recursive($arr, $replacements): array` | Like `array_replace()`, but when both values at a key are associative arrays they are merged recursively instead of overwritten. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed arrays are overwritten, not merged. |
 | `array_combine()` | `array_combine($keys, $values): array` | Create array from keys/values |
-| `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values |
+| `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values. A negative `$num` throws `\ValueError`. |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |
 | `array_pad()` | `array_pad($arr, $size, $value): array` | Pad to length |
 | `range()` | `range($start, $end): array` | Sequential integers |

@@ -20,6 +20,7 @@ use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
@@ -185,6 +186,12 @@ pub(crate) fn collect_constants(
         (ExprKind::IntLiteral(4), PhpType::Int),
     );
     for (name, value) in ARRAY_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in STRING_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

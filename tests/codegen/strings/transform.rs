@@ -79,13 +79,36 @@ echo strlen($s);
     assert_eq!(out, "65538,66000");
 }
 
-/// Verifies str_repeat emits a runtime error when given a negative count, matching PHP's behavior.
+/// Verifies an uncaught `str_repeat()` negative count reports PHP's uncaught-`ValueError` fatal.
+///
+/// The count used to reach `__rt_str_repeat`, which printed a bare fatal no `catch` block could
+/// ever intercept. It is now screened at the call site and raised as a real `ValueError`, so the
+/// uncaught diagnostic gains PHP's `Uncaught ValueError:` prefix.
 #[test]
 fn test_str_repeat_negative_count_reports_runtime_error() {
     let err = compile_and_run_expect_failure(r#"<?php echo str_repeat("ab", -1);"#);
     assert!(err.contains(
-        "Fatal error: str_repeat(): Argument #2 ($times) must be greater than or equal to 0"
+        "Fatal error: Uncaught ValueError: str_repeat(): Argument #2 ($times) must be greater than or equal to 0"
     ));
+}
+
+/// Verifies `str_repeat()` with a negative count raises a catchable `ValueError` like PHP 8.4.
+#[test]
+fn test_str_repeat_negative_count_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo str_repeat("ab", -1);
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", str_repeat("ab", 0), "|", str_repeat("ab", 2);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|str_repeat(): Argument #2 ($times) must be greater than or equal to 0||abab"
+    );
 }
 
 /// Verifies strrev reverses the characters in a string.
@@ -247,6 +270,181 @@ echo count($parts) . " " . $parts[0] . " " . $parts[1] . " " . $parts[2];
 "#,
     );
     assert_eq!(out, "3 He ll o");
+}
+
+/// Verifies `str_pad()` with an empty `$pad_string` raises PHP's catchable `ValueError`.
+///
+/// The runtime pad loop copied `$length - strlen($string)` bytes out of the pad string, so an
+/// empty pad string made it read whatever followed the zero-length buffer: `str_pad("x", 4, "")`
+/// returned `"xUUU"` built from uninitialized memory. PHP only rejects the empty pad string when
+/// padding would actually happen, so the shorter-`$length` call must still return the input.
+#[test]
+fn test_str_pad_empty_pad_string_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo str_pad("x", 4, "");
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", str_pad("xyz", 1, ""), "|", str_pad("x", 4, "-", STR_PAD_LEFT);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|str_pad(): Argument #3 ($pad_string) must not be empty|xyz|---x"
+    );
+}
+
+/// Verifies an uncaught empty `str_pad()` pad string reports PHP's uncaught-`ValueError` fatal.
+#[test]
+fn test_str_pad_empty_pad_string_uncaught_reports_value_error_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php echo str_pad("x", 4, "");"#);
+    assert!(err.contains(
+        "Fatal error: Uncaught ValueError: str_pad(): Argument #3 ($pad_string) must not be empty"
+    ));
+}
+
+/// Verifies `str_pad()` rejects a `$pad_type` outside `STR_PAD_LEFT`/`RIGHT`/`BOTH`.
+#[test]
+fn test_str_pad_invalid_pad_type_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo str_pad("x", 4, "ab", 9);
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", str_pad("x", 5, "ab", STR_PAD_BOTH);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|str_pad(): Argument #4 ($pad_type) must be STR_PAD_LEFT, STR_PAD_RIGHT, or STR_PAD_BOTH|abxab"
+    );
+}
+
+/// Verifies `str_split()` with a non-positive `$length` raises PHP's catchable `ValueError`.
+///
+/// `__rt_str_split` advanced its cursor by the chunk length, so `0` spun forever pushing empty
+/// chunks until the heap was exhausted and `-1` walked the cursor backwards and crashed.
+#[test]
+fn test_str_split_non_positive_length_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([0, -1] as $len) {
+    try {
+        var_dump(str_split("abc", $len));
+    } catch (ValueError $e) {
+        echo get_class($e), "|", $e->getMessage(), "\n";
+    }
+}
+echo implode(",", str_split("abcde", 2)), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|str_split(): Argument #2 ($length) must be greater than 0\n\
+         ValueError|str_split(): Argument #2 ($length) must be greater than 0\n\
+         ab,cd,e\n"
+    );
+}
+
+/// Verifies an uncaught zero `str_split()` chunk length reports PHP's uncaught-`ValueError` fatal.
+#[test]
+fn test_str_split_zero_length_uncaught_reports_value_error_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php var_dump(str_split("abc", 0));"#);
+    assert!(err.contains(
+        "Fatal error: Uncaught ValueError: str_split(): Argument #2 ($length) must be greater than 0"
+    ));
+}
+
+/// Verifies `explode()` with an empty separator raises PHP's catchable `ValueError`.
+///
+/// A zero-length separator matched at every position, so the splitter never advanced and pushed
+/// empty segments until the heap was exhausted.
+#[test]
+fn test_explode_empty_separator_is_a_catchable_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    var_dump(explode("", "abc"));
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", implode("/", explode(",", "a,b,c"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|explode(): Argument #1 ($separator) must not be empty|a/b/c"
+    );
+}
+
+/// Verifies an uncaught empty `explode()` separator reports PHP's uncaught-`ValueError` fatal.
+#[test]
+fn test_explode_empty_separator_uncaught_reports_value_error_fatal() {
+    let err = compile_and_run_expect_failure(r#"<?php var_dump(explode("", "abc"));"#);
+    assert!(err.contains(
+        "Fatal error: Uncaught ValueError: explode(): Argument #1 ($separator) must not be empty"
+    ));
+}
+
+/// Verifies `explode()`'s third `$limit` parameter follows php-src for every sign.
+///
+/// A positive limit caps the element count and lets the last element absorb the remaining
+/// suffix, `0` behaves like `1`, and a negative limit drops that many trailing segments —
+/// including down to an empty array when it drops them all.
+#[test]
+fn test_explode_limit_matches_php_for_every_sign() {
+    let out = compile_and_run(
+        r#"<?php
+$s = "a,b,c";
+echo implode("/", explode(",", $s, 0)), "|";
+echo implode("/", explode(",", $s, 1)), "|";
+echo implode("/", explode(",", $s, 2)), "|";
+echo implode("/", explode(",", $s, 3)), "|";
+echo implode("/", explode(",", $s, 99)), "|";
+echo count(explode(",", $s, -1)), ":", implode("/", explode(",", $s, -1)), "|";
+echo count(explode(",", $s, -2)), ":", implode("/", explode(",", $s, -2)), "|";
+echo count(explode(",", $s, -3)), "|";
+echo count(explode(",", $s, -9)), "|";
+echo count(explode(",", "", -1)), "|";
+echo count(explode(",", "", 0));
+"#,
+    );
+    assert_eq!(out, "a,b,c|a,b,c|a/b,c|a/b/c|a/b/c|2:a/b|1:a|0|0|0|1");
+}
+
+/// Verifies `wordwrap()` rejects the argument combinations reference PHP refuses to wrap with.
+///
+/// An empty `$break` left the wrapper with nothing to insert, so it silently returned the input
+/// unwrapped; a zero `$width` with `$cut_long_words` asks for progress-free cutting. php-src
+/// checks `$break` first, then the width/cut pair.
+#[test]
+fn test_wordwrap_invalid_arguments_are_catchable_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    echo wordwrap("ab cd", 3, "");
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|";
+try {
+    echo wordwrap("abcdef", 0, "\n", true);
+} catch (ValueError $e) {
+    echo get_class($e), "|", $e->getMessage();
+}
+echo "|", wordwrap("ab cd", 3, "|"), "|", wordwrap("abcdef", 0, "\n", false);
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError|wordwrap(): Argument #3 ($break) must not be empty|\
+         ValueError|wordwrap(): Argument #4 ($cut_long_words) cannot be true when argument #2 ($width) is 0|\
+         ab|cd|abcdef"
+    );
 }
 
 /// Verifies sprintf zero-pads an integer to a given width.

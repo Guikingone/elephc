@@ -479,6 +479,9 @@ define("PI", 3.14159);
 | `FNM_PATHNAME` | int | Target-specific libc/PHP value |
 | `FNM_PERIOD` | int | 4 |
 | `FNM_CASEFOLD` | int | 16 |
+| `STR_PAD_RIGHT` | int | 1 — `str_pad()`'s default padding mode |
+| `STR_PAD_LEFT` | int | 0 |
+| `STR_PAD_BOTH` | int | 2 |
 
 ## Superglobals
 

@@ -3715,7 +3715,9 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -4332,7 +4334,9 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -14707,7 +14711,9 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -20813,7 +20819,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "fresh"
+        "kind": "may_alias_arguments"
       },
       "requirements": {
         "kind": "static",
@@ -29275,7 +29281,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "fresh"
+        "kind": "may_alias_arguments"
       },
       "requirements": {
         "kind": "static",
@@ -31890,7 +31896,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "fresh"
+        "kind": "may_alias_arguments"
       },
       "requirements": {
         "kind": "static",
@@ -32379,7 +32385,8 @@
         "kind": "static",
         "names": [
           "reads_process",
-          "writes_process"
+          "writes_process",
+          "may_throw"
         ]
       },
       "lowering": {
@@ -38778,7 +38785,8 @@
         "kind": "static",
         "names": [
           "reads_process",
-          "writes_process"
+          "writes_process",
+          "may_throw"
         ]
       },
       "lowering": {
@@ -43649,7 +43657,9 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -43773,7 +43783,9 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -44019,7 +44031,9 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",
@@ -51974,7 +51988,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "fresh"
+        "kind": "may_alias_arguments"
       },
       "requirements": {
         "kind": "static",
@@ -53408,9 +53422,12 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 49,
+      "codegen_line": 52,
       "notes": [
-        "Rejects `unset()` calls that were not converted into direct EIR unbind operations."
+        "Rejects `unset()` calls that were not converted into direct EIR unbind operations.",
+        "Reaching this lowering means `crate::ir_lower::expr` could not turn the target",
+        "into a slot clear, a hash/array removal, an `offsetUnset()` call or a `__unset()`",
+        "call, so the message lists the shapes that do lower directly."
       ],
       "runtime_helpers": [],
       "sig_arm": null,
@@ -54416,7 +54433,9 @@
       },
       "effects": {
         "kind": "static",
-        "names": []
+        "names": [
+          "may_throw"
+        ]
       },
       "lowering": {
         "kind": "runtime_call",

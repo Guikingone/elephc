@@ -4883,6 +4883,7 @@ fn lower_array_fill_call(
                 ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
             }
         }
+        emit_array_fill_count_guard(ctx, false);
         abi::emit_call_label(ctx.emitter, array_fill_runtime_helper(value_ty));
         return Ok(());
     }
@@ -4898,8 +4899,34 @@ fn lower_array_fill_call(
             ctx.load_value_to_reg(value, "rdx")?;
         }
     }
+    emit_array_fill_count_guard(ctx, true);
     abi::emit_call_label(ctx.emitter, array_fill_runtime_helper(value_ty));
     Ok(())
+}
+
+/// php-src's verbatim `ValueError` wording for `array_fill()` with a negative `$count`.
+const ARRAY_FILL_NEGATIVE_COUNT_MESSAGE: &str =
+    "array_fill(): Argument #2 ($count) must be greater than or equal to 0";
+
+/// Rejects the negative `array_fill()` `$count` reference PHP refuses to build an array for.
+///
+/// The fill helpers write `$count` straight into the array header's length field without
+/// clamping it, so a negative count produced an array whose header claimed a negative length
+/// — `count()` answered `-1` and every walk over it read past the payload. `second_arg_reg`
+/// selects which ABI register currently holds `$count`: the string fill helper takes
+/// `(count, ptr, len)`, every other fill helper takes `(start, count, value)`.
+fn emit_array_fill_count_guard(ctx: &mut FunctionContext<'_>, second_arg_reg: bool) {
+    let count_reg = match (ctx.emitter.target.arch, second_arg_reg) {
+        (Arch::AArch64, false) => "x0",
+        (Arch::AArch64, true) => "x1",
+        (Arch::X86_64, false) => "rdi",
+        (Arch::X86_64, true) => "rsi",
+    };
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::SignedAtLeast(count_reg, 0),
+        ARRAY_FILL_NEGATIVE_COUNT_MESSAGE,
+    );
 }
 
 /// Calls the keyed `array_fill()` runtime helper after materializing the boxed payload fields.
@@ -4925,6 +4952,7 @@ fn lower_array_fill_assoc_call(
             abi::emit_load_int_immediate(ctx.emitter, "r8", value_tag);
         }
     }
+    emit_array_fill_count_guard(ctx, true);
     abi::emit_call_label(ctx.emitter, "__rt_array_fill_assoc");
     Ok(())
 }
@@ -5617,8 +5645,31 @@ fn lower_array_chunk_call(
             ctx.load_value_to_reg(length, "rsi")?;
         }
     }
+    emit_array_chunk_length_guard(ctx);
     abi::emit_call_label(ctx.emitter, array_chunk_runtime_helper(source_elem_ty));
     Ok(())
+}
+
+/// php-src's verbatim `ValueError` wording for `array_chunk()` with a non-positive `$length`.
+const ARRAY_CHUNK_NON_POSITIVE_LENGTH_MESSAGE: &str =
+    "array_chunk(): Argument #2 ($length) must be greater than 0";
+
+/// Rejects the non-positive `array_chunk()` `$length` reference PHP refuses to chunk with.
+///
+/// The chunking helpers advance their cursor by `$length`, so a zero length never reaches the
+/// end of the source and kept allocating empty chunks until the heap was exhausted; a negative
+/// length walks the cursor backwards. The guard runs while `$length` still sits in its ABI
+/// argument register, so it covers every chunk-helper variant at once.
+fn emit_array_chunk_length_guard(ctx: &mut FunctionContext<'_>) {
+    let length_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x1",
+        Arch::X86_64 => "rsi",
+    };
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::SignedAtLeast(length_reg, 1),
+        ARRAY_CHUNK_NON_POSITIVE_LENGTH_MESSAGE,
+    );
 }
 
 /// Calls the appropriate legacy runtime helper after materializing pad arguments.

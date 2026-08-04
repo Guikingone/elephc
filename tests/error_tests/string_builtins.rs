@@ -195,11 +195,47 @@ fn test_error_ord_undefined_variable_arg() {
 }
 
 /// Verifies that `explode()` with only one argument produces the correct arity error.
+///
+/// The reported range covers the optional `$limit` third parameter.
 #[test]
 fn test_error_explode_wrong_args() {
     expect_error(
         "<?php explode(\",\");",
-        "explode() takes exactly 2 arguments",
+        "explode() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `explode()` rejects a fourth argument now that `$limit` is accepted.
+#[test]
+fn test_error_explode_too_many_args() {
+    expect_error(
+        "<?php explode(\",\", \"a,b\", 1, 2);",
+        "explode() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `explode()` accepts the optional `$limit`, positionally and by name.
+#[test]
+fn test_explode_limit_argument_type_checks() {
+    assert!(
+        check_source("<?php $a = explode(\",\", \"a,b\", -1);").is_ok(),
+        "explode() must accept a negative positional $limit",
+    );
+    assert!(
+        check_source("<?php $a = explode(\",\", \"a,b\", limit: 2);").is_ok(),
+        "explode() must accept $limit as a named argument",
+    );
+}
+
+/// Verifies that `str_pad()`'s padding-mode constants are predefined like PHP's.
+#[test]
+fn test_str_pad_mode_constants_are_predefined() {
+    assert!(
+        check_source(
+            "<?php $a = str_pad(\"x\", 4, \"-\", STR_PAD_LEFT) . str_pad(\"x\", 4, \"-\", STR_PAD_RIGHT) . str_pad(\"x\", 4, \"-\", STR_PAD_BOTH);"
+        )
+        .is_ok(),
+        "STR_PAD_LEFT/STR_PAD_RIGHT/STR_PAD_BOTH must resolve as predefined constants",
     );
 }
 

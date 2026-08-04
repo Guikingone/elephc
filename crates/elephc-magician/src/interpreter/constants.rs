@@ -237,6 +237,12 @@ pub(super) const EVAL_LOCK_NB: i64 = 4;
 pub(super) const EVAL_ARRAY_FILTER_USE_VALUE: i64 = 0;
 pub(super) const EVAL_ARRAY_FILTER_USE_BOTH: i64 = 1;
 pub(super) const EVAL_ARRAY_FILTER_USE_KEY: i64 = 2;
+/// `str_pad()` pads on the left of the input.
+pub(super) const EVAL_STR_PAD_LEFT: i64 = 0;
+/// `str_pad()` pads on the right of the input, which is PHP's default.
+pub(super) const EVAL_STR_PAD_RIGHT: i64 = 1;
+/// `str_pad()` splits the padding across both sides of the input.
+pub(super) const EVAL_STR_PAD_BOTH: i64 = 2;
 pub(super) const EVAL_COUNT_NORMAL: i64 = 0;
 pub(super) const EVAL_COUNT_RECURSIVE: i64 = 1;
 pub(super) const EVAL_PREG_SPLIT_NO_EMPTY: i64 = 1;

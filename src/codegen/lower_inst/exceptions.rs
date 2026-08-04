@@ -16,6 +16,10 @@
 //!   synthesized by a codegen guard rather than by a user `new`, and the message string is baked
 //!   at emit time from a caller that passes no span — so there is no origin to print. Reference
 //!   PHP does report one here (the operation's own line), which stays a known gap.
+//! - `emit_value_error_unless()` is the shared builtin argument-range guard: it keeps
+//!   out-of-range arguments (empty separators, non-positive lengths, negative counts)
+//!   from ever reaching a runtime helper that would read uninitialized memory or loop
+//!   forever, and raises reference PHP's catchable `ValueError` instead.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -33,6 +37,55 @@ pub(super) fn emit_error(ctx: &mut FunctionContext<'_>, message: &str) {
 /// Throws a catchable PHP `TypeError` carrying a static message.
 pub(super) fn emit_type_error(ctx: &mut FunctionContext<'_>, message: &str) {
     emit_static_exception(ctx, "TypeError", "_spl_type_error_class_id", message);
+}
+
+/// Throws a catchable PHP `ValueError` carrying a static message.
+///
+/// Reference PHP raises this `Error` subclass — not a fatal — when a builtin argument has
+/// the right type but a value the function cannot honor (`str_pad()` with an empty pad
+/// string, `str_split()` with a non-positive chunk length, `str_repeat()` with a negative
+/// count, `explode()` with an empty separator, `array_fill()` with a negative count,
+/// `random_int()` with `$min > $max`). `catch (ValueError $e)`, `catch (Error $e)`, and
+/// `catch (Throwable $e)` all match; callers pass php-src's own verbatim wording.
+pub(super) fn emit_value_error(ctx: &mut FunctionContext<'_>, message: &str) {
+    emit_static_exception(ctx, "ValueError", "_spl_value_error_class_id", message);
+}
+
+/// The register condition a materialized builtin argument must satisfy to skip its
+/// `ValueError`.
+///
+/// The register is inspected right before the runtime helper call, while the argument
+/// still sits in its target ABI register, so the same guard works for every supported
+/// target without re-materializing the operand.
+pub(super) enum ValueGuard<'a> {
+    /// The 64-bit register, read as a signed integer, must be `>= minimum`
+    /// (`str_split()` chunk length, `str_repeat()`/`array_fill()` counts).
+    SignedAtLeast(&'a str, i64),
+}
+
+/// Throws a catchable PHP `ValueError` unless the guarded register satisfies `guard`.
+///
+/// Emits the compare/branch pair for the active target, falls through to the throw
+/// sequence when the guard fails, and leaves the caller's continuation label in place so
+/// the runtime helper call that follows only ever runs with an in-range argument.
+pub(super) fn emit_value_error_unless(
+    ctx: &mut FunctionContext<'_>,
+    guard: ValueGuard<'_>,
+    message: &str,
+) {
+    let ok_label = ctx.next_label("value_guard_ok");
+    match (ctx.emitter.target.arch, &guard) {
+        (Arch::AArch64, ValueGuard::SignedAtLeast(reg, minimum)) => {
+            ctx.emitter.instruction(&format!("cmp {}, #{}", reg, minimum));     // compare the materialized argument against its PHP minimum
+            ctx.emitter.instruction(&format!("b.ge {}", ok_label));             // an argument at or above the minimum is in range
+        }
+        (Arch::X86_64, ValueGuard::SignedAtLeast(reg, minimum)) => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", reg, minimum));      // compare the materialized argument against its PHP minimum
+            ctx.emitter.instruction(&format!("jge {}", ok_label));              // an argument at or above the minimum is in range
+        }
+    }
+    emit_value_error(ctx, message);
+    ctx.emitter.label(&ok_label);
 }
 
 /// Throws a catchable PHP `DivisionByZeroError` carrying a static message.
