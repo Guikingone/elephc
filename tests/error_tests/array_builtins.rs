@@ -697,3 +697,90 @@ fn test_error_array_multisort_non_array() {
         "array_multisort() arguments must be indexed arrays",
     );
 }
+
+/// Verifies that an untyped closure/arrow-function parameter passed as an array builtin's
+/// callback inherits the array's ELEMENT type instead of staying `Mixed`, so a string-only
+/// builtin call in the body type-checks. Covers every builtin that types its callback
+/// contextually; runtime behavior is covered by codegen tests where the backend supports it.
+#[test]
+fn test_array_callback_untyped_parameters_inherit_element_type() {
+    expect_no_error(
+        r#"<?php
+$w = ["banana", "apple"];
+usort($w, fn($a, $b) => strlen($a) <=> strlen($b));
+"#,
+    );
+    expect_no_error(
+        r#"<?php
+$w = ["k" => "banana", "j" => "apple"];
+uasort($w, fn($a, $b) => strlen($a) <=> strlen($b));
+"#,
+    );
+    expect_no_error(
+        r#"<?php
+$w = ["banana", "apple"];
+$r = array_filter($w, fn($v) => strlen($v) > 3);
+"#,
+    );
+    expect_no_error(
+        r#"<?php
+$w = ["banana", "apple"];
+$r = array_map(fn($v) => strtoupper($v), $w);
+"#,
+    );
+    expect_no_error(
+        r#"<?php
+$w = ["banana", "apple"];
+array_walk($w, function ($v) { echo strlen($v); });
+"#,
+    );
+    expect_no_error(
+        r#"<?php
+$w = ["banana", "apple"];
+$r = array_reduce($w, fn($c, $v) => $c + strlen($v), 0);
+"#,
+    );
+}
+
+/// Verifies that `uksort()` types its comparator parameters from the array's KEY type, so a
+/// string-keyed array gives an untyped comparator two `string` parameters instead of `int`.
+#[test]
+fn test_uksort_untyped_parameters_inherit_key_type() {
+    expect_no_error(
+        r#"<?php
+$w = ["banana" => 1, "fig" => 2];
+uksort($w, fn($a, $b) => strlen($a) <=> strlen($b));
+"#,
+    );
+}
+
+/// Verifies that `array_walk()` also types the optional second callback parameter from the
+/// array's key type, while a single-parameter callback still passes arity validation.
+#[test]
+fn test_array_walk_callback_second_parameter_inherits_key_type() {
+    expect_no_error(
+        r#"<?php
+$w = ["banana" => 1, "fig" => 2];
+array_walk($w, function ($v, $k) { echo strlen($k), $v; });
+"#,
+    );
+    expect_no_error(
+        r#"<?php
+$w = ["banana", "apple"];
+array_walk($w, function ($v) { echo strlen($v); });
+"#,
+    );
+}
+
+/// Verifies contextual callback typing does not silence real errors: an integer element type
+/// still rejects a string-only builtin applied to the inherited parameter.
+#[test]
+fn test_array_callback_contextual_typing_still_rejects_wrong_element_use() {
+    expect_error(
+        r#"<?php
+$w = [3, 1, 2];
+usort($w, fn($a, $b) => strlen($a) <=> strlen($b));
+"#,
+        "strlen() argument must be string",
+    );
+}

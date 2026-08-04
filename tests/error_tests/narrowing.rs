@@ -103,3 +103,74 @@ fn test_no_narrow_when_literal_true_loop_can_break() {
         "List unpacking requires an array",
     );
 }
+
+/// Verifies a static-property narrowing does not survive an intervening call that could reassign
+/// it: PHP raises a `TypeError` for this program at runtime, so the compiler must keep rejecting it.
+#[test]
+fn test_static_property_narrowing_dropped_by_intervening_call() {
+    expect_error(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    private static function wipe(): void { self::$inst = null; }
+    public static function get(): S {
+        if (self::$inst === null) { self::$inst = new S(); }
+        self::wipe();
+        return self::$inst;
+    }
+}
+"#,
+        "return type expects Object(\"S\")",
+    );
+}
+
+/// Verifies return-type validation is flow-sensitive: a `return` placed BEFORE the guard that
+/// establishes the narrowing must not borrow that later fact.
+#[test]
+fn test_property_narrowing_does_not_leak_backwards_to_earlier_return() {
+    expect_error(
+        r#"<?php
+class A {
+    public ?A $p = null;
+    public function f(bool $c): A {
+        if ($c) { return $this->p; }
+        if ($this->p === null) { throw new Exception("x"); }
+        return $this->p;
+    }
+}
+"#,
+        "return type expects Object(\"A\")",
+    );
+}
+
+/// Verifies a nullable static property with no narrowing at all still fails the non-null return.
+#[test]
+fn test_unguarded_nullable_static_property_return_still_rejected() {
+    expect_error(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public static function get(): S { return self::$inst; }
+}
+"#,
+        "return type expects Object(\"S\")",
+    );
+}
+
+/// Verifies `static::$p` is not narrowed: late static binding can select a subclass that
+/// redeclares the property, so the guarded fact does not describe the storage a later read hits.
+#[test]
+fn test_late_static_bound_property_is_not_narrowed() {
+    expect_error(
+        r#"<?php
+class S {
+    protected static ?S $inst = null;
+    public static function get(): S {
+        if (static::$inst === null) { static::$inst = new S(); }
+        return static::$inst;
+    }
+}
+"#,
+        "return type expects Object(\"S\")",
+    );
+}

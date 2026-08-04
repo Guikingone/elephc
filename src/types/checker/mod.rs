@@ -26,6 +26,7 @@ mod functions;
 mod inference;
 mod loop_storage;
 mod method_pass;
+pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
 mod type_compat;
@@ -167,6 +168,38 @@ pub(crate) struct Checker {
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because
     /// eval fragments can create caller-scope variables at runtime.
     pub eval_barrier_active: bool,
+    /// Types recorded for `return <expr>;` statements at the moment each one was checked,
+    /// keyed by the statement node's address in the AST plus its span.
+    ///
+    /// `collect_return_infos` runs *after* a body has been checked and re-infers every return
+    /// against the body's FINAL environment. Without this side channel a flow-sensitive fact
+    /// that only holds on part of the body — a property narrowing established halfway down —
+    /// would be applied to returns that execute before it, silently accepting a nullable
+    /// return. The address key is exact because both passes borrow the same immutable AST; the
+    /// span is carried alongside so a recycled address can never be mistaken for a hit.
+    pub flow_typed_returns: HashMap<usize, (Span, PhpType)>,
+    /// Whether the statements being checked belong to the top-level (global) scope rather than a
+    /// function, method, or closure body. `with_local_storage_context` clears it for every local
+    /// scope, so `null_probe` only records deferred roots for the scope whose environment
+    /// actually becomes `CheckResult::global_env`.
+    pub null_probe_scope_is_top_level: bool,
+    /// Never-declared variables named by a null probe (`isset`/`empty`/`unset`/`??`) at top level,
+    /// with the span to blame if the tolerance turns out to be unjustified.
+    ///
+    /// PHP answers these probes without an `Undefined variable` warning, but EIR lowering can only
+    /// represent the storage when the variable stays `null` for the whole scope: main's local
+    /// types come from `global_env`, so a name that is *also* assigned somewhere at top level ends
+    /// up with that assigned type and its slot is read before any store. `check_top_level_program`
+    /// therefore defers the decision to the end of the pass, where `global_env` is authoritative.
+    pub pending_null_probe_roots: Vec<(String, Span)>,
+    /// Nesting depth of null-probe operand inference (`isset`/`empty`/`unset` arguments and the
+    /// left operand of `??`).
+    ///
+    /// Inside a probe, reaching through a `null` base is legal PHP — `isset($n['k'])` and
+    /// `$n->p ?? $d` answer `false`/`$d` for a null `$n` instead of faulting — so index and
+    /// property access on `PhpType::Void` yield `Void` rather than a diagnostic. Outside a probe
+    /// those accesses keep their errors.
+    pub null_probe_depth: usize,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,

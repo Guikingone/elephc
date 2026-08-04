@@ -317,6 +317,9 @@ impl Checker {
                     // "undefined index" warning behavior for this very
                     // common idiom (e.g. `json_decode($json, true)["k"]`).
                     PhpType::Mixed => Ok(PhpType::Mixed),
+                    // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
+                    // answer `false` / the default; only a probe context may do so.
+                    PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }
@@ -425,7 +428,14 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::NullCoalesce { value, default } => {
-                let vt = self.infer_type(value, env)?;
+                // `??` is a null probe: PHP evaluates `$neverDefined ?? $d` to `$d` without an
+                // undefined-variable warning, so a never-declared chain root reads as `null`
+                // here. The default operand keeps ordinary inference.
+                let probed =
+                    crate::types::checker::null_probe::null_probe_env(self, value, env);
+                let probed_env = probed.clone();
+                let vt = self
+                    .infer_null_probe_operand(value, probed_env.as_ref().unwrap_or(env))?;
                 let dt = self.infer_type(default, env)?;
                 let non_null_value = if Self::union_contains_void(&vt) {
                     self.strip_void_from_union(&vt)
@@ -574,7 +584,7 @@ impl Checker {
                 self.infer_dynamic_property_access_type(object, property, expr, env, true)
             }
             ExprKind::StaticPropertyAccess { receiver, property } => {
-                self.infer_static_property_access_type(receiver, property, expr)
+                self.infer_static_property_access_type(receiver, property, expr, env)
             }
             ExprKind::MethodCall {
                 object,

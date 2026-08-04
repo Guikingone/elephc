@@ -169,14 +169,26 @@ impl Checker {
         result
     }
 
-    /// Invalidates synthetic property facts affected by a completed statement assignment.
+    /// Invalidates synthetic property facts affected by a completed statement assignment, then
+    /// re-establishes the fact for the storage the statement itself wrote.
+    ///
     /// Property writes can mutate an aliased object and therefore clear every fact; local
-    /// rebindings clear only facts rooted at the rebound local.
-    fn invalidate_property_narrowings_after_assignment(&self, stmt: &Stmt, env: &mut TypeEnv) {
+    /// rebindings clear only facts rooted at the rebound local. A plain
+    /// `$this->p = <non-null>` / `self::$p = <non-null>` write is the one case where the
+    /// post-write type of a place is known, so `record_property_assignment_narrowing` puts that
+    /// single fact back — this is what lets `if (self::$p === null) { self::$p = new S(); }`
+    /// leave `self::$p` non-null on both paths.
+    fn invalidate_property_narrowings_after_assignment(&mut self, stmt: &Stmt, env: &mut TypeEnv) {
         match &stmt.kind {
-            StmtKind::PropertyAssign { .. }
-            | StmtKind::PropertyArrayPush { .. }
-            | StmtKind::PropertyArrayAssign { .. } => Self::purge_property_narrowings(env),
+            StmtKind::PropertyAssign { .. } | StmtKind::StaticPropertyAssign { .. } => {
+                Self::purge_property_narrowings(env);
+                self.record_property_assignment_narrowing(stmt, env);
+            }
+            StmtKind::PropertyArrayPush { .. } | StmtKind::PropertyArrayAssign { .. } => {
+                Self::purge_property_narrowings(env)
+            }
+            StmtKind::StaticPropertyArrayPush { .. }
+            | StmtKind::StaticPropertyArrayAssign { .. } => Self::purge_property_narrowings(env),
             StmtKind::NestedArrayAssign { target, .. }
                 if assignment_target_may_write_property(target) =>
             {

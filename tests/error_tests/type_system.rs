@@ -991,3 +991,42 @@ fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
         "array_sum() argument must be array",
     );
 }
+
+/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
+/// tolerance is scoped to `isset`/`empty`/`unset`/`??` and nothing else.
+#[test]
+fn test_undefined_variable_read_is_still_rejected() {
+    expect_error("<?php echo $neverDefined;", "Undefined variable: $neverDefined");
+}
+
+/// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])`
+/// but not about `$a`, so the index subexpression keeps the diagnostic.
+#[test]
+fn test_null_probe_index_subexpression_still_requires_a_defined_variable() {
+    expect_error("<?php var_dump(isset($a[$b]));", "Undefined variable: $b");
+}
+
+/// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is
+/// exactly what those constructs exist for. Runtime answers are pinned by codegen tests.
+#[test]
+fn test_null_probes_accept_a_never_declared_variable() {
+    expect_no_error("<?php var_dump(isset($neverA));");
+    expect_no_error("<?php var_dump(empty($neverB));");
+    expect_no_error(r#"<?php var_dump($neverC ?? "d");"#);
+    expect_no_error("<?php unset($neverD); echo 'ok';");
+    expect_no_error("<?php var_dump(isset($neverE['k']));");
+}
+
+/// Verifies a probed name that is ALSO assigned in the same scope keeps the diagnostic.
+///
+/// The tolerance is only sound while the variable stays `null` for the whole scope: main's local
+/// types come from the final global environment, so an assigned name gets that assigned type on a
+/// slot the probe would read before any store. Accepting it would miscompile, so the deferred
+/// check restores the original error.
+#[test]
+fn test_null_probe_on_a_later_assigned_variable_is_still_rejected() {
+    expect_error(
+        "<?php if (!isset($cfg)) { $cfg = 3; } var_dump($cfg);",
+        "Undefined variable: $cfg",
+    );
+}

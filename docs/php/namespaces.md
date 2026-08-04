@@ -35,7 +35,14 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 ## Name resolution rules
 - Unqualified class names honor `use` aliases, otherwise resolve relative to current namespace
 - Functions/constants: `use function`/`use const` aliases first, then current namespace, then global fallback
-- Fully-qualified `\Lib\Tool` always refers to global canonical name
+- Qualified names (containing `\` but not starting with one) have their **first segment** expanded
+  through the class/namespace import table — the plain `use` table — whether the name denotes a
+  class, a function, or a constant. With `use App\Math as M;`, all of `M\double(5)`,
+  `new M\Thing()`, `M\Thing::method()`, `$x instanceof M\Thing` and `M\FOO` resolve into
+  `App\Math`. Only the first segment is substituted, and `use function` / `use const` aliases do
+  not participate (they apply to unqualified names only), matching PHP
+- Fully-qualified `\Lib\Tool` always refers to global canonical name; a leading `\` suppresses
+  alias expansion, so `\M\double()` is *not* rewritten
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity

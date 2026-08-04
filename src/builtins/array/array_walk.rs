@@ -30,11 +30,15 @@ builtin! {
 
 /// Validates the array and callback arguments for an `array_walk` call.
 ///
-/// Infers the array, derives its element type, and checks the callback signature contextually.
+/// Infers the array and checks the callback contextually against its element type, adding the
+/// array's key type as a second parameter when the callback declares `function ($value, $key)`.
 /// Arity (exactly 2) is pre-validated by the registry. Returns `Ok(PhpType::Void)`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let arr_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
-    let callback_arg_types = [crate::types::checker::builtins::array_element_type(&arr_ty)];
+    let callback_arg_types = crate::types::checker::builtins::array_walk_callback_arg_types(
+        &arr_ty,
+        &cx.args[1],
+    );
     crate::types::checker::builtins::check_array_callback_builtin_call(
         cx.checker,
         &cx.args[1],

@@ -1402,3 +1402,31 @@ echo count(array_map(function (int $n): int { return $n; }, build()));
     );
     assert_eq!(out, "0");
 }
+
+/// Verifies an untyped arrow-function predicate passed to `array_filter` inherits the
+/// indexed array's `string` element type, so `strlen()` in its body compiles and runs.
+#[test]
+fn test_array_filter_untyped_closure_param_inherits_string_element() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["banana", "apple", "fig"];
+$r = array_filter($w, fn($v) => strlen($v) > 3);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "banana,apple");
+}
+
+/// Verifies an untyped arrow-function callback passed to `array_map` inherits the indexed
+/// array's `string` element type.
+#[test]
+fn test_array_map_untyped_closure_param_inherits_string_element() {
+    let out = compile_and_run(
+        r#"<?php
+$w = ["banana", "apple"];
+$r = array_map(fn($v) => strtoupper($v), $w);
+echo implode(",", $r);
+"#,
+    );
+    assert_eq!(out, "BANANA,APPLE");
+}

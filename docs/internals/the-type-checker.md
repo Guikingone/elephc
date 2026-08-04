@@ -232,6 +232,53 @@ The type checker validates:
 2. **Argument types** — wrong types → error (in some cases; many builtins accept multiple types)
 3. **Return type** — used to infer the type of the call expression
 
+### Contextual callback parameter typing
+
+**File:** `src/types/checker/builtins/callables.rs`
+
+An array builtin types the *unannotated* parameters of its callback from the array it is given, so
+the idiomatic untyped closure/arrow function checks correctly:
+
+```php
+$words = ["banana", "apple"];
+usort($words, fn($a, $b) => strlen($a) <=> strlen($b));   // $a, $b are string
+```
+
+`array_map` (argument 0), `array_all` / `array_any` / `array_filter` / `array_find` /
+`array_reduce` / `array_walk` / `array_walk_recursive` / `uasort` / `uksort` / `usort`
+(argument 1) and `array_udiff` / `array_uintersect` (argument 2) are typed this way. Value
+parameters take the array's element type; key parameters take the array's key type — `Int` for an
+indexed array, the declared key type for an associative one. That is what `uksort` compares, what
+`array_filter` passes under `ARRAY_FILTER_USE_KEY` / `ARRAY_FILTER_USE_BOTH`, and what
+`array_walk` passes as its optional second callback parameter (added only when the callback
+literally declares it, so a one-parameter callback still satisfies arity checking).
+
+`contextual_callback_arg_positions()` is the single source of truth for those positions, and every
+eager pre-inference pass consults it. Skipping them matters: inferring the closure before the hook
+supplies its hints would check the body once against the unhinted parameter fallback and reject
+valid code. Explicitly declared parameter types always stay authoritative, and an element type the
+array does not pin down (`Mixed`/`Never`) leaves the parameter `Mixed`.
+
+### Null probes (`isset` / `empty` / `unset` / `??`)
+
+**File:** `src/types/checker/null_probe.rs`
+
+`isset()`, `empty()`, `unset()` and the left operand of `??` / `??=` exist to name storage that may
+never have been declared, and PHP answers all of them without an `Undefined variable` warning. The
+checker matches that: the *spine* of the operand's access chain (`$x`, `$x[...]`, `$x->p`, `$x?->p`)
+may bottom out in an undeclared variable, which reads as `null`. Reaching through a `null` base is
+allowed inside a probe too, so `isset($never['k'])` answers `false` instead of "Cannot index
+non-array". Index and property-name subexpressions are *not* covered — PHP still warns about `$b`
+in `isset($a[$b])`, so that keeps the ordinary diagnostic, as does every read outside a probe.
+
+Acceptance is decided at the *end* of the top-level pass rather than at the probe. EIR lowering
+derives `main`'s local types from `CheckResult::global_env`, so a probed name is only representable
+while it stays `null` for the whole scope: it must finish the pass unbound, and the checker then
+seeds it as `null` so codegen answers from the slot type instead of reading storage no store ever
+initializes. A name that is *also* assigned at top level (`if (!isset($cfg)) { $cfg = 3; }`) would
+get that assigned type on a slot the probe reads before the store, so the original diagnostic is
+restored for it.
+
 ## User-defined function checking
 
 **Files:** `src/types/checker/functions.rs`, `src/types/checker/functions/`
@@ -284,9 +331,27 @@ This information is then used when checking calls to that function.
 
 **File:** `src/types/checker/stmt_check/narrowing.rs`
 
-Inside an `if` (or ternary) guarded by a type predicate, the checker narrows the guarded binding's type for each branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`/`is_real`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class; `is_null($x)` and the strict comparisons `$x === null` and `$x === false` (in either operand order) narrow to `null` and to the literal `False` subtype respectively. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. The false-sentinel case preserves the literal `false`: after `if ($x === false) { throw ...; }`, an `int|false` value continues as plain `int`, while a full `bool` member is not stripped.
+Inside an `if` (or ternary) guarded by a type predicate, the checker narrows the guarded binding's type for each branch. `is_int`/`is_integer`/`is_long`, `is_float`/`is_double`/`is_real`, `is_string`, and `is_bool` narrow to the corresponding scalar; `$x instanceof Class` narrows to that class; `is_null($x)` and the strict comparisons `$x === null` and `$x === false` (in either operand order) narrow to `null` and to the literal `False` subtype respectively. `$x !== null` / `$x !== false` and single-operand `isset($x)` are the same guards with the branches swapped, so a leading `!` on them cancels out. The then-branch sees the guarded type and the else-branch sees the complement (a `Union` drops the matched members); a leading `!` swaps the two. The false-sentinel case preserves the literal `false`: after `if ($x === false) { throw ...; }`, an `int|false` value continues as plain `int`, while a full `bool` member is not stripped.
 
-The guarded receiver may be a variable or a simple property access (`$var->prop`, `$this->prop`). Property narrowings are stored under a synthetic environment key and are conservatively dropped after anything that could mutate the property — a property assignment, any call, or loop-body entry — and dropped per-object when the root local is rebound. Properties backed by PHP 8.4 `get` hooks or `__get` are never narrowed, because two reads may produce different values.
+The guarded receiver may be a variable, a simple instance property (`$var->prop`, `$this->prop`), or a simple static property (`self::$p`, `Cls::$p`). `static::$p` is never narrowed, because late static binding can select a subclass that redeclares the property. Property narrowings are stored under a synthetic environment key and are conservatively dropped after anything that could mutate the property — a property assignment, any call, or loop-body entry — and dropped per-object when the root local is rebound. Properties backed by PHP 8.4 `get` hooks or `__get` are never narrowed, because two reads may produce different values. Guard detection never raises a diagnostic of its own: a receiver whose type cannot be inferred is simply not narrowed.
+
+#### Lazy initialization (the singleton shape)
+
+A completed `$this->p = <non-null>` or `self::$p = <non-null>` write re-establishes the fact for that place, recorded as the property's *declared* type minus `null` (never the assigned expression's type — a declared property coerces what it stores). When a single guarded clause both falls through and wrote its guarded place, the type after the `if` is the union of the then-branch exit fact and the guard complement instead of the pre-`if` type. Together those make PHP's lazy-initialization idiom check:
+
+```php
+class S {
+    private static ?S $inst = null;
+    public static function get(): S {
+        if (self::$inst === null) { self::$inst = new S(); }   // then-path: S
+        return self::$inst;                                    // else-path: S  =>  S
+    }
+}
+```
+
+The `!isset(self::$inst)`, `self::$inst !== null` early-return, `self::$inst ??= new S()` and `$this->p ??= ...` spellings all reach the same fact. An intervening call still drops it, so a genuinely unsound program (`self::wipe(); return self::$inst;` — a `TypeError` under PHP) stays rejected.
+
+Return-type validation is flow-sensitive against these facts: each `return` records the type it had where it was checked (`Checker::flow_typed_returns`), so a narrowing established halfway down a body is not applied to a `return` that executes before it.
 
 Narrowing applies across `if`/`elseif`/`else` chains: each subsequent clause (and the `else`) sees the accumulated complement of the previous guards. A chain with no `else` whose every clause body always diverges (`return`, `throw`, `exit()`/`die()`, or a call to a function declared `: never`) narrows the statements after the entire `if` construct to the accumulated complement. This is what makes the common "overload" shape type-check:
 

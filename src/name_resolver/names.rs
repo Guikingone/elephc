@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - PHP class-like names are resolved differently from function and constant fallback lookups.
+//! - The leading segment of a *qualified* name (`M\thing`) is expanded through the
+//!   class/namespace import table for classes, functions, and constants alike
+//!   (`expand_qualified_namespace_alias`); `use function` / `use const` aliases apply only to
+//!   unqualified names, and fully-qualified names are never expanded.
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, Name};
@@ -122,6 +126,31 @@ pub(super) fn register_imports(
     Ok(())
 }
 
+/// Expands the leading segment of a *qualified* name (contains `\`, no leading `\`)
+/// through the class/namespace import table.
+///
+/// PHP translates the first segment of a qualified name using the class/namespace import
+/// table (plain `use X as A;`) regardless of whether the name ultimately denotes a class,
+/// a function, or a constant. `use function` / `use const` aliases apply only to
+/// *unqualified* names, and fully-qualified names (`\A\b`) are never expanded. Alias
+/// lookup is case-insensitive, and only the first segment is ever substituted.
+///
+/// Returns `None` when the name is unqualified or fully qualified, or when its first
+/// segment is not a registered alias.
+pub(super) fn expand_qualified_namespace_alias(name: &Name, imports: &Imports) -> Option<String> {
+    if name.is_fully_qualified() || name.is_unqualified() {
+        return None;
+    }
+    let first = name.parts.first()?;
+    let alias = imports.classes.get(&php_symbol_key(first))?;
+    let suffix = &name.parts[1..];
+    if suffix.is_empty() {
+        Some(alias.clone())
+    } else {
+        Some(format!("{}\\{}", alias, suffix.join("\\")))
+    }
+}
+
 /// Resolves "self", "parent", "static" to their lowercase special-name form;
 /// delegates to `resolved_class_name` for all other names.
 pub(super) fn resolve_special_or_class_name(
@@ -162,18 +191,10 @@ pub(super) fn resolved_class_name(
                 .canonical_class_like(alias)
                 .unwrap_or_else(|| alias.clone());
         }
-    } else if let Some(first) = name.parts.first() {
-        if let Some(alias) = imports.classes.get(&php_symbol_key(first)) {
-            let suffix = &name.parts[1..];
-            let candidate = if suffix.is_empty() {
-                alias.clone()
-            } else {
-                format!("{}\\{}", alias, suffix.join("\\"))
-            };
-            return symbols
-                .canonical_class_like(&candidate)
-                .unwrap_or(candidate);
-        }
+    } else if let Some(candidate) = expand_qualified_namespace_alias(name, imports) {
+        return symbols
+            .canonical_class_like(&candidate)
+            .unwrap_or(candidate);
     }
     let candidate = if let Some(namespace) = current_namespace {
         if !namespace.is_empty() {
@@ -204,14 +225,8 @@ pub(super) fn resolved_class_constant_name(
         {
             return alias.clone();
         }
-    } else if let Some(first) = name.parts.first() {
-        if let Some(alias) = imports.classes.get(&php_symbol_key(first)) {
-            let suffix = &name.parts[1..];
-            if suffix.is_empty() {
-                return alias.clone();
-            }
-            return format!("{}\\{}", alias, suffix.join("\\"));
-        }
+    } else if let Some(candidate) = expand_qualified_namespace_alias(name, imports) {
+        return candidate;
     }
     if let Some(namespace) = current_namespace {
         if !namespace.is_empty() {
@@ -264,18 +279,8 @@ pub(super) fn resolve_function_name(
         }
         return local;
     }
-    if let Some(first) = name.parts.first() {
-        if let Some(alias) = imports.functions.get(&php_symbol_key(first)) {
-            let suffix = &name.parts[1..];
-            let candidate = if suffix.is_empty() {
-                alias.clone()
-            } else {
-                format!("{}\\{}", alias, suffix.join("\\"))
-            };
-            return symbols
-                .canonical_function(&candidate)
-                .unwrap_or(candidate);
-        }
+    if let Some(candidate) = expand_qualified_namespace_alias(name, imports) {
+        return symbols.canonical_function(&candidate).unwrap_or(candidate);
     }
     let candidate = if let Some(namespace) = current_namespace {
         if !namespace.is_empty() {
@@ -330,14 +335,8 @@ pub(super) fn resolve_constant_name(
         }
         return local;
     }
-    if let Some(first) = name.parts.first() {
-        if let Some(alias) = imports.constants.get(first) {
-            let suffix = &name.parts[1..];
-            if suffix.is_empty() {
-                return alias.clone();
-            }
-            return format!("{}\\{}", alias, suffix.join("\\"));
-        }
+    if let Some(candidate) = expand_qualified_namespace_alias(name, imports) {
+        return candidate;
     }
     if let Some(namespace) = current_namespace {
         if !namespace.is_empty() {

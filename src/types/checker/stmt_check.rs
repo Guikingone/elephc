@@ -109,7 +109,15 @@ impl Checker {
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
                 if let Some(e) = expr {
-                    self.infer_type_with_assignment_effects(e, env)?;
+                    let returned = self.infer_type_with_assignment_effects(e, env)?;
+                    // Record the type as observed HERE, in flow order, so the later
+                    // flow-insensitive return-coverage pass does not apply a narrowing that
+                    // only holds further down the body to this return. See
+                    // `Checker::flow_typed_returns`.
+                    self.flow_typed_returns.insert(
+                        stmt as *const Stmt as usize,
+                        (stmt.span, returned),
+                    );
                     // `function &f() { return $obj->prop; }` returns a reference to the
                     // property, so promote it to a reference property program-wide.
                     if self.current_by_ref_return {
