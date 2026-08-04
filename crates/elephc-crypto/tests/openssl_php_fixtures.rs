@@ -10,6 +10,8 @@
 
 #[path = "fixtures/openssl_php_fixtures.rs"]
 mod fixtures;
+#[path = "openssl_php_fixtures/abi.rs"]
+mod abi;
 
 use fixtures as fx;
 

@@ -166,15 +166,18 @@ warnings, by-ref tag store, Mixed/`false` boxing).
 
 ```text
 crates/elephc-crypto/
-  Cargo.toml          # + aes, cbc, ctr, ecb?, aes-gcm, cipher, base64?
+  Cargo.toml          # + aes, cipher, ctr, ghash, subtle
   src/
     lib.rs            # re-export / register new externs
     algos.rs          # existing hash
     hmac.rs           # existing
     cipher.rs         # NEW: name table, key/iv normalize, dispatch
-    encrypt.rs        # NEW: or keep encrypt+decrypt in cipher.rs if cohesive
+    cipher/abi.rs     # NEW: panic-contained C ABI + output sizing
+    cipher/block.rs   # NEW: CBC/ECB padding and CTR dispatch
+    cipher/gcm.rs     # NEW: runtime-IV/tag AES-GCM composition
   tests/
-    vectors.rs        # extend with AES vectors + PHP golden fixtures
+    openssl_php_fixtures.rs      # fixture schema/inventory
+    openssl_php_fixtures/abi.rs  # ABI/NIST/PHP-golden tests
 ```
 
 Prefer splitting if `cipher.rs` would exceed the soft 500 LoC cohesion
@@ -195,7 +198,7 @@ Keep status codes simple and panic-free across the `extern "C"` boundary.
 //  -5 decrypt/auth/padding failure
 //  -6 bad tag_length
 //  -7 output buffer too small
-//  -8 bad options / unsupported combo
+//  -8 invalid options or pointer arguments
 
 #[no_mangle]
 pub unsafe extern "C" fn elephc_crypto_cipher_iv_length(
@@ -206,13 +209,10 @@ pub unsafe extern "C" fn elephc_crypto_cipher_iv_length(
 #[no_mangle]
 pub unsafe extern "C" fn elephc_crypto_cipher_methods(
     aliases: i32,
-    out_ptrs: *mut *const u8, // or single packed buffer protocol
-    out_lens: *mut usize,
-    max_count: usize,
-) -> isize; // count written, or -1
-
-// Prefer a simpler packed protocol if multi-pointer is painful:
-// write NUL-separated or length-prefixed names into out_buf; return count.
+    out_ptr: *mut u8,
+    out_cap: usize,
+    out_len: *mut usize,
+) -> isize; // count written; names are trailing-NUL packed
 
 #[no_mangle]
 pub unsafe extern "C" fn elephc_crypto_encrypt(
@@ -248,20 +248,25 @@ pass full `options` into the bridge and let it ignore `RAW_DATA` — either is
 fine if documented; prefer **bridge ignores `OPENSSL_RAW_DATA`**, glue handles
 base64.
 
-**Output sizing:** caller provides a generous buffer (e.g. `data_len + 64` for
-encrypt, `data_len` for decrypt raw, or two-phase length query). Simplest MVP:
-fixed max or `data_len + 32` with `-7` if too small; runtime allocates based on
-input length + block size + tag.
+**Output sizing:** caller provides a generous buffer (e.g. `data_len + 32` for
+encrypt and `data_len` for decrypt raw). On `-7`, the ABI still writes the
+required ciphertext/plaintext and tag lengths so callers can retry. The packed
+method-list ABI follows the same length-query rule.
 
 ### Dependencies (`Cargo.toml`)
 
-Use current RustCrypto stack compatible with existing `digest 0.10`:
+Locked RustCrypto stack compatible with existing `digest 0.10`:
 
 - `aes`
-- `cbc`
+- `cipher`
 - `ctr`
-- `aes-gcm`
-- block padding via `cipher` traits / `cbc` padding helpers
+- `ghash`
+- `subtle`
+
+CBC/ECB padding is implemented locally so failures map to stable bridge status
+codes. GCM is composed from RustCrypto AES + GHASH because PHP accepts arbitrary
+non-empty runtime IV lengths and 1..=16-byte tags, while the high-level
+`aes-gcm` type encodes both sizes at compile time.
 
 Avoid `openssl` crate. Keep musl/Docker test images working without new system
 packages.
@@ -555,15 +560,16 @@ carry empty/short/long-IV ciphertext plus the PHP warning observed on successful
 encrypt/decrypt calls. Empty CBC/CTR/GCM plaintext is round-tripped and exported.
 The corpus also contains 13 false-return failure modes with PHP-level warning
 text where PHP emits one. Provider error-queue strings are intentionally
-excluded because they vary with the OpenSSL build. The Elephc-specific 12-name
-`openssl_get_cipher_methods()` inventory remains a Phase 2 implementation test,
-not a PHP golden (stock PHP exposes a much larger method list).
+excluded because they vary with the OpenSSL build. The bridge's Elephc-specific
+12-name method inventory is locked in Phase 1; its PHP-visible AOT exposure
+remains a Phase 2 implementation test, not a PHP golden (stock PHP exposes a
+much larger method list).
 
 ### Phase 1 — `elephc-crypto` cipher engine
 
-- [ ] Dependencies + `cipher` module + C ABI.
-- [ ] All matrix modes + key/iv/tag rules.
-- [ ] `cargo test -p elephc-crypto`.
+- [x] Dependencies + `cipher` module + C ABI.
+- [x] All matrix modes + key/iv/tag rules.
+- [x] `cargo test -p elephc-crypto`.
 
 ### Phase 2 — AOT constants + non-AEAD encrypt/decrypt + helpers
 
