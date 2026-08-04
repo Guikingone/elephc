@@ -189,6 +189,9 @@ against measured php-src 8.5.6 output rather than by analogy:
   container — whether its parameter is declared `&` is not visible at the call
   site — and any reference bound to it, since an alias has its own slot and would
   otherwise pass every slot-keyed check.
+- **Rendering an `array<int>` element.** A read of one answers an int-or-null,
+  and PHP renders the null arm as the empty string, so `echo $a[0] . "|" . $a[1]`
+  is exact — including the miss, which warns and contributes nothing.
 - **`gettype()`.** php-src's historical spellings, not the type names PHP 8
   prints elsewhere: an int is `integer`, a float `double`, a bool `boolean`, and
   null `NULL` in capitals. A settled type answers at compile time; a boxed one
@@ -210,6 +213,14 @@ against measured php-src 8.5.6 output rather than by analogy:
   boundaries, both signed zeroes and 1200 random values across 24 orders of
   magnitude. A precision outside php_intpow10's exact 0..22 table is refused
   rather than answered nearly-right.
+
+Known WASM-only defect, refused rather than answered: a **by-reference container
+parameter**. The ref cell a caller synthesizes and the writeback that follows it
+do not round-trip an array — `function m(array &$a) { $a[] = 41; } $v = [7];
+m($v); echo count($v);` answered `106808` where php-src answers `2`, and the
+`$a[0] = 41` form answered `0` for `1`. By-reference `int` and `string` both
+round-trip correctly and remain supported, so only the container payload is
+refused. The native backend answers correctly for the same program.
 
 A shared front-end bug surfaced while measuring this and is fixed: an
 `if`/`elseif`/`else` chain whose FIRST condition folded to false propagated the

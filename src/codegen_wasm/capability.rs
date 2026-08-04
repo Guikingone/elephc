@@ -1875,11 +1875,17 @@ fn int_like_to_string_shape_issue(
     let Some(source) = function.value(*operand) else {
         return Some("IToStr source is missing from the value table".to_string());
     };
-    if source.ir_type != IrType::I64
-        || !matches!(source.php_type.codegen_repr(), PhpType::Int | PhpType::Bool)
+    // A TAGGED scalar is the int-or-null an `array<int>` read answers. PHP renders its null arm
+    // as the empty string — `$a[9] . "|"` is just `"|"` — so the pair is exact, and refusing it
+    // turned away `echo $values[0] . "|" . $values[1]` over an ordinary list of ints.
+    let tagged_int_or_null = source.ir_type == IrType::TaggedScalar
+        && source.php_type.codegen_repr() == PhpType::TaggedScalar;
+    if !tagged_int_or_null
+        && (source.ir_type != IrType::I64
+            || !matches!(source.php_type.codegen_repr(), PhpType::Int | PhpType::Bool))
     {
         return Some(format!(
-            "IToStr requires I64/Int or I64/Bool, got {:?}/{:?}",
+            "IToStr requires I64/Int, I64/Bool or a tagged int|null, got {:?}/{:?}",
             source.ir_type,
             source.php_type.codegen_repr()
         ));
@@ -3355,6 +3361,24 @@ fn direct_call_shape_issue(
         return Some(format!(
             "target {:?} has a variadic parameter outside the L1 direct-call contract",
             target.name
+        ));
+    }
+    // A by-reference parameter carrying a CONTAINER is silently wrong today: the ref cell the
+    // caller synthesizes and the writeback that follows it do not round-trip an array. Measured
+    // against php-src — `function m(array &$a) { $a[] = 41; } $v = [7]; m($v); echo count($v);`
+    // answered 106808 for php-src's 2, and the `$a[0] = 41` form answered 0 for 1. A by-ref
+    // `int` and a by-ref `string` both round-trip correctly, so only the container payload is
+    // refused, and it is refused rather than left answering garbage.
+    if let Some(parameter) = target.function.params.iter().find(|param| {
+        param.by_ref
+            && matches!(
+                param.ir_type,
+                IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash)
+            )
+    }) {
+        return Some(format!(
+            "target {:?} takes ${} as a by-reference container, whose ref-cell writeback is not exact",
+            target.name, parameter.name
         ));
     }
     if target.function.params.len() != inst.operands.len() {
@@ -9544,13 +9568,19 @@ mod tests {
             shape_issue(IrType::I64, PhpType::Bool, Ownership::MaybeOwned),
             None
         );
-        assert!(
+        // A TAGGED scalar is the int-or-null an `array<int>` read answers, and PHP renders its
+        // null arm as the empty string, so the pair is exact rather than approximate.
+        assert_eq!(
             shape_issue(
                 IrType::TaggedScalar,
                 PhpType::TaggedScalar,
                 Ownership::MaybeOwned
-            )
-            .is_some()
+            ),
+            None
+        );
+        // The TAG has to agree with the storage: a raw I64 claiming to be tagged does not.
+        assert!(
+            shape_issue(IrType::I64, PhpType::TaggedScalar, Ownership::MaybeOwned).is_some()
         );
         assert!(
             shape_issue(IrType::I64, PhpType::Float, Ownership::MaybeOwned).is_some()

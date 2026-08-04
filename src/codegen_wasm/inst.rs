@@ -1585,7 +1585,35 @@ fn lower_int_like_to_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         .function
         .value(value)
         .ok_or_else(|| WasmError::Unsupported(format!("IToStr source {:?} is missing", value)))?;
+    let source_ir = source.ir_type;
     let source_php = source.php_type.codegen_repr();
+    // A TAGGED scalar carries the int-or-null an `array<int>` read answers. PHP renders null as
+    // the empty string in a string context, so the null arm is a zero-length result and the other
+    // arm is the ordinary decimal.
+    if source_ir == IrType::TaggedScalar {
+        let WasmRepr::Tagged { payload, tag } = ctx.value_repr(value)?.clone() else {
+            return Err(WasmError::Unsupported(
+                "IToStr over a tagged scalar with a non-tagged representation".to_string(),
+            ));
+        };
+        ctx.fb.ins(&format!("local.get {payload}"), "the tagged payload");
+        ctx.fb.ins(
+            "global.get $__float_scratch",
+            "integer formatting scratch buffer",
+        );
+        ctx.fb
+            .ins("call $__rt_itoa", "format PHP integer as decimal string");
+        ctx.fb.ins("i64.extend_i32_u", "widen integer string length");
+        // A null tag answers the EMPTY string: keep the pointer, zero the length.
+        ctx.fb.ins(&format!("local.get {tag}"), "tagged scalar tag");
+        ctx.fb.ins("i32.const 8", "tagged null tag");
+        ctx.fb.ins("i32.eq", "tagged scalar is null?");
+        ctx.fb.ins(
+            "(if (param i64) (result i64) (then (drop) (i64.const 0)))",
+            "PHP renders null as the empty string",
+        );
+        return store_result(ctx, inst);
+    }
     match source_php {
         PhpType::Int => {
             ctx.emit_load_value(value)?;

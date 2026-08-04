@@ -12722,8 +12722,10 @@ fn test_cli_wasm_refuses_mutating_an_iterated_container_it_cannot_see() {
         String::from_utf8_lossy(&accepted.stderr)
     );
 
-    // The same shapes with the mutation AFTER the loop stay compilable — the widening has to end
-    // where the iterator does.
+    // A by-reference CONTAINER parameter is refused wherever it appears, loop or no loop: its
+    // ref-cell writeback does not round-trip an array, which was measured answering 106808 for
+    // php-src's 2. So the "the widening ends where the iterator does" half of this rule is
+    // carried by the by-VALUE case above, not by a post-loop by-ref call.
     let after = dir.join("after.php");
     fs::write(
         &after,
@@ -12735,10 +12737,11 @@ fn test_cli_wasm_refuses_mutating_an_iterated_container_it_cannot_see() {
         .arg("wasm32-wasi")
         .arg(&after)
         .output()
-        .expect("failed to compile the post-loop callee mutation");
+        .expect("failed to run the compiler over the post-loop callee mutation");
     assert!(
-        output.status.success(),
-        "mutating through a callee after the loop must compile: {}",
+        !output.status.success()
+            && String::from_utf8_lossy(&output.stderr).contains("by-reference container"),
+        "a by-reference container is refused for its writeback, not for the loop: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
@@ -13085,6 +13088,120 @@ process.exitCode = wasi.start(instance);
             && String::from_utf8_lossy(&refused.stderr).contains("may be uninitialized"),
         "a read before the store must stay refused: {}",
         String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a by-reference CONTAINER parameter is refused, while by-reference scalars still work.
+///
+/// The ref cell a caller synthesizes for a by-reference argument, and the writeback that follows
+/// it, do not round-trip an array. Measured against php-src:
+///
+/// ```text
+///   function m(array &$a) { $a[] = 41; }  $v = [7];  m($v);  echo count($v);
+///   php-src: 2      this target: 106808
+///   function m(array &$a) { $a[0] = 41; } $v = [7];  m($v);  echo count($v);
+///   php-src: 1      this target: 0
+/// ```
+///
+/// The caller's array simply does not come back. A by-reference `int` and a by-reference `string`
+/// both round-trip correctly, so only the container payload is refused — and it is refused rather
+/// than left answering garbage, which is what it did before. The native backend answers `41|42`
+/// for the same program, so this is a WASM-only defect.
+#[test]
+fn test_cli_wasm_refuses_a_by_reference_container_parameter() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_by_ref_container");
+
+    for (name, source) in [
+        (
+            "push.php",
+            "<?php\nfunction m(array &$a): void { $a[] = 41; }\n$v = [7];\nm($v);\necho count($v), \"\\n\";\n",
+        ),
+        (
+            "set.php",
+            "<?php\nfunction m(array &$a): void { $a[0] = 41; }\n$v = [7];\nm($v);\necho count($v), \"\\n\";\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let refused = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to run the compiler over the by-ref container");
+        assert!(
+            !refused.status.success()
+                && String::from_utf8_lossy(&refused.stderr).contains("by-reference container"),
+            "{name} must be refused: {}",
+            String::from_utf8_lossy(&refused.stderr)
+        );
+    }
+
+    // A by-reference SCALAR does round-trip, and must keep working — refusing those too would
+    // cost real programs for a defect they do not have.
+    let scalars = dir.join("main.php");
+    fs::write(
+        &scalars,
+        r#"<?php
+function bumpInt(int &$x): void { $x = 41; }
+function bumpStr(string &$s): void { $s = "hi"; }
+$n = 1;
+$t = "a";
+bumpInt($n);
+bumpStr($t);
+echo $n, "|", $t, "\n";
+"#,
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&scalars)
+        .output()
+        .expect("failed to compile the by-ref scalars");
+    assert!(
+        output.status.success(),
+        "by-reference scalars must compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the by-ref scalars under Node");
+    assert!(
+        run.status.success(),
+        "the by-ref scalars must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "41|hi\n",
+        "php-src's own answers"
     );
 
     let _ = fs::remove_dir_all(&dir);
