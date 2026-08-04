@@ -233,6 +233,23 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
 ) -> Result<(), CompileError> {
+    // The hidden variadic that collects surplus positional arguments for
+    // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
+    // inherited signature that does not carry it cannot dispatch to a body that does.
+    // Report that directly instead of the generic parameter-count mismatch, which names a
+    // parameter the source never wrote.
+    if crate::func_args::sig_collects_surplus_args(child_sig)
+        != crate::func_args::sig_collects_surplus_args(parent_sig)
+    {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "func_num_args()/func_get_args()/func_get_arg() are not supported in {}::{} when {} {}: the inherited signature cannot be widened to collect surplus arguments",
+                owner_name, method_name, context, kind
+            ),
+        ));
+    }
+
     if child_sig.params.len() != parent_sig.params.len() {
         return Err(CompileError::new(
             span,

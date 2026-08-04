@@ -146,6 +146,10 @@ fn compile_source_to_asm_with_defines_repr_and_regex(
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
+    // desugared into a hidden variadic parameter plus plain PHP after autoloading and
+    // before the optimizer, so the checker and the backend only ever see ordinary PHP.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");

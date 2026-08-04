@@ -510,6 +510,54 @@ collects integers into `$nums`, and every argument passed to the variadic is che
 against the declared element type, so passing an argument of the wrong type is
 rejected. An untyped variadic (`...$nums`) accepts heterogeneous arguments.
 
+## Argument introspection
+
+`func_num_args()`, `func_get_args()` and `func_get_arg($position)` read the arguments the
+current call actually received, including the surplus positional arguments PHP allows past
+a function's declared parameter list:
+
+```php
+<?php
+function log_all() {
+    echo func_num_args(), ": ";
+    foreach (func_get_args() as $arg) {
+        echo $arg, " ";
+    }
+}
+log_all("a", "b", "c"); // 3: a b c
+
+function first_extra($label) {
+    return func_get_arg(1);
+}
+echo first_extra("label", "extra"); // extra
+```
+
+They work in functions, methods (instance and static), closures and arrow functions, and
+report the *current* values of the declared parameters, so a parameter the body reassigned
+— or wrote through by reference — is reflected in `func_get_args()`, exactly as in PHP. An
+out-of-range or negative position throws `ValueError` with PHP's message.
+
+elephc implements these constructs by giving the function a hidden variadic parameter that
+collects the surplus arguments, which constrains where they can be used. They are rejected,
+with a diagnostic naming the reason, when:
+
+- the call is outside any function (PHP raises the same "must be called from a function
+  context" error at runtime);
+- the function declares a parameter with a default value — the hidden variadic cannot tell
+  a passed argument from a defaulted one;
+- the function already declares its own variadic parameter — read that parameter instead;
+- the method overrides a parent method or implements an interface method — the inherited
+  signature has no slot for the collected arguments;
+- the call is dynamic (`func_num_args(...)`, `$f = "func_num_args"; $f()`), which PHP also
+  rejects with "Cannot call func_num_args() dynamically".
+
+Surplus *positional* arguments are only accepted by functions that use one of these three
+constructs; every other function keeps elephc's compile-time arity check. Surplus *named*
+arguments stay rejected either way, matching PHP.
+
+Because the three constructs are rewritten by the compiler rather than dispatched as
+builtin calls, `function_exists()` reports `false` for them, where PHP reports `true`.
+
 ## Spread operator
 
 ```php

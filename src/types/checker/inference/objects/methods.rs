@@ -541,6 +541,12 @@ impl Checker {
                 } else if sig.variadic.is_some()
                     && arg_types.len() > regular_param_count
                     && !method_variadic_param_is_by_ref(sig)
+                    // A declared element type on the variadic (`mixed ...$xs`, `int ...$xs`) is
+                    // the contract, exactly like a declared regular parameter above: call-site
+                    // arguments are validated against it and must never narrow it. Without this
+                    // guard `mixed ...$xs` was rewritten to the widened argument type, and a
+                    // later checker pass then rejected the very call that produced it.
+                    && !declared_flags.get(regular_param_count).copied().unwrap_or(false)
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {
@@ -1107,6 +1113,12 @@ impl Checker {
                 } else if sig.variadic.is_some()
                     && arg_types.len() > regular_param_count
                     && !method_variadic_param_is_by_ref(sig)
+                    // Same rule as the instance-method path: a declared variadic element type is
+                    // a contract to validate against, not a slot to narrow from the call site.
+                    && !static_declared_flags
+                        .get(regular_param_count)
+                        .copied()
+                        .unwrap_or(false)
                 {
                     let mut elem_ty = arg_types[regular_param_count].clone();
                     for arg_ty in arg_types.iter().skip(regular_param_count + 1) {

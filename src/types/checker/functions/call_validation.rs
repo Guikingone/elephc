@@ -163,6 +163,10 @@ impl Checker {
 
     /// Normalizes arguments for a user-defined function call, allowing unknown named arguments
     /// to be collected into the variadic parameter.
+    ///
+    /// The one exception is the hidden variadic added by `crate::func_args` to collect the
+    /// surplus positional arguments `func_get_args()` exposes: the callee declares no
+    /// variadic of its own, so PHP still rejects an unknown named argument there.
     pub(crate) fn normalize_named_call_args(
         &self,
         sig: &FunctionSig,
@@ -171,7 +175,16 @@ impl Checker {
         callee_desc: &str,
         env: &TypeEnv,
     ) -> Result<Vec<Expr>, CompileError> {
-        self.normalize_call_args(sig, args, span, callee_desc, false, true, env)
+        let allow_unknown_named_variadic = !crate::func_args::sig_collects_surplus_args(sig);
+        self.normalize_call_args(
+            sig,
+            args,
+            span,
+            callee_desc,
+            false,
+            allow_unknown_named_variadic,
+            env,
+        )
     }
 
     /// Normalizes arguments for a builtin or extern function call, rejecting unknown named
