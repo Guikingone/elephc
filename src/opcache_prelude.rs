@@ -1655,6 +1655,12 @@ fn splice_interned_strings_usage(template: &str, buffer_size: i64) -> String {
     )
 }
 
+/// First `version_id` whose `opcache_get_status()` script entries carry a `revalidate` key.
+///
+/// php-src added it in 8.3; a `--php-version 8.2` build must not report it. Verified against the
+/// official `php:8.2-cli` and `php:8.3-cli` images.
+const SCRIPTS_REVALIDATE_MIN_VERSION_ID: u32 = 80300;
+
 /// Renders the `opcache_get_status()['scripts']` map: a PHP array keyed by each script's
 /// canonical `full_path`, each value the reference-shaped 7-key entry.
 ///
@@ -1706,12 +1712,6 @@ fn splice_interned_strings_usage(template: &str, buffer_size: i64) -> String {
 /// (see [`INVALIDATE_TEMPLATE`]). With nothing invalidated the call returns the mtime unchanged.
 ///
 /// An empty manifest renders `[]`.
-/// First `version_id` whose `opcache_get_status()` script entries carry a `revalidate` key.
-///
-/// php-src added it in 8.3; a `--php-version 8.2` build must not report it. Verified against the
-/// official `php:8.2-cli` and `php:8.3-cli` images.
-const SCRIPTS_REVALIDATE_MIN_VERSION_ID: u32 = 80300;
-
 fn render_scripts_map_literal(
     manifest: &[ScriptEntry],
     revalidate_freq: i64,
