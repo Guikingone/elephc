@@ -50,11 +50,14 @@ mod substr_count;
 mod substr_replace;
 mod str_pad;
 mod str_split;
+mod str_word_count;
 mod addslashes;
 mod stripslashes;
 mod nl2br;
 mod base_convert;
 mod chunk_split;
+mod count_chars;
+mod strtr;
 mod quotemeta;
 mod wordwrap;
 mod bin2hex;
@@ -186,8 +189,14 @@ pub use nl2br::emit_nl2br;
 pub use base_convert::emit_base_convert;
 /// Emit the chunk_split fixed-length splitter.
 pub use chunk_split::emit_chunk_split;
+/// Emit the count_chars byte-frequency tally.
+pub use count_chars::emit_count_chars;
+/// Emit the strtr pairwise and replacement-pair translators.
+pub use strtr::emit_strtr;
 /// Emit the quotemeta regular-expression metacharacter escaper.
 pub use quotemeta::emit_quotemeta;
+/// Emit the str_word_count word scanner.
+pub use str_word_count::emit_str_word_count;
 /// Emit newline to `<br>` conversion.
 pub use wordwrap::emit_wordwrap;
 /// Emit wordwrap helper.

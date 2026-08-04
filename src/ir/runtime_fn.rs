@@ -391,6 +391,7 @@ pub enum RuntimeFnId {
     Chop,
     Chr,
     ChunkSplit,
+    CountChars,
     Crc32,
     CtypeAlnum,
     CtypeAlpha,
@@ -437,12 +438,14 @@ pub enum RuntimeFnId {
     StrReplace,
     StrSplit,
     StrStartsWith,
+    StrWordCount,
     Strcasecmp,
     Strcmp,
     Strncasecmp,
     Strncmp,
     Strpos,
     Strrpos,
+    Strtr,
     Strstr,
     Substr,
     SubstrCount,
@@ -774,6 +777,7 @@ impl RuntimeFnId {
             // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
             // empty separator, `str_pad()` empty pad string or bad pad type,
             // `str_repeat()` negative count, `str_split()` non-positive length,
+            // `str_word_count()` unknown format, `count_chars()` unknown mode,
             // `round()` unknown rounding mode,
             // `strncmp()`/`strncasecmp()` negative compare length,
             // `substr_count()` empty needle or out-of-subject offset/length,
@@ -783,6 +787,7 @@ impl RuntimeFnId {
             // the try-prefix hoist would move the call out of the `try` that must catch it.
             RuntimeFnId::ArrayChunk
             | RuntimeFnId::ArrayFill
+            | RuntimeFnId::CountChars
             | RuntimeFnId::ArrayPad
             | RuntimeFnId::Clamp
             | RuntimeFnId::Explode
@@ -792,6 +797,7 @@ impl RuntimeFnId {
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrRepeat
             | RuntimeFnId::StrSplit
+            | RuntimeFnId::StrWordCount
             | RuntimeFnId::Strncasecmp
             | RuntimeFnId::Strncmp
             | RuntimeFnId::SubstrCount
@@ -862,6 +868,12 @@ impl RuntimeFnId {
                 )
             }
             RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
+            // `strtr()` reads the replacement-pair hash and materializes its result through
+            // the shared concat reservation front end; it never throws or warns.
+            RuntimeFnId::Strtr => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_CONCAT.bits(),
+            ),
             RuntimeFnId::Sprintf | RuntimeFnId::Vsprintf => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_HEAP.bits()
@@ -1115,6 +1127,10 @@ impl RuntimeFnId {
                 // hexdec()/bindec()/octdec() box their `int|float` answer through
                 // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
                 // that cannot alias the parsed subject string.
+                // Every `count_chars()` shape allocates its own result: modes 0-2 build a
+                // brand-new tally hash and modes 3-4 hand back a `__rt_str_persist`-owned
+                // byte list, so nothing returned can alias the subject string.
+                | RuntimeFnId::CountChars
                 | RuntimeFnId::Bindec
                 | RuntimeFnId::Hexdec
                 | RuntimeFnId::Octdec
@@ -1169,8 +1185,18 @@ impl RuntimeFnId {
                 | RuntimeFnId::PtrReadString
                 | RuntimeFnId::Range
                 | RuntimeFnId::StrSplit
+                // Every `str_word_count()` shape allocates its own result: format 0 is a plain
+                // integer, format 1 pushes persisted copies into a brand-new indexed array, and
+                // format 2 persists each word before inserting it into a brand-new hash. Nothing
+                // handed back can alias the subject or the character-list argument.
+                | RuntimeFnId::StrWordCount
                 | RuntimeFnId::Strpos
                 | RuntimeFnId::Strrpos
+                // `strtr()` writes into a reservation taken from `__rt_concat_reserve` and then
+                // copies the finished bytes into owned heap storage through `__rt_str_persist`,
+                // releasing the reservation afterwards, so the result is caller-owned and can
+                // never alias the subject, the pair array, or the byte lists.
+                | RuntimeFnId::Strtr
                 // Strstr's result is `string|false`, so its lowering boxes BOTH arms into a
                 // fresh Mixed cell and `__rt_mixed_from_value` persists (copies) the string
                 // payload — it no longer hands back a borrowed slice of the haystack. Leaving
@@ -1552,6 +1578,7 @@ impl RuntimeFnId {
             RuntimeFnId::Chop => "chop",
             RuntimeFnId::Chr => "chr",
             RuntimeFnId::ChunkSplit => "chunk_split",
+            RuntimeFnId::CountChars => "count_chars",
             RuntimeFnId::Crc32 => "crc32",
             RuntimeFnId::CtypeAlnum => "ctype_alnum",
             RuntimeFnId::CtypeAlpha => "ctype_alpha",
@@ -1599,12 +1626,14 @@ impl RuntimeFnId {
             RuntimeFnId::StrReplace => "str_replace",
             RuntimeFnId::StrSplit => "str_split",
             RuntimeFnId::StrStartsWith => "str_starts_with",
+            RuntimeFnId::StrWordCount => "str_word_count",
             RuntimeFnId::Strcasecmp => "strcasecmp",
             RuntimeFnId::Strcmp => "strcmp",
             RuntimeFnId::Strncasecmp => "strncasecmp",
             RuntimeFnId::Strncmp => "strncmp",
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::Strrpos => "strrpos",
+            RuntimeFnId::Strtr => "strtr",
             RuntimeFnId::Strstr => "strstr",
             RuntimeFnId::Substr => "substr",
             RuntimeFnId::SubstrCount => "substr_count",

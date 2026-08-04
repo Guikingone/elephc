@@ -66,6 +66,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Count,
     /// Dispatches core callable, constant, process-control, and debug-output builtins.
     Core,
+    /// Dispatches `count_chars(...)`.
+    CountChars,
     /// Dispatches `crc32(...)`.
     Crc32,
     /// Dispatches `ctype_*` predicates.
@@ -286,6 +288,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     StrReplace,
     /// Dispatches `str_split(...)`.
     StrSplit,
+    /// Dispatches `str_word_count(...)`.
+    StrWordCount,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
     /// Dispatches `str_repeat(...)`.
@@ -294,6 +298,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Strval,
     /// Dispatches `strrev(...)`.
     Strrev,
+    /// Dispatches `strtr(...)`.
+    Strtr,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -364,6 +370,7 @@ impl EvalDirectHook {
             Self::Core => eval_builtin_core_call(name, args, context, scope, values),
             Self::Cos => eval_builtin_cos(args, context, scope, values),
             Self::Cosh => eval_builtin_cosh(args, context, scope, values),
+            Self::CountChars => eval_builtin_count_chars(args, context, scope, values),
             Self::Crc32 => eval_builtin_crc32(args, context, scope, values),
             Self::Ctype => match name {
                 "ctype_alnum" => eval_builtin_ctype_alnum(args, context, scope, values),
@@ -543,6 +550,7 @@ impl EvalDirectHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StrSplit => eval_builtin_str_split(args, context, scope, values),
+            Self::StrWordCount => eval_builtin_str_word_count(args, context, scope, values),
             Self::Strlen => match name {
                 "mb_strlen" => eval_builtin_mb_strlen(args, context, scope, values),
                 "strlen" => eval_builtin_strlen(args, context, scope, values),
@@ -551,6 +559,7 @@ impl EvalDirectHook {
             Self::StrRepeat => eval_builtin_str_repeat(args, context, scope, values),
             Self::Strval => eval_builtin_strval(args, context, scope, values),
             Self::Strrev => eval_builtin_strrev(args, context, scope, values),
+            Self::Strtr => eval_builtin_strtr(args, context, scope, values),
             Self::Strstr => eval_builtin_strstr(args, context, scope, values),
             Self::Substr => eval_builtin_substr(args, context, scope, values),
             Self::SubstrReplace => eval_builtin_substr_replace(args, context, scope, values),

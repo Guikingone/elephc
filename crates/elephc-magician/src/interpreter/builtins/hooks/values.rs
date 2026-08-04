@@ -69,6 +69,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Count,
     /// Dispatches core callable, constant, process-control, and debug-output builtins.
     Core,
+    /// Dispatches `count_chars(...)`.
+    CountChars,
     /// Dispatches `crc32(...)`.
     Crc32,
     /// Dispatches `ctype_*` predicates.
@@ -291,6 +293,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     StrReplace,
     /// Dispatches `str_split(...)`.
     StrSplit,
+    /// Dispatches `str_word_count(...)`.
+    StrWordCount,
     /// Dispatches `strlen(...)` and `mb_strlen(...)`.
     Strlen,
     /// Dispatches `str_repeat(...)`.
@@ -299,6 +303,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Strval,
     /// Dispatches `strrev(...)`.
     Strrev,
+    /// Dispatches `strtr(...)`.
+    Strtr,
     /// Dispatches `strstr(...)`.
     Strstr,
     /// Dispatches `substr(...)`.
@@ -380,6 +386,13 @@ impl EvalValuesHook {
             Self::Core => eval_core_values_result(name, evaluated_args, context, values),
             Self::Cos => one_arg(evaluated_args, values, eval_cos_result),
             Self::Cosh => one_arg(evaluated_args, values, eval_cosh_result),
+            Self::CountChars => match evaluated_args {
+                [subject] => eval_count_chars_result(*subject, None, context, values),
+                [subject, mode] => {
+                    eval_count_chars_result(*subject, Some(*mode), context, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Crc32 => one_arg(evaluated_args, values, eval_crc32_result),
             Self::Ctype => one_arg(evaluated_args, values, |value, values| match name {
                 "ctype_alnum" => eval_ctype_alnum_result(value, values),
@@ -636,6 +649,20 @@ impl EvalValuesHook {
                 [value, length] => eval_str_split_result(*value, Some(*length), values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },
+            Self::StrWordCount => match evaluated_args {
+                [subject] => eval_str_word_count_result(*subject, None, None, context, values),
+                [subject, format] => {
+                    eval_str_word_count_result(*subject, Some(*format), None, context, values)
+                }
+                [subject, format, characters] => eval_str_word_count_result(
+                    *subject,
+                    Some(*format),
+                    Some(*characters),
+                    context,
+                    values,
+                ),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Strlen => match name {
                 "mb_strlen" => match evaluated_args {
                     [value] => eval_mb_strlen_result(*value, None, context, values),
@@ -652,6 +679,11 @@ impl EvalValuesHook {
                 eval_strval_result(value, context, values)
             }),
             Self::Strrev => one_arg(evaluated_args, values, eval_strrev_result),
+            Self::Strtr => match evaluated_args {
+                [subject, from] => eval_strtr_result(*subject, *from, None, values),
+                [subject, from, to] => eval_strtr_result(*subject, *from, Some(*to), values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Strstr => match evaluated_args {
                 [haystack, needle] => eval_strstr_result(*haystack, *needle, false, values),
                 [haystack, needle, before_needle] => {

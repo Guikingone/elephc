@@ -889,6 +889,14 @@ const BASE_CONVERT_TO_BASE_MESSAGE: &str =
 const CHUNK_SPLIT_NON_POSITIVE_LENGTH_MESSAGE: &str =
     "chunk_split(): Argument #2 ($length) must be greater than 0";
 
+/// php-src's verbatim `ValueError` wording for `count_chars()` with an unknown `$mode`.
+const COUNT_CHARS_MODE_MESSAGE: &str =
+    "count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)";
+
+/// php-src's verbatim `ValueError` wording for `str_word_count()` with an unknown `$format`.
+const STR_WORD_COUNT_FORMAT_MESSAGE: &str =
+    "str_word_count(): Argument #2 ($format) must be a valid format value";
+
 /// php-src's verbatim `ValueError` wording for `str_repeat()` with a negative `$times`.
 const STR_REPEAT_NEGATIVE_TIMES_MESSAGE: &str =
     "str_repeat(): Argument #2 ($times) must be greater than or equal to 0";
@@ -1656,6 +1664,225 @@ fn lower_chunk_split_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     }
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
     Ok(())
+}
+
+/// Lowers both `strtr()` shapes through their shared runtime helpers.
+///
+/// The form is selected from the STATIC type of `$from`, not from the operand count: a named
+/// `strtr(string: $s, from: [...])` call still materializes the trailing `$to` default, so an
+/// array `$from` always means the replacement-pair form. Its container shape then picks
+/// between the hash helper and the indexed-array wrapper that converts before replacing.
+pub(crate) fn lower_strtr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count_between(inst, "strtr", 2, 3)?;
+    let pairs = expect_operand(inst, 1)?;
+    let helper = match ctx.value_php_type(pairs)? {
+        PhpType::AssocArray { .. } => "__rt_strtr_hash",
+        PhpType::Array(_) => "__rt_strtr_array",
+        _ => return lower_strtr_pairwise(ctx, inst),
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strtr", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the subject while materializing the replacement pairs
+            ctx.load_value_to_result(pairs)?;
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the subject into the primary runtime argument registers
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strtr", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.load_value_to_result(pairs)?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the replacement pairs to the runtime helper
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    store_if_result(ctx, inst)
+}
+
+/// Materializes the three-argument `strtr($string, $from, $to)` byte-translation form.
+///
+/// A missing or `null` `$to` yields a zero-length destination list, which makes the mapping
+/// empty and leaves the subject untouched — the same result php-src produces for
+/// `strtr($s, $from, null)` after its deprecation notice.
+fn lower_strtr_pairwise(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strtr", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the subject while materializing the byte lists
+            load_string_arg_to_regs(ctx, inst, 1, "strtr", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the source byte list while materializing the destination list
+            load_optional_strtr_to(ctx, inst, "x5", "x6")?;
+            ctx.emitter.instruction("ldp x3, x4, [sp], #16");                   // restore the source byte list into the runtime argument registers
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the subject into the primary runtime argument registers
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "strtr", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_arg_to_regs(ctx, inst, 1, "strtr", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_optional_strtr_to(ctx, inst, "rcx", "r8")?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_strtr_pairwise");
+    store_if_result(ctx, inst)
+}
+
+/// Loads the nullable `strtr()` `$to` byte list into a pointer/length pair.
+fn load_optional_strtr_to(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    ptr_reg: &str,
+    len_reg: &str,
+) -> Result<()> {
+    let Some(to) = inst.operands.get(2).copied() else {
+        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(to)?, PhpType::Void | PhpType::Never) {
+        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+        return Ok(());
+    }
+    load_value_as_string_to_regs(ctx, to, "strtr to", ptr_reg, len_reg)
+}
+
+/// Lowers `count_chars(string, mode?)` through the shared runtime helper.
+///
+/// The checker already fixed the result storage from the literal `$mode`, so the only runtime
+/// validation left is php-src's `ValueError` for a mode outside `0..=4`, raised before
+/// `__rt_count_chars` allocates anything.
+pub(crate) fn lower_count_chars(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count_between(inst, "count_chars", 1, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "count_chars", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the subject while materializing the mode
+            if inst.operands.len() >= 2 {
+                let mode = expect_operand(inst, 1)?;
+                load_as_int(ctx, mode, "count_chars mode")?;
+                ctx.emitter.instruction("mov x3, x0");                          // pass the requested result mode to the runtime helper
+            } else {
+                ctx.emitter.instruction("mov x3, xzr");                         // php's default mode 0 tallies every byte value
+            }
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the subject into the primary runtime argument registers
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "count_chars", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            if inst.operands.len() >= 2 {
+                let mode = expect_operand(inst, 1)?;
+                load_as_int(ctx, mode, "count_chars mode")?;
+                ctx.emitter.instruction("mov rdi, rax");                        // pass the requested result mode to the runtime helper
+            } else {
+                ctx.emitter.instruction("xor edi, edi");                        // php's default mode 0 tallies every byte value
+            }
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    let mode_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedInRange(mode_reg, 0, 4),
+        COUNT_CHARS_MODE_MESSAGE,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_count_chars");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `str_word_count(string, format?, characters?)` through the shared runtime helper.
+///
+/// The checker already fixed the result storage from the literal `$format`, so the only
+/// runtime validation left is php-src's `ValueError` for a format outside `0..=2`, raised
+/// before `__rt_str_word_count` allocates anything.
+pub(crate) fn lower_str_word_count(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "str_word_count", 1, 3)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_str_word_count_aarch64(ctx, inst)?,
+        Arch::X86_64 => lower_str_word_count_x86_64(ctx, inst)?,
+    }
+    let format_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedInRange(format_reg, 0, 2),
+        STR_WORD_COUNT_FORMAT_MESSAGE,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_str_word_count");
+    store_if_result(ctx, inst)
+}
+
+/// Materializes AArch64 `str_word_count()` runtime arguments.
+fn lower_str_word_count_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let subject = expect_string_operand(ctx, inst, 0, "str_word_count")?;
+    ctx.load_string_value_to_regs(subject, "x1", "x2")?;
+    ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the subject while materializing the format and character list
+    if inst.operands.len() >= 2 {
+        let format = expect_operand(inst, 1)?;
+        load_as_int(ctx, format, "str_word_count format")?;
+        ctx.emitter.instruction("mov x3, x0");                                  // pass the requested result format to the runtime helper
+    } else {
+        ctx.emitter.instruction("mov x3, xzr");                                 // php's default format 0 returns the plain word count
+    }
+    load_optional_str_word_count_characters(ctx, inst, "x4", "x5")?;
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the subject into the primary runtime argument registers
+    Ok(())
+}
+
+/// Materializes x86_64 `str_word_count()` runtime arguments.
+fn lower_str_word_count_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let subject = expect_string_operand(ctx, inst, 0, "str_word_count")?;
+    ctx.load_string_value_to_regs(subject, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    if inst.operands.len() >= 2 {
+        let format = expect_operand(inst, 1)?;
+        load_as_int(ctx, format, "str_word_count format")?;
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the requested result format to the runtime helper
+    } else {
+        ctx.emitter.instruction("xor edi, edi");                                // php's default format 0 returns the plain word count
+    }
+    load_optional_str_word_count_characters(ctx, inst, "rcx", "r8")?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    Ok(())
+}
+
+/// Loads the nullable optional `str_word_count()` character list into a pointer/length pair.
+///
+/// An omitted or `null` `$characters` argument becomes a zero-length list, which builds the
+/// same membership table php-src derives from a `NULL` char list.
+fn load_optional_str_word_count_characters(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    ptr_reg: &str,
+    len_reg: &str,
+) -> Result<()> {
+    let Some(characters) = inst.operands.get(2).copied() else {
+        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(characters)?, PhpType::Void | PhpType::Never) {
+        abi::emit_load_int_immediate(ctx.emitter, ptr_reg, 0);
+        abi::emit_load_int_immediate(ctx.emitter, len_reg, 0);
+        return Ok(());
+    }
+    load_value_as_string_to_regs(ctx, characters, "str_word_count characters", ptr_reg, len_reg)
 }
 
 /// Lowers `str_pad(string, length, pad_string?, pad_type?)` through the shared runtime helper.

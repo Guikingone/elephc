@@ -515,3 +515,72 @@ s:1:ab:a:b|f:1:ab:a:b|c:1:ab:a:b|\
 s:2:a,b|f:2:a,b|c:2:a,b"
     );
 }
+
+/// Verifies the eval interpreter reproduces every `str_word_count()` result shape, including
+/// the byte-offset map, the extra `$characters` alphabet, and php-src's boundary trims.
+#[test]
+fn test_eval_str_word_count_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo str_word_count("Hello friend, you\'re here"), ":";
+echo implode(",", str_word_count("Hello friend", 1)), ":";
+foreach (str_word_count("one two", 2) as $offset => $word) { echo $offset, "=", $word, ";"; }
+echo implode(",", str_word_count("fri3nd", 1, "3")), ":";
+echo implode(",", str_word_count("-abc-", 1));');
+"#,
+    );
+
+    assert_eq!(out, "4:Hello,friend:0=one;4=two;fri3nd:abc");
+}
+
+/// Verifies the eval interpreter reproduces every `count_chars()` mode and raises php-src's
+/// catchable `ValueError` for an unknown one.
+#[test]
+fn test_eval_count_chars_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$used = count_chars("hello", 1);
+foreach ($used as $byte => $count) { echo $byte, "=", $count, ";"; }
+echo ":", count_chars("hello world", 3), ":", strlen(count_chars("hello world", 4)), ":", count(count_chars("aab", 0));
+try { count_chars("ab", 7); } catch (\ValueError $e) { echo ":", $e->getMessage(); }');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "101=1;104=1;108=2;111=1;: dehlorw:248:256:count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)"
+    );
+}
+
+/// Verifies the eval interpreter reproduces both `strtr()` shapes, including longest-match-first
+/// selection, integer keys, and keys longer than the subject.
+#[test]
+fn test_eval_strtr_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strtr("foo bar", ["foo"=>"bar","bar"=>"baz"]), ":";
+echo strtr("abc", ["a"=>"b","ab"=>"X"]), ":";
+echo strtr("12345", [1=>"one", 23=>"two-three"]), ":";
+echo strtr("abcd", "abc", "xy"), ":";
+echo strtr("abc", ["abcd"=>"X"]);');
+"#,
+    );
+
+    assert_eq!(out, "bar baz:Xc:onetwo-three45:xycd:abc");
+}
+
+/// Verifies the eval interpreter raises php-src's catchable `ValueError` for an unknown
+/// `str_word_count()` format, matching the compiled backend's guard.
+#[test]
+fn test_eval_str_word_count_invalid_format_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('try { str_word_count("ab", 5); } catch (\ValueError $e) { echo $e->getMessage(); }');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "str_word_count(): Argument #2 ($format) must be a valid format value"
+    );
+}

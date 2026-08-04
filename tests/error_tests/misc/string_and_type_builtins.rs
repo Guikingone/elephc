@@ -332,3 +332,54 @@ expect_builtin_arity_error!(
     "<?php chunk_split(\"a\", 1, \"-\", 5);",
     "chunk_split() takes 1 to 3 arguments"
 );
+
+// Tests str_word_count() arity error when called with too many arguments (accepts 1 to 3).
+expect_builtin_arity_error!(
+    test_error_str_word_count_wrong_args,
+    "<?php str_word_count(\"a\", 0, \"x\", 5);",
+    "str_word_count() takes 1 to 3 arguments"
+);
+
+// Tests count_chars() arity error when called with too many arguments (accepts 1 to 2).
+expect_builtin_arity_error!(
+    test_error_count_chars_wrong_args,
+    "<?php count_chars(\"a\", 0, 1);",
+    "count_chars() takes 1 or 2 arguments"
+);
+
+// Tests strtr() arity error when called with too many arguments (accepts 2 to 3).
+expect_builtin_arity_error!(
+    test_error_strtr_wrong_args,
+    "<?php strtr(\"a\", \"b\", \"c\", \"d\");",
+    "strtr() takes 2 or 3 arguments"
+);
+
+// Tests strtr() rejecting a string $from in the two-argument replacement-pair form, using
+// php-src's own TypeError wording.
+expect_builtin_arity_error!(
+    test_error_strtr_two_arg_string_from,
+    "<?php strtr(\"abc\", \"a\");",
+    "strtr(): Argument #2 ($from) must be of type array, string given"
+);
+
+// Tests strtr() rejecting an array $from in the three-argument pairwise form, using php-src's
+// own TypeError wording.
+expect_builtin_arity_error!(
+    test_error_strtr_three_arg_array_from,
+    "<?php strtr(\"abc\", [\"a\" => \"b\"], \"x\");",
+    "strtr(): Argument #2 ($from) must be of type string, array given"
+);
+
+// Tests str_word_count() rejecting a $format that elephc cannot resolve at compile time.
+expect_builtin_arity_error!(
+    test_error_str_word_count_non_literal_format,
+    "<?php $f = strlen(\"ab\"); str_word_count(\"a b\", $f);",
+    "str_word_count() format argument must be an integer literal in AOT mode"
+);
+
+// Tests count_chars() rejecting a $mode that elephc cannot resolve at compile time.
+expect_builtin_arity_error!(
+    test_error_count_chars_non_literal_mode,
+    "<?php $m = strlen(\"ab\"); count_chars(\"ab\", $m);",
+    "count_chars() mode argument must be an integer literal in AOT mode"
+);

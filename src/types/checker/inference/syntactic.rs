@@ -312,7 +312,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
-            | "str_word_count" | "chunk_split" | "quotemeta" | "base_convert"
+            | "chunk_split" | "quotemeta" | "base_convert"
             // `join` is `implode`'s alias, and dechex/decbin/decoct render integers as
             // strings. Without these arms an array literal such as `[dechex($n)]` would take
             // the `_ => PhpType::Int` fallback below, type the element `int`, and read the

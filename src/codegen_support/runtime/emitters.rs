@@ -100,6 +100,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_nl2br(emitter);
     strings::emit_chunk_split(emitter);
     strings::emit_quotemeta(emitter);
+    strings::emit_str_word_count(emitter);
+    strings::emit_count_chars(emitter);
+    strings::emit_strtr(emitter);
     strings::emit_wordwrap(emitter);
     strings::emit_bin2hex(emitter);
     strings::emit_dec_to_base(emitter);

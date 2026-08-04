@@ -59,6 +59,38 @@ try {
     echo "caught: " . $e->getMessage() . "\n";
 }
 
+// Word and byte statistics
+echo "\n--- Stats ---\n";
+$sentence = "Hello friend, you're looking good today!";
+// Format 0 counts words, 1 returns the list, 2 keys every word by its byte offset
+echo "str_word_count: " . str_word_count($sentence) . "\n";
+echo "str_word_count(1): " . implode(", ", str_word_count($sentence, 1)) . "\n";
+foreach (str_word_count("one two", 2) as $offset => $word) {
+    echo "  offset $offset => $word\n";
+}
+// $characters widens the word alphabet beyond letters, ' and -
+echo "str_word_count digits: " . implode(", ", str_word_count("fri3nd", 1, "3")) . "\n";
+// count_chars() mode 1 tallies only the byte values the string actually uses
+foreach (count_chars("hello", 1) as $byte => $count) {
+    echo "  " . chr($byte) . " x $count\n";
+}
+// modes 3 and 4 render the used / unused byte values as a string
+echo "count_chars(3): " . count_chars("hello world", 3) . "\n";
+// A mode outside 0..4 is a catchable \ValueError
+try {
+    count_chars("abc", 9);
+} catch (\ValueError $e) {
+    echo "caught: " . $e->getMessage() . "\n";
+}
+
+// Translation
+echo "\n--- Translate ---\n";
+// Three arguments translate bytes pairwise, truncated to the shorter list
+echo "strtr(pairwise): " . strtr("abcd", "abc", "xy") . "\n";
+// Two arguments apply replacement pairs longest-match-first, in one left-to-right pass
+echo "strtr(pairs): " . strtr("foo bar", ["foo" => "bar", "bar" => "baz"]) . "\n";
+echo "strtr(longest): " . strtr("abc", ["a" => "b", "ab" => "X"]) . "\n";
+
 // Split and join
 echo "\n--- Split/Join ---\n";
 $csv = "one,two,three";

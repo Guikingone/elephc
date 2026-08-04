@@ -710,3 +710,224 @@ echo strlen($s), "|", substr($s, 38, 6), "|", substr($s, -5);
     );
     assert_eq!(out, "84000|AA==AA|AAA==");
 }
+
+/// Verifies `str_word_count()` counts php-src's words and returns them as a plain list,
+/// including the apostrophe-joined form and the empty-subject shortcuts.
+#[test]
+fn test_str_word_count() {
+    let out = compile_and_run(
+        r#"<?php
+echo str_word_count("Hello friend, you're looking          good today!"), "|";
+echo implode(",", str_word_count("Hello friend, you're looking good today!", 1)), "|";
+echo str_word_count(""), "|", count(str_word_count("", 1));
+"#,
+    );
+    assert_eq!(out, "6|Hello,friend,you're,looking,good,today|0|0");
+}
+
+/// Verifies `str_word_count()` format 2 keys every word by its byte offset in the subject.
+#[test]
+fn test_str_word_count_offset_map() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (str_word_count("Hello friend, you're here", 2) as $offset => $word) { echo $offset, ":", $word, " "; }
+"#,
+    );
+    assert_eq!(out, "0:Hello 6:friend 14:you're 21:here ");
+}
+
+/// Verifies `str_word_count()` honours the extra `$characters` alphabet and php-src's rule
+/// that a leading `'`/`-` and a trailing `-` are dropped unless the list re-admits them.
+#[test]
+fn test_str_word_count_characters_and_boundaries() {
+    let out = compile_and_run(
+        r#"<?php
+echo implode(",", str_word_count("fri3nd", 1)), "|";
+echo implode(",", str_word_count("fri3nd", 1, "3")), "|";
+echo implode(",", str_word_count("-abc-", 1)), "|";
+echo implode(",", str_word_count("-abc-", 1, "-")), "|";
+echo implode(",", str_word_count("'abc'", 1)), "|";
+echo implode(",", str_word_count("a-b'c", 1));
+"#,
+    );
+    assert_eq!(out, "fri,nd|fri3nd|abc|-abc-|abc'|a-b'c");
+}
+
+/// Verifies `str_word_count()` resolves through case-insensitive, namespaced, and named
+/// argument call forms.
+#[test]
+fn test_str_word_count_case_insensitive_and_named() {
+    let out = compile_and_run(
+        r#"<?php echo Str_Word_Count("a b c"), "|", \str_word_count("a b c"), "|", str_word_count(string: "a b", format: 1)[1];"#,
+    );
+    assert_eq!(out, "3|3|b");
+}
+
+/// Verifies `str_word_count()` raises php-src's `ValueError` for a `$format` outside 0..2.
+#[test]
+fn test_str_word_count_invalid_format_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try { str_word_count("ab", 3); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { str_word_count("ab", -1); } catch (\ValueError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "str_word_count(): Argument #2 ($format) must be a valid format value\nstr_word_count(): Argument #2 ($format) must be a valid format value"
+    );
+}
+
+/// Verifies `str_word_count()` format 1 keeps growing its result array well past the initial
+/// capacity, so the appended words survive every reallocation.
+#[test]
+fn test_str_word_count_list_grows_past_initial_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$words = str_word_count(str_repeat("alpha beta ", 8000), 1);
+echo count($words), "|", $words[0], "|", $words[15999];
+"#,
+    );
+    assert_eq!(out, "16000|alpha|beta");
+}
+
+/// Verifies `count_chars()` returns the used-byte tally for mode 1 and the used / unused byte
+/// lists for modes 3 and 4.
+#[test]
+fn test_count_chars_modes() {
+    let out = compile_and_run(
+        r#"<?php
+$used = count_chars("hello world", 1);
+foreach ($used as $byte => $count) { echo $byte, "=", $count, " "; }
+echo "|", count_chars("hello world", 3), "|", strlen(count_chars("hello world", 4));
+"#,
+    );
+    assert_eq!(
+        out,
+        "32=1 100=1 101=1 104=1 108=3 111=2 114=1 119=1 | dehlorw|248"
+    );
+}
+
+/// Verifies `count_chars()` mode 0 (and the omitted default) tallies all 256 byte values while
+/// mode 2 keeps only the ones the subject never uses.
+#[test]
+fn test_count_chars_full_and_unused_tallies() {
+    let out = compile_and_run(
+        r#"<?php
+$all = count_chars("aab", 0);
+$unused = count_chars("aab", 2);
+$default = count_chars("aab");
+echo count($all), "|", $all[97], "|", $all[98], "|", $all[0], "|";
+echo count($unused), "|", $unused[0], "|", (isset($unused[97]) ? "y" : "n"), "|";
+echo count($default), "|", $default[97];
+"#,
+    );
+    assert_eq!(out, "256|2|1|0|254|0|n|256|2");
+}
+
+/// Verifies `count_chars()` returns php-src's empty results for an empty subject.
+#[test]
+fn test_count_chars_empty_subject() {
+    let out = compile_and_run(
+        r#"<?php
+echo count(count_chars("", 1)), "|", strlen(count_chars("", 3)), "|", strlen(count_chars("", 4)), "|", count(count_chars("", 2));
+"#,
+    );
+    assert_eq!(out, "0|0|256|256");
+}
+
+/// Verifies `count_chars()` resolves through case-insensitive, namespaced, and named argument
+/// call forms.
+#[test]
+fn test_count_chars_case_insensitive_and_named() {
+    let out = compile_and_run(
+        r#"<?php echo Count_Chars("abc", 3), "|", \count_chars("cba", 3), "|", count_chars(string: "zya", mode: 3), "|", count(count_chars(string: "aab", mode: 1));"#,
+    );
+    assert_eq!(out, "abc|abc|ayz|2");
+}
+
+/// Verifies `count_chars()` raises php-src's `ValueError` for a `$mode` outside 0..4.
+#[test]
+fn test_count_chars_invalid_mode_throws() {
+    let out = compile_and_run(
+        r#"<?php
+try { count_chars("ab", 5); } catch (\ValueError $e) { echo $e->getMessage(), "\n"; }
+try { count_chars("ab", -1); } catch (\ValueError $e) { echo $e->getMessage(); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)\ncount_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)"
+    );
+}
+
+/// Verifies `strtr()` replacement pairs apply longest-match-first in one left-to-right pass
+/// with no re-substitution of already replaced text.
+#[test]
+fn test_strtr_replacement_pairs() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtr("foo bar", ["foo"=>"bar","bar"=>"baz"]), "|";
+echo strtr("hi all, I said hello", ["hello"=>"hi","hi"=>"hello"]), "|";
+echo strtr("abc", ["a"=>"b","ab"=>"X"]), "|";
+echo strtr("abcabc", ["abc"=>"x","bca"=>"y"]), "|";
+echo strtr("aXbXc", ["X"=>"","b"=>"BB"]);
+"#,
+    );
+    assert_eq!(out, "bar baz|hello all, I said hi|Xc|xx|aBBc");
+}
+
+/// Verifies `strtr()` skips keys longer than the subject, matches numeric-string and integer
+/// keys through their decimal spelling, and returns the subject for an empty pair list.
+#[test]
+fn test_strtr_key_edge_cases() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtr("abc", ["abcd"=>"X"]), "|";
+echo strtr("12345", [1=>"one", 23=>"two-three"]), "|";
+echo strtr("0a1", ["0"=>"zero","1"=>"one"]), "|";
+echo strtr("abc", []), "|";
+echo strtr("abc", ["a","b"]);
+"#,
+    );
+    assert_eq!(out, "abc|onetwo-three45|zeroaone|abc|abc");
+}
+
+/// Verifies the three-argument `strtr()` byte translation truncates to the shorter list, never
+/// re-translates an already written byte, and lets a later pair win for the same source byte.
+#[test]
+fn test_strtr_pairwise() {
+    let out = compile_and_run(
+        r#"<?php
+echo strtr("abcd", "abc", "xy"), "|";
+echo strtr("abcd", "ab", "xyz"), "|";
+echo strtr("abcd", "", ""), "|";
+echo strtr("aab", "ab", "ba"), "|";
+echo strtr("a", "aa", "xy");
+"#,
+    );
+    assert_eq!(out, "xycd|xycd|abcd|bba|y");
+}
+
+/// Verifies `strtr()` resolves through case-insensitive, namespaced, and named argument call
+/// forms in both of its shapes.
+#[test]
+fn test_strtr_case_insensitive_and_named() {
+    let out = compile_and_run(
+        r#"<?php $map = ["b"=>"B"]; echo StrTr("abc", "abc", "xyz"), "|", \strtr("abc", ["a"=>"1"]), "|", strtr(string: "abc", from: $map), "|", strtr(string: "abc", from: "ab", to: "xy");"#,
+    );
+    assert_eq!(out, "xyz|1bc|aBc|xyc");
+}
+
+/// Verifies a `strtr()` result far larger than the 64 KiB concat scratch buffer stays intact
+/// through the bounded heap fallback.
+#[test]
+fn test_strtr_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$out = strtr(str_repeat("ab", 50000), ["ab" => "cdef"]);
+echo strlen($out), "|", substr($out, 0, 8), "|", substr($out, -8);
+"#,
+    );
+    assert_eq!(out, "200000|cdefcdef|cdefcdef");
+}

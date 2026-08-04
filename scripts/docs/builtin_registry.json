@@ -13185,6 +13185,119 @@
   },
   {
     "area": "String",
+    "canonical_name": "count_chars",
+    "description": "Returns byte-frequency information about a string as a tally or a byte list.",
+    "eval": {
+      "area": "string",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/count_chars.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "mode",
+          "optional": true
+        }
+      ],
+      "required_param_count": 1,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 506,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.count_chars` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/count_chars.rs",
+      "sig_line": null
+    },
+    "name": "count_chars",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "count_chars"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "count_chars"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "mode",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "array|string",
+      "variadic": null
+    },
+    "slug": "count_chars",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
     "canonical_name": "crc32",
     "description": "Calculates the CRC32 polynomial of a string.",
     "eval": {
@@ -46024,6 +46137,132 @@
   },
   {
     "area": "String",
+    "canonical_name": "str_word_count",
+    "description": "Counts the words in a string, or returns them as a list or byte-offset map.",
+    "eval": {
+      "area": "string",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/str_word_count.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "format",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "characters",
+          "optional": true
+        }
+      ],
+      "required_param_count": 1,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 506,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.str_word_count` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/str_word_count.rs",
+      "sig_line": null
+    },
+    "name": "str_word_count",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "str_word_count"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "str_word_count"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "format",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "characters",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "array|int",
+      "variadic": null
+    },
+    "slug": "str_word_count",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
     "canonical_name": "strcasecmp",
     "description": "Binary safe case-insensitive string comparison. Returns negative, zero, or positive.",
     "eval": {
@@ -53038,6 +53277,133 @@
       "variadic": null
     },
     "slug": "strtoupper",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
+    "canonical_name": "strtr",
+    "description": "Translates bytes pairwise, or applies longest-match-first replacement pairs.",
+    "eval": {
+      "area": "string",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/strtr.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "from",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "to",
+          "optional": true
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 506,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.strtr` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/strtr.rs",
+      "sig_line": null
+    },
+    "name": "strtr",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "reads_heap",
+          "alloc_concat"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "strtr"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "strtr"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "from",
+          "optional": false,
+          "type": "array|string"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "to",
+          "optional": true,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "strtr",
     "sub_area": "String"
   },
   {
