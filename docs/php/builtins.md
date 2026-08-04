@@ -306,6 +306,7 @@ sidebar:
 | [`tan()`](./builtins/math/tan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`tanh()`](./builtins/math/tanh.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`buffer_new()`](./builtins/misc/buffer_new.md) | `(int $length): mixed` | `mixed` | ✓ | ✓ |
+| [`constant()`](./builtins/misc/constant.md) | `(string $name): mixed` | `mixed` | ✓ | — |
 | [`define()`](./builtins/misc/define.md) | `(string $constant_name, mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`defined()`](./builtins/misc/defined.md) | `(string $constant_name): bool` | `bool` | ✓ | ✓ |
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |

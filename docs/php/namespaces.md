@@ -482,6 +482,12 @@ define("PI", 3.14159);
 | `STR_PAD_RIGHT` | int | 1 — `str_pad()`'s default padding mode |
 | `STR_PAD_LEFT` | int | 0 |
 | `STR_PAD_BOTH` | int | 2 |
+| `COUNT_NORMAL` | int | 0 — `count()`'s default mode |
+| `COUNT_RECURSIVE` | int | 1 |
+| `PHP_ROUND_HALF_UP` | int | 1 — `round()`'s default mode |
+| `PHP_ROUND_HALF_DOWN` | int | 2 |
+| `PHP_ROUND_HALF_EVEN` | int | 3 |
+| `PHP_ROUND_HALF_ODD` | int | 4 |
 
 ## Superglobals
 

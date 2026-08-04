@@ -1863,9 +1863,16 @@ fn lower_dynamic_property_assign(
 
 /// Lowers pre/post increment and decrement expressions.
 ///
-/// PHP integer overflow promotion applies: `PHP_INT_MAX + 1` becomes float.
-/// The result is typed Mixed and emitted through a checked helper that
-/// returns a boxed Mixed value (int or float) at runtime.
+/// Three paths, all of which can retype the local, so all of them store a boxed Mixed:
+/// - a `Str` or boxed `Mixed` local goes through [`lower_str_inc_dec`], which applies PHP's
+///   string rules (`"az"++` is `"ba"`, `"9"++` is `int(10)`) to a string payload and keeps
+///   every other payload on the existing numeric helper;
+/// - a `Float` local adds or subtracts exactly `1.0` and stays a float;
+/// - an `Int` local uses the checked helper, so PHP's overflow promotion applies
+///   (`PHP_INT_MAX + 1` becomes float).
+///
+/// The post-forms return the value the local held before the store; the pre-forms re-read
+/// the local afterwards.
 fn lower_inc_dec(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,

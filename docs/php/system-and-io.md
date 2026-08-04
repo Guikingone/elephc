@@ -20,6 +20,7 @@ sidebar:
 | `putenv()` | `putenv($assignment): bool` | Set environment variable ("KEY=VALUE") |
 | `define()` | `define($name, $value): bool` | Define a compile-time global constant with a string-literal name |
 | `defined()` | `defined($name): bool` | Check whether a string-literal constant name is defined |
+| `constant()` | `constant($name): mixed` | Value of a global constant named by a string literal. AOT has no runtime constant table, so a dynamic name, a `Foo::BAR` class constant, and an unknown name are compile errors |
 | `php_uname()` | `php_uname($mode = "a"): string` | Get system information from the target runtime |
 | `phpversion()` | `phpversion(?string $extension = null): string\|false` | Get the targeted PHP language version, or one extension's version (`false` if it is not loaded) |
 | `zend_version()` | `zend_version(): string` | Get the Zend Engine version for the compile target |

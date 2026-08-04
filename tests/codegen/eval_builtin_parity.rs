@@ -14,9 +14,14 @@ use crate::support::{
     compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
 };
 
+/// Registry builtins that exist only in the AOT catalog and have no eval interpreter hook yet.
+///
+/// `function_exists()` inside `eval()` answers from the eval interpreter's own registry, so a
+/// name listed here is skipped by the catalog sweep below.
 const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_all",
     "array_any",
+    "array_count_values",
     "array_diff_assoc",
     "array_find",
     "array_intersect_assoc",
@@ -31,6 +36,7 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_uintersect",
     "array_walk_recursive",
     "bindec",
+    "constant",
     "decbin",
     "dechex",
     "decoct",

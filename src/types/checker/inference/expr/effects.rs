@@ -82,7 +82,9 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                // `int` can overflow to float and `string` can become int/float
+                // (`"9"++` is `int(10)`), so the local is dynamically typed afterwards.
+                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)
@@ -90,7 +92,9 @@ impl Checker {
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                // Same retype as the pre-form: only the RESULT differs, and it was already
+                // computed above against the type the local held before the update.
+                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)

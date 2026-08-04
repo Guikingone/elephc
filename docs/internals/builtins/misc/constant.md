@@ -1,15 +1,15 @@
 ---
-title: "is_scalar() — internals"
-description: "Compiler internals for is_scalar(): lowering path, type checks, and runtime helpers."
+title: "constant() — internals"
+description: "Compiler internals for constant(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 468
+  order: 298
 ---
 
-## `is_scalar()` — internals
+## `constant()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/types/is_scalar.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_scalar.rs)
+- **Signature**: [`src/builtins/system/constant.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/constant.rs)
 - **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
@@ -22,12 +22,12 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `eir_primitive`
-- **Validation**: `signature`
-- **Result type source**: `declared`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
 - **Result ownership**: `non_heap`
-- **Effects**: `shared`
+- **Effects**: `static (1 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `dynamic`
+- **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
@@ -37,7 +37,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function is_scalar(mixed $value): bool
+function constant(string $name): mixed
 ```
 
 ## What the type checker enforces
@@ -46,9 +46,8 @@ function is_scalar(mixed $value): bool
 
 ## Eval interpreter (magician)
 
-- **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/types/is_scalar.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/types/is_scalar.rs) (`eval_builtin!`)
-- **Dispatch hooks**: `direct`, `values`
+_Not callable from eval'd code — the magician interpreter has no entry for this builtin._
 
 ## Cross-references
 
-- [User reference for `is_scalar()`](../../../php/builtins/type/is_scalar.md)
+- [User reference for `constant()`](../../../php/builtins/misc/constant.md)

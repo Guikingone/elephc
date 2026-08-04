@@ -358,13 +358,13 @@ fn emit_str_inc_dec_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sid_int_parsed_x86");
     emitter.instruction("test r11, r11");                                       // is the parsed numeric string negative?
     emitter.instruction("jnz __rt_sid_int_negative_x86");                       // a negative run has a different magnitude bound than a positive one
-    abi::emit_load_int_immediate(emitter, "rcx", i64::MAX);
+    emitter.instruction("mov rcx, 0x7fffffffffffffff");                         // the largest PHP integer bounds a positive numeric string
     emitter.instruction("cmp r10, rcx");                                        // does the parsed magnitude still fit in a PHP integer?
     emitter.instruction("ja __rt_sid_float_x86");                               // a magnitude above PHP_INT_MAX is a float numeric string
     emitter.instruction("mov rax, r10");                                        // rax = the signed value of a positive numeric string
     emitter.instruction("jmp __rt_sid_int_value_x86");                          // continue with the shared integer increment
     emitter.label("__rt_sid_int_negative_x86");
-    abi::emit_load_int_immediate(emitter, "rcx", i64::MIN);
+    emitter.instruction("mov rcx, 0x8000000000000000");                         // the magnitude of PHP_INT_MIN bounds a negative numeric string
     emitter.instruction("cmp r10, rcx");                                        // does the negative magnitude still fit in a PHP integer?
     emitter.instruction("ja __rt_sid_float_x86");                               // a magnitude below PHP_INT_MIN is a float numeric string
     emitter.instruction("mov rax, r10");                                        // stage the magnitude before turning it into a negative value

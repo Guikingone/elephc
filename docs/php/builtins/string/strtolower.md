@@ -2,7 +2,7 @@
 title: "strtolower()"
 description: "Converts a string to lowercase."
 sidebar:
-  order: 430
+  order: 431
 ---
 
 ## strtolower()

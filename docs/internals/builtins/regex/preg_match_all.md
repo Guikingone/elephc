@@ -2,7 +2,7 @@
 title: "preg_match_all() — internals"
 description: "Compiler internals for preg_match_all(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 345
+  order: 346
 ---
 
 ## `preg_match_all()` — internals

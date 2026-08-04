@@ -12,7 +12,7 @@ sidebar:
 | `abs()` | `abs($val): int\|float` | Absolute value (preserves type); `abs(PHP_INT_MIN)` has no `int` result and promotes to `float` |
 | `floor()` | `floor($val): float` | Round down |
 | `ceil()` | `ceil($val): float` | Round up |
-| `round()` | `round($val [, $precision]): float` | Round to nearest |
+| `round()` | `round($num [, $precision [, $mode]]): float` | Round to nearest. `$mode` is one of `PHP_ROUND_HALF_UP` (default), `PHP_ROUND_HALF_DOWN`, `PHP_ROUND_HALF_EVEN`, `PHP_ROUND_HALF_ODD`; any other value throws `\ValueError` |
 | `sqrt()` | `sqrt($val): float` | Square root |
 | `pow()` | `pow($base, $exp): float` | Exponentiation |
 | `min()` | `min($value, ...$values): mixed` | Minimum. Either one array, or two or more values |

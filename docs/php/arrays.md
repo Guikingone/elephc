@@ -248,7 +248,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 
 | Function | Signature | Description |
 |---|---|---|
-| `count()` | `count($arr_or_countable): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()` |
+| `count()` | `count($value [, $mode]): int` | Number of elements; on objects implementing `Countable`, dispatches to `count()`. `$mode` accepts `COUNT_NORMAL` (default) and `COUNT_RECURSIVE`; anything else throws `\ValueError`. `COUNT_RECURSIVE` is currently supported only where the receiver cannot hold a nested array — a nested receiver is a compile error rather than a wrong count |
+| `array_count_values()` | `array_count_values($array): array` | Maps each distinct `int`/`string` value to its number of occurrences; other values are skipped with a warning |
 | `array_push()` | `array_push($arr, $val): void` | Add element to end |
 | `array_pop()` | `array_pop($arr): mixed` | Remove and return last element |
 | `in_array()` | `in_array(mixed $needle, array $haystack, bool $strict = false): bool` | Search for a value. Omitted or `false` strictness uses PHP loose comparison for supported scalar/string values; `true` requires type-identical membership. |

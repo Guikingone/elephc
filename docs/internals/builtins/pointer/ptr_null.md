@@ -2,7 +2,7 @@
 title: "ptr_null() — internals"
 description: "Compiler internals for ptr_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 316
+  order: 317
 ---
 
 ## `ptr_null()` — internals

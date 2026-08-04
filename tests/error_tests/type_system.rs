@@ -372,6 +372,22 @@ fn test_error_wrong_arg_count() {
     );
 }
 
+/// Verifies the two `string` storage shapes that cannot take the boxed `mixed` contract
+/// PHP's string increment needs: a by-reference parameter aliases a caller slot whose
+/// declared `string` type must not change, and a `static` local's initializer writes its
+/// symbol with the declared `string` representation. Both must be source-level errors.
+#[test]
+fn test_error_increment_string_in_unboxable_storage() {
+    expect_error(
+        "<?php function f(string &$r): void { $r++; } $v = \"az\"; f($v);",
+        "it is a by-reference parameter",
+    );
+    expect_error(
+        "<?php function g(): string { static $s = \"aa\"; $s++; return $s; } g();",
+        "it is a static local",
+    );
+}
+
 /// Verifies that increment/decrement is still rejected on the local types PHP has no
 /// increment rule for, now that `string` locals have one (`"az"++` is `"ba"`).
 #[test]

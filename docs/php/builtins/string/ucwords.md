@@ -2,7 +2,7 @@
 title: "ucwords()"
 description: "Uppercases the first character of each word in a string."
 sidebar:
-  order: 437
+  order: 438
 ---
 
 ## ucwords()

@@ -2,7 +2,7 @@
 title: "spl_autoload() — internals"
 description: "Compiler internals for spl_autoload(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 352
+  order: 353
 ---
 
 ## `spl_autoload()` — internals

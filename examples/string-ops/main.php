@@ -120,3 +120,20 @@ echo "\n--- Parsing ---\n";
 $parsed = sscanf("X=42 Y=99", "X=%d Y=%d");
 echo "sscanf count: " . count($parsed) . "\n";
 echo "sscanf values: " . $parsed[0] . ", " . $parsed[1] . "\n";
+
+// Increment (PHP's perl-style alphanumeric carry)
+echo "\n--- Increment ---\n";
+$col = "A";
+$cols = [];
+for ($i = 0; $i < 28; $i++) { $cols[] = $col; $col++; }
+echo "columns: " . implode(" ", $cols) . "\n";
+$word = "az";
+$word++;
+echo "'az'++ : " . $word . "\n";
+$wrap = "Zz";
+$wrap++;
+echo "'Zz'++ : " . $wrap . "\n";
+$num = "9";
+$num++;
+echo "'9'++  : ";
+var_dump($num);
