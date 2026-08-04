@@ -2609,7 +2609,12 @@ pub(super) fn lower_prop_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
 /// emitted, which is the whole point: the loop must iterate storage the property owns, without
 /// a second reference that would make `IterStart` copy it and the loop exit over-release it.
 ///
-/// A slot with no container to split keeps the ordinary borrowed load.
+/// There is deliberately NO fallback. A slot this function cannot split is an `unsupported`
+/// codegen error, not a plain read: the frontend has already marked the result `Borrowed`, so
+/// skipping the split leaves the loop borrowing a shared container whose split inside `IterStart`
+/// consumes the reference the PROPERTY holds. Failing loudly is what keeps
+/// `property_fetch_for_write_applies` in `src/ir_lower/expr/mod.rs` honest — the two sides cannot
+/// drift apart without the compiler saying so.
 pub(super) fn lower_prop_get_for_write(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -2617,39 +2622,70 @@ pub(super) fn lower_prop_get_for_write(
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
-    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
-    let Some(helper) = property_cow_helper(&slot) else {
-        ctx.load_value_to_reg(object, base_reg)?;
-        emit_property_load(ctx, &slot, base_reg)?;
-        return store_if_result(ctx, inst);
+    let Some(split) = property_container_split(&slot) else {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} for property {}::${} with PHP type {:?}",
+            inst.op.name(),
+            slot.class_name,
+            slot.property,
+            slot.php_type
+        )));
     };
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let result_reg = abi::int_result_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     abi::emit_load_from_address(ctx.emitter, arg_reg, base_reg, slot.offset);
-    abi::emit_call_label(ctx.emitter, helper);
+    if split.through_reference_cell {
+        // A reference slot stores the ref-cell pointer, not the container: the container the
+        // loop must iterate lives at offset 0 INSIDE the cell, and that is also where the
+        // separated one has to be published so every alias of the reference observes it.
+        abi::emit_load_from_address(ctx.emitter, arg_reg, arg_reg, 0);
+    }
+    abi::emit_call_label(ctx.emitter, split.helper);
     // The split helper clobbers the scratch registers on both targets (it materializes the
     // null-container sentinel into one of them), so the receiver has to be reloaded before the
     // separated container can be published into its slot.
     ctx.load_value_to_reg(object, base_reg)?;
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_store_to_address(ctx.emitter, result_reg, base_reg, slot.offset);
+    if split.through_reference_cell {
+        let cell_reg = reference_pointer_reg(ctx, base_reg);
+        abi::emit_load_from_address(ctx.emitter, cell_reg, base_reg, slot.offset);
+        abi::emit_store_to_address(ctx.emitter, result_reg, cell_reg, 0);
+    } else {
+        abi::emit_store_to_address(ctx.emitter, result_reg, base_reg, slot.offset);
+    }
     store_if_result(ctx, inst)
 }
 
-/// Returns the copy-on-write helper that separates this property's container, if there is one.
+/// How `PropGetForWrite` reaches and republishes one property's container.
+struct PropertyContainerSplit {
+    /// The copy-on-write helper that separates this container kind.
+    helper: &'static str,
+    /// `true` when the property slot holds a ref cell and the container pointer lives inside it.
+    through_reference_cell: bool,
+}
+
+/// Classifies a property slot as a container `PropGetForWrite` can split, or `None` when it
+/// cannot.
 ///
-/// Only the two container shapes need — and survive — the split. A packed field, a reference
-/// cell, or a dynamic slot is not a plain container pointer at a fixed offset, and a scalar
-/// property has nothing to separate; all of them keep the ordinary read.
-fn property_cow_helper(slot: &PropertySlot) -> Option<&'static str> {
-    if slot.is_packed || slot.is_reference || !slot.is_declared {
+/// Both container kinds are supported whether the property is declared with a type or untyped:
+/// the two store the same plain container pointer at the slot offset, so the split and the
+/// write-back use the same layout for both. A reference slot is supported too, one indirection
+/// deeper, through the cell. A packed field is a compact record field rather than a container
+/// pointer, and a scalar property has nothing to separate.
+fn property_container_split(slot: &PropertySlot) -> Option<PropertyContainerSplit> {
+    if slot.is_packed {
         return None;
     }
-    match slot.php_type.codegen_repr() {
-        PhpType::Array(_) => Some("__rt_array_ensure_unique"),
-        PhpType::AssocArray { .. } => Some("__rt_hash_ensure_unique"),
-        _ => None,
-    }
+    let helper = match slot.php_type.codegen_repr() {
+        PhpType::Array(_) => "__rt_array_ensure_unique",
+        PhpType::AssocArray { .. } => "__rt_hash_ensure_unique",
+        _ => return None,
+    };
+    Some(PropertyContainerSplit {
+        helper,
+        through_reference_cell: slot.is_reference,
+    })
 }
 
 /// Guards statically typed object receivers before selecting declared, dynamic,

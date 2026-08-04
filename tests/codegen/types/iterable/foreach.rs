@@ -1530,3 +1530,443 @@ foreach ($o->x as &$v) { $v = $v * 2; }
         "expected slot load -> split -> slot republish, got:\n{body}"
     );
 }
+
+// --- Issue #642 review round 2: the two shapes the first fix got wrong ---
+//
+// The first `PropGetForWrite` landed with a gate that only proved the SYNTACTIC root of the
+// property chain was a variable, and a backend that silently declined to split slots it did not
+// recognize. Both holes end the same way — the loop borrows a container nobody keeps alive for it:
+//
+//  1. An intermediate step that is a get hook or a `__get` returns a FRESH object. Borrowing out
+//     of it and then dropping the receiver frees the container the loop is about to iterate.
+//  2. The backend returned `None` for untyped and reference slots and fell back to a plain read,
+//     but the frontend had already marked the result BORROWED. With a second owner the container
+//     is shared, so `IterStart` splits it — consuming the reference the PROPERTY holds — and the
+//     loop then mutates a copy nobody republishes.
+//
+// A NOTE ON THE HEAP ASSERTIONS BELOW. Two of these fixtures sit on top of leaks that exist
+// without any `foreach` at all: a bare `$r = &$o->x;` leaks 4 blocks / 184 bytes, and a bare
+// `$t = $o->undeclared;` through `__get` leaks 4 blocks / 192 bytes. Those tests therefore assert
+// that the by-reference loop adds NOTHING to the heap the same program already leaks without it,
+// which is the property this fix owns and which keeps passing once the unrelated leaks are fixed.
+
+/// Returns the `live_bytes=N` figure from a heap-debug run's stderr.
+///
+/// Panics when the instrumentation line is missing, so a fixture that silently stopped emitting
+/// heap-debug output fails loudly instead of comparing two absent values as equal.
+fn heap_debug_live_bytes(stderr: &str) -> u64 {
+    stderr
+        .split_whitespace()
+        .find_map(|field| field.strip_prefix("live_bytes="))
+        .unwrap_or_else(|| panic!("missing heap-debug live_bytes in stderr: {stderr}"))
+        .parse()
+        .expect("heap-debug live_bytes must be numeric")
+}
+
+/// Regression for issue #642: an intermediate property GET HOOK returns a fresh object, so the
+/// property behind it has no owner that outlives the loop, and the fetch-for-write read must
+/// decline the chain. Pre-fix the receiver was dropped right after the borrow, which freed the
+/// container and left the loop warning about a null source instead of running.
+#[test]
+fn test_regression_642_by_ref_foreach_property_chain_through_get_hook() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Inner { public array $x = [1, 2]; }
+class Outer { public Inner $inner { get { return new Inner(); } } }
+$o = new Outer();
+foreach ($o->inner->x as &$v) { $v *= 2; echo $v; }
+"#,
+    );
+    assert_eq!(out.stdout, "24");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #642: a `__get` magic getter is the same hazard as a get hook — a fresh
+/// object whose only owner is the read — and must be declined for the same reason.
+///
+/// The `__get` receiver itself leaks without any loop, so this compares against that baseline
+/// instead of asserting a clean heap: what the fix owns is that the by-reference loop adds
+/// nothing on top.
+#[test]
+fn test_regression_642_by_ref_foreach_property_chain_through_magic_get() {
+    let classes = r#"<?php
+class Inner { public array $x = [1, 2]; }
+class Outer { public function __get($name) { return new Inner(); } }
+$o = new Outer();
+"#;
+    let by_ref = compile_and_run_with_heap_debug(&format!(
+        "{classes}foreach ($o->inner->x as &$v) {{ $v *= 2; echo $v; }}\n"
+    ));
+    let baseline = compile_and_run_with_heap_debug(&format!(
+        "{classes}$t = $o->inner;\nforeach ($t->x as $v) {{ echo $v * 2; }}\n"
+    ));
+    assert_eq!(by_ref.stdout, "24");
+    assert_eq!(
+        heap_debug_live_bytes(&by_ref.stderr),
+        heap_debug_live_bytes(&baseline.stderr),
+        "the by-reference loop must not leak beyond the `__get` receiver itself;\nby-ref: {}\nbaseline: {}",
+        by_ref.stderr,
+        baseline.stderr
+    );
+}
+
+/// Regression for issue #642: a chain of PLAIN declared properties is a chain of stable backing
+/// slots, so it keeps the fetch-for-write read and its writes must land in the inner property.
+/// This is the case the hook restriction must not take down with it.
+#[test]
+fn test_regression_642_by_ref_foreach_over_nested_plain_property_chain() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class Inner { public array $x = [1, 2]; }
+class Outer {
+    public Inner $inner;
+    public function __construct() { $this->inner = new Inner(); }
+}
+$o = new Outer();
+foreach ($o->inner->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->inner->x);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #642: an UNTYPED property slot holds the same plain container pointer as
+/// a typed one, so it must be split and republished like one. Pre-fix the backend declined the
+/// split while the frontend still marked the read borrowed; with a second owner the loop mutated
+/// an unpublished copy — printing `1,2|1,2` — and the program then aborted under heap debug with
+/// `bad refcount`.
+#[test]
+fn test_regression_642_by_ref_foreach_untyped_property_shared_with_another_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public $x = [1, 2]; }
+$o = new C();
+$keep = $o->x;
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x), '|', implode(',', $keep);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4|1,2");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #642: an untyped HASH property must reach the hash split helper with a
+/// second owner live, exactly like its indexed counterpart.
+#[test]
+fn test_regression_642_by_ref_foreach_untyped_hash_property_shared_with_another_owner() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class C { public $x = ['a' => 1, 'b' => 2]; }
+$o = new C();
+$keep = $o->x;
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+$out = '';
+foreach ($o->x as $k => $w) { $out = $out . $k . '=' . $w . ';'; }
+foreach ($keep as $k => $w) { $out = $out . $k . '=' . $w . ';'; }
+echo $out;
+"#,
+    );
+    assert_eq!(out.stdout, "a=2;b=4;a=1;b=2;");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #642: taking a reference to a property (`$r = &$o->x`) promotes its slot
+/// to a ref cell, and the container pointer then lives INSIDE the cell. The split has to go
+/// through the cell so the alias observes the mutation. Pre-fix the backend declined the split
+/// and every write was lost — `1,2|1,2|1,2` where PHP prints `2,4|2,4|1,2`.
+///
+/// Binding a reference to a property leaks 4 blocks with no loop present at all, so the heap
+/// assertion is differential: the by-reference loop must add nothing to that.
+#[test]
+fn test_regression_642_by_ref_foreach_reference_property_shared_with_another_owner() {
+    let setup = r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+$r = &$o->x;
+$keep = $o->x;
+"#;
+    let by_ref = compile_and_run_with_heap_debug(&format!(
+        "{setup}foreach ($o->x as &$v) {{ $v = $v * 2; }}\nunset($v);\necho implode(',', $o->x), '|', implode(',', $r), '|', implode(',', $keep);\n"
+    ));
+    let baseline = compile_and_run_with_heap_debug(&format!(
+        "{setup}echo implode(',', $o->x), '|', implode(',', $r), '|', implode(',', $keep);\n"
+    ));
+    assert_eq!(by_ref.stdout, "2,4|2,4|1,2");
+    assert_eq!(baseline.stdout, "1,2|1,2|1,2");
+    assert!(
+        !by_ref.stderr.contains("bad refcount"),
+        "the split must balance the property's own reference, got: {}",
+        by_ref.stderr
+    );
+    assert_eq!(
+        heap_debug_live_bytes(&by_ref.stderr),
+        heap_debug_live_bytes(&baseline.stderr),
+        "the by-reference loop must not leak beyond the reference binding itself;\nby-ref: {}\nbaseline: {}",
+        by_ref.stderr,
+        baseline.stderr
+    );
+}
+
+/// Regression for issue #642: a hash-valued property reached through a ref cell must use the hash
+/// split helper, proving the cell path is not hardwired to the indexed one.
+#[test]
+fn test_regression_642_by_ref_foreach_reference_hash_property_shared_with_another_owner() {
+    let setup = r#"<?php
+class C { public array $x = ['a' => 1, 'b' => 2]; }
+$o = new C();
+$r = &$o->x;
+$keep = $o->x;
+"#;
+    let dump = r#"$out = '';
+foreach ($r as $k => $w) { $out = $out . $k . '=' . $w . ';'; }
+foreach ($keep as $k => $w) { $out = $out . $k . '=' . $w . ';'; }
+echo $out;
+"#;
+    let by_ref = compile_and_run_with_heap_debug(&format!(
+        "{setup}foreach ($o->x as &$v) {{ $v = $v * 2; }}\nunset($v);\n{dump}"
+    ));
+    let baseline = compile_and_run_with_heap_debug(&format!("{setup}{dump}"));
+    assert_eq!(by_ref.stdout, "a=2;b=4;a=1;b=2;");
+    assert!(
+        !by_ref.stderr.contains("bad refcount"),
+        "the split must balance the property's own reference, got: {}",
+        by_ref.stderr
+    );
+    assert_eq!(
+        heap_debug_live_bytes(&by_ref.stderr),
+        heap_debug_live_bytes(&baseline.stderr),
+        "the by-reference loop must not leak beyond the reference binding itself;\nby-ref: {}\nbaseline: {}",
+        by_ref.stderr,
+        baseline.stderr
+    );
+}
+
+/// Coherence gate for issue #642: the frontend must never emit `PropGetForWrite` for a shape the
+/// backend cannot split.
+///
+/// The property is enforced structurally rather than by inspection. `lower_prop_get_for_write`
+/// has no fallback left — a slot it cannot split is a hard `unsupported` codegen error — so any
+/// shape the frontend over-accepts fails to COMPILE here instead of miscompiling silently. Each
+/// row is a property shape a by-reference `foreach` can reach; every one of them must compile and
+/// produce the output the PHP interpreter produces, whichever side of the gate it lands on.
+///
+/// The rows that do not assert a clean heap sit on leaks that are independent of this op: a get
+/// hook, a dynamic `stdClass` property, and a static property each leak with a by-VALUE loop too.
+#[test]
+fn test_regression_642_prop_get_for_write_frontend_and_backend_agree_on_every_shape() {
+    // (name, program body, expected stdout, heap must be clean)
+    let shapes: &[(&str, &str, &str, bool)] = &[
+        (
+            "typed indexed",
+            "class C { public array $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x);",
+            "2,4",
+            true,
+        ),
+        (
+            "untyped indexed",
+            "class C { public $x = [1, 2]; }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x);",
+            "2,4",
+            true,
+        ),
+        (
+            "private property through $this",
+            "class C {
+    private array $x = [1, 2];
+    public function run(): string { foreach ($this->x as &$v) { $v = $v * 2; } unset($v); return implode(',', $this->x); }
+}
+$o = new C();
+echo $o->run();",
+            "2,4",
+            true,
+        ),
+        (
+            "nullable property assigned in the constructor",
+            "class C { public ?array $x; public function __construct() { $this->x = [1, 2]; } }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x);",
+            "2,4",
+            true,
+        ),
+        (
+            "mixed property assigned in the constructor",
+            "class C { public mixed $x; public function __construct() { $this->x = [1, 2]; } }
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->x);",
+            "2,4",
+            true,
+        ),
+        (
+            "nested plain chain",
+            "class Inner { public array $x = [1, 2]; }
+class Outer { public Inner $inner; public function __construct() { $this->inner = new Inner(); } }
+$o = new Outer();
+foreach ($o->inner->x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', $o->inner->x);",
+            "2,4",
+            true,
+        ),
+        (
+            "hooked intermediate chain",
+            "class Inner { public array $x = [1, 2]; }
+class Outer { public Inner $inner { get { return new Inner(); } } }
+$o = new Outer();
+foreach ($o->inner->x as &$v) { $v *= 2; echo $v; }",
+            "24",
+            true,
+        ),
+        (
+            "temporary receiver",
+            "class C { public array $x = [1, 2]; }
+function make(): C { return new C(); }
+foreach (make()->x as &$v) { $v = $v * 2; echo $v; }",
+            "24",
+            true,
+        ),
+        (
+            "hooked property",
+            "class C {
+    private array $store = [1, 2];
+    public array $x { get { return $this->store; } }
+}
+$o = new C();
+foreach ($o->x as &$v) { $v = $v * 2; echo $v; }",
+            "24",
+            false,
+        ),
+        (
+            "dynamic stdClass property",
+            "$o = new stdClass();
+$o->x = [1, 2];
+foreach ($o->x as &$v) { $v = $v * 2; echo $v; }",
+            "24",
+            false,
+        ),
+        (
+            "static property",
+            "class C { public static array $x = [1, 2]; }
+foreach (C::$x as &$v) { $v = $v * 2; }
+unset($v);
+echo implode(',', C::$x);",
+            "2,4",
+            false,
+        ),
+    ];
+
+    for (name, body, expected, expect_clean_heap) in shapes {
+        let out = compile_and_run_with_heap_debug(&format!("<?php\n{body}\n"));
+        assert_eq!(
+            &out.stdout, expected,
+            "shape `{name}` produced the wrong output; stderr: {}",
+            out.stderr
+        );
+        if *expect_clean_heap {
+            assert!(
+                out.stderr.contains("leak summary: clean"),
+                "shape `{name}` did not report a clean heap-debug leak summary, got: {}",
+                out.stderr
+            );
+        }
+        assert!(
+            !out.stderr.contains("bad refcount"),
+            "shape `{name}` reported a bad refcount: {}",
+            out.stderr
+        );
+    }
+}
+
+/// Regression for issue #642: the reference-slot split must go THROUGH the ref cell on every
+/// supported target — dereference the cell to reach the container, then publish the separated
+/// container back at the cell's payload rather than into the property slot, which holds the cell
+/// pointer itself. Writing the container over the slot would destroy the reference binding.
+///
+/// The assertion is structural so it can be run for a non-host architecture through
+/// `ELEPHC_TEST_TARGET` without an assembler for that target.
+#[test]
+fn test_regression_642_prop_get_for_write_splits_reference_slot_through_the_cell() {
+    let dir = make_cli_test_dir("elephc_prop_get_for_write_reference_cell");
+    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+class C { public array $x = [1, 2]; }
+$o = new C();
+$r = &$o->x;
+foreach ($o->x as &$v) { $v = $v * 2; }
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let start = user_asm
+        .find("op=prop_get_for_write")
+        .expect("missing prop_get_for_write lowering");
+    let body = &user_asm[start..];
+    let end = body[1..]
+        .find("op=iter_start")
+        .map(|pos| pos + 1)
+        .expect("missing iter_start after prop_get_for_write");
+    let body = &body[..end];
+
+    // Cell pointer out of the slot, container out of the cell, split, container back into the
+    // cell. The slot offset is 8 for the single property; the cell payload sits at offset 0.
+    let steps: [&str; 5] = match target().arch {
+        Arch::AArch64 => [
+            "ldr x0, [x9, #8]",
+            "ldr x0, [x0]",
+            "bl __rt_array_ensure_unique",
+            "ldr x10, [x9, #8]",
+            "str x0, [x10]",
+        ],
+        Arch::X86_64 => [
+            "mov rdi, QWORD PTR [r11 + 8]",
+            "mov rdi, QWORD PTR [rdi]",
+            "call __rt_array_ensure_unique",
+            "mov r10, QWORD PTR [r11 + 8]",
+            "mov QWORD PTR [r10], rax",
+        ],
+    };
+    let mut cursor = 0usize;
+    for step in steps {
+        let found = body[cursor..]
+            .find(step)
+            .unwrap_or_else(|| panic!("missing `{step}` after offset {cursor} in:\n{body}"));
+        cursor += found + step.len();
+    }
+    assert!(
+        !body.contains("str x0, [x9, #8]") && !body.contains("mov QWORD PTR [r11 + 8], rax"),
+        "the separated container must never overwrite the ref-cell pointer in the slot:\n{body}"
+    );
+}

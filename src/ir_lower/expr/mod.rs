@@ -8160,8 +8160,10 @@ pub(crate) fn lower_by_ref_foreach_property_source(
     ctx.builder
         .set_value_ownership(result.value, Ownership::Borrowed);
     // The receiver object is dropped here rather than held for the whole loop. This is safe
-    // because `property_fetch_for_write_applies` demanded a variable-rooted receiver: the base
-    // local keeps the object — and therefore its property slot — alive until the loop ends.
+    // because `property_fetch_for_write_applies` demanded that every step of the receiver chain
+    // be a stable backing slot: the base local keeps the object — and therefore its property
+    // slot — alive until the loop ends. A chain with a hook, a `__get`, or a call anywhere in it
+    // does NOT have that owner, and takes the ordinary retaining read instead.
     if ctx.value_is_owning_temporary(object_value) {
         crate::ir_lower::ownership::release_if_owned(ctx, object_value, Some(expr.span));
     }
@@ -8170,29 +8172,22 @@ pub(crate) fn lower_by_ref_foreach_property_source(
 
 /// Returns whether a by-reference `foreach` source can take the fetch-for-write property read.
 ///
-/// Requires a statically-known object receiver rooted in a plain variable (`$o->x`, `$this->x`),
-/// and a property whose static type is one of the two container kinds with a copy-on-write helper
-/// to split them. Everything else — dynamic property names, `Mixed` receivers, scalar or
-/// nullable properties, and receivers over a temporary such as `f()->x`, which has no owner once
-/// the read returns — keeps the ordinary retaining read.
+/// Requires a statically-known, non-null object receiver; a property that is a fixed container
+/// slot the backend can split; and a receiver chain made only of stable backing slots. Everything
+/// else — dynamic property names, `Mixed` receivers, scalar or nullable properties, hooked or
+/// `__get`-routed steps, and receivers over a temporary such as `f()->x` — keeps the ordinary
+/// retaining read.
 fn property_fetch_for_write_applies(
     ctx: &LoweringContext<'_, '_>,
     object_value: &LoweredValue,
     property: &str,
     expr: &Expr,
 ) -> bool {
-    if !matches!(
-        ctx.builder.value_php_type(object_value.value).codegen_repr(),
-        PhpType::Object(_)
-    ) {
+    let PhpType::Object(class_name) = ctx.builder.value_php_type(object_value.value).codegen_repr()
+    else {
         return false;
-    }
+    };
     if value_is_nullable(ctx, object_value.value) {
-        return false;
-    }
-    // A hooked property is not a storage slot at all: the read routes to an accessor method
-    // whose result is a fresh value, so there is nothing for the loop to alias.
-    if class_declares_hook_accessor(ctx, object_value.value, &property_hook_get_method(property)) {
         return false;
     }
     let property_ty =
@@ -8203,20 +8198,113 @@ fn property_fetch_for_write_applies(
     ) {
         return false;
     }
-    property_chain_is_variable_rooted(expr)
+    // `lower_prop_get_for_write` has no fallback: a slot it cannot split is a hard codegen
+    // error. This mirrors its slot classification over the same `ClassInfo` metadata, which is
+    // what keeps the two sides from ever disagreeing about which shapes carry the op.
+    if !property_is_splittable_container_slot(ctx, &class_name, property) {
+        return false;
+    }
+    let ExprKind::PropertyAccess { object, .. } = &expr.kind else {
+        return false;
+    };
+    receiver_is_stable_backing_storage(ctx, object)
 }
 
-/// Returns whether a property expression bottoms out in a plain variable receiver (`$o->x`,
-/// `$this->x`, `$o->inner->x`).
+/// Returns whether a class property is a fixed container slot that `Op::PropGetForWrite` can
+/// split in place.
 ///
-/// `$this` counts: it is a parameter local that owns the receiver for the whole method body,
-/// which is exactly the lifetime guarantee this predicate is there to establish.
-fn property_chain_is_variable_rooted(expr: &Expr) -> bool {
+/// Mirrors `resolve_property_slot_for_class` and `property_container_split` in
+/// `src/codegen/lower_inst/objects.rs` over the same `ClassInfo` metadata — including the SPL
+/// storage-type override, so a class that shadows `CallbackFilterIterator`'s internals with an
+/// array property is classified by the type the backend will actually see. A declared `get` hook
+/// disqualifies the property outright: the read routes to an accessor method returning a fresh
+/// value, so there is no slot for the loop to alias.
+fn property_is_splittable_container_slot(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    if is_builtin_stdclass_name(normalized) {
+        return false;
+    }
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return false;
+    };
+    if class_info
+        .methods
+        .contains_key(&php_symbol_key(&property_hook_get_method(property)))
+    {
+        return false;
+    }
+    // The backend resolves the slot from `visible_property` and then lets the SPL storage
+    // override win, so both steps have to hold here: a name with no visible slot is a dynamic
+    // property the backend cannot address, and an overridden one is not the declared type.
+    let Some((_, (_, declared_ty))) = class_info.visible_property(property) else {
+        return false;
+    };
+    let slot_ty = runtime_property_type_override(ctx, normalized, property)
+        .unwrap_or_else(|| declared_ty.clone());
+    matches!(
+        slot_ty.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    )
+}
+
+/// Returns whether an object expression names storage that keeps the receiver alive for the whole
+/// loop without this read owning it.
+///
+/// A plain variable or `$this` is such storage, and so is a chain of declared, non-hooked property
+/// slots over one. What is not: a `get` hook, a `__get` magic getter, a call, a `new`, or anything
+/// else that materializes a FRESH object. Its only owner is the read itself, and
+/// `lower_by_ref_foreach_property_source` drops that owner as soon as the borrow is taken — which
+/// frees the very container the loop was about to iterate. Proving only that the SYNTACTIC root is
+/// a variable is not enough, because an intermediate step can be a hook while the root is not.
+fn receiver_is_stable_backing_storage(ctx: &LoweringContext<'_, '_>, expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Variable(_) | ExprKind::This => true,
-        ExprKind::PropertyAccess { object, .. } => property_chain_is_variable_rooted(object),
+        ExprKind::PropertyAccess { object, property } => {
+            let Some((class_name, nullable)) =
+                instance_callable_object_class_and_nullability(ctx, object)
+            else {
+                return false;
+            };
+            if nullable {
+                return false;
+            }
+            property_is_stable_object_backing_slot(ctx, &class_name, property)
+                && receiver_is_stable_backing_storage(ctx, object)
+        }
         _ => false,
     }
+}
+
+/// Returns whether an intermediate chain step reads an object out of a plain declared slot.
+///
+/// The slot must exist on a statically known class, hold an object, and carry no `get` hook. An
+/// undeclared name fails here too, which is what rejects `__get`-routed and dynamic steps: both
+/// call code that builds a fresh object instead of handing back stored storage.
+fn property_is_stable_object_backing_slot(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+    property: &str,
+) -> bool {
+    let normalized = class_name.trim_start_matches('\\');
+    if is_builtin_stdclass_name(normalized) {
+        return false;
+    }
+    let Some(class_info) = ctx.classes.get(normalized) else {
+        return false;
+    };
+    if class_info
+        .methods
+        .contains_key(&php_symbol_key(&property_hook_get_method(property)))
+    {
+        return false;
+    }
+    class_info
+        .visible_property(property)
+        .is_some_and(|(_, (_, slot_ty))| matches!(slot_ty.codegen_repr(), PhpType::Object(_)))
 }
 
 /// Returns the fetch-for-write element read a by-reference `foreach` source can take, if any.
