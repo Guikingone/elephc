@@ -86,3 +86,30 @@ direct_only(200);
     assert!(user_asm.contains("structural-small"));
     assert!(!user_asm.contains("dead-direct-small"));
 }
+
+/// Verifies a break-only case cannot fall through into a later case body or default after DCE.
+#[test]
+fn test_dead_code_elimination_preserves_break_only_switch_case_barrier() {
+    let out = compile_and_run(
+        r#"<?php
+switch (true) {
+    case $argc > 0:
+        break;
+    case $argc > 100:
+        echo "second";
+        break;
+}
+echo "|";
+
+switch (true) {
+    case $argc > 0:
+        break;
+    default:
+        echo "default";
+}
+echo "|";
+"#,
+    );
+
+    assert_eq!(out, "||");
+}

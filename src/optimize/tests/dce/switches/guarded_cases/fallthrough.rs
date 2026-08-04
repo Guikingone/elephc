@@ -133,3 +133,29 @@ fn test_eliminate_dead_code_keeps_case_guard_for_direct_only_switch_entry() {
 
     assert_eq!(cases[1].1[0], Stmt::echo(Expr::int_lit(7)));
 }
+
+/// Verifies a break-only case remains a control-flow barrier before later case bodies.
+#[test]
+fn test_eliminate_dead_code_preserves_break_only_switch_case_barrier() {
+    let break_stmt = Stmt::new(StmtKind::Break(1), Span::dummy());
+    let cases = optimized_switch_cases(vec![
+        (
+            vec![x_comparison(BinOp::Lt, 0)],
+            vec![break_stmt.clone()],
+        ),
+        (
+            vec![x_comparison(BinOp::Gt, 100)],
+            vec![Stmt::echo(Expr::int_lit(7)), break_stmt.clone()],
+        ),
+    ]);
+
+    assert_eq!(cases.len(), 2);
+    assert_eq!(cases[0].1, vec![break_stmt]);
+    assert_eq!(
+        cases[1].1,
+        vec![
+            Stmt::echo(Expr::int_lit(7)),
+            Stmt::new(StmtKind::Break(1), Span::dummy()),
+        ]
+    );
+}

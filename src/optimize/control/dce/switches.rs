@@ -326,10 +326,12 @@ fn prune_switch_patterns_with_guards(
 /// matching case guard. Once a prior body can fall through, subsequent bodies
 /// use only the outer guards because their case patterns were not evaluated on
 /// every incoming path. Terminating cases preserve direct-only entry tracking.
-/// Switch-noop breaks (a break as the sole statement) are trimmed from bodies.
+/// A switch-noop break is trimmed only from the final case when no default can
+/// receive fall-through; earlier breaks remain control-flow barriers.
 fn dce_switch_cases_with_guards(
     subject: &Expr,
     cases: Vec<(Vec<Expr>, Vec<Stmt>)>,
+    has_default: bool,
     guards: &GuardState,
 ) -> Vec<(Vec<Expr>, Vec<Stmt>)> {
     let trim_switch_noop_break = |body: Vec<Stmt>| {
@@ -343,15 +345,21 @@ fn dce_switch_cases_with_guards(
     let mut direct_entry_guards = guards.clone();
     let mut direct_only = true;
     let mut processed = Vec::with_capacity(cases.len());
+    let case_count = cases.len();
 
-    for (patterns, body) in cases {
+    for (index, (patterns, body)) in cases.into_iter().enumerate() {
         let patterns: Vec<_> = patterns.into_iter().map(prune_expr).collect();
         let case_guards = if direct_only {
             extend_guards_for_switch_case(subject, &patterns, &direct_entry_guards)
         } else {
             guards.clone()
         };
-        let body = trim_switch_noop_break(dce_block_with_guards(body, case_guards));
+        let body = dce_block_with_guards(body, case_guards);
+        let body = if !has_default && index + 1 == case_count {
+            trim_switch_noop_break(body)
+        } else {
+            body
+        };
         if direct_only {
             direct_entry_guards =
                 extend_guards_for_switch_case_no_match_subject(subject, &patterns, &direct_entry_guards);
@@ -382,9 +390,10 @@ pub(super) fn dce_switch_stmt(
     guards: &GuardState,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
+    let has_default = default.is_some();
     let (cases, default) = prune_switch_patterns_with_guards(
         &subject,
-        dce_switch_cases_with_guards(&subject, cases, guards),
+        dce_switch_cases_with_guards(&subject, cases, has_default, guards),
         default,
         guards,
     );
@@ -446,9 +455,10 @@ pub(super) fn dce_switch_stmt_with_tail(
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
     let tail = dce_block_with_guards(tail, guards.clone());
+    let has_default = default.is_some();
     let (cases, default) = prune_switch_patterns_with_guards(
         &subject,
-        dce_switch_cases_with_guards(&subject, cases, guards),
+        dce_switch_cases_with_guards(&subject, cases, has_default, guards),
         default,
         guards,
     );
