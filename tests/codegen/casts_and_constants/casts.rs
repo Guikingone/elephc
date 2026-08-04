@@ -255,3 +255,47 @@ echo (int)(1e300 * $n), ':', (int)(-1e300 * $n), ':', (int)(1.5e19 * $n);
     );
     assert_eq!(out, "0:0:-3446744073709551616");
 }
+
+/// Verifies RUNTIME `(float)` / `(int)` string casts follow PHP's numeric-string grammar
+/// rather than libc `strtod`'s, so they agree with the compile-time folder in
+/// `crate::optimize::fold::casts`. PHP has no `INF`/`NAN` spelling (`(float)"INF"` is
+/// `0.0`), no hexadecimal form (`(int)"0x1A"` is `0`, not `26`) and no underscore
+/// separator (`(float)"1_000"` is `1.0`); leading/trailing whitespace is allowed, a bare
+/// `"1e"` stops before the exponent, and only the leading numeric run counts.
+/// The strings come out of a `foreach`, so the runtime helpers are what is exercised.
+#[test]
+fn test_runtime_string_casts_follow_php_numeric_string_grammar() {
+    let out = compile_and_run(
+        r#"<?php
+$strings = ["INF", "-INF", "nan", "infinity", "0x1A", "1e400", " 42 ", "+.5e-2", "1_000", "5.", ".5", "1e", "12abc", "1.2.3", "", "9223372036854775808"];
+foreach ($strings as $s) { echo (float)$s, ",", (int)$s, ",", is_numeric($s) ? "T" : "F", "|"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "0,0,F|0,0,F|0,0,F|0,0,F|0,0,F|INF,0,T|42,42,T|0.005,0,T|1,1,F|5,5,T|0.5,0,T|1,1,F|12,12,F|1.2,1,F|0,0,F|9.2233720368548E+18,9223372036854775807,T|"
+    );
+}
+
+/// Verifies a string literal and the same string reaching the cast at runtime produce the
+/// SAME value: the constant folder and the runtime helper must implement one grammar.
+/// A mismatch here means `(float)"0x1A"` answers `0.0` in one path and `26.0` in the other.
+#[test]
+fn test_string_cast_literal_and_runtime_paths_agree() {
+    let out = compile_and_run(
+        r#"<?php
+$runtime = ["INF", "0x1A", "1_000", " 42 ", "1e", "12abc"];
+echo (float)"INF", ",", (int)"INF", "|";
+echo (float)"0x1A", ",", (int)"0x1A", "|";
+echo (float)"1_000", ",", (int)"1_000", "|";
+echo (float)" 42 ", ",", (int)" 42 ", "|";
+echo (float)"1e", ",", (int)"1e", "|";
+echo (float)"12abc", ",", (int)"12abc", "|";
+echo "\n";
+foreach ($runtime as $s) { echo (float)$s, ",", (int)$s, "|"; }
+"#,
+    );
+    let (folded, runtime) = out.split_once('\n').expect("two output lines");
+    assert_eq!(folded, runtime);
+    assert_eq!(folded, "0,0|0,0|1,1|42,42|1,1|12,12|");
+}

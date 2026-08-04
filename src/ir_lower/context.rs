@@ -1670,6 +1670,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
+                    | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
                     | Op::StrPersist
@@ -1810,7 +1811,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn call_result_may_alias_arg(&self, argument: ValueId, result: ValueId) -> bool {
         if matches!(
             self.builder.value_defining_op(argument),
-            Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+            Some(
+                Op::MixedNumericBinop
+                    | Op::ICheckedAdd
+                    | Op::ICheckedSub
+                    | Op::ICheckedMul
+                    | Op::ICheckedPow
+            )
         ) {
             return false;
         }

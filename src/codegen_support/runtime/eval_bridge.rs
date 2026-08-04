@@ -1157,9 +1157,7 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_mixed_cast_float");                            // cast the right boxed operand to a PHP numeric double
     emitter.instruction("fmov d1, d0");                                         // keep the right divisor in d1
     emitter.instruction("ldr d0, [sp, #8]");                                    // reload the left dividend into d0
-    emitter.instruction("fdiv d2, d0, d1");                                     // compute the fmod quotient before truncation
-    emitter.instruction("frintz d2, d2");                                       // truncate the quotient toward zero
-    emitter.instruction("fmsub d0, d2, d1, d0");                                // compute dividend minus truncated quotient times divisor
+    emitter.bl_c("fmod");                                                       // libc fmod keeps the dividend's sign, so -0.0 survives like PHP
     emitter.instruction("fcmp d0, d0");                                         // detect NaN so PHP echo prints NAN without a sign
     emitter.instruction("b.vs __elephc_eval_value_fmod_nan");                   // normalize unordered fmod results before boxing
     emitter.instruction("fmov x1, d0");                                         // move the fmod result bits into mixed value_lo

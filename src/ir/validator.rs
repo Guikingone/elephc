@@ -418,7 +418,7 @@ fn validate_opcode_rules(
         EvalStaticMethodCall => Ok(()),
         IAdd | ISub | IMul | IDiv | ISDiv | ISMod | IPow | IBitAnd | IBitOr | IBitXor
         | IShl | IShrA => check_binary(function, inst_id, inst, IrType::I64, "I64"),
-        ICheckedAdd | ICheckedSub | ICheckedMul => {
+        ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => {
             check_binary(function, inst_id, inst, IrType::I64, "I64")
         }
         FAdd | FSub | FMul | FDiv | FPow => check_binary(function, inst_id, inst, IrType::F64, "F64"),

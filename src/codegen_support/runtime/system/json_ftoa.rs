@@ -12,7 +12,8 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via
 //!   `crate::codegen_support::runtime::system`.
 //! - `__rt_json_encode_float` (same module group) passes `'e'` for the finite
-//!   and substituted-zero paths; `__rt_serialize` passes `'E'`.
+//!   and substituted-zero paths; `__rt_serialize` and `__rt_ftoa_repr` (the
+//!   `var_dump` float renderer) pass `'E'`.
 //!
 //! Key details:
 //! - The shortest precision is found by probing `snprintf("%.*e", p, x)` for
@@ -23,8 +24,12 @@
 //! - The decimal exponent `E` is parsed from the `%e` scratch via `strtol`;
 //!   `decpt = E + 1` selects exponential layout when `decpt < -3 || decpt > 17`
 //!   (the same thresholds PHP/`zend_gcvt` use), otherwise a decimal layout is
-//!   produced with `snprintf("%.*f", max(0, p - E), x)` straight into
-//!   `_concat_buf`.
+//!   produced with `snprintf("%.*f", p - E, x)` straight into `_concat_buf`.
+//! - When `p - E` is NEGATIVE (`decpt` past the last significant digit) that
+//!   `snprintf` is wrong: `%.0f` prints the double's exact decimal expansion
+//!   (`39528480211503568`) instead of `zend_gcvt`'s shortest round-trip digits
+//!   zero-padded to `decpt` (`39528480211503570`). That range is emitted by hand
+//!   instead, copying the scratch digits and appending `E - p` zeros.
 //! - Output ABI matches `__rt_ftoa`: result bytes land in `_concat_buf` at the
 //!   current `_concat_off`, the cursor is advanced by the byte count, and the
 //!   pointer/length are returned in `x1`/`x2` (AArch64) or `rax`/`rdx`
@@ -110,10 +115,10 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #17");                                         // compare decpt against 17
     emitter.instruction("b.gt __rt_json_ftoa_exp");                             // decpt > 17 -> exponential form
 
-    // -- decimal form: snprintf("%.*f", max(0, p - E), x) into concat_buf --
+    // -- decimal form: snprintf("%.*f", p - E, x) into concat_buf --
     emitter.instruction("sub x9, x19, x21");                                    // fracdigits = p - E
     emitter.instruction("cmp x9, #0");                                          // is the fractional digit count negative?
-    emitter.instruction("csel x9, x9, xzr, ge");                                // clamp negatives to zero (integer-valued)
+    emitter.instruction("b.lt __rt_json_ftoa_intpad");                          // decpt exceeds the significant digits: zero-pad instead
     emitter.instruction("str x9, [sp, #0]");                                    // Apple variadic arg 0: fractional digit count (stack)
     abi::emit_symbol_address(emitter, "x10", "_concat_off");
     emitter.instruction("ldr x11, [x10]");                                      // current concat offset
@@ -133,6 +138,50 @@ pub(crate) fn emit_json_ftoa(emitter: &mut Emitter) {
     emitter.instruction("add x10, x10, x2");                                    // advance the cursor past the digits
     emitter.instruction("str x10, [x9]");                                       // publish the new concat offset
     emitter.instruction("b __rt_json_ftoa_done");                               // finished decimal layout
+
+    // -- zero-padded integer form: the shortest digits followed by (E - p) zeros --
+    // `%.*f` cannot be used here: with a clamped precision of 0 it prints the double's
+    // EXACT decimal expansion (39528480211503568) instead of `zend_gcvt`'s shortest
+    // round-trip digits padded with zeros (39528480211503570).
+    emitter.label("__rt_json_ftoa_intpad");
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // current concat offset
+    abi::emit_symbol_address(emitter, "x11", "_concat_buf");
+    emitter.instruction("add x12, x11, x10");                                   // cursor = concat_buf + offset
+    emitter.instruction("mov x1, x12");                                         // remember the result start pointer
+    emitter.instruction("cbz x20, __rt_json_ftoa_intpad_first");                // skip sign when the value is non-negative
+    emitter.instruction("mov w13, #45");                                        // ASCII '-'
+    emitter.instruction("strb w13, [x12], #1");                                 // emit the sign and advance the cursor
+    emitter.label("__rt_json_ftoa_intpad_first");
+    emitter.instruction("add x13, sp, #16");                                    // base of the "%.*e" scratch string
+    emitter.instruction("ldrb w14, [x13, x20]");                                // first significant digit (after optional sign)
+    emitter.instruction("strb w14, [x12], #1");                                 // emit the leading digit
+    emitter.instruction("cbz x19, __rt_json_ftoa_intpad_zeros");                // p==0 has no fractional digits to copy
+    emitter.instruction("add x13, x13, x20");                                   // skip optional sign
+    emitter.instruction("add x13, x13, #2");                                    // skip the leading digit and '.'
+    emitter.instruction("mov x14, #0");                                         // significant-digit copy index
+    emitter.label("__rt_json_ftoa_intpad_loop");
+    emitter.instruction("cmp x14, x19");                                        // copied all p remaining significant digits?
+    emitter.instruction("b.ge __rt_json_ftoa_intpad_zeros");                    // significant digits complete
+    emitter.instruction("ldrb w15, [x13, x14]");                                // load the next significant digit
+    emitter.instruction("strb w15, [x12], #1");                                 // emit the significant digit
+    emitter.instruction("add x14, x14, #1");                                    // advance the copy index
+    emitter.instruction("b __rt_json_ftoa_intpad_loop");                        // copy the next significant digit
+    emitter.label("__rt_json_ftoa_intpad_zeros");
+    emitter.instruction("sub x14, x21, x19");                                   // trailing zero count = E - p
+    emitter.label("__rt_json_ftoa_intpad_zloop");
+    emitter.instruction("cbz x14, __rt_json_ftoa_intpad_end");                  // all trailing zeros emitted
+    emitter.instruction("mov w15, #48");                                        // ASCII '0'
+    emitter.instruction("strb w15, [x12], #1");                                 // emit one trailing zero
+    emitter.instruction("sub x14, x14, #1");                                    // one fewer trailing zero to emit
+    emitter.instruction("b __rt_json_ftoa_intpad_zloop");                       // continue padding
+    emitter.label("__rt_json_ftoa_intpad_end");
+    emitter.instruction("sub x2, x12, x1");                                     // result length = cursor - start
+    abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                       // original concat offset
+    emitter.instruction("add x10, x10, x2");                                    // advance past the emitted bytes
+    emitter.instruction("str x10, [x9]");                                       // publish the new concat offset
+    emitter.instruction("b __rt_json_ftoa_done");                               // finished zero-padded integer layout
 
     // -- exponential form: d.dddde[+-]E with json conventions, byte by byte --
     emitter.label("__rt_json_ftoa_exp");
@@ -283,9 +332,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rcx, rbx");                                        // fracdigits = p ...
     emitter.instruction("sub rcx, r13");                                        // ... minus E
     emitter.instruction("test rcx, rcx");                                       // is the fractional digit count negative?
-    emitter.instruction("jns __rt_json_ftoa_frac_ok_x");                        // non-negative count is fine
-    emitter.instruction("xor ecx, ecx");                                        // clamp to zero (integer-valued)
-    emitter.label("__rt_json_ftoa_frac_ok_x");
+    emitter.instruction("js __rt_json_ftoa_intpad_x");                          // decpt exceeds the significant digits: zero-pad instead
     abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // current concat offset
     abi::emit_symbol_address(emitter, "r9", "_concat_buf");
     emitter.instruction("lea rdi, [r9 + r8]");                                  // destination = concat_buf + offset
@@ -301,6 +348,51 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add r8, rdx");                                         // advance the cursor past the digits
     abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the new concat offset
     emitter.instruction("jmp __rt_json_ftoa_done_x");                           // finished decimal layout
+
+    // -- zero-padded integer form: the shortest digits followed by (E - p) zeros --
+    emitter.label("__rt_json_ftoa_intpad_x");
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // current concat offset
+    abi::emit_symbol_address(emitter, "r9", "_concat_buf");
+    emitter.instruction("lea r10, [r9 + r8]");                                  // cursor = concat_buf + offset
+    emitter.instruction("mov r14, r10");                                        // remember the result start pointer
+    emitter.instruction("test r12, r12");                                       // is the value negative?
+    emitter.instruction("jz __rt_json_ftoa_intpad_first_x");                    // skip sign when non-negative
+    emitter.instruction("mov BYTE PTR [r10], 45");                              // emit '-'
+    emitter.instruction("inc r10");                                             // advance the cursor
+    emitter.label("__rt_json_ftoa_intpad_first_x");
+    emitter.instruction("movzx ecx, BYTE PTR [rsp + r12]");                     // first significant digit (after optional sign)
+    emitter.instruction("mov BYTE PTR [r10], cl");                              // emit the leading digit
+    emitter.instruction("inc r10");                                             // advance the cursor
+    emitter.instruction("test rbx, rbx");                                       // does the mantissa have further digits?
+    emitter.instruction("jz __rt_json_ftoa_intpad_zeros_x");                    // p==0 has no fractional digits to copy
+    emitter.instruction("lea rsi, [rsp + r12 + 2]");                            // &scratch[neg+2] = first fractional digit
+    emitter.instruction("xor edi, edi");                                        // significant-digit copy index
+    emitter.label("__rt_json_ftoa_intpad_loop_x");
+    emitter.instruction("cmp rdi, rbx");                                        // copied all p remaining significant digits?
+    emitter.instruction("jge __rt_json_ftoa_intpad_zeros_x");                   // significant digits complete
+    emitter.instruction("movzx ecx, BYTE PTR [rsi + rdi]");                     // load the next significant digit
+    emitter.instruction("mov BYTE PTR [r10], cl");                              // emit the significant digit
+    emitter.instruction("inc r10");                                             // advance the cursor
+    emitter.instruction("inc rdi");                                             // advance the copy index
+    emitter.instruction("jmp __rt_json_ftoa_intpad_loop_x");                    // copy the next significant digit
+    emitter.label("__rt_json_ftoa_intpad_zeros_x");
+    emitter.instruction("mov rcx, r13");                                        // trailing zero count = E ...
+    emitter.instruction("sub rcx, rbx");                                        // ... minus p
+    emitter.label("__rt_json_ftoa_intpad_zloop_x");
+    emitter.instruction("test rcx, rcx");                                       // all trailing zeros emitted?
+    emitter.instruction("jz __rt_json_ftoa_intpad_end_x");                      // zero padding complete
+    emitter.instruction("mov BYTE PTR [r10], 48");                              // emit one trailing zero
+    emitter.instruction("inc r10");                                             // advance the cursor
+    emitter.instruction("dec rcx");                                             // one fewer trailing zero to emit
+    emitter.instruction("jmp __rt_json_ftoa_intpad_zloop_x");                   // continue padding
+    emitter.label("__rt_json_ftoa_intpad_end_x");
+    emitter.instruction("mov rax, r14");                                        // result pointer = start
+    emitter.instruction("mov rdx, r10");                                        // cursor (one past the last byte)
+    emitter.instruction("sub rdx, rax");                                        // result length = cursor - start
+    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // original concat offset
+    emitter.instruction("add r8, rdx");                                         // advance past the emitted bytes
+    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the new concat offset
+    emitter.instruction("jmp __rt_json_ftoa_done_x");                           // finished zero-padded integer layout
 
     emitter.label("__rt_json_ftoa_exp_x");
     abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // current concat offset

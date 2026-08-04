@@ -45,7 +45,21 @@ impl Checker {
                         "Exponentiation requires numeric operands",
                     ));
                 }
-                Ok(PhpType::Float)
+                // PHP's `**` is int-preserving: `2 ** 3` is `int(8)`, not `float(8)`.
+                // It only becomes a float when an operand is already a float, when the
+                // exponent is negative, or when the integer result overflows `i64` — so
+                // an int/int power is `Mixed` for the same reason `+`/`-`/`*` are.
+                if uses_mixed_numeric_dispatch(&lt) || uses_mixed_numeric_dispatch(&rt) {
+                    Ok(PhpType::Mixed)
+                } else if lt == PhpType::Float || rt == PhpType::Float {
+                    Ok(PhpType::Float)
+                } else if let Some(literal_ty) =
+                    checked_literal_int_arithmetic_type(op, left, right)
+                {
+                    Ok(literal_ty)
+                } else {
+                    Ok(PhpType::Mixed)
+                }
             }
             BinOp::Add => {
                 if is_array_like_type(&lt) || is_array_like_type(&rt) {
@@ -1265,9 +1279,45 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
         BinOp::Add => lhs.checked_add(rhs).is_some(),
         BinOp::Sub => lhs.checked_sub(rhs).is_some(),
         BinOp::Mul => lhs.checked_mul(rhs).is_some(),
+        BinOp::Pow => int_pow_result_fits(lhs, rhs),
         _ => return None,
     };
     Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns whether PHP's `int ** int` keeps an integer result for these literals.
+///
+/// Mirrors `zend_pow_function_base` (and `crate::optimize::fold::ops::try_fold_int_pow`):
+/// a negative exponent is always a double, `exp == 0` and `base == 0` answer immediately,
+/// and otherwise the square-and-multiply loop reports the first `i64` multiplication that
+/// would overflow — the exact point where PHP promotes the result to a double.
+fn int_pow_result_fits(base: i64, exponent: i64) -> bool {
+    if exponent < 0 {
+        return false;
+    }
+    if exponent == 0 || base == 0 {
+        return true;
+    }
+    let (mut accumulated, mut factor, mut remaining) = (1i64, base, exponent);
+    while remaining >= 1 {
+        if remaining % 2 == 1 {
+            remaining -= 1;
+            match accumulated.checked_mul(factor) {
+                Some(product) => accumulated = product,
+                None => return false,
+            }
+        } else {
+            remaining /= 2;
+            match factor.checked_mul(factor) {
+                Some(product) => factor = product,
+                None => return false,
+            }
+        }
+        if remaining == 0 {
+            return true;
+        }
+    }
+    true
 }
 
 /// Returns `true` when an integer arithmetic expression cannot overflow.

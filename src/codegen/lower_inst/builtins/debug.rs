@@ -488,7 +488,7 @@ fn emit_var_dump_int_payload(ctx: &mut FunctionContext<'_>) {
 /// Emits `var_dump` output for a float payload in the floating result register.
 fn emit_var_dump_float(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_call_label(ctx.emitter, "__rt_ftoa");
+    abi::emit_call_label(ctx.emitter, "__rt_ftoa_repr");
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
     emit_write_literal(ctx, b"float(");
     abi::emit_pop_reg_pair(ctx.emitter, ptr_reg, len_reg);

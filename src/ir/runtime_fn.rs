@@ -629,13 +629,11 @@ impl RuntimeFnId {
         match self {
             RuntimeFnId::Abs |
             RuntimeFnId::Acos |
-            RuntimeFnId::ArrayChunk |
             RuntimeFnId::ArrayColumn |
             RuntimeFnId::ArrayCombine |
             RuntimeFnId::ArrayDiff |
             RuntimeFnId::ArrayDiffAssoc |
             RuntimeFnId::ArrayDiffKey |
-            RuntimeFnId::ArrayFill |
             RuntimeFnId::ArrayFillKeys |
             RuntimeFnId::ArrayFlip |
             RuntimeFnId::ArrayIntersect |
@@ -673,7 +671,6 @@ impl RuntimeFnId {
             RuntimeFnId::CtypeSpace |
             RuntimeFnId::Deg2rad |
             RuntimeFnId::Exp |
-            RuntimeFnId::Explode |
             RuntimeFnId::Fdiv |
             RuntimeFnId::Floor |
             RuntimeFnId::Fmod |
@@ -718,10 +715,7 @@ impl RuntimeFnId {
             RuntimeFnId::StrContains |
             RuntimeFnId::StrEndsWith |
             RuntimeFnId::StrIreplace |
-            RuntimeFnId::StrPad |
-            RuntimeFnId::StrRepeat |
             RuntimeFnId::StrReplace |
-            RuntimeFnId::StrSplit |
             RuntimeFnId::StrStartsWith |
             RuntimeFnId::Strcasecmp |
             RuntimeFnId::Strcmp |
@@ -734,9 +728,21 @@ impl RuntimeFnId {
             RuntimeFnId::Tanh |
             RuntimeFnId::Trim |
             RuntimeFnId::Ucfirst |
-            RuntimeFnId::Ucwords |
-            RuntimeFnId::Wordwrap => crate::ir::Effects::empty(),
-            RuntimeFnId::Clamp => crate::ir::Effects::MAY_THROW,
+            RuntimeFnId::Ucwords => crate::ir::Effects::empty(),
+            // These seven raise reference PHP's catchable `ValueError` for out-of-range
+            // arguments (`array_chunk()` non-positive length, `clamp()` inverted bounds,
+            // `array_fill()` negative count, `explode()` empty separator, `str_pad()` empty
+            // pad string or bad pad type, `str_repeat()` negative count, `str_split()`
+            // non-positive length, `wordwrap()` empty break or zero cutting width), so they
+            // must not be treated as removable pure calls.
+            RuntimeFnId::ArrayChunk
+            | RuntimeFnId::ArrayFill
+            | RuntimeFnId::Clamp
+            | RuntimeFnId::Explode
+            | RuntimeFnId::StrPad
+            | RuntimeFnId::StrRepeat
+            | RuntimeFnId::StrSplit
+            | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError
@@ -787,10 +793,17 @@ impl RuntimeFnId {
                     | crate::ir::Effects::MAY_FATAL.bits(),
             ),
             RuntimeFnId::Phpversion => crate::ir::Effects::PURE,
-            RuntimeFnId::MtRand | RuntimeFnId::Rand | RuntimeFnId::RandomInt => {
+            RuntimeFnId::Rand => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_PROCESS.bits()
+                    | crate::ir::Effects::WRITES_PROCESS.bits(),
+            ),
+            // `mt_rand()` and `random_int()` raise a catchable `ValueError` for an inverted
+            // `[min, max]` range; `rand()` silently swaps the bounds instead.
+            RuntimeFnId::MtRand | RuntimeFnId::RandomInt => {
                 crate::ir::Effects::from_bits_retain(
                     crate::ir::Effects::READS_PROCESS.bits()
-                        | crate::ir::Effects::WRITES_PROCESS.bits(),
+                        | crate::ir::Effects::WRITES_PROCESS.bits()
+                        | crate::ir::Effects::MAY_THROW.bits(),
                 )
             }
             RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,

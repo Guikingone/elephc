@@ -12,6 +12,7 @@ mod itoa;
 mod concat;
 mod concat_scratch;
 mod ftoa;
+mod php_num_scan;
 mod str_eq;
 mod str_loose_eq;
 mod str_to_number;
@@ -87,7 +88,8 @@ pub use itoa::emit_itoa;
 /// Emit integer-to-string conversion helper.
 pub use concat::emit_concat;
 /// Emit string concatenation helper.
-pub use ftoa::emit_ftoa;
+pub use ftoa::{emit_ftoa, emit_ftoa_repr};
+pub use php_num_scan::emit_php_num_scan;
 /// Emit float-to-string conversion helper.
 pub use str_eq::emit_str_eq;
 /// Emit case-sensitive string equality check.
