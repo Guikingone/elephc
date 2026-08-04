@@ -17,6 +17,7 @@ use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
@@ -198,6 +199,12 @@ pub(crate) fn collect_constants(
         );
     }
     for (name, value) in JSON_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in MATH_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

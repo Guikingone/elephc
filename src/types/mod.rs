@@ -30,6 +30,8 @@ pub(crate) mod error_constants;
 mod ffi;
 /// JSON literal constant type inference.
 pub(crate) mod json_constants;
+/// PHP math integer constants (`PHP_ROUND_HALF_*` rounding modes).
+pub(crate) mod math_constants;
 /// PHP type model and type environment for tracking variable types.
 mod model;
 /// Preg/PCRE flag constants shared by checker and codegen.

@@ -399,11 +399,13 @@ fn is_builtin_global_constant(name: &str) -> bool {
         ) {
             return true;
         }
-    // Shared source-of-truth slices for JSON, stream/socket, and session constants.
+    // Shared source-of-truth slices for JSON, stream/socket, session, array, and math constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
         .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
         .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())
+        .chain(crate::types::array_constants::ARRAY_INT_CONSTANTS.iter())
+        .chain(crate::types::math_constants::MATH_INT_CONSTANTS.iter())
         .any(|(constant_name, _)| *constant_name == name)
 }

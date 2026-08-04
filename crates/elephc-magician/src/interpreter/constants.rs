@@ -245,6 +245,14 @@ pub(super) const EVAL_STR_PAD_RIGHT: i64 = 1;
 pub(super) const EVAL_STR_PAD_BOTH: i64 = 2;
 pub(super) const EVAL_COUNT_NORMAL: i64 = 0;
 pub(super) const EVAL_COUNT_RECURSIVE: i64 = 1;
+/// `round()` breaks exact `.5` ties away from zero, which is PHP's default.
+pub(super) const EVAL_PHP_ROUND_HALF_UP: i64 = 1;
+/// `round()` breaks exact `.5` ties toward zero.
+pub(super) const EVAL_PHP_ROUND_HALF_DOWN: i64 = 2;
+/// `round()` breaks exact `.5` ties toward the nearest even digit.
+pub(super) const EVAL_PHP_ROUND_HALF_EVEN: i64 = 3;
+/// `round()` breaks exact `.5` ties toward the nearest odd digit.
+pub(super) const EVAL_PHP_ROUND_HALF_ODD: i64 = 4;
 pub(super) const EVAL_PREG_SPLIT_NO_EMPTY: i64 = 1;
 pub(super) const EVAL_PREG_SPLIT_DELIM_CAPTURE: i64 = 2;
 pub(super) const EVAL_PREG_SPLIT_OFFSET_CAPTURE: i64 = 4;
