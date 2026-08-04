@@ -5361,14 +5361,15 @@ fn lower_array_splice_call(
     Ok(())
 }
 
-/// Materializes the shared `(array, offset, length)` argument triple for `array_slice` and
-/// `array_splice` into the runtime argument registers.
+/// Materializes the shared `(array, offset, length, length_present)` argument tuple for
+/// `array_slice` and `array_splice` into the runtime argument registers.
 ///
-/// The offset and length are resolved to plain integers first — unboxing a `Mixed` cell read from a
-/// heterogeneous array via `__rt_mixed_cast_int` — and spilled to the stack, because that unbox call
-/// clobbers caller-saved registers. The array pointer (a plain stack load that clobbers nothing) is
-/// then placed, and the staged integers are restored into the offset/length argument registers, so
-/// the runtime helper sees the array pointer plus two genuine integers rather than a boxed pointer.
+/// The offset, the length and the length-present flag are resolved to plain integers first —
+/// unboxing a `Mixed` cell read from a heterogeneous array via `__rt_mixed_cast_int` — and spilled to
+/// the stack, because those unbox calls clobber caller-saved registers. The array pointer (a plain
+/// stack load that clobbers nothing) is then placed, and the staged integers are restored into the
+/// offset/length/flag argument registers, so the runtime helper sees the array pointer plus three
+/// genuine integers rather than a boxed pointer.
 fn lower_slice_like_args(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
@@ -5378,17 +5379,21 @@ fn lower_slice_like_args(
 ) -> Result<()> {
     resolve_int_operand_to_result(ctx, offset, &format!("{} offset", name))?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    resolve_slice_length_present_to_result(ctx, length)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     resolve_slice_length_to_result(ctx, length, name)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
             abi::emit_pop_reg(ctx.emitter, "x2"); // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x3"); // restore the length-present flag into the fourth runtime argument
             abi::emit_pop_reg(ctx.emitter, "x1"); // restore the resolved offset into the second runtime argument
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
             abi::emit_pop_reg(ctx.emitter, "rdx"); // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rcx"); // restore the length-present flag into the fourth runtime argument
             abi::emit_pop_reg(ctx.emitter, "rsi"); // restore the resolved offset into the second runtime argument
         }
     }
@@ -5397,20 +5402,17 @@ fn lower_slice_like_args(
 
 /// Resolves an optional `array_slice`/`array_splice` length into the integer result register.
 ///
-/// An absent or `Void` length becomes the runtime "until the end" sentinel; otherwise the length is
-/// resolved through the shared integer resolver, unboxing a `Mixed` value to a plain integer.
+/// An absent or `Void` length materializes a zero placeholder that the helper ignores because the
+/// companion length-present flag is zero; otherwise the length is resolved through the shared integer
+/// resolver, unboxing a `Mixed` value to a plain integer.
 fn resolve_slice_length_to_result(
     ctx: &mut FunctionContext<'_>,
     length: Option<ValueId>,
     name: &str,
 ) -> Result<()> {
-    let until_end = match length {
-        None => true,
-        Some(length) => matches!(ctx.value_php_type(length)?.codegen_repr(), PhpType::Void),
-    };
-    if until_end {
+    if slice_length_is_statically_absent(ctx, length)? {
         let reg = abi::int_result_reg(ctx.emitter);
-        emit_array_slice_until_end_sentinel(ctx, reg);
+        abi::emit_load_int_immediate(ctx.emitter, reg, 0);
         return Ok(());
     }
     resolve_int_operand_to_result(
@@ -5420,15 +5422,73 @@ fn resolve_slice_length_to_result(
     )
 }
 
+/// Resolves the `array_slice`/`array_splice` length-present flag into the integer result register.
+///
+/// PHP's `?int $length` treats `null` as "to the end of the array", and every other `i64` — including
+/// `-1` — is a real length, so the runtime helpers cannot recognise "no length" from the length value
+/// itself. The flag is therefore materialized separately: an omitted or statically `Void` argument is
+/// the immediate `0`, a statically typed integer is the immediate `1`, and a boxed `Mixed` argument is
+/// unboxed at runtime so a `null` payload (runtime tag 8) also reports `0`.
+fn resolve_slice_length_present_to_result(
+    ctx: &mut FunctionContext<'_>,
+    length: Option<ValueId>,
+) -> Result<()> {
+    let reg = abi::int_result_reg(ctx.emitter);
+    if slice_length_is_statically_absent(ctx, length)? {
+        abi::emit_load_int_immediate(ctx.emitter, reg, 0);
+        return Ok(());
+    }
+    let length = length.expect("length present");
+    if !matches!(
+        ctx.value_php_type(length)?.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        abi::emit_load_int_immediate(ctx.emitter, reg, 1);
+        return Ok(());
+    }
+    ctx.load_value_to_result(length)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #8");                              // runtime tag 8 marks a boxed PHP null length argument
+            ctx.emitter.instruction("cset x0, ne");                             // report a length only when the boxed payload is not null
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 8");                              // runtime tag 8 marks a boxed PHP null length argument
+            ctx.emitter.instruction("setne al");                                // report a length only when the boxed payload is not null
+            ctx.emitter.instruction("movzx rax, al");                           // widen the length-present flag to a full integer argument word
+        }
+    }
+    Ok(())
+}
+
+/// Reports whether the `array_slice`/`array_splice` length argument is absent at compile time.
+///
+/// A missing operand and a statically `Void` operand both mean the PHP call omitted `$length` (or
+/// passed a literal `null`), which selects the "slice to the end of the array" behavior.
+fn slice_length_is_statically_absent(
+    ctx: &mut FunctionContext<'_>,
+    length: Option<ValueId>,
+) -> Result<bool> {
+    match length {
+        None => Ok(true),
+        Some(length) => Ok(matches!(
+            ctx.value_php_type(length)?.codegen_repr(),
+            PhpType::Void
+        )),
+    }
+}
+
 /// Resolves the offset/length arguments for a boxed-Mixed `array_slice`/`array_splice` into the
 /// refcounted runtime helper's argument registers, restoring a previously-staged array pointer.
 ///
 /// On entry the converted (now-owned) indexed-array pointer must be the topmost value on the
-/// temporary stack. The offset and length are resolved to plain integers first — `__rt_mixed_cast_int`
-/// unboxes a `Mixed` cell read from a heterogeneous array, and an absent/`Void` length becomes the
-/// until-the-end sentinel — and spilled to the stack, because each unbox call clobbers caller-saved
-/// registers. The three staged values are then popped into the array/offset/length argument registers
-/// so the helper sees a pointer plus two genuine integers rather than a boxed pointer.
+/// temporary stack. The offset, the length and the length-present flag are resolved to plain integers
+/// first — `__rt_mixed_cast_int` unboxes a `Mixed` cell read from a heterogeneous array, and an
+/// absent/`Void`/boxed-null length clears the length-present flag — and spilled to the stack, because
+/// each unbox call clobbers caller-saved registers. The four staged values are then popped into the
+/// array/offset/length/flag argument registers so the helper sees a pointer plus three genuine
+/// integers rather than a boxed pointer.
 fn materialize_mixed_slice_args(
     ctx: &mut FunctionContext<'_>,
     offset: ValueId,
@@ -5437,16 +5497,20 @@ fn materialize_mixed_slice_args(
 ) -> Result<()> {
     resolve_int_operand_to_result(ctx, offset, &format!("{} offset", name))?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    resolve_slice_length_present_to_result(ctx, length)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     resolve_slice_length_to_result(ctx, length, name)?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x2"); // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x3"); // restore the length-present flag into the fourth runtime argument
             abi::emit_pop_reg(ctx.emitter, "x1"); // restore the resolved offset into the second runtime argument
             abi::emit_pop_reg(ctx.emitter, "x0"); // restore the converted array pointer into the first runtime argument
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rdx"); // restore the resolved length into the third runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rcx"); // restore the length-present flag into the fourth runtime argument
             abi::emit_pop_reg(ctx.emitter, "rsi"); // restore the resolved offset into the second runtime argument
             abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the converted array pointer into the first runtime argument
         }
@@ -5694,18 +5758,6 @@ fn lower_array_pad_call(
     }
     abi::emit_call_label(ctx.emitter, array_pad_runtime_helper(source_elem_ty));
     Ok(())
-}
-
-/// Emits the `-1` runtime sentinel used when slicing to the end of the source array.
-fn emit_array_slice_until_end_sentinel(ctx: &mut FunctionContext<'_>, reg: &str) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, #-1", reg));              // use -1 as the array_slice() runtime sentinel for length until the end
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, -1", reg));               // use -1 as the x86_64 array_slice() runtime sentinel for length until the end
-        }
-    }
 }
 
 /// Returns the helper that matches the chunk source element ownership representation.

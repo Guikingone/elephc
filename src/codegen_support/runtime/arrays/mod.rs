@@ -159,6 +159,7 @@ mod mixed_unbox;
 mod mixed_write_stdout;
 mod refcount;
 mod shuffle;
+mod slice_bounds;
 mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;

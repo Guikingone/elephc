@@ -15,6 +15,8 @@ mod aggregates;
 mod heterogeneous;
 #[path = "indexed/search_merge_union.rs"]
 mod search_merge_union;
+#[path = "indexed/slice_bounds.rs"]
+mod slice_bounds;
 #[path = "indexed/slice_stack_range.rs"]
 mod slice_stack_range;
 #[path = "indexed/set_ops.rs"]
