@@ -35,6 +35,7 @@ mod magic_constants;
 mod name_resolver;
 mod names;
 mod optimize;
+mod mb_convert_encoding_prelude;
 mod parse_ini_prelude;
 mod parser;
 mod dom_prelude;

@@ -276,7 +276,12 @@ pub(crate) fn canonical_builtin_function_name(name: &str) -> Option<String> {
 /// `function trigger_error(...)`, the redeclaration check must treat it as overridable, or
 /// every `--web` compile fails with "Cannot redeclare built-in function: trigger_error".
 pub(crate) fn is_prelude_overridable_builtin(canonical: &str) -> bool {
-    matches!(canonical, "trigger_error")
+    // `mb_convert_encoding` keeps its catalog membership — `function_exists()` and the mbstring
+    // polyfill guards must still see it as a real PHP function — while its BODY ships as an
+    // elephc-PHP prelude (`crate::mb_convert_encoding_prelude`), because the `mb_*` family has no
+    // EIR lowering at all and a call would otherwise die with
+    // `unsupported EIR backend feature: builtin call mb_convert_encoding`.
+    matches!(canonical, "trigger_error" | "mb_convert_encoding")
 }
 
 /// Returns true only for PHP-visible builtin functions (non-internal builtins).

@@ -96,3 +96,35 @@ try {
     );
     assert_eq!(out, "3:caught");
 }
+
+/// `mb_convert_encoding()` must convert, and must follow the SHAPE of its subject: given an array
+/// it converts each element and returns an array.
+///
+/// `Console\Application::splitStringByWidth` ends with
+/// `return mb_convert_encoding($lines, $encoding, 'utf8');` under a declared `: array`, so both the
+/// array shape and a working conversion are required for it to compile and run.
+#[test]
+fn test_mb_convert_encoding_identity_and_array_shape() {
+    let out = compile_and_run(
+        r#"<?php
+echo mb_convert_encoding('abc', 'UTF-8', 'UTF-8'), "|";
+$lines = ['ab', 'cd'];
+$converted = mb_convert_encoding($lines, 'UTF-8', 'UTF-8');
+echo count($converted), ":", $converted[0], ":", $converted[1];
+"#,
+    );
+    assert_eq!(out, "abc|2:ab:cd");
+}
+
+/// A real conversion, not an identity: ISO-8859-1 `0xE9` is `é`, which is two bytes in UTF-8.
+#[test]
+fn test_mb_convert_encoding_latin1_to_utf8_widens_high_bytes() {
+    let out = compile_and_run(
+        r#"<?php
+$latin1 = "caf" . chr(233);
+$utf8 = mb_convert_encoding($latin1, 'UTF-8', 'ISO-8859-1');
+echo strlen($latin1), ":", strlen($utf8), ":", ($utf8 === "caf\xc3\xa9" ? 'ok' : 'no');
+"#,
+    );
+    assert_eq!(out, "4:5:ok");
+}

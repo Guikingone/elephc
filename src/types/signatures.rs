@@ -475,13 +475,9 @@ pub(crate) fn legacy_builtin_call_sig(name: &str) -> Option<FunctionSig> {
             2,
             vec![null_lit()],
         )),
-        // mb_convert_encoding(array|string $string, string $to_encoding,
-        // array|string|null $from_encoding = null): array|string|false.
-        "mb_convert_encoding" => Some(optional(
-            &["string", "to_encoding", "from_encoding"],
-            2,
-            vec![null_lit()],
-        )),
+        // `mb_convert_encoding` is intentionally absent: it ships as an elephc-PHP prelude
+        // (`crate::mb_convert_encoding_prelude`), so a named-argument/default entry here would make
+        // the checker treat the prelude's own declaration as redeclaring a builtin.
         // mb_detect_encoding(string $string, array|string|null $encodings = null,
         // bool $strict = false): string|false.
         "mb_detect_encoding" => Some(optional(
@@ -1460,8 +1456,8 @@ fn general_first_class_callable_builtin_sig(name: &str) -> Option<FunctionSig> {
         // -- multibyte string (mbstring) first-class callables (recognition-only) --
         // mb_substr/mb_strtolower/mb_strtoupper/mb_convert_case/mb_convert_encoding
         // each take a string and return a string.
-        "mb_substr" | "mb_strtolower" | "mb_strtoupper" | "mb_convert_case"
-        | "mb_convert_encoding" => Some(typed_first_class_builtin_sig(
+        "mb_substr" | "mb_strtolower" | "mb_strtoupper" | "mb_convert_case" => Some(
+            typed_first_class_builtin_sig(
             name,
             &[PhpType::Str],
             PhpType::Str,

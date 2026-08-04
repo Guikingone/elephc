@@ -314,6 +314,7 @@ pub(crate) fn compile(config: CliConfig) {
     // to this global via `name_resolver::PRELUDE_GLOBAL_FUNCTIONS`.
     let phase_started = Instant::now();
     let ast = parse_ini_prelude::inject_if_used(ast);
+    let ast = crate::mb_convert_encoding_prelude::inject_if_used(ast);
     timings.record_since("parse-ini-prelude", phase_started);
 
     // Inject the dynamic-`$filter` filter_var helper prelude when the program references

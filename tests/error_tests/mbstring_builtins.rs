@@ -15,6 +15,11 @@ use super::*;
 
 /// Verifies that every registered `mb_*` builtin is recognized (no "Undefined
 /// function") in a representative valid call form.
+///
+/// `mb_convert_encoding` is deliberately absent from this list: it is no longer recognition-only,
+/// it ships as an elephc-PHP prelude (`crate::mb_convert_encoding_prelude`) that actually converts,
+/// and this harness type-checks WITHOUT the prelude-injection stage. Its contract is covered where
+/// the behaviour lives — `codegen::strings::test_mb_convert_encoding_*`.
 #[test]
 fn test_mbstring_builtins_recognized() {
     assert!(
@@ -29,13 +34,12 @@ $is = mb_stristr("héllo", "L");
 $lo = mb_strtolower("HÉLLO");
 $up = mb_strtoupper("héllo");
 $cc = mb_convert_case("héllo world", 0);
-$ce = mb_convert_encoding("héllo", "UTF-8", "ISO-8859-1");
 $de = mb_detect_encoding("héllo");
 $ie = mb_internal_encoding();
 $or = mb_ord("é");
 $sp = mb_str_split("héllo");
 $w = mb_strwidth("héllo");
-echo $sub . $len . $lo . $up . $cc . $ce . $w;
+echo $sub . $len . $lo . $up . $cc . $w;
 "#
         )
         .is_ok(),

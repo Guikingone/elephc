@@ -55,6 +55,7 @@ pub mod names;
 /// Optimizer passes.
 pub mod optimize;
 /// Conditionally-injected `parse_ini_file()` standard-library prelude.
+pub mod mb_convert_encoding_prelude;
 pub mod parse_ini_prelude;
 /// Parser for PHP syntax.
 pub mod parser;

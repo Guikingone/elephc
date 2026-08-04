@@ -148,22 +148,12 @@ pub(super) fn check_builtin(
             }
             Ok(Some(PhpType::Str))
         }
-        "mb_convert_encoding" => {
-            // mb_convert_encoding(array|string $string, string $to_encoding,
-            // array|string|null $from_encoding = null): array|string|false. Symfony calls
-            // it with a string and expects a string back; the recognition layer models the
-            // common string result.
-            if args.len() < 2 || args.len() > 3 {
-                return Err(CompileError::new(
-                    span,
-                    "mb_convert_encoding() takes 2 or 3 arguments",
-                ));
-            }
-            for arg in args {
-                checker.infer_type(arg, env)?;
-            }
-            Ok(Some(PhpType::Str))
-        }
+        // `mb_convert_encoding` is deliberately NOT recognized here: it now ships as an
+        // elephc-PHP prelude (`crate::mb_convert_encoding_prelude`) that actually CONVERTS and
+        // follows PHP's result shape (an array subject returns an array). Recognizing it as a
+        // builtin would shadow that declaration and put the call straight back on the
+        // `unsupported EIR backend feature: builtin call mb_convert_encoding` path, which is
+        // where `Console\Application::splitStringByWidth` used to die.
         "mb_detect_encoding" => {
             // mb_detect_encoding(string $string, array|string|null $encodings = null,
             // bool $strict = false): string|false.
