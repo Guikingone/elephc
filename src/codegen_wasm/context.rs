@@ -537,7 +537,24 @@ impl<'a> FnCtx<'a> {
         }
 
         for (raw, php_type) in candidates {
-            let repr = self.slot_repr(LocalSlotId::from_raw(raw))?.clone();
+            self.emit_slot_release(LocalSlotId::from_raw(raw), &php_type)?;
+        }
+        Ok(())
+    }
+
+    /// Releases one local slot's owned heap value and CLEARS the slot.
+    ///
+    /// Clearing first is what makes a second pass — the return epilogue, or another explicit
+    /// release — a no-op instead of a double free: every release path below is null-safe.
+    /// Shared by the epilogue and by the explicit `ReleaseLocalSlot` an early scope exit emits.
+    pub(super) fn emit_slot_release(
+        &mut self,
+        slot: LocalSlotId,
+        php_type: &PhpType,
+    ) -> Result<()> {
+        let php_type = php_type.clone();
+        {
+            let repr = self.slot_repr(slot)?.clone();
             match repr {
                 WasmRepr::Ptr(local) => {
                     self.fb

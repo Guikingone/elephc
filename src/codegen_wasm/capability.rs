@@ -5885,12 +5885,12 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::ThrowErrorValue
         | Op::CatchCurrent
         | Op::CatchBind
+        | Op::ReleaseLocalSlot
         | Op::Nop => true,
         Op::ConstClassName
         | Op::ConstEnumCase
         | Op::LoadCalledClassId
         | Op::DataAddr
-        | Op::ReleaseLocalSlot
         | Op::StoreGlobal
         | Op::LoadStaticLocal
         | Op::StoreStaticLocal

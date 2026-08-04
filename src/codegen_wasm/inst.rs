@@ -151,6 +151,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::PromoteLocalRefCell => super::refcell::lower_promote_local_ref_cell(ctx, &inst),
         Op::AliasLocalRefCell => super::refcell::lower_alias_local_ref_cell(ctx, &inst),
         Op::ReleaseLocalRefCell => super::refcell::lower_release_local_ref_cell(ctx, &inst),
+        Op::ReleaseLocalSlot => lower_release_local_slot(ctx, &inst),
         Op::IterCurrentValueRef => super::refcell::lower_iter_current_value_ref(ctx, &inst),
         other => Err(WasmError::Unsupported(format!("op {:?}", other))),
     }
@@ -2713,6 +2714,29 @@ fn emit_object_to_string(ctx: &mut FnCtx, object: ValueId, class_name: &str) -> 
         return Ok(true);
     }
     Ok(false)
+}
+
+/// Lowers `ReleaseLocalSlot`: the early release of a slot leaving scope.
+///
+/// The return epilogue already releases every owned local, so this is not new ownership work —
+/// it is the SAME release, brought forward to where the scope actually ends. Bringing it
+/// forward is what makes it safe to run twice: the shared helper clears the slot before
+/// releasing, so the epilogue then finds a null and skips it.
+fn lower_release_local_slot(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return Err(WasmError::Unsupported(
+            "release_local_slot without a LocalSlot immediate".to_string(),
+        ));
+    };
+    let php_type = ctx
+        .function
+        .locals
+        .get(slot.as_raw() as usize)
+        .map(|local| local.php_type.codegen_repr())
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!("release_local_slot: unknown slot {:?}", slot))
+        })?;
+    ctx.emit_slot_release(slot, &php_type)
 }
 
 fn lower_echo(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
