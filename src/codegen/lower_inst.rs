@@ -3846,6 +3846,11 @@ fn lower_callback_filter_accept_intrinsic(
 /// `__rt_gen_suspend(key, value)`; a NULL key requests an auto-increment
 /// integer key. The helper's result register holds the value delivered by the
 /// next `send()`/`next()`, which becomes the SSA result of the yield.
+///
+/// An `Immediate::Bool(true)` marks a *delegated* yield emitted by the
+/// `yield from <array>` desugaring. Those keys are forwarded verbatim, so the
+/// call targets `__rt_gen_suspend_delegated`, which skips PHP's auto-key
+/// bookkeeping exactly like `__rt_gen_delegate` does for inner generators.
 fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let target = ctx.emitter.target;
     let key_arg = abi::int_arg_reg_name(target, 0);
@@ -3882,7 +3887,12 @@ fn lower_generator_yield(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     }
     abi::emit_pop_reg(ctx.emitter, value_arg);
 
-    abi::emit_call_label(ctx.emitter, "__rt_gen_suspend");
+    let suspend_symbol = if matches!(inst.immediate, Some(Immediate::Bool(true))) {
+        "__rt_gen_suspend_delegated"
+    } else {
+        "__rt_gen_suspend"
+    };
+    abi::emit_call_label(ctx.emitter, suspend_symbol);
     store_call_result(ctx, inst, &PhpType::Mixed)
 }
 

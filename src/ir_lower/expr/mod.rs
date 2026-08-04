@@ -1873,6 +1873,9 @@ fn lower_inc_dec(
             ctx.load_local(name, Some(expr.span))
         };
     }
+    if matches!(existing_type.codegen_repr(), PhpType::Float) {
+        return lower_float_inc_dec(ctx, name, increment, post, old, expr);
+    }
     let one = lower_int_literal(ctx, 1, expr);
     let operand = coerce_to_int(ctx, old, expr);
     let checked_int_local = matches!(existing_type.codegen_repr(), PhpType::Int);
@@ -1903,6 +1906,43 @@ fn lower_inc_dec(
         .expect("integer inc/dec produces a value");
     let new = LoweredValue { value: new, ir_type: result_ir_type };
     ctx.store_local(name, new, result_php_type, Some(expr.span));
+    if post {
+        old
+    } else {
+        ctx.load_local(name, Some(expr.span))
+    }
+}
+
+/// Lowers `++`/`--` on a float local as PHP's `$f = $f ± 1.0`.
+///
+/// PHP never promotes or demotes a float here: the local stays a float and the operator
+/// adds or subtracts exactly one. Post-forms return the value loaded before the store,
+/// pre-forms re-read the local so the new value is the expression's result.
+fn lower_float_inc_dec(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    increment: bool,
+    post: bool,
+    old: LoweredValue,
+    expr: &Expr,
+) -> LoweredValue {
+    let one = lower_float_literal(ctx, 1.0, expr);
+    let op = if increment { Op::FAdd } else { Op::FSub };
+    let new = ctx
+        .builder
+        .emit_with_effects(
+            op,
+            vec![old.value, one.value],
+            None,
+            IrType::F64,
+            PhpType::Float,
+            Ownership::NonHeap,
+            op.default_effects(),
+            Some(expr.span),
+        )
+        .expect("float inc/dec produces a value");
+    let new = LoweredValue { value: new, ir_type: IrType::F64 };
+    ctx.store_local(name, new, PhpType::Float, Some(expr.span));
     if post {
         old
     } else {
@@ -14648,12 +14688,14 @@ fn lower_yield_from_array(
         Some(span),
     );
     // Re-yield the inner key/value pair through the outer generator. The sent
-    // value is discarded (arrays ignore it), exactly like a `yield $k => $v;`
-    // statement.
+    // value is discarded (arrays ignore it). The `Immediate::Bool(true)` marks
+    // the yield as *delegated*: PHP forwards `yield from` keys verbatim, so an
+    // integer key from the inner array must not advance the outer generator's
+    // implicit-key counter (`yield from [7 => "x"]` leaves it where it was).
     ctx.emit_value(
         Op::GeneratorYield,
         vec![key.value, element.value],
-        None,
+        Some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::GeneratorYield.default_effects(),
         Some(span),

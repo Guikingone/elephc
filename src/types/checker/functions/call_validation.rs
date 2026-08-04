@@ -58,13 +58,9 @@ fn call_arg_plan_error(
                 callee_desc
             ),
         ),
-        CallArgPlanError::SpreadAfterNamed { span } => CompileError::new(
-            span,
-            &format!(
-                "{} cannot use argument unpacking after named arguments",
-                callee_desc
-            ),
-        ),
+        CallArgPlanError::SpreadAfterNamed { span } => {
+            spread_after_named_error(span, callee_desc)
+        }
         CallArgPlanError::MissingRequired { span, param_idx } => {
             let param_name = sig
                 .params
@@ -77,6 +73,19 @@ fn call_arg_plan_error(
             )
         }
     }
+}
+
+/// Builds the diagnostic for PHP's compile-time
+/// "Cannot use argument unpacking after named arguments" fatal, prefixed with
+/// the callee description used by the rest of the call diagnostics.
+fn spread_after_named_error(span: crate::span::Span, callee_desc: &str) -> CompileError {
+    CompileError::new(
+        span,
+        &format!(
+            "{} cannot use argument unpacking after named arguments",
+            callee_desc
+        ),
+    )
 }
 
 /// Returns a boolean vector indicating which argument positions contain assoc-spread sources
@@ -105,6 +114,29 @@ fn is_assoc_spread_source(expr: &Expr, env: &TypeEnv) -> bool {
 }
 
 impl Checker {
+    /// Enforces PHP's syntactic "no argument unpacking after named arguments"
+    /// rule on a call surface whose callee is not resolvable at compile time
+    /// (string callables, `new $class(...)`), where no signature is available to
+    /// run the shared planner against.
+    ///
+    /// The rule itself stays in `crate::types::call_args`; this only maps its
+    /// error onto the same diagnostic the planner-backed surfaces produce.
+    pub(crate) fn require_no_spread_after_named_args(
+        &self,
+        args: &[Expr],
+        callee_desc: &str,
+    ) -> Result<(), CompileError> {
+        call_args::validate_no_spread_after_named(args).map_err(|err| match err {
+            CallArgPlanError::SpreadAfterNamed { span } => {
+                spread_after_named_error(span, callee_desc)
+            }
+            other => CompileError::new(
+                crate::span::Span::dummy(),
+                &format!("{} has invalid arguments: {:?}", callee_desc, other),
+            ),
+        })
+    }
+
     /// Returns true when an argument expression is an l-value supported by by-reference calls.
     pub(crate) fn is_by_ref_argument_lvalue(
         &mut self,
