@@ -314,6 +314,7 @@ Ownership operations:
 | Op | Operand | Result | Effects | Lowering |
 |---|---|---|---|---|
 | `Acquire` | refcounted/string/callable value | `Void` or retained value alias | `REFCOUNT_OP`, maybe `WRITES_HEAP` | `__rt_incref`, string persist/retain, callable descriptor retain if added |
+| `Acquire` + `Bool` immediate | same | same | same | same; the immediate marks a *lifetime pin* and only opts the pair out of acquire/release cancellation |
 | `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
 | `Move` | any value | same type | pure validator operation | no machine instruction |
 | `Borrow` | value with live owner | same type | pure validator operation | no machine instruction |
@@ -569,6 +570,19 @@ and discard. The op is restricted to indexed receivers with an integer key and a
 array or hash element (each split with its own runtime helper); every other shape
 keeps the retaining read. The receiver split only happens for a receiver that
 came from a local slot, since the new container has to be published somewhere.
+
+Because the result is borrowed, the parent's element slot is its only owner, and
+the loop body can drop that parent (`$a = []`, `unset($a)`) while the iterator is
+still running. The by-reference `foreach` therefore takes a **lifetime pin** on
+the source — an `Acquire` marked with a `Bool(true)` immediate — emitted *after*
+`IterStart`, and releases it on every exit: the loop's own exit block for normal
+termination and `break`, and `emit_innermost_loop_cleanups` for `break N`,
+`return`, and `throw`. The ordering is load-bearing in both directions. Earlier
+than `IterStart` and the extra reference makes that instruction's
+`__rt_array_ensure_unique` split, handing the loop the private copy this whole
+mechanism exists to avoid; later than the last exit and the element outlives the
+program's need for it. PHP gets the same effect for free: its by-reference
+`foreach` holds a reference to the iterated array itself.
 
 ### Iterables, SPL, and Foreach
 
@@ -990,7 +1004,11 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   scalar slots are not aliased.
 - **Paired acquire/release cancellation** — an `acquire` whose result is used
   exactly once, by its `release`, drops both. The single-use guard makes this
-  refcount-neutral on every path regardless of distance between the two ops.
+  refcount-neutral on every path regardless of distance between the two ops. An
+  `acquire` carrying an immediate is a **lifetime pin** and is exempt: its result
+  is deliberately never read, because the reference exists so the value survives
+  an interval in which another owner may release it, and that raised refcount is
+  exactly what the program observes.
 - **String-literal concat folding** — `str_concat(const_str a, const_str b)`
   interns `a ++ b` into the data pool and becomes a single `const_str` marked
   `persistent` so cleanup never frees the literal. Nested concats converge across

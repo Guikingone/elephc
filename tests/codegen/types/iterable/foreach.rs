@@ -931,3 +931,159 @@ echo implode(',', $a[0][0]), '|', implode(',', $mid[0]);
         out.stderr
     );
 }
+
+/// Regression for issue #580 (PR review follow-up): the loop must keep its borrowed element
+/// source alive when the body drops the parent that owned it.
+///
+/// `ArrayGetForWrite` hands the loop the parent's own element, borrowed — the parent's slot is
+/// the only owner. `$a = []` inside the body releases the outer container, which releases the
+/// element with it, so the iterator was left pointing at freed storage: iteration stopped after
+/// the first element (`1,done` instead of `1,2,done`) and `$v *= 2` wrote through a dangling
+/// pointer. The loop therefore takes an explicit lifetime reference of its own, after the
+/// copy-on-write separation so the pin cannot trigger a second split, and drops it on the way
+/// out.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_survives_parent_replacement() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2]];
+foreach ($a[0] as &$v) {
+    echo $v, ',';
+    if ($v === 1) $a = [];
+    $v *= 2;
+}
+unset($v);
+echo 'done';
+"#,
+    );
+    assert_eq!(out.stdout, "1,2,done");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #580 (PR review follow-up): the same lifetime guarantee under a nested
+/// source, where the dropped parent is an intermediate level of the subscript chain.
+#[test]
+fn test_regression_580_by_ref_foreach_nested_element_source_survives_parent_replacement() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[[1, 2]]];
+foreach ($a[0][0] as &$v) {
+    echo $v, ',';
+    if ($v === 1) $a = [];
+    $v *= 2;
+}
+unset($v);
+echo 'done';
+"#,
+    );
+    assert_eq!(out.stdout, "1,2,done");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Guard for issue #580 (PR review follow-up): the lifetime pin must be dropped on a `break`,
+/// not only on normal loop termination, or the element leaks.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_pin_released_on_break() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2, 3]];
+foreach ($a[0] as &$v) {
+    $v = $v * 2;
+    if ($v === 4) { break; }
+}
+unset($v);
+echo implode(',', $a[0]);
+"#,
+    );
+    assert_eq!(out.stdout, "2,4,3");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Guard for issue #580 (PR review follow-up): a `break 2` out of an outer loop skips the inner
+/// loop's exit block, so the pin has to be dropped by the multi-level break cleanup path.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_pin_released_on_multi_level_break() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2, 3]];
+$total = 0;
+foreach ([1, 2] as $round) {
+    foreach ($a[0] as &$v) {
+        $total = $total + $v;
+        if ($v === 2) { break 2; }
+    }
+    unset($v);
+}
+echo $total;
+"#,
+    );
+    assert_eq!(out.stdout, "3");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Guard for issue #580 (PR review follow-up): a `return` out of the loop body never reaches the
+/// exit block, so the pin has to be dropped by the return cleanup path.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_pin_released_on_return() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function first_doubled(array $rows): int {
+    foreach ($rows[0] as &$v) {
+        $v = $v * 2;
+        return $v;
+    }
+    return 0;
+}
+echo first_doubled([[5, 6]]);
+"#,
+    );
+    assert_eq!(out.stdout, "10");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
+
+/// Guard for issue #580 (PR review follow-up): leaving the loop by throwing must drop the pin
+/// too, so an exception caught outside the loop leaves a clean heap.
+#[test]
+fn test_regression_580_by_ref_foreach_element_source_pin_released_on_throw() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [[1, 2, 3]];
+try {
+    foreach ($a[0] as &$v) {
+        $v = $v * 2;
+        if ($v === 4) { throw new Exception('stop'); }
+    }
+} catch (Exception $e) {
+    echo $e->getMessage(), ':';
+}
+unset($v);
+echo implode(',', $a[0]);
+"#,
+    );
+    assert_eq!(out.stdout, "stop:2,4,3");
+    assert!(
+        out.stderr.contains("leak summary: clean"),
+        "expected a clean heap-debug leak summary, got: {}",
+        out.stderr
+    );
+}
