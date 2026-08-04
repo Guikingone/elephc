@@ -21,7 +21,6 @@ use crate::support::{
 const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_all",
     "array_any",
-    "array_count_values",
     "array_diff_assoc",
     "array_find",
     "array_intersect_assoc",
@@ -36,7 +35,6 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_uintersect",
     "array_walk_recursive",
     "bindec",
-    "constant",
     "decbin",
     "dechex",
     "decoct",
