@@ -249,7 +249,10 @@ impl Checker {
             {
                 inferred_specific_array_type_from_infos(&all_return_infos).unwrap()
             } else {
-                declared_ret
+                crate::types::checker::type_compat::declarations::callable_return_slot_type(
+                    declared_ret,
+                    all_return_infos.iter().map(|info| &info.ty),
+                )
             };
         } else if !all_return_infos.is_empty() {
             return_type = all_return_infos[0].ty.clone();

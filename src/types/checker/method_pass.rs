@@ -497,7 +497,10 @@ impl Checker {
                     {
                         inferred_return
                     } else {
-                        declared
+                        crate::types::checker::type_compat::declarations::callable_return_slot_type(
+                            declared,
+                            return_infos.iter().map(|info| &info.ty),
+                        )
                     }
                 }
                 Err(error) => {

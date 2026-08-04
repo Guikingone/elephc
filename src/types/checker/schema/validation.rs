@@ -79,6 +79,10 @@ pub(crate) fn build_method_sig(
         }
     }
     let return_type = match method.return_type.as_ref() {
+        // No widening of a declared `callable` here: this pre-pass has no body to inspect, so it
+        // cannot tell a descriptor-only body from one returning a string or an `[$obj, 'm']` pair.
+        // `Checker::check_method_bodies` re-derives the effective return type from the collected
+        // returns and applies `callable_return_slot_type` there.
         Some(type_ann) => checker.resolve_method_return_type_hint(
             type_ann,
             declaring_type,

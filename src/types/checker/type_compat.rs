@@ -9,7 +9,7 @@
 //! Key details:
 //! - Compatibility must be conservative for Mixed, unions, nullable values, inheritance, and pointer-like extensions.
 
-mod declarations;
+pub(crate) mod declarations;
 mod object_types;
 mod pointers;
 mod unions;

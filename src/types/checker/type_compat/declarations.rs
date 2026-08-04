@@ -15,6 +15,56 @@ use crate::types::{callable_wrapper_sig, ClassInfo, FunctionSig, PhpType};
 use super::super::inference::syntactic::infer_expr_type_syntactic;
 use super::super::{Checker, FnDecl};
 
+/// Widens a declared `callable` return contract to the boxed `Mixed` slot that can actually hold
+/// it.
+///
+/// `PhpType::Callable` is a single word: the address of a closure descriptor. PHP's `callable` is a
+/// union of five runtime forms — a `Closure`, a function-name string, `'Class::method'`, an
+/// `[$object, 'method']` / `[Class::class, 'method']` pair, and an object with `__invoke`. Only the
+/// first fits a descriptor slot, so a declared `: callable` return was strictly narrower than
+/// declaring nothing at all: `function f(): callable { return 'strtoupper'; }` is ordinary PHP but
+/// had no representable return slot. A boxed `Mixed` return holds all five to the byte, and the
+/// dynamic-invoke path already dispatches every one of them on the runtime tag — which is exactly
+/// how the same program behaves today with the annotation removed.
+///
+/// Applied to the EFFECTIVE (stored) return type only, after the declared contract has been
+/// validated, so `return 42;` from a `: callable` function still fails at compile time. A union
+/// carrying a callable arm (`?callable`) widens for the same reason: its callable arm is no more
+/// representable than a bare one.
+///
+/// The widening is CONDITIONAL on `returns`, and that condition is what keeps it strictly additive.
+/// A body whose every `return` already yields a descriptor keeps `Callable`: those are precisely the
+/// programs that compile today, and several builtins (`array_map`, `usort`, the first-class-callable
+/// surfaces) read the descriptor directly and have no boxed-Mixed callback path — widening them
+/// turns a working program into `array_map() callback must have a statically known callable
+/// signature`. Only a body that returns a form the descriptor slot CANNOT hold gets the boxed slot,
+/// and every such program is rejected outright before this change, so nothing that works can break.
+pub(crate) fn callable_return_slot_type<'a>(
+    declared: PhpType,
+    returns: impl IntoIterator<Item = &'a PhpType>,
+) -> PhpType {
+    if !type_mentions_callable(&declared) {
+        return declared;
+    }
+    let needs_boxed_slot = returns
+        .into_iter()
+        .any(|actual| !matches!(actual, PhpType::Callable | PhpType::Never));
+    if needs_boxed_slot {
+        PhpType::Mixed
+    } else {
+        declared
+    }
+}
+
+/// Returns whether `ty` is `callable` or a union with a `callable` arm.
+fn type_mentions_callable(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Callable => true,
+        PhpType::Union(members) => members.iter().any(type_mentions_callable),
+        _ => false,
+    }
+}
+
 impl Checker {
     /// Applies the callable-wrapper transformation to `sig`, producing a new `FunctionSig`
     /// with an additional `$wrapper` closure parameter prepended. This allows first-class
@@ -22,6 +72,41 @@ impl Checker {
     /// closure-invocation mechanism.
     pub(crate) fn callable_wrapper_sig(sig: &FunctionSig) -> FunctionSig {
         callable_wrapper_sig(sig)
+    }
+
+    /// Returns whether `actual` is one of PHP's callable forms flowing into a declared `callable`
+    /// return contract.
+    ///
+    /// Accepted ONLY at the return boundary, where `callable_return_slot_type` has widened the slot
+    /// to boxed `Mixed` and the caller therefore invokes through the tag-dispatching dynamic path.
+    /// The argument boundary keeps its own, stricter rule: a value reaching a `callable` PARAMETER
+    /// still lands in a descriptor slot, so accepting a string or an array there would write a
+    /// non-descriptor word into it.
+    pub(crate) fn callable_return_slot_accepts(expected: &PhpType, actual: &PhpType) -> bool {
+        if !type_mentions_callable(expected) {
+            return false;
+        }
+        // `?callable` admits null, and a body like `return $some ? 'strrev' : null;` reaches here as
+        // `Union([Str, Void])` — the null arm has to be accepted from INSIDE a union too, not only
+        // as a bare `Void` actual (which the caller already handled).
+        Self::is_php_callable_form(actual, Self::return_type_accepts_null(expected))
+    }
+
+    /// Returns whether `ty` can hold one of PHP's five runtime callable forms.
+    fn is_php_callable_form(ty: &PhpType, nullable: bool) -> bool {
+        match ty {
+            // `Closure` / first-class callable descriptor, a function-name or `Class::method`
+            // string, an `[$object, 'method']` pair, an `__invoke` object, and the imprecise
+            // types that may carry any of them at runtime.
+            PhpType::Callable | PhpType::Str | PhpType::Mixed => true,
+            PhpType::Array(_) | PhpType::AssocArray { .. } => true,
+            PhpType::Object(_) => true,
+            PhpType::Void => nullable,
+            PhpType::Union(members) => members
+                .iter()
+                .all(|member| Self::is_php_callable_form(member, nullable)),
+            _ => false,
+        }
     }
 
     /// Resolves a parameter type hint from a `TypeExpr` to a `PhpType`, validating that

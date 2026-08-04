@@ -348,6 +348,13 @@ impl Checker {
             ));
         }
 
+        // A declared `callable` return slot is widened to boxed Mixed by
+        // `callable_return_slot_type`, so every PHP callable form is representable here and the
+        // caller invokes it through the tag-dispatching dynamic path.
+        if Self::callable_return_slot_accepts(expected, actual) {
+            return Ok(());
+        }
+
         match self.require_compatible_arg_type(expected, actual, span, context) {
             Ok(()) => Ok(()),
             // Base→derived object returns (the value is statically only known to be a
@@ -379,7 +386,7 @@ impl Checker {
 
     /// Returns true if `ty` can accept a null/void value — covers PhpType::Mixed,
     /// PhpType::Void, and PhpType::Union types where any member accepts null.
-    fn return_type_accepts_null(ty: &PhpType) -> bool {
+    pub(crate) fn return_type_accepts_null(ty: &PhpType) -> bool {
         match ty {
             PhpType::Mixed => true,
             PhpType::Union(members) => members.iter().any(Self::return_type_accepts_null),

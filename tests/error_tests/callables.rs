@@ -821,3 +821,48 @@ echo implode(',', (new Adapter())->grab(true));
 "#,
     );
 }
+
+/// NEGATIVE CONTROL for the declared `: callable` return slot, which is widened to boxed `Mixed`
+/// so it can hold every PHP callable form (see
+/// `tests/codegen/oop/callables/declared_callable_return.rs`). The widening changes the
+/// REPRESENTATION, not what the contract admits: an int is not a callable form and must stay a
+/// compile error, otherwise the relaxation would read as "a declared callable accepts anything".
+#[test]
+fn test_declared_callable_return_rejects_an_int() {
+    expect_error(
+        r#"<?php
+function bad(): callable { return 42; }
+$c = bad();
+echo $c(), "\n";
+"#,
+        "return type expects Callable, got Int",
+    );
+}
+
+/// Sibling of the above on a float, so the accepted set is pinned as "the callable forms" rather
+/// than "every scalar but int".
+#[test]
+fn test_declared_callable_return_rejects_a_float() {
+    expect_error(
+        r#"<?php
+function bad(): callable { return 1.5; }
+$c = bad();
+echo $c(), "\n";
+"#,
+        "return type expects Callable, got Float",
+    );
+}
+
+/// The same contract on a METHOD, which resolves its return type through `build_method_sig`
+/// rather than the free-function path — both had to be widened, so both need the control.
+#[test]
+fn test_declared_callable_return_on_a_method_rejects_a_bool() {
+    expect_error(
+        r#"<?php
+class C { public function bad(): callable { return true; } }
+$c = (new C())->bad();
+echo $c(), "\n";
+"#,
+        "return type expects Callable, got Bool",
+    );
+}
