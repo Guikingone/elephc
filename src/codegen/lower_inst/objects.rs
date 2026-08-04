@@ -2714,19 +2714,102 @@ pub(super) fn lower_prop_initialized(
 /// diagnostic. Any refcounted payload the slot owned is released first, so the write
 /// cannot leak a string/array/object.
 ///
-/// A slot that is not declared (a `__get`/`__set`-backed or dynamic name) has no
-/// storage to clear, so the lowering is a no-op there.
+/// A property that lives in the receiver's DYNAMIC-property hash instead of a fixed
+/// slot — every `stdClass` property, and an undeclared name on an
+/// `#[AllowDynamicProperties]` class — is genuinely removable, so it takes the hash
+/// removal path and matches PHP exactly: the key disappears, `isset()` answers false,
+/// the value renderers stop listing it, and a later write re-appends it.
+///
+/// Every other slot shape is REFUSED rather than silently skipped. A by-reference
+/// property slot holds an object-owned ref-cell pointer that the destructor still has
+/// to free and that a later write would write THROUGH — reviving the alias PHP's
+/// `unset()` just broke — so neither zeroing nor keeping the cell reproduces PHP.
+/// A packed field and an undeclared slot have no removable storage at all. Skipping
+/// them quietly left `isset()` answering `true` after an `unset()`, so they now name
+/// themselves instead.
 pub(super) fn lower_prop_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let object = expect_operand(inst, 0)?;
     let property = property_name_immediate(ctx, inst)?.to_string();
+    if let Some(hash_offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
+        return lower_dynamic_prop_unset(ctx, object, &property, hash_offset);
+    }
     let slot = resolve_property_slot(ctx, object, &property, inst)?;
-    if !slot.is_declared || slot.is_packed || slot.is_reference {
-        return Ok(());
+    if let Some(reason) = unset_unsupported_slot_reason(&slot) {
+        return Err(CodegenIrError::unsupported(format!(
+            "unset() of {} {}::${}",
+            reason, slot.class_name, slot.property
+        )));
     }
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
     emit_property_uninitialized_marker(ctx, &slot, base_reg);
+    Ok(())
+}
+
+/// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
+/// state, or `None` when the uninitialized marker is a faithful encoding for it.
+///
+/// Used only for the diagnostic text; the ordering matters because a slot can be both
+/// undeclared and by-reference, and the by-reference storage is the more specific
+/// obstacle to report.
+fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
+    if slot.is_packed {
+        return Some("packed class field");
+    }
+    if slot.is_reference {
+        return Some("by-reference property");
+    }
+    if !slot.is_declared {
+        return Some("untyped property slot");
+    }
+    None
+}
+
+/// Removes a dynamic property from the receiver's property hash (`unset($obj->name)`).
+///
+/// The receiver stores its dynamic properties in a hash whose pointer lives at
+/// `hash_offset` — offset 8 for `stdClass`, just past the fixed slots for an
+/// `#[AllowDynamicProperties]` class. `__rt_hash_unset` copy-on-write splits the table,
+/// releases the removed key and the boxed `Mixed` value the entry owned, tombstones the
+/// slot so other probe chains survive, and returns the unique table pointer, which is
+/// stored back into the receiver. Removing an absent key is a no-op inside the helper,
+/// so `unset($obj->never_set)` and a repeated `unset()` both behave like PHP.
+///
+/// The receiver register is caller-saved, so it is parked on the temporary stack across
+/// the helper call and reloaded before the table pointer is stored back.
+fn lower_dynamic_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    hash_offset: usize,
+) -> Result<()> {
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr x0, [{}, #{}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!(
+                "mov rdi, QWORD PTR [{} + {}]",
+                object_reg, hash_offset
+            )); // load the dynamic-property hash pointer from the receiver
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, hash_offset);
+        }
+    }
     Ok(())
 }
 
@@ -2862,6 +2945,13 @@ fn emit_stdclass_get_call(
 }
 
 /// Lowers a static-name read from an undeclared property on an allow-dynamic class.
+///
+/// OWNERSHIP: the miss path boxes a FRESH null cell, so the caller owns and releases the
+/// result. `__rt_hash_get` only BORROWS the stored cell, so the hit path has to retain it
+/// to match — exactly what `__rt_stdclass_get` does for the same storage. Without the
+/// retain each read handed the caller a reference it did not own, and the caller's release
+/// eventually freed a live hash entry, after which further reads of that property answered
+/// `NULL` (a use-after-free of the removed cell).
 fn lower_allow_dynamic_prop_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -2883,6 +2973,7 @@ fn lower_allow_dynamic_prop_get(
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // missing dynamic properties read as PHP null
             ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null fallback after a successful dynamic-property hit
         }
         Arch::X86_64 => {
@@ -2896,6 +2987,7 @@ fn lower_allow_dynamic_prop_get(
             ctx.emitter.instruction("test rax, rax");                           // check whether the dynamic-property key was present
             ctx.emitter.instruction(&format!("je {}", miss_label));             // missing dynamic properties read as PHP null
             ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null fallback after a successful dynamic-property hit
         }
     }

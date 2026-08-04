@@ -48,8 +48,19 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Rejects `unset()` calls that were not converted into direct EIR unbind operations.
 ///
 /// Reaching this lowering means `crate::ir_lower::expr` could not turn the target
-/// into a slot clear, a hash/array removal, an `offsetUnset()` call or a `__unset()`
-/// call, so the message lists the shapes that do lower directly.
+/// into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
+/// call or a dynamic-property removal, so the message lists the shapes that do lower
+/// directly and then names the one shape users hit most.
+///
+/// THE UNTYPED FIXED SLOT is that shape. `unset($obj->untypedProp)` on a property
+/// declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
+/// warns `Undefined property` and answers `null`, and a later write recreates it.
+/// elephc gives each declared property a fixed, monomorphically typed slot, so a
+/// property the checker typed `Int` has no encoding for "removed and reading as null"
+/// — every candidate encoding answers `int(0)` or a raw marker word instead. A loud
+/// error beats a wrong value, so the shape is refused here. Untyped properties whose
+/// storage is a DYNAMIC hash (`stdClass`, undeclared names on
+/// `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -57,7 +68,9 @@ pub(super) fn lower_unset_builtin(
     Err(CodegenIrError::unsupported(format!(
         "unset target shape with {} lowered operands (supported: variables, \
          array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
-         and declared typed object properties)",
+         declared typed object properties, and dynamic object properties). \
+         An UNTYPED declared property (`public $p = 1;`) is not supported: its fixed \
+         slot has no representation for PHP's removed-then-null read",
         inst.operands.len()
     )))
 }
