@@ -61,7 +61,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     for extra in &cx.args[1..] {
         let ty = cx.checker.infer_type(extra, cx.env)?;
-        if ty != PhpType::Int {
+        if !crate::types::checker::builtins::numeric::accepts_gradual_int(&ty) {
             return Err(CompileError::new(
                 extra.span,
                 "json_encode() flags and depth must be integers",

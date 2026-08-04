@@ -56,3 +56,40 @@ mod decode_bigint;
 mod case_insensitive;
 #[path = "json/evaluation_order.rs"]
 mod evaluation_order;
+
+/// `json_encode()`'s flags argument accepts a BOXED value, and the bitmask survives the boxing.
+///
+/// `$flags = $options['json_encoding'] ?? 0;` — a hash read merged with a scalar default — reaches
+/// the builtin as `Mixed`, and PHP casts it to int at the boundary. Demanding a bare `Int` rejected
+/// `Console\Descriptor\JsonDescriptor::write` on a program `php -n` runs. Asserting the PRETTY_PRINT
+/// output rather than just "it compiles" is what pins the bitmask itself: a flags word that arrived
+/// as garbage would still produce valid JSON, just not this shape.
+#[test]
+fn test_json_encode_accepts_boxed_flags_and_keeps_the_bitmask() {
+    let out = compile_and_run(
+        r#"<?php
+function w(array $data, array $options = []): string {
+    $flags = $options['json_encoding'] ?? 0;
+    return json_encode($data, $flags);
+}
+echo w(['a' => 1], ['json_encoding' => \JSON_PRETTY_PRINT]);
+"#,
+    );
+    assert_eq!(out, "{\n    \"a\": 1\n}");
+}
+
+/// The default arm of the same `??`, so the widened boundary is pinned on both sides: a boxed zero
+/// must encode exactly as an unflagged call does.
+#[test]
+fn test_json_encode_boxed_zero_flags_encodes_unflagged() {
+    let out = compile_and_run(
+        r#"<?php
+function w(array $data, array $options = []): string {
+    $flags = $options['json_encoding'] ?? 0;
+    return json_encode($data, $flags);
+}
+echo w(['a/b']);
+"#,
+    );
+    assert_eq!(out, "[\"a\\/b\"]");
+}

@@ -280,7 +280,12 @@ fn lower_json_encode_flags(
 ) -> Result<()> {
     if inst.operands.len() >= 2 {
         let flags = expect_operand(inst, 1)?;
-        require_integer_like(ctx.load_value_to_result(flags)?, "json_encode flags")?;
+        let flags_ty = ctx.load_value_to_result(flags)?;
+        if matches!(flags_ty, PhpType::Mixed) {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        } else {
+            require_integer_like(flags_ty, "json_encode flags")?;
+        }
         abi::emit_store_reg_to_symbol(
             ctx.emitter,
             abi::int_result_reg(ctx.emitter),
