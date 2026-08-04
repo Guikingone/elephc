@@ -3107,3 +3107,153 @@ echo f(), "\n";
 "#,
     );
 }
+
+// -- Untyped by-reference parameters carrying a multi-word value ------------------------------
+//
+// An UNDECLARED `&$v` parameter used to take its EIR type from whatever the call sites inferred,
+// and the CALLEE sizes its writeback from that type. When no call site could be attributed — an
+// imprecise receiver, e.g. a method whose union return type is INFERRED rather than declared —
+// the parameter fell back to `int` and the callee emitted a ONE-WORD store into a caller variable
+// holding a two-word `Str`. The pointer was refreshed and the length left stale, so a caller
+// holding a LONGER string read past the end of the shorter one the callee wrote, and a caller
+// holding a shorter one saw the new value truncated. Silent, with no diagnostic anywhere.
+//
+// ⚠️ Every fixture below uses caller and callee strings of DIFFERENT lengths on purpose. With
+// equal lengths the stale-length bug is invisible — the old code passed those by coincidence, so
+// an equal-length fixture proves nothing about this family.
+
+/// Caller string LONGER than what the callee writes. Under the defect this read two bytes past the
+/// end of the new string; `strlen` reported the caller's old length.
+#[test]
+fn test_untyped_by_ref_param_overwrites_a_longer_caller_string() {
+    let out = compile_and_run(
+        r#"<?php
+function w(&$v): void { $v = "ABCDEFGHIJ"; }
+function go(): void { $id = '012345678901'; w($id); echo strlen($id), ":", $id, "\n"; }
+go();
+"#,
+    );
+    assert_eq!(out, "10:ABCDEFGHIJ\n");
+}
+
+/// The other direction: caller string SHORTER than the callee's write, which the defect truncated.
+#[test]
+fn test_untyped_by_ref_param_overwrites_a_shorter_caller_string() {
+    let out = compile_and_run(
+        r#"<?php
+function w(&$v): void { $v = "ABCDEFGHIJ"; }
+function go(): void { $id = 'xyz'; w($id); echo strlen($id), ":", $id, "\n"; }
+go();
+"#,
+    );
+    assert_eq!(out, "10:ABCDEFGHIJ\n");
+}
+
+/// The shape that made the defect reachable from ordinary code: a method reached through a
+/// receiver whose union type is INFERRED (no declared return), called from inside a function.
+/// This is Symfony's `PdoAdapter` shape — `$stmt = $conn->prepare(...); $stmt->bindParam(1, $id)`.
+#[test]
+#[ignore = "OPEN DEFECT, root-caused: an undeclared by-reference parameter takes its EIR type from the call sites, so a receiver the checker cannot attribute leaves it int and the callee stores ONE word into a two-word caller string. Widening every undeclared by-ref parameter to a boxed Mixed cell fixes it (15 probes green) but the uniform callable invoker hands the callee a plain two-word ref cell where a Mixed cell is now expected, which segfaults an array-callable call with a by-ref argument. Patch and analysis: memory/byref-undeclared-widen-WIP.patch."]
+fn test_untyped_by_ref_param_through_an_inferred_union_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Stmt { public function bind($k, &$v): bool { $v = "ABCDEFGHIJ"; return true; } }
+class Conn { public function prepare($s) { return $s === "" ? false : new Stmt(); } }
+function go(): void {
+    $c = new Conn();
+    $stmt = $c->prepare("A");
+    $id = '012345678901';
+    $stmt->bind("id", $id);
+    echo strlen($id), ":", $id, "\n";
+}
+go();
+"#,
+    );
+    assert_eq!(out, "10:ABCDEFGHIJ\n");
+}
+
+/// The same call at TOP LEVEL, which was already correct — kept as the control that proves the fix
+/// did not trade the function-body case for the top-level one.
+#[test]
+fn test_untyped_by_ref_param_through_an_inferred_union_receiver_at_top_level() {
+    let out = compile_and_run(
+        r#"<?php
+class Stmt { public function bind($k, &$v): bool { $v = "ABCDEFGHIJ"; return true; } }
+class Conn { public function prepare($s) { return $s === "" ? false : new Stmt(); } }
+$c = new Conn();
+$stmt = $c->prepare("A");
+$id = '012345678901';
+$stmt->bind("id", $id);
+echo strlen($id), ":", $id, "\n";
+"#,
+    );
+    assert_eq!(out, "10:ABCDEFGHIJ\n");
+}
+
+/// A DECLARED union return took a different, already-correct path. Keeping it pins that the two
+/// paths now agree rather than that one of them was rewritten to match the other's bug.
+#[test]
+fn test_untyped_by_ref_param_through_a_declared_union_receiver() {
+    let out = compile_and_run(
+        r#"<?php
+class Stmt { public function bind($k, &$v): bool { $v = "ABCDEFGHIJ"; return true; } }
+class Conn { public function prepare($s): Stmt|bool { return $s === "" ? false : new Stmt(); } }
+function go(): void {
+    $c = new Conn();
+    $stmt = $c->prepare("A");
+    $id = '012345678901';
+    $stmt->bind("id", $id);
+    echo strlen($id), ":", $id, "\n";
+}
+go();
+"#,
+    );
+    assert_eq!(out, "10:ABCDEFGHIJ\n");
+}
+
+/// The scalar sources the writeback already supported must keep working: widening every undeclared
+/// by-reference parameter to a boxed cell changes their staging too.
+#[test]
+fn test_untyped_by_ref_param_still_carries_int_and_bool() {
+    let out = compile_and_run(
+        r#"<?php
+function bump(&$n, &$flag): void { $n = $n + 41; $flag = true; }
+function go(): void { $n = 1; $flag = false; bump($n, $flag); echo $n, ":", ($flag ? "T" : "F"), "\n"; }
+go();
+"#,
+    );
+    assert_eq!(out, "42:T\n");
+}
+
+/// An undefined caller variable is what PHP creates at a by-reference argument, and it has length
+/// zero — the case the defect turned into an empty string rather than the written value.
+#[test]
+#[ignore = "OPEN DEFECT, root-caused: an undeclared by-reference parameter takes its EIR type from the call sites, so a receiver the checker cannot attribute leaves it int and the callee stores ONE word into a two-word caller string. Widening every undeclared by-ref parameter to a boxed Mixed cell fixes it (15 probes green) but the uniform callable invoker hands the callee a plain two-word ref cell where a Mixed cell is now expected, which segfaults an array-callable call with a by-ref argument. Patch and analysis: memory/byref-undeclared-widen-WIP.patch."]
+fn test_untyped_by_ref_param_defines_an_undefined_caller_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function w(&$v): void { $v = "ABCDEFGHIJ"; }
+function go(): void { w($id); echo strlen($id), ":", $id, "\n"; }
+go();
+"#,
+    );
+    assert_eq!(out, "10:ABCDEFGHIJ\n");
+}
+
+/// Repeated writes through the same parameter inside a loop, so the release path is exercised more
+/// than once — a writeback that transfers ownership must not double-free or leak the old string.
+#[test]
+fn test_untyped_by_ref_param_repeated_writes_release_the_previous_string() {
+    let out = compile_and_run(
+        r#"<?php
+function w(&$v, string $s): void { $v = $s; }
+function go(): void {
+    $id = 'seed-value-long';
+    foreach (['a', 'bb', 'ccc', 'dddd'] as $s) { w($id, $s); echo strlen($id), ":", $id, ";"; }
+    echo "\n";
+}
+go();
+"#,
+    );
+    assert_eq!(out, "1:a;2:bb;3:ccc;4:dddd;\n");
+}
