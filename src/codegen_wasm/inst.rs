@@ -1847,6 +1847,14 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     if source.ir_type == IrType::F64 && target == IrType::Str {
         return lower_float_to_string(ctx, inst);
     }
+    // `(string) $int` and `(string) $bool` are the rendering `IToStr` already performs for
+    // `"$n"` and `echo $n`, so routing them there keeps every spelling byte-identical.
+    if source.ir_type == IrType::I64
+        && target == IrType::Str
+        && matches!(source.php_type.codegen_repr(), PhpType::Int | PhpType::Bool)
+    {
+        return lower_int_like_to_string(ctx, inst);
+    }
     // `(int) $string`: PHP takes the leading numeric prefix, silently, and answers 0 when
     // there is none. Shared with the boxed-string cast so the two cannot disagree.
     if source.ir_type == IrType::Str

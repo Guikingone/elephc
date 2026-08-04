@@ -1680,6 +1680,12 @@ fn cast_shape_issue(
         (IrType::F64, IrType::Str) => {
             source_php == PhpType::Float && result_php == PhpType::Str
         }
+        // `(string) $int` and `(string) $bool` render through the same `__rt_itoa` that `Op::IToStr`
+        // already uses for `"$n"` and `echo $n`, so the spellings agree by construction. PHP renders
+        // an integer as decimal, `true` as "1" and `false` as the empty string.
+        (IrType::I64, IrType::Str) => {
+            matches!(source_php, PhpType::Int | PhpType::Bool) && result_php == PhpType::Str
+        }
         // Only the explicit `(int)` cast is admitted: the implicit coercion is
         // rejected above because its diagnostics differ from this one.
         (IrType::F64, IrType::I64) => {
@@ -2417,15 +2423,23 @@ fn iterator_alias_mutation_issue(
 /// The instructions that can run while the iterator started by `start` is still live.
 ///
 /// Answers, in block order: the tail of `start`'s own block, then every instruction of every
-/// block in the loop. A block is in the loop when the header — the block whose `IterNext`
-/// advances THIS iterator — both reaches it and is reachable from it. Without a header (an
-/// iterator nothing advances) the loop is empty and only the tail is returned, which is the
-/// conservative answer for a shape this backend would refuse elsewhere anyway.
+/// block in the loop. A block is in the loop when a header — a block whose `IterNext` advances
+/// THIS iterator — both reaches it and is reachable from it.
+///
+/// This is an ACCEPTING gate, so every uncertainty has to widen the answer rather than narrow it:
+/// a body this walk cannot map returns the whole function, which is what the rule scanned before
+/// it was scoped at all. Silently returning nothing would turn the audit into a no-op for exactly
+/// the shapes it understands least.
 fn iterator_live_instructions(
     function: &Function,
     start: &Instruction,
     start_id: InstId,
 ) -> Vec<InstId> {
+    let everything = || -> Vec<InstId> {
+        (0..function.instructions.len())
+            .map(|index| InstId::from_raw(index as u32))
+            .collect()
+    };
     let iterator = start.result;
     let block_of = |id: InstId| -> Option<usize> {
         function
@@ -2434,7 +2448,7 @@ fn iterator_live_instructions(
             .position(|block| block.instructions.contains(&id))
     };
     let Some(start_block) = block_of(start_id) else {
-        return Vec::new();
+        return everything();
     };
     let mut live: Vec<InstId> = function.blocks[start_block]
         .instructions
@@ -2443,26 +2457,42 @@ fn iterator_live_instructions(
         .skip_while(|id| *id != start_id)
         .skip(1)
         .collect();
-    let header = function.blocks.iter().position(|block| {
-        block.instructions.iter().any(|id| {
-            function
-                .instruction(*id)
-                .is_some_and(|inst| inst.op == Op::IterNext && inst.operands.first().copied() == iterator)
+    // EVERY block that advances this iterator is a header, not just the first one found. A single
+    // `foreach` has one, but rotating or peeling a loop leaves a priming `IterNext` outside the
+    // cycle; taking the first in block order could then pick that one, whose region is a
+    // singleton, and the body would go unscanned — the guard would pass exactly the mutation it
+    // exists to refuse.
+    let headers: Vec<usize> = function
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| {
+            block.instructions.iter().any(|id| {
+                function.instruction(*id).is_some_and(|inst| {
+                    inst.op == Op::IterNext && inst.operands.first().copied() == iterator
+                })
+            })
         })
-    });
-    let Some(header) = header else {
-        return live;
-    };
-    // The live range ends where the SAME `IterStart` runs again, so neither walk may pass through
-    // its block. Without that barrier a `foreach` nested in a `while` counts everything after the
+        .map(|(index, _)| index)
+        .collect();
+    if headers.is_empty() {
+        // An iterator nothing advances: no loop to bound, so the whole function stands in.
+        return everything();
+    }
+    // The live range ends where the SAME `IterStart` runs again, so no walk may pass through its
+    // block. Without that barrier a `foreach` nested in a `while` counts everything after the
     // inner loop as still inside it — the outer back edge reaches the inner header — and refuses
     // `while (…) { foreach ($a as $v) {…} $a[] = 9; }`, where the append runs with no live
     // iterator. A shape that starts and advances in ONE block has no such boundary to draw.
-    let barrier = (header != start_block).then_some(start_block);
-    let forward = blocks_reachable_from(function, header, false, barrier);
-    let backward = blocks_reachable_from(function, header, true, barrier);
+    let mut inside: HashSet<usize> = HashSet::new();
+    for header in headers {
+        let barrier = (header != start_block).then_some(start_block);
+        let forward = blocks_reachable_from(function, header, false, barrier);
+        let backward = blocks_reachable_from(function, header, true, barrier);
+        inside.extend(forward.intersection(&backward).copied());
+    }
     for block in 0..function.blocks.len() {
-        if block != start_block && forward.contains(&block) && backward.contains(&block) {
+        if block != start_block && inside.contains(&block) {
             live.extend(function.blocks[block].instructions.iter().copied());
         }
     }
@@ -4080,6 +4110,10 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
     // and no `PropGet` on `value` appears in the constructor at all. So any call, any dynamic
     // property access, and any reference binding before the store ends the proof. Reads in later
     // blocks are dominated by the store and need no check.
+    //
+    // The receiver has to be `$this` too. Matching the property by NAME alone counts
+    // `$this->child->p = 1;` as a write to `$this->p` — a different object's slot that happens
+    // to share a name — and the proof would rest on a store that never touches this class.
     entry
         .instructions
         .iter()
@@ -4089,7 +4123,13 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
                 && data_string(module, candidate) == Some(property))
                 || instruction_can_observe_this(candidate)
         })
-        .is_some_and(|first| first.op == Op::PropSet)
+        .is_some_and(|first| {
+            first.op == Op::PropSet
+                && first
+                    .operands
+                    .first()
+                    .is_some_and(|receiver| value_local_origin(constructor, *receiver) == Some(0))
+        })
 }
 
 /// Whether an instruction could let something else read the object being constructed.
@@ -8284,13 +8324,16 @@ mod tests {
                 PhpType::Int,
                 Ownership::NonHeap,
             );
+            // `(string) $int` is supported, so the probe casts a STRING to a float instead —
+            // a conversion the table still has no exact answer for.
+            let text = builder.emit_const_str(method_data);
             let _ = builder.emit(
                 Op::Cast,
-                vec![lhs],
-                Some(Immediate::CastTarget(IrType::Str)),
-                IrType::Str,
-                PhpType::Str,
-                Ownership::Owned,
+                vec![text],
+                Some(Immediate::CastTarget(IrType::F64)),
+                IrType::F64,
+                PhpType::Float,
+                Ownership::NonHeap,
             );
             let array = builder
                 .emit(

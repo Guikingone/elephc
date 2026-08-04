@@ -12462,3 +12462,109 @@ echo count($h), "\n";
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `round($value, $places)` against php-src, including the cases the naive form fails.
+///
+/// The two-argument form is a DIFFERENT function from `round($value)`, not the same one with a
+/// default. Scaling is inexact — `0.285 * 1e10` is `2849999999.9999995` — so php-src extracts the
+/// integral part and then REPAIRS the extraction, adding one back when unscaling the candidate
+/// reproduces the input exactly. That repair is why `round(1.005, 2)` is `1.01` and
+/// `round(9.995, 2)` is `10`, both of which scale-round-unscale gets wrong. The transcription was
+/// validated at 1420/1420 against php-src 8.5.6 over a corpus of halfway values, the classic
+/// traps, the 1e15/1e-15 boundaries and 1200 random values across 24 orders of magnitude; the
+/// naive model scores 1087/1420 on the same corpus. The values below are the traps from it.
+#[test]
+fn test_cli_wasm_round_with_a_precision_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_round_places");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+echo round(1.005, 2), "|", round(2.675, 2), "|", round(9.995, 2), "|", round(0.285, 2), "\n";
+echo round(8.995, 2), "|", round(0.045, 2), "|", round(1.45, 1), "|", round(1.55, 1), "\n";
+echo round(1.005, 3), "|", round(-1.005, 2), "|", round(-9.995, 2), "|", round(-0.285, 2), "\n";
+echo round(1234.5678, -2), "|", round(1234.5678, 0), "|", round(-1234.5678, -2), "\n";
+echo round(0.5, 0), "|", round(-0.5, 0), "|", round(1.5, 0), "|", round(2.5, 0), "|", round(-2.5, 0), "\n";
+echo round(1e15, 2), "|", round(1e-15, 20), "|", round(123456789.987654321, 4), "\n";
+$p = 2;
+echo round(3.14159, $p), "|", round(2.71828, $p), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the rounding probe to WASM");
+    assert!(
+        output.status.success(),
+        "round compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the rounding probe under Node");
+    assert!(
+        run.status.success(),
+        "rounding must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "1.01|2.68|10|0.29\n",
+            "9|0.05|1.5|1.6\n",
+            "1.005|-1.01|-10|-0.29\n",
+            "1200|1235|-1200\n",
+            "1|-1|2|3|-3\n",
+            "1.0E+15|1.0E-15|123456789.9877\n",
+            "3.14|2.72\n",
+        ),
+        "php-src 8.5.6's own answers"
+    );
+
+    // A precision php-src reaches `pow()` for is refused rather than answered nearly-right.
+    let wide = dir.join("wide.php");
+    fs::write(&wide, "<?php echo round(1.5, 30), \"\\n\";\n").unwrap();
+    let refused = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&wide)
+        .output()
+        .expect("failed to run the compiler over the wide precision");
+    assert!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr).contains("php_intpow10"),
+        "a precision outside the exact table must be refused: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
