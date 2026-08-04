@@ -289,7 +289,20 @@ impl Checker {
                 .collect(),
             param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults,
-            return_type: crate::types::PhpType::Int,
+            // A declared return type is authoritative even in a placeholder: the `Int` fallback is
+            // only meant to stand in until the body is inferred, but a provisional signature that
+            // survives (a variant group whose members are still being resolved) reaches codegen and
+            // makes the function return an int. `return 'lit';` from a `: string` function then
+            // compiles to `(int) 'lit'` — 0 — with no diagnostic anywhere. Seeding the declaration's
+            // own type keeps the placeholder honest for exactly the cases that carry one.
+            return_type: decl
+                .return_type
+                .as_ref()
+                .and_then(|type_expr| {
+                    self.resolve_declared_return_type_hint(type_expr, decl.span, "function")
+                        .ok()
+                })
+                .unwrap_or(crate::types::PhpType::Int),
             declared_return: decl.return_type.is_some(),
             by_ref_return: false,
             ref_params: decl.ref_params,

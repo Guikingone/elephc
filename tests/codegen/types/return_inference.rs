@@ -207,3 +207,31 @@ echo f();
     );
     assert_eq!(out, "3");
 }
+
+/// A declared return type must survive a *provisional* signature.
+///
+/// Function signatures are seeded with a `PhpType::Int` placeholder before the body is inferred.
+/// When a provisional survives — here the body passes an undefined variable by reference to a
+/// method on a union-typed receiver, which keeps the callee unresolved — that placeholder reached
+/// codegen and the function was compiled as returning an int. `return 'lit';` from a `: string`
+/// function then lowered to `(int) 'lit'`, so the caller silently received `0`: no diagnostic
+/// anywhere, on a declaration that states the answer outright.
+///
+/// A declaration is authoritative; the placeholder is only for the inferred case. Seeded at three
+/// sites (`driver/functions.rs`, `functions/resolution/signature.rs`, `functions/resolution/mod.rs`)
+/// and fixed at all three.
+#[test]
+fn test_declared_return_type_survives_a_provisional_signature() {
+    let out = compile_and_run(
+        r#"<?php
+class Stmt { public function bind(string $k, &$v): bool { $v = "b:$k"; return true; } }
+class Conn {
+    /** @return Stmt|bool */
+    public function prepare(string $s) { return $s === "" ? false : new Stmt(); }
+}
+function go(Conn $c): string { $stmt = $c->prepare("A"); $stmt->bind("id", $id); return "lit"; }
+echo go(new Conn()), "\n";
+"#,
+    );
+    assert_eq!(out, "lit\n");
+}

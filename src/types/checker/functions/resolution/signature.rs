@@ -113,7 +113,18 @@ impl Checker {
                 .collect(),
             param_attributes: decl.param_attributes.clone(),
             defaults: decl.defaults.clone(),
-            return_type: PhpType::Int,
+            // A declared return type is authoritative even in a provisional signature. The `Int`
+            // placeholder is meant to stand in only until the body is inferred, but a provisional
+            // that survives reaches codegen and makes the function return an int: `return 'lit';`
+            // from a `: string` function compiles to `(int) 'lit'` — 0 — with no diagnostic.
+            return_type: decl
+                .return_type
+                .as_ref()
+                .and_then(|type_expr| {
+                    self.resolve_declared_return_type_hint(type_expr, decl.span, "function")
+                        .ok()
+                })
+                .unwrap_or(PhpType::Int),
             declared_return: decl.return_type.is_some(),
             by_ref_return: decl.by_ref_return,
             ref_params: decl.ref_params.clone(),
