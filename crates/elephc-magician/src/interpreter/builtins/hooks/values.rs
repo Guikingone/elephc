@@ -494,8 +494,11 @@ impl EvalValuesHook {
             Self::Rand => eval_rand_values_result(evaluated_args, values),
             Self::RandomInt => eval_random_int_values_result(evaluated_args, values),
             Self::Round => match evaluated_args {
-                [value] => eval_round_result(*value, None, values),
-                [value, precision] => eval_round_result(*value, Some(*precision), values),
+                [value] => eval_round_result(*value, None, None, values),
+                [value, precision] => eval_round_result(*value, Some(*precision), None, values),
+                [value, precision, mode] => {
+                    eval_round_result(*value, Some(*precision), Some(*mode), values)
+                }
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::MbEregMatch => eval_mb_ereg_match_values_result(evaluated_args, values),

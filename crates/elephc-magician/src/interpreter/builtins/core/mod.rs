@@ -14,6 +14,7 @@ use super::super::*;
 
 mod call_user_func;
 mod call_user_func_array;
+mod constant;
 mod define;
 mod defined;
 mod die;
@@ -36,6 +37,7 @@ mod var_dump;
 
 pub(in crate::interpreter) use call_user_func::*;
 pub(in crate::interpreter) use call_user_func_array::*;
+pub(in crate::interpreter) use constant::*;
 pub(in crate::interpreter) use define::*;
 pub(in crate::interpreter) use defined::*;
 pub(in crate::interpreter) use die::*;
@@ -67,6 +69,7 @@ pub(in crate::interpreter) fn eval_builtin_core_call(
     match name {
         "call_user_func" => eval_builtin_call_user_func(args, context, scope, values),
         "call_user_func_array" => eval_builtin_call_user_func_array(args, context, scope, values),
+        "constant" => eval_builtin_constant(args, context, scope, values),
         "define" => eval_builtin_define(args, context, scope, values),
         "defined" => eval_builtin_defined(args, context, scope, values),
         "die" => eval_builtin_die(args, context, scope, values),
@@ -107,6 +110,7 @@ pub(in crate::interpreter) fn eval_core_values_result(
             };
             eval_call_user_func_array_with_values(*callback, *arg_array, context, values)
         }
+        "constant" => eval_constant_result(evaluated_args, context, values),
         "define" => eval_define_result(evaluated_args, context, values),
         "defined" => eval_defined_result(evaluated_args, context, values),
         "die" => eval_die_values_result(evaluated_args, values),

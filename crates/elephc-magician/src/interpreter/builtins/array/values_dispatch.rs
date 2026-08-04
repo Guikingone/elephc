@@ -22,6 +22,7 @@ pub(in crate::interpreter) fn eval_array_declared_values_result(
         "array_chunk" => super::array_chunk::eval_array_chunk_declared_values_result(evaluated_args, context, values),
         "array_column" => super::array_column::eval_array_column_declared_values_result(evaluated_args, context, values),
         "array_combine" => super::array_combine::eval_array_combine_declared_values_result(evaluated_args, context, values),
+        "array_count_values" => super::array_count_values::eval_array_count_values_declared_values_result(evaluated_args, context, values),
         "array_diff" => super::array_diff::eval_array_diff_declared_values_result(evaluated_args, context, values),
         "array_diff_key" => super::array_diff_key::eval_array_diff_key_declared_values_result(evaluated_args, context, values),
         "array_fill" => super::array_fill::eval_array_fill_declared_values_result(evaluated_args, context, values),

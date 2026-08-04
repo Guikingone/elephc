@@ -11,6 +11,7 @@
 mod array_chunk;
 mod array_column;
 mod array_combine;
+mod array_count_values;
 mod array_diff;
 mod array_diff_key;
 mod array_fill;
