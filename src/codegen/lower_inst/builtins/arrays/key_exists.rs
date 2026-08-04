@@ -141,6 +141,9 @@ fn lower_indexed_array_key_exists(
     match ctx.value_php_type(key)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => lower_indexed_integer_key_exists(ctx, inst, key, array),
         PhpType::Str => lower_indexed_string_key_exists(ctx, inst, key, array),
+        PhpType::Mixed | PhpType::Union(_) => {
+            lower_indexed_mixed_key_exists(ctx, inst, key, array)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "array_key_exists key PHP type {:?}",
             other
@@ -207,6 +210,50 @@ fn lower_indexed_string_key_exists(
             ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the string-miss fallback after the bounds check
             ctx.emitter.label(&string_miss);
             ctx.emitter.instruction("xor eax, eax");                            // a non-integer string key is absent from a packed array
+            ctx.emitter.label(&done);
+        }
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers indexed-array key existence for a BOXED key whose type is only known at runtime.
+///
+/// Reached from `foreach ($rows as $rowKey => $row)`-style code, where the bound key is a boxed
+/// `Mixed`: `Console\Helper\Table::renderRow` probes `array_key_exists($lineKey, $unmergedRows[$rowKey])`
+/// exactly this way. `materialize_mixed_hash_key_*` normalizes the boxed value into the same
+/// `(key_lo, key_hi)` pair the string path produces — `key_hi == -1` marks a canonical INTEGER key —
+/// so the two answers follow PHP: an integer key is bounds-checked against the packed array, and a
+/// key that stays a string can never exist in one, which is `false`.
+fn lower_indexed_mixed_key_exists(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    key: ValueId,
+    array: ValueId,
+) -> Result<()> {
+    let string_miss = ctx.next_label("array_key_exists_mixed_miss");
+    let done = ctx.next_label("array_key_exists_mixed_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            materialize_mixed_hash_key_aarch64(ctx, key)?;
+            ctx.emitter.instruction("cmn x2, #1");                              // key_hi == -1 marks a normalized integer key
+            ctx.emitter.instruction(&format!("b.ne {}", string_miss));          // genuine string keys never index a packed array
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the string-miss fallback after the bounds check
+            ctx.emitter.label(&string_miss);
+            ctx.emitter.instruction("mov x0, #0");                              // a non-integer key is absent from a packed array
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            materialize_mixed_hash_key_x86_64(ctx, key)?;
+            ctx.emitter.instruction("cmp rdx, -1");                             // key_hi == -1 marks a normalized integer key
+            ctx.emitter.instruction(&format!("jne {}", string_miss));           // genuine string keys never index a packed array
+            ctx.emitter.instruction("mov rsi, rax");                            // move the normalized integer key into the key argument register
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_key_exists");
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the string-miss fallback after the bounds check
+            ctx.emitter.label(&string_miss);
+            ctx.emitter.instruction("xor eax, eax");                            // a non-integer key is absent from a packed array
             ctx.emitter.label(&done);
         }
     }

@@ -19,7 +19,7 @@
 //!   `offsetSet` for `ArrayAccess` object parents), which mutates the aliased
 //!   container for every slot representation.
 
-use crate::support::compile_and_run_with_heap_debug;
+use crate::support::{compile_and_run, compile_and_run_with_heap_debug};
 
 /// Homogeneous `array<array<int>>` matrices preserve concrete slot types while leaf writes
 /// COW-split and write the mutated child back through every indexed parent.
@@ -353,4 +353,48 @@ echo $unmerged[0][0][1], ':', $unmerged[0][1][1], ':', $unmerged[1][0][1], ':', 
         "expected clean heap, got: {}",
         out.stderr
     );
+}
+
+/// An INT-keyed read of an array whose element type is still `Never` — an empty `[]` literal whose
+/// only writer is a nested `$u[$k][$j] = …` — must widen to `Mixed`, not hand back `Never`.
+///
+/// `Never` there means "nothing written yet", not "uninhabited": PHP grows the array at runtime and
+/// the read legitimately lands on what a nested write put there. The STRING-keyed arm of the same
+/// match already answered `Mixed` for the byte-identical container, so `$u[$k]` was accepted when
+/// `$k` came from `foreach (… as $k)` (a string value) and rejected when it came from
+/// `foreach (… as $k => $v)` (an int key) — the only difference between the two. Regression for
+/// `Console\Helper\Table::renderRow` (`array_key_exists($lineKey, $unmergedRows[$rowKey])`) and
+/// `DependencyInjection\Definition::setMethodCalls`.
+#[test]
+fn test_int_keyed_read_of_never_element_widens_to_mixed() {
+    let out = compile_and_run(
+        r#"<?php
+$u = [];
+foreach ([['a', 'b']] as $rowKey => $row) {
+    foreach ($row as $lineKey => $cell) {
+        if (!\array_key_exists($rowKey, $u) || !\array_key_exists($lineKey, $u[$rowKey])) {
+            $u[$rowKey][$lineKey] = $cell;
+        }
+    }
+}
+echo count($u), ":", count($u[0]), ":", $u[0][1];
+"#,
+    );
+    assert_eq!(out, "1:2:b");
+}
+
+/// The same read reaching `count()` rather than `array_key_exists()`, so the widening is pinned at
+/// the element type and not at one builtin's argument check.
+#[test]
+fn test_int_keyed_never_element_reaches_count() {
+    let out = compile_and_run(
+        r#"<?php
+$u = [];
+foreach ([['x']] as $k => $row) {
+    $u[$k][0] = $row[0];
+    echo count($u[$k]);
+}
+"#,
+    );
+    assert_eq!(out, "1");
 }

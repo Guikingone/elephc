@@ -238,7 +238,7 @@ impl Checker {
                     }
                     PhpType::Array(elem_ty) => {
                         if normalized_idx_ty == PhpType::Int {
-                            Ok(*elem_ty.clone())
+                            Ok(empty_array_element_read_type(elem_ty))
                         } else if array_key_is_gradually_acceptable(&idx_ty, &normalized_idx_ty) {
                             // Gradual typing: a string/Mixed/coercible key into an array the
                             // checker inferred packed/int-keyed is accepted as an associative
@@ -294,7 +294,8 @@ impl Checker {
                                 PhpType::Array(elem_ty) => {
                                     saw_indexable_member = true;
                                     if normalized_idx_ty == PhpType::Int {
-                                        result_members.push(*elem_ty.clone());
+                                        result_members
+                                            .push(empty_array_element_read_type(elem_ty));
                                     } else if array_key_is_gradually_acceptable(
                                         &idx_ty,
                                         &normalized_idx_ty,
@@ -1248,6 +1249,28 @@ fn php_type_is_int_offset_coercible(ty: &PhpType) -> bool {
         | PhpType::Never => true,
         PhpType::Union(members) => members.iter().all(php_type_is_int_offset_coercible),
         _ => false,
+    }
+}
+
+/// Returns the type an INT-keyed element read yields, widening the never-written element.
+///
+/// `PhpType::Array(Never)` is what an empty `[]` literal infers to, and `Never` there means "no
+/// element has been written yet" — not "this element is uninhabited". PHP grows arrays after the
+/// fact, so a read can legitimately land on an element a later statement (or a nested
+/// `$a[$k][$j] = …`, which contributes no storage evidence at all) put there. Handing `Never` back
+/// makes the value unusable everywhere: `array_key_exists($j, $a[$k])` becomes "second argument
+/// must be array", `count($a[$k])` becomes "argument must be array or Countable".
+///
+/// The STRING-keyed arm of the same match already answers `Mixed` for the byte-identical container,
+/// so this aligns the two: `$u = []; $u[$k]` is accepted when `$k` is a string and was rejected
+/// when `$k` was an int, purely by which side of that `if` it fell on. Measured on
+/// `Console\Helper\Table::renderRow` (`$unmergedRows[$rowKey]`, whose only writer is the nested
+/// `$unmergedRows[$rowKey][$lineKey] = …`) and `DependencyInjection\Definition::setMethodCalls`.
+fn empty_array_element_read_type(elem_ty: &PhpType) -> PhpType {
+    if matches!(elem_ty, PhpType::Never) {
+        PhpType::Mixed
+    } else {
+        elem_ty.clone()
     }
 }
 
