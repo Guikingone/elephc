@@ -34,6 +34,7 @@ use std::collections::HashSet;
 
 mod constants;
 mod nullsafe_chain;
+mod ref_place_args;
 
 /// Lowers an expression and returns its EIR value.
 pub(crate) fn lower_expr(ctx: &mut LoweringContext<'_, '_>, expr: &Expr) -> LoweredValue {
@@ -1999,6 +2000,13 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
         return value;
     }
     if let Some(value) = lower_dynamic_call_user_func_array(ctx, canonical, args, expr) {
+        return value;
+    }
+    // A mutating builtin whose by-reference array argument is a property, static property, or
+    // container element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before
+    // any builtin fast path runs, so the rewritten call reaches the local-variable
+    // by-reference lowering that actually stores the copy-on-write result back.
+    if let Some(value) = ref_place_args::lower_builtin_ref_place_call(ctx, name, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
@@ -5357,11 +5365,12 @@ fn unset_property_access_has_direct_lowering(
             UnsetPropertyAction::Magic
                 | UnsetPropertyAction::Noop
                 | UnsetPropertyAction::ClearTyped
+                | UnsetPropertyAction::RemoveDynamic
         )
     )
 }
 
-/// Lowers `unset($object->property)` for magic and no-op property targets.
+/// Lowers `unset($object->property)` for magic, no-op, fixed-slot and dynamic property targets.
 fn lower_unset_property_access(
     ctx: &mut LoweringContext<'_, '_>,
     object: &Expr,
@@ -5376,7 +5385,10 @@ fn lower_unset_property_access(
         Some(UnsetPropertyAction::Noop) => {
             lower_expr(ctx, object);
         }
-        Some(UnsetPropertyAction::ClearTyped) => {
+        // Both storage shapes share `Op::PropUnset`: the backend already resolves the
+        // receiver's property storage, so it picks the fixed-slot marker or the
+        // dynamic-hash removal from the same instruction.
+        Some(UnsetPropertyAction::ClearTyped | UnsetPropertyAction::RemoveDynamic) => {
             let object = lower_expr(ctx, object);
             let data = ctx.intern_string(property);
             ctx.emit_void(
@@ -5399,6 +5411,10 @@ enum UnsetPropertyAction {
     /// The property has a DECLARED type, so PHP's `unset()` leaves it uninitialized —
     /// a state elephc's fixed property slots represent exactly.
     ClearTyped,
+    /// The property lives in the receiver's dynamic-property hash (`stdClass`, or an
+    /// undeclared name on an `#[AllowDynamicProperties]` class), where PHP's `unset()`
+    /// really is a key removal.
+    RemoveDynamic,
 }
 
 /// Selects the PHP-visible `unset()` behavior for a statically known object property operand.
@@ -5408,34 +5424,50 @@ fn property_unset_action(
     property: &str,
 ) -> Option<UnsetPropertyAction> {
     let (class_name, _) = isset_object_expr_class(ctx, object)?;
+    // Every `stdClass` property is a hash entry, so `unset()` is a plain key removal and
+    // `stdClass` declares no magic methods that could intercept it.
     if is_builtin_stdclass_name(&class_name) {
-        return Some(UnsetPropertyAction::Fallback);
+        return Some(UnsetPropertyAction::RemoveDynamic);
     }
     let class_info = ctx.classes.get(class_name.as_str())?;
-    if class_info.allow_dynamic_properties {
-        return Some(UnsetPropertyAction::Fallback);
+    if class_info.allow_dynamic_properties && class_info.visible_property(property).is_none() {
+        return Some(dynamic_property_unset_action(ctx, &class_name));
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
         // PHP does NOT consult `__unset` for a property it can see: it removes the
         // property itself. A DECLARED (typed) property becomes uninitialized, which
-        // elephc's fixed slots can represent exactly; an untyped property is nulled,
-        // which keeps reads and `isset()` PHP-correct on a slot that has no
-        // uninitialized state.
-        return Some(if class_info.visible_property_is_declared(property) {
-            UnsetPropertyAction::ClearTyped
-        } else {
-            // An UNTYPED property slot has no uninitialized state and no null-capable
-            // storage, so there is no sound way to make a later read answer PHP's
-            // "Undefined property" null. Keep the explicit unsupported diagnostic
-            // rather than leaving a stale value or a garbage payload behind.
-            UnsetPropertyAction::Fallback
-        });
+        // elephc's fixed slots can represent exactly.
+        if class_info.visible_property_is_declared(property) {
+            return Some(UnsetPropertyAction::ClearTyped);
+        }
+        // An UNTYPED fixed slot has no "removed" state and no null-capable storage:
+        // PHP's later read must warn and answer `null`, which a slot the checker typed
+        // `Int`/`Str`/... cannot represent. Keep the explicit unsupported diagnostic
+        // rather than leaving a stale value or a garbage payload behind.
+        return Some(UnsetPropertyAction::Fallback);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__unset")).is_some() {
         Some(UnsetPropertyAction::Magic)
     } else {
         Some(UnsetPropertyAction::Noop)
     }
+}
+
+/// Chooses how to unset an undeclared name on an `#[AllowDynamicProperties]` class.
+///
+/// PHP consults `__unset()` for such a name only when the dynamic property is ABSENT at
+/// the unset site, and removes the hash entry silently when it is present — a decision
+/// that depends on runtime state. A class that declares `__unset()` therefore keeps the
+/// explicit unsupported diagnostic instead of silently picking one of the two behaviors;
+/// a class without `__unset()` can only ever take the removal path.
+fn dynamic_property_unset_action(
+    ctx: &LoweringContext<'_, '_>,
+    class_name: &str,
+) -> UnsetPropertyAction {
+    if class_method_signature(ctx, class_name, &php_symbol_key("__unset")).is_some() {
+        return UnsetPropertyAction::Fallback;
+    }
+    UnsetPropertyAction::RemoveDynamic
 }
 
 /// Lowers a magic `__unset($name)` call, guarding nullable receivers as a no-op.

@@ -5,7 +5,7 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, and resource scope-cleanup.
+//! - Submodules group focused fixtures for basics, regressions, stack args, copy-on-write and cycle handling, growth, related suites, resource scope-cleanup, and by-reference builtin arguments that name a property, static property, or container element.
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
@@ -15,6 +15,8 @@ mod nullable_string_return;
 mod regressions;
 #[path = "runtime_gc/assoc_rebind_release.rs"]
 mod assoc_rebind_release;
+#[path = "runtime_gc/by_ref_place_args.rs"]
+mod by_ref_place_args;
 #[path = "runtime_gc/stack_args.rs"]
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]

@@ -594,6 +594,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         name
     }
 
+    /// Declares a fresh synthetic slot that follows ordinary PHP local-variable ownership.
+    ///
+    /// `declare_hidden_temp` uses `LocalKind::HiddenTemp`, whose store *moves* an already-owned
+    /// expression result into the slot without retaining it. A lowering that desugars a PHP
+    /// construct into `$tmp = <place>; ...; <place> = $tmp;` needs the opposite contract: the
+    /// read may be a borrowed pointer (a static-property load carries no reference of its own),
+    /// so the store must retain and function-exit cleanup must release. Declaring the slot as
+    /// `LocalKind::PhpLocal` gives it exactly the ownership rules the equivalent user-written
+    /// assignment would have. The `__eir_` prefix cannot appear in PHP source, so the name can
+    /// never collide with a user variable.
+    pub(crate) fn declare_synthetic_php_local(&mut self, php_type: PhpType) -> String {
+        let name = format!("__eir_place{}", self.hidden_temp_counter);
+        self.hidden_temp_counter += 1;
+        self.declare_local_with_kind(&name, php_type, LocalKind::PhpLocal);
+        name
+    }
+
     /// Declares a one-shot hidden expression-result temporary.
     pub(crate) fn declare_owned_hidden_temp(&mut self, php_type: PhpType) -> String {
         let name = format!("__eir_tmp{}", self.hidden_temp_counter);
