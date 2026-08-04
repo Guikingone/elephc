@@ -101,11 +101,11 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **24
-compile to `wasm32-wasi`**, and **23 of those reproduce php-src's output byte
-for byte**. The twenty-fourth is `ifdef`, which uses an Elephc-only
-preprocessor form php-src cannot parse at all — so every example this target
-compiles, it also runs correctly.
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **30
+compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
+php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
+php-src cannot parse at all, so it has no php-src output to match — meaning
+every example this target compiles, it also runs correctly.
 
 When comparing against php-src yourself, pass the script path as the module's
 first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
@@ -117,10 +117,14 @@ most programs:
 
 | Blocker | Examples affected |
 |---|---|
-| Unregistered runtime function (streams, sockets, `unlink`, `gettype`, …) | 117 |
-| `Heap(Mixed)` operand shapes on supported builtins (`substr`, `array_values`, `array_keys`, …) | ~40 |
-| Method call, property read, and array read on a boxed receiver | ~40 |
-| Cast shapes not yet admitted | ~35 |
+| Unregistered runtime function (streams, sockets, `unlink`, `gettype`, …) | 62 |
+| Method call on a boxed receiver | 39 |
+| Property read on a boxed receiver | 33 |
+| Array read on a boxed receiver | 32 |
+| Cast shapes not yet admitted | 30 |
+
+96 of the 158 remaining examples need no missing builtin at all: they are held
+up purely by operand shapes, which is where the work is concentrated.
 
 Some examples will never compile to this target: `stream_socket_*`, FFI/`extern`
 calls, and process control have no WASI Preview 1 equivalent. The goal is
@@ -147,6 +151,17 @@ against measured php-src 8.5.6 output rather than by analogy:
 - **Relational comparison against a boxed value.** PHP compares without
   converting, so `"abc" <= 1` is false and `[1] <= 1` is false. A cast-then-
   compare lowering answers both incorrectly.
+- **A float reaching a string.** `(string) $f`, `"$f"` and `echo $f` share one
+  renderer, so all three agree: `-0` for negative zero, `1.0E+20` and `1.0E-7`
+  in exponent form, `100` rather than `100.0` for an integral value.
+- **`array_keys()` and `array_values()` of an associative array.** Both project
+  in php-src's INSERTION order — `["z" => 26, "a" => 1]` answers `z`, `a` —
+  never sorted, and never the bucket table's order.
+- **A typed property with no default.** Reading one before it is written is
+  `Error: Typed property C::$p must not be accessed before initialization`, and
+  this backend has no sentinel for it: the allocator zeroes the slot and zero is
+  a legitimate `int`. Such a read is refused unless the constructor writes the
+  property unconditionally, which removes the question rather than answering it.
 
 A shared front-end bug surfaced while measuring this and is fixed: an
 `if`/`elseif`/`else` chain whose FIRST condition folded to false propagated the

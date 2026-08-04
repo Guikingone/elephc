@@ -3668,6 +3668,11 @@ fn property_get_shape_issue(
         // materializer, and `scoped_constant_get` is the ONLY way to obtain a case object,
         // so no read can precede those writes.
         && !module.enum_infos.contains_key(&class_name)
+        // ...and a CONSTRUCTOR that writes it unconditionally is a third: every path out of
+        // `new` has passed that store, so no read from outside the constructor can precede it.
+        // Reading it INSIDE the constructor still could, so that stays refused.
+        && !(function.name != format!("{class_name}::__construct")
+            && constructor_initializes_property(module, &class_name, property))
     {
         return Some(format!(
             "typed property ${property} may be uninitialized and requires an exact PHP fatal check"
@@ -3780,6 +3785,44 @@ fn dynamic_property_initialized_before_read(
                 && value_local_origin(function, candidate_root) == receiver_slot);
     }
     initialized
+}
+
+/// Whether the class's constructor writes `property` before anything outside it can read.
+///
+/// A typed property with no default answers `Error: Typed property C::$p must not be accessed
+/// before initialization` until something writes it, and this backend has no sentinel to test
+/// for that — the allocator zeroes the slot, and zero is a legitimate `int` or `bool`. A write
+/// in the constructor's ENTRY block removes the question rather than answering it: the store
+/// dominates every exit from `new`, so the property is always initialized by the time any other
+/// method or caller can reach it.
+fn constructor_initializes_property(module: &Module, class_name: &str, property: &str) -> bool {
+    let key = crate::names::php_symbol_key("__construct");
+    let Some(info) = module.class_infos.get(class_name) else {
+        return false;
+    };
+    let implementation = info
+        .method_impl_classes
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    let Some(constructor) = find_method_function(module, &implementation, &key) else {
+        return false;
+    };
+    let Some(entry) = constructor
+        .blocks
+        .iter()
+        .find(|block| block.id == constructor.entry)
+    else {
+        return false;
+    };
+    entry.instructions.iter().any(|inst_id| {
+        constructor
+            .instruction(*inst_id)
+            .is_some_and(|candidate| {
+                candidate.op == Op::PropSet
+                    && data_string(module, candidate) == Some(property)
+            })
+    })
 }
 
 /// Traces nullable boxing and ownership forwarders to the underlying object receiver.
