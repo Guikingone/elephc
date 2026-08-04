@@ -122,14 +122,17 @@ fixture before coding the edge case:
    PKCS#7.
 3. **Key length**:
    - shorter than required → zero-pad **unless** `OPENSSL_DONT_ZERO_PAD_KEY`
-     (then fail / warn like PHP);
+     (then return `false` and warn that the key length cannot be set);
    - longer → truncate to required length.
-4. **IV length**: must match cipher IV length for modes that use IV
-   (verify empty-IV CBC behavior against local PHP — PHP often zero-fills;
-   match observed behavior and document it).
+4. **IV length**:
+   - CBC/CTR empty or short IV → zero-pad to the required length; long IV →
+     truncate. PHP warns on encrypt in all three cases and on decrypt for a
+     short/long IV, but not for an empty IV;
+   - GCM accepts any non-empty IV length (12 is the reported/default length);
+     empty IV returns `false`.
 5. **GCM**:
    - encrypt writes authentication tag into by-ref `$tag` (length
-     `$tag_length`, default 16, valid range typically 4..16 — match PHP);
+     `$tag_length`, default 16, observed valid range 1..16);
    - decrypt takes `$tag` by value; auth failure → `false`;
    - `$aad` optional additional authenticated data.
 6. **Failure** returns `false` (bool), not empty string. Emit warnings
@@ -537,10 +540,24 @@ AES-256-GCM (print tag length).
 
 ### Phase 0 — PHP golden fixtures
 
-- [ ] Script or checked-in vectors from `php -r` for every matrix cipher:
+- [x] Script or checked-in vectors from `php -r` for every matrix cipher:
       ciphertext (raw hex), tag (GCM), iv_length, failure modes.
-- [ ] Lock empty-IV and short-key behavior to observed PHP on CI PHP version
+- [x] Lock empty-IV and short-key behavior to observed PHP on CI PHP version
       notes in the plan/tests comments.
+
+Phase 0 baseline: PHP 8.4.19 CLI with OpenSSL 3.6.1. The repository CI does not
+provision or pin PHP, so CI consumes the checked-in Rust fixture module rather
+than regenerating it. Regeneration is explicit and stamps both PHP and OpenSSL
+versions in the output. The corpus covers all 12 ciphers, GCM with/without AAD
+and tag lengths 1/4/12/16, GCM IV lengths 1/12/16/20, IV lengths, base64 mode,
+zero padding, short/long keys, and case-insensitive names. CBC and CTR both
+carry empty/short/long-IV ciphertext plus the PHP warning observed on successful
+encrypt/decrypt calls. Empty CBC/CTR/GCM plaintext is round-tripped and exported.
+The corpus also contains 13 false-return failure modes with PHP-level warning
+text where PHP emits one. Provider error-queue strings are intentionally
+excluded because they vary with the OpenSSL build. The Elephc-specific 12-name
+`openssl_get_cipher_methods()` inventory remains a Phase 2 implementation test,
+not a PHP golden (stock PHP exposes a much larger method list).
 
 ### Phase 1 — `elephc-crypto` cipher engine
 
@@ -672,10 +689,9 @@ Linux matrix: rely on CI unless a target-specific ABI bug appears; then use
 
 ## Open implementation choices (decide during Phase 0–1, then lock)
 
-1. **Empty IV for CBC:** match local PHP exactly (likely zero-fill to 16).
-2. **`get_cipher_methods(true)`:** same list vs uppercase aliases.
-3. **Warning text:** copy PHP strings vs elephc-short messages (prefer PHP-like).
-4. **Whether `openssl_encrypt` without GCM still type-checks `ref tag`:** yes;
+1. **`get_cipher_methods(true)`:** same list vs uppercase aliases.
+2. **Warning text:** copy PHP strings vs elephc-short messages (prefer PHP-like).
+3. **Whether `openssl_encrypt` without GCM still type-checks `ref tag`:** yes;
    runtime no-ops tag for non-AEAD.
 
 Once Phase 0 fixtures exist, do not change matrix or flag meanings without
