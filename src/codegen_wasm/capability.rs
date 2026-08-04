@@ -2426,6 +2426,11 @@ fn iterator_alias_mutation_issue(
                 | Op::StaticMethodCall
                 | Op::EvalStaticMethodCall
                 | Op::IteratorMethodCall
+                // A closure can declare `&$a` as readily as a named function can. That shape is
+                // refused earlier today — `closure_new` rejects a by-reference callback parameter
+                // — so this arm costs no coverage and closes the route before it opens.
+                | Op::ClosureCall
+                | Op::CallableDescriptorInvoke
         ) {
             let passed: Vec<usize> = candidate
                 .operands
@@ -4299,24 +4304,48 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
     // `$this->child->p = 1;` as a write to `$this->p` — a different object's slot that happens
     // to share a name — and the proof would rest on a store that never touches this class.
     //
-    // And the FIRST property access wins whatever its name: reading some OTHER property can
-    // dispatch `__get`, which is ordinary PHP code free to read this one. Filtering the scan down
-    // to the target's own name would step over that.
-    entry
+    // Touching ANOTHER property is not automatically neutral: on a class with `__get` or `__set`
+    // it runs user code free to read this one. But treating it as fatal unconditionally would
+    // refuse `__construct() { $this->a = 1; $this->b = 2; }` for `$b`, so the magic methods the
+    // class actually declares decide. A store of a DIFFERENT property must not end the walk
+    // claiming success either — `$this->self = $this;` is a `PropSet` on `$this`, and reading it
+    // as proof that some other slot is initialized is exactly the escape it performs.
+    let declares = |magic: &str| -> bool {
+        info.method_impl_classes
+            .contains_key(&crate::names::php_symbol_key(magic))
+    };
+    let reads_dispatch = declares("__get");
+    let writes_dispatch = declares("__set");
+    for candidate in entry
         .instructions
         .iter()
         .filter_map(|inst_id| constructor.instruction(*inst_id))
-        .find(|candidate| {
-            matches!(candidate.op, Op::PropSet | Op::PropGet | Op::NullsafePropGet)
-                || instruction_can_observe_this(constructor, candidate)
-        })
-        .is_some_and(|first| {
-            first.op == Op::PropSet
-                && first
-                    .operands
-                    .first()
-                    .is_some_and(|receiver| value_local_origin(constructor, *receiver) == Some(0))
-        })
+    {
+        let on_this = candidate
+            .operands
+            .first()
+            .is_some_and(|receiver| value_local_origin(constructor, *receiver) == Some(0));
+        let names_it = data_string(module, candidate) == Some(property);
+        // A `PropSet` whose receiver is NOT `$this` is not a sibling slot at all — it is a store
+        // into someone else's object, and when the VALUE is `$this` it is the same escape as
+        // `self::$last = $this`, just through a different opcode: `$box->held = $this;`.
+        let stores_this = candidate
+            .operands
+            .iter()
+            .skip(1)
+            .any(|operand| value_local_origin(constructor, *operand) == Some(0));
+        match candidate.op {
+            Op::PropSet if on_this && names_it => return true,
+            Op::PropGet | Op::NullsafePropGet if names_it => return false,
+            Op::PropGet | Op::NullsafePropGet if reads_dispatch => return false,
+            Op::PropSet if !on_this && stores_this => return false,
+            Op::PropSet if on_this && writes_dispatch => return false,
+            Op::PropSet => continue, // a declared sibling slot: no dispatch, no escape
+            _ if instruction_can_observe_this(constructor, candidate) => return false,
+            _ => continue,
+        }
+    }
+    false
 }
 
 /// Whether an instruction could let something else read the object being constructed.

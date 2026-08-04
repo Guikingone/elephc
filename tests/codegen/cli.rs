@@ -12744,3 +12744,75 @@ fn test_cli_wasm_refuses_mutating_an_iterated_container_it_cannot_see() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a constructor that lets `$this` ESCAPE before the initializing store is refused.
+///
+/// The proof this predicate offers is "no reader can precede the store", and it is only worth
+/// anything if every way of handing `$this` to other code ends it. Two shapes measured wrong
+/// before they were closed: parking `$this` where something else can reach it —
+/// `self::$last = $this;` or `$box->held = $this;` — and, subtler, a store of a DIFFERENT
+/// property satisfying "the first property access is a store" and so standing in as proof for a
+/// slot it never touched.
+///
+/// The accepting half matters just as much: two sibling stores must still compile, and a plain
+/// `$x = $this;` is not an escape at all, because a local that never leaves the frame cannot read
+/// anything. Refusing those would cost real programs for no soundness gain.
+#[test]
+fn test_cli_wasm_refuses_a_constructor_that_leaks_this_before_its_store() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_constructor_escape");
+
+    for (name, source) in [
+        (
+            "static.php",
+            "<?php\nclass C {\n    public $value;\n    public static $last;\n    public function __construct(int $v) { self::$last = $this; $this->value = $v; }\n}\necho (new C(7))->value;\n",
+        ),
+        (
+            "foreign.php",
+            "<?php\nclass Box { public $held; public function __construct() { $this->held = 0; } }\nclass Node {\n    public $payload;\n    public function __construct(Box $box) { $box->held = $this; $this->payload = 7; }\n}\necho (new Node(new Box()))->payload;\n",
+        ),
+        (
+            "sibling.php",
+            "<?php\nclass A {\n    public $p;\n    public $self;\n    public function __construct($v) { $this->self = $this; leak($this->self); $this->p = $v; }\n}\nfunction leak($o): void { echo $o->p; }\nnew A(1);\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let refused = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to run the compiler over the escaping constructor");
+        assert!(
+            !refused.status.success(),
+            "{name} lets $this escape before the store and must be refused"
+        );
+    }
+
+    for (name, source) in [
+        (
+            "siblings.php",
+            "<?php\nclass A {\n    public $a;\n    public $b;\n    public function __construct(int $v) { $this->a = 1; $this->b = $v; }\n}\n$x = new A(7);\necho $x->a, $x->b;\n",
+        ),
+        (
+            "localcopy.php",
+            "<?php\nclass C { public $a; public function __construct() { $x = $this; $this->a = 1; } }\necho (new C())->a;\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let accepted = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the well-behaved constructor");
+        assert!(
+            accepted.status.success(),
+            "{name} observes nothing and must compile: {}",
+            String::from_utf8_lossy(&accepted.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
