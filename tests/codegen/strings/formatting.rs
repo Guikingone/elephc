@@ -291,3 +291,173 @@ echo "|n=" . $n;
     );
     assert_eq!(out, "[x=42]|n=6");
 }
+
+// --- printf-family memory safety and PHP conversion parity ---
+
+/// A field width wider than the per-conversion scratch buffer must produce padding bytes
+/// only. Regression for an out-of-bounds stack read: the helper used to copy `snprintf`'s
+/// "would have written" return value out of a 128-byte stack buffer, so `sprintf("[%300s]",
+/// "x")` leaked ~170 bytes of live stack (including pointers) into the result string.
+#[test]
+fn test_sprintf_wide_width_emits_only_padding() {
+    let out = compile_and_run(
+        r#"<?php
+$r = sprintf("[%300s]", "x");
+echo strlen($r), "|", bin2hex($r) === "5b" . str_repeat("20", 299) . "78" . "5d" ? "clean" : "leak";
+"#,
+    );
+    assert_eq!(out, "302|clean");
+}
+
+/// A `%s` operand longer than the old 128-byte null-termination buffer must survive intact.
+/// The helper used to clamp string operands to 127 bytes.
+#[test]
+fn test_sprintf_long_string_argument_is_not_truncated() {
+    let out = compile_and_run(r#"<?php echo strlen(sprintf("%s", str_repeat("a", 200)));"#);
+    assert_eq!(out, "200");
+}
+
+/// A width past `INT_MAX` must be a controlled error, not silent stack corruption. The
+/// specifier used to be copied byte-for-byte into a 32-byte stack buffer, so a 40-digit
+/// width overwrote adjacent frame slots and a 300-digit width overwrote the saved return
+/// address (these binaries carry no stack canary).
+#[test]
+fn test_sprintf_overlong_width_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php echo sprintf("%" . str_repeat("9", 300) . "s", "x");"#,
+    );
+    assert!(
+        err.contains("Width must be between 0 and 2147483647"),
+        "{err}"
+    );
+}
+
+/// A width that fits in `INT_MAX` but not in the 64 KiB result arena must be a controlled
+/// error too; `sprintf("%2000000000s", "x")` used to segfault.
+#[test]
+fn test_sprintf_result_larger_than_buffer_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(r#"<?php echo sprintf("%2000000000s", "x");"#);
+    assert!(
+        err.contains("formatted result exceeds the 65536-byte string buffer"),
+        "{err}"
+    );
+}
+
+/// A format string that consumes more arguments than were supplied must stop instead of
+/// reading past the pushed argument records on the caller's stack.
+#[test]
+fn test_sprintf_missing_argument_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(r#"<?php $f = "%s%s"; echo sprintf($f, "a");"#);
+    assert!(err.contains("too few arguments"), "{err}");
+}
+
+/// Conversion characters PHP does not define must never be forwarded to libc `snprintf`
+/// (which would expose `%n`, an arbitrary-write primitive). PHP raises a `ValueError`.
+#[test]
+fn test_sprintf_unknown_specifier_reports_runtime_error() {
+    let err = compile_and_run_expect_failure(r#"<?php $f = "%n"; echo sprintf($f, 5);"#);
+    assert!(err.contains("Unknown format specifier"), "{err}");
+}
+
+/// `%b` renders binary, matching PHP's `sprintf("%b", 5)` → `101`. libc has no portable
+/// `%b`, so the old code emitted the literal specifier text instead.
+#[test]
+fn test_sprintf_binary_specifier() {
+    let out = compile_and_run(
+        r#"<?php echo sprintf("%b", 5), "|", sprintf("%b", 0), "|", sprintf("%'x5b", 5);"#,
+    );
+    assert_eq!(out, "101|0|xx101");
+}
+
+/// `%F` is PHP's locale-independent fixed-point conversion and must format like `%f`.
+#[test]
+fn test_sprintf_uppercase_fixed_point() {
+    let out = compile_and_run(r#"<?php echo sprintf("%F", 3.5);"#);
+    assert_eq!(out, "3.500000");
+}
+
+/// `%E` must render the uppercase scientific form. It used to build the invalid libc
+/// format `%llE`, printing an uninitialized register as a denormal.
+#[test]
+fn test_sprintf_uppercase_scientific() {
+    let out = compile_and_run(r#"<?php echo sprintf("%E", 12345.678);"#);
+    assert_eq!(out, "1.234568E+4");
+}
+
+/// PHP does not zero-pad the `%e`/`%E` exponent to two digits the way C does.
+#[test]
+fn test_sprintf_exponent_is_not_zero_padded() {
+    let out = compile_and_run(
+        r#"<?php echo sprintf("%e", 12345.678), "|", sprintf("%e", 1.0), "|", sprintf("%e", 1e-100), "|", sprintf("%.3e", 12345.678);"#,
+    );
+    assert_eq!(out, "1.234568e+4|1.000000e+0|1.000000e-100|1.235e+4");
+}
+
+/// PHP's `%f`/`%e` renderer drops the sign of negative zero, while `%g` keeps it.
+#[test]
+fn test_sprintf_negative_zero() {
+    let out = compile_and_run(
+        r#"<?php echo sprintf("%f", -0.0), "|", sprintf("%e", -0.0), "|", sprintf("%g", -0.0);"#,
+    );
+    assert_eq!(out, "0.000000|0.000000e+0|-0");
+}
+
+/// PHP's `N$` explicit argument numbers select an operand without advancing the sequential
+/// cursor, so one argument can be formatted twice.
+#[test]
+fn test_sprintf_positional_arguments() {
+    let out = compile_and_run(
+        r#"<?php echo sprintf('%1$s-%1$s', "x"), "|", sprintf('%2$s %1$s', "a", "b");"#,
+    );
+    assert_eq!(out, "x-x|b a");
+}
+
+/// PHP's `'X` flag sets a custom pad character; `X` must not be mistaken for the width or
+/// the conversion character.
+#[test]
+fn test_sprintf_custom_pad_character() {
+    let out = compile_and_run(
+        r#"<?php echo sprintf("%'.4f", 1.5), "|", sprintf("%'x10d", -42), "|", sprintf("%'*8.3f", -1.5), "|", sprintf("%-'x10s", "ab");"#,
+    );
+    assert_eq!(out, "1.500000|xxxxxxx-42|**-1.500|abxxxxxxxx");
+}
+
+/// Zero padding is inserted after a leading sign, matching PHP's `sprintf("%05d", -42)`.
+#[test]
+fn test_sprintf_zero_padding_follows_the_sign() {
+    let out = compile_and_run(
+        r#"<?php echo sprintf("%05d", -42), "|", sprintf("%010.2f", -1.5), "|", sprintf("%08.3f", -1.5);"#,
+    );
+    assert_eq!(out, "-0042|-000001.50|-001.500");
+}
+
+/// PHP appends `%c` without applying width or padding, and clamps float precision to 53
+/// digits instead of rendering an unbounded fraction.
+#[test]
+fn test_sprintf_char_and_precision_limits() {
+    let out = compile_and_run(
+        r#"<?php echo sprintf("%5c", 65), "|", strlen(sprintf("%.100f", 1.5)), "|", sprintf("%.5d", 42);"#,
+    );
+    assert_eq!(out, "A|55|42");
+}
+
+/// When the conversion character and the packed operand disagree the runtime must coerce the
+/// operand, never print it as a raw pointer. This happens with a format string built at
+/// runtime, with `v*printf()` over a heterogeneous array, and with `%1$s`/`%1$d` naming the
+/// same argument under two conversions.
+#[test]
+fn test_sprintf_operand_type_mismatch_is_coerced_not_leaked() {
+    let out = compile_and_run(
+        r#"<?php
+$f = "%d";
+echo sprintf($f, "42");
+echo "|" . vsprintf("%d", ["42"]);
+echo "|" . vsprintf("%f", ["3.5"]);
+$g = "%s";
+echo "|" . sprintf($g, 42);
+echo "|" . sprintf('%1$s %1$d %1$s', "7");
+echo "|" . sprintf('%1$s %1$f', "3.5");
+"#,
+    );
+    assert_eq!(out, "42|42|3.500000|42|7 7 7|3.5 3.500000");
+}
