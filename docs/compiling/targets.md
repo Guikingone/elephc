@@ -101,7 +101,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **30
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **31
 compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
 php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
 php-src cannot parse at all, so it has no php-src output to match — meaning
@@ -112,23 +112,27 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-The dominant blockers behind the remaining examples, in the order they gate the
-most programs:
+**30 of the 159 remaining examples will never compile here.** `stream_socket_*`,
+sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
+WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
-| Blocker | Examples affected |
+Of the rest, the work is a long tail rather than a few large levers. Counting
+examples whose blockers are *entirely* contained in one subsystem — as opposed
+to examples that merely mention it, which overstates every subsystem several
+times over:
+
+| Subsystem completed in full | Examples it alone unblocks |
 |---|---|
-| Unregistered runtime function (streams, sockets, `unlink`, `gettype`, …) | 62 |
-| Method call on a boxed receiver | 39 |
-| Property read on a boxed receiver | 33 |
-| Array read on a boxed receiver | 32 |
-| Cast shapes not yet admitted | 30 |
+| The whole file/stream family (38 functions) | 5 |
+| Casts (`Mixed`-to-scalar, `IToStr`, truthiness) | 4 |
+| Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
+| All three together | 17 |
 
-96 of the 158 remaining examples need no missing builtin at all: they are held
-up purely by operand shapes, which is where the work is concentrated.
-
-Some examples will never compile to this target: `stream_socket_*`, FFI/`extern`
-calls, and process control have no WASI Preview 1 equivalent. The goal is
-everything WASI permits, not the whole example suite.
+The blocker-count distribution says the same thing: 16 examples have one
+distinct blocker, 20 have two, 22 have three, and the tail runs past eleven.
+Progress is roughly one example per fix, so the example counter is a poor guide
+to correctness work — running a differential corpus against php-src has been
+finding more, and more serious, defects than making the counter move.
 
 ### PHP semantics this target reproduces exactly
 
@@ -162,12 +166,37 @@ against measured php-src 8.5.6 output rather than by analogy:
   this backend has no sentinel for it: the allocator zeroes the slot and zero is
   a legitimate `int`. Such a read is refused unless the constructor writes the
   property unconditionally, which removes the question rather than answering it.
+  The same reasoning retires PHP's implicit `= null` on an untyped property: once
+  the constructor always overwrites it, no reader can observe the null, which is
+  what makes `class Node { public $value; public $next; }` constructible here.
+- **Reading an untyped property.** The read is an ownership question, not an
+  opcode one. `ir_lower` stabilizes a borrowed result with an `Op::Acquire` and
+  skips that when the result is already owned — which is what an untyped property
+  gives — so borrowing unconditionally frees the cell the object still points at,
+  and retaining unconditionally leaks one reference per read of a declared
+  `string` or `array` property. The load asks the value which it is.
+- **Writing a container after iterating it.** `foreach ($h as ...) {}` followed
+  by `$h["c"] = 3;` is accepted: the iterator is dead by then. Only mutations the
+  loop itself can reach are refused, since those have no PHP snapshot to write
+  against.
 
-A shared front-end bug surfaced while measuring this and is fixed: an
+Two shared front-end bugs surfaced while measuring this and are fixed. An
 `if`/`elseif`/`else` chain whose FIRST condition folded to false propagated the
-`else` branch's constants, ignoring the elseifs entirely. Both backends then
-answered from the wrong branch — silently, since the branch itself was lowered
-correctly and only the propagated fact was wrong.
+`else` branch's constants, ignoring the elseifs entirely; both backends then
+answered from the wrong branch, silently, since the branch itself was lowered
+correctly and only the propagated fact was wrong. And an untyped property
+narrowed from its null default to a concrete class dropped the null it still
+held, so `$a->next === null` answered false for a slot that was null — a
+declared `?N $next = null` was always correct, so the narrowing, not the storage,
+was at fault. That fix is applied to instance properties; the static-property
+path keeps the old narrowing because the union slot leaks one reference there,
+and a leak is not an improvement on a wrong answer.
+
+A related defect remains open: the checker analyses a loop condition once, with
+the environment from before the loop, so `$cur = $head; while ($cur !== null) {
+$cur = $cur->next; }` still tests `$cur` as non-nullable. The straight-line form
+of the same walk is correct. This target refuses the shape; the native backend
+does not terminate on it.
 
 Known divergence: an uncaught error prints a class-agnostic fatal, and
 diagnostics omit php-src's ` in <file> on line <n>` tail. A `TypeError` raised

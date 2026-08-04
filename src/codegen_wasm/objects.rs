@@ -1069,6 +1069,18 @@ pub(super) fn emit_object_allocation(
         };
         let prop_name = ci.properties[i].0.clone();
         let prop_type = ci.properties[i].1.clone();
+        // PHP's implicit `= null` on an untyped property is unobservable when the constructor
+        // always overwrites it, and it has no representation once the checker has narrowed the
+        // slot to what the constructor stores. The audit skips it on the same terms; the two
+        // must agree, or planning fails on a module the audit passed.
+        if super::capability::null_default_is_overwritten_by_the_constructor(
+            ctx.module,
+            &class_name,
+            &prop_name,
+            &expr.kind,
+        ) {
+            continue;
+        }
         let off = ci
             .property_offsets
             .get(&prop_name)

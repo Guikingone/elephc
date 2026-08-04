@@ -1307,6 +1307,18 @@ pub(super) fn cast_stands_in_for_mixed_comparison(
         }
         comparison = Some(candidate);
     }
+    // A TERMINATOR is not in the instruction table, so a use there — a `CondBr` condition, a
+    // `Switch` scrutinee, block arguments on any edge — is invisible to the scan above. This
+    // result stops being the integer conversion and becomes a -1/0/1 answer, so any such reader
+    // would silently get the wrong value.
+    if function
+        .blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .any(|terminator| terminator_reads(terminator, result))
+    {
+        return None;
+    }
     let comparison = comparison?;
     let [left, right] = comparison.operands.as_slice() else {
         return None;
@@ -1320,6 +1332,12 @@ pub(super) fn cast_stands_in_for_mixed_comparison(
     // sides to bool first — a different rule — so only a genuine integer is admitted here.
     let other_value = function.value(other)?;
     if other_value.ir_type != IrType::I64 || other_value.php_type.codegen_repr() != PhpType::Int {
+        return None;
+    }
+    // Both sides boxed needs php-src's full cross-type table, which this target does not carry.
+    // The other side is an `I64/Int` by now, but it may be the CONVERSION of a box — and then it
+    // is a -1/0/1 answer rather than the integer, so comparing against it means nothing.
+    if value_is_a_boxed_mixed_cast(function, other) {
         return None;
     }
     // The cast and the comparison share a block, so "already materialized" is a question about
@@ -1339,6 +1357,52 @@ pub(super) fn cast_stands_in_for_mixed_comparison(
         }
     }
     Some((*source, other, mixed_on_left))
+}
+
+/// Whether a terminator reads `value`, as a condition, a scrutinee, or a branch argument.
+fn terminator_reads(terminator: &Terminator, value: ValueId) -> bool {
+    match terminator {
+        Terminator::Br { args, .. } => args.contains(&value),
+        Terminator::CondBr {
+            cond,
+            then_args,
+            else_args,
+            ..
+        } => *cond == value || then_args.contains(&value) || else_args.contains(&value),
+        Terminator::Switch {
+            scrutinee,
+            default_args,
+            ..
+        } => *scrutinee == value || default_args.contains(&value),
+        Terminator::Return { value: returned } => *returned == Some(value),
+        Terminator::Throw { value: thrown } => *thrown == value,
+        Terminator::GeneratorSuspend {
+            key,
+            value: yielded,
+            resume_args,
+            ..
+        } => {
+            *key == Some(value) || *yielded == Some(value) || resume_args.contains(&value)
+        }
+        Terminator::Fatal { .. } | Terminator::Unreachable => false,
+    }
+}
+
+/// Whether `value` is the result of a cast whose source is a boxed Mixed.
+fn value_is_a_boxed_mixed_cast(function: &Function, value: ValueId) -> bool {
+    function
+        .instructions
+        .iter()
+        .find(|candidate| candidate.result == Some(value))
+        .is_some_and(|defining| {
+            defining.op == Op::Cast
+                && defining.operands.first().is_some_and(|source| {
+                    function.value(*source).is_some_and(|operand| {
+                        operand.ir_type == IrType::Heap(IrHeapKind::Mixed)
+                            && operand.php_type.codegen_repr() == PhpType::Mixed
+                    })
+                })
+        })
 }
 
 /// Locates the instruction defining `result` as a `(block index, position within the block)` pair.
@@ -2389,8 +2453,14 @@ fn iterator_live_instructions(
     let Some(header) = header else {
         return live;
     };
-    let forward = blocks_reachable_from(function, header, false);
-    let backward = blocks_reachable_from(function, header, true);
+    // The live range ends where the SAME `IterStart` runs again, so neither walk may pass through
+    // its block. Without that barrier a `foreach` nested in a `while` counts everything after the
+    // inner loop as still inside it — the outer back edge reaches the inner header — and refuses
+    // `while (…) { foreach ($a as $v) {…} $a[] = 9; }`, where the append runs with no live
+    // iterator. A shape that starts and advances in ONE block has no such boundary to draw.
+    let barrier = (header != start_block).then_some(start_block);
+    let forward = blocks_reachable_from(function, header, false, barrier);
+    let backward = blocks_reachable_from(function, header, true, barrier);
     for block in 0..function.blocks.len() {
         if block != start_block && forward.contains(&block) && backward.contains(&block) {
             live.extend(function.blocks[block].instructions.iter().copied());
@@ -2400,7 +2470,15 @@ fn iterator_live_instructions(
 }
 
 /// Blocks reachable from `origin` over control-flow edges, or reaching it when `reverse` is set.
-fn blocks_reachable_from(function: &Function, origin: usize, reverse: bool) -> HashSet<usize> {
+///
+/// A `barrier` block is never entered and its edges are never followed, which is how the caller
+/// stops a walk at the point the iterator is restarted.
+fn blocks_reachable_from(
+    function: &Function,
+    origin: usize,
+    reverse: bool,
+    barrier: Option<usize>,
+) -> HashSet<usize> {
     let successors = |block: usize| -> Vec<usize> {
         let Some(terminator) = function.blocks[block].terminator.as_ref() else {
             return Vec::new();
@@ -2443,6 +2521,9 @@ fn blocks_reachable_from(function: &Function, origin: usize, reverse: bool) -> H
     let mut seen = HashSet::new();
     let mut stack = vec![origin];
     while let Some(block) = stack.pop() {
+        if Some(block) == barrier && block != origin {
+            continue; // the walk stops here: past it the iterator is a different one
+        }
         if !seen.insert(block) {
             continue;
         }
@@ -3503,6 +3584,14 @@ fn object_new_shape_issue(
                 "class {class_name} default #{index} has no property metadata"
             ));
         };
+        if null_default_is_overwritten_by_the_constructor(
+            module,
+            class_name,
+            property,
+            &default.kind,
+        ) {
+            continue;
+        }
         let literal = match literal_default_value(
             &format!("property ${property}"),
             property_type,
@@ -3980,14 +4069,67 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
     else {
         return false;
     };
-    entry.instructions.iter().any(|inst_id| {
-        constructor
-            .instruction(*inst_id)
-            .is_some_and(|candidate| {
-                candidate.op == Op::PropSet
-                    && data_string(module, candidate) == Some(property)
-            })
-    })
+    // The store has to come before ANYTHING in the entry block that could observe the slot.
+    // Naming the property is one way — `$this->p = $this->p ?? 1;` reads it first — but not the
+    // only one: `$this` ESCAPING is enough. Measured on
+    //
+    //     public function __construct(int $v) { $this->init(); $this->value = $v; }
+    //     private function init(): void { var_dump($this->value); }
+    //
+    // php-src prints NULL and this backend printed int(0), because `init` reads the zeroed slot
+    // and no `PropGet` on `value` appears in the constructor at all. So any call, any dynamic
+    // property access, and any reference binding before the store ends the proof. Reads in later
+    // blocks are dominated by the store and need no check.
+    entry
+        .instructions
+        .iter()
+        .filter_map(|inst_id| constructor.instruction(*inst_id))
+        .find(|candidate| {
+            (matches!(candidate.op, Op::PropSet | Op::PropGet | Op::NullsafePropGet)
+                && data_string(module, candidate) == Some(property))
+                || instruction_can_observe_this(candidate)
+        })
+        .is_some_and(|first| first.op == Op::PropSet)
+}
+
+/// Whether an instruction could let something else read the object being constructed.
+///
+/// Anything that hands `$this` to code this predicate cannot see — a method call, a free call, a
+/// dynamic property access, a reference binding — is a point past which "no reader can precede
+/// the store" stops being provable.
+fn instruction_can_observe_this(inst: &Instruction) -> bool {
+    matches!(
+        inst.op,
+        Op::MethodCall
+            | Op::NullsafeMethodCall
+            | Op::StaticMethodCall
+            | Op::EvalStaticMethodCall
+            | Op::IteratorMethodCall
+            | Op::MethodLookup
+            | Op::Call
+            | Op::DynamicPropGet
+            | Op::DynamicPropSet
+            | Op::LoadPropRefCell
+            | Op::BindRefCellPtr
+    )
+}
+
+/// Whether a property's NULL default is unobservable because the constructor always overwrites it.
+///
+/// PHP gives an untyped property an implicit `= null`, and the checker then narrows the slot from
+/// what the constructor stores — so `public $value;` written `$this->value = $v;` with an int
+/// arrives here as an `Int` slot carrying a null default, which has no representation. There is
+/// nothing to represent: every path out of `new` runs the constructor's store, so no reader can
+/// ever see the null. Skipping the default is what makes `class Node { public $value; public
+/// $next; }` — a linked-list node, ordinary PHP — constructible on this target.
+pub(super) fn null_default_is_overwritten_by_the_constructor(
+    module: &Module,
+    class_name: &str,
+    property: &str,
+    default: &crate::parser::ast::ExprKind,
+) -> bool {
+    matches!(default, crate::parser::ast::ExprKind::Null)
+        && constructor_initializes_property(module, class_name, property)
 }
 
 /// Traces nullable boxing and ownership forwarders to the underlying object receiver.
