@@ -12568,3 +12568,159 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies an in-place sort of the array being iterated is refused, and one after it is not.
+///
+/// PHP's `foreach` walks a SNAPSHOT. This target has no snapshot, so a mutation of the live
+/// container has to be refused — and the mutation set was `usort` alone, which let `sort()`
+/// through. Measured: `foreach ([5,3,9,1] as $v) { echo $v; sort($a); }` printed `5 3 5 9` where
+/// php-src prints `5 3 9 1`, because the loop re-read the array it had just reordered. Every
+/// in-place mutator in the registry is refused now; the same call AFTER the loop still compiles
+/// and still matches php-src, which is the half that keeps the widening honest.
+#[test]
+fn test_cli_wasm_refuses_sorting_the_array_being_iterated() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_sort_during_foreach");
+    let during = dir.join("during.php");
+    fs::write(
+        &during,
+        "<?php\n$a = [5, 3, 9, 1];\nforeach ($a as $v) { echo $v, \" \"; sort($a); }\n",
+    )
+    .unwrap();
+    let refused = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&during)
+        .output()
+        .expect("failed to run the compiler over the in-loop sort");
+    assert!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr)
+                .contains("may mutate the iterated container"),
+        "sorting the iterated array must be refused: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let after = dir.join("main.php");
+    fs::write(
+        &after,
+        r#"<?php
+$a = [5, 3, 9, 1];
+foreach ($a as $v) { echo $v, " "; }
+sort($a);
+echo "| ", implode(",", $a), "\n";
+"#,
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&after)
+        .output()
+        .expect("failed to compile the post-loop sort to WASM");
+    assert!(
+        output.status.success(),
+        "sorting after the loop must compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the post-loop sort under Node");
+    assert!(
+        run.status.success(),
+        "the post-loop sort must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "5 3 9 1 | 1,3,5,9\n",
+        "php-src's own answer"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a container the loop cannot see mutated is refused: through a callee, or an alias.
+///
+/// Both were measured wrong before the guard learned them. `function bump(array &$a) { $a[] = 99; }`
+/// called from inside the loop grew the array the loop was reading and exhausted memory, where
+/// php-src walks its snapshot and stops. `$r = &$h;` then `$r[] = 99;` inside the loop printed
+/// `5 | 0` against php-src's `5 3 9 1 | 8` — the alias has its own slot, so every slot-keyed check
+/// passed. Whether a callee's parameter is declared `&` is not visible at the call site, so
+/// handing the container to anything at all ends the proof.
+#[test]
+fn test_cli_wasm_refuses_mutating_an_iterated_container_it_cannot_see() {
+    let dir = make_cli_test_dir("elephc_cli_wasm_hidden_iterated_mutation");
+
+    for (name, source, why) in [
+        (
+            "callee.php",
+            "<?php\nfunction bump(array &$a): void { $a[] = 99; }\n$h = [5, 3, 9, 1];\nforeach ($h as $v) { echo $v; bump($h); }\n",
+            "receives the iterated container",
+        ),
+        (
+            "alias.php",
+            "<?php\n$h = [5, 3, 9, 1];\n$r = &$h;\nforeach ($h as $v) { echo $v; $r[] = 99; }\n",
+            "a reference to the iterated container",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let refused = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to run the compiler over the hidden mutation");
+        let stderr = String::from_utf8_lossy(&refused.stderr).into_owned();
+        assert!(
+            !refused.status.success() && stderr.contains(why),
+            "{name} must be refused with {why:?}: {stderr}"
+        );
+    }
+
+    // The same shapes with the mutation AFTER the loop stay compilable — the widening has to end
+    // where the iterator does.
+    let after = dir.join("after.php");
+    fs::write(
+        &after,
+        "<?php\nfunction bump(array &$a): void { $a[] = 99; }\n$h = [5, 3, 9, 1];\nforeach ($h as $v) { echo $v, \" \"; }\nbump($h);\necho \"| \", count($h), \"\\n\";\n",
+    )
+    .unwrap();
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&after)
+        .output()
+        .expect("failed to compile the post-loop callee mutation");
+    assert!(
+        output.status.success(),
+        "mutating through a callee after the loop must compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -1369,11 +1369,18 @@ fn terminator_reads(terminator: &Terminator, value: ValueId) -> bool {
             else_args,
             ..
         } => *cond == value || then_args.contains(&value) || else_args.contains(&value),
+        // Each CASE edge carries its own arguments, not just the default one — a use there is as
+        // real as any other, and reading the three-way answer through it would be as wrong.
         Terminator::Switch {
             scrutinee,
+            cases,
             default_args,
             ..
-        } => *scrutinee == value || default_args.contains(&value),
+        } => {
+            *scrutinee == value
+                || default_args.contains(&value)
+                || cases.iter().any(|case| case.args.contains(&value))
+        }
         Terminator::Return { value: returned } => *returned == Some(value),
         Terminator::Throw { value: thrown } => *thrown == value,
         Terminator::GeneratorSuspend {
@@ -1389,20 +1396,39 @@ fn terminator_reads(terminator: &Terminator, value: ValueId) -> bool {
 }
 
 /// Whether `value` is the result of a cast whose source is a boxed Mixed.
-fn value_is_a_boxed_mixed_cast(function: &Function, value: ValueId) -> bool {
-    function
-        .instructions
-        .iter()
-        .find(|candidate| candidate.result == Some(value))
-        .is_some_and(|defining| {
-            defining.op == Op::Cast
-                && defining.operands.first().is_some_and(|source| {
+///
+/// Forwarders are chased: one `Move` between the cast and the use hides the same not-an-integer
+/// this rejects directly. A value with no defining instruction — a block parameter — cannot be a
+/// stand-in result, because a cast whose result reaches a terminator is refused outright, so no
+/// three-way answer ever crosses an edge.
+fn value_is_a_boxed_mixed_cast(function: &Function, mut value: ValueId) -> bool {
+    for _ in 0..=function.values.len() {
+        let Some(defining) = function
+            .instructions
+            .iter()
+            .find(|candidate| candidate.result == Some(value))
+        else {
+            return false;
+        };
+        match defining.op {
+            Op::Cast => {
+                return defining.operands.first().is_some_and(|source| {
                     function.value(*source).is_some_and(|operand| {
                         operand.ir_type == IrType::Heap(IrHeapKind::Mixed)
                             && operand.php_type.codegen_repr() == PhpType::Mixed
                     })
                 })
-        })
+            }
+            Op::Move | Op::Borrow | Op::Acquire => {
+                let Some(next) = defining.operands.first() else {
+                    return false;
+                };
+                value = *next;
+            }
+            _ => return false,
+        }
+    }
+    false
 }
 
 /// Locates the instruction defining `result` as a `(block index, position within the block)` pair.
@@ -2357,11 +2383,52 @@ fn iterator_alias_mutation_issue(
             _ => None,
         })?;
     let source_slot = value_local_origin(function, source);
+    // A REFERENCE to the container makes every mutation through the alias invisible to the slot
+    // comparisons below: `$r = &$h;` gives `$r` its own slot, and `foreach ($h as $v) { $r[] = 99; }`
+    // printed `5 | 0` where php-src prints `5 3 9 1 | 8`. The promotion and the aliasing both name
+    // the slot, and either one anywhere in the function means the container can change under the
+    // loop, so neither is scoped to the live range.
+    if let Some(source_slot) = source_slot {
+        if function.instructions.iter().any(|candidate| {
+            matches!(
+                candidate.op,
+                Op::PromoteLocalRefCell | Op::AliasLocalRefCell
+            ) && instruction_names_slot(candidate, source_slot)
+        }) {
+            return Some(
+                "a reference to the iterated container can mutate it without PHP snapshot/COW \
+                 semantics"
+                    .to_string(),
+            );
+        }
+    }
     let live = iterator_live_instructions(function, start, start_id);
     for candidate in live
         .iter()
         .filter_map(|id| function.instruction(*id))
     {
+        // A CALL that receives the container can take it BY REFERENCE, and the mutation then
+        // happens in a body this scan never sees. Measured: `function bump(array &$a) { $a[] = 99; }`
+        // called from the loop grew the array the loop was reading and exhausted memory, where
+        // php-src walks its snapshot and stops at four. Whether the parameter is declared `&` is
+        // not visible here, so passing the container to anything at all ends the proof.
+        if matches!(
+            candidate.op,
+            Op::Call
+                | Op::MethodCall
+                | Op::NullsafeMethodCall
+                | Op::StaticMethodCall
+                | Op::EvalStaticMethodCall
+                | Op::IteratorMethodCall
+        ) && candidate.operands.iter().any(|operand| {
+            *operand == source
+                || (source_slot.is_some() && value_local_origin(function, *operand) == source_slot)
+        }) {
+            return Some(format!(
+                "{} receives the iterated container and may mutate it by reference",
+                candidate.op.name()
+            ));
+        }
         if matches!(
             candidate.op,
             Op::StoreLocal | Op::UnsetLocal | Op::StoreRefCell
@@ -2388,16 +2455,13 @@ fn iterator_alias_mutation_issue(
                 | Op::HashAppend
                 | Op::ArrayToHash
         );
-        let sorts_container = matches!(
-            candidate.immediate.as_ref(),
+        let sorts_container = match candidate.immediate.as_ref() {
             Some(Immediate::RuntimeCall(
-                RuntimeCallTarget::Function(RuntimeFnId::Usort)
-                    | RuntimeCallTarget::ProfiledFunction {
-                        target: RuntimeFnId::Usort,
-                        ..
-                    }
-            ))
-        );
+                RuntimeCallTarget::Function(target)
+                | RuntimeCallTarget::ProfiledFunction { target, .. },
+            )) => runtime_call_mutates_its_array(*target),
+            _ => false,
+        };
         if !mutates_container && !sorts_container {
             continue;
         }
@@ -2418,6 +2482,53 @@ fn iterator_alias_mutation_issue(
         }
     }
     None
+}
+
+/// Whether an instruction's slot immediate mentions `slot`, in either the single or paired form.
+///
+/// `promote_local_ref_cell slots[0,1]` and `alias_local_ref_cell slots[2,0]` both carry a PAIR, so
+/// a check that only reads `Immediate::LocalSlot` sees neither.
+fn instruction_names_slot(inst: &Instruction, slot: u32) -> bool {
+    match inst.immediate.as_ref() {
+        Some(Immediate::LocalSlot(named)) => named.as_raw() == slot,
+        Some(Immediate::LocalSlotPair { first, second }) => {
+            first.as_raw() == slot || second.as_raw() == slot
+        }
+        _ => false,
+    }
+}
+
+/// Whether a runtime function rewrites the array handed to it, rather than answering a new one.
+///
+/// Naming only `usort` here was measured wrong: `foreach ($a as $v) { echo $v; sort($a); }` over
+/// `[5,3,9,1]` printed `5 3 5 9` where php-src prints `5 3 9 1`, because PHP iterates a SNAPSHOT
+/// and this target re-reads the array it just reordered. Every in-place mutator in the registry
+/// is listed, including the ones this backend has no lowering for yet — a name that arrives later
+/// must not arrive through a hole.
+fn runtime_call_mutates_its_array(target: RuntimeFnId) -> bool {
+    matches!(
+        target,
+        RuntimeFnId::Sort
+            | RuntimeFnId::Rsort
+            | RuntimeFnId::Asort
+            | RuntimeFnId::Arsort
+            | RuntimeFnId::Ksort
+            | RuntimeFnId::Krsort
+            | RuntimeFnId::Usort
+            | RuntimeFnId::Uasort
+            | RuntimeFnId::Uksort
+            | RuntimeFnId::Natsort
+            | RuntimeFnId::Natcasesort
+            | RuntimeFnId::Shuffle
+            | RuntimeFnId::ArrayMultisort
+            | RuntimeFnId::ArrayPop
+            | RuntimeFnId::ArrayPush
+            | RuntimeFnId::ArrayShift
+            | RuntimeFnId::ArrayUnshift
+            | RuntimeFnId::ArraySplice
+            | RuntimeFnId::ArrayWalk
+            | RuntimeFnId::ArrayWalkRecursive
+    )
 }
 
 /// The instructions that can run while the iterator started by `start` is still live.
@@ -2485,12 +2596,30 @@ fn iterator_live_instructions(
     // `while (…) { foreach ($a as $v) {…} $a[] = 9; }`, where the append runs with no live
     // iterator. A shape that starts and advances in ONE block has no such boundary to draw.
     let mut inside: HashSet<usize> = HashSet::new();
-    for header in headers {
-        let barrier = (header != start_block).then_some(start_block);
-        let forward = blocks_reachable_from(function, header, false, barrier);
-        let backward = blocks_reachable_from(function, header, true, barrier);
+    for header in &headers {
+        let barrier = (*header != start_block).then_some(start_block);
+        let forward = blocks_reachable_from(function, *header, false, barrier);
+        let backward = blocks_reachable_from(function, *header, true, barrier);
         inside.extend(forward.intersection(&backward).copied());
     }
+    // The cycle alone is not the whole live range: a block can sit BETWEEN the start and the
+    // advance without lying on the cycle at all, and the iterator is fully alive there. Two
+    // independent reviewers reached this from opposite directions — an `IterStart` in the loop's
+    // own header leaves the body outside the cycle, and a split critical edge inserts a block into
+    // the entry wedge. Both are the same gap: blocks the start reaches, that reach an advance,
+    // without either walk re-entering the start.
+    let after_start = blocks_reachable_from(function, start_block, false, None);
+    let mut wedge: HashSet<usize> = HashSet::new();
+    for header in &headers {
+        let reaches_header = blocks_reachable_from(function, *header, true, Some(start_block));
+        wedge.extend(
+            after_start
+                .intersection(&reaches_header)
+                .copied()
+                .filter(|block| *block != start_block),
+        );
+    }
+    inside.extend(wedge);
     for block in 0..function.blocks.len() {
         if block != start_block && inside.contains(&block) {
             live.extend(function.blocks[block].instructions.iter().copied());
@@ -2571,7 +2700,11 @@ fn value_local_origin(function: &Function, mut value: ValueId) -> Option<u32> {
         };
         let instruction = function.instruction(inst)?;
         match instruction.op {
-            Op::LoadLocal => {
+            // A ref-cell load names its slot exactly as a plain load does. Reading only
+            // `LoadLocal` left a referenced container with no slot at all, so every slot-keyed
+            // check downstream silently passed: `$r = &$h; foreach ($h as $v) { $r[] = 99; }`
+            // printed `5 | 0` where php-src prints `5 3 9 1 | 8`.
+            Op::LoadLocal | Op::LoadRefCell => {
                 let Some(Immediate::LocalSlot(slot)) = instruction.immediate else {
                     return None;
                 };
@@ -4114,13 +4247,16 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
     // The receiver has to be `$this` too. Matching the property by NAME alone counts
     // `$this->child->p = 1;` as a write to `$this->p` — a different object's slot that happens
     // to share a name — and the proof would rest on a store that never touches this class.
+    //
+    // And the FIRST property access wins whatever its name: reading some OTHER property can
+    // dispatch `__get`, which is ordinary PHP code free to read this one. Filtering the scan down
+    // to the target's own name would step over that.
     entry
         .instructions
         .iter()
         .filter_map(|inst_id| constructor.instruction(*inst_id))
         .find(|candidate| {
-            (matches!(candidate.op, Op::PropSet | Op::PropGet | Op::NullsafePropGet)
-                && data_string(module, candidate) == Some(property))
+            matches!(candidate.op, Op::PropSet | Op::PropGet | Op::NullsafePropGet)
                 || instruction_can_observe_this(candidate)
         })
         .is_some_and(|first| {
@@ -4136,7 +4272,13 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
 ///
 /// Anything that hands `$this` to code this predicate cannot see — a method call, a free call, a
 /// dynamic property access, a reference binding — is a point past which "no reader can precede
-/// the store" stops being provable.
+/// the store" stops being provable. `ObjectCloneShallow` belongs here for a different reason: it
+/// copies EVERY slot, so it observes the one in question whatever its name.
+///
+/// A CLOSURE is the subtle one: `usort($a, function ($x, $y) { var_dump($this->p); ... })` in a
+/// constructor binds `$this` implicitly, with no operand naming it anywhere, and php-src prints
+/// NULL at each comparison. So closure creation counts, and so does `RuntimeCall` — a builtin
+/// taking a callback runs user code from inside what looks like one instruction.
 fn instruction_can_observe_this(inst: &Instruction) -> bool {
     matches!(
         inst.op,
@@ -4147,10 +4289,16 @@ fn instruction_can_observe_this(inst: &Instruction) -> bool {
             | Op::IteratorMethodCall
             | Op::MethodLookup
             | Op::Call
+            | Op::RuntimeCall
+            | Op::ClosureNew
+            | Op::ClosureBind
+            | Op::ClosureCall
+            | Op::ClosureCapture
             | Op::DynamicPropGet
             | Op::DynamicPropSet
             | Op::LoadPropRefCell
             | Op::BindRefCellPtr
+            | Op::ObjectCloneShallow
     )
 }
 

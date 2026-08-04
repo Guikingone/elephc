@@ -178,25 +178,39 @@ against measured php-src 8.5.6 output rather than by analogy:
 - **Writing a container after iterating it.** `foreach ($h as ...) {}` followed
   by `$h["c"] = 3;` is accepted: the iterator is dead by then. Only mutations the
   loop itself can reach are refused, since those have no PHP snapshot to write
-  against.
+  against. An iterator's live range ends where its own `IterStart` runs again, so
+  a `foreach` nested in a `while` does not make the whole outer body untouchable.
+- **`round($value, $places)`.** Not `round($value)` with a default argument.
+  Scaling is inexact — `0.285 * 1e10` is `2849999999.9999995` — so php-src
+  extracts the integral part and then repairs the extraction, which is why
+  `round(1.005, 2)` is `1.01` and `round(9.995, 2)` is `10`. Scale-round-unscale
+  gets both wrong. Transcribed from php-src 8.5's `_php_math_round` and validated
+  at 1420/1420 over the halfway values, the classic traps, the 1e15 and 1e-15
+  boundaries, both signed zeroes and 1200 random values across 24 orders of
+  magnitude. A precision outside php_intpow10's exact 0..22 table is refused
+  rather than answered nearly-right.
 
-Two shared front-end bugs surfaced while measuring this and are fixed. An
+A shared front-end bug surfaced while measuring this and is fixed: an
 `if`/`elseif`/`else` chain whose FIRST condition folded to false propagated the
-`else` branch's constants, ignoring the elseifs entirely; both backends then
-answered from the wrong branch, silently, since the branch itself was lowered
-correctly and only the propagated fact was wrong. And an untyped property
-narrowed from its null default to a concrete class dropped the null it still
-held, so `$a->next === null` answered false for a slot that was null — a
-declared `?N $next = null` was always correct, so the narrowing, not the storage,
-was at fault. That fix is applied to instance properties; the static-property
-path keeps the old narrowing because the union slot leaks one reference there,
-and a leak is not an improvement on a wrong answer.
+`else` branch's constants, ignoring the elseifs entirely. Both backends then
+answered from the wrong branch — silently, since the branch itself was lowered
+correctly and only the propagated fact was wrong.
 
-A related defect remains open: the checker analyses a loop condition once, with
-the environment from before the loop, so `$cur = $head; while ($cur !== null) {
-$cur = $cur->next; }` still tests `$cur` as non-nullable. The straight-line form
-of the same walk is correct. This target refuses the shape; the native backend
-does not terminate on it.
+Two shared defects found the same way remain OPEN, both in the checker rather
+than in this backend:
+
+- An untyped property narrowed from its null default to a concrete class drops
+  the null it still holds, so `$a->next === null` answers false for a slot that
+  is null, and `$cur = $head; while ($cur !== null) { $cur = $cur->next; }` does
+  not terminate on the native backend. A declared `?N $next = null` is correct in
+  both backends, so the narrowing rather than the storage is at fault. Giving the
+  slot union storage fixes the answer but stops a self-referential cycle from
+  being collected, and a leaked cycle is not an improvement on a wrong answer, so
+  the change was reverted rather than shipped half-right. This target refuses the
+  shape.
+- The checker analyses a loop condition once, with the environment from before
+  the loop, so a local reassigned in the body is typed from its pre-loop value in
+  the condition. The straight-line form of the same walk is correct.
 
 Known divergence: an uncaught error prints a class-agnostic fatal, and
 diagnostics omit php-src's ` in <file> on line <n>` tail. A `TypeError` raised
