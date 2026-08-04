@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Added PHP-compatible `parse_url()` to native compilation and the Magician `eval()` runtime, including associative and component-selector return shapes, `PHP_URL_*` constants, IPv6/userinfo/port edge cases, catchable invalid-selector `ValueError`s, and identical support on macOS ARM64, Linux ARM64, and Linux x86_64.
 
 ## [0.26.3] - 2026-08-05
 - Added tagless `.lfc` source files with per-file PHP/LFC classification across entry points, includes, and autoload; LFC always enables elephc extensions, while `--strict-php` remains PHP-only and now composes with `--define`, callable dispatch, and `eval()`.
