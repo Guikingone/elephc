@@ -307,7 +307,7 @@ the same read-modify-write. Reading the result of an increment on a property or 
 element — `echo $obj->n++;` — is not supported yet; assign through the statement form
 first.
 
-`int`, `float`, `bool`, `null`, and `mixed` values all increment like PHP. Floats add or
+`int`, `float`, `bool`, and `null` values all increment like PHP. Floats add or
 subtract exactly `1.0` and stay floats:
 
 ```php
@@ -322,6 +322,10 @@ type (`"9"++` is `int(10)`, `"3.5"++` is `float(4.5)`), and an elephc local has 
 static type for its whole lifetime — the same rule that rejects `$x = 1; $x = "s";`.
 elephc reports this at compile time instead of returning a string where PHP returns a
 number. Use an explicit numeric local, or build the next string yourself.
+
+PHP's perl-style alphanumeric carry (`"az"++` is `"ba"`, `"Zz"++` is `"AAa"`) is not
+implemented on any path. A boxed `mixed` value holding a string increments numerically
+(`int(1)` for `"az"`) instead of carrying, so do not rely on `++` to advance a string.
 
 ## Ternary
 
