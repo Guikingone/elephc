@@ -4224,6 +4224,31 @@ fn lower_trim(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Resul
 fn lower_gettype(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let value = operand(inst, 0)?;
     let declared = ctx.value_php_type(value)?.clone();
+    // A nullable scalar arrives TAGGED: the tag alone separates the two settled answers.
+    if ctx.function.value(value).map(|v| v.ir_type) == Some(IrType::TaggedScalar) {
+        if let Some(member) = gettype_nullable_member(&declared) {
+            let super::values::WasmRepr::Tagged { tag, .. } = ctx.value_repr(value)?.clone() else {
+                return Err(WasmError::Unsupported(
+                    "gettype over a tagged scalar with a non-tagged representation".to_string(),
+                ));
+            };
+            let (null_ptr, null_len) = ctx.default_str_literal("NULL")?;
+            let (member_ptr, member_len) = ctx.default_str_literal(member)?;
+            ctx.fb
+                .ins(&format!("i32.const {member_ptr}"), "the non-null answer");
+            ctx.fb.ins(&format!("i64.const {member_len}"), "its length");
+            ctx.fb.ins(&format!("local.get {tag}"), "tagged scalar tag");
+            ctx.fb.ins("i32.const 8", "tagged null tag");
+            ctx.fb.ins("i32.eq", "tagged scalar is null?");
+            ctx.fb.ins(
+                &format!(
+                    "(if (param i32 i64) (result i32 i64) (then (drop) (drop) (i32.const {null_ptr}) (i64.const {null_len})))"
+                ),
+                "PHP names the null arm NULL",
+            );
+            return store_result(ctx, inst);
+        }
+    }
     if let Some(name) = gettype_declared_name(&declared) {
         let (ptr, len) = ctx.default_str_literal(name)?;
         ctx.fb
@@ -5616,6 +5641,27 @@ fn gettype_declared_name(php_type: &PhpType) -> Option<&'static str> {
     gettype_name(&php_type.codegen_repr())
 }
 
+/// The non-null member of an exact `T|null` union, when `T` has a settled `gettype()` name.
+///
+/// A nullable scalar is stored as a TAGGED scalar, so the runtime tag decides between the two
+/// answers and both are settled: `int|null` is "integer" or "NULL", never anything else.
+fn gettype_nullable_member(php_type: &PhpType) -> Option<&'static str> {
+    let PhpType::Union(members) = php_type else {
+        return None;
+    };
+    if members.len() != 2
+        || !members
+            .iter()
+            .any(|member| matches!(member, PhpType::Void | PhpType::Never))
+    {
+        return None;
+    }
+    members
+        .iter()
+        .find(|member| !matches!(member, PhpType::Void | PhpType::Never))
+        .and_then(gettype_name)
+}
+
 /// Validates `gettype($value)`: one operand answering a string.
 ///
 /// A settled type answers at compile time. A boxed one dispatches on the cell tag, which decides
@@ -5641,6 +5687,12 @@ fn gettype_shape_issue(function: &Function, call: &Instruction) -> Option<String
     // The check reads the DECLARED type, not `codegen_repr()`: a resource reprs as `Int`, so
     // asking the repr would answer "integer" for a handle php-src calls "resource".
     if gettype_declared_name(&value.php_type).is_some() {
+        return None;
+    }
+    // A nullable scalar is a TAGGED scalar whose tag picks between two settled names.
+    if value.ir_type == IrType::TaggedScalar
+        && gettype_nullable_member(&value.php_type).is_some()
+    {
         return None;
     }
     let source = value.php_type.codegen_repr();

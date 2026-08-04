@@ -348,15 +348,47 @@ impl Checker {
         } else {
             inferred_return
         };
+        // A SUBCLASS copies its parent's signatures when its own schema is built, which happens
+        // before any body is checked — so the copy carries the placeholder return type, not the
+        // one inferred here. Refining only the declaring class leaves every inheritor claiming
+        // the placeholder: `class A { protected $n = "a"; function label() { return $this->n; } }`
+        // answers `Str` for `A::label` and `Int` for `B::label` the moment a `class B extends A`
+        // exists. Propagate to the classes that actually use THIS implementation.
+        let method_key = php_symbol_key(&method.name);
+        let inheritors: Vec<String> = self
+            .classes
+            .iter()
+            .filter(|(name, info)| {
+                name.as_str() != class.name
+                    && info.method_impl_classes.get(&method_key) == Some(&class.name)
+            })
+            .map(|(name, _)| name.clone())
+            .collect();
         if !method.is_static {
             if let Some(ci) = self.classes.get_mut(&class.name) {
-                if let Some(sig) = ci.methods.get_mut(&php_symbol_key(&method.name)) {
+                if let Some(sig) = ci.methods.get_mut(&method_key) {
                     sig.return_type = effective_return.clone();
                 }
             }
-        } else if let Some(ci) = self.classes.get_mut(&class.name) {
-            if let Some(sig) = ci.static_methods.get_mut(&php_symbol_key(&method.name)) {
-                sig.return_type = effective_return.clone();
+            for name in &inheritors {
+                if let Some(ci) = self.classes.get_mut(name) {
+                    if let Some(sig) = ci.methods.get_mut(&method_key) {
+                        sig.return_type = effective_return.clone();
+                    }
+                }
+            }
+        } else {
+            if let Some(ci) = self.classes.get_mut(&class.name) {
+                if let Some(sig) = ci.static_methods.get_mut(&method_key) {
+                    sig.return_type = effective_return.clone();
+                }
+            }
+            for name in &inheritors {
+                if let Some(ci) = self.classes.get_mut(name) {
+                    if let Some(sig) = ci.static_methods.get_mut(&method_key) {
+                        sig.return_type = effective_return.clone();
+                    }
+                }
             }
         }
         self.update_method_callable_return_metadata(
