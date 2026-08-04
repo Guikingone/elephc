@@ -396,8 +396,10 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `--timings` | — | off | Print per-phase compiler timings to stderr. |
+| `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
+| `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
 

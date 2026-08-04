@@ -101,7 +101,7 @@ Target:
 
 Codegen:
   --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
-  --null-repr=MODE        sentinel (default) | tagged
+  --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
   --gc-stats              Print GC statistics at exit
