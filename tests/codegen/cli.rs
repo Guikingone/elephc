@@ -12980,3 +12980,112 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a typed property can be READ inside its own constructor, once the store has run.
+///
+/// Reading a typed property with no default before anything writes it is
+/// `Error: Typed property C::$p must not be accessed before initialization`, and this backend has
+/// no sentinel for it — the allocator zeroes the slot and zero is a legitimate int. The rule
+/// admitted such a read only from OUTSIDE the constructor, on the grounds that a read inside it
+/// could still precede the store. That is a question about the individual read, not about the
+/// class: `__construct(string $n) { $this->name = $n; echo $this->name; }` is ordinary PHP whose
+/// store demonstrably comes first. The entry block decides, so a read before the store is still
+/// refused — carried here as a compile-time negative control.
+#[test]
+fn test_cli_wasm_reads_a_typed_property_after_its_own_constructor_store() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_constructor_read_after_store");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Scoped {
+    public string $name;
+    public int $depth;
+    public function __construct(string $name, int $depth)
+    {
+        $this->name = $name;
+        $this->depth = $depth;
+        echo "open(", $this->name, "@", $this->depth, ")\n";
+    }
+    public function label(): string { return $this->name; }
+}
+$a = new Scoped("outer", 1);
+$b = new Scoped("inner", 2);
+echo $a->label(), "|", $b->label(), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the constructor read to WASM");
+    assert!(
+        output.status.success(),
+        "reading after the store must compile: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the constructor read under Node");
+    assert!(
+        run.status.success(),
+        "the constructor read must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "open(outer@1)\nopen(inner@2)\nouter|inner\n",
+        "php-src's own answers"
+    );
+
+    // The negative control: reading BEFORE the store observes the uninitialized slot, and php-src
+    // raises there, so it must stay refused.
+    let before = dir.join("before.php");
+    fs::write(
+        &before,
+        "<?php\nclass C { public int $v; public function __construct(int $x) { echo $this->v; $this->v = $x; } }\nnew C(1);\n",
+    )
+    .unwrap();
+    let refused = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&before)
+        .output()
+        .expect("failed to run the compiler over the pre-store read");
+    assert!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr).contains("may be uninitialized"),
+        "a read before the store must stay refused: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

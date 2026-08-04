@@ -4143,9 +4143,15 @@ fn property_get_shape_issue(
         && !module.enum_infos.contains_key(&class_name)
         // ...and a CONSTRUCTOR that writes it unconditionally is a third: every path out of
         // `new` has passed that store, so no read from outside the constructor can precede it.
-        // Reading it INSIDE the constructor still could, so that stays refused.
+        // INSIDE the constructor the store has to be shown to come first, which is a question
+        // about this one read rather than about the class — `__construct(string $n) { $this->name
+        // = $n; echo $this->name; }` is ordinary PHP and was refused for the shape of its own
+        // proof rather than for anything it does.
         && !(function.name != format!("{class_name}::__construct")
             && constructor_initializes_property(module, &class_name, property))
+        && !(function.name == format!("{class_name}::__construct")
+            && constructor_initializes_property(module, &class_name, property)
+            && constructor_store_precedes(module, function, inst, property))
     {
         return Some(format!(
             "typed property ${property} may be uninitialized and requires an exact PHP fatal check"
@@ -4401,6 +4407,41 @@ fn instruction_can_observe_this(function: &Function, inst: &Instruction) -> bool
         .iter()
         .skip(1)
         .any(|operand| value_local_origin(function, *operand) == Some(0))
+}
+
+/// Whether the constructor's own store of `property` dominates this read.
+///
+/// `constructor_initializes_property` has already shown the store is the FIRST property event in
+/// the entry block. So a read in a LATER block is dominated by it — the entry block dominates the
+/// whole body — and a read in the entry block is dominated exactly when it sits after the store.
+fn constructor_store_precedes(
+    module: &Module,
+    constructor: &Function,
+    read: &Instruction,
+    property: &str,
+) -> bool {
+    let Some(entry) = constructor
+        .blocks
+        .iter()
+        .find(|block| block.id == constructor.entry)
+    else {
+        return false;
+    };
+    let position = |predicate: &dyn Fn(&Instruction) -> bool| -> Option<usize> {
+        entry.instructions.iter().position(|inst_id| {
+            constructor.instruction(*inst_id).is_some_and(predicate)
+        })
+    };
+    let Some(store) = position(&|candidate: &Instruction| {
+        candidate.op == Op::PropSet && data_string(module, candidate) == Some(property)
+    }) else {
+        return false;
+    };
+    match position(&|candidate: &Instruction| std::ptr::eq(candidate, read)) {
+        Some(here) => here > store,
+        // Not in the entry block at all: the entry dominates every other block.
+        None => true,
+    }
 }
 
 /// Whether a property's NULL default is unobservable because the constructor always overwrites it.

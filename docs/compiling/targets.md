@@ -101,7 +101,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **33
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **34
 compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
 php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
 php-src cannot parse at all, so it has no php-src output to match — meaning
@@ -112,7 +112,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 157 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 156 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
