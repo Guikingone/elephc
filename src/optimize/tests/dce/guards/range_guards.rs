@@ -468,3 +468,226 @@ fn test_eliminate_dead_code_invalidates_range_for_foreach_iteration_variable() {
     };
     assert!(matches!(body[0].kind, StmtKind::If { .. }));
 }
+
+/// Verifies an exact-`int` typed local seeds the discrete domain for later range guards.
+#[test]
+fn test_eliminate_dead_code_seeds_integer_domain_from_typed_local() {
+    let program = vec![Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: vec![("input".into(), None, None, false)],
+            param_attributes: vec![Vec::new()],
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: vec![
+                Stmt::new(
+                    StmtKind::TypedAssign {
+                        type_expr: TypeExpr::Int,
+                        name: "x".into(),
+                        value: Expr::var("input"),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::binop(
+                            Expr::var("x"),
+                            BinOp::Gt,
+                            Expr::int_lit(10),
+                        ),
+                        then_body: vec![Stmt::new(
+                            StmtKind::If {
+                                condition: Expr::binop(
+                                    Expr::var("x"),
+                                    BinOp::Gt,
+                                    Expr::int_lit(5),
+                                ),
+                                then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                                elseif_clauses: Vec::new(),
+                                else_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
+                            },
+                            Span::dummy(),
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    )];
+
+    let eliminated = eliminate_dead_code(program);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+        panic!("expected function");
+    };
+    let StmtKind::If { then_body, .. } = &body[1].kind else {
+        panic!("expected outer if");
+    };
+    assert_eq!(then_body, &vec![Stmt::echo(Expr::int_lit(7))]);
+}
+
+/// Verifies typed float and nullable-int locals do not seed the discrete integer domain.
+#[test]
+fn test_eliminate_dead_code_does_not_seed_non_exact_int_typed_locals() {
+    for type_expr in [
+        TypeExpr::Float,
+        TypeExpr::Nullable(Box::new(TypeExpr::Int)),
+    ] {
+        let program = vec![Stmt::new(
+            StmtKind::FunctionDecl {
+                name: "main".into(),
+                params: vec![("input".into(), None, None, false)],
+                param_attributes: vec![Vec::new()],
+                variadic: None,
+                variadic_by_ref: false,
+                variadic_type: None,
+                return_type: None,
+                by_ref_return: false,
+                body: vec![
+                    Stmt::new(
+                        StmtKind::TypedAssign {
+                            type_expr,
+                            name: "x".into(),
+                            value: Expr::var("input"),
+                        },
+                        Span::dummy(),
+                    ),
+                    Stmt::new(
+                        StmtKind::If {
+                            condition: Expr::binop(
+                                Expr::var("x"),
+                                BinOp::Gt,
+                                Expr::int_lit(10),
+                            ),
+                            then_body: vec![Stmt::new(
+                                StmtKind::If {
+                                    condition: Expr::binop(
+                                        Expr::var("x"),
+                                        BinOp::GtEq,
+                                        Expr::int_lit(11),
+                                    ),
+                                    then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                                    elseif_clauses: Vec::new(),
+                                    else_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
+                                },
+                                Span::dummy(),
+                            )],
+                            elseif_clauses: Vec::new(),
+                            else_body: None,
+                        },
+                        Span::dummy(),
+                    ),
+                ],
+            },
+            Span::dummy(),
+        )];
+
+        let eliminated = eliminate_dead_code(program);
+        let StmtKind::FunctionDecl { body, .. } = &eliminated[0].kind else {
+            panic!("expected function");
+        };
+        let StmtKind::If { then_body, .. } = &body[1].kind else {
+            panic!("expected outer if");
+        };
+        assert!(matches!(then_body[0].kind, StmtKind::If { .. }));
+    }
+}
+
+/// Verifies a by-reference call invalidates a typed local's seeded integer domain.
+#[test]
+fn test_eliminate_dead_code_invalidates_typed_local_domain_for_by_ref_call() {
+    let mutator = Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "mutate".into(),
+            params: vec![("value".into(), None, None, true)],
+            param_attributes: vec![Vec::new()],
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: vec![Stmt::new(
+                StmtKind::Assign {
+                    name: "value".into(),
+                    value: Expr::float_lit(10.5),
+                },
+                Span::dummy(),
+            )],
+        },
+        Span::dummy(),
+    );
+    let caller = Stmt::new(
+        StmtKind::FunctionDecl {
+            name: "main".into(),
+            params: vec![("input".into(), None, None, false)],
+            param_attributes: vec![Vec::new()],
+            variadic: None,
+            variadic_by_ref: false,
+            variadic_type: None,
+            return_type: None,
+            by_ref_return: false,
+            body: vec![
+                Stmt::new(
+                    StmtKind::TypedAssign {
+                        type_expr: TypeExpr::Int,
+                        name: "x".into(),
+                        value: Expr::var("input"),
+                    },
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::ExprStmt(Expr::new(
+                        ExprKind::FunctionCall {
+                            name: Name::unqualified("mutate"),
+                            args: vec![Expr::var("x")],
+                        },
+                        Span::dummy(),
+                    )),
+                    Span::dummy(),
+                ),
+                Stmt::new(
+                    StmtKind::If {
+                        condition: Expr::binop(
+                            Expr::var("x"),
+                            BinOp::Gt,
+                            Expr::int_lit(10),
+                        ),
+                        then_body: vec![Stmt::new(
+                            StmtKind::If {
+                                condition: Expr::binop(
+                                    Expr::var("x"),
+                                    BinOp::GtEq,
+                                    Expr::int_lit(11),
+                                ),
+                                then_body: vec![Stmt::echo(Expr::int_lit(7))],
+                                elseif_clauses: Vec::new(),
+                                else_body: Some(vec![Stmt::echo(Expr::int_lit(8))]),
+                            },
+                            Span::dummy(),
+                        )],
+                        elseif_clauses: Vec::new(),
+                        else_body: None,
+                    },
+                    Span::dummy(),
+                ),
+            ],
+        },
+        Span::dummy(),
+    );
+
+    let eliminated = eliminate_dead_code(vec![mutator, caller]);
+
+    let StmtKind::FunctionDecl { body, .. } = &eliminated[1].kind else {
+        panic!("expected caller function");
+    };
+    let StmtKind::If { then_body, .. } = &body[2].kind else {
+        panic!("expected outer if");
+    };
+    assert!(matches!(then_body[0].kind, StmtKind::If { .. }));
+}

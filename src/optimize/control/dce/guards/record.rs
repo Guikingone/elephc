@@ -44,6 +44,14 @@ pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut Guar
         .condition_guards
         .retain(|known| !known.names.iter().any(|known_name| known_name == name));
 }
+
+/// Removes any facts recreated for roots whose surviving references make them volatile.
+fn clear_reference_volatile_guard_facts(guards: &mut GuardState) {
+    let volatile_names = guards.reference_volatile_vars.clone();
+    for name in volatile_names {
+        clear_guards_for_name(guards, &name);
+    }
+}
 /// Pushes a variable name into the tracker list if not already present.
 ///
 /// deduplicates against existing entries to keep the names list unique.
@@ -72,7 +80,11 @@ fn record_truthy_guard(guards: &mut GuardState, name: &str, known_truthy: bool) 
 /// Clears all existing guards for the name, then adds the exact value to `exact_guards`,
 /// records the variable as bool-true/false if the value is boolean, and calls
 /// `record_truthy_guard` with the literal's truthiness.
-fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
+pub(super) fn record_exact_literal_guard(
+    guards: &mut GuardState,
+    name: &str,
+    value: GuardLiteral,
+) {
     clear_guards_for_name(guards, name);
     if let GuardLiteral::Bool(value) = &value {
         if *value {
@@ -326,7 +338,7 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case(subject: 
         return guards.clone();
     };
 
-    match &subject.kind {
+    let mut next = match &subject.kind {
         ExprKind::BoolLiteral(subject_bool) => extend_guards(guards, pattern, *subject_bool),
         ExprKind::Variable(name) => {
             let mut next = guards.clone();
@@ -336,7 +348,9 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case(subject: 
             next
         }
         _ => guards.clone(),
-    }
+    };
+    clear_reference_volatile_guard_facts(&mut next);
+    next
 }
 
 /// Extends guard state for switch case fallthrough when the subject boolean does not match patterns.
@@ -379,7 +393,7 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case_no_match_
         return guards.clone();
     };
 
-    patterns.iter().fold(guards.clone(), |mut guards, pattern| {
+    let mut next = patterns.iter().fold(guards.clone(), |mut guards, pattern| {
         match &pattern.kind {
             ExprKind::BoolLiteral(pattern_bool) => {
                 record_truthy_guard(&mut guards, name, !pattern_bool);
@@ -391,7 +405,9 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case_no_match_
             }
         }
         guards
-    })
+    });
+    clear_reference_volatile_guard_facts(&mut next);
+    next
 }
 
 /// Main guard extension dispatcher for a branch taken at a conditional point.
@@ -451,5 +467,6 @@ pub(in crate::optimize::control::dce) fn extend_guards(guards: &GuardState, cond
         record_truthy_guard(&mut next, name, known_truthy);
     };
 
+    clear_reference_volatile_guard_facts(&mut next);
     next
 }

@@ -144,10 +144,9 @@ pub(super) fn record_range_guard(guards: &mut GuardState, name: &str, contrib: I
 }
 
 /// Couples an exact integer literal fact to a point range for `name`.
+/// Callers must clear prior facts for `name` before recording the exact value.
 pub(super) fn record_exact_int_range(guards: &mut GuardState, name: &str, value: i64) {
-    // Exact clears other facts for the name first; replace any prior range.
     guards.record_integer_domain(name);
-    guards.range_guards.retain(|known| known.name != name);
     guards.range_guards.push(RangeGuard {
         name: name.to_string(),
         interval: IntInterval::point(value),

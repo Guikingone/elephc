@@ -30,6 +30,8 @@ pub(super) enum TailSinkTarget {
 /// `integer_domain_vars` — variables proven to hold integers in the current scope/path.
 /// `range_guards` — integer interval facts from relational int-literal branches.
 /// `relational_guards` — cross-variable (or var/int) relational and strict-equality atoms.
+/// `reference_volatile_vars` — iterable roots exposed through surviving by-ref aliases;
+/// facts mentioning them remain disabled for the rest of the current guard scope.
 pub(super) struct GuardState {
     pub(super) truthy_vars: Vec<String>,
     pub(super) falsy_vars: Vec<String>,
@@ -41,6 +43,7 @@ pub(super) struct GuardState {
     pub(super) integer_domain_vars: Vec<String>,
     pub(super) range_guards: Vec<RangeGuard>,
     pub(super) relational_guards: Vec<RelationalGuard>,
+    pub(super) reference_volatile_vars: Vec<String>,
 }
 
 impl GuardState {
@@ -69,8 +72,22 @@ impl GuardState {
 
     /// Records that `name` holds an integer value without duplicating the domain fact.
     pub(super) fn record_integer_domain(&mut self, name: &str) {
-        if !self.has_integer_domain(name) {
+        if !self.is_reference_volatile(name) && !self.has_integer_domain(name) {
             self.integer_domain_vars.push(name.to_string());
+        }
+    }
+
+    /// Returns whether writes may reach `name` through a surviving reference alias.
+    pub(super) fn is_reference_volatile(&self, name: &str) -> bool {
+        self.reference_volatile_vars
+            .iter()
+            .any(|known| known == name)
+    }
+
+    /// Permanently disables guard facts for a name exposed through a reference alias.
+    pub(super) fn mark_reference_volatile(&mut self, name: &str) {
+        if !self.is_reference_volatile(name) {
+            self.reference_volatile_vars.push(name.to_string());
         }
     }
 }
