@@ -78,6 +78,13 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
+                // PHP's string increment can change the value's type (`"9"++` is
+                // `int(10)`), so the pre-form's value is dynamically tagged. EIR lowering
+                // gives the local boxed Mixed frame storage for the same reason.
+                Some(PhpType::Str) => {
+                    self.record_string_incdec_local(name);
+                    Ok(PhpType::Mixed)
+                }
                 // PHP's `++`/`--` on a float adds or subtracts 1.0 and keeps the float.
                 Some(PhpType::Float) => Ok(PhpType::Float),
                 Some(PhpType::Bool) | Some(PhpType::False) | Some(PhpType::Void) => {
@@ -98,6 +105,13 @@ impl Checker {
                 | Some(PhpType::False)
                 | Some(PhpType::Void) => Ok(PhpType::Int),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
+                // The post-forms yield the value the local held BEFORE the update, so a
+                // string local still answers `string` even though the update itself can
+                // retype the local (see the pre-form arm).
+                Some(PhpType::Str) => {
+                    self.record_string_incdec_local(name);
+                    Ok(PhpType::Str)
+                }
                 // The post-forms yield the float the local held before the update.
                 Some(PhpType::Float) => Ok(PhpType::Float),
                 Some(other) => Err(CompileError::new(
@@ -975,21 +989,26 @@ fn object_union_match_arm_type(ty: &PhpType) -> bool {
     }
 }
 
+impl Checker {
+    /// Records that `name` is a `string` local used as a `++` / `--` target in the
+    /// function-like scope currently being checked.
+    ///
+    /// EIR lowering reads this contract (through `CheckResult::string_incdec_locals`) and
+    /// gives the local boxed `Mixed` frame storage from its first store. Without it the
+    /// slot only widens at the increment, and every earlier or later `string`-typed read
+    /// of the same slot has to detach an owned copy out of the boxed cell — one leaked
+    /// heap block per executed read, unbounded inside a loop.
+    fn record_string_incdec_local(&mut self, name: &str) {
+        self.string_incdec_locals
+            .insert((self.current_loop_storage_scope.clone(), name.to_string()));
+    }
+}
+
 /// Formats the diagnostic for `++`/`--` applied to a local elephc cannot update in place.
 ///
-/// `int`, `float`, `bool`, `null`, and boxed `mixed` locals all have an increment path.
-/// A `string` local is called out separately: PHP's string increment can change the
-/// value's type (`"9"++` is `int(10)`), and a statically typed local cannot hold both,
-/// so the operator is rejected instead of silently returning a string.
+/// `int`, `float`, `bool`, `null`, `string`, and boxed `mixed` locals all have an increment
+/// path; everything else (arrays, objects, buffers, pointers) reaches this diagnostic.
 fn increment_type_error(name: &str, ty: &PhpType) -> String {
-    if matches!(ty, PhpType::Str) {
-        return format!(
-            "Cannot increment/decrement ${} of type string: PHP's string increment can \
-             change the value's type (\"9\"++ is int(10)), which a statically typed local \
-             cannot hold",
-            name
-        );
-    }
     format!("Cannot increment/decrement ${} of type {:?}", name, ty)
 }
 

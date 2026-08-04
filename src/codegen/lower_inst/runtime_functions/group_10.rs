@@ -112,6 +112,22 @@ pub(super) fn lower(
                     "__rt_strcmp",
                 )
         }),
+        RuntimeFnId::Strncasecmp => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_length_limited_compare(
+                    ctx,
+                    inst,
+                    "strncasecmp",
+                    "__rt_strncasecmp",
+                )
+        }),
+        RuntimeFnId::Strncmp => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_length_limited_compare(
+                    ctx,
+                    inst,
+                    "strncmp",
+                    "__rt_strncmp",
+                )
+        }),
         RuntimeFnId::Strpos => Some({
             crate::codegen::lower_inst::builtins::strings::lower_string_position(
                     ctx,

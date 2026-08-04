@@ -211,3 +211,139 @@ fn test_substr_replace_no_length() {
     let out = compile_and_run(r#"<?php echo substr_replace("hello world", "!", 5);"#);
     assert_eq!(out, "hello!");
 }
+
+/// Verifies `substr_count()` counts non-overlapping occurrences.
+/// `LC_ALL=C php` prints `2` for both `substr_count("hello world", "o")` and
+/// `substr_count("aaaa", "aa")` — matches never overlap.
+#[test]
+fn test_substr_count_non_overlapping() {
+    let out = compile_and_run(
+        r#"<?php echo substr_count("hello world", "o"), "|", substr_count("aaaa", "aa"), "|", substr_count("hello", "z");"#,
+    );
+    assert_eq!(out, "2|2|0");
+}
+
+/// Verifies `substr_count()` honours the `$offset` argument, including a negative offset
+/// measured back from the subject end. `LC_ALL=C php` prints `1` for both forms.
+#[test]
+fn test_substr_count_offset() {
+    let out = compile_and_run(
+        r#"<?php echo substr_count("hello world", "o", 5), "|", substr_count("hello world", "o", -5);"#,
+    );
+    assert_eq!(out, "1|1");
+}
+
+/// Verifies `substr_count()` honours `$length`, including the negative form measured back
+/// from the subject end, and treats an explicit `null` like an omitted argument.
+/// `LC_ALL=C php` prints `1`, `1`, `1`, `2`.
+#[test]
+fn test_substr_count_length() {
+    let out = compile_and_run(
+        r#"<?php
+echo substr_count("hello world", "o", 0, 5), "|",
+     substr_count("hello world", "o", 0, -5), "|",
+     substr_count("hello world", "l", 3, 4), "|",
+     substr_count("hello world", "o", 0, null);
+"#,
+    );
+    assert_eq!(out, "1|1|1|2");
+}
+
+/// Verifies `substr_count()` resolves case-insensitively, through a namespace-qualified
+/// call, and by named argument.
+#[test]
+fn test_substr_count_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+echo SUBSTR_COUNT("hello world", "o"), "|",
+     \substr_count("hello world", "o"), "|",
+     substr_count(haystack: "hello world", needle: "o", offset: 5);
+"#,
+    );
+    assert_eq!(out, "2|2|1");
+}
+
+/// Verifies `substr_count()` raises php-src's catchable `ValueError`s for an empty needle
+/// and for an `$offset`/`$length` pair that leaves the subject. Messages are verbatim
+/// `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_substr_count_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([["abc", "", 0, null], ["abc", "b", 5, null], ["abc", "b", 0, 9]] as $t) {
+    try {
+        substr_count($t[0], $t[1], $t[2], $t[3]);
+    } catch (ValueError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "substr_count(): Argument #2 ($needle) must not be empty\n\
+substr_count(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+substr_count(): Argument #4 ($length) must be contained in argument #1 ($haystack)\n"
+    );
+}
+
+/// Verifies `strncmp()` compares only the first `$length` bytes and returns php-src's raw
+/// byte difference. `LC_ALL=C php` prints `0`, `-12`, `-1`, `1`, `0` for these calls.
+#[test]
+fn test_strncmp_prefix_and_byte_difference() {
+    let out = compile_and_run(
+        r#"<?php
+echo strncmp("Hello", "Hexxx", 2), "|",
+     strncmp("Hello", "Hexxx", 3), "|",
+     strncmp("abc", "abd", 3), "|",
+     strncmp("abc", "ab", 3), "|",
+     strncmp("abc", "abc", 10);
+"#,
+    );
+    assert_eq!(out, "0|-12|-1|1|0");
+}
+
+/// Verifies `strncasecmp()` folds ASCII case before comparing the bounded prefix.
+/// `LC_ALL=C php` prints `0`, `-1`, `1`.
+#[test]
+fn test_strncasecmp_ascii_folding() {
+    let out = compile_and_run(
+        r#"<?php
+echo strncasecmp("HeLLo", "hellO", 5), "|",
+     strncasecmp("ABC", "abd", 3), "|",
+     strncasecmp("abc", "AB", 3);
+"#,
+    );
+    assert_eq!(out, "0|-1|1");
+}
+
+/// Verifies both length-limited comparisons resolve case-insensitively, through a
+/// namespace-qualified call, and by named argument.
+#[test]
+fn test_strncmp_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+echo STRNCMP("abc", "abd", 3), "|",
+     \strncasecmp("ABC", "abc", 3), "|",
+     strncmp(string1: "abc", string2: "abd", length: 2);
+"#,
+    );
+    assert_eq!(out, "-1|0|0");
+}
+
+/// Verifies both length-limited comparisons raise php-src's catchable `ValueError` for a
+/// negative `$length`. Messages are verbatim `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_strncmp_negative_length_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+try { strncmp("a", "b", -1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strncasecmp("a", "b", -1); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "strncmp(): Argument #3 ($length) must be greater than or equal to 0\n\
+strncasecmp(): Argument #3 ($length) must be greater than or equal to 0\n"
+    );
+}

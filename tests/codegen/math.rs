@@ -11,3 +11,5 @@
 mod functions;
 #[path = "math/php_float_to_int.rs"]
 mod php_float_to_int;
+#[path = "math/rounding_modes.rs"]
+mod rounding_modes;

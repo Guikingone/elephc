@@ -2,7 +2,7 @@
 title: "fdatasync() — internals"
 description: "Compiler internals for fdatasync(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 161
+  order: 162
 ---
 
 ## `fdatasync()` — internals

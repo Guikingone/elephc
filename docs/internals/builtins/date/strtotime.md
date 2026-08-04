@@ -2,7 +2,7 @@
 title: "strtotime() — internals"
 description: "Compiler internals for strtotime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 102
+  order: 103
 ---
 
 ## `strtotime()` — internals

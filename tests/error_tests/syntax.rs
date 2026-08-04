@@ -568,3 +568,104 @@ fn test_error_foreach_reference_to_destructuring_pattern() {
         "Cannot take a reference to a destructuring pattern in foreach",
     );
 }
+
+// --- Alternative control-structure syntax ---
+
+/// Verifies an alternative-syntax block that is never closed names the terminator it wants.
+#[test]
+fn test_error_alternative_syntax_missing_terminator() {
+    expect_error("<?php if (true): echo 1;", "Expected 'endif' to close");
+    expect_error("<?php while (true): echo 1;", "Expected 'endwhile' to close");
+    expect_error("<?php for ($i=0;$i<1;$i++): echo 1;", "Expected 'endfor' to close");
+    expect_error("<?php foreach ([1] as $x): echo 1;", "Expected 'endforeach' to close");
+    expect_error("<?php switch (1): case 1: echo 1;", "Expected 'endswitch' to close");
+}
+
+/// Verifies closing an alternative block with the wrong keyword reports the stray terminator
+/// rather than silently accepting a mismatched pair.
+#[test]
+fn test_error_alternative_syntax_mismatched_terminator() {
+    expect_error(
+        "<?php foreach ([1] as $x): echo 1; endwhile;",
+        "Unexpected 'endwhile': there is no open alternative-syntax block",
+    );
+}
+
+/// Verifies a terminator keyword with no open alternative block is reported by name.
+#[test]
+fn test_error_alternative_syntax_stray_terminator() {
+    expect_error(
+        "<?php endif;",
+        "Unexpected 'endif': there is no open alternative-syntax block",
+    );
+}
+
+/// Verifies an alternative block terminator without its mandatory `;` is reported.
+#[test]
+fn test_error_alternative_syntax_terminator_needs_semicolon() {
+    expect_error("<?php if (true): echo 1; endif", "Expected ';'");
+}
+
+/// Verifies mixing a brace `if` body with an `else:`/`elseif:` branch is rejected, as in PHP.
+#[test]
+fn test_error_alternative_syntax_cannot_mix_with_braces() {
+    expect_error(
+        "<?php if (true) { echo 1; } else: echo 2; endif;",
+        "Cannot mix brace and alternative syntax in one if statement",
+    );
+    expect_error(
+        "<?php if (true) { echo 1; } elseif (false): echo 2; endif;",
+        "Cannot mix brace and alternative syntax in one if statement",
+    );
+}
+
+/// Verifies an alternative `if` cannot take a brace `else` body, mirroring PHP's requirement
+/// that the whole chain uses one style.
+#[test]
+fn test_error_alternative_if_rejects_brace_else() {
+    expect_error(
+        "<?php if (true): echo 1; else { echo 2; } endif;",
+        "Expected ':' after 'else' in an alternative-syntax if block",
+    );
+}
+
+// --- goto (unsupported) ---
+
+/// Verifies `goto` is rejected with a diagnostic that names the construct, not a generic
+/// "unexpected token" error.
+#[test]
+fn test_error_goto_is_not_supported() {
+    expect_error("<?php goto done; done: echo 1;", "`goto` is not supported");
+}
+
+/// Verifies a `goto` target label on its own is rejected and names the label.
+#[test]
+fn test_error_goto_label_is_not_supported() {
+    expect_error("<?php done: echo 1;", "`goto` labels are not supported");
+    expect_error("<?php done: echo 1;", "the label `done:`");
+}
+
+// --- References inside array literals ---
+
+/// Verifies `[&$x]` reports the unsupported construct by name instead of "Unexpected token:
+/// Ampersand". elephc arrays hold values, so an element cannot alias a variable's storage.
+#[test]
+fn test_error_reference_element_in_array_literal() {
+    expect_error(
+        "<?php $first = 1; $r = [&$first];",
+        "Reference elements in array literals (`[&$x]`) are not supported",
+    );
+}
+
+/// Verifies the same diagnostic covers a keyed element and the legacy `array(...)` spelling.
+#[test]
+fn test_error_reference_element_in_keyed_and_legacy_array_literals() {
+    expect_error(
+        "<?php $a = 1; $r = [\"k\" => &$a];",
+        "Reference elements in array literals (`[&$x]`) are not supported",
+    );
+    expect_error(
+        "<?php $a = 1; $r = array(&$a);",
+        "Reference elements in array literals (`[&$x]`) are not supported",
+    );
+}

@@ -2,7 +2,7 @@
 title: "array_udiff()"
 description: "Computes the difference of arrays using a callback comparator."
 sidebar:
-  order: 40
+  order: 41
 ---
 
 ## array_udiff()

@@ -2,7 +2,7 @@
 title: "basename() — internals"
 description: "Compiler internals for basename(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 104
+  order: 105
 ---
 
 ## `basename()` — internals

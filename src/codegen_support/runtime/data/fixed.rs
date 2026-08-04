@@ -486,6 +486,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     for (label, message) in crate::codegen_support::runtime::arrays::ARRAY_FLIP_SKIPPED_MESSAGES {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    // -- php-src's array_count_values() skipped-entry warning, shared with its runtime emitter --
+    // The emitter derives its `write()` length from the same table, so the bytes here and the
+    // immediate there can never drift apart.
+    for (label, message) in
+        crate::codegen_support::runtime::arrays::ARRAY_COUNT_VALUES_SKIPPED_MESSAGES
+    {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     // -- PHP 8.5's NAN-to-bool coercion warning, shared with `__rt_warn_nan_coerced_bool` --
     // Emitted for every profile even though only 8.5 call sites reference it: the literal is
     // 50 bytes of `.data` and keeping it unconditional means the runtime `.data` layout does

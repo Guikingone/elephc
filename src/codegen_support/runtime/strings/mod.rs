@@ -21,6 +21,7 @@ mod number_format;
 mod atoi;
 mod grapheme_strrev;
 mod strcopy;
+mod str_inc_dec;
 mod str_persist;
 mod strtolower;
 mod strtoupper;
@@ -34,6 +35,8 @@ mod strrev;
 mod chr;
 mod strcmp;
 mod strcasecmp;
+mod strncmp;
+mod strncasecmp;
 mod str_starts_with;
 mod str_ends_with;
 mod str_replace;
@@ -52,6 +55,8 @@ mod stripslashes;
 mod nl2br;
 mod wordwrap;
 mod bin2hex;
+mod base_to_number;
+mod dec_to_base;
 mod hex2bin;
 mod inet_ntop;
 mod inet_pton;
@@ -111,6 +116,8 @@ pub use strcopy::emit_strcopy;
 pub use concat_scratch::emit_concat_scratch;
 pub use str_persist::emit_str_persist;
 /// Emit string persistence helper.
+pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};
+/// Emit PHP's `++`/`--` on a string value and its boxed dispatch entry point.
 pub use strtolower::emit_strtolower;
 /// Emit lowercase string conversion.
 pub use strtoupper::emit_strtoupper;
@@ -136,6 +143,10 @@ pub use chr::emit_chr;
 pub use strcmp::emit_strcmp;
 /// Emit case-sensitive string comparison.
 pub use strcasecmp::emit_strcasecmp;
+/// Emit length-limited case-sensitive string comparison.
+pub use strncmp::emit_strncmp;
+/// Emit length-limited case-insensitive string comparison.
+pub use strncasecmp::emit_strncasecmp;
 /// Emit case-insensitive string comparison.
 pub use str_starts_with::emit_str_starts_with;
 /// Emit check for string prefix match.
@@ -172,6 +183,10 @@ pub use nl2br::emit_nl2br;
 pub use wordwrap::emit_wordwrap;
 /// Emit wordwrap helper.
 pub use bin2hex::emit_bin2hex;
+/// Emit the shared unsigned integer-to-base renderer used by dechex/decbin/decoct.
+pub use dec_to_base::emit_dec_to_base;
+/// Emit the shared base-digit parser used by hexdec/bindec/octdec.
+pub use base_to_number::emit_base_to_number;
 /// Emit binary-to-hexadecimal encoding.
 pub use hex2bin::emit_hex2bin;
 /// Emit hexadecimal-to-binary decoding.

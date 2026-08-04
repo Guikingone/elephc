@@ -22,9 +22,18 @@ fn test_error_ceil_wrong_args() {
 }
 
 /// Verifies round() rejects missing argument. Input: `round()` with no args.
+///
+/// `round()` gained PHP 8.4's third `$mode` parameter, so the arity diagnostic now spans
+/// `1 to 3` arguments.
 #[test]
 fn test_error_round_wrong_args() {
-    expect_error("<?php round();", "round() takes 1 or 2 arguments");
+    expect_error("<?php round();", "round() takes 1 to 3 arguments");
+}
+
+/// Verifies round() rejects a fourth argument. Input: `round(1.0, 2, 3, 4)`.
+#[test]
+fn test_error_round_too_many_args() {
+    expect_error("<?php echo round(1.0, 2, 3, 4);", "round() takes 1 to 3 arguments");
 }
 
 /// Verifies sqrt() rejects excess positional arguments. Input: `sqrt(1, 2)`.
@@ -154,3 +163,39 @@ fn test_error_number_format_wrong_args() {
 }
 
 // --- String function errors ---
+
+/// Verifies that `dechex()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_dechex_wrong_args() {
+    expect_error("<?php dechex();", "dechex() takes exactly 1 argument");
+}
+
+/// Verifies that `decbin()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_decbin_too_many_args() {
+    expect_error("<?php decbin(1, 2);", "decbin() takes exactly 1 argument");
+}
+
+/// Verifies that `decoct()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_decoct_wrong_args() {
+    expect_error("<?php decoct();", "decoct() takes exactly 1 argument");
+}
+
+/// Verifies that `hexdec()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_hexdec_wrong_args() {
+    expect_error("<?php hexdec();", "hexdec() takes exactly 1 argument");
+}
+
+/// Verifies that `bindec()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_bindec_too_many_args() {
+    expect_error("<?php bindec(\"1\", 2);", "bindec() takes exactly 1 argument");
+}
+
+/// Verifies that `octdec()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_octdec_wrong_args() {
+    expect_error("<?php octdec();", "octdec() takes exactly 1 argument");
+}

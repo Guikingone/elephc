@@ -2,7 +2,7 @@
 title: "get_declared_classes()"
 description: "Returns an array of the names of the defined classes."
 sidebar:
-  order: 80
+  order: 81
 ---
 
 ## get_declared_classes()

@@ -2,7 +2,7 @@
 title: "array_keys() — internals"
 description: "Compiler internals for array_keys(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 21
+  order: 22
 ---
 
 ## `array_keys()` — internals

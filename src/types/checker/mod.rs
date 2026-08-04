@@ -224,6 +224,14 @@ pub(crate) struct Checker {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
+    /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
+    ///
+    /// PHP's string increment can change the value's type (`"9"++` is `int(10)`), so EIR
+    /// lowering must give those locals boxed `Mixed` frame storage from their FIRST store
+    /// instead of widening the slot at the increment. Recorded here because the checker
+    /// already visits every expression with a typed environment, so no second AST walk is
+    /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
+    pub string_incdec_locals: HashSet<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -302,6 +310,7 @@ pub fn check_types(
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
+        string_incdec_locals: checker.string_incdec_locals,
     })
 }
 

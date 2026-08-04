@@ -23,6 +23,7 @@ use super::numeric;
 use super::objects;
 use super::pointers;
 use super::resource_ids;
+use super::round_mode;
 use super::spl;
 use super::strings;
 use super::system;
@@ -43,6 +44,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.
     numeric::emit_php_float_to_int(emitter);
+    round_mode::emit_round_mode(emitter);
 
     // String runtime functions
     strings::emit_concat_scratch(emitter);
@@ -63,6 +65,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
     strings::emit_str_persist(emitter);
+    strings::emit_str_inc_dec(emitter);
+    strings::emit_mixed_inc_dec(emitter);
     strings::emit_strtolower(emitter);
     strings::emit_strtoupper(emitter);
     strings::emit_trim(emitter);
@@ -76,6 +80,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_chr(emitter);
     strings::emit_strcmp(emitter);
     strings::emit_strcasecmp(emitter);
+    strings::emit_strncmp(emitter);
+    strings::emit_strncasecmp(emitter);
     strings::emit_str_starts_with(emitter);
     strings::emit_str_ends_with(emitter);
     strings::emit_str_replace(emitter);
@@ -94,6 +100,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_nl2br(emitter);
     strings::emit_wordwrap(emitter);
     strings::emit_bin2hex(emitter);
+    strings::emit_dec_to_base(emitter);
+    strings::emit_base_to_number(emitter);
     strings::emit_long2ip(emitter);
     strings::emit_ip2long(emitter);
     strings::emit_inet_ntop(emitter);
@@ -281,6 +289,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_intersect(emitter);
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
+    arrays::emit_array_count_values(emitter);
     arrays::emit_array_flip_string(emitter);
     arrays::emit_hash_flip(emitter);
     arrays::emit_hash_map(emitter);
@@ -400,6 +409,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     compare::emit_mixed_loose_eq(emitter);
     compare::emit_mixed_array_loose_eq(emitter);
     compare::emit_obj_loose_eq(emitter);
+    compare::emit_php_compare(emitter);
+    arrays::emit_min_max_mixed(emitter);
+    arrays::emit_min_max_str(emitter);
+    arrays::emit_min_max_hash(emitter);
 
     // Buffer runtime functions
     buffers::emit_buffer_new(emitter);

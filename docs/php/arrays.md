@@ -153,6 +153,33 @@ echo $b[0];   // 9
 
 The same applies to function parameters and mutating built-ins (`array_push()`, `sort()`, `shuffle()`, etc.).
 
+### Reference elements in array literals are not supported
+
+PHP lets an array literal hold a *reference* to a variable, so writing through the
+array writes through to that variable:
+
+```php
+<?php
+$first = 1;
+$r = [&$first];   // not supported by elephc
+$r[0] = 9;
+echo $first;      // PHP: 9
+```
+
+elephc rejects this at compile time:
+
+```text
+error[3:12]: Reference elements in array literals (`[&$x]`) are not supported:
+an array element cannot alias a variable's storage.
+```
+
+The same applies to keyed elements (`['k' => &$a]`) and the legacy
+`array(&$a)` spelling. elephc's arrays store plain values, and its only
+reference form points *into* array storage (`$b =& $a[0]`), never out of it —
+an element aliasing a local variable would be a pointer to a stack slot the
+array can outlive. Assign the value and copy back afterwards, or alias an
+existing element with `$b =& $a[0]`.
+
 ## Multi-dimensional arrays
 ```php
 <?php

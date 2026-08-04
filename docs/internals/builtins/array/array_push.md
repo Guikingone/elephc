@@ -2,7 +2,7 @@
 title: "array_push() — internals"
 description: "Compiler internals for array_push(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 29
+  order: 30
 ---
 
 ## `array_push()` — internals

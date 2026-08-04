@@ -53,6 +53,7 @@ pub enum RuntimeFnId {
     ArrayChunk,
     ArrayColumn,
     ArrayCombine,
+    ArrayCountValues,
     ArrayDiff,
     ArrayDiffAssoc,
     ArrayDiffKey,
@@ -310,11 +311,16 @@ pub enum RuntimeFnId {
     Clamp,
     Cos,
     Cosh,
+    Bindec,
+    Decbin,
+    Dechex,
+    Decoct,
     Deg2rad,
     Exp,
     Fdiv,
     Floor,
     Fmod,
+    Hexdec,
     Hypot,
     Intdiv,
     Log,
@@ -323,6 +329,7 @@ pub enum RuntimeFnId {
     Max,
     Min,
     MtRand,
+    Octdec,
     Pi,
     Pow,
     Rad2deg,
@@ -424,6 +431,8 @@ pub enum RuntimeFnId {
     StrStartsWith,
     Strcasecmp,
     Strcmp,
+    Strncasecmp,
+    Strncmp,
     Strpos,
     Strrpos,
     Strstr,
@@ -669,6 +678,10 @@ impl RuntimeFnId {
             RuntimeFnId::CtypeAlpha |
             RuntimeFnId::CtypeDigit |
             RuntimeFnId::CtypeSpace |
+            RuntimeFnId::Bindec |
+            RuntimeFnId::Decbin |
+            RuntimeFnId::Dechex |
+            RuntimeFnId::Decoct |
             RuntimeFnId::Deg2rad |
             RuntimeFnId::Exp |
             RuntimeFnId::Fdiv |
@@ -682,6 +695,7 @@ impl RuntimeFnId {
             RuntimeFnId::HashEquals |
             RuntimeFnId::Htmlentities |
             RuntimeFnId::Htmlspecialchars |
+            RuntimeFnId::Hexdec |
             RuntimeFnId::Hypot |
             RuntimeFnId::Implode |
             RuntimeFnId::InetNtop |
@@ -699,12 +713,12 @@ impl RuntimeFnId {
             RuntimeFnId::Ltrim |
             RuntimeFnId::Md5 |
             RuntimeFnId::NumberFormat |
+            RuntimeFnId::Octdec |
             RuntimeFnId::Ord |
             RuntimeFnId::Pi |
             RuntimeFnId::Pow |
             RuntimeFnId::Rad2deg |
             RuntimeFnId::Range |
-            RuntimeFnId::Round |
             RuntimeFnId::Rtrim |
             RuntimeFnId::Sha1 |
             RuntimeFnId::Sin |
@@ -732,6 +746,8 @@ impl RuntimeFnId {
             // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
             // empty separator, `str_pad()` empty pad string or bad pad type,
             // `str_repeat()` negative count, `str_split()` non-positive length,
+            // `round()` unknown rounding mode,
+            // `strncmp()`/`strncasecmp()` negative compare length,
             // `substr_count()` empty needle or out-of-subject offset/length,
             // `wordwrap()` empty break or zero cutting width, `min()`/`max()` over an
             // empty array), so they must not be treated
@@ -744,9 +760,12 @@ impl RuntimeFnId {
             | RuntimeFnId::Explode
             | RuntimeFnId::Max
             | RuntimeFnId::Min
+            | RuntimeFnId::Round
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrRepeat
             | RuntimeFnId::StrSplit
+            | RuntimeFnId::Strncasecmp
+            | RuntimeFnId::Strncmp
             | RuntimeFnId::SubstrCount
             | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
             RuntimeFnId::FunctionExists
@@ -1043,6 +1062,7 @@ impl RuntimeFnId {
                 // temporary, which leaked the whole source table on `array_flip(build())` while
                 // the same call through a named local stayed clean. Its Fresh-owning siblings
                 // `ArrayKeys` / `ArrayValues` were already listed here; this was the gap.
+                | RuntimeFnId::ArrayCountValues
                 | RuntimeFnId::ArrayFlip
                 | RuntimeFnId::ArrayIntersect
                 | RuntimeFnId::ArrayKeys
@@ -1057,6 +1077,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArraySlice
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
+                // hexdec()/bindec()/octdec() box their `int|float` answer through
+                // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
+                // that cannot alias the parsed subject string.
+                | RuntimeFnId::Bindec
+                | RuntimeFnId::Hexdec
+                | RuntimeFnId::Octdec
                 // Every property slot is re-boxed through `__rt_mixed_from_value`,
                 // which persists strings and increfs containers, so the cell handed
                 // back is independently owned and never aliases the source object's
@@ -1080,6 +1106,16 @@ impl RuntimeFnId {
                 // `microtime()` formats into fresh storage from the clock; it has no string
                 // argument to alias. Its float mode is non-heap and unaffected.
                 | RuntimeFnId::Microtime
+                // Every `min()` / `max()` return path materializes fresh storage rather
+                // than handing back argument storage: the scalar forms return a plain
+                // register value, a `Mixed` result is boxed through
+                // `__rt_mixed_from_value` (which persists strings and increfs heap
+                // children), and the single-array string reduction runs its borrowed
+                // winner through `__rt_str_persist`. Leaving them in the default
+                // `MayAliasArguments` bucket suppressed nothing useful and leaked the
+                // boxed `Mixed` result of `min([...])`.
+                | RuntimeFnId::Max
+                | RuntimeFnId::Min
                 | RuntimeFnId::ObGetClean
                 | RuntimeFnId::ObGetContents
                 | RuntimeFnId::ObGetFlush
@@ -1119,7 +1155,10 @@ impl RuntimeFnId {
             BuiltinResultOwnership::Fresh
         } else if matches!(
             self,
-            RuntimeFnId::Htmlentities
+            RuntimeFnId::Decbin
+                | RuntimeFnId::Dechex
+                | RuntimeFnId::Decoct
+                | RuntimeFnId::Htmlentities
                 | RuntimeFnId::Htmlspecialchars
                 | RuntimeFnId::Implode
         ) {
@@ -1144,6 +1183,7 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayFillKeys => "array_fill_keys",
             RuntimeFnId::ArrayFilter => "array_filter",
             RuntimeFnId::ArrayFind => "array_find",
+            RuntimeFnId::ArrayCountValues => "array_count_values",
             RuntimeFnId::ArrayFlip => "array_flip",
             RuntimeFnId::ArrayIntersect => "array_intersect",
             RuntimeFnId::ArrayIntersectAssoc => "array_intersect_assoc",
@@ -1394,11 +1434,16 @@ impl RuntimeFnId {
             RuntimeFnId::Clamp => "clamp",
             RuntimeFnId::Cos => "cos",
             RuntimeFnId::Cosh => "cosh",
+            RuntimeFnId::Bindec => "bindec",
+            RuntimeFnId::Decbin => "decbin",
+            RuntimeFnId::Dechex => "dechex",
+            RuntimeFnId::Decoct => "decoct",
             RuntimeFnId::Deg2rad => "deg2rad",
             RuntimeFnId::Exp => "exp",
             RuntimeFnId::Fdiv => "fdiv",
             RuntimeFnId::Floor => "floor",
             RuntimeFnId::Fmod => "fmod",
+            RuntimeFnId::Hexdec => "hexdec",
             RuntimeFnId::Hypot => "hypot",
             RuntimeFnId::Intdiv => "intdiv",
             RuntimeFnId::Log => "log",
@@ -1492,6 +1537,7 @@ impl RuntimeFnId {
             RuntimeFnId::MbStrlen => "mb_strlen",
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
+            RuntimeFnId::Octdec => "octdec",
             RuntimeFnId::Ord => "ord",
             RuntimeFnId::Printf => "printf",
             RuntimeFnId::Rtrim => "rtrim",
@@ -1508,6 +1554,8 @@ impl RuntimeFnId {
             RuntimeFnId::StrStartsWith => "str_starts_with",
             RuntimeFnId::Strcasecmp => "strcasecmp",
             RuntimeFnId::Strcmp => "strcmp",
+            RuntimeFnId::Strncasecmp => "strncasecmp",
+            RuntimeFnId::Strncmp => "strncmp",
             RuntimeFnId::Strpos => "strpos",
             RuntimeFnId::Strrpos => "strrpos",
             RuntimeFnId::Strstr => "strstr",

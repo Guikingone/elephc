@@ -643,3 +643,48 @@ echo strlen($n), "|", substr($n, -12);
     );
     assert_eq!(out, "65412|1,234,567.89");
 }
+
+/// Verifies `join()` behaves as `implode()`'s alias for the two-argument call form.
+/// Fixture and expectation come from `LC_ALL=C php`: `join(", ", ["a","b","c"])` is `"a, b, c"`.
+#[test]
+fn test_join_with_separator() {
+    let out = compile_and_run(r#"<?php echo join(", ", ["a", "b", "c"]);"#);
+    assert_eq!(out, "a, b, c");
+}
+
+/// Verifies `join()`'s single-argument form joins with an empty separator.
+/// PHP declares `join(string|array $separator, ?array $array = null)`, so `join($array)`
+/// concatenates the elements: `LC_ALL=C php` prints `abc`.
+#[test]
+fn test_join_single_array_argument() {
+    let out = compile_and_run(r#"<?php echo join(["a", "b", "c"]);"#);
+    assert_eq!(out, "abc");
+}
+
+/// Verifies `join()` resolves case-insensitively and through a namespace-qualified call,
+/// and that its parameters are reachable by name.
+#[test]
+fn test_join_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x", "y"];
+echo JOIN("-", $a), "|", \join("+", $a), "|", join(separator: "*", array: $a);
+"#,
+    );
+    assert_eq!(out, "x-y|x+y|x*y");
+}
+
+/// Verifies `join()` joins an integer array, which routes through the integer renderer.
+#[test]
+fn test_join_int_array() {
+    let out = compile_and_run(r#"<?php echo join("+", [1, 2, 3]), "|", join([1, 2, 3]);"#);
+    assert_eq!(out, "1+2+3|123");
+}
+
+/// Verifies `implode()`/`join()` accept an empty array literal, whose element type is
+/// uninhabited. `LC_ALL=C php` prints an empty string for both.
+#[test]
+fn test_join_empty_array() {
+    let out = compile_and_run(r#"<?php echo "[", implode("", []), join([]), "]";"#);
+    assert_eq!(out, "[]");
+}

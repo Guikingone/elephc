@@ -2,7 +2,7 @@
 title: "chdir()"
 description: "Changes the current directory."
 sidebar:
-  order: 105
+  order: 106
 ---
 
 ## chdir()

@@ -2,7 +2,7 @@
 title: "get_class() — internals"
 description: "Compiler internals for get_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 77
+  order: 78
 ---
 
 ## `get_class()` — internals

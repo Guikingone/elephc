@@ -2,7 +2,7 @@
 title: "class_attribute_args() — internals"
 description: "Compiler internals for class_attribute_args(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 67
+  order: 68
 ---
 
 ## `class_attribute_args()` — internals

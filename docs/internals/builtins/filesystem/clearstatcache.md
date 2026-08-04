@@ -2,7 +2,7 @@
 title: "clearstatcache() — internals"
 description: "Compiler internals for clearstatcache(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 109
+  order: 110
 ---
 
 ## `clearstatcache()` — internals

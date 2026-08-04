@@ -202,6 +202,61 @@ pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
     column::lower_array_column(ctx, inst)
 }
 
+/// Lowers `array_count_values()` through the tally-building runtime helpers.
+///
+/// Associative sources take `__rt_hash_count_values`, which dispatches on each entry's
+/// RUNTIME value tag. Indexed sources take `__rt_array_count_values` with the COMPILE-TIME
+/// element tag, because an indexed array's payload carries no per-slot tag: the tag selects
+/// between the 8-byte integer slot layout, the 16-byte string slot layout, and the boxed
+/// `Mixed` pointer layout. Any other element tag makes every entry skippable, which is exactly
+/// php-src's behaviour for a `float`/`bool`/array/object element.
+pub(crate) fn lower_array_count_values(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count(inst, "array_count_values", 1)?;
+    let array = expect_operand(inst, 0)?;
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    if matches!(source_ty, PhpType::AssocArray { .. }) {
+        ctx.load_value_to_result(array)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the source hash pointer as the tally helper argument
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_hash_count_values");
+        return store_if_result(ctx, inst);
+    }
+    let element_tag = array_count_values_element_tag(&source_ty)?;
+    ctx.load_value_to_result(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("mov x1, #{}", element_tag));             // pass the compile-time element tag to the tally helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the source indexed-array pointer as the tally helper argument
+            ctx.emitter
+                .instruction(&format!("mov rsi, {}", element_tag));             // pass the compile-time element tag to the tally helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_count_values");
+    store_if_result(ctx, inst)
+}
+
+/// Returns the runtime element tag `__rt_array_count_values` needs for an indexed source.
+///
+/// Only `Int`, `Str`, and boxed `Mixed` elements can produce a PHP array key. Every other
+/// element type is reported with its own tag so the helper warns and skips each entry the way
+/// php-src does, instead of reading a float payload as a pointer.
+fn array_count_values_element_tag(source_ty: &PhpType) -> Result<u8> {
+    match source_ty {
+        PhpType::Array(elem) => runtime_value_tag("array_count_values", &elem.codegen_repr()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_count_values for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Lowers `array_flip()` through the hash-building runtime helpers.
 ///
 /// Associative sources take the `__rt_hash_flip` path, which walks the source hash and

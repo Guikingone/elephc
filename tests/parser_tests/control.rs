@@ -273,3 +273,129 @@ fn test_parse_foreach_reference_to_pattern_is_rejected() {
     assert!(parse_fails("<?php foreach ($m as &[$a, $b]) {}"));
     assert!(parse_fails("<?php foreach ($m as $k => &[$a, $b]) {}"));
 }
+
+// --- Alternative control-structure syntax ---
+
+/// Verifies `if (…): … endif;` produces exactly the same `StmtKind::If` shape as the brace form.
+#[test]
+fn test_alternative_if_parses_to_plain_if() {
+    let alternative = parse_source("<?php if (1) { echo \"a\"; } ");
+    let braces = parse_source("<?php if (1): echo \"a\"; endif;");
+    assert_eq!(alternative.len(), 1);
+    assert_eq!(braces.len(), 1);
+    let (
+        StmtKind::If {
+            then_body: alt_body,
+            elseif_clauses: alt_elseifs,
+            else_body: alt_else,
+            ..
+        },
+        StmtKind::If {
+            then_body: brace_body,
+            elseif_clauses: brace_elseifs,
+            else_body: brace_else,
+            ..
+        },
+    ) = (&alternative[0].kind, &braces[0].kind)
+    else {
+        panic!("expected both forms to parse to If");
+    };
+    assert_eq!(alt_body.len(), brace_body.len());
+    assert_eq!(alt_elseifs.len(), brace_elseifs.len());
+    assert_eq!(alt_else.is_some(), brace_else.is_some());
+}
+
+/// Verifies `elseif:` and `else:` segments populate the same clause list the brace form uses.
+#[test]
+fn test_alternative_if_elseif_else_parses() {
+    let stmts =
+        parse_source("<?php if (1): echo 1; elseif (2): echo 2; elseif (3): echo 3; else: echo 4; endif;");
+    let StmtKind::If {
+        elseif_clauses,
+        else_body,
+        then_body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected If");
+    };
+    assert_eq!(then_body.len(), 1);
+    assert_eq!(elseif_clauses.len(), 2);
+    assert_eq!(else_body.as_ref().map(Vec::len), Some(1));
+}
+
+/// Verifies each alternative loop form parses to its ordinary loop statement kind.
+#[test]
+fn test_alternative_loops_parse_to_plain_loops() {
+    assert!(matches!(
+        parse_source("<?php while (false): echo 1; endwhile;")[0].kind,
+        StmtKind::While { .. }
+    ));
+    assert!(matches!(
+        parse_source("<?php for ($i = 0; $i < 1; $i++): echo 1; endfor;")[0].kind,
+        StmtKind::For { .. }
+    ));
+    assert!(matches!(
+        parse_source("<?php foreach ([1] as $x): echo $x; endforeach;")[0].kind,
+        StmtKind::Foreach { .. }
+    ));
+}
+
+/// Verifies the alternative `switch` form collects cases and the default arm like the brace form.
+#[test]
+fn test_alternative_switch_parses_cases_and_default() {
+    let stmts = parse_source(
+        "<?php switch (1): case 1: echo 1; break; case 2: echo 2; break; default: echo 3; endswitch;",
+    );
+    let StmtKind::Switch { cases, default, .. } = &stmts[0].kind else {
+        panic!("expected Switch");
+    };
+    assert_eq!(cases.len(), 2);
+    assert!(default.is_some());
+}
+
+/// Verifies alternative bodies may be empty, matching PHP's `if (…): endif;`.
+#[test]
+fn test_alternative_bodies_may_be_empty() {
+    let stmts = parse_source(
+        "<?php if (false): endif; while (false): endwhile; foreach ([] as $x): endforeach; switch (1): endswitch;",
+    );
+    assert_eq!(stmts.len(), 4);
+}
+
+/// Verifies alternative and brace forms nest inside each other in both directions.
+#[test]
+fn test_alternative_and_brace_forms_nest() {
+    let outer_alt = parse_source("<?php foreach ([1] as $a): if ($a) { echo 1; } endforeach;");
+    let StmtKind::Foreach { body, .. } = &outer_alt[0].kind else {
+        panic!("expected Foreach");
+    };
+    assert!(matches!(body[0].kind, StmtKind::If { .. }));
+
+    let outer_brace = parse_source("<?php foreach ([1] as $a) { if ($a): echo 1; endif; }");
+    let StmtKind::Foreach { body, .. } = &outer_brace[0].kind else {
+        panic!("expected Foreach");
+    };
+    assert!(matches!(body[0].kind, StmtKind::If { .. }));
+}
+
+/// Verifies mixing the two `if` styles, an unterminated alternative block, a mismatched
+/// terminator, and a stray terminator are all rejected, matching PHP.
+#[test]
+fn test_alternative_syntax_malformed_forms_are_rejected() {
+    assert!(parse_fails("<?php if (true) { echo 1; } else: echo 2; endif;"));
+    assert!(parse_fails("<?php if (true): echo 1; else { echo 2; } endif;"));
+    assert!(parse_fails("<?php if (true): echo 1;"));
+    assert!(parse_fails("<?php foreach ([1] as $x): echo 1; endwhile;"));
+    assert!(parse_fails("<?php endif;"));
+    assert!(parse_fails("<?php for ($i = 0; $i < 1; $i++): echo 1; endfor"));
+}
+
+// --- goto (unsupported) ---
+
+/// Verifies `goto` and its target label are rejected at parse time rather than silently ignored.
+#[test]
+fn test_goto_and_labels_are_rejected() {
+    assert!(parse_fails("<?php goto done; done: echo 1;"));
+    assert!(parse_fails("<?php done: echo 1;"));
+}

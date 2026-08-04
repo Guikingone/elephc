@@ -2,7 +2,7 @@
 title: "checkdate() — internals"
 description: "Compiler internals for checkdate(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 91
+  order: 92
 ---
 
 ## `checkdate()` — internals

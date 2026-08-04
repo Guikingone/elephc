@@ -2,7 +2,7 @@
 title: "stream_filter_prepend() — internals"
 description: "Compiler internals for stream_filter_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 359
+  order: 366
 ---
 
 ## `stream_filter_prepend()` — internals

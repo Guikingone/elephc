@@ -14,6 +14,7 @@ sidebar:
 | [`array_chunk()`](./builtins/array/array_chunk.md) | `(array $array, int $length): array` | `array` | ✓ | ✓ |
 | [`array_column()`](./builtins/array/array_column.md) | `(array $array, string $column_key): array` | `array` | ✓ | ✓ |
 | [`array_combine()`](./builtins/array/array_combine.md) | `(array $keys, array $values): array` | `array` | ✓ | ✓ |
+| [`array_count_values()`](./builtins/array/array_count_values.md) | `(array $array): array` | `array` | ✓ | — |
 | [`array_diff()`](./builtins/array/array_diff.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
 | [`array_diff_assoc()`](./builtins/array/array_diff_assoc.md) | `(array $array, ...$arrays): mixed` | `mixed` | ✓ | — |
 | [`array_diff_key()`](./builtins/array/array_diff_key.md) | `(array $array, ...$arrays): array` | `array` | ✓ | ✓ |
@@ -267,15 +268,20 @@ sidebar:
 | [`asin()`](./builtins/math/asin.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan()`](./builtins/math/atan.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`atan2()`](./builtins/math/atan2.md) | `(float $y, float $x): float` | `float` | ✓ | ✓ |
+| [`bindec()`](./builtins/math/bindec.md) | `(string $binary_string): mixed` | `mixed` | ✓ | — |
 | [`ceil()`](./builtins/math/ceil.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`clamp()`](./builtins/math/clamp.md) | `(int $value, int $min, int $max): mixed` | `mixed` | ✓ | ✓ |
 | [`cos()`](./builtins/math/cos.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`cosh()`](./builtins/math/cosh.md) | `(float $num): float` | `float` | ✓ | ✓ |
+| [`decbin()`](./builtins/math/decbin.md) | `(int $num): string` | `string` | ✓ | — |
+| [`dechex()`](./builtins/math/dechex.md) | `(int $num): string` | `string` | ✓ | — |
+| [`decoct()`](./builtins/math/decoct.md) | `(int $num): string` | `string` | ✓ | — |
 | [`deg2rad()`](./builtins/math/deg2rad.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`exp()`](./builtins/math/exp.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fdiv()`](./builtins/math/fdiv.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
 | [`floor()`](./builtins/math/floor.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`fmod()`](./builtins/math/fmod.md) | `(float $num1, float $num2): float` | `float` | ✓ | ✓ |
+| [`hexdec()`](./builtins/math/hexdec.md) | `(string $hex_string): mixed` | `mixed` | ✓ | — |
 | [`hypot()`](./builtins/math/hypot.md) | `(float $x, float $y): float` | `float` | ✓ | ✓ |
 | [`intdiv()`](./builtins/math/intdiv.md) | `(int $num1, int $num2): int` | `int` | ✓ | ✓ |
 | [`is_finite()`](./builtins/math/is_finite.md) | `(float $num): bool` | `bool` | ✓ | ✓ |
@@ -287,12 +293,13 @@ sidebar:
 | [`max()`](./builtins/math/max.md) | `(mixed $value, ...$values): mixed` | `mixed` | ✓ | ✓ |
 | [`min()`](./builtins/math/min.md) | `(mixed $value, ...$values): mixed` | `mixed` | ✓ | ✓ |
 | [`mt_rand()`](./builtins/math/mt_rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
+| [`octdec()`](./builtins/math/octdec.md) | `(string $octal_string): mixed` | `mixed` | ✓ | — |
 | [`pi()`](./builtins/math/pi.md) | `(): float` | `float` | ✓ | ✓ |
 | [`pow()`](./builtins/math/pow.md) | `(float $num, float $exponent): float` | `float` | ✓ | ✓ |
 | [`rad2deg()`](./builtins/math/rad2deg.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`rand()`](./builtins/math/rand.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
 | [`random_int()`](./builtins/math/random_int.md) | `(int $min, int $max): int` | `int` | ✓ | ✓ |
-| [`round()`](./builtins/math/round.md) | `(float $num, int $precision = 0): float` | `float` | ✓ | ✓ |
+| [`round()`](./builtins/math/round.md) | `(float $num, int $precision = 0, int $mode = 1): float` | `float` | ✓ | ✓ |
 | [`sin()`](./builtins/math/sin.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`sinh()`](./builtins/math/sinh.md) | `(float $num): float` | `float` | ✓ | ✓ |
 | [`sqrt()`](./builtins/math/sqrt.md) | `(float $num): float` | `float` | ✓ | ✓ |
@@ -397,6 +404,7 @@ sidebar:
 | [`inet_ntop()`](./builtins/string/inet_ntop.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`inet_pton()`](./builtins/string/inet_pton.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`ip2long()`](./builtins/string/ip2long.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
+| [`join()`](./builtins/string/join.md) | `(mixed $separator, mixed $array = null): string` | `string` | ✓ | — |
 | [`lcfirst()`](./builtins/string/lcfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`long2ip()`](./builtins/string/long2ip.md) | `(int $ip): string` | `string` | ✓ | ✓ |
 | [`ltrim()`](./builtins/string/ltrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
@@ -424,6 +432,8 @@ sidebar:
 | [`strcmp()`](./builtins/string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`stripslashes()`](./builtins/string/stripslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strlen()`](./builtins/string/strlen.md) | `(string $string): int` | `int` | ✓ | ✓ |
+| [`strncasecmp()`](./builtins/string/strncasecmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
+| [`strncmp()`](./builtins/string/strncmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
 | [`strpos()`](./builtins/string/strpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrev()`](./builtins/string/strrev.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strrpos()`](./builtins/string/strrpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
@@ -431,6 +441,7 @@ sidebar:
 | [`strtolower()`](./builtins/string/strtolower.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strtoupper()`](./builtins/string/strtoupper.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`substr()`](./builtins/string/substr.md) | `(string $string, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
+| [`substr_count()`](./builtins/string/substr_count.md) | `(string $haystack, string $needle, int $offset = 0, mixed $length = null): int` | `int` | ✓ | — |
 | [`substr_replace()`](./builtins/string/substr_replace.md) | `(string $string, string $replace, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
 | [`trim()`](./builtins/string/trim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`ucfirst()`](./builtins/string/ucfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |

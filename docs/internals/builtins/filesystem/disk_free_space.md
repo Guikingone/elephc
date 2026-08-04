@@ -2,7 +2,7 @@
 title: "disk_free_space() — internals"
 description: "Compiler internals for disk_free_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 112
+  order: 113
 ---
 
 ## `disk_free_space()` — internals

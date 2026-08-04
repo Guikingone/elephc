@@ -7,9 +7,15 @@
 //!
 //! Key details:
 //! - Indexed arrays store their logical length in the first header word and their
-//!   payload slots 24 bytes after the header, one 8-byte slot per element.
+//!   payload slots 24 bytes after the header: one 8-byte slot per `int`/`float`/`bool`
+//!   or boxed-`Mixed` element, one 16-byte `[ptr][len]` slot per string element.
+//! - Scalar indexed arrays reduce with an inline loop; string, boxed-`Mixed`, and
+//!   hash-backed containers reduce through the `__rt_min_max_str` /
+//!   `__rt_min_max_mixed` / `__rt_min_max_hash` runtime helpers, which apply PHP 8's
+//!   full comparison table through `__rt_php_compare`.
 //! - An empty array is PHP's `ValueError`, thrown through the shared math
-//!   `emit_throw_value_error()` path so it stays catchable like `clamp()`'s.
+//!   `emit_throw_value_error()` path so it stays catchable like `clamp()`'s. The
+//!   runtime reductions report emptiness with runtime tag `-1`.
 //! - Scratch is limited to the registers the backend already treats as clobbered by
 //!   a builtin call (`x9`–`x13`, `d0`/`d1`; `rax`/`rcx`/`rdx`/`r10`/`r11`, `xmm0`/`xmm1`),
 //!   so no register-allocated value can be destroyed by the loop.
@@ -25,6 +31,28 @@ use super::super::expect_operand;
 
 /// Byte offset of the first payload slot inside an indexed-array allocation.
 const ARRAY_DATA_OFFSET: i64 = 24;
+
+/// Selects the runtime reduction that matches a container's element storage.
+#[derive(Clone, Copy)]
+enum ContainerReduction {
+    /// Indexed array of 16-byte `[ptr][len]` string slots (`__rt_min_max_str`).
+    IndexedStr,
+    /// Indexed array of borrowed boxed-`Mixed` cells (`__rt_min_max_mixed`).
+    IndexedMixed,
+    /// Hash-backed associative array of any value type (`__rt_min_max_hash`).
+    Hash,
+}
+
+impl ContainerReduction {
+    /// Returns the `__rt_*` symbol that reduces this container shape.
+    fn symbol(self) -> &'static str {
+        match self {
+            ContainerReduction::IndexedStr => "__rt_min_max_str",
+            ContainerReduction::IndexedMixed => "__rt_min_max_mixed",
+            ContainerReduction::Hash => "__rt_min_max_hash",
+        }
+    }
+}
 
 /// Lowers PHP's single-argument `min()` / `max()` form and reports whether it applied.
 ///
@@ -43,25 +71,35 @@ pub(super) fn try_lower_single_array(
     let array = expect_operand(inst, 0)?;
     match ctx.value_php_type(array)?.codegen_repr() {
         PhpType::Array(element) => {
-            lower_array_min_max(ctx, inst, want_max, &element.codegen_repr())?;
+            let element = element.codegen_repr();
+            match element {
+                PhpType::Str => {
+                    lower_container_min_max(ctx, inst, want_max, ContainerReduction::IndexedStr)?
+                }
+                PhpType::Mixed => {
+                    lower_container_min_max(ctx, inst, want_max, ContainerReduction::IndexedMixed)?
+                }
+                _ => lower_array_min_max(ctx, inst, want_max, &element)?,
+            }
             Ok(true)
         }
-        PhpType::AssocArray { key, value } => Err(unsupported_element_error(
-            super::min_max_name(want_max),
-            &format!("array<{}, {}>", key, value),
-        )),
+        PhpType::AssocArray { .. } => {
+            lower_container_min_max(ctx, inst, want_max, ContainerReduction::Hash)?;
+            Ok(true)
+        }
         _ => Ok(false),
     }
 }
 
 /// Formats the diagnostic for a single-array `min()` / `max()` the reduction cannot compare.
 ///
-/// The reduction walks 8-byte scalar payload slots, so it covers indexed arrays of
-/// `int`, `float`, and `bool`. String, boxed-`Mixed`, and hash-backed associative
-/// arrays would need PHP's full comparison table on heap values and are rejected here.
+/// Indexed arrays of `int`, `float`, `bool` and `string`, indexed arrays of boxed
+/// `Mixed` cells, and hash-backed associative arrays all reduce. What is left is the
+/// tagged nullable-scalar element representation, whose payload slots carry their
+/// runtime tag in a side register the reduction cannot read.
 fn unsupported_element_error(name: &str, shape: &str) -> CodegenIrError {
     CodegenIrError::unsupported(format!(
-        "{}() with a single array argument requires an indexed array of int, float, or bool values, got {}",
+        "{}() with a single array argument cannot reduce an array of {} values",
         name, shape
     ))
 }
@@ -155,6 +193,143 @@ fn materialize_result(
             Ok(())
         }
         _ => Ok(()),
+    }
+}
+
+/// Lowers `min($container)` / `max($container)` through a runtime reduction helper.
+///
+/// Handles the container shapes whose elements are not raw 8-byte scalar words:
+/// indexed `array<string>`, indexed arrays of boxed `Mixed` cells, and hash-backed
+/// associative arrays. The helper returns the winning element as an unboxed
+/// `(tag, lo, hi)` triple, or tag `-1` for an empty container, which is turned into
+/// PHP's catchable `ValueError` here.
+fn lower_container_min_max(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    want_max: bool,
+    reduction: ContainerReduction,
+) -> Result<()> {
+    let name = super::min_max_name(want_max);
+    let array = expect_operand(inst, 0)?;
+    let result_ty = inst
+        .result
+        .map(|value| ctx.value_php_type(value))
+        .transpose()?
+        .unwrap_or(PhpType::Mixed)
+        .codegen_repr();
+    let empty_label = ctx.next_label("min_max_container_empty");
+    let done_label = ctx.next_label("min_max_container_done");
+    let message = format!(
+        "{}(): Argument #1 ($value) must contain at least one element",
+        name
+    );
+    let (message_label, message_len) = ctx.data.add_string(message.as_bytes());
+    let direction = i64::from(want_max);
+
+    ctx.load_value_to_result(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("mov x1, #{}", direction));        // pass 1 for max() and 0 for min() as the reduction direction
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // move the container pointer into the reduction argument register
+            ctx.emitter.instruction(&format!("mov rsi, {}", direction));        // pass 1 for max() and 0 for min() as the reduction direction
+        }
+    }
+    abi::emit_call_label(ctx.emitter, reduction.symbol());
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmn x0, #1");                              // did the reduction report the empty-container tag?
+            ctx.emitter.instruction(&format!("b.eq {}", empty_label));          // an empty container is PHP's ValueError, not a reduction
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, -1");                             // did the reduction report the empty-container tag?
+            ctx.emitter.instruction(&format!("je {}", empty_label));            // an empty container is PHP's ValueError, not a reduction
+        }
+    }
+    materialize_container_result(ctx, &result_ty, name)?;
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&empty_label);
+    super::emit_throw_value_error(ctx, &message_label, message_len);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Converts a reduced `(tag, lo, hi)` triple into the EIR result value's representation.
+///
+/// The triple already sits in the registers `__rt_mixed_from_value` consumes and in the
+/// registers a string result is returned in on AArch64, so the boxed and string cases
+/// cost at most a register move. Numeric results carry a defensive tag check so an
+/// element whose runtime tag disagrees with the inferred result type is converted
+/// instead of reinterpreted.
+fn materialize_container_result(
+    ctx: &mut FunctionContext<'_>,
+    result_ty: &PhpType,
+    name: &str,
+) -> Result<()> {
+    match result_ty {
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            Ok(())
+        }
+        PhpType::Str => {
+            if ctx.emitter.target.arch == Arch::X86_64 {
+                ctx.emitter.instruction("mov rax, rdi");                        // publish the reduced string pointer in the string result register
+                ctx.emitter.instruction("mov rdx, rsi");                        // publish the reduced string length in the string result register
+            }
+            // The reduction borrows the winning bytes from the container, which the
+            // caller is free to release right after this call, so the result has to
+            // own its own copy.
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            Ok(())
+        }
+        PhpType::Float => {
+            let double_label = ctx.next_label("min_max_container_double");
+            let ready_label = ctx.next_label("min_max_container_float_ready");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #2");                      // is the reduced element already a float payload?
+                    ctx.emitter.instruction(&format!("b.eq {}", double_label)); // reinterpret its payload word directly
+                    ctx.emitter.instruction("scvtf d0, x1");                    // widen an integer-like payload into the float result register
+                    abi::emit_jump(ctx.emitter, &ready_label);
+                    ctx.emitter.label(&double_label);
+                    ctx.emitter.instruction("fmov d0, x1");                     // reinterpret the payload word as the double it encodes
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 2");                      // is the reduced element already a float payload?
+                    ctx.emitter.instruction(&format!("je {}", double_label));   // reinterpret its payload word directly
+                    ctx.emitter.instruction("cvtsi2sd xmm0, rdi");              // widen an integer-like payload into the float result register
+                    abi::emit_jump(ctx.emitter, &ready_label);
+                    ctx.emitter.label(&double_label);
+                    ctx.emitter.instruction("movq xmm0, rdi");                  // reinterpret the payload word as the double it encodes
+                }
+            }
+            ctx.emitter.label(&ready_label);
+            Ok(())
+        }
+        PhpType::Int | PhpType::Bool | PhpType::Void | PhpType::Never => {
+            let ready_label = ctx.next_label("min_max_container_int_ready");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("cmp x0, #2");                      // is the reduced element a float payload?
+                    ctx.emitter.instruction(&format!("b.ne {}", ready_label));  // integer-like payloads publish unchanged
+                    ctx.emitter.instruction("fmov d0, x1");                     // reinterpret the payload word as the double it encodes
+                    ctx.emitter.instruction("fcvtzs x1, d0");                   // truncate the double toward zero like PHP's int cast
+                    ctx.emitter.label(&ready_label);
+                    ctx.emitter.instruction("mov x0, x1");                      // publish the reduced payload in the integer result register
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("cmp rax, 2");                      // is the reduced element a float payload?
+                    ctx.emitter.instruction(&format!("jne {}", ready_label));   // integer-like payloads publish unchanged
+                    ctx.emitter.instruction("movq xmm0, rdi");                  // reinterpret the payload word as the double it encodes
+                    ctx.emitter.instruction("cvttsd2si rdi, xmm0");             // truncate the double toward zero like PHP's int cast
+                    ctx.emitter.label(&ready_label);
+                    ctx.emitter.instruction("mov rax, rdi");                    // publish the reduced payload in the integer result register
+                }
+            }
+            Ok(())
+        }
+        other => Err(unsupported_element_error(name, &format!("{}", other))),
     }
 }
 

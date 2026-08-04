@@ -69,6 +69,12 @@ pub(super) enum ValueGuard<'a> {
     /// so `PHP_INT_MIN`, whose magnitude is not representable, fails the guard instead
     /// of wrapping back to a negative "absolute" length.
     SignedMagnitudeAtMost(&'a str, i64),
+    /// The 64-bit register, read as a signed integer, must satisfy
+    /// `minimum <= value <= maximum` (`round()`'s `$mode` enumeration).
+    ///
+    /// Both ends are inclusive; the guard is used for builtin arguments whose accepted
+    /// values are a small contiguous set of PHP constants rather than a magnitude limit.
+    SignedInRange(&'a str, i64, i64),
 }
 
 /// Throws a catchable PHP `ValueError` unless the guarded register satisfies `guard`.
@@ -106,6 +112,22 @@ pub(super) fn emit_value_error_unless(
             ctx.emitter.instruction(&format!("jg {}", fail_label));             // a value above the bound is out of range
             ctx.emitter.instruction(&format!("cmp {}, -{}", reg, maximum));     // compare the materialized argument against the negated bound
             ctx.emitter.instruction(&format!("jge {}", ok_label));              // a value at or above the negated bound is in range
+            ctx.emitter.label(&fail_label);
+        }
+        (Arch::AArch64, ValueGuard::SignedInRange(reg, minimum, maximum)) => {
+            let fail_label = ctx.next_label("value_guard_fail");
+            ctx.emitter.instruction(&format!("cmp {}, #{}", reg, minimum));     // compare the materialized argument against the inclusive lower bound
+            ctx.emitter.instruction(&format!("b.lt {}", fail_label));           // a value below the range is rejected
+            ctx.emitter.instruction(&format!("cmp {}, #{}", reg, maximum));     // compare the materialized argument against the inclusive upper bound
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // a value at or below the upper bound is in range
+            ctx.emitter.label(&fail_label);
+        }
+        (Arch::X86_64, ValueGuard::SignedInRange(reg, minimum, maximum)) => {
+            let fail_label = ctx.next_label("value_guard_fail");
+            ctx.emitter.instruction(&format!("cmp {}, {}", reg, minimum));      // compare the materialized argument against the inclusive lower bound
+            ctx.emitter.instruction(&format!("jl {}", fail_label));             // a value below the range is rejected
+            ctx.emitter.instruction(&format!("cmp {}, {}", reg, maximum));      // compare the materialized argument against the inclusive upper bound
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // a value at or below the upper bound is in range
             ctx.emitter.label(&fail_label);
         }
     }

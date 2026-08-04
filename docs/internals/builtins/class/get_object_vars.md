@@ -2,7 +2,7 @@
 title: "get_object_vars() — internals"
 description: "Compiler internals for get_object_vars(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 83
+  order: 84
 ---
 
 ## `get_object_vars()` — internals

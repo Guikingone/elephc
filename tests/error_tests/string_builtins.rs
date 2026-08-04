@@ -460,3 +460,53 @@ fn test_error_vprintf_wrong_args() {
         "vprintf() takes exactly 2 arguments",
     );
 }
+
+/// Verifies that `join()` with no arguments produces the correct arity error.
+/// `join()` mirrors PHP's `implode()` signature, whose `$array` parameter is optional,
+/// so the enforced contract is one or two arguments.
+#[test]
+fn test_error_join_wrong_args() {
+    expect_error("<?php join();", "join() takes 1 or 2 arguments");
+}
+
+/// Verifies that `join()` with three arguments produces the correct arity error.
+#[test]
+fn test_error_join_too_many_args() {
+    expect_error("<?php join(\"a\", [\"b\"], \"c\");", "join() takes 1 or 2 arguments");
+}
+
+/// Verifies that `substr_count()` with a single argument produces the correct arity error.
+#[test]
+fn test_error_substr_count_wrong_args() {
+    expect_error(
+        "<?php substr_count(\"abc\");",
+        "substr_count() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies that `substr_count()` with five arguments produces the correct arity error.
+#[test]
+fn test_error_substr_count_too_many_args() {
+    expect_error(
+        "<?php substr_count(\"abc\", \"b\", 0, 1, 2);",
+        "substr_count() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies that `strncmp()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_strncmp_wrong_args() {
+    expect_error(
+        "<?php strncmp(\"a\", \"b\");",
+        "strncmp() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies that `strncasecmp()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_strncasecmp_wrong_args() {
+    expect_error(
+        "<?php strncasecmp(\"a\", \"b\");",
+        "strncasecmp() takes exactly 3 arguments",
+    );
+}

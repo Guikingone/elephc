@@ -2,7 +2,7 @@
 title: "array_push()"
 description: "Pushes one or more elements onto the end of array."
 sidebar:
-  order: 29
+  order: 30
 ---
 
 ## array_push()

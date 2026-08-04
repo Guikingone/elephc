@@ -797,3 +797,30 @@ usort($w, fn($a, $b) => strlen($a) <=> strlen($b));
         "strlen() argument must be string",
     );
 }
+
+/// Verifies `array_count_values()` rejects a missing argument.
+#[test]
+fn test_error_array_count_values_wrong_args() {
+    expect_error(
+        "<?php array_count_values();",
+        "array_count_values() takes exactly 1 argument",
+    );
+}
+
+/// Verifies `array_count_values()` rejects excess positional arguments.
+#[test]
+fn test_error_array_count_values_too_many_args() {
+    expect_error(
+        "<?php echo array_count_values([1], [2]);",
+        "array_count_values() takes exactly 1 argument",
+    );
+}
+
+/// Verifies `array_count_values()` rejects a non-array argument.
+#[test]
+fn test_error_array_count_values_wrong_type() {
+    expect_error(
+        "<?php echo array_count_values(\"x\");",
+        "array_count_values() argument must be array",
+    );
+}

@@ -2,7 +2,7 @@
 title: "array_key_exists() — internals"
 description: "Compiler internals for array_key_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 18
+  order: 19
 ---
 
 ## `array_key_exists()` — internals

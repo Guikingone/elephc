@@ -510,3 +510,240 @@ try { min([]); } catch (ValueError $e) { echo "discarded: ", $e->getMessage(), "
          discarded: min(): Argument #1 ($value) must contain at least one element\n"
     );
 }
+
+/// Verifies the single-array `min()` / `max()` form over an indexed `array<string>`,
+/// including PHP's numeric-string promotion (`"10" < "9"` is false because both are
+/// numeric, while `"10" < "9a"` falls back to a byte comparison). Expected output is
+/// verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_min_max_single_array_of_strings() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(min(["a", "c", "b"]), max(["a", "c", "b"]));
+$s = ["pear", "apple", "fig"];
+var_dump(min($s), max($s));
+var_dump(min(["10", "9"]), max(["10", "9"]));
+var_dump(min(["10", "9a"]), max(["10", "9a"]));
+var_dump(min(["1e2", "99"]), max(["1e2", "99"]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"a\"\nstring(1) \"c\"\n\
+         string(5) \"apple\"\nstring(4) \"pear\"\n\
+         string(1) \"9\"\nstring(2) \"10\"\n\
+         string(2) \"10\"\nstring(2) \"9a\"\n\
+         string(2) \"99\"\nstring(3) \"1e2\"\n"
+    );
+}
+
+/// Verifies the single-array form over a heterogeneous (boxed `Mixed`) indexed array.
+/// Every case pins one rule of PHP 8's comparison table: a bool operand coerces both
+/// sides, `null` versus a number coerces to bool, a number versus a non-numeric string
+/// compares as strings, and equal elements keep the *earlier* one. Expected output is
+/// verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_min_max_single_array_mixed_elements() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(min([1, 2.5]), max([1, 2.5]));
+var_dump(min([1, "1"]), max([1, "1"]));
+var_dump(min([0, "a"]), max([0, "a"]));
+var_dump(min([true, 2]), max([true, 2]));
+var_dump(min([null, -1]), max([null, -1]));
+var_dump(min([null, 0]), max([null, 0]));
+var_dump(min([-1, "-2"]), max([-1, "-2"]));
+var_dump(min([1, 2, "3"]), max([1, 2, "3"]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nfloat(2.5)\n\
+         int(1)\nint(1)\n\
+         int(0)\nstring(1) \"a\"\n\
+         bool(true)\nbool(true)\n\
+         NULL\nint(-1)\n\
+         NULL\nNULL\n\
+         string(2) \"-2\"\nint(-1)\n\
+         int(1)\nstring(1) \"3\"\n"
+    );
+}
+
+/// Verifies the single-array form over hash-backed associative arrays, whose values may
+/// be of any type. Expected output is verbatim `LC_ALL=C php` 8.4 output for the same
+/// program.
+#[test]
+fn test_min_max_single_associative_array() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(min(["a" => 3, "b" => 1, "c" => 2]), max(["a" => 3, "b" => 1, "c" => 2]));
+$h = ["x" => "pear", "y" => "apple"];
+var_dump(min($h), max($h));
+var_dump(min(["a" => 1.5, "b" => 2.5]), max(["a" => 1.5, "b" => 2.5]));
+var_dump(min(["a" => null, "b" => 1, "c" => "z"]), max(["a" => null, "b" => 1, "c" => "z"]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nint(3)\n\
+         string(5) \"apple\"\nstring(4) \"pear\"\n\
+         float(1.5)\nfloat(2.5)\n\
+         NULL\nstring(1) \"z\"\n"
+    );
+}
+
+/// Verifies the container reductions on arrays built at run time from `$argc`, so the
+/// elements survive constant folding and the loop really walks runtime storage. The
+/// string result is copied out of the container, so it stays valid after the argument
+/// temporary is released. Expected output is verbatim `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_min_max_single_array_built_at_runtime() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+$a = [];
+for ($i = 0; $i < 6; $i++) { $a[] = (($i * 5) % 7) + $n; }
+var_dump(min($a), max($a));
+$s = [];
+for ($i = 0; $i < 4; $i++) { $s[] = "k" . ((($i * 3) % 4) + $n); }
+var_dump(min($s), max($s));
+$m = [];
+for ($i = 0; $i < 4; $i++) { $m[] = ($i % 2 === 0) ? ($i + 0.5) : ("v$i"); }
+var_dump(min($m), max($m));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nint(7)\n\
+         string(2) \"k1\"\nstring(2) \"k4\"\n\
+         float(0.5)\nstring(2) \"v3\"\n"
+    );
+}
+
+/// Verifies `dechex()`, `decbin()`, and `decoct()` render an integer in their base.
+/// Expectations are verbatim `LC_ALL=C php` 8.4 output for the same expressions.
+#[test]
+fn test_dec_to_base_positive_values() {
+    let out = compile_and_run(
+        r#"<?php
+echo dechex(255), "|", dechex(26), "|", dechex(0), "|",
+     decbin(26), "|", decbin(0), "|",
+     decoct(64), "|", decoct(8), "|", decoct(0);
+"#,
+    );
+    assert_eq!(out, "ff|1a|0|11010|0|100|10|0");
+}
+
+/// Verifies the base renderers treat their input as UNSIGNED, which is what makes
+/// `dechex(-1)` print `ffffffffffffffff` in reference PHP rather than a signed value.
+#[test]
+fn test_dec_to_base_negative_is_unsigned() {
+    let out = compile_and_run(
+        r#"<?php
+echo dechex(-1), "\n", decoct(-1), "\n", decbin(-1), "\n", dechex(PHP_INT_MAX), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "ffffffffffffffff\n\
+1777777777777777777777\n\
+1111111111111111111111111111111111111111111111111111111111111111\n\
+7fffffffffffffff\n"
+    );
+}
+
+/// Verifies the base renderers resolve case-insensitively, through a namespace-qualified
+/// call, and by named argument.
+#[test]
+fn test_dec_to_base_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php echo DECHEX(255), "|", \decbin(5), "|", decoct(num: 8);"#,
+    );
+    assert_eq!(out, "ff|101|10");
+}
+
+/// Verifies the base renderers work on runtime-unknown values inside a loop, so the shared
+/// concat-scratch reservation is exercised repeatedly rather than folded away.
+#[test]
+fn test_dec_to_base_runtime_values_in_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$acc = "";
+for ($i = 0; $i < 5; $i++) {
+    $acc .= dechex($i * 1000 + $argc) . ":" . decoct($i + $argc) . ";";
+}
+echo $acc;
+"#,
+    );
+    assert_eq!(out, "1:1;3e9:2;7d1:3;bb9:4;fa1:5;");
+}
+
+/// Verifies `hexdec()`, `bindec()`, and `octdec()` parse digits of their base.
+/// Expectations are verbatim `LC_ALL=C php` 8.4 output for the same expressions.
+#[test]
+fn test_base_to_number_basic_values() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(hexdec("ff"), hexdec("FF"), hexdec("a0"), hexdec(""),
+         bindec("110"), bindec(""), octdec("77"), octdec(""));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(255)\nint(255)\nint(160)\nint(0)\nint(6)\nint(0)\nint(63)\nint(0)\n"
+    );
+}
+
+/// Verifies the base parsers ignore characters that are not digits of the requested base,
+/// which is what makes `hexdec("a0z")` `160` and `bindec("12")` `1` in reference PHP.
+/// (PHP additionally raises an `E_DEPRECATED` notice here; elephc emits no deprecation
+/// diagnostics, so only the value is compared.)
+#[test]
+fn test_base_to_number_ignores_invalid_characters() {
+    let out = compile_and_run(
+        r#"<?php var_dump(hexdec("a0z"), bindec("12"), octdec("98"), hexdec("0xff"));"#,
+    );
+    assert_eq!(out, "int(160)\nint(1)\nint(0)\nint(255)\n");
+}
+
+/// Verifies the base parsers widen to `float` exactly where reference PHP does — at
+/// `PHP_INT_MAX`, not at the unsigned 64-bit boundary.
+#[test]
+fn test_base_to_number_widens_to_float_past_int_max() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(hexdec("7fffffffffffffff"), hexdec("8000000000000000"),
+         hexdec("ffffffffffffffff"), octdec("1777777777777777777777"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9223372036854775807)\n\
+float(9.223372036854776E+18)\n\
+float(1.8446744073709552E+19)\n\
+float(1.8446744073709552E+19)\n"
+    );
+}
+
+/// Verifies the base parsers resolve case-insensitively, through a namespace-qualified
+/// call, and by named argument.
+#[test]
+fn test_base_to_number_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php var_dump(HEXDEC("ff"), \bindec("101"), octdec(octal_string: "17"));"#,
+    );
+    assert_eq!(out, "int(255)\nint(5)\nint(15)\n");
+}
+
+/// Verifies `dechex()`/`hexdec()` round-trip a runtime-unknown value, so neither side is
+/// folded away by the optimizer.
+#[test]
+fn test_dechex_hexdec_roundtrip_runtime_value() {
+    let out = compile_and_run(
+        r#"<?php
+$n = 48879 + $argc;
+var_dump(hexdec(dechex($n)) === $n, bindec(decbin($n)) === $n, octdec(decoct($n)) === $n);
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\n");
+}

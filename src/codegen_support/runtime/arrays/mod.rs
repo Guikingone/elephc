@@ -10,6 +10,7 @@
 
 mod array_chunk;
 mod array_chunk_refcounted;
+mod array_count_values;
 mod array_column;
 mod array_column_mixed;
 mod array_column_ref;
@@ -132,6 +133,7 @@ mod heap_kind;
 mod heap_free;
 mod in_array_mixed_int;
 mod ksort;
+mod min_max_container;
 mod natsort;
 mod object_free_deep;
 mod range;
@@ -171,6 +173,7 @@ pub use array_chunk::emit_array_chunk;
 pub use array_chunk_refcounted::emit_array_chunk_refcounted;
 /// Emit refcounted array chunk helper.
 pub use array_column::emit_array_column;
+pub use array_count_values::{emit_array_count_values, ARRAY_COUNT_VALUES_SKIPPED_MESSAGES};
 /// Emit array column extraction helper.
 pub use array_column_mixed::emit_array_column_mixed;
 /// Emit Mixed-type array column helper.
@@ -419,6 +422,8 @@ pub use ksort::emit_ksort;
 /// Emit key sort helper.
 pub use natsort::emit_natsort;
 /// Emit natural sort helper.
+pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
+/// Emit the single-array `min()` / `max()` reductions for Mixed, string, and hash containers.
 pub use mixed_abs::emit_mixed_abs;
 pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed from value conversion helper.

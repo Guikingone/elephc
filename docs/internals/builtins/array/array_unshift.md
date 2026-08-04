@@ -2,7 +2,7 @@
 title: "array_unshift() — internals"
 description: "Compiler internals for array_unshift(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 43
+  order: 44
 ---
 
 ## `array_unshift()` — internals

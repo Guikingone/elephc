@@ -2,7 +2,7 @@
 title: "fileatime() — internals"
 description: "Compiler internals for fileatime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 115
+  order: 116
 ---
 
 ## `fileatime()` — internals

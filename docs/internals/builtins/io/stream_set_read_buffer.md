@@ -2,7 +2,7 @@
 title: "stream_set_read_buffer() — internals"
 description: "Compiler internals for stream_set_read_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 232
+  order: 233
 ---
 
 ## `stream_set_read_buffer()` — internals

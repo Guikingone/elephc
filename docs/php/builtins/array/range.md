@@ -2,7 +2,7 @@
 title: "range()"
 description: "Create an array containing a range of elements."
 sidebar:
-  order: 57
+  order: 58
 ---
 
 ## range()

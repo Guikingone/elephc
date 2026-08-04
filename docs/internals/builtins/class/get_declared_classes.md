@@ -2,7 +2,7 @@
 title: "get_declared_classes() — internals"
 description: "Compiler internals for get_declared_classes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 80
+  order: 81
 ---
 
 ## `get_declared_classes()` — internals

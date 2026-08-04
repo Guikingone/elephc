@@ -29,6 +29,8 @@ mod numeric;
 mod objects;
 mod pointers;
 mod resource_ids;
+/// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
+mod round_mode;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
 mod strings;

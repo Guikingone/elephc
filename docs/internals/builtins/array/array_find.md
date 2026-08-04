@@ -2,7 +2,7 @@
 title: "array_find() — internals"
 description: "Compiler internals for array_find(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 12
+  order: 13
 ---
 
 ## `array_find()` — internals

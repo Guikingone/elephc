@@ -2,7 +2,7 @@
 title: "sort()"
 description: "Sorts an array in ascending order."
 sidebar:
-  order: 60
+  order: 61
 ---
 
 ## sort()

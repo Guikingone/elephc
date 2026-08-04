@@ -2,7 +2,7 @@
 title: "array_splice() — internals"
 description: "Compiler internals for array_splice(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 38
+  order: 39
 ---
 
 ## `array_splice()` — internals

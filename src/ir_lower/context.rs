@@ -119,6 +119,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
+    /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
+    /// target. Those locals get boxed `Mixed` frame storage from their first store, so
+    /// every read of the slot is already a boxed load instead of an owned string detach.
+    pub string_incdec_locals: &'m HashSet<(String, String)>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -190,6 +194,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
+        string_incdec_locals: &'m HashSet<(String, String)>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -222,6 +227,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             builtin_call_types,
             loop_storage_types,
+            string_incdec_locals,
             loop_storage_scope,
             constants: constants.clone(),
             top_level_env,
@@ -442,6 +448,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
     }
 
+    /// Returns the frame storage type a local must use, boxing `string` locals that PHP's
+    /// `++`/`--` can retype.
+    ///
+    /// `"9"++` is `int(10)`, so a local the checker recorded as a string increment/decrement
+    /// target cannot keep concrete `Str` storage. Widening the slot lazily at the increment
+    /// is not enough: the slot type is a whole-frame property, so every OTHER `Str`-typed
+    /// read of the same slot would then have to detach an owned copy out of the boxed cell
+    /// (`__rt_mixed_cast_string`), leaking one heap block per executed read. Boxing from the
+    /// first store — including the incoming-parameter store — keeps every access on the
+    /// ordinary boxed-Mixed path instead.
+    fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        if !matches!(php_type.codegen_repr(), PhpType::Str) {
+            return php_type;
+        }
+        let key = (self.loop_storage_scope.clone(), name.to_string());
+        if self.string_incdec_locals.contains(&key) {
+            return PhpType::Mixed;
+        }
+        php_type
+    }
+
     /// Declares a local slot with the requested role if it does not already exist.
     pub(crate) fn declare_local_with_kind(
         &mut self,
@@ -452,13 +479,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(slot) = self.local_slots.get(name) {
             return *slot;
         }
+        let boxed_php_type = if kind == LocalKind::PhpLocal {
+            self.boxed_incdec_storage_type(name, php_type.clone())
+        } else {
+            php_type.clone()
+        };
+        // An incoming `string` parameter arrives with a `Str` entry already seeded from the
+        // signature environment, so the boxed contract has to REPLACE that fact rather than
+        // defer to it; otherwise every read of the parameter stays `Str`-typed against the
+        // boxed slot the increment needs.
+        let overrides_seeded_type = boxed_php_type != php_type;
+        let php_type = boxed_php_type;
         let ir_type = value_ir_type(&php_type);
         let slot = self
             .builder
             .add_local(Some(name.to_string()), ir_type, php_type.clone(), kind);
         self.local_slots.insert(name.to_string(), slot);
         self.local_kinds.insert(name.to_string(), kind);
-        self.local_types.entry(name.to_string()).or_insert(php_type);
+        if overrides_seeded_type {
+            self.local_types.insert(name.to_string(), php_type);
+        } else {
+            self.local_types.entry(name.to_string()).or_insert(php_type);
+        }
         slot
     }
 
@@ -1031,6 +1073,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let uses_global = self.uses_global_storage(name, previous_kind);
         let php_type = if uses_global {
             self.global_alias_type(name)
+        } else if previous_kind == LocalKind::PhpLocal {
+            // A `string` local PHP's `++`/`--` can retype uses boxed Mixed storage from its
+            // FIRST store, so no read of the slot is ever typed `Str` against boxed storage.
+            self.boxed_incdec_storage_type(name, php_type)
         } else {
             php_type
         };
@@ -1667,6 +1713,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
@@ -1813,6 +1860,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(argument),
             Some(
                 Op::MixedNumericBinop
+                    | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul

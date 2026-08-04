@@ -2,7 +2,7 @@
 title: "krsort() — internals"
 description: "Compiler internals for krsort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 53
+  order: 54
 ---
 
 ## `krsort()` — internals

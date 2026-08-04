@@ -17,10 +17,12 @@
 mod array_loose_eq;
 mod mixed_loose_eq;
 mod obj_loose_eq;
+mod php_compare;
 
 pub use array_loose_eq::emit_mixed_array_loose_eq;
 pub use mixed_loose_eq::emit_mixed_loose_eq;
 pub use obj_loose_eq::emit_obj_loose_eq;
+pub use php_compare::emit_php_compare;
 
 /// Maximum nesting the loose-equality walkers follow before reporting "not equal".
 ///

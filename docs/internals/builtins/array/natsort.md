@@ -2,7 +2,7 @@
 title: "natsort() — internals"
 description: "Compiler internals for natsort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 56
+  order: 57
 ---
 
 ## `natsort()` — internals

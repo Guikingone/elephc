@@ -372,16 +372,18 @@ fn test_error_wrong_arg_count() {
     );
 }
 
-/// Verifies that increment/decrement on a string is rejected.
+/// Verifies that increment/decrement is still rejected on the local types PHP has no
+/// increment rule for, now that `string` locals have one (`"az"++` is `"ba"`).
 #[test]
-fn test_error_increment_string() {
-    // The diagnostic explains why: PHP's string increment can produce an int or float
-    // ("9"++ is int(10)), which a statically typed local cannot hold.
+fn test_error_increment_unsupported_type() {
     expect_error(
-        "<?php $x = \"hi\"; $x++;",
-        "Cannot increment/decrement $x of type string",
+        "<?php $x = [1, 2]; $x++;",
+        "Cannot increment/decrement $x of type",
     );
-    expect_error("<?php $x = \"hi\"; --$x;", "which a statically typed local cannot hold");
+    expect_error(
+        "<?php $x = [1, 2]; --$x;",
+        "Cannot increment/decrement $x of type",
+    );
 }
 
 /// Verifies the kind predicates `is_array`/`is_object`/`is_scalar` reject a wrong argument

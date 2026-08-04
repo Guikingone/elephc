@@ -74,18 +74,41 @@ try {
 }
 ```
 
-The single-array form currently compiles when every element has the same scalar type:
-an indexed array of `int`, of `float`, or of `bool`. It is rejected at compile time for
+The single-array form accepts indexed arrays of `int`, `float`, `bool` and `string`,
+indexed arrays with heterogeneous (boxed `mixed`) elements, and associative arrays with
+values of any type:
 
-- an array of strings (`min(["a", "b"])`),
-- an associative array (`min(["a" => 3, "b" => 1])`),
-- and any array with heterogeneous elements — including a mixed int/float literal such
-  as `min([1, 2.5])`, whose elements are stored as boxed `mixed` values.
+```php
+var_dump(min([1, 2.5]));                     // int(1)
+var_dump(max(["a", "c", "b"]));              // string(1) "c"
+var_dump(min(["a" => 3, "b" => 1]));         // int(1)
+var_dump(max(["x" => "pear", "y" => "fig"])); // string(4) "pear"
+```
 
-Selecting the smallest element there needs PHP's full comparison table over boxed heap
-values, which the reduction does not implement; the diagnostic names the array shape it
-saw. Write `min(1, 2.5)` (the variadic form, which has no such restriction) or make the
-array uniform (`min([1.0, 2.5])`).
+Elements are compared with PHP 8's own comparison rules, in PHP's order: a `bool` on
+either side converts both sides to `bool`, then `null` (which becomes `""` against a
+string, so `min([null, "a"])` is `NULL` but `min(["", null])` is `""`), then two numeric
+strings compare numerically while any other string pair compares byte-wise, and finally a
+number against a non-numeric string compares as strings. Ties keep the *earlier* element
+and the winner keeps its original type, exactly like PHP:
+
+```php
+var_dump(min(["10", "9"]));   // string(1) "9"  — both numeric, so 9 < 10
+var_dump(min(["10", "9a"]));  // string(2) "10" — "9a" is not numeric, so bytes decide
+var_dump(max([0, "a"]));      // string(1) "a"  — "0" vs "a" as strings
+var_dump(min([1, "1"]));      // int(1)         — equal, so the first element wins
+```
+
+Two limitations remain in the single-array form:
+
+- Comparisons that involve a *numeric string* are resolved as `double`s, so two integer
+  strings that differ only beyond 2^53 (`min(["9223372036854775807", "9223372036854775806"])`)
+  can compare equal where PHP compares them exactly. Comparisons between two real `int`
+  elements are exact. This is the same simplification the `==` runtime already makes.
+- Arrays, objects, resources and callables only rank *above* the scalar elements and
+  compare equal to each other, instead of PHP's element-wise array comparison. An indexed
+  array whose elements are themselves arrays (`min([[1], [2]])`) is rejected at compile
+  time rather than reduced with the wrong order.
 
 ## Math constants
 

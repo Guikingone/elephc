@@ -986,3 +986,131 @@ var_dump($l);
     );
     assert_eq!(out, "float(3.1)\n");
 }
+
+// --- PHP's `++` / `--` on string values (perl-style alphanumeric carry) ---
+
+/// Verifies PHP's perl-style string increment, including the alphanumeric carry
+/// (`"az"` → `"ba"`, `"Zz"` → `"AAa"`, `"zz"` → `"aaa"`), the numeric-string retype
+/// (`"9"` → `int(10)`, `"1.5"` → `float(2.5)`), the empty-string rule (`""` → `"1"`),
+/// and the non-alphanumeric stop (`"a-"` is unchanged while `"-a"` becomes `"-b"`).
+/// Expected output is `LC_ALL=C php 8.4.20` with its `E_DEPRECATED` lines removed —
+/// elephc has no runtime deprecation channel and reproduces only the values.
+#[test]
+fn test_string_increment_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = "az"; $a++; var_dump($a);
+$b = "Zz"; $b++; var_dump($b);
+$c = "a9"; $c++; var_dump($c);
+$d = "z";  $d++; var_dump($d);
+$e = "Az"; $e++; var_dump($e);
+$f = "zz"; $f++; var_dump($f);
+$g = "A";  $g++; var_dump($g);
+$h = "";   $h++; var_dump($h);
+$i = "9";  $i++; var_dump($i);
+$j = "a-"; $j++; var_dump($j);
+$k = "-a"; $k++; var_dump($k);
+$l = "9z"; $l++; var_dump($l);
+$m = "1.5"; $m++; var_dump($m);
+$n = "0x1A"; $n++; var_dump($n);
+$o = "1e3"; $o++; var_dump($o);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(2) \"ba\"\nstring(3) \"AAa\"\nstring(2) \"b0\"\nstring(2) \"aa\"\n\
+         string(2) \"Ba\"\nstring(3) \"aaa\"\nstring(1) \"B\"\nstring(1) \"1\"\n\
+         int(10)\nstring(2) \"a-\"\nstring(2) \"-b\"\nstring(3) \"10a\"\n\
+         float(2.5)\nstring(4) \"0x1B\"\nfloat(1001)\n"
+    );
+}
+
+/// Verifies PHP's string decrement: a non-numeric string is left ALONE (unlike `++`),
+/// a numeric string decrements numerically and retypes, and the empty string becomes
+/// `int(-1)`. Expected output is `LC_ALL=C php 8.4.20` without its deprecation lines.
+#[test]
+fn test_string_decrement_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = "az"; $a--; var_dump($a);
+$b = "9";  $b--; var_dump($b);
+$c = "";   $c--; var_dump($c);
+$d = "1.5"; $d--; var_dump($d);
+$e = "0";  $e--; var_dump($e);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(2) \"az\"\nint(8)\nint(-1)\nfloat(0.5)\nint(-1)\n"
+    );
+}
+
+/// Verifies the pre- and post-forms of a string increment: the post-form yields the value
+/// the local held BEFORE the update (including across the numeric retype `"8"` → `int(9)`),
+/// the pre-form yields the updated value.
+#[test]
+fn test_string_increment_pre_and_post_forms() {
+    let out = compile_and_run(
+        r#"<?php
+$a = "az";
+var_dump($a++);
+var_dump($a);
+$b = "az";
+var_dump(++$b);
+var_dump($b);
+$c = "8";
+var_dump($c++);
+var_dump($c);
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(2) \"az\"\nstring(2) \"ba\"\nstring(2) \"ba\"\nstring(2) \"ba\"\n\
+         string(1) \"8\"\nint(9)\n"
+    );
+}
+
+/// Verifies the string increment survives the storage shapes that are not a plain
+/// straight-line local: a loop-carried local (the spreadsheet-column idiom), a `string`
+/// function parameter, and a boxed `mixed` local that happens to hold a string.
+#[test]
+fn test_string_increment_loop_parameter_and_mixed_local() {
+    let out = compile_and_run(
+        r#"<?php
+$col = "A";
+$out = [];
+for ($i = 0; $i < 30; $i++) { $out[] = $col; $col++; }
+echo implode(",", $out), "\n";
+function bump(string $s): string { $s++; return $s; }
+echo bump("az"), " ", bump("Zz"), " ", bump("a9"), "\n";
+$m = $argc > 99 ? 1 : "az";
+$m++;
+var_dump($m);
+"#,
+    );
+    assert_eq!(
+        out,
+        "A,B,C,D,E,F,G,H,I,J,K,L,M,N,O,P,Q,R,S,T,U,V,W,X,Y,Z,AA,AB,AC,AD\n\
+         ba AAa b0\nstring(2) \"ba\"\n"
+    );
+}
+
+/// Verifies the int/float boundary of a numeric-string increment: a value that still fits
+/// stays an `int`, `PHP_INT_MAX` promotes to `float`, a 20-digit string is already a float,
+/// and decrementing `PHP_INT_MAX` stays an exact `int`.
+#[test]
+fn test_numeric_string_increment_int_boundary() {
+    let out = compile_and_run(
+        r#"<?php
+$a = "9223372036854775806"; $a++; var_dump($a);
+$b = "9223372036854775807"; $b++; var_dump($b);
+$c = "99999999999999999999"; $c++; var_dump($c);
+$d = "9223372036854775807"; $d--; var_dump($d);
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(9223372036854775807)\nfloat(9.223372036854776E+18)\n\
+         float(1.0E+20)\nint(9223372036854775806)\n"
+    );
+}

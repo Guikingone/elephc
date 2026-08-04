@@ -2,7 +2,7 @@
 title: "in_array() — internals"
 description: "Compiler internals for in_array(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 52
+  order: 53
 ---
 
 ## `in_array()` — internals

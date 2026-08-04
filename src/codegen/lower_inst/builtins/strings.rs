@@ -164,6 +164,165 @@ pub(crate) fn lower_binary_string_runtime(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `dechex()`/`decbin()`/`decoct()` through the shared unsigned base renderer.
+///
+/// The three builtins differ only in the constant base handed to `__rt_dec_to_base`, which
+/// reads its input as unsigned — that is what makes `dechex(-1)` render `"ffffffffffffffff"`
+/// instead of a signed value.
+pub(crate) fn lower_dec_to_base(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    base: i64,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 1 arg, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    load_as_int(ctx, expect_operand(inst, 0)?, name)?;
+    let base_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, base_reg, base);
+    abi::emit_call_label(ctx.emitter, "__rt_dec_to_base");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `hexdec()`/`bindec()`/`octdec()` through the shared base-digit parser.
+///
+/// The three builtins differ only in the constant base handed to `__rt_base_to_number`.
+/// That helper reports whether its answer stayed an integer or widened to a float, and this
+/// lowering boxes the selected arm into the `int|float` union's `Mixed` representation.
+pub(crate) fn lower_base_to_number(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    base: i64,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 1 arg, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    let subject = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_value_as_string_to_regs(ctx, subject, name, "x1", "x2")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x3", base);
+        }
+        Arch::X86_64 => {
+            load_value_as_string_to_regs(ctx, subject, name, "rax", "rdx")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the subject pointer as the first SysV argument
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the subject length before the base overwrites rdx
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", base);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_base_to_number");
+    box_base_to_number_result(ctx, name);
+    store_if_result(ctx, inst)
+}
+
+/// Boxes `__rt_base_to_number`'s integer-or-float answer as PHP's `int|float` union.
+///
+/// The helper reports its arm in the integer result register: zero selects the integer
+/// payload it left alongside it, one selects the float payload in the float result register.
+fn box_base_to_number_result(ctx: &mut FunctionContext<'_>, name: &str) {
+    let float_label = ctx.next_label(&format!("{}_float", name));
+    let done_label = ctx.next_label(&format!("{}_done", name));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", float_label));      // a widened result is boxed from the float register instead
+            ctx.emitter.instruction("mov x2, xzr");                             // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip float boxing after producing the integer result
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction("fmov x1, d0");                             // move the widened float bits into the mixed helper payload register
+            ctx.emitter.instruction("mov x2, xzr");                             // float mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #2");                              // runtime tag 2 = float
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the parse stay inside PHP's integer range?
+            ctx.emitter.instruction(&format!("jnz {}", float_label));           // a widened result is boxed from the float register instead
+            ctx.emitter.instruction("mov rdi, rdx");                            // move the parsed integer into the mixed helper payload register
+            ctx.emitter.instruction("xor esi, esi");                            // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 = integer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip float boxing after producing the integer result
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction("movq rdi, xmm0");                          // move the widened float bits into the mixed helper payload register
+            ctx.emitter.instruction("xor esi, esi");                            // float mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 2");                              // runtime tag 2 = float
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
+/// Lowers `strncmp()`/`strncasecmp()`, which compare only the first `$length` bytes.
+///
+/// `$length` is screened before the helper runs because reference PHP raises a catchable
+/// `ValueError` for a negative value; the runtime helpers therefore treat their bound as
+/// unsigned. `name` selects the php-src wording of that diagnostic.
+pub(crate) fn lower_length_limited_compare(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    if inst.operands.len() != 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 3 args, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    let length_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_value_as_string_to_regs(ctx, expect_operand(inst, 0)?, name, "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the first string while materializing the remaining arguments
+            load_value_as_string_to_regs(ctx, expect_operand(inst, 1)?, name, "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the second string while materializing the compare length
+            load_as_int(ctx, expect_operand(inst, 2)?, name)?;
+            ctx.emitter.instruction("mov x5, x0");                              // pass the requested compare length as the fifth runtime argument
+            ctx.emitter.instruction("ldp x3, x4, [sp], #16");                   // restore the second string into the secondary runtime string argument
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the first string into the primary runtime string argument
+            "x5"
+        }
+        Arch::X86_64 => {
+            load_value_as_string_to_regs(ctx, expect_operand(inst, 0)?, name, "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_value_as_string_to_regs(ctx, expect_operand(inst, 1)?, name, "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_as_int(ctx, expect_operand(inst, 2)?, name)?;
+            ctx.emitter.instruction("mov r8, rax");                             // pass the requested compare length as the fifth SysV argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            "r8"
+        }
+    };
+    let message = if name == "strncasecmp" {
+        STRNCASECMP_NEGATIVE_LENGTH_MESSAGE
+    } else {
+        STRNCMP_NEGATIVE_LENGTH_MESSAGE
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 0),
+        message,
+    );
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `explode(separator, string, limit?)` into the shared string-array splitter helper.
 pub(crate) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cleanups = plan_split_string_temp_cleanups(ctx, inst)?;
@@ -733,6 +892,14 @@ const WORDWRAP_ZERO_WIDTH_CUT_MESSAGE: &str =
 /// php-src's verbatim `ValueError` wording for `explode()` with an empty `$separator`.
 const EXPLODE_EMPTY_SEPARATOR_MESSAGE: &str =
     "explode(): Argument #1 ($separator) must not be empty";
+
+/// php-src's verbatim `ValueError` wording for `strncmp()` with a negative `$length`.
+const STRNCMP_NEGATIVE_LENGTH_MESSAGE: &str =
+    "strncmp(): Argument #3 ($length) must be greater than or equal to 0";
+
+/// php-src's verbatim `ValueError` wording for `strncasecmp()` with a negative `$length`.
+const STRNCASECMP_NEGATIVE_LENGTH_MESSAGE: &str =
+    "strncasecmp(): Argument #3 ($length) must be greater than or equal to 0";
 
 /// php-src's verbatim `ValueError` wording for `substr_count()` with an empty `$needle`.
 const SUBSTR_COUNT_EMPTY_NEEDLE_MESSAGE: &str =

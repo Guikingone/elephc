@@ -2,7 +2,7 @@
 title: "symlink() — internals"
 description: "Compiler internals for symlink(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 152
+  order: 153
 ---
 
 ## `symlink()` — internals

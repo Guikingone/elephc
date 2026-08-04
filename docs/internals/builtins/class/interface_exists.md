@@ -2,7 +2,7 @@
 title: "interface_exists() — internals"
 description: "Compiler internals for interface_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 85
+  order: 86
 ---
 
 ## `interface_exists()` — internals

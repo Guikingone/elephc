@@ -57,6 +57,9 @@ if ($x > 0) {
 }
 ```
 
+PHP's alternative `if ($x): … elseif … else: … endif;` form is also accepted —
+see [Alternative syntax](#alternative-syntax).
+
 ## while
 
 ```php
@@ -253,6 +256,86 @@ switch ($x) {
         echo "other";
 }
 ```
+
+## Alternative syntax
+
+`if`, `while`, `for`, `foreach`, and `switch` all accept PHP's alternative
+syntax: a `:` opens the body instead of `{`, and a matching `endif;`,
+`endwhile;`, `endfor;`, `endforeach;`, or `endswitch;` closes it. (`declare`
+uses the same shape with `enddeclare;` — see above.)
+
+```php
+<?php
+if ($x > 0):
+    echo "positive";
+elseif ($x < 0):
+    echo "negative";
+else:
+    echo "zero";
+endif;
+
+while ($i < 3):
+    $i++;
+endwhile;
+
+for ($i = 0; $i < 3; $i++):
+    echo $i;
+endfor;
+
+foreach ([1, 2, 3] as $value):
+    echo $value;
+endforeach;
+
+switch ($x):
+    case 1:
+        echo "one";
+        break;
+    default:
+        echo "other";
+endswitch;
+```
+
+The two forms are exactly equivalent — the alternative body compiles to the same
+code as the braced one — and they nest freely in either direction, so an
+alternative `if` can sit inside a braced `foreach` and vice versa.
+
+Two rules match PHP:
+
+- **One style per `if` chain.** Every branch of a given `if` must use the same
+  form. `if ($x) { ... } else: ... endif;` is rejected, as is
+  `if ($x): ... else { ... } endif;`. Note that this means `else if` (two words)
+  cannot be used in an alternative chain — write `elseif`.
+- **The terminator needs its semicolon.** `endif`, `endwhile`, `endfor`,
+  `endforeach`, and `endswitch` are each followed by `;`.
+
+Since elephc has no inline-HTML mode, the alternative forms are a pure
+readability choice rather than a templating feature.
+
+## goto
+
+**`goto` is not supported.** Both the statement and its target label are
+rejected at compile time:
+
+```text
+error[2:1]: `goto` is not supported: elephc compiles structured control flow
+only, so a jump to an arbitrary label inside a function has no lowering.
+Please restructure the jump with `break`, `continue`, a loop flag, or an early
+`return`
+
+error[4:1]: `goto` labels are not supported: the label `end:` can only be
+reached by `goto`, which elephc does not support.
+```
+
+elephc analyses control flow structurally — termination and reachability
+analysis, flow-sensitive type narrowing, loop and branch pruning, and constant
+propagation all assume the statement tree describes the CFG. An arbitrary
+intra-function jump breaks that assumption, so the construct is rejected outright
+rather than partially supported. Use `break` (including `break 2;`), `continue`,
+a loop flag, or an early `return` instead; those cover PHP's common `goto` use
+of bailing out of nested loops.
+
+`goto` is still a reserved word, so it cannot be used as a function name — but,
+as in PHP, it remains valid as a method or constant name (`$obj->goto()`).
 
 ## match expression
 

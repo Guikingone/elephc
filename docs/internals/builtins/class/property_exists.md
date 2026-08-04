@@ -2,7 +2,7 @@
 title: "property_exists() — internals"
 description: "Compiler internals for property_exists(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 89
+  order: 90
 ---
 
 ## `property_exists()` — internals

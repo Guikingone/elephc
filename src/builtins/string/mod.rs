@@ -78,6 +78,8 @@ pub mod strcasecmp;
 pub mod strcmp;
 pub mod stripslashes;
 pub mod strlen;
+pub mod strncasecmp;
+pub mod strncmp;
 pub mod strpos;
 pub mod strrev;
 pub mod strrpos;

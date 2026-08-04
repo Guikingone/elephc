@@ -18,6 +18,7 @@ pub mod array_any;
 pub mod array_chunk;
 pub mod array_column;
 pub mod array_combine;
+pub mod array_count_values;
 pub mod array_diff;
 pub mod array_diff_assoc;
 pub mod array_diff_key;

@@ -417,3 +417,33 @@ fn lower_loaded_bool_to_string(ctx: &mut FunctionContext<'_>) -> Result<()> {
     }
     Ok(())
 }
+
+/// Lowers `Op::StrIncDec`: PHP's `++` / `--` applied to a string value.
+///
+/// The operand is either a concrete `Str` payload or a boxed `Mixed` cell, and the result is
+/// ALWAYS a freshly allocated boxed `Mixed` cell because the operator can change the value's
+/// type (`"9"++` is `int(10)`, `"az"++` is `"ba"`). A concrete string goes straight to
+/// `__rt_str_inc_dec`; a boxed value goes through `__rt_mixed_inc_dec`, which routes a string
+/// payload to the same helper and keeps every other payload on the existing numeric path.
+///
+/// The `i64` immediate carries the delta and is `+1` for `++` and `-1` for `--`.
+pub(super) fn lower_str_inc_dec(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    let delta = super::expect_i64(inst)?;
+    let operand_ty = ctx.value_php_type(value)?.codegen_repr();
+    ctx.load_value_to_result(value)?;
+    let delta_reg = match (ctx.emitter.target.arch, &operand_ty) {
+        (Arch::AArch64, PhpType::Str) => "x3",
+        (Arch::AArch64, _) => "x1",
+        (Arch::X86_64, PhpType::Str) => "rcx",
+        (Arch::X86_64, _) => "rdi",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, delta_reg, delta);
+    let helper = if matches!(operand_ty, PhpType::Str) {
+        "__rt_str_inc_dec"
+    } else {
+        "__rt_mixed_inc_dec"
+    };
+    abi::emit_call_label(ctx.emitter, helper);
+    store_if_result(ctx, inst)
+}

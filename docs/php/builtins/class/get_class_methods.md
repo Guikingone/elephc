@@ -2,7 +2,7 @@
 title: "get_class_methods()"
 description: "get_class_methods() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet."
 sidebar:
-  order: 78
+  order: 79
 ---
 
 ## get_class_methods()

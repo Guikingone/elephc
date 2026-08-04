@@ -658,6 +658,28 @@ fn lower_mixed_numeric_binary(
     )
 }
 
+/// Lowers PHP's `++` / `--` on a value that may hold a string at runtime.
+///
+/// The operand is either a concrete `Str` load or a boxed `Mixed` load, and the result is
+/// always a boxed `Mixed` cell: PHP's string increment can change the value's type
+/// (`"9"++` is `int(10)`, `"az"++` is `"ba"`), so no concrete slot can hold both outcomes.
+/// The `i64` immediate is the delta the runtime helper applies (`+1` or `-1`).
+fn lower_str_inc_dec(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    increment: bool,
+    expr: &Expr,
+) -> LoweredValue {
+    ctx.emit_value(
+        Op::StrIncDec,
+        vec![value.value],
+        Some(Immediate::I64(if increment { 1 } else { -1 })),
+        PhpType::Mixed,
+        Op::StrIncDec.default_effects(),
+        Some(expr.span),
+    )
+}
+
 /// Maps AST arithmetic to the mixed-numeric runtime helper set currently available.
 fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
     match op {
@@ -1853,19 +1875,13 @@ fn lower_inc_dec(
 ) -> LoweredValue {
     let old = ctx.load_local(name, Some(expr.span));
     let existing_type = ctx.local_type(name);
-    if matches!(existing_type.codegen_repr(), PhpType::Mixed) {
+    if matches!(existing_type.codegen_repr(), PhpType::Mixed | PhpType::Str) {
         let return_old = if post {
             crate::ir_lower::ownership::acquire_if_refcounted(ctx, old, Some(expr.span))
         } else {
             old
         };
-        let one = lower_int_literal(ctx, 1, expr);
-        let op = if increment {
-            MixedNumericOp::Add
-        } else {
-            MixedNumericOp::Sub
-        };
-        let new = lower_mixed_numeric_binary(ctx, old, one, op, expr);
+        let new = lower_str_inc_dec(ctx, old, increment, expr);
         ctx.store_local(name, new, PhpType::Mixed, Some(expr.span));
         return if post {
             return_old
@@ -1954,6 +1970,9 @@ fn lower_float_inc_dec(
 fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[Expr], expr: &Expr) -> LoweredValue {
     constants::register_static_define_call(ctx, name, args);
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
+        return value;
+    }
+    if let Some(value) = constants::lower_static_constant_call(ctx, name, args, expr) {
         return value;
     }
     let canonical = name.as_str();
