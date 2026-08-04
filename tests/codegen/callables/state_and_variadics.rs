@@ -1285,3 +1285,54 @@ echo $s, "\n";
     );
     assert_eq!(out, "42\n12\n");
 }
+
+/// A closure stored in an *instance-property array* must survive a later write to that same
+/// property — the copy-on-write split that the second write triggers has to take its own
+/// reference on the callable descriptor.
+///
+/// `__rt_hash_clone_shallow` dispatches on each entry's runtime value tag: tag 1 re-persists the
+/// string, tags 4/5/6/7/11 retain through `__rt_incref`, and everything else is copied as a raw
+/// scalar word. Tag 10 (callable descriptor) was in neither list, so the clone silently aliased a
+/// descriptor whose refcount stayed 1 while two tables pointed at it. The hash *free* path always
+/// released tag 10 (`__rt_hash_free_deep_value_callable`), so the contract was already "the hash
+/// owns a reference" — only the clone forgot to take one. The sibling indexed-array helper
+/// `__rt_array_clone_shallow` had handled tag 10 all along.
+///
+/// The split only happens when the hash is shared, which is precisely what the property write
+/// sequence does (`prop_get` then `acquire` puts the refcount at 2). A local array stays unique and
+/// never showed the bug, which is why this needs a property to reproduce.
+///
+/// Reading the element *before* the second write masked it: that read's own retain kept the
+/// descriptor alive. Symptoms ranged over a loud fatal, silently corrupted output, and an infinite
+/// loop depending on the shape — all from valid PHP.
+#[test]
+fn test_closure_in_property_array_survives_copy_on_write_split() {
+    let out = compile_and_run(
+        r#"<?php
+function mk(string $v): callable { return function () use ($v): string { return $v; }; }
+class R { public array $m = []; }
+$r = new R();
+$r->m['a'] = mk('one');
+$r->m['b'] = 'plain';
+$f = $r->m['a'];
+echo $f(), "\n";
+
+class S {
+    private array $m = [];
+    public function add(string $k, string $v): void {
+        $this->m[$k] = function () use ($v): string { return $v; };
+    }
+    public function runAll(): string {
+        $out = '';
+        foreach ($this->m as $k => $fn) { $out .= $k . '=' . $fn() . ';'; }
+        return $out;
+    }
+}
+$s = new S();
+$s->add('a', 'one');
+$s->add('b', 'two');
+echo $s->runAll(), "\n";
+"#,
+    );
+    assert_eq!(out, "one\na=one;b=two;\n");
+}

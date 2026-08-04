@@ -92,6 +92,8 @@ pub fn emit_hash_clone_shallow(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // nested refcounted values need retains
     emitter.instruction("cmp x5, #7");                                          // is this entry's value a boxed mixed cell?
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // nested refcounted values need retains
+    emitter.instruction("cmp x5, #10");                                         // is this entry's value a callable descriptor?
+    emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // callable descriptors are refcounted like any other child pointer, so the clone must take its own reference
     emitter.instruction("cmp x5, #11");                                         // is this entry's value a reference cell?
     emitter.instruction("b.eq __rt_hash_clone_shallow_value_ref");              // a reference survives the COW copy: share the cell pointer and retain it
     emitter.instruction("ldr x3, [sp, #24]");                                   // x3 = scalar/float value_lo copied as-is
@@ -198,6 +200,8 @@ fn emit_hash_clone_shallow_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain nested refcounted child pointers for the cloned associative-array owner
     emitter.instruction("cmp r10, 7");                                          // is the current source entry value a boxed mixed child pointer that needs a retain?
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // retain nested refcounted child pointers for the cloned associative-array owner
+    emitter.instruction("cmp r10, 10");                                         // is the current source entry value a callable descriptor that needs a retain?
+    emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // callable descriptors are refcounted like any other child pointer, so the clone must take its own reference
     emitter.instruction("cmp r10, 11");                                         // is the current source entry value a reference cell that must survive the COW copy?
     emitter.instruction("je __rt_hash_clone_shallow_value_ref");                // share the reference cell pointer with the cloned owner and retain it
     emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // reload the scalar or float low payload word that can be forwarded into the destination hash unchanged
