@@ -57,6 +57,27 @@ function factorial($n) {
 echo factorial(10); // 3628800
 ```
 
+Recursion depth is bounded by the real call stack, and running off the end is
+reported instead of crashing. Every compiled function checks the stack pointer
+against the measured stack floor on entry; when it is exhausted the program
+writes
+
+```
+Fatal error: Maximum call stack size reached. Infinite recursion?
+```
+
+to stderr and exits with status 255 — the same class of controlled diagnostic
+PHP 8.3+ produces for runaway recursion, and the same exit status PHP uses for
+an uncaught fatal error.
+
+The floor comes from `getrlimit(RLIMIT_STACK)` minus a small reserve, so the
+usable depth follows the process stack limit: roughly 50 000 frames of a small
+function on a default 8 MiB stack. Function bodies that run on a coroutine
+stack — generator bodies and `Fiber` callables — get a floor derived from that
+coroutine's own 256 KiB stack instead, which is roughly 1 400 frames of the same
+function. Deepen `ulimit -s` if a legitimately deep algorithm needs more room on
+the main stack.
+
 ## Default parameter values
 
 ```php

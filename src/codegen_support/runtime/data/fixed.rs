@@ -19,7 +19,8 @@ use super::{
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
-    SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STR_REPEAT_TIMES_MSG,
+    SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
+    STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
 use crate::codegen_support::platform::Target;
@@ -197,6 +198,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _fiber_main_saved_sp, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_exc, 8, 3\n");
     out.push_str(".comm _fiber_main_saved_call_frame, 8, 3\n");
+    // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
+    // execution context that is running right now: every compiled function prologue does an
+    // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
+    // when it is below. Zero (the .comm default) disables the guard, so a program that never
+    // runs __rt_stack_limit_init keeps the pre-guard behavior. _stack_limit_main remembers
+    // the OS-thread floor so __rt_fiber_switch can restore it when control leaves a fiber
+    // stack; while a fiber runs, _stack_limit holds that fiber's own floor instead.
+    out.push_str(".comm _stack_limit, 8, 3\n");
+    out.push_str(".comm _stack_limit_main, 8, 3\n");
     out.push_str(".comm _elephc_eval_dynamic_object_destruct_fn, 8, 3\n");
     out.push_str(".comm _rt_diag_suppression, 8, 3\n");
     // elephc_web_capture: per-request output-capture mode flag read by
@@ -283,6 +293,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
     out.push_str(".globl _heap_dbg_free_list_msg\n_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
+    out.push_str(&format!(
+        ".globl _stack_err_msg\n_stack_err_msg:\n    .ascii {:?}\n",
+        STACK_OVERFLOW_MSG
+    ));
     out.push_str(&format!(
         ".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii {:?}\n",
         ARRAY_ALLOC_SIZE_MSG

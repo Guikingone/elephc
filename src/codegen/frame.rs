@@ -27,6 +27,7 @@ use crate::types::PhpType;
 
 use super::context::FunctionContext;
 use super::local_analysis::LocalSlotAnalysis;
+use super::stack_guard;
 use super::value_placement::{self, ValuePlacement};
 
 const FRAME_FOOTER_BYTES: usize = 16;
@@ -172,6 +173,10 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // Measure the stack only after argc/argv are safe in globals: the initializer is an
+    // ordinary call and clobbers the C-ABI argument registers they arrive in. `main` itself
+    // is never guarded — it is the root of every call chain and runs before the floor exists.
+    stack_guard::emit_stack_limit_init_call(ctx.emitter);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
@@ -198,6 +203,12 @@ pub(super) fn emit_function_prologue_with_label(
     ctx.emitter.blank();
     ctx.emitter.label_global(entry_label);
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
+    // The depth check runs before anything is written to the new frame and before the
+    // incoming arguments are spilled, so it only needs x9 (AArch64) / no register at all
+    // (x86_64) and cannot disturb the ABI. Placing it after the frame has been reserved
+    // means the compare already accounts for this function's own frame size.
+    let stack_ok_label = ctx.next_label("stack_ok");
+    stack_guard::emit_stack_limit_check(ctx.emitter, &stack_ok_label);
     capture_concat_base(ctx);
     emit_callee_saved_saves(ctx);
 
@@ -442,6 +453,10 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("save argc/argv to globals for the bridge and handler");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // `--web` forks its workers from this process and each worker serves requests on its own
+    // main stack, so the floor measured here stays valid in every child. Measuring before the
+    // bridge call also keeps the clobbered argument registers away from `elephc_web_run`.
+    stack_guard::emit_stack_limit_init_call(ctx.emitter);
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);

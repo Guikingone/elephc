@@ -79,6 +79,14 @@ pub(crate) const OB_CLOSURE_INVOKE_NAME: &str = "Closure::__invoke";
 
 pub(crate) const DIRNAME_LEVELS_MSG: &str =
     "Fatal error: dirname(): Argument #2 ($levels) must be greater than or equal to 1\n";
+/// Fatal error message written by `__rt_stack_overflow` when a function prologue finds the
+/// stack pointer below `_stack_limit`. PHP 8.3+ reports the same condition as
+/// `Fatal error: Uncaught Error: Maximum call stack size of N bytes
+/// (zend.max_allowed_stack_size - zend.reserved_stack_size) reached. Infinite recursion?`;
+/// elephc has no per-call-site context in the fatal path (it is entered with almost no
+/// stack left), so it reports the same condition without the byte count and location.
+pub(crate) const STACK_OVERFLOW_MSG: &str =
+    "Fatal error: Maximum call stack size reached. Infinite recursion?\n";
 /// Fatal error message when an array allocation request cannot be sized safely,
 /// i.e. `capacity * elem_size` does not fit in the machine word. PHP reports the
 /// same class of failure as a `ValueError` naming the offending argument
