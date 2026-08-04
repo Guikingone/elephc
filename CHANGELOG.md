@@ -4,6 +4,9 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed array builtins that mutate by reference silently doing nothing when the receiver was an object property, a static property or an array element: `usort($obj->items, ...)` returned the array unsorted with no diagnostic, because the by-reference parameter got a value temporary instead of the caller's storage.
+- Fixed reading a dynamic object property dropping a reference it never took, which freed the live value after a few reads and answered `null` from then on.
+- Added `usort()` over string arrays, `array_reduce()` over string arrays with an integer or boolean accumulator, and `unset()` of dynamic object properties (`stdClass`, `#[AllowDynamicProperties]`). `unset()` of an untyped declared property, `uasort()`/`uksort()`/`array_walk()` over associative arrays, and `unset()` on a by-reference property are reported with diagnostics naming the shape instead of producing a wrong value.
 - Added `func_num_args()`, `func_get_args()` and `func_get_arg()`, together with the surplus positional arguments PHP allows past a function's declared parameter list. Shapes that cannot be represented — a defaulted parameter, an existing variadic, an overridden method signature, a dynamic call, top-level use — get a targeted compile error rather than a wrong answer.
 - Added `strtr()`, `count_chars()` and `str_word_count()`, completing the audit's missing-builtin list.
 - Fixed `new $class(...$args)` silently dropping its spread arguments: the object was constructed with no arguments at all, or with only the named ones, and no diagnostic was reported. Dynamic `new` now shares the same call-argument planning as every other call surface.
