@@ -65,6 +65,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// Expected capability reminder for eval fixtures that intentionally omit regex support.
+const EVAL_WITHOUT_REGEX_REMINDER: &str =
+    "warning: dynamic eval was compiled without optional regex support";
+
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -92,15 +96,18 @@ fn elephc_bin() -> String {
 /// Linking also surfaces the HOST linker's warnings, which are environmental rather
 /// than anything elephc emitted: GNU `ld` on Linux reports the static-`getaddrinfo`
 /// glibc notes and the `.note.GNU-stack` deprecation, while Apple's linker stays silent.
+/// The intentional eval capability reminder is excluded exactly; every other compiler
+/// diagnostic still surfaces.
 fn elephc_diagnostics(stderr: &str) -> String {
     stderr
         .lines()
         .filter(|line| {
-            line.starts_with("error")
-                || line.starts_with("Error")
-                || line.starts_with("warning")
-                || line.starts_with("Warning: ")
-                || line.starts_with("EIR backend error")
+            *line != EVAL_WITHOUT_REGEX_REMINDER
+                && (line.starts_with("error")
+                    || line.starts_with("Error")
+                    || line.starts_with("warning")
+                    || line.starts_with("Warning: ")
+                    || line.starts_with("EIR backend error"))
         })
         .collect::<Vec<_>>()
         .join("\n")

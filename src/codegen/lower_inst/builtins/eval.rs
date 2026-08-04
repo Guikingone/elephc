@@ -2128,6 +2128,7 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
+    register_eval_regex_provider(ctx);
     let symbol = ctx
         .emitter
         .target
@@ -2141,6 +2142,30 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
+}
+
+/// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
+fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.regex {
+        return;
+    }
+    for (index, provider_symbol) in [
+        "elephc_pcre2_v1_compile",
+        "elephc_pcre2_v1_exec",
+        "elephc_pcre2_v1_free",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+        let symbol = ctx.emitter.target.extern_symbol(provider_symbol);
+        abi::emit_symbol_address(ctx.emitter, arg_reg, &symbol);
+    }
+    let register = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_regex_provider");
+    abi::emit_call_label(ctx.emitter, &register);
 }
 
 /// Writes the physical eval call site's strict profile before every runtime dispatch.

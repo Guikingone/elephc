@@ -10,16 +10,16 @@ which compile-time branches are taken.
 
 ## Linking native libraries
 
-When a program calls into C libraries through [extern/FFI](../beyond-php/extern.md),
-those libraries must be linked into the binary. Raw link flags, managed native
-packages, Composer source, Rust bridge crates, and toolchains are distinct
-mechanisms:
+When a program calls into C libraries through
+[extern/FFI](../beyond-php/extern.md), those libraries must be linked into the
+binary. Raw link flags, managed native packages, Composer source, Rust bridge
+crates, runtime capabilities, and toolchains are distinct mechanisms:
 
 | Mechanism | Use it for | Do not use it for |
 |---|---|---|
 | `elephc native` | Reviewed runtime/builtin-oriented C packages with exact source, lock, recipe, and cached static outputs | Arbitrary FFI libraries, PHP packages, Rust crates, or tool installation |
 | Composer/autoload | PHP source dependencies resolved ahead of time | C archives or Rust bridges |
-| Auto-detected bridge / `--with-CRATE` | Optional Elephc Rust `staticlib` implementations | Catalogued C sources |
+| Auto-detected bridge / `--with-NAME` | Optional Elephc Rust `staticlib` implementations and explicit runtime capabilities | Catalogued C sources themselves |
 | User/OS toolchain | `cc`, `ar`, `ranlib`, assembler, linker, Make, SDK, and cross tools | Project dependency locking |
 
 Raw `extern` linking is a separate user-supplied workflow layered onto the
@@ -85,7 +85,7 @@ They do not override or satisfy a missing managed-package requirement such as
 PCRE2.
 See [FFI & Extern](../beyond-php/extern.md).
 
-## Bridge crates and `--with-CRATE`
+## Bridge crates and `--with-NAME`
 
 Some optional features are implemented as Rust *bridge crates* (`staticlib`
 archives) that elephc links into the program: `pdo` (database access), `tls`
@@ -120,15 +120,31 @@ detected automatically. See [Eval](../php/eval.md) for language semantics and
 [Eval Runtime Architecture](../internals/eval-runtime.md) for the AOT/fallback
 decision and scope ABI.
 
+`--with-regex` is a runtime-capability flag rather than a Rust bridge flag.
+Dynamic eval source cannot be inspected for feature use, so the flag requests
+the ordinary regex runtime and managed PCRE2 archives, then registers that
+provider with Magician:
+
+```bash
+elephc native add pcre2
+elephc --with-regex app.php
+```
+
+Without it, dynamic eval still compiles and runs non-regex code, but `preg_*`
+names are unavailable there and calls fail at runtime. A statically visible
+regex use enables the same provider automatically. Declaring PCRE2 without
+either trigger does not link it.
+
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
-mode, which owns the program entry point). An unknown crate name is rejected with
-the list of valid crates. Forcing a crate increases binary size, since the whole
-archive is included.
+mode, which owns the program entry point). An unknown capability name is
+rejected with the list of valid names. Forcing a bridge increases binary size,
+since the whole archive is included.
 
 Bridge crates are Elephc's optional Rust workspace components. They are not
-installed or versioned by `elephc native`, and `--with-CRATE` is not a native
-package command. Composer dependencies are PHP source handled by the compile-time
-autoload pipeline; they are separate from both mechanisms.
+installed or versioned by `elephc native`. Runtime-capability flags may require
+a separately declared managed package, as `--with-regex` requires `pcre2`;
+the flag itself does not install it. Composer dependencies are PHP source
+handled by the compile-time autoload pipeline and remain separate.
 
 ## Heap size
 

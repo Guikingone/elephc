@@ -1,22 +1,21 @@
 //! Purpose:
-//! PCRE2 POSIX-wrapper regex engine used by eval `preg_*` builtins.
-//! Provides the small capture API the eval regex modules need while sharing
-//! the same native regex family as the AOT runtime path.
+//! Opaque optional-provider regex engine used by eval `preg_*` builtins.
+//! Provides the small capture API the eval regex modules need without making
+//! libelephc_magician itself depend on PCRE2.
 //!
 //! Called from:
 //! - `crate::interpreter::builtins::regex::pattern`.
 //! - `crate::interpreter::builtins::regex` match, replace, and split helpers.
 //!
 //! Key details:
-//! - Subject and pattern bytes are passed through PCRE2's POSIX wrapper as C strings.
+//! - Subject and pattern bytes are passed through the registered provider as C strings.
 //! - Match offsets are byte offsets into the original subject, matching PHP capture arrays.
 
-use std::ffi::CString;
+use std::ffi::{c_int, c_void, CString};
 use std::marker::PhantomData;
 
-use libc::{c_char, c_int, c_void, size_t};
-
 use super::super::super::EvalStatus;
+use crate::regex_provider::{regex_provider, RegexProvider};
 
 const REG_ICASE: c_int = 0x0001;
 const REG_NEWLINE: c_int = 0x0002;
@@ -26,42 +25,6 @@ const REG_UNGREEDY: c_int = 0x0200;
 const REG_UCP: c_int = 0x0400;
 const REG_UTF: c_int = 0x0040;
 const REG_NOMATCH: c_int = 17;
-
-/// PCRE2 POSIX `regex_t` layout for the supported PCRE2 wrapper ABI.
-#[repr(C)]
-struct Pcre2Regex {
-    re_pcre2_code: *mut c_void,
-    re_match_data: *mut c_void,
-    re_endp: *const c_char,
-    re_nsub: size_t,
-    re_erroffset: size_t,
-    re_cflags: c_int,
-}
-
-/// PCRE2 POSIX `regmatch_t` capture offset pair.
-#[repr(C)]
-#[derive(Clone, Copy)]
-struct Pcre2Regmatch {
-    rm_so: c_int,
-    rm_eo: c_int,
-}
-
-unsafe extern "C" {
-    /// Compiles a PCRE2 pattern through the POSIX wrapper.
-    fn pcre2_regcomp(regex: *mut Pcre2Regex, pattern: *const c_char, flags: c_int) -> c_int;
-
-    /// Executes a compiled PCRE2 regex and fills capture offsets.
-    fn pcre2_regexec(
-        regex: *const Pcre2Regex,
-        subject: *const c_char,
-        nmatch: size_t,
-        matches: *mut Pcre2Regmatch,
-        flags: c_int,
-    ) -> c_int;
-
-    /// Releases resources owned by a compiled PCRE2 regex.
-    fn pcre2_regfree(regex: *mut Pcre2Regex);
-}
 
 /// Supported PHP regex modifiers after delimiter stripping.
 #[derive(Default)]
@@ -73,9 +36,11 @@ pub(in crate::interpreter) struct EvalPregModifiers {
     pub(in crate::interpreter) unicode: bool,
 }
 
-/// A compiled PCRE2 regex plus POSIX wrapper metadata.
+/// A compiled regex plus its registered opaque provider.
 pub(in crate::interpreter) struct Regex {
-    raw: Pcre2Regex,
+    handle: *mut c_void,
+    capture_slots: usize,
+    provider: RegexProvider,
 }
 
 impl Regex {
@@ -84,25 +49,40 @@ impl Regex {
         body: &[u8],
         modifiers: EvalPregModifiers,
     ) -> Result<Self, EvalStatus> {
+        let provider = regex_provider().ok_or(EvalStatus::RuntimeFatal)?;
         let pattern = CString::new(body).map_err(|_| EvalStatus::RuntimeFatal)?;
-        let mut raw = Pcre2Regex {
-            re_pcre2_code: std::ptr::null_mut(),
-            re_match_data: std::ptr::null_mut(),
-            re_endp: std::ptr::null(),
-            re_nsub: 0,
-            re_erroffset: 0,
-            re_cflags: 0,
+        let mut handle = std::ptr::null_mut();
+        let mut capture_slots = 0_u64;
+        let status = unsafe {
+            (provider.compile)(
+                &mut handle,
+                pattern.as_ptr(),
+                modifiers.flags() as u32,
+                &mut capture_slots,
+            )
         };
-        let status = unsafe { pcre2_regcomp(&mut raw, pattern.as_ptr(), modifiers.flags()) };
-        if status != 0 {
+        let Ok(capture_slots) = usize::try_from(capture_slots) else {
+            if !handle.is_null() {
+                unsafe { (provider.free)(handle) };
+            }
+            return Err(EvalStatus::RuntimeFatal);
+        };
+        if status != 0 || handle.is_null() || capture_slots == 0 {
+            if !handle.is_null() {
+                unsafe { (provider.free)(handle) };
+            }
             return Err(EvalStatus::RuntimeFatal);
         }
-        Ok(Self { raw })
+        Ok(Self {
+            handle,
+            capture_slots,
+            provider,
+        })
     }
 
     /// Returns the number of capture slots including the full match at index 0.
     pub(in crate::interpreter) fn captures_len(&self) -> usize {
-        self.raw.re_nsub.saturating_add(1)
+        self.capture_slots
     }
 
     /// Returns whether this regex matches the subject.
@@ -146,25 +126,25 @@ impl Regex {
     /// Executes this regex from a byte offset, returning capture offsets on match.
     fn exec_at<'a>(&self, subject: &'a [u8], start: usize) -> Option<Captures<'a>> {
         let subject_c = CString::new(subject).ok()?;
-        let mut matches = vec![Pcre2Regmatch::unmatched(); self.captures_len().max(1)];
-        matches[0].rm_so = c_int::try_from(start).ok()?;
-        matches[0].rm_eo = c_int::try_from(subject.len()).ok()?;
+        let mut offset_pairs = vec![-1_i64; self.captures_len().checked_mul(2)?];
+        offset_pairs[0] = i64::try_from(start).ok()?;
+        offset_pairs[1] = i64::try_from(subject.len()).ok()?;
         let status = unsafe {
-            pcre2_regexec(
-                &self.raw,
+            (self.provider.exec)(
+                self.handle,
                 subject_c.as_ptr(),
-                matches.len(),
-                matches.as_mut_ptr(),
-                REG_STARTEND,
+                u64::try_from(self.captures_len()).ok()?,
+                offset_pairs.as_mut_ptr(),
+                REG_STARTEND as u32,
             )
         };
         if status == REG_NOMATCH || status != 0 {
             return None;
         }
         Some(Captures {
-            matches: matches
-                .into_iter()
-                .map(|matched| matched.to_offsets())
+            matches: offset_pairs
+                .chunks_exact(2)
+                .map(|pair| offsets(pair[0], pair[1]))
                 .collect(),
             _subject: PhantomData,
         })
@@ -172,9 +152,9 @@ impl Regex {
 }
 
 impl Drop for Regex {
-    /// Releases the compiled PCRE2 regex when the wrapper is dropped.
+    /// Releases the compiled regex through the provider that created it.
     fn drop(&mut self) {
-        unsafe { pcre2_regfree(&mut self.raw) };
+        unsafe { (self.provider.free)(self.handle) };
     }
 }
 
@@ -201,18 +181,9 @@ impl EvalPregModifiers {
     }
 }
 
-impl Pcre2Regmatch {
-    /// Returns an unmatched capture sentinel.
-    fn unmatched() -> Self {
-        Self { rm_so: -1, rm_eo: -1 }
-    }
-
-    /// Converts a PCRE2 offset pair to an optional Rust byte range.
-    fn to_offsets(self) -> Option<(usize, usize)> {
-        let start = usize::try_from(self.rm_so).ok()?;
-        let end = usize::try_from(self.rm_eo).ok()?;
-        Some((start, end))
-    }
+/// Converts one provider offset pair to an optional Rust byte range.
+fn offsets(start: i64, end: i64) -> Option<(usize, usize)> {
+    Some((usize::try_from(start).ok()?, usize::try_from(end).ok()?))
 }
 
 /// One regex match span.

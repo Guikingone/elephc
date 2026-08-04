@@ -67,6 +67,9 @@ int32_t elephc_pcre2_v1_exec(
     size_t slots;
     size_t effective_slots;
     size_t index;
+    int use_startend;
+    int64_t start_offset = -1;
+    int64_t end_offset = -1;
     int result;
 
     if (handle == NULL || subject_z == NULL || (requested_slots != 0 && offset_pairs == NULL) || eflags > INT_MAX) {
@@ -78,6 +81,15 @@ int32_t elephc_pcre2_v1_exec(
     }
     slots = (size_t)requested_slots;
     effective_slots = slots < handle->slot_count ? slots : handle->slot_count;
+    use_startend = (eflags & REG_STARTEND) != 0 && effective_slots != 0;
+    if (use_startend) {
+        start_offset = offset_pairs[0];
+        end_offset = offset_pairs[1];
+        if (start_offset < 0 || end_offset < start_offset
+            || start_offset > INT_MAX || end_offset > INT_MAX) {
+            return (int32_t)REG_BADPAT;
+        }
+    }
     for (index = 0; index < slots; ++index) {
         offset_pairs[index * 2] = -1;
         offset_pairs[index * 2 + 1] = -1;
@@ -90,6 +102,10 @@ int32_t elephc_pcre2_v1_exec(
         for (index = 0; index < effective_slots; ++index) {
             matches[index].rm_so = -1;
             matches[index].rm_eo = -1;
+        }
+        if (use_startend) {
+            matches[0].rm_so = (regoff_t)start_offset;
+            matches[0].rm_eo = (regoff_t)end_offset;
         }
     }
     result = pcre2_regexec(&handle->regex, subject_z, effective_slots, matches, (int)eflags);
