@@ -128,3 +128,32 @@ echo strlen($latin1), ":", strlen($utf8), ":", ($utf8 === "caf\xc3\xa9" ? 'ok' :
     );
     assert_eq!(out, "4:5:ok");
 }
+
+/// A builtin by-reference OUT parameter accepts a PROPERTY, not only a plain variable.
+///
+/// PHP writes into any writable lvalue, and `ErrorHandler\DebugClassLoader` does
+/// `parse_str($spec, $this->patchTypes);`. elephc's user-function path already accepts a property
+/// here (`Checker::is_by_ref_argument_lvalue`); the builtin path demanded a variable and reported
+/// "parameter $result must be passed a variable" on a program `php -n` runs.
+#[test]
+#[ignore = "OPEN DEFECT, root-caused and bisected: `parse_str` has NO EIR lowering, so the honest \
+fix is the elephc-PHP prelude — but that prelude does not lower either. The CALL SITE is fine \
+(probe p3: a property passed by reference into a plain user function compiles and runs); the \
+blocker is inside the body, where a NESTED write through a by-reference array parameter \
+(`$result[$base][$sub] = $value` / `$result[$base][] = $value`) fails with `runtime_call missing \
+operand 2`. Same family as the open nested-dim-write defects. Relaxing only the checker gate here \
+would move the failure from the checker to the backend, invisible to the --web ledger."]
+fn test_builtin_by_ref_out_param_accepts_a_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder {
+    public array $parsed = [];
+    public function load(string $spec): void { parse_str($spec, $this->parsed); }
+}
+$h = new Holder();
+$h->load('a=1&b=2');
+echo $h->parsed['a'], ":", $h->parsed['b'];
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
