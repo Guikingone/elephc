@@ -541,7 +541,7 @@ across a reset point.
 | `HashNew(key_type, value_type, capacity)` | none | `Heap(Hash)` | `alloc_heap` |
 | `ArrayLen`, `HashLen` | container | `I64` | `reads_heap` |
 | `ArrayGet` | array, index | element type | `reads_heap`, `may_warn`, maybe `may_fatal` |
-| `ArrayGetForWrite` | array, index (`I64`) | element type, **borrowed** | `reads_heap`, `may_warn` |
+| `ArrayGetForWrite` | array, index (`I64`) | element type, **borrowed** | `reads_heap`, `writes_heap`, `writes_local`, `alloc_heap`, `refcount_op`, `may_warn` |
 | `HashGet` | hash, key | value type | `reads_heap`, `may_warn`, maybe `may_fatal` |
 | `ArraySet` | array, index, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `HashSet` | hash, key, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
