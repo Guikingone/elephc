@@ -129,6 +129,31 @@ echo "[" . $s[99] . "]";  // []
 
 Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 
+## Incrementing a string
+
+`++` on a string uses PHP's perl-style alphanumeric carry, which is how the
+spreadsheet-column idiom works:
+
+```php
+<?php
+$col = "A";
+for ($i = 0; $i < 30; $i++) { echo $col, " "; $col++; }
+// A B C ... Z AA AB AC AD
+```
+
+The carry runs over raw bytes from the end: `a`–`y`, `A`–`Y` and `0`–`8` advance in
+place; `z`, `Z` and `9` wrap to `a`, `A` and `0` and carry left; a carry out of the
+front prepends `a`, `A` or `1` (`"zz"++` is `"aaa"`, `"Zz"++` is `"AAa"`, `"9z"++` is
+`"10a"`). Any other byte stops the carry, so `"a-"++` is unchanged while `"-a"++` is
+`"-b"`, and `""++` is `"1"`.
+
+A *numeric* string increments as a number and therefore changes type — `"9"++` is
+`int(10)`, `"1.5"++` is `float(2.5)`. `--` never carries: it decrements a numeric
+string, turns `""` into `int(-1)`, and leaves every other string alone.
+
+See [Operators](./operators.md#increment--decrement) for the full rules and the one
+documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
+
 ## Built-in string functions
 
 | Function | Signature | Description |

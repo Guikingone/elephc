@@ -273,10 +273,12 @@ fn test_error_array_fill_keys_wrong_args() {
     );
 }
 
-/// Verifies that error count wrong args.
+/// Verifies that `count()` with no argument is rejected, naming the arity it now
+/// accepts: PHP's optional `$mode` (`COUNT_RECURSIVE`) makes the second argument
+/// legal, so the diagnostic reads "1 or 2" rather than "exactly 1".
 #[test]
 fn test_error_count_wrong_args() {
-    expect_error("<?php count();", "count() takes exactly 1 argument");
+    expect_error("<?php count();", "count() takes 1 or 2 arguments");
 }
 
 /// Verifies that error array diff wrong args.

@@ -317,15 +317,43 @@ var_dump($f--); // float(2.5) — the post-form returns the old value
 var_dump($f);   // float(1.5)
 ```
 
-A `string` local cannot be incremented: PHP's string increment can change the value's
-type (`"9"++` is `int(10)`, `"3.5"++` is `float(4.5)`), and an elephc local has one
-static type for its whole lifetime — the same rule that rejects `$x = 1; $x = "s";`.
-elephc reports this at compile time instead of returning a string where PHP returns a
-number. Use an explicit numeric local, or build the next string yourself.
+`string` values increment with PHP's full rules, including the perl-style alphanumeric
+carry:
 
-PHP's perl-style alphanumeric carry (`"az"++` is `"ba"`, `"Zz"++` is `"AAa"`) is not
-implemented on any path. A boxed `mixed` value holding a string increments numerically
-(`int(1)` for `"az"`) instead of carrying, so do not rely on `++` to advance a string.
+```php
+$s = "az"; $s++;   // string(2) "ba"
+$s = "Zz"; $s++;   // string(3) "AAa"
+$s = "a9"; $s++;   // string(2) "b0"
+$s = "zz"; $s++;   // string(3) "aaa"
+$s = "a-"; $s++;   // string(2) "a-"  — the carry stops at the first non-alphanumeric byte
+$s = "-a"; $s++;   // string(2) "-b"
+$s = "";   $s++;   // string(1) "1"
+```
+
+The carry runs over raw bytes from the end of the string: `a`–`y`, `A`–`Y` and `0`–`8`
+advance in place, `z`/`Z`/`9` wrap to `a`/`A`/`0` and carry into the previous byte, and
+a carry out of the front prepends `a`, `A` or `1`. Any other byte (including the bytes
+of a multi-byte character) stops the carry and leaves the rest of the string alone.
+
+A *numeric* string increments as a number instead, so the operator can change the
+value's type — which is why a `string` local that is a `++`/`--` target is given boxed
+`mixed` storage for its whole lifetime:
+
+```php
+$n = "9";    $n++;  // int(10)
+$n = "1.5";  $n++;  // float(2.5)
+$n = "1e3";  $n++;  // float(1001)
+$n = "0x1A"; $n++;  // string(4) "0x1B" — "0x1A" is not a PHP numeric string
+```
+
+`--` follows PHP's asymmetric rule: a numeric string decrements numerically, the empty
+string becomes `int(-1)`, and any other string is left **unchanged** (`"az"--` is still
+`"az"`). PHP additionally raises `E_DEPRECATED` for `++` on a non-alphanumeric string
+and for `--` on a non-numeric string; elephc has no runtime deprecation channel, so it
+reproduces the resulting value but not the notice.
+
+`++`/`--` on an array, object, buffer, or pointer local stays a compile-time error, as
+in PHP where it is a `TypeError`.
 
 ## Ternary
 

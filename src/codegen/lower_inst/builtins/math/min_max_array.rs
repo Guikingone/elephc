@@ -1,6 +1,7 @@
 //! Purpose:
 //! Lowers PHP's single-array `min()` / `max()` form for the EIR backend.
-//! Walks an indexed array's payload slots in place and reduces them to one element.
+//! Reduces an indexed array's payload slots, or a hash-backed table's values, to one
+//! element.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::builtins::math::lower_min_max()`.
@@ -94,9 +95,11 @@ pub(super) fn try_lower_single_array(
 /// Formats the diagnostic for a single-array `min()` / `max()` the reduction cannot compare.
 ///
 /// Indexed arrays of `int`, `float`, `bool` and `string`, indexed arrays of boxed
-/// `Mixed` cells, and hash-backed associative arrays all reduce. What is left is the
-/// tagged nullable-scalar element representation, whose payload slots carry their
-/// runtime tag in a side register the reduction cannot read.
+/// `Mixed` cells, and hash-backed associative arrays all reduce. What is left are the
+/// element representations no reduction can read as a comparable payload: the tagged
+/// nullable-scalar slots, whose runtime tag lives in a side register, and homogeneous
+/// arrays of a heap shape (`array<array<int>>`, `array<Foo>`) that PHP would compare
+/// structurally. Rejecting them keeps a wrong ordering out of the generated program.
 fn unsupported_element_error(name: &str, shape: &str) -> CodegenIrError {
     CodegenIrError::unsupported(format!(
         "{}() with a single array argument cannot reduce an array of {} values",

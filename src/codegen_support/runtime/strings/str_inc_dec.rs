@@ -123,7 +123,7 @@ pub fn emit_str_inc_dec(emitter: &mut Emitter) {
     emitter.instruction("b __rt_sid_int_value");                                // continue with the shared integer increment
     emitter.label("__rt_sid_int_negative");
     emitter.instruction("mov x16, #1");                                         // start from one to materialize the magnitude of PHP_INT_MIN
-    emitter.instruction("lsl x16, x16, #63");                                    // x16 = 0x8000000000000000, the magnitude of the smallest PHP integer
+    emitter.instruction("lsl x16, x16, #63");                                   // x16 = 0x8000000000000000, the magnitude of the smallest PHP integer
     emitter.instruction("cmp x14, x16");                                        // does the negative magnitude still fit in a PHP integer?
     emitter.instruction("b.hi __rt_sid_float");                                 // a magnitude below PHP_INT_MIN is a float numeric string
     emitter.instruction("neg x15, x14");                                        // x15 = the signed value of a negative numeric string

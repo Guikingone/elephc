@@ -312,16 +312,27 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"
             | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
-            | "str_word_count" | "chunk_split" => PhpType::Str,
+            | "str_word_count" | "chunk_split"
+            // `join` is `implode`'s alias, and dechex/decbin/decoct render integers as
+            // strings. Without these arms an array literal such as `[dechex($n)]` would take
+            // the `_ => PhpType::Int` fallback below, type the element `int`, and read the
+            // string result registers as an integer — `["a"]` came out as `[0]`.
+            | "join" | "dechex" | "decbin" | "decoct" => PhpType::Str,
             "strpos" | "strrpos" | "array_search" | "grapheme_strrev" | "fileatime"
             | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
             | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile"
-            | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp" => {
+            | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp"
+            // hexdec/bindec/octdec return `int|float`, whose shared codegen representation
+            // is `Mixed`; the boxed cell must not be read back as a raw integer.
+            | "hexdec" | "bindec" | "octdec" => {
                 PhpType::Mixed
             }
             "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]),
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv" | "printf"
-            | "rand" | "time" | "fpassthru" | "linkinfo" => PhpType::Int,
+            | "rand" | "time" | "fpassthru" | "linkinfo"
+            // Listed explicitly rather than left to the `_ => PhpType::Int` fallback, so a
+            // future change to that fallback cannot silently retype them.
+            | "substr_count" | "strncmp" | "strncasecmp" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,

@@ -347,3 +347,19 @@ try { strncasecmp("a", "b", -1); } catch (ValueError $e) { echo $e->getMessage()
 strncasecmp(): Argument #3 ($length) must be greater than or equal to 0\n"
     );
 }
+
+/// Verifies `join()`, `substr_count()`, `strncmp()`, and `strncasecmp()` keep their PHP
+/// types inside an array literal, whose element typing uses the checker's syntactic
+/// inference table rather than the per-call checked type.
+#[test]
+fn test_new_string_builtins_keep_their_types_inside_array_literals() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump([join("-", ["a", "b"]), substr_count("aaa", "a"), strncmp("a", "b", 1), strncasecmp("A", "a", 1)]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(4) {\n  [0]=>\n  string(3) \"a-b\"\n  [1]=>\n  int(3)\n  [2]=>\n  int(-1)\n  [3]=>\n  int(0)\n}\n"
+    );
+}

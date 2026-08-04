@@ -747,3 +747,27 @@ var_dump(hexdec(dechex($n)) === $n, bindec(decbin($n)) === $n, octdec(decoct($n)
     );
     assert_eq!(out, "bool(true)\nbool(true)\nbool(true)\n");
 }
+
+/// Verifies the new base-conversion builtins keep their PHP types inside an array literal.
+///
+/// Array-literal element typing goes through the checker's syntactic inference table, whose
+/// fallback is `int`. Before these builtins were listed there, `[dechex($n)]` typed its
+/// element `int` and read the string result registers as an integer, so `["a"]` printed
+/// `[0]`. Expectations are verbatim `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_base_builtins_keep_their_types_inside_array_literals() {
+    let out = compile_and_run(
+        r#"<?php
+$i = 10 + $argc - 1;
+var_dump([dechex($i), decoct($i), decbin($i)]);
+var_dump([hexdec("ff"), octdec("17"), hexdec("ffffffffffffffff")]);
+echo join("/", [dechex($i), decoct($i)]), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        "array(3) {\n  [0]=>\n  string(1) \"a\"\n  [1]=>\n  string(2) \"12\"\n  [2]=>\n  string(4) \"1010\"\n}\n\
+array(3) {\n  [0]=>\n  int(255)\n  [1]=>\n  int(15)\n  [2]=>\n  float(1.8446744073709552E+19)\n}\n\
+a/12\n"
+    );
+}

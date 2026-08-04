@@ -10,6 +10,8 @@
 //! - `__rt_mixed_loose_eq` is the single entry point every backend loose-equality
 //!   fallback funnels through; the array and object walkers call back into it for
 //!   element/property comparison, so all three share one PHP comparison table.
+//! - `__rt_php_compare` is the *ordering* counterpart (PHP's `<`, `>`, `<=>` table) over
+//!   unboxed `(tag, lo, hi)` triples; the single-array `min()` / `max()` reductions use it.
 //! - Recursion carries an explicit depth argument instead of global state, so the
 //!   helpers stay reentrant; the cap keeps a cyclic structure from overflowing the
 //!   stack (see `MAX_LOOSE_EQ_DEPTH`).
