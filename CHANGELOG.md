@@ -4,6 +4,8 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed `new $class(...$args)` silently dropping its spread arguments: the object was constructed with no arguments at all, or with only the named ones, and no diagnostic was reported. Dynamic `new` now shares the same call-argument planning as every other call surface.
+- Added the internal array pointer family (`key()`, `current()`, `next()`, `prev()`, `reset()`, `end()`), plus `quotemeta()`, `chunk_split()` and `base_convert()`.
 - Added `++`/`--` on strings with PHP's perl-style alphanumeric carry (`"az"` becomes `"ba"`, `"Zz"` becomes `"AAa"`), including the numeric-string cases where the value changes type (`"9"++` is `int(10)`). By-reference parameters and static locals are rejected with a diagnostic explaining why.
 - Added `substr_count()`, `strncmp()`/`strncasecmp()`, `dechex`/`hexdec`/`decbin`/`bindec`/`decoct`/`octdec`, `array_count_values()`, `constant()`, `join()`, and the `PHP_ROUND_HALF_*`/`COUNT_*` constants. `round()` gains its `$mode` argument, implemented as php-src's algorithm — which also corrects the two-argument form, where `round(1.005, 2)` returned `1` instead of `1.01`. `count()` gains its `$mode` argument. Single-array `min()`/`max()` accept strings, associative arrays and heterogeneous elements.
 - Fixed unbounded recursion crashing with a raw SIGSEGV: every function prologue now checks the stack pointer against a limit derived from `RLIMIT_STACK`, and reports PHP's "Maximum call stack size reached" instead. Fibers and generators, which run on their own stacks, carry their own floor.
