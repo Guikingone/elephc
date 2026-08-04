@@ -646,7 +646,6 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeys |
             RuntimeFnId::ArrayMerge |
             RuntimeFnId::ArrayMergeRecursive |
-            RuntimeFnId::ArrayPad |
             RuntimeFnId::ArrayProduct |
             RuntimeFnId::ArrayReplace |
             RuntimeFnId::ArrayReplaceRecursive |
@@ -729,14 +728,17 @@ impl RuntimeFnId {
             RuntimeFnId::Trim |
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords => crate::ir::Effects::empty(),
-            // These seven raise reference PHP's catchable `ValueError` for out-of-range
+            // These raise reference PHP's catchable `ValueError` for out-of-range
             // arguments (`array_chunk()` non-positive length, `clamp()` inverted bounds,
-            // `array_fill()` negative count, `explode()` empty separator, `str_pad()` empty
-            // pad string or bad pad type, `str_repeat()` negative count, `str_split()`
-            // non-positive length, `wordwrap()` empty break or zero cutting width), so they
-            // must not be treated as removable pure calls.
+            // `array_fill()` negative count, `array_pad()` oversized length, `explode()`
+            // empty separator, `str_pad()` empty pad string or bad pad type,
+            // `str_repeat()` negative count, `str_split()` non-positive length,
+            // `wordwrap()` empty break or zero cutting width), so they must not be treated
+            // as removable pure calls: dead-code elimination would drop the diagnostic, and
+            // the try-prefix hoist would move the call out of the `try` that must catch it.
             RuntimeFnId::ArrayChunk
             | RuntimeFnId::ArrayFill
+            | RuntimeFnId::ArrayPad
             | RuntimeFnId::Clamp
             | RuntimeFnId::Explode
             | RuntimeFnId::StrPad

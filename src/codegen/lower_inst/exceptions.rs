@@ -17,9 +17,10 @@
 //!   at emit time from a caller that passes no span — so there is no origin to print. Reference
 //!   PHP does report one here (the operation's own line), which stays a known gap.
 //! - `emit_value_error_unless()` is the shared builtin argument-range guard: it keeps
-//!   out-of-range arguments (empty separators, non-positive lengths, negative counts)
-//!   from ever reaching a runtime helper that would read uninitialized memory or loop
-//!   forever, and raises reference PHP's catchable `ValueError` instead.
+//!   out-of-range arguments (empty separators, non-positive lengths, negative counts,
+//!   oversized array lengths) from ever reaching a runtime helper that would read
+//!   uninitialized memory, allocate an unrepresentable size, or loop forever, and raises
+//!   reference PHP's catchable `ValueError` instead.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -61,6 +62,13 @@ pub(super) enum ValueGuard<'a> {
     /// The 64-bit register, read as a signed integer, must be `>= minimum`
     /// (`str_split()` chunk length, `str_repeat()`/`array_fill()` counts).
     SignedAtLeast(&'a str, i64),
+    /// The 64-bit register, read as a signed integer, must satisfy
+    /// `-maximum <= value <= maximum` (`array_pad()`'s `$length` magnitude).
+    ///
+    /// The bound is checked on the signed argument itself rather than on `abs(value)`
+    /// so `PHP_INT_MIN`, whose magnitude is not representable, fails the guard instead
+    /// of wrapping back to a negative "absolute" length.
+    SignedMagnitudeAtMost(&'a str, i64),
 }
 
 /// Throws a catchable PHP `ValueError` unless the guarded register satisfies `guard`.
@@ -82,6 +90,23 @@ pub(super) fn emit_value_error_unless(
         (Arch::X86_64, ValueGuard::SignedAtLeast(reg, minimum)) => {
             ctx.emitter.instruction(&format!("cmp {}, {}", reg, minimum));      // compare the materialized argument against its PHP minimum
             ctx.emitter.instruction(&format!("jge {}", ok_label));              // an argument at or above the minimum is in range
+        }
+        (Arch::AArch64, ValueGuard::SignedMagnitudeAtMost(reg, maximum)) => {
+            let fail_label = ctx.next_label("value_guard_fail");
+            ctx.emitter.instruction(&format!("mov x9, #{}", maximum));          // materialize the largest magnitude PHP accepts for this argument
+            ctx.emitter.instruction(&format!("cmp {}, x9", reg));               // compare the materialized argument against the positive bound
+            ctx.emitter.instruction(&format!("b.gt {}", fail_label));           // a value above the bound is out of range
+            ctx.emitter.instruction(&format!("cmn {}, x9", reg));               // compare the materialized argument against the negated bound
+            ctx.emitter.instruction(&format!("b.ge {}", ok_label));             // a value at or above the negated bound is in range
+            ctx.emitter.label(&fail_label);
+        }
+        (Arch::X86_64, ValueGuard::SignedMagnitudeAtMost(reg, maximum)) => {
+            let fail_label = ctx.next_label("value_guard_fail");
+            ctx.emitter.instruction(&format!("cmp {}, {}", reg, maximum));      // compare the materialized argument against the positive bound
+            ctx.emitter.instruction(&format!("jg {}", fail_label));             // a value above the bound is out of range
+            ctx.emitter.instruction(&format!("cmp {}, -{}", reg, maximum));     // compare the materialized argument against the negated bound
+            ctx.emitter.instruction(&format!("jge {}", ok_label));              // a value at or above the negated bound is in range
+            ctx.emitter.label(&fail_label);
         }
     }
     emit_value_error(ctx, message);
