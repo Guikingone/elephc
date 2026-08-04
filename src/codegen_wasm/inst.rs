@@ -90,6 +90,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IToF => lower_itof(ctx, &inst),
         Op::IToStr => lower_int_like_to_string(ctx, &inst),
         Op::FToStr => lower_float_to_string(ctx, &inst),
+        Op::StrCharAt => lower_str_char_at(ctx, &inst),
         Op::FToI => lower_ftoi(ctx, &inst),
         Op::Cast => lower_cast(ctx, &inst),
         Op::IsTruthy => lower_is_truthy(ctx, &inst),
@@ -1621,6 +1622,22 @@ fn lower_int_like_to_string(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     store_result(ctx, inst)
 }
 
+/// Lowers `StrCharAt`: `$s[$i]`, PHP's one-byte string offset read.
+///
+/// A negative index counts from the END, and anything still outside answers the EMPTY string
+/// after `Warning: Uninitialized string offset N` — naming the index AS WRITTEN, so a negative
+/// one is reported negative rather than resolved first. The runtime owns both, since neither
+/// the bound nor the sign is known here.
+fn lower_str_char_at(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    ctx.emit_load_value(operand(inst, 0)?)?;
+    ctx.emit_load_value(operand(inst, 1)?)?;
+    ctx.fb.ins(
+        "call $__rt_str_char_at",
+        "PHP's string offset read: one byte, or \"\" with a warning",
+    );
+    store_result(ctx, inst)
+}
+
 /// Lowers `FToStr`: a PHP float to its string form.
 ///
 /// The formatting is `__rt_ftoa`'s, the same one `echo` of a float uses, so a rendered float
@@ -1723,6 +1740,24 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // `(string) $f` and `"$f"` byte-identical.
     if source.ir_type == IrType::F64 && target == IrType::Str {
         return lower_float_to_string(ctx, inst);
+    }
+    // `(int) $string`: PHP takes the leading numeric prefix, silently, and answers 0 when
+    // there is none. Shared with the boxed-string cast so the two cannot disagree.
+    if source.ir_type == IrType::Str
+        && target == IrType::I64
+        && source.php_type.codegen_repr() == PhpType::Str
+    {
+        ctx.emit_load_value(value)?;
+        ctx.fb.ins("i32.wrap_i64", "narrow the string length for the parser");
+        ctx.fb.ins(
+            "global.get $__float_scratch",
+            "the parser's overflow scratch",
+        );
+        ctx.fb.ins(
+            "call $__rt_str_to_int",
+            "PHP's (int) of a string: leading numeric prefix, else 0",
+        );
+        return store_result(ctx, inst);
     }
     if source.ir_type == IrType::Heap(IrHeapKind::Object) && target == IrType::Str {
         if let PhpType::Object(class_name) = source.php_type.clone() {

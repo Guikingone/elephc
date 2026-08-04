@@ -1553,6 +1553,12 @@ fn cast_shape_issue(
         (IrType::Str, IrType::Str) => {
             source_php == PhpType::Str && result_php == PhpType::Str
         }
+        // `(int) $string` parses the LEADING numeric prefix and answers 0 for anything else,
+        // silently — the same `__rt_str_to_int` a boxed string already casts through, so the
+        // two spellings agree.
+        (IrType::Str, IrType::I64) => {
+            source_php == PhpType::Str && result_php == PhpType::Int
+        }
         (IrType::I64, IrType::F64) => {
             source_php == PhpType::Int && result_php == PhpType::Float
         }
@@ -5935,6 +5941,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::CatchBind
         | Op::ReleaseLocalSlot
         | Op::FToStr
+        | Op::StrCharAt
         | Op::Nop => true,
         Op::ConstClassName
         | Op::ConstEnumCase
@@ -5969,7 +5976,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::MixedCastInt
         | Op::MixedCastFloat
         | Op::MixedCastString
-        | Op::StrCharAt
+
         | Op::StrInterpolate
         | Op::WriteStrStdout
         | Op::HashLen

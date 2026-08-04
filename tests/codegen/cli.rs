@@ -11997,3 +11997,94 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `(int) $string` and `$s[$i]`, both against php-src's exact answers.
+///
+/// `(int)` of a string takes the LEADING numeric prefix and answers 0 when there is none,
+/// silently — the same parser a boxed string casts through, so the two spellings agree.
+///
+/// `$s[$i]` counts a negative index from the END, and anything still outside answers the EMPTY
+/// string after `Warning: Uninitialized string offset N` — naming the index AS WRITTEN, so a
+/// negative one is reported negative rather than resolved first.
+#[test]
+fn test_cli_wasm_string_to_int_and_offset_read_match_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_string_offset");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$s = "42";
+echo (int) $s, "|", (int) "abc", "|", (int) "12abc", "|", (int) "  7  ", "\n";
+$t = "hi";
+foreach ([0, 1, 2, 5, -1, -2, -3, -10] as $i) { echo "[", $i, "=>", $t[$i], "]"; }
+echo "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the string cases to WASM");
+    assert!(
+        output.status.success(),
+        "string-case compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the string cases under Node");
+    assert!(
+        run.status.success(),
+        "string cases must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "42|0|12|7\n",
+            "[0=>h][1=>i][2=>][5=>][-1=>i][-2=>h][-3=>][-10=>]\n",
+        )
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr)
+            .lines()
+            .collect::<Vec<&str>>(),
+        vec![
+            "Warning: Uninitialized string offset 2",
+            "Warning: Uninitialized string offset 5",
+            "Warning: Uninitialized string offset -3",
+            "Warning: Uninitialized string offset -10",
+        ],
+        "php-src warns for each out-of-range read, naming the index as written"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

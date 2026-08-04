@@ -149,6 +149,11 @@ const PHP_VALUE_FALSE: &[u8] = b"false";
 const ERR_COUNT_PREFIX: &[u8] =
     b"PHP Fatal error: Uncaught TypeError: count(): Argument #1 ($value) must be of type Countable|array, ";
 const ERR_COUNT_SUFFIX: &[u8] = b" given\n";
+/// `$s[$i]` outside the string answers the EMPTY string after this warning, which names the
+/// index AS WRITTEN — a negative one is reported negative, not resolved from the end first.
+const WARN_UNINIT_STRING_OFFSET: &[u8] = b"Warning: Uninitialized string offset ";
+/// The newline closing that warning, in this emitter's own data group.
+const WARN_OFFSET_NEWLINE: &[u8] = b"\n";
 /// Reaching `string` or `bool` from a NaN still converts, but PHP 8.5 WARNS first — measured
 /// raw, since an error handler hides the level. There is no notice on the way to `float`, where
 /// NaN is an ordinary value.
@@ -216,7 +221,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + PHP_VALUE_TRUE.len() as u32
     + PHP_VALUE_FALSE.len() as u32
     + ERR_COUNT_PREFIX.len() as u32
-    + ERR_COUNT_SUFFIX.len() as u32;
+    + ERR_COUNT_SUFFIX.len() as u32
+    + WARN_UNINIT_STRING_OFFSET.len() as u32
+    + WARN_OFFSET_NEWLINE.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -360,6 +367,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         PHP_VALUE_FALSE,
         ERR_COUNT_PREFIX,
         ERR_COUNT_SUFFIX,
+        WARN_UNINIT_STRING_OFFSET,
+        WARN_OFFSET_NEWLINE,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -408,7 +417,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&wat);
     emit_method_call_failure_runtime(wm, &method_offsets);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
-    emit_return_coercion_runtime(wm, &warning_offsets[17..32], &method_offsets[2..11]);
+    emit_return_coercion_runtime(wm, &warning_offsets[17..34], &method_offsets[2..11]);
 }
 
 /// Emits the fatal path used when a `Mixed` receiver is not an object.
@@ -470,7 +479,7 @@ fn emit_return_coercion_runtime(
     offsets: &[(u32, u32)],
     type_offsets: &[(u32, u32)],
 ) {
-    debug_assert_eq!(offsets.len(), 15);
+    debug_assert_eq!(offsets.len(), 17);
     debug_assert_eq!(type_offsets.len(), 9);
     let (float_prefix_ptr, float_prefix_len) = offsets[0];
     let (str_prefix_ptr, str_prefix_len) = offsets[1];
@@ -487,6 +496,8 @@ fn emit_return_coercion_runtime(
     let (false_ptr, false_len) = offsets[12];
     let (count_prefix_ptr, count_prefix_len) = offsets[13];
     let (count_suffix_ptr, count_suffix_len) = offsets[14];
+    let (uninit_offset_ptr, uninit_offset_len) = offsets[15];
+    let (newline_ptr, newline_len) = offsets[16];
     // The shared `PHP_TYPE_*` words each end with the newline that terminates the method-call
     // fatal; here a word sits mid-sentence, so the newline is dropped from the length.
     let word = |index: usize| -> (u32, u32) {
@@ -715,6 +726,28 @@ fn emit_return_coercion_runtime(
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {count_suffix_ptr}) (i32.const {count_suffix_len})))
   (call $wasi_proc_exit (i32.const 255))
   unreachable)                                                    ;; elephc-trap:post-noreturn:count-type-fatal-exit
+"#
+    ));
+    // `$s[$i]`: PHP counts a negative index from the END, and answers the EMPTY string with a
+    // warning for anything still outside. The warning names the index AS WRITTEN.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_str_char_at (param $ptr i32) (param $len i64) (param $idx i64) (result i32) (result i64)
+  (local $i i64) (local $tp i32) (local $tl i32)
+  (local.set $i (local.get $idx))
+  (if (i64.lt_s (local.get $i) (i64.const 0))                     ;; a negative index counts from the end
+    (then (local.set $i (i64.add (local.get $len) (local.get $i)))))
+  (if (i32.or (i64.lt_s (local.get $i) (i64.const 0)) (i64.ge_s (local.get $i) (local.get $len)))
+    (then
+      (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {uninit_offset_ptr}) (i32.const {uninit_offset_len}))
+      (call $__rt_itoa (local.get $idx) (i32.add (global.get $__float_scratch) (i32.const 9344)))
+      (local.set $tl)
+      (local.set $tp)
+      (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $tp) (local.get $tl))
+      (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {newline_ptr}) (i32.const {newline_len}))
+      (return (call $__rt_str_persist (local.get $ptr) (i64.const 0)))))  ;; PHP answers ""
+  (call $__rt_str_persist                                         ;; one byte, owned by the caller
+    (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))
+    (i64.const 1)))
 "#
     ));
 }
