@@ -474,3 +474,30 @@ echo $o['b']['c'];
     );
     assert_eq!(out, "v");
 }
+
+/// An AUTO-VIVIFYING nested write through a by-reference array parameter must reach the caller.
+///
+/// `$r['a']['b'] = 'x'` where `$r['a']` does not exist yet: PHP creates the intermediate array and
+/// `$out['a']['b']` reads back `x`. elephc COMPILES this and then warns "Undefined array key" and
+/// reads null — a silently wrong answer, not a refusal.
+///
+/// The discriminator is auto-vivification alone. Creating the intermediate explicitly first
+/// (`$r['a'] = []; $r['a'][] = 'x';`) writes back correctly, and so does the same shape behind an
+/// `array_key_exists` guard, which is why every earlier probe that only checked COMPILATION looked
+/// green here.
+#[test]
+#[ignore = "OPEN DEFECT, SILENT: compiles, then warns `Undefined array key` and reads null where \
+php -n prints `x`. The intermediate array auto-vivified by a nested write never crosses the \
+by-reference boundary back to the caller. Sibling of \
+test_vivified_by_ref_element_accepts_a_nested_write, which is the LOUD form of the same writeback \
+gap — fix the writeback once and both should follow."]
+fn test_auto_vivifying_nested_write_reaches_the_by_ref_caller() {
+    let out = compile_and_run(
+        r#"<?php
+function fill(array &$r): void { $r = []; $r['a']['b'] = 'x'; }
+fill($out);
+echo $out['a']['b'];
+"#,
+    );
+    assert_eq!(out, "x");
+}
