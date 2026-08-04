@@ -7244,3 +7244,109 @@ echo "n=" . $n . " kept=" . count($r);
     );
     assert_eq!(out, "n=0 kept=0");
 }
+
+/// Verifies `fread()` of a payload larger than the 64 KiB concat scratch buffer returns the whole
+/// string AND leaves the stream-handle table intact, so the following `fclose()` still sees a
+/// valid resource. Before the reservation fix the read ran past `_concat_buf` into the adjacent
+/// BSS globals and `fclose()` failed with a bogus TypeError.
+#[test]
+fn test_fread_larger_than_concat_scratch_keeps_stream_table_intact() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$payload = str_repeat("0123456789", 10000);
+file_put_contents("big_fread.bin", $payload);
+$f = fopen("big_fread.bin", "r");
+$data = fread($f, 100000);
+echo strlen($data), "|", substr($data, 0, 5), "|", substr($data, -5), "|";
+echo ($data === $payload ? "same" : "DIFF"), "|";
+echo (is_resource($f) ? "res" : "broken"), "|";
+fclose($f);
+unlink("big_fread.bin");
+echo "closed";
+"#,
+    );
+    assert_eq!(out, "100000|01234|56789|same|res|closed");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_get_contents()` drains a stream larger than the 64 KiB concat scratch buffer
+/// into one contiguous, byte-exact result through the growable reservation.
+#[test]
+fn test_stream_get_contents_larger_than_concat_scratch() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$payload = str_repeat("abcdefghij", 10000);
+file_put_contents("big_sgc.bin", $payload);
+$f = fopen("big_sgc.bin", "r");
+$data = stream_get_contents($f);
+fclose($f);
+unlink("big_sgc.bin");
+echo strlen($data), "|", ($data === $payload ? "same" : "DIFF");
+"#,
+    );
+    assert_eq!(out, "100000|same");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the bounded `stream_get_contents($f, $length)` form also honours a cap larger than the
+/// 64 KiB concat scratch buffer without overrunning it.
+#[test]
+fn test_stream_get_contents_bounded_larger_than_concat_scratch() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$payload = str_repeat("abcdefghij", 10000);
+file_put_contents("big_sgc_b.bin", $payload);
+$f = fopen("big_sgc_b.bin", "r");
+$data = stream_get_contents($f, 70000);
+fclose($f);
+unlink("big_sgc_b.bin");
+echo strlen($data), "|", ($data === substr($payload, 0, 70000) ? "same" : "DIFF");
+"#,
+    );
+    assert_eq!(out, "70000|same");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `fgets()` returns a line longer than the 64 KiB concat scratch buffer intact: the line
+/// accumulator grows into owned heap storage instead of writing past `_concat_buf`.
+#[test]
+fn test_fgets_line_larger_than_concat_scratch() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$w = fopen("big_line.txt", "w");
+fwrite($w, "first\n");
+fwrite($w, str_repeat("Z", 200000));
+fwrite($w, "\nlast\n");
+fclose($w);
+$f = fopen("big_line.txt", "r");
+$a = fgets($f);
+$b = fgets($f);
+$c = fgets($f);
+fclose($f);
+unlink("big_line.txt");
+echo rtrim($a), "|", strlen($b), "|", substr($b, 0, 3), "|", rtrim($c);
+"#,
+    );
+    assert_eq!(out, "first|200001|ZZZ|last");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_get_line()` honours a byte budget larger than the 64 KiB concat scratch
+/// buffer, returning the full delimiter-stripped line from the reserved destination.
+#[test]
+fn test_stream_get_line_budget_larger_than_concat_scratch() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$long = str_repeat("Q", 150000);
+file_put_contents("big_sgl.txt", $long . "|tail");
+$f = fopen("big_sgl.txt", "r");
+$a = stream_get_line($f, 200000, "|");
+$b = stream_get_line($f, 200000, "|");
+fclose($f);
+unlink("big_sgl.txt");
+echo strlen($a), "|", substr($a, 0, 3), "|", $b;
+"#,
+    );
+    assert_eq!(out, "150000|QQQ|tail");
+    let _ = fs::remove_dir_all(&dir);
+}

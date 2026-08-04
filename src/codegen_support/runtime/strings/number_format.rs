@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - The result is bounded by the fixed 48-byte snprintf buffer plus its grouping separators,
+//!   so a flat 128 bytes is reserved through `__rt_concat_reserve` before the first store. That
+//!   keeps a format that lands near the end of the 64 KiB concat scratch buffer from spilling
+//!   past it into the adjacent BSS globals.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -14,7 +18,8 @@ use crate::codegen_support::platform::Arch;
 /// Emits the `__rt_number_format` runtime helper.
 ///
 /// Formats a floating-point number with configurable decimal places and separators,
-/// writing the result into the concat buffer. Dispatches to target-specific implementations.
+/// writing the result into storage reserved through `__rt_concat_reserve` and publishing the
+/// written length through `__rt_concat_publish`. Dispatches to target-specific implementations.
 ///
 /// Input registers (ARM64): `d0` = number, `x1` = decimals, `x2` = dec_point char, `x3` = thousands_sep (0=none)
 /// Output registers (ARM64): `x1` = string pointer, `x2` = string length
@@ -84,11 +89,10 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // pop the variadic argument from stack
     emitter.instruction("str x0, [sp, #80]");                                   // save raw string length
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current concat_buf write offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x10, x7, x8");                                     // compute destination pointer
+    // -- reserve bounded destination storage (48 raw bytes plus grouping separators) --
+    emitter.instruction("mov x0, #128");                                        // the 48-byte snprintf buffer plus its thousands separators can never exceed 128 bytes
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the grouped number
+    emitter.instruction("mov x10, x0");                                         // compute destination pointer
     emitter.instruction("str x10, [sp, #72]");                                  // save result start pointer
 
     // -- scan raw string to find integer part length --
@@ -163,13 +167,11 @@ pub fn emit_number_format(emitter: &mut Emitter) {
     emitter.instruction("sub x12, x12, #1");                                    // decrement remaining chars
     emitter.instruction("b __rt_nf_copy_dec");                                  // continue copying decimal part
 
-    // -- finalize: compute length and update concat_off --
+    // -- finalize: compute length and publish the written bytes --
     emitter.label("__rt_nf_done");
     emitter.instruction("ldr x1, [sp, #72]");                                   // load result start pointer
     emitter.instruction("sub x2, x10, x1");                                     // result length = dest_end - dest_start
-    emitter.instruction("ldr x8, [x6]");                                        // load current concat_off
-    emitter.instruction("add x8, x8, x2");                                      // advance offset by result length
-    emitter.instruction("str x8, [x6]");                                        // store updated concat_off
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
@@ -187,7 +189,7 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the raw snprintf buffer, mini format string, and concat-buffer state
     emitter.instruction("push rbx");                                            // preserve the concat-buffer destination cursor across the local formatting and copy loops
     emitter.instruction("push r12");                                            // preserve the concat-buffer start pointer for the final x86_64 string return pair
-    emitter.instruction("push r13");                                            // preserve the concat-offset symbol address across the local formatting and copy loops
+    emitter.instruction("push r13");                                            // preserve one more callee-saved register so the frame stays 16-byte aligned for the SysV snprintf call
     emitter.instruction("sub rsp, 104");                                        // reserve local storage; bumped 96→104 so the four 8-byte saves above + this sub leave rsp 0-mod-16 before the SysV snprintf call below
     emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // preserve the requested decimal count across the intermediate formatting and copy loops
     emitter.instruction("mov QWORD PTR [rbp - 48], rsi");                       // preserve the decimal-separator byte across the intermediate formatting and copy loops
@@ -205,11 +207,10 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 1");                                          // advertise one live SIMD variadic register because the formatted number is passed in xmm0 on SysV x86_64
     emitter.bl_c("snprintf");                                                   // render the raw fixed-point decimal string into the local snprintf buffer
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // preserve the raw snprintf byte count before the thousands-separator pass consumes caller-saved registers
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r13", "_concat_off");
-    emitter.instruction("mov r8, QWORD PTR [r13]");                             // load the current concat-buffer write cursor before appending the formatted output
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_buf");
-    emitter.instruction("lea rbx, [r9 + r8]");                                  // compute the concat-buffer destination cursor where the formatted output will begin
-    emitter.instruction("mov r12, rbx");                                        // preserve the concat-buffer start pointer for the final x86_64 string return pair
+    emitter.instruction("mov rax, 128");                                        // the 48-byte snprintf buffer plus its thousands separators can never exceed 128 bytes
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the grouped number
+    emitter.instruction("mov rbx, rax");                                        // compute the destination cursor where the formatted output will begin
+    emitter.instruction("mov r12, rbx");                                        // preserve the reserved start pointer for the final x86_64 string return pair
     emitter.instruction("lea r10, [rbp - 120]");                                // point at the raw snprintf output buffer before scanning for a leading minus sign and decimal point
     emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // reload the raw snprintf byte count before splitting the integer and decimal parts
     emitter.instruction("movzx eax, BYTE PTR [r10]");                           // peek at the first raw formatted byte to detect a leading minus sign
@@ -285,14 +286,12 @@ fn emit_number_format_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_nf_copy_dec_linux_x86_64");                   // continue copying the decimal part until every remaining raw byte has been emitted
 
     emitter.label("__rt_nf_done_linux_x86_64");
-    emitter.instruction("mov rax, r12");                                        // return the concat-buffer start pointer of the formatted number in the primary x86_64 string result register
-    emitter.instruction("mov rdx, rbx");                                        // copy the concat-buffer end cursor so the final formatted-string length can be derived
-    emitter.instruction("sub rdx, rax");                                        // derive the formatted-string length from the concat-buffer start and end cursors
-    emitter.instruction("mov r8, QWORD PTR [r13]");                             // reload the old concat-buffer write cursor before publishing the formatted-string append
-    emitter.instruction("add r8, rdx");                                         // advance the concat-buffer write cursor by the emitted formatted-string length
-    emitter.instruction("mov QWORD PTR [r13], r8");                             // publish the updated concat-buffer write cursor after appending the formatted number
+    emitter.instruction("mov rax, r12");                                        // return the reserved start pointer of the formatted number in the primary x86_64 string result register
+    emitter.instruction("mov rdx, rbx");                                        // copy the destination end cursor so the final formatted-string length can be derived
+    emitter.instruction("sub rdx, rax");                                        // derive the formatted-string length from the destination start and end cursors
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("add rsp, 104");                                        // release the local raw-buffer and mini-format scratch space before restoring callee-saved registers
-    emitter.instruction("pop r13");                                             // restore the saved concat-offset symbol register after the x86_64 number_format() helper finishes
+    emitter.instruction("pop r13");                                             // restore the callee-saved register kept only to preserve the frame's 16-byte alignment
     emitter.instruction("pop r12");                                             // restore the saved concat-buffer start register after the x86_64 number_format() helper finishes
     emitter.instruction("pop rbx");                                             // restore the saved concat-buffer destination cursor register after the x86_64 number_format() helper finishes
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the x86_64 formatted string pair

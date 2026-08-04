@@ -18,6 +18,7 @@ use super::exceptions;
 use super::fibers;
 use super::generators;
 use super::io;
+use super::numeric;
 use super::objects;
 use super::pointers;
 use super::resource_ids;
@@ -38,7 +39,12 @@ use crate::codegen_support::RuntimeFeatures;
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     diagnostics::emit_diagnostics(emitter);
 
+    // Shared numeric coercions. Emitted first because string, array, and cast helpers all
+    // branch into `__rt_php_float_to_int` for PHP's float→int rules.
+    numeric::emit_php_float_to_int(emitter);
+
     // String runtime functions
+    strings::emit_concat_scratch(emitter);
     strings::emit_itoa(emitter);
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
@@ -370,6 +376,15 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     objects::emit_mixed_array_fetch_for_write(emitter);
     objects::emit_new_by_name(emitter);
     objects::emit_call_object_destructor(emitter);
+    objects::emit_obj_enum_kind(emitter);
+    objects::emit_obj_enum_name_offset(emitter);
+    objects::emit_obj_enum_case_name(emitter);
+    objects::emit_var_dump_emit_enum_line(emitter);
+    objects::emit_pr_obj_desc(emitter);
+    objects::emit_print_r_object(emitter);
+    objects::emit_obj_prop_count(emitter);
+    objects::emit_obj_prop_name(emitter);
+    objects::emit_obj_prop_value(emitter);
     objects::emit_json_encode_stdclass(emitter);
 
     // Buffer runtime functions

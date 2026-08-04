@@ -12,7 +12,7 @@
 mod arrays;
 mod buffers;
 mod callables;
-mod data;
+pub(crate) mod data;
 mod diagnostics;
 mod emitters;
 mod eval_bridge;
@@ -22,6 +22,8 @@ mod fibers;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
 mod io;
+/// The shared PHP `float`→`int` conversion (`__rt_php_float_to_int`).
+mod numeric;
 mod objects;
 mod pointers;
 mod resource_ids;

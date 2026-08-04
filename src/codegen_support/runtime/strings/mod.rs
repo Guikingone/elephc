@@ -10,6 +10,7 @@
 
 mod itoa;
 mod concat;
+mod concat_scratch;
 mod ftoa;
 mod str_eq;
 mod str_loose_eq;
@@ -104,6 +105,7 @@ pub use atoi::emit_atoi;
 /// Emit ASCII-to-integer conversion.
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
+pub use concat_scratch::emit_concat_scratch;
 pub use str_persist::emit_str_persist;
 /// Emit string persistence helper.
 pub use strtolower::emit_strtolower;

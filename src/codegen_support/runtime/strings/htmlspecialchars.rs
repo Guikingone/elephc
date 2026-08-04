@@ -7,10 +7,12 @@
 //!
 //! Key details:
 //! - HTML escaping helpers are emitted scanners that must keep entity tables and quote handling in sync with PHP semantics.
+//! - The worst-case `6 * len` expansion (`&quot;` / `&#039;`) is reserved through
+//!   `__rt_concat_reserve` before the first store, so long inputs fall back to heap storage
+//!   instead of running off the end of the 64 KiB concat scratch buffer.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits the `__rt_htmlspecialchars` runtime helper for ARM64.
 ///
@@ -19,8 +21,12 @@ use crate::codegen_support::abi;
 ///
 /// # ABI (ARM64)
 /// - **Input**: `x1` = source string pointer, `x2` = source byte length
-/// - **Output**: `x1` = result pointer in `_concat_buf`, `x2` = result byte length
-/// - Writes into `_concat_buf`, advances `_concat_off` by the produced length.
+/// - **Output**: `x1` = result pointer, `x2` = result byte length
+/// - Reserves the worst-case `6 * len` expansion through `__rt_concat_reserve` (concat scratch
+///   while it fits, owned heap storage otherwise) and finishes through `__rt_concat_publish`.
+/// - Clobbers every caller-saved register, because the reservation can reach `__rt_heap_alloc`.
+/// - A wrapped `6 * len` product reports PHP's allocation-overflow fatal through
+///   `__rt_alloc_overflow` instead of reserving a too-small destination.
 ///
 /// # PHP compatibility
 /// Single-quote escape uses `&#039;` (numeric entity) to match PHP's default `ENT_QUOTES` behavior.
@@ -34,12 +40,19 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.comment("--- runtime: htmlspecialchars ---");
     emitter.label_global("__rt_htmlspecialchars");
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("mov x10, x9");                                         // save result start
+    // -- reserve the worst-case six-bytes-per-input-byte entity expansion before writing anything --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed source string
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the reservation call
+    emitter.instruction("add x29, sp, #16");                                    // establish the htmlspecialchars helper frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length across the reservation call
+    emitter.instruction("mov x9, #6");                                          // worst-case entity expansion factor (`&quot;` / `&#039;`)
+    emitter.instruction("umulh x10, x2, x9");                                   // capture the high half of the 6 * length product
+    emitter.instruction("cbnz x10, __rt_htmlsc_size_overflow");                 // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("mul x0, x2, x9");                                      // compute the worst-case escaped result size
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the escaped result
+    emitter.instruction("mov x9, x0");                                          // destination pointer
+    emitter.instruction("mov x10, x0");                                         // save result start
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
     emitter.instruction("mov x11, x2");                                         // remaining byte count
 
     emitter.label("__rt_htmlsc_loop");
@@ -144,10 +157,14 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
     emitter.label("__rt_htmlsc_done");
     emitter.instruction("mov x1, x10");                                         // result pointer
     emitter.instruction("sub x2, x9, x10");                                     // result length
-    emitter.instruction("ldr x8, [x6]");                                        // reload offset
-    emitter.instruction("add x8, x8, x2");                                      // advance by result length
-    emitter.instruction("str x8, [x6]");                                        // store updated offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the htmlspecialchars helper frame
     emitter.instruction("ret");                                                 // return
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_htmlsc_size_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
 /// Emits the `__rt_htmlspecialchars` runtime helper for Linux x86_64.
@@ -157,21 +174,28 @@ pub fn emit_htmlspecialchars(emitter: &mut Emitter) {
 ///
 /// # ABI (x86_64 System V)
 /// - **Input**: `rax` = source string pointer, `rdx` = source byte length
-/// - **Output**: `rax` = result pointer in `_concat_buf`, `rdx` = result byte length
-/// - Writes into `_concat_buf`, advances `_concat_off` by the produced length.
+/// - **Output**: `rax` = result pointer, `rdx` = result byte length
+/// - Reserves the worst-case `6 * len` expansion through `__rt_concat_reserve` and publishes the
+///   written length through `__rt_concat_publish`, so long inputs use owned heap storage instead
+///   of running off the end of the 64 KiB concat scratch buffer.
 fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: htmlspecialchars ---");
     emitter.label_global("__rt_htmlspecialchars");
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before expanding HTML-sensitive characters
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r11, [r10 + r9]");                                 // compute the concat-buffer destination pointer where the escaped HTML string begins
-    emitter.instruction("mov r8, r11");                                         // preserve the concat-backed result start pointer for the returned string value after the loop mutates the destination cursor
-    emitter.instruction("mov rcx, rdx");                                        // seed the remaining source length counter from the borrowed input string length
-    emitter.instruction("mov rsi, rax");                                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
+    // -- reserve the worst-case six-bytes-per-input-byte entity expansion before writing anything --
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the reservation and publish calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed source string
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the source pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed source pointer across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the borrowed source length across the reservation call
+    emitter.instruction("imul rax, rdx, 6");                                    // compute the worst-case escaped result size as 6 * source length
+    emitter.instruction("jo __rt_htmlsc_size_overflow_linux_x86_64");           // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the escaped result
+    emitter.instruction("mov r11, rax");                                        // compute the destination pointer where the escaped HTML string begins
+    emitter.instruction("mov r8, r11");                                         // preserve the result start pointer for the returned string value after the loop mutates the destination cursor
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // seed the remaining source length counter from the borrowed input string length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
 
     emitter.label("__rt_htmlsc_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // stop once every source byte has been classified and copied into concat storage
@@ -259,11 +283,15 @@ fn emit_htmlspecialchars_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_htmlsc_loop_linux_x86_64");                   // continue escaping the remaining source bytes after expanding one greater-than sign
 
     emitter.label("__rt_htmlsc_done_linux_x86_64");
-    emitter.instruction("mov rax, r8");                                         // return the concat-backed result start pointer after escaping the full input string
-    emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer destination cursor before computing the escaped string length
+    emitter.instruction("mov rax, r8");                                         // return the reserved result start pointer after escaping the full input string
+    emitter.instruction("mov rdx, r11");                                        // copy the final destination cursor before computing the escaped string length
     emitter.instruction("sub rdx, r8");                                         // compute the escaped string length as dest_end - dest_start for the returned x86_64 string value
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset before publishing the bytes that htmlspecialchars() appended
-    emitter.instruction("add rcx, rdx");                                        // advance the concat-buffer write offset by the produced escaped-string length
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset after finishing the HTML-escape expansion
-    emitter.instruction("ret");                                                 // return the concat-backed escaped string in the standard x86_64 string result registers
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 32");                                         // release the htmlspecialchars spill slots before returning the escaped string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the escaped string
+    emitter.instruction("ret");                                                 // return the escaped string in the standard x86_64 string result registers
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_htmlsc_size_overflow_linux_x86_64");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }

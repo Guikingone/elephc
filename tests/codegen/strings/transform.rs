@@ -292,3 +292,156 @@ fn test_multiarg_string_builtins_of_mixed_argument() {
     );
     assert_eq!(out, "hell0 w0rld|6|hello,world");
 }
+
+/// Verifies `str_pad()` to a target width far beyond the 64 KiB concat scratch buffer produces the
+/// full padded string instead of running the pad loop past the scratch end (overflow regression).
+#[test]
+fn test_str_pad_target_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$p = str_pad("a", 1 << 20, "xy");
+echo strlen($p), "|", substr($p, 0, 5), "|", substr($p, -5);
+"#,
+    );
+    assert_eq!(out, "1048576|axyxy|xyxyx");
+}
+
+/// Verifies `str_repeat()` reports PHP's allocation-overflow fatal error instead of crashing when
+/// `length * times` wraps a machine word (`4 * 2^62` wraps to 0, which used to pass the 64 KiB
+/// scratch check and then SIGBUS while copying `times * length` bytes).
+#[test]
+fn test_str_repeat_length_times_overflow_is_a_controlled_error() {
+    let err = compile_and_run_expect_failure(r#"<?php echo str_repeat("aaaa", 4611686018427387904);"#);
+    assert!(
+        err.contains("Fatal error: Possible integer overflow in memory allocation"),
+        "expected an allocation-overflow fatal error, got: {err}"
+    );
+}
+
+// --- Expansive transformers beyond the 64 KiB concat scratch buffer ---
+
+/// Verifies `htmlspecialchars()` on a payload whose worst-case 6x entity expansion cannot fit the
+/// shared 64 KiB concat scratch buffer produces the full correct escaping instead of writing past
+/// the scratch end into the adjacent BSS globals (concat-scratch overflow regression).
+#[test]
+fn test_htmlspecialchars_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$h = htmlspecialchars(str_repeat("<a href=\"x\">&'", 8000));
+echo strlen($h), "|", substr($h, 0, 12), "|", substr($h, -12);
+"#,
+    );
+    assert_eq!(out, "312000|&lt;a href=&|;&amp;&#039;");
+}
+
+/// Verifies `html_entity_decode()` of an entity-encoded payload longer than the 64 KiB concat
+/// scratch buffer decodes every entity through the heap fallback.
+#[test]
+fn test_html_entity_decode_input_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$d = html_entity_decode(str_repeat("&lt;a&gt;&amp;&quot;&#039;", 5000));
+echo strlen($d), "|", substr($d, 0, 8), "|", substr($d, -8);
+"#,
+    );
+    assert_eq!(out, "30000|<a>&\"'<a|\"'<a>&\"'");
+}
+
+/// Verifies `nl2br()` on an all-newline-heavy payload whose worst-case 7x expansion exceeds the
+/// 64 KiB concat scratch buffer keeps every injected break tag intact.
+#[test]
+fn test_nl2br_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$n = nl2br(str_repeat("a\nb\n", 20000));
+echo strlen($n), "|", substr($n, 0, 8), "|", substr($n, -8);
+"#,
+    );
+    assert_eq!(out, "320000|a<br />\n|b<br />\n");
+}
+
+/// Verifies `addslashes()` / `stripslashes()` round-trip a payload whose 2x escaped form exceeds
+/// the 64 KiB concat scratch buffer, so both directions take the heap fallback and stay byte-exact.
+#[test]
+fn test_addslashes_roundtrip_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("a'b\"c\\d", 20000);
+$a = addslashes($s);
+$b = stripslashes($a);
+echo strlen($a), "|", substr($a, 0, 10), "|", strlen($b), "|", ($b === $s ? "same" : "DIFF");
+"#,
+    );
+    assert_eq!(out, "200000|a\\'b\\\"c\\\\d|140000|same");
+}
+
+/// Verifies `wordwrap()` on a payload whose wrapped form far exceeds the 64 KiB concat scratch
+/// buffer inserts every break string instead of running the copy helper past the scratch end.
+#[test]
+fn test_wordwrap_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$t = str_repeat("hello world ", 8000);
+$w = wordwrap($t, 5, "<BR>", true);
+echo strlen($w), "|", substr($w, 0, 14), "|", substr($w, -9);
+"#,
+    );
+    assert_eq!(out, "144000|hello<BR>world|world<BR>");
+}
+
+/// Verifies `str_replace()` with an expanding replacement whose result exceeds the 64 KiB concat
+/// scratch buffer emits every replacement instead of overrunning the scratch end.
+#[test]
+fn test_str_replace_expansion_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("ab", 40000);
+$r = str_replace("a", "XYZW", $s);
+echo strlen($r), "|", substr($r, 0, 10), "|", substr($r, -10);
+"#,
+    );
+    assert_eq!(out, "200000|XYZWbXYZWb|XYZWbXYZWb");
+}
+
+/// Verifies `str_ireplace()` with an expanding case-insensitive replacement whose result exceeds
+/// the 64 KiB concat scratch buffer stays byte-exact through the heap fallback.
+#[test]
+fn test_str_ireplace_expansion_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("ab", 40000);
+$i = str_ireplace("A", "0123456789", $s);
+echo strlen($i), "|", substr($i, 0, 12), "|", substr($i, -12);
+"#,
+    );
+    assert_eq!(out, "440000|0123456789b0|b0123456789b");
+}
+
+/// Verifies `substr_replace()` on a subject plus replacement that together exceed the 64 KiB
+/// concat scratch buffer keeps the prefix, replacement, and suffix intact.
+#[test]
+fn test_substr_replace_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("x", 50000);
+$r = str_repeat("R", 50000);
+$o = substr_replace($s, $r, 100, 200);
+echo strlen($o), "|", $o[0], $o[99], $o[100], $o[50099], $o[50100];
+"#,
+    );
+    assert_eq!(out, "99800|xxRRx");
+}
+
+/// Verifies `number_format()` still formats correctly when the shared concat scratch buffer is
+/// already nearly full, which used to spill its grouped output past the scratch end.
+#[test]
+fn test_number_format_near_end_of_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$pad = str_repeat("z", 65400);
+$n = $pad . number_format(1234567.891, 2, ".", ",");
+echo strlen($n), "|", substr($n, -12);
+"#,
+    );
+    assert_eq!(out, "65412|1,234,567.89");
+}

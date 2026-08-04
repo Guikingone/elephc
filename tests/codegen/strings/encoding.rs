@@ -521,3 +521,87 @@ fn test_htmlentities_coercion_error_names_htmlentities() {
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `bin2hex()` of a 100 KB payload — whose 200 KB hexadecimal expansion cannot fit the
+/// shared 64 KiB concat scratch buffer — produces the full correct result instead of writing past
+/// the scratch end into the adjacent BSS globals (concat-scratch overflow regression).
+#[test]
+fn test_bin2hex_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("\x00\x11\xfe", 40000);
+$h = bin2hex($s);
+echo strlen($h), "|", substr($h, 0, 6), "|", substr($h, -6);
+"#,
+    );
+    assert_eq!(out, "240000|0011fe|0011fe");
+}
+
+/// Verifies `base64_encode()` / `base64_decode()` round-trip a payload whose encoding exceeds the
+/// 64 KiB concat scratch buffer, so both directions take the heap fallback and stay byte-exact.
+#[test]
+fn test_base64_roundtrip_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("elephc", 20000);
+$e = base64_encode($s);
+$d = base64_decode($e);
+echo strlen($e), "|", substr($e, 0, 8), "|", strlen($d), "|", ($d === $s ? "same" : "DIFF");
+"#,
+    );
+    assert_eq!(out, "160000|ZWxlcGhj|120000|same");
+}
+
+/// Verifies `urlencode()` of a payload whose worst-case 3x percent-encoded expansion exceeds the
+/// 64 KiB concat scratch buffer keeps every escape intact through the heap fallback.
+#[test]
+fn test_urlencode_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$s = str_repeat("%~", 30000);
+$e = urlencode($s);
+echo strlen($e), "|", substr($e, 0, 6), "|", substr($e, -6);
+"#,
+    );
+    assert_eq!(out, "180000|%25%7E|%25%7E");
+}
+
+/// Verifies `hex2bin()` decoding a hexadecimal string longer than the 64 KiB concat scratch
+/// buffer still produces the exact binary payload.
+#[test]
+fn test_hex2bin_input_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$h = str_repeat("41", 70000);
+$b = hex2bin($h);
+echo strlen($b), "|", substr($b, 0, 3), "|", substr($b, -3);
+"#,
+    );
+    assert_eq!(out, "70000|AAA|AAA");
+}
+
+/// Verifies `rawurlencode()` of a payload whose worst-case 3x percent-encoded expansion exceeds
+/// the 64 KiB concat scratch buffer keeps every RFC 3986 escape intact through the heap fallback.
+#[test]
+fn test_rawurlencode_result_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$e = rawurlencode(str_repeat("%~ ", 30000));
+echo strlen($e), "|", substr($e, 0, 9), "|", substr($e, -9);
+"#,
+    );
+    assert_eq!(out, "210000|%25~%20%2|20%25~%20");
+}
+
+/// Verifies `urldecode()` of a percent-encoded payload longer than the 64 KiB concat scratch
+/// buffer decodes every escape through the heap fallback.
+#[test]
+fn test_urldecode_input_larger_than_concat_scratch() {
+    let out = compile_and_run(
+        r#"<?php
+$u = urldecode(str_repeat("%41+", 30000));
+echo strlen($u), "|", substr($u, 0, 4), "|", substr($u, -4);
+"#,
+    );
+    assert_eq!(out, "60000|A A |A A ");
+}

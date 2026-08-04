@@ -9,6 +9,7 @@
 //! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
 
 use super::{
+    ALLOC_OVERFLOW_MSG, ARRAY_ALLOC_SIZE_MSG, BUFFER_ALLOC_SIZE_MSG, RANGE_SIZE_MSG,
     DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
     HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
     HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
@@ -17,7 +18,8 @@ use super::{
     OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
     OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
-    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
+    PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
+    SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
 use crate::codegen_support::platform::Target;
@@ -281,7 +283,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
     out.push_str(".globl _heap_dbg_double_free_msg\n_heap_dbg_double_free_msg:\n    .ascii \"Fatal error: heap debug detected double free\\n\"\n");
     out.push_str(".globl _heap_dbg_free_list_msg\n_heap_dbg_free_list_msg:\n    .ascii \"Fatal error: heap debug detected free-list corruption\\n\"\n");
-    out.push_str(".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii \"Fatal error: array capacity exceeded\\n\"\n");
+    out.push_str(&format!(
+        ".globl _arr_cap_err_msg\n_arr_cap_err_msg:\n    .ascii {:?}\n",
+        ARRAY_ALLOC_SIZE_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _range_size_err_msg\n_range_size_err_msg:\n    .ascii {:?}\n",
+        RANGE_SIZE_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _buffer_alloc_size_msg\n_buffer_alloc_size_msg:\n    .ascii {:?}\n",
+        BUFFER_ALLOC_SIZE_MSG
+    ));
     out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
@@ -292,8 +305,28 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _ptr_null_err_msg\n_ptr_null_err_msg:\n    .ascii \"Fatal error: null pointer dereference\\n\"\n");
     out.push_str(".globl _ptr_read_string_len_err_msg\n_ptr_read_string_len_err_msg:\n    .ascii \"Fatal error: ptr_read_string() length must be non-negative\\n\"\n");
     out.push_str(&format!(
+        ".globl _alloc_overflow_msg\n_alloc_overflow_msg:\n    .ascii {:?}\n",
+        ALLOC_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
         ".globl _str_repeat_times_msg\n_str_repeat_times_msg:\n    .ascii {:?}\n",
         STR_REPEAT_TIMES_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _sprintf_width_msg\n_sprintf_width_msg:\n    .ascii {:?}\n",
+        SPRINTF_WIDTH_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _sprintf_overflow_msg\n_sprintf_overflow_msg:\n    .ascii {:?}\n",
+        SPRINTF_OVERFLOW_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _sprintf_argcount_msg\n_sprintf_argcount_msg:\n    .ascii {:?}\n",
+        SPRINTF_ARGCOUNT_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _sprintf_unknown_spec_msg\n_sprintf_unknown_spec_msg:\n    .ascii {:?}\n",
+        SPRINTF_UNKNOWN_SPEC_MSG
     ));
     out.push_str(&format!(
         ".globl _hash_unknown_algo_msg\n_hash_unknown_algo_msg:\n    .ascii {:?}\n",
@@ -969,6 +1002,23 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _pr_arrow\n_pr_arrow:\n    .ascii \"] => \"\n");
     out.push_str(".globl _pr_nl\n_pr_nl:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _pr_one\n_pr_one:\n    .ascii \"1\"\n");
+    // print_r object literals: the header suffix PHP writes after the class name
+    // (`C Object`, and `C Enum` / `C Enum:int` / `C Enum:string` for an enum case),
+    // and the ` *RECURSION*` marker a revisited instance renders instead of a body.
+    // The marker deliberately carries NO newline — the entry line terminator is
+    // written by whichever walker opened the `[key] => ` line, exactly like PHP.
+    out.push_str(".globl _pr_object_suffix\n_pr_object_suffix:\n    .ascii \" Object\\n\"\n");
+    out.push_str(".globl _pr_enum_suffix\n_pr_enum_suffix:\n    .ascii \" Enum\\n\"\n");
+    out.push_str(".globl _pr_enum_int_suffix\n_pr_enum_int_suffix:\n    .ascii \" Enum:int\\n\"\n");
+    out.push_str(".globl _pr_enum_str_suffix\n_pr_enum_str_suffix:\n    .ascii \" Enum:string\\n\"\n");
+    out.push_str(".globl _pr_recursion\n_pr_recursion:\n    .ascii \" *RECURSION*\"\n");
+    // var_dump enum literals: PHP renders an enum case as `enum(Class::Case)`
+    // instead of an object body, so the three fragments bracket the class name
+    // (from `_class_name_entries`) and the case name (from the instance's `name`
+    // property slot).
+    out.push_str(".globl _vd_enum_prefix\n_vd_enum_prefix:\n    .ascii \"enum(\"\n");
+    out.push_str(".globl _vd_enum_sep\n_vd_enum_sep:\n    .ascii \"::\"\n");
+    out.push_str(".globl _vd_enum_close\n_vd_enum_close:\n    .ascii \")\\n\"\n");
     out.push_str(".globl _pr_spaces\n_pr_spaces:\n    .ascii \"                                                                \"\n");
     out.push_str(".globl _ftp_user_cmd\n_ftp_user_cmd:\n    .ascii \"USER anonymous\\x0d\\n\"\n");
     out.push_str(".globl _ftp_pass_cmd\n_ftp_pass_cmd:\n    .ascii \"PASS anonymous@\\x0d\\n\"\n");
