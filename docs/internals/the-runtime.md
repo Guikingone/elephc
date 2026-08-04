@@ -386,9 +386,11 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_map_str_owned` | Apply a descriptor-wrapper callback that returns owned strings and transfer those strings directly into the result array |
 | `__rt_array_map_mixed` | Apply a descriptor-backed callback that returns owned boxed Mixed cells and store them directly into a newly allocated result array |
 | `__rt_array_filter` | Filter scalar elements where callback returns truthy; an optional third argument carries a captured-closure environment |
-| `__rt_array_reduce` | Reduce array to single value via callback; an optional fourth argument carries a captured-callback environment |
+| `__rt_array_reduce` | Reduce an indexed array of 8-byte payload slots to a single value via callback; an optional fourth argument carries a captured-callback environment |
+| `__rt_array_reduce_str` | Reduce an indexed string array's 16-byte `[ptr][len]` slots into one integer accumulator, passing each element to the callback as a pointer/length pair; an optional fourth argument carries a captured-callback environment |
 | `__rt_array_walk` | Call callback on each element (side-effects); an optional third argument carries a captured-callback environment |
-| `__rt_usort` | Sort array using user comparison callback; an optional third argument carries a captured-callback environment |
+| `__rt_usort` | Sort an indexed array of 8-byte payload slots using a user comparison callback; an optional third argument carries a captured-callback environment |
+| `__rt_usort_str` | Stable insertion sort over an indexed string array's 16-byte `[ptr][len]` slots using a user comparison callback that receives both strings as pointer/length pairs; an optional third argument carries a captured-callback environment |
 
 ### Reference counting
 

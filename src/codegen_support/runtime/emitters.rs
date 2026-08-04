@@ -334,10 +334,12 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_filter_refcounted(emitter);
     arrays::emit_array_find_any_all(emitter);
     arrays::emit_array_reduce(emitter);
+    arrays::emit_array_reduce_str(emitter);
     arrays::emit_array_walk(emitter);
     arrays::emit_array_walk_recursive(emitter);
     arrays::emit_array_udiff_uintersect(emitter);
     arrays::emit_usort(emitter);
+    arrays::emit_usort_str(emitter);
     arrays::emit_array_to_mixed(emitter);
     arrays::emit_array_merge_into(emitter);
     arrays::emit_array_merge_into_refcounted(emitter);

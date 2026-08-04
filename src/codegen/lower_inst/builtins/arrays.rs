@@ -1027,10 +1027,10 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
     let initial = expect_operand(inst, 2)?;
-    let elem_ty =
-        eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_reduce")?;
+    let elem_ty = array_reduce_callback_array_element_type(ctx.value_php_type(array)?)?;
     let initial_ty =
         eight_byte_callback_value_type(ctx.value_php_type(initial)?, "array_reduce initial")?;
+    let reduce_helper = array_reduce_runtime_label(&elem_ty);
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             lower_descriptor_callback_runtime(
@@ -1047,7 +1047,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     ctx.load_value_to_reg(initial, initial_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_array_reduce");
+                    abi::emit_call_label(ctx.emitter, reduce_helper);
                     Ok(())
                 },
             )?;
@@ -1073,7 +1073,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     ctx.load_value_to_reg(initial, initial_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_array_reduce");
+                    abi::emit_call_label(ctx.emitter, reduce_helper);
                     Ok(())
                 },
             )?;
@@ -1098,7 +1098,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
     ctx.load_value_to_reg(array, array_arg_reg)?;
     ctx.load_value_to_reg(initial, initial_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, "__rt_array_reduce");
+    abi::emit_call_label(ctx.emitter, reduce_helper);
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
@@ -2397,6 +2397,7 @@ fn lower_user_sort_static_callback(
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
     let elem_ty = user_sort_element_type(ctx.value_php_type(array)?, name)?;
+    let sort_helper = user_sort_runtime_label(&elem_ty);
     let callback_arg_types = [elem_ty.clone(), elem_ty];
     let source_local = source_load_local_slot(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
@@ -2412,7 +2413,13 @@ fn lower_user_sort_static_callback(
             &callback_owner,
             Some(&callback_arg_types),
         )?;
-        return lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding);
+        return lower_user_sort_with_static_callback_binding(
+            ctx,
+            inst,
+            array,
+            callback_binding,
+            sort_helper,
+        );
     }
     match callback_ty {
         PhpType::Callable => {
@@ -2428,7 +2435,7 @@ fn lower_user_sort_static_callback(
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_usort");
+                    abi::emit_call_label(ctx.emitter, sort_helper);
                     Ok(())
                 },
             )?;
@@ -2456,7 +2463,7 @@ fn lower_user_sort_static_callback(
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_usort");
+                    abi::emit_call_label(ctx.emitter, sort_helper);
                     Ok(())
                 },
             )?;
@@ -2476,15 +2483,20 @@ fn lower_user_sort_static_callback(
         &callback_owner,
         Some(&callback_arg_types),
     )?;
-    lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding)
+    lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding, sort_helper)
 }
 
 /// Calls the user-sort runtime with a statically recovered callback binding.
+///
+/// `sort_helper` selects the slot permuter matching the receiver's element
+/// width: `__rt_usort` for 8-byte payload slots, `__rt_usort_str` for the
+/// 16-byte `[ptr][len]` string descriptors.
 fn lower_user_sort_with_static_callback_binding(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array: ValueId,
     callback_binding: StaticSortCallbackBinding,
+    sort_helper: &str,
 ) -> Result<()> {
     let callback_label = sort_callback_label_returning_int(ctx, &callback_binding)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
@@ -2494,7 +2506,7 @@ fn lower_user_sort_with_static_callback_binding(
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, "__rt_usort");
+    abi::emit_call_label(ctx.emitter, sort_helper);
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
@@ -2642,9 +2654,10 @@ fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: bool) -> Re
 /// handles and boxed `Mixed` cells (each a single 8-byte payload) are sortable;
 /// the comparator decides the ordering and receives each element through an ABI
 /// adapter when the runtime slot type differs from its declared parameters.
-/// String elements are rejected here exactly as before — their multi-word
-/// descriptors are not permuted by the 8-byte slot sorter — so they keep
-/// producing a clear unsupported-feature error rather than a corrupt sort.
+/// String elements are 16-byte `[ptr][len]` descriptors, so they are routed to
+/// the dedicated `__rt_usort_str` slot permuter instead; only `usort` accepts
+/// them because it is the sort that renumbers keys, which an indexed array
+/// without key storage can represent exactly.
 fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
@@ -2656,7 +2669,8 @@ fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
                     | PhpType::Never
                     | PhpType::Mixed
                     | PhpType::Object(_)
-            ) {
+            ) || (elem == PhpType::Str && name == "usort")
+            {
                 return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(
@@ -2668,6 +2682,19 @@ fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
             "{} for PHP type {:?}",
             name, other
         ))),
+    }
+}
+
+/// Returns the user-sort runtime helper matching an indexed array's slot width.
+///
+/// String elements occupy 16-byte `[ptr][len]` slots and must be permuted by
+/// `__rt_usort_str`; every other supported element kind is a single 8-byte
+/// payload handled by `__rt_usort`.
+fn user_sort_runtime_label(elem_ty: &PhpType) -> &'static str {
+    if elem_ty.codegen_repr() == PhpType::Str {
+        "__rt_usort_str"
+    } else {
+        "__rt_usort"
     }
 }
 
@@ -2907,6 +2934,38 @@ fn array_map_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
             "array_map for PHP type {:?}",
             other
         ))),
+    }
+}
+
+/// Returns the indexed-array element type accepted by the `array_reduce()` runtimes.
+///
+/// String elements are allowed because `__rt_array_reduce_str` reads the 16-byte
+/// `[ptr][len]` payload slots and hands the callback a pointer/length pair; every
+/// other accepted element kind is a single 8-byte payload consumed by
+/// `__rt_array_reduce`. The accumulator is validated separately and must still fit
+/// in one integer register, so no intermediate string ever needs persisting.
+fn array_reduce_callback_array_element_type(ty: PhpType) -> Result<PhpType> {
+    match ty.codegen_repr() {
+        PhpType::Array(elem) => {
+            let elem = elem.codegen_repr();
+            if elem == PhpType::Str {
+                return Ok(elem);
+            }
+            eight_byte_callback_value_type(elem, "array_reduce")
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_reduce for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Returns the `array_reduce()` runtime helper matching the source element width.
+fn array_reduce_runtime_label(elem_ty: &PhpType) -> &'static str {
+    if elem_ty.codegen_repr() == PhpType::Str {
+        "__rt_array_reduce_str"
+    } else {
+        "__rt_array_reduce"
     }
 }
 
@@ -3961,6 +4020,12 @@ fn instance_method_already_emitted(
 }
 
 /// Verifies the wrapper can forward the callback argument ABI without boxing or shuffling pairs.
+///
+/// String arguments occupy two integer ABI slots, so they are only forwarded when every
+/// visible argument is a string: that is the shape the runtime callback helpers actually
+/// produce (a single-string element callback, or the two-string `usort()` comparator).
+/// A mixed string/scalar list would need a register-shuffling wrapper no runtime helper
+/// currently calls, so it stays a diagnosed unsupported feature.
 fn require_static_method_callback_arg_types(
     owner: &str,
     callback_name: &str,
@@ -3977,11 +4042,12 @@ fn require_static_method_callback_arg_types(
     if visible_arg_types
         .iter()
         .any(|ty| matches!(ty.codegen_repr(), PhpType::Str))
-        && !(visible_arg_types.len() == 1
-            && matches!(visible_arg_types[0].codegen_repr(), PhpType::Str))
+        && !visible_arg_types
+            .iter()
+            .all(|ty| matches!(ty.codegen_repr(), PhpType::Str))
     {
         return Err(CodegenIrError::unsupported(format!(
-            "{} '{}' with string callback args outside the one-argument ABI",
+            "{} '{}' with mixed string and scalar callback args",
             owner, callback_name
         )));
     }

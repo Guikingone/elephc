@@ -33,6 +33,14 @@ echo "Sorted: ";
 foreach ($sorted as $v) { echo $v . " "; }
 echo "\n";
 
+// usort over a string array: the comparator receives each element as a string
+$words = ["banana", "apple", "fig", "cherry"];
+usort($words, fn($a, $b) => strlen($a) <=> strlen($b));
+echo "Sorted words: " . implode(", ", $words) . "\n";
+
+// array_reduce over a string array: the callback folds strings into an int accumulator
+echo "Total word length: " . array_reduce($words, fn($carry, $word) => $carry + strlen($word), 0) . "\n";
+
 // array_walk: apply side-effect to each element
 echo "Walk:\n";
 $items = [10, 20, 30];

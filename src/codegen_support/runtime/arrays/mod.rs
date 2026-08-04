@@ -69,6 +69,7 @@ mod array_rand;
 mod random_u32;
 mod random_uniform;
 mod array_reduce;
+mod array_reduce_str;
 mod array_replace;
 mod array_replace_recursive;
 mod array_reverse;
@@ -167,6 +168,7 @@ mod sort_int;
 mod sort_str;
 mod undefined_array_key_warning;
 mod usort;
+mod usort_str;
 pub(super) mod value_error;
 
 pub use array_chunk::emit_array_chunk;
@@ -294,6 +296,8 @@ pub use random_u32::emit_random_u32;
 pub use random_uniform::emit_random_uniform;
 /// Emit uniform random integer helper.
 pub use array_reduce::emit_array_reduce;
+/// Emit string-array reduce helper.
+pub use array_reduce_str::emit_array_reduce_str;
 /// Emit array reduce helper.
 pub use array_replace::emit_array_replace;
 /// Emit array replace helper (right-wins hash merge).
@@ -477,3 +481,5 @@ pub use sort_str::emit_sort_str;
 pub use undefined_array_key_warning::emit_undefined_array_key_warning;
 /// Emit user-defined sort helper.
 pub use usort::emit_usort;
+/// Emit user-defined string-array sort helper.
+pub use usort_str::emit_usort_str;
