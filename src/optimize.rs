@@ -117,6 +117,52 @@ impl PropagatedValue {
             PropagatedValue::ArrayLit(_) => None,
         }
     }
+
+    /// Returns whether two facts denote the *same constant*, i.e. whether merging control-flow
+    /// paths that carry them can substitute either one without changing program output.
+    ///
+    /// Stricter than `PartialEq` for floats: `0.0` and `-0.0` compare equal under IEEE but
+    /// `echo` prints `0` and `-0`, so a merge that unified them would change the program.
+    fn same_constant(&self, other: &Self) -> bool {
+        match (self, other) {
+            (PropagatedValue::Scalar(left), PropagatedValue::Scalar(right)) => {
+                left.same_constant(right)
+            }
+            (PropagatedValue::ArrayLit(left), PropagatedValue::ArrayLit(right)) => {
+                same_array_literal_fact(left, right)
+            }
+            _ => false,
+        }
+    }
+}
+
+/// Returns whether two array-literal facts hold identical constants.
+///
+/// `assigned_array_fact` only produces literals whose keys and values are scalar literals, so
+/// the comparison walks them through `ScalarValue::same_constant` and keeps signed zeros apart.
+/// Anything that is not one of those two literal shapes falls back to structural equality.
+fn same_array_literal_fact(left: &Expr, right: &Expr) -> bool {
+    /// Compares two scalar-literal expressions by constant identity.
+    fn same_scalar(left: &Expr, right: &Expr) -> bool {
+        match (scalar_value(left), scalar_value(right)) {
+            (Some(left), Some(right)) => left.same_constant(&right),
+            _ => left == right,
+        }
+    }
+
+    match (&left.kind, &right.kind) {
+        (ExprKind::ArrayLiteral(left), ExprKind::ArrayLiteral(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|(left, right)| same_scalar(left, right))
+        }
+        (ExprKind::ArrayLiteralAssoc(left), ExprKind::ArrayLiteralAssoc(right)) => {
+            left.len() == right.len()
+                && left.iter().zip(right).all(|((left_key, left_value), (right_key, right_value))| {
+                    same_scalar(left_key, right_key) && same_scalar(left_value, right_value)
+                })
+        }
+        _ => left == right,
+    }
 }
 
 /// Maps local names to propagated facts during constant propagation.

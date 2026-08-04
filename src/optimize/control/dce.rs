@@ -211,7 +211,7 @@ fn guard_literal_to_scalar(value: &GuardLiteral) -> ScalarValue {
         GuardLiteral::Bool(value) => ScalarValue::Bool(*value),
         GuardLiteral::Null => ScalarValue::Null,
         GuardLiteral::Int(value) => ScalarValue::Int(*value),
-        GuardLiteral::Float(bits) => ScalarValue::Float(f64::from_bits(*bits)),
+        GuardLiteral::Float(value) => ScalarValue::Float(*value),
         GuardLiteral::String(value) => ScalarValue::String(value.clone()),
     }
 }
@@ -234,7 +234,7 @@ fn known_subject_truthiness(subject: &Expr, guards: &GuardState) -> Option<bool>
             ScalarValue::Bool(value) => GuardLiteral::Bool(value),
             ScalarValue::Null => GuardLiteral::Null,
             ScalarValue::Int(value) => GuardLiteral::Int(value),
-            ScalarValue::Float(value) => GuardLiteral::Float(value.to_bits()),
+            ScalarValue::Float(value) => GuardLiteral::Float(value),
             ScalarValue::String(value) => GuardLiteral::String(value),
         };
         return Some(guard_literal_truthy(&guard_literal));

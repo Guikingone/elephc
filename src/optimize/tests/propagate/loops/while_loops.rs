@@ -31,7 +31,7 @@ fn test_propagate_constants_preserves_scalar_across_while_false_body_writes() {
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -55,7 +55,7 @@ fn test_propagate_constants_tracks_assignment_through_do_while_false() {
 
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -82,7 +82,7 @@ fn test_propagate_constants_tracks_assignment_through_while_true_break() {
 
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -120,7 +120,7 @@ fn test_propagate_constants_merges_branch_breaks_through_while_true() {
 
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -147,13 +147,13 @@ fn test_propagate_constants_tracks_continue_through_do_while_false() {
 
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
 /// Tests that constant propagation preserves unmodified scalar values inside a while
 /// loop body. The variable `base` is assigned before the loop and never modified
-/// inside the loop, so the echo statement should be folded to a literal `8.0`.
+/// inside the loop, so the echo statement should be folded to a literal `8`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_inside_while_loop_body() {
     let program = vec![
@@ -185,6 +185,6 @@ fn test_propagate_constants_preserves_unmodified_scalar_inside_while_loop_body()
 
     assert_eq!(
         body[0],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }

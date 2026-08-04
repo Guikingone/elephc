@@ -38,7 +38,7 @@ pub(in crate::optimize::control::dce) fn scalar_guard_value(expr: &Expr) -> Opti
         ExprKind::BoolLiteral(value) => Some(GuardLiteral::Bool(*value)),
         ExprKind::Null => Some(GuardLiteral::Null),
         ExprKind::IntLiteral(value) => Some(GuardLiteral::Int(*value)),
-        ExprKind::FloatLiteral(value) => Some(GuardLiteral::Float(value.to_bits())),
+        ExprKind::FloatLiteral(value) => Some(GuardLiteral::Float(*value)),
         ExprKind::StringLiteral(value) => Some(GuardLiteral::String(value.clone())),
         _ => None,
     }
@@ -79,7 +79,7 @@ pub(in crate::optimize::control::dce) fn guard_literal_truthy(value: &GuardLiter
         GuardLiteral::Bool(value) => *value,
         GuardLiteral::Null => false,
         GuardLiteral::Int(value) => *value != 0,
-        GuardLiteral::Float(bits) => f64::from_bits(*bits) != 0.0,
+        GuardLiteral::Float(value) => *value != 0.0,
         GuardLiteral::String(value) => !value.is_empty() && value != "0",
     }
 }
