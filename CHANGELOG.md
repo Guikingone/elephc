@@ -4,6 +4,8 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Added `func_num_args()`, `func_get_args()` and `func_get_arg()`, together with the surplus positional arguments PHP allows past a function's declared parameter list. Shapes that cannot be represented — a defaulted parameter, an existing variadic, an overridden method signature, a dynamic call, top-level use — get a targeted compile error rather than a wrong answer.
+- Added `strtr()`, `count_chars()` and `str_word_count()`, completing the audit's missing-builtin list.
 - Fixed `new $class(...$args)` silently dropping its spread arguments: the object was constructed with no arguments at all, or with only the named ones, and no diagnostic was reported. Dynamic `new` now shares the same call-argument planning as every other call surface.
 - Added the internal array pointer family (`key()`, `current()`, `next()`, `prev()`, `reset()`, `end()`), plus `quotemeta()`, `chunk_split()` and `base_convert()`.
 - Added `++`/`--` on strings with PHP's perl-style alphanumeric carry (`"az"` becomes `"ba"`, `"Zz"` becomes `"AAa"`), including the numeric-string cases where the value changes type (`"9"++` is `int(10)`). By-reference parameters and static locals are rejected with a diagnostic explaining why.
