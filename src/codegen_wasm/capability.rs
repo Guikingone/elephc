@@ -20,7 +20,7 @@ use super::transfer;
 use super::WasmError;
 use crate::codegen::{literal_default_value, Emit, LiteralDefaultValue};
 use crate::ir::{
-    BlockId, Function, Immediate, Instruction, IrHeapKind, IrType, LocalKind, Module,
+    BlockId, Function, Immediate, InstId, Instruction, IrHeapKind, IrType, LocalKind, Module,
     Op, Ownership, RuntimeCallTarget, RuntimeFnId, Terminator, UnaryStringRuntime,
     ValueDef, ValueId,
 };
@@ -2267,6 +2267,13 @@ fn iter_start_shape_issue(function: &Function, inst: &Instruction) -> Option<Str
 }
 
 /// Rejects mutations that can invalidate a live iterator snapshot.
+///
+/// Only a mutation the LOOP can reach counts. Walking every instruction after the `IterStart`
+/// instead — which the flat instruction table makes easy and wrong — refuses code that touches
+/// the container once the loop is over: `foreach ($h as ...) {}` followed by `$h["c"] = 3;` is
+/// ordinary PHP, and the iterator is dead by then. The live range is the loop itself: the blocks
+/// reachable from the header that also reach it back, plus the tail of the block that starts the
+/// iterator, where the source pointer is already captured but iteration has not begun.
 fn iterator_alias_mutation_issue(
     function: &Function,
     start: &Instruction,
@@ -2280,10 +2287,10 @@ fn iterator_alias_mutation_issue(
             _ => None,
         })?;
     let source_slot = value_local_origin(function, source);
-    for candidate in function
-        .instructions
+    let live = iterator_live_instructions(function, start, start_id);
+    for candidate in live
         .iter()
-        .skip(start_id.as_raw() as usize + 1)
+        .filter_map(|id| function.instruction(*id))
     {
         if matches!(
             candidate.op,
@@ -2341,6 +2348,107 @@ fn iterator_alias_mutation_issue(
         }
     }
     None
+}
+
+/// The instructions that can run while the iterator started by `start` is still live.
+///
+/// Answers, in block order: the tail of `start`'s own block, then every instruction of every
+/// block in the loop. A block is in the loop when the header — the block whose `IterNext`
+/// advances THIS iterator — both reaches it and is reachable from it. Without a header (an
+/// iterator nothing advances) the loop is empty and only the tail is returned, which is the
+/// conservative answer for a shape this backend would refuse elsewhere anyway.
+fn iterator_live_instructions(
+    function: &Function,
+    start: &Instruction,
+    start_id: InstId,
+) -> Vec<InstId> {
+    let iterator = start.result;
+    let block_of = |id: InstId| -> Option<usize> {
+        function
+            .blocks
+            .iter()
+            .position(|block| block.instructions.contains(&id))
+    };
+    let Some(start_block) = block_of(start_id) else {
+        return Vec::new();
+    };
+    let mut live: Vec<InstId> = function.blocks[start_block]
+        .instructions
+        .iter()
+        .copied()
+        .skip_while(|id| *id != start_id)
+        .skip(1)
+        .collect();
+    let header = function.blocks.iter().position(|block| {
+        block.instructions.iter().any(|id| {
+            function
+                .instruction(*id)
+                .is_some_and(|inst| inst.op == Op::IterNext && inst.operands.first().copied() == iterator)
+        })
+    });
+    let Some(header) = header else {
+        return live;
+    };
+    let forward = blocks_reachable_from(function, header, false);
+    let backward = blocks_reachable_from(function, header, true);
+    for block in 0..function.blocks.len() {
+        if block != start_block && forward.contains(&block) && backward.contains(&block) {
+            live.extend(function.blocks[block].instructions.iter().copied());
+        }
+    }
+    live
+}
+
+/// Blocks reachable from `origin` over control-flow edges, or reaching it when `reverse` is set.
+fn blocks_reachable_from(function: &Function, origin: usize, reverse: bool) -> HashSet<usize> {
+    let successors = |block: usize| -> Vec<usize> {
+        let Some(terminator) = function.blocks[block].terminator.as_ref() else {
+            return Vec::new();
+        };
+        let targets = match terminator {
+            Terminator::Br { target, .. } => vec![*target],
+            Terminator::CondBr {
+                then_target,
+                else_target,
+                ..
+            } => vec![*then_target, *else_target],
+            Terminator::Switch { cases, default, .. } => {
+                let mut out: Vec<_> = cases.iter().map(|case| case.target).collect();
+                out.push(*default);
+                out
+            }
+            Terminator::GeneratorSuspend { resume, .. } => vec![*resume],
+            Terminator::Return { .. }
+            | Terminator::Throw { .. }
+            | Terminator::Fatal { .. }
+            | Terminator::Unreachable => Vec::new(),
+        };
+        targets
+            .into_iter()
+            .map(|target| target.as_raw() as usize)
+            .filter(|target| *target < function.blocks.len())
+            .collect()
+    };
+    let edges: Vec<Vec<usize>> = if reverse {
+        let mut reversed = vec![Vec::new(); function.blocks.len()];
+        for block in 0..function.blocks.len() {
+            for next in successors(block) {
+                reversed[next].push(block);
+            }
+        }
+        reversed
+    } else {
+        (0..function.blocks.len()).map(successors).collect()
+    };
+    let mut seen = HashSet::new();
+    let mut stack = vec![origin];
+    while let Some(block) = stack.pop() {
+        if !seen.insert(block) {
+            continue;
+        }
+        stack.extend(edges[block].iter().copied());
+    }
+    seen
 }
 
 /// Traces a value through ownership forwarders to its originating local slot.

@@ -12353,3 +12353,112 @@ console.error(`pages=${instance.exports.memory.buffer.byteLength / 65536}`);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a container written AFTER a `foreach` still compiles.
+///
+/// The guard that refuses a mutation of a live iterated container walked every instruction after
+/// the `IterStart` in the function's flat instruction table, which includes everything the loop
+/// has already finished with. `foreach ($h as ...) {}` followed by `$h["c"] = 3;` is ordinary PHP
+/// — the iterator is dead by then — and it was refused. The live range is the loop: the blocks
+/// reachable from the header that reach it back. A write INSIDE the loop must still be refused,
+/// so this exercises the second loop as a compile-time negative control in the same file.
+#[test]
+fn test_cli_wasm_writes_a_container_after_iterating_it() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_write_after_foreach");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$h = ["a" => 1, "b" => 2];
+foreach ($h as $k => $v) { echo $k, ":", $v, " "; }
+echo "\n";
+$h["c"] = 3;
+unset($h["a"]);
+foreach ($h as $k => $v) { echo $k, "=", $v, " "; }
+echo "\n", count($h), "\n";
+$list = [10, 20, 30];
+foreach ($list as $n) { echo $n, " "; }
+$list[] = 40;
+echo "\n", implode(",", $list), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the post-loop writes to WASM");
+    assert!(
+        output.status.success(),
+        "post-loop container write compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the post-loop writes under Node");
+    assert!(
+        run.status.success(),
+        "the post-loop writes must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!("a:1 b:2 \n", "b=2 c=3 \n", "2\n", "10 20 30 \n", "10,20,30,40\n"),
+        "php-src's own answers"
+    );
+
+    // The negative control: the same write INSIDE the loop still has no snapshot to write
+    // against, and must stay refused.
+    let inside = dir.join("inside.php");
+    fs::write(
+        &inside,
+        r#"<?php
+$h = ["a" => 1, "b" => 2];
+foreach ($h as $k => $v) { $h["z" . $k] = $v; }
+echo count($h), "\n";
+"#,
+    )
+    .unwrap();
+    let refused = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&inside)
+        .output()
+        .expect("failed to run the compiler over the in-loop write");
+    assert!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr)
+                .contains("may mutate the iterated container"),
+        "a write inside the loop must still be refused: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
