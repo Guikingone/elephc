@@ -489,3 +489,46 @@ sum3(...args(), c: last());
     assert_eq!(out.stdout, "sc");
     assert!(out.stderr.contains("Fatal error: Named parameter $c overwrites previous argument"));
 }
+
+/// Pins the argument shapes PHP still accepts around the compile-time
+/// "Cannot use argument unpacking after named arguments" rule, so the check
+/// cannot start over-rejecting. Only a `...` that literally follows a `name:`
+/// argument is illegal: a spread *before* a named argument, back-to-back
+/// spreads, a string-keyed spread on its own (which behaves like named
+/// arguments), and a string-keyed spread followed by another spread are all
+/// legal. Expected output is real `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_spread_shapes_around_named_arguments_stay_legal() {
+    let out = compile_and_run(
+        r#"<?php
+function show($a, $b = 2, $c = 3) { echo "$a/$b/$c"; }
+$args = [10];
+show(...$args, c: 30);
+echo "|";
+show(...[10], ...[20]);
+echo "|";
+show(...["c" => 30, "a" => 10]);
+echo "|";
+show(...["a" => 10], ...[20]);
+echo "|";
+show(...["b" => 20, "a" => 10], c: 30);
+"#,
+    );
+    assert_eq!(out, "10/2/30|10/20/3|10/2/30|10/20/3|10/20/30");
+}
+
+/// Pins that a string-keyed unpack into a *runtime* string callable — the
+/// surface that has no signature to plan against — keeps working. The
+/// unpack-after-named guard added for that surface must only reject a `...`
+/// that follows a literal named argument.
+#[test]
+fn test_string_callable_named_spread_stays_legal() {
+    let out = compile_and_run(
+        r#"<?php
+function pair($a, $b = 0) { echo "$a|$b"; }
+$c = "pair";
+$c(...["b" => 2, "a" => 1]);
+"#,
+    );
+    assert_eq!(out, "1|2");
+}

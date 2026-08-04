@@ -114,6 +114,34 @@ foreach ($nums as &$value) {
 }
 ```
 
+The value target can also be a destructuring pattern, in either spelling, with or
+without a key:
+
+```php
+$points = [[1, 2], [3, 4]];
+foreach ($points as [$x, $y]) {
+    echo "$x,$y\n";
+}
+foreach ($points as list($x, $y)) { /* same thing */ }
+foreach ($points as $i => [$x, $y]) {
+    echo "$i: $x,$y\n";
+}
+
+// Keyed, skipped, and nested patterns work exactly as they do in an assignment.
+$rows = [["name" => "Ada", "role" => "admin"]];
+foreach ($rows as ["name" => $name, "role" => $role]) {
+    echo "$name is $role\n";
+}
+foreach ([[1, 2, 3]] as [, $second]) { echo $second; }
+foreach ([[1, [2, 3]]] as [$a, [$b, $c]]) { echo $a, $b, $c; }
+```
+
+A destructuring pattern binds one element per iteration and then unpacks it, so it
+follows the rules in [Array destructuring](./arrays.md): keyed and unkeyed entries
+cannot be mixed, and an empty pattern (`foreach ($x as [])`) is an error. The `&`
+reference marker applies to a variable target, never to a whole pattern, so
+`foreach ($x as &[$a, $b])` is rejected.
+
 Use `foreach ($arr as $key => &$value)` when both the key and a mutable
 element reference are needed. The key itself cannot be bound by reference.
 By-reference value binding is currently supported only for array sources;

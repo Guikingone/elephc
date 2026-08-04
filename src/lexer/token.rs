@@ -214,6 +214,7 @@ pub enum Token {
     EqualEqual,     // ==
     EqualEqualEqual, // ===
     NotEqual,       // !=
+    LessGreater,    // <> (PHP alias for !=)
     NotEqualEqual,  // !==
     Less,           // <
     Greater,        // >

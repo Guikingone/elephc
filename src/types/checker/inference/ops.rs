@@ -435,6 +435,9 @@ impl Checker {
         })?;
         if var_ty != PhpType::Callable {
             if matches!(var_ty.codegen_repr(), PhpType::Str) {
+                // The callee name is only known at runtime, but PHP rejects
+                // unpacking after named arguments while compiling the call.
+                self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
                 for arg in args {
                     self.infer_type(arg, env)?;
                 }
@@ -521,6 +524,9 @@ impl Checker {
                 &format!("callable ${}", var),
             );
         }
+        // No signature is known for this callable, so the planner never runs;
+        // still apply PHP's syntactic unpack-after-named rule.
+        self.require_no_spread_after_named_args(args, &format!("callable ${}", var))?;
         for arg in args {
             self.infer_type(arg, env)?;
         }
@@ -549,6 +555,13 @@ impl Checker {
         }
         let callee_ty = self.infer_type(callee, env)?;
         if matches!(callee_ty.codegen_repr(), PhpType::Str) {
+            // String callables resolve at runtime; PHP still rejects unpacking
+            // after named arguments while compiling the call expression.
+            let callee_desc = match &callee.kind {
+                ExprKind::Variable(var_name) => format!("callable ${}", var_name),
+                _ => "callable expression".to_string(),
+            };
+            self.require_no_spread_after_named_args(args, &callee_desc)?;
             for arg in args {
                 self.infer_type(arg, env)?;
             }

@@ -375,7 +375,13 @@ fn test_error_wrong_arg_count() {
 /// Verifies that increment/decrement on a string is rejected.
 #[test]
 fn test_error_increment_string() {
-    expect_error("<?php $x = \"hi\"; $x++;", "Cannot increment/decrement");
+    // The diagnostic explains why: PHP's string increment can produce an int or float
+    // ("9"++ is int(10)), which a statically typed local cannot hold.
+    expect_error(
+        "<?php $x = \"hi\"; $x++;",
+        "Cannot increment/decrement $x of type string",
+    );
+    expect_error("<?php $x = \"hi\"; --$x;", "which a statically typed local cannot hold");
 }
 
 /// Verifies the kind predicates `is_array`/`is_object`/`is_scalar` reject a wrong argument

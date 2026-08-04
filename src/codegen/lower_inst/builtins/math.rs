@@ -22,6 +22,7 @@ use super::{expect_operand, store_if_result};
 
 mod binary;
 mod libm;
+mod min_max_array;
 mod random;
 
 pub(crate) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
@@ -213,6 +214,9 @@ pub(crate) fn lower_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers numeric `min()` and `max()` over concrete integer-like or float operands.
+///
+/// PHP's one-argument form reduces a single array instead of comparing arguments,
+/// so it is routed to the dedicated array reduction before the variadic paths.
 pub(crate) fn lower_min_max(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -223,6 +227,9 @@ pub(crate) fn lower_min_max(
             "{} expected at least 1 arg, got 0",
             min_max_name(want_max)
         )));
+    }
+    if min_max_array::try_lower_single_array(ctx, inst, want_max)? {
+        return store_if_result(ctx, inst);
     }
     let result_ty = inst
         .result

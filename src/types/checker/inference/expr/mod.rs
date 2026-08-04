@@ -78,12 +78,14 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
+                // PHP's `++`/`--` on a float adds or subtracts 1.0 and keeps the float.
+                Some(PhpType::Float) => Ok(PhpType::Float),
                 Some(PhpType::Bool) | Some(PhpType::False) | Some(PhpType::Void) => {
                     Ok(PhpType::Int)
                 }
                 Some(other) => Err(CompileError::new(
                     expr.span,
-                    &format!("Cannot increment/decrement ${} of type {:?}", name, other),
+                    &increment_type_error(name, other),
                 )),
                 None => Err(CompileError::new(
                     expr.span,
@@ -96,9 +98,11 @@ impl Checker {
                 | Some(PhpType::False)
                 | Some(PhpType::Void) => Ok(PhpType::Int),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
+                // The post-forms yield the float the local held before the update.
+                Some(PhpType::Float) => Ok(PhpType::Float),
                 Some(other) => Err(CompileError::new(
                     expr.span,
-                    &format!("Cannot increment/decrement ${} of type {:?}", name, other),
+                    &increment_type_error(name, other),
                 )),
                 None if self.eval_barrier_active => Ok(PhpType::Int),
                 None => Err(CompileError::new(
@@ -547,7 +551,9 @@ impl Checker {
                 // we can't typecheck constructor args or the resulting
                 // object's type. Infer the name expression for its side
                 // effects + warnings, type-check the args generically, and
-                // return Mixed.
+                // return Mixed. The unpack-after-named shape is syntactic in
+                // PHP, so it is still rejected without a known constructor.
+                self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
                 self.infer_type(name_expr, env)?;
                 for arg in args {
                     self.infer_type(arg, env)?;
@@ -967,6 +973,24 @@ fn object_union_match_arm_type(ty: &PhpType) -> bool {
             .all(|member| matches!(member, PhpType::Object(_) | PhpType::False | PhpType::Void)),
         _ => false,
     }
+}
+
+/// Formats the diagnostic for `++`/`--` applied to a local elephc cannot update in place.
+///
+/// `int`, `float`, `bool`, `null`, and boxed `mixed` locals all have an increment path.
+/// A `string` local is called out separately: PHP's string increment can change the
+/// value's type (`"9"++` is `int(10)`), and a statically typed local cannot hold both,
+/// so the operator is rejected instead of silently returning a string.
+fn increment_type_error(name: &str, ty: &PhpType) -> String {
+    if matches!(ty, PhpType::Str) {
+        return format!(
+            "Cannot increment/decrement ${} of type string: PHP's string increment can \
+             change the value's type (\"9\"++ is int(10)), which a statically typed local \
+             cannot hold",
+            name
+        );
+    }
+    format!("Cannot increment/decrement ${} of type {:?}", name, ty)
 }
 
 /// Widens a match arm type to also admit PHP null, for merges where another

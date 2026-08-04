@@ -23,6 +23,7 @@ sidebar:
 |---|---|---|
 | `==` | `$a == $b` | Loose equality using PHP-style coercions for bool, null, numeric `int`/`float` comparison, numeric strings, non-numeric strings, arrays, and objects |
 | `!=` | `$a != $b` | Loose inequality using the same coercions as `==` |
+| `<>` | `$a <> $b` | PHP's alias for `!=`: identical semantics, identical precedence and associativity |
 | `===` | `$a === $b` | Strict equality (type and value) |
 | `!==` | `$a !== $b` | Strict inequality |
 | `<` | `$a < $b` | Less than |
@@ -287,6 +288,40 @@ Nullsafe access cannot be used as an assignment target or combined with first-cl
 | `$i++` | Post-increment | Old value |
 | `--$i` | Pre-decrement | New value |
 | `$i--` | Post-decrement | Old value |
+
+In statement position the target can be a local variable, an object property
+(including `$this->prop`), an array element, or a static property, in either the
+prefix or the postfix spelling:
+
+```php
+$this->count++;
+++$this->count;
+$this->items[0]++;
+$obj->count--;
+--$obj->items[2];
+$totals["a"]++;
+```
+
+Statement position discards the operator's result, so `++$x;` and `$x++;` compile to
+the same read-modify-write. Reading the result of an increment on a property or array
+element — `echo $obj->n++;` — is not supported yet; assign through the statement form
+first.
+
+`int`, `float`, `bool`, `null`, and `mixed` values all increment like PHP. Floats add or
+subtract exactly `1.0` and stay floats:
+
+```php
+$f = 1.5;
+$f++;         // float(2.5)
+var_dump($f--); // float(2.5) — the post-form returns the old value
+var_dump($f);   // float(1.5)
+```
+
+A `string` local cannot be incremented: PHP's string increment can change the value's
+type (`"9"++` is `int(10)`, `"3.5"++` is `float(4.5)`), and an elephc local has one
+static type for its whole lifetime — the same rule that rejects `$x = 1; $x = "s";`.
+elephc reports this at compile time instead of returning a string where PHP returns a
+number. Use an explicit numeric local, or build the next string yourself.
 
 ## Ternary
 

@@ -449,3 +449,60 @@ var_dump(fmod(-7.5 * $n, 2.5));
     );
     assert_eq!(out, "-0|0|-1.5|1.5|NAN|float(-0)\n");
 }
+
+/// Verifies PHP's single-array `min()` / `max()` form over int, float, and bool arrays,
+/// through both a literal and a variable. Expected output matches `php -r` on 8.4.
+#[test]
+fn test_min_max_single_array_argument() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(min([1, 2, 3]), max([1, 2, 3]));
+$a = [3, 1, 2];
+var_dump(min($a), max($a));
+$b = [3.5, 1.25, 2.0];
+var_dump(min($b), max($b));
+var_dump(min([5]), max([5]));
+var_dump(min([true, false]), max([true, false]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nint(3)\nint(1)\nint(3)\nfloat(1.25)\nfloat(3.5)\nint(5)\nint(5)\n\
+         bool(false)\nbool(true)\n"
+    );
+}
+
+/// Verifies the variadic `min()` / `max()` form still works next to the single-array
+/// form, including the runtime-unknown operands that survive constant folding.
+#[test]
+fn test_min_max_variadic_form_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+var_dump(min(1, 2), max(1, 2, 3), min(1.5, 2));
+var_dump(min($n, 5), max($n, 5));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(1)\nint(3)\nfloat(1.5)\nint(1)\nint(5)\n"
+    );
+}
+
+/// Verifies an empty array raises PHP's catchable `ValueError` with php-src's exact
+/// message, for both `min()` and `max()` and for a literal and a variable.
+#[test]
+fn test_min_max_empty_array_throws_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try { var_dump(min([])); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+$empty = [];
+try { var_dump(max($empty)); } catch (ValueError $e) { echo get_class($e), ": ", $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "ValueError: min(): Argument #1 ($value) must contain at least one element\n\
+         ValueError: max(): Argument #1 ($value) must contain at least one element\n"
+    );
+}

@@ -370,6 +370,36 @@ fn test_not_equal() {
     assert_eq!(out, "1");
 }
 
+/// Verifies `<>` behaves exactly like `!=` at runtime, including the loose numeric-string
+/// comparison and array comparison cases. Expected output matches `php -r` on 8.4.
+#[test]
+fn test_angle_not_equal_matches_not_equal() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(1 <> 2);
+var_dump(1 <> 1);
+var_dump("1" <> 1);
+var_dump(1 + 1 <> 2);
+var_dump(true <> false);
+var_dump([1, 2] <> [1, 3]);
+$a = 5;
+var_dump($a <> 5, $a <> 6);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(false)\nbool(true)\n"
+    );
+}
+
+/// Verifies `< >` separated by whitespace is still two relational operators, so the
+/// `<>` token does not swallow chained comparisons such as `(1 < 2) > 0`.
+#[test]
+fn test_angle_not_equal_does_not_capture_spaced_comparisons() {
+    let out = compile_and_run("<?php var_dump((1 < 2) > 0);");
+    assert_eq!(out, "bool(true)\n");
+}
+
 // --- Loose comparison across types ---
 
 /// Verifies loose equality at compile time: empty string equals false, var_dump shows bool(true).
@@ -842,4 +872,117 @@ var_dump([null] == [0 * $n], ["a" => null] == ["b" => null]);
          bool(true)\nbool(false)\n\
          bool(true)\nbool(false)\n"
     );
+}
+
+// --- Increment/decrement on property and array-element targets ---
+
+/// Verifies statement-position `++`/`--` on `$this` members, in both prefix and postfix
+/// spelling, over an int property, an array-element property, and a float property.
+/// Regression for the parser accepting `$obj->n++` but rejecting `$this->n++`.
+#[test]
+fn test_incdec_on_this_members() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $n = 0;
+    public array $arr = [1, 2];
+    public float $f = 1.5;
+    public function bumpPost(): void { $this->n++; }
+    public function bumpPre(): void { ++$this->n; }
+    public function dropPost(): void { $this->n--; }
+    public function dropPre(): void { --$this->n; }
+    public function bumpElem(): void { $this->arr[0]++; }
+    public function bumpElemPre(): void { ++$this->arr[1]; }
+    public function bumpFloat(): void { $this->f++; }
+}
+$c = new C();
+$c->bumpPost(); $c->bumpPre(); $c->bumpPost();
+echo $c->n, "|";
+$c->dropPost(); $c->dropPre();
+echo $c->n, "|";
+$c->bumpElem(); $c->bumpElemPre();
+echo $c->arr[0], ",", $c->arr[1], "|";
+$c->bumpFloat();
+echo $c->f;
+"#,
+    );
+    assert_eq!(out, "3|1|2,3|2.5");
+}
+
+/// Verifies prefix `++`/`--` in statement position on the complex targets that previously
+/// only worked in postfix spelling: object properties and array elements.
+#[test]
+fn test_prefix_incdec_on_complex_targets() {
+    let out = compile_and_run(
+        r#"<?php
+class C { public int $n = 0; public array $arr = [1, 2]; }
+$c = new C();
+++$c->n; ++$c->n; --$c->n; ++$c->arr[0];
+echo $c->n, ",", $c->arr[0], "|";
+$a = [1, 2];
+++$a[0]; --$a[1];
+echo $a[0], ",", $a[1], "|";
+$x = 1; ++$x; $x++;
+echo $x;
+"#,
+    );
+    assert_eq!(out, "1,2|2,1|3");
+}
+
+/// Verifies `$this` member increments still work inside nested control flow, where the
+/// statement parser is re-entered from a loop or conditional body.
+#[test]
+fn test_incdec_on_this_members_inside_control_flow() {
+    let out = compile_and_run(
+        r#"<?php
+class C {
+    public int $n = 0;
+    public function run(): void { for ($i = 0; $i < 3; $i++) { $this->n++; } }
+}
+$c = new C();
+$c->run();
+echo $c->n, "|";
+while ($c->n < 5) { $c->n++; }
+echo $c->n;
+"#,
+    );
+    assert_eq!(out, "3|5");
+}
+
+/// Verifies `++`/`--` on float locals in every spelling, including the value each form
+/// returns and the IEEE edge cases. Expected output matches `php -r` on 8.4.
+#[test]
+fn test_incdec_on_float_locals() {
+    let out = compile_and_run(
+        r#"<?php
+$f = 1.5; $f++; var_dump($f);
+$g = 1.5; $g--; var_dump($g);
+$h = -0.5; ++$h; var_dump($h);
+$i = 2.25; --$i; var_dump($i);
+$j = 1.5; var_dump($j++); var_dump($j);
+$k = 1.5; var_dump(++$k); var_dump($k);
+$m = 1.0e308; $m++; var_dump($m);
+$inf = INF; $inf++; var_dump($inf);
+$nan = NAN; $nan++; var_dump($nan);
+"#,
+    );
+    assert_eq!(
+        out,
+        "float(2.5)\nfloat(0.5)\nfloat(0.5)\nfloat(1.25)\nfloat(1.5)\nfloat(2.5)\n\
+         float(2.5)\nfloat(2.5)\nfloat(1.0E+308)\nfloat(INF)\nfloat(NAN)\n"
+    );
+}
+
+/// Verifies a float local incremented in a loop accumulates like PHP, so the float
+/// increment path also works when the local is register-allocated across a loop.
+#[test]
+fn test_float_increment_in_loop() {
+    let out = compile_and_run(
+        r#"<?php
+$l = 0.1;
+for ($n = 0; $n < 3; $n++) { $l++; }
+var_dump($l);
+"#,
+    );
+    assert_eq!(out, "float(3.1)\n");
 }

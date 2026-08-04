@@ -207,6 +207,16 @@ $items = [0];
 
 PHP does not allow keyed and unkeyed entries in the same destructuring pattern, and elephc reports that as a compile-time error.
 
+The same patterns can be used as a `foreach` value target — see
+[foreach](./control-structures.md):
+
+```php
+<?php
+foreach ([[1, 2], [3, 4]] as [$x, $y]) {
+    echo $x + $y;
+}
+```
+
 ## Built-in array functions
 
 | Function | Signature | Description |

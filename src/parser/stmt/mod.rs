@@ -29,6 +29,7 @@ pub use ffi::parse_extern_stmts;
 pub(crate) use oop::parse_anonymous_class;
 pub(crate) use params::{looks_like_typed_param, parse_type_expr};
 pub(crate) use assign::can_replay_assignment_target;
+pub(crate) use assign::{parse_destructuring_pattern_unpack, starts_destructuring_pattern};
 
 /// Parses a single PHP statement, including optional PHP 8 attribute groups.
 pub fn parse_stmt(tokens: &[SpannedToken], pos: &mut usize) -> Result<Stmt, CompileError> {

@@ -13,6 +13,12 @@
 //!   `returns` type.
 //! - Builtins with argument-type-dependent returns (`abs`, `clamp`, `min`, `max`)
 //!   supply a `check` hook that computes the precise return type.
+//! - `min_max_array_element_type()` is the one shared helper here: `min` and `max`
+//!   accept the same single-array form, so both home files delegate to it.
+
+use crate::builtins::spec::BuiltinCheckCtx;
+use crate::errors::CompileError;
+use crate::types::PhpType;
 
 pub mod abs;
 pub mod acos;
@@ -47,3 +53,27 @@ pub mod sinh;
 pub mod sqrt;
 pub mod tan;
 pub mod tanh;
+
+/// Resolves the result type of the single-argument `min()` / `max()` form.
+///
+/// PHP's one-argument form takes an array and returns one of its elements, so the
+/// call's result type is the array's element type. A non-array argument is PHP's
+/// `min(): Argument #1 ($value) must be of type array, <type> given` TypeError;
+/// elephc reports it at compile time because the argument type is already known.
+pub(crate) fn min_max_array_element_type(
+    cx: &mut BuiltinCheckCtx,
+    name: &str,
+) -> Result<PhpType, CompileError> {
+    let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
+    match ty {
+        PhpType::Array(element) => Ok(*element),
+        PhpType::AssocArray { value, .. } => Ok(*value),
+        other => Err(CompileError::new(
+            cx.span,
+            &format!(
+                "{}(): Argument #1 ($value) must be of type array, {} given",
+                name, other
+            ),
+        )),
+    }
+}

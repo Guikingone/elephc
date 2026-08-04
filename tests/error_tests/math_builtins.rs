@@ -39,16 +39,35 @@ fn test_error_pow_wrong_args() {
     expect_error("<?php pow(1);", "pow() takes exactly 2 arguments");
 }
 
-/// Verifies min() rejects single-argument call (requires at least 2). Input: `min(1)`.
+/// Verifies min() rejects a lone non-array argument with php-src's TypeError wording.
+/// PHP's single-argument form takes an array; `min(1)` is a TypeError there too.
 #[test]
 fn test_error_min_wrong_args() {
-    expect_error("<?php min(1);", "min() requires at least 2 arguments");
+    expect_error(
+        "<?php min(1);",
+        "min(): Argument #1 ($value) must be of type array, int given",
+    );
 }
 
-/// Verifies max() rejects single-argument call (requires at least 2). Input: `max(1)`.
+/// Verifies max() rejects a lone non-array argument with php-src's TypeError wording.
 #[test]
 fn test_error_max_wrong_args() {
-    expect_error("<?php max(1);", "max() requires at least 2 arguments");
+    expect_error(
+        "<?php max(1);",
+        "max(): Argument #1 ($value) must be of type array, int given",
+    );
+}
+
+/// Verifies min() with no argument at all still reports PHP's ArgumentCountError text.
+#[test]
+fn test_error_min_no_args() {
+    expect_error("<?php min();", "min() expects at least 1 argument, 0 given");
+}
+
+/// Verifies max() with no argument at all still reports PHP's ArgumentCountError text.
+#[test]
+fn test_error_max_no_args() {
+    expect_error("<?php max();", "max() expects at least 1 argument, 0 given");
 }
 
 /// Verifies clamp() rejects missing bound arguments. Input: `clamp(1, 2)`.

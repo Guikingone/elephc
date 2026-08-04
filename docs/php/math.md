@@ -15,8 +15,8 @@ sidebar:
 | `round()` | `round($val [, $precision]): float` | Round to nearest |
 | `sqrt()` | `sqrt($val): float` | Square root |
 | `pow()` | `pow($base, $exp): float` | Exponentiation |
-| `min()` | `min($a, $b, ...): int\|float` | Minimum (variadic) |
-| `max()` | `max($a, $b, ...): int\|float` | Maximum (variadic) |
+| `min()` | `min($value, ...$values): mixed` | Minimum. Either one array, or two or more values |
+| `max()` | `max($value, ...$values): mixed` | Maximum. Either one array, or two or more values |
 | `clamp()` | `clamp(?mixed $value, ?mixed $min, ?mixed $max): ?mixed` | Clamp a value to inclusive bounds |
 | `intdiv()` | `intdiv($a, $b): int` | Integer division; a zero divisor raises a catchable `DivisionByZeroError`, and `intdiv(PHP_INT_MIN, -1)` an `ArithmeticError` |
 | `fmod()` | `fmod($a, $b): float` | Float modulo |
@@ -50,6 +50,42 @@ echo clamp(15, 0, 10);      // 10
 echo clamp(3.5, 0.0, 10.0); // 3.5
 echo clamp("P", "A", "Z");  // "P"
 ```
+
+### min() and max()
+
+Both accept PHP's two call forms: a single array whose elements are compared, or
+two or more values compared against each other.
+
+```php
+var_dump(min([1, 2, 3]));   // int(1)
+var_dump(max([1, 2, 3]));   // int(3)
+var_dump(min([3.5, 1.25])); // float(1.25)
+var_dump(min(4, 9, 2));     // int(2)
+```
+
+An empty array has no element to return, so it throws a catchable `ValueError`
+exactly like PHP:
+
+```php
+try {
+    min([]);
+} catch (ValueError $e) {
+    echo $e->getMessage(); // min(): Argument #1 ($value) must contain at least one element
+}
+```
+
+The single-array form currently compiles when every element has the same scalar type:
+an indexed array of `int`, of `float`, or of `bool`. It is rejected at compile time for
+
+- an array of strings (`min(["a", "b"])`),
+- an associative array (`min(["a" => 3, "b" => 1])`),
+- and any array with heterogeneous elements — including a mixed int/float literal such
+  as `min([1, 2.5])`, whose elements are stored as boxed `mixed` values.
+
+Selecting the smallest element there needs PHP's full comparison table over boxed heap
+values, which the reduction does not implement; the diagnostic names the array shape it
+saw. Write `min(1, 2.5)` (the variadic form, which has no such restriction) or make the
+array uniform (`min([1.0, 2.5])`).
 
 ## Math constants
 

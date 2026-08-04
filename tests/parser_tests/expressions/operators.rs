@@ -49,6 +49,72 @@ fn test_comparison_lower_than_arithmetic() {
     assert_eq!(stmts, vec![expected]);
 }
 
+/// Verifies that `<>` parses to the same `BinOp::NotEq` node as `!=`, so the alias is
+/// indistinguishable from `!=` after parsing.
+#[test]
+fn test_angle_not_equal_is_alias_of_not_equal() {
+    let angle = parse_source("<?php echo 1 <> 2;");
+    let bang = parse_source("<?php echo 1 != 2;");
+    assert_eq!(angle, bang);
+    assert_eq!(
+        angle,
+        vec![Stmt::echo(Expr::binop(
+            Expr::int_lit(1),
+            BinOp::NotEq,
+            Expr::int_lit(2),
+        ))]
+    );
+}
+
+/// Verifies the Pratt binding power of `<>` matches `!=` exactly: it binds looser than
+/// `+` and looser than `<`, and it is left-associative like the other equality operators.
+#[test]
+fn test_angle_not_equal_binding_power_matches_not_equal() {
+    // Arithmetic (bp 29) binds tighter than `<>` (bp 21): 1 + 2 <> 3 is (1 + 2) <> 3.
+    let stmts = parse_source("<?php echo 1 + 2 <> 3;");
+    assert_eq!(
+        stmts,
+        vec![Stmt::echo(Expr::binop(
+            Expr::binop(Expr::int_lit(1), BinOp::Add, Expr::int_lit(2)),
+            BinOp::NotEq,
+            Expr::int_lit(3),
+        ))]
+    );
+
+    // Relational (bp 23) binds tighter than `<>` (bp 21): 1 <> 2 < 3 is 1 <> (2 < 3).
+    let stmts = parse_source("<?php echo 1 <> 2 < 3;");
+    assert_eq!(
+        stmts,
+        vec![Stmt::echo(Expr::binop(
+            Expr::int_lit(1),
+            BinOp::NotEq,
+            Expr::binop(Expr::int_lit(2), BinOp::Lt, Expr::int_lit(3)),
+        ))]
+    );
+
+    // `<>` is left-associative and shares its level with `==`: 1 <> 2 == 3 is (1 <> 2) == 3.
+    let stmts = parse_source("<?php echo 1 <> 2 == 3;");
+    assert_eq!(
+        stmts,
+        vec![Stmt::echo(Expr::binop(
+            Expr::binop(Expr::int_lit(1), BinOp::NotEq, Expr::int_lit(2)),
+            BinOp::Eq,
+            Expr::int_lit(3),
+        ))]
+    );
+
+    // `&&` (bp 13) binds looser than `<>`: 1 <> 2 && 3 is (1 <> 2) && 3.
+    let stmts = parse_source("<?php echo 1 <> 2 && 3;");
+    assert_eq!(
+        stmts,
+        vec![Stmt::echo(Expr::binop(
+            Expr::binop(Expr::int_lit(1), BinOp::NotEq, Expr::int_lit(2)),
+            BinOp::And,
+            Expr::int_lit(3),
+        ))]
+    );
+}
+
 /// Verifies that `<?php echo "x" . 1 < 2;` parses as `("x" . 1) < 2` — concatenation has higher
 /// precedence than comparison, matching PHP precedence.
 #[test]

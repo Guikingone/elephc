@@ -217,3 +217,59 @@ fn test_parse_foreach_key_value_by_ref() {
         panic!("expected Foreach");
     }
 }
+
+/// Verifies `foreach ($m as [$a, $b])` desugars to a loop over a hidden value variable whose
+/// body starts with the same unpack statement `[$a, $b] = $tmp;` produces.
+#[test]
+fn test_parse_foreach_value_destructuring_desugars_to_hidden_temp() {
+    let stmts = parse_source("<?php foreach ($m as [$a, $b]) { echo $a; }");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        value_by_ref,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert_eq!(key_var, &None);
+    assert!(value_var.starts_with("__elephc_foreach_"));
+    assert!(!value_by_ref);
+    assert_eq!(body.len(), 2);
+    let StmtKind::ListUnpack { vars, value } = &body[0].kind else {
+        panic!("expected the unpack statement first in the body");
+    };
+    assert_eq!(vars, &vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(value.kind, ExprKind::Variable(value_var.clone()));
+}
+
+/// Verifies the `$key => [pattern]` form keeps the real key variable and only replaces the
+/// value target with the hidden temporary.
+#[test]
+fn test_parse_foreach_key_with_value_destructuring() {
+    let stmts = parse_source("<?php foreach ($m as $k => [$a, $b]) {}");
+    assert_eq!(stmts.len(), 1);
+    let StmtKind::Foreach {
+        key_var,
+        value_var,
+        body,
+        ..
+    } = &stmts[0].kind
+    else {
+        panic!("expected Foreach");
+    };
+    assert_eq!(key_var, &Some("k".to_string()));
+    assert!(value_var.starts_with("__elephc_foreach_"));
+    assert_eq!(body.len(), 1);
+    assert!(matches!(body[0].kind, StmtKind::ListUnpack { .. }));
+}
+
+/// Verifies a reference to a whole destructuring pattern is rejected: PHP allows `&` on the
+/// targets inside the pattern, never on the pattern itself.
+#[test]
+fn test_parse_foreach_reference_to_pattern_is_rejected() {
+    assert!(parse_fails("<?php foreach ($m as &[$a, $b]) {}"));
+    assert!(parse_fails("<?php foreach ($m as $k => &[$a, $b]) {}"));
+}

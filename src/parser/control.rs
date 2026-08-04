@@ -12,7 +12,10 @@ use crate::errors::CompileError;
 use crate::lexer::{SpannedToken, Token};
 use crate::parser::ast::{BinOp, CatchClause, Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
-use crate::parser::stmt::{expect_semicolon, expect_token, name_starts_at, parse_block, parse_body, parse_name};
+use crate::parser::stmt::{
+    expect_semicolon, expect_token, name_starts_at, parse_block, parse_body,
+    parse_destructuring_pattern_unpack, parse_name, starts_destructuring_pattern,
+};
 use crate::span::Span;
 
 /// Parse: if (expr) { stmts } (elseif (expr) { stmts })* (else { stmts })?
@@ -130,6 +133,30 @@ pub fn parse_foreach(
         false
     };
 
+    // `foreach ($pairs as [$a, $b])`: the value target is a destructuring pattern, so the
+    // loop binds a hidden temporary and the body starts by unpacking it.
+    if starts_destructuring_pattern(tokens, *pos) {
+        if first_by_ref {
+            return Err(CompileError::new(
+                span,
+                "Cannot take a reference to a destructuring pattern in foreach",
+            ));
+        }
+        let (value_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
+        expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
+        let body = prepend_stmt(unpack, parse_body(tokens, pos)?);
+        return Ok(Stmt::new(
+            StmtKind::Foreach {
+                array,
+                key_var: None,
+                value_var,
+                value_by_ref: false,
+                body,
+            },
+            span,
+        ));
+    }
+
     let first_var = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Variable(n)) => n.clone(),
         _ => return Err(CompileError::new(span, "Expected variable after 'as'")),
@@ -137,7 +164,7 @@ pub fn parse_foreach(
     *pos += 1;
 
     // Check for => (foreach $arr as $key => $value)
-    let (key_var, value_var, value_by_ref) =
+    let (key_var, value_var, value_by_ref, unpack) =
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
         if first_by_ref {
             return Err(CompileError::new(
@@ -155,18 +182,34 @@ pub fn parse_foreach(
         } else {
             false
         };
-        let val_var = match tokens.get(*pos).map(|(t, _)| t) {
-            Some(Token::Variable(n)) => n.clone(),
-            _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
-        };
-        *pos += 1;
-        (Some(first_var), val_var, value_by_ref)
+        // `foreach ($m as $k => [$a, $b])` destructures the value the same way.
+        if starts_destructuring_pattern(tokens, *pos) {
+            if value_by_ref {
+                return Err(CompileError::new(
+                    span,
+                    "Cannot take a reference to a destructuring pattern in foreach",
+                ));
+            }
+            let (val_var, unpack) = parse_foreach_pattern_target(tokens, pos, span)?;
+            (Some(first_var), val_var, false, Some(unpack))
+        } else {
+            let val_var = match tokens.get(*pos).map(|(t, _)| t) {
+                Some(Token::Variable(n)) => n.clone(),
+                _ => return Err(CompileError::new(span, "Expected variable after '=>'")),
+            };
+            *pos += 1;
+            (Some(first_var), val_var, value_by_ref, None)
+        }
     } else {
-        (None, first_var, first_by_ref)
+        (None, first_var, first_by_ref, None)
     };
 
     expect_token(tokens, pos, &Token::RParen, "Expected ')' after foreach")?;
     let body = parse_body(tokens, pos)?;
+    let body = match unpack {
+        Some(unpack) => prepend_stmt(unpack, body),
+        None => body,
+    };
 
     Ok(Stmt::new(
         StmtKind::Foreach {
@@ -178,6 +221,38 @@ pub fn parse_foreach(
         },
         span,
     ))
+}
+
+/// Parses a `foreach` value destructuring pattern into a hidden loop variable plus the
+/// statement that unpacks it.
+///
+/// The loop still binds one value per iteration, so the pattern becomes
+/// `foreach (… as $tmp) { [pattern] = $tmp; … }`. The temporary is named from the pattern's
+/// source position so nested loops in one function never collide.
+fn parse_foreach_pattern_target(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+) -> Result<(String, Stmt), CompileError> {
+    let pattern_span = tokens
+        .get(*pos)
+        .map(|(_, metadata)| metadata.span)
+        .unwrap_or(span);
+    let value_var = format!(
+        "__elephc_foreach_{}_{}",
+        pattern_span.line, pattern_span.col
+    );
+    let source = Expr::new(ExprKind::Variable(value_var.clone()), pattern_span);
+    let unpack = parse_destructuring_pattern_unpack(tokens, pos, pattern_span, source)?;
+    Ok((value_var, unpack))
+}
+
+/// Returns `body` with `first` inserted as its first statement.
+fn prepend_stmt(first: Stmt, body: Vec<Stmt>) -> Vec<Stmt> {
+    let mut stmts = Vec::with_capacity(body.len() + 1);
+    stmts.push(first);
+    stmts.extend(body);
+    stmts
 }
 
 /// Parse: do { stmts } while (expr);

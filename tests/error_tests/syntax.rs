@@ -512,3 +512,59 @@ fn test_error_extern_missing_function() {
         "Expected 'function', string literal, 'class', or 'global' after 'extern'",
     );
 }
+
+// --- `<>` (PHP alias for `!=`) errors ---
+
+/// Verifies that `<>` with a missing right operand is reported as an unexpected token
+/// rather than silently parsing as `<` followed by `>`.
+#[test]
+fn test_error_angle_not_equal_missing_right_operand() {
+    expect_error("<?php $x = 1 <> ;", "Unexpected token: Semicolon");
+}
+
+/// Verifies prefix `++` on `$this` itself (not a member of it) is rejected as an invalid
+/// increment target instead of being parsed as a member increment.
+#[test]
+fn test_error_prefix_increment_on_this_itself() {
+    expect_error(
+        "<?php class C { function f() { ++$this; } }",
+        "Invalid increment target",
+    );
+}
+
+/// Verifies incrementing a method return value is rejected, matching PHP's
+/// "Can't use method return value in write context" fatal.
+#[test]
+fn test_error_increment_method_return_value() {
+    expect_error(
+        "<?php class C { function foo() { return 1; } function f() { $this->foo()++; } }",
+        "Invalid assignment target",
+    );
+}
+
+// --- foreach destructuring errors ---
+
+/// Verifies an empty `foreach` destructuring pattern reports PHP's "Cannot use empty list".
+#[test]
+fn test_error_foreach_empty_destructuring_pattern() {
+    expect_error("<?php $m = [[1]]; foreach ($m as []) {}", "Cannot use empty list");
+}
+
+/// Verifies a `foreach` destructuring pattern that is never closed is reported as a missing
+/// `]`, not as a missing loop variable.
+#[test]
+fn test_error_foreach_unclosed_destructuring_pattern() {
+    expect_error(
+        "<?php $m = [[1, 2]]; foreach ($m as [$a, $b) {}",
+        "Expected ']' after list pattern",
+    );
+}
+
+/// Verifies taking a reference to the whole destructuring pattern is rejected.
+#[test]
+fn test_error_foreach_reference_to_destructuring_pattern() {
+    expect_error(
+        "<?php $m = [[1, 2]]; foreach ($m as &[$a, $b]) {}",
+        "Cannot take a reference to a destructuring pattern in foreach",
+    );
+}
