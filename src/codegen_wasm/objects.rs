@@ -1515,16 +1515,19 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     let prop_type = prop_type.codegen_repr();
     let obj_ref = object_ptr_ref(ctx, object)?;
 
-    // `Op::PropGet` is always followed by `Op::Acquire`, which persists a string and increfs a
-    // refcounted child — so retaining here too would leave one extra reference per read.
-    emit_declared_property_load(
-        ctx,
-        &obj_ref,
-        offset,
-        &prop_type,
-        &property,
-        PropertyLoad::Borrowed,
-    )?;
+    // Whether an `Op::Acquire` follows is not a property of `Op::PropGet` — it is a property of
+    // the value it produces, and the EIR says which: `ir_lower` acquires a borrowed result to
+    // stabilize it, and skips that when the result is ALREADY owned. A DECLARED `string`/`array`
+    // property reads as `MaybeOwned` and is acquired; an UNTYPED one reads as `Owned` and is not,
+    // yet is still paired with a `release`. Retaining unconditionally leaks one reference per read
+    // of the first kind; borrowing unconditionally frees the second kind out from under the object
+    // — `$this->n` read once by `echo` left the slot dangling, and the next `$this->n + 1` read a
+    // recycled cell.
+    let load = match ctx.function.value(inst.result.unwrap_or(object)) {
+        Some(value) if value.ownership == Ownership::Owned => PropertyLoad::Owned,
+        _ => PropertyLoad::Borrowed,
+    };
+    emit_declared_property_load(ctx, &obj_ref, offset, &prop_type, &property, load)?;
 
     store_result(ctx, inst)?;
     Ok(())
@@ -1536,9 +1539,9 @@ pub(super) enum PropertyLoad {
     /// The reader owns it: a string is persisted into a fresh heap copy and a refcounted child is
     /// increfed. For callers that produce a result nothing else will acquire.
     Owned,
-    /// The reader only views it: no copy and no incref. For `Op::PropGet`, which the EIR ALWAYS
-    /// follows with an `Op::Acquire` — verified across every use shape (store, echo, argument,
-    /// concat, builtin argument, return, strict compare).
+    /// The reader only views it: no copy and no incref. For an `Op::PropGet` whose result the EIR
+    /// follows with an `Op::Acquire` — which it does for every `MaybeOwned` result, across every
+    /// use shape (store, echo, argument, concat, builtin argument, return, strict compare).
     Borrowed,
 }
 

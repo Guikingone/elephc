@@ -1525,24 +1525,24 @@ fn float_cmp_op(pred: CmpPredicate) -> &'static str {
 /// Lowers `ICmp`: signed integer comparison yielding an i64 boolean (0/1).
 fn lower_int_cmp(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let wasm_op = int_cmp_op(cmp_immediate(inst)?)?;
-    // A comparison against a BOXED value is PHP's own, not a converted integer's: the runtime
-    // answers -1/0/1 for the pair and the original predicate is applied to that.
-    if let Some((cell, other, mixed_on_left)) =
+    // A comparison against a BOXED value is PHP's own, not a converted integer's. The cast that
+    // nominally produced the integer already ran `__rt_mixed_cmp_i64` — it holds the -1/0/1 answer
+    // for the pair, taken while the box was still alive — so all that is left is the original
+    // predicate against zero, with the operands kept in their original order: `pred(box, other)`
+    // is `pred(cmp, 0)` and `pred(other, box)` is `pred(0, cmp)`.
+    if let Some((_, _, mixed_on_left)) =
         super::capability::icmp_compares_a_boxed_value(ctx.function, inst)
     {
-        ctx.emit_load_value(cell)?;
-        ctx.emit_load_value(other)?;
-        ctx.fb.ins(
-            "call $__rt_mixed_cmp_i64",
-            "PHP's comparison of a boxed value with an integer",
-        );
-        if !mixed_on_left {
-            // The helper always takes the box first, so a box on the RIGHT answers the
-            // opposite sign.
-            ctx.fb.ins("i64.const -1", "reversed operand order");
-            ctx.fb.ins("i64.mul", "flip the three-way result");
+        let three_way = operand(inst, if mixed_on_left { 0 } else { 1 })?;
+        if mixed_on_left {
+            ctx.emit_load_value(three_way)?;
+            ctx.fb
+                .ins("i64.const 0", "compare the three-way answer with zero");
+        } else {
+            ctx.fb
+                .ins("i64.const 0", "the box sat on the right of the comparison");
+            ctx.emit_load_value(three_way)?;
         }
-        ctx.fb.ins("i64.const 0", "compare the three-way result with zero");
         ctx.fb.ins(wasm_op, "the original predicate");
         ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
         return store_result(ctx, inst);
@@ -1872,17 +1872,19 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             }
         }
     }
-    // A cast that exists only to feed a comparison emits no conversion: the comparison reads
-    // the box itself, so this result is dead and only needs to exist for the value table.
-    if super::capability::cast_stands_in_for_mixed_comparison(ctx.function, inst).is_some()
-        && ctx.function.instructions.iter().any(|candidate| {
-            candidate.op == Op::ICmp
-                && super::capability::icmp_compares_a_boxed_value(ctx.function, candidate)
-                    .is_some_and(|(_, _, _)| candidate.operands.contains(&inst.result.unwrap()))
-        })
+    // A cast that exists only to feed a comparison emits no conversion. It performs the
+    // comparison instead: PHP compares the BOX, and here — before any release the EIR schedules
+    // for an owned temporary — the box is guaranteed alive. What lands in this result is the
+    // -1/0/1 answer, which the `ICmp` downstream tests against zero.
+    if let Some((cell, other, _)) =
+        super::capability::cast_stands_in_for_mixed_comparison(ctx.function, inst)
     {
-        ctx.fb
-            .ins("i64.const 0", "placeholder: the comparison reads the box");
+        ctx.emit_load_value(cell)?;
+        ctx.emit_load_value(other)?;
+        ctx.fb.ins(
+            "call $__rt_mixed_cmp_i64",
+            "PHP's comparison of a boxed value with an integer",
+        );
         return store_result(ctx, inst);
     }
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {

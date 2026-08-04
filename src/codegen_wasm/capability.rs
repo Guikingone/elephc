@@ -1258,12 +1258,29 @@ pub(super) fn object_to_string_impl(module: &Module, class_name: &str) -> Option
 /// while the cast answers 0 and reports true. The native backend still takes the cast and gets
 /// both this and `[1] <= 1` wrong; this target answers PHP by comparing the box directly.
 ///
-/// Returns the cast's SOURCE, and only when every use of the cast's result is such a comparison
-/// — otherwise the converted integer is genuinely wanted somewhere and the cast must stand.
+/// Answers `(cell, other, mixed_on_left)`: the box, the value PHP compares it against, and which
+/// side of the `ICmp` the box sits on. Only when EVERY use of the cast's result is that one
+/// comparison — otherwise the converted integer is genuinely wanted somewhere and the cast stands.
+///
+/// The comparison reads the BOX, so it has to run while the box is alive, and the EIR releases an
+/// owned temporary — a property read, a call result — immediately after the cast:
+///
+/// ```text
+///   v1 = prop_get v0 data[0]      ; owned
+///   v3 = cast v1 I64
+///   release v1                    ; the box is gone HERE
+///   v4 = icmp v3 v2 Sgt
+/// ```
+///
+/// So the comparison is emitted AT THE CAST rather than at the `ICmp`. There the box is always
+/// live, whatever owns it, and the `ICmp` is left comparing the three-way answer against zero.
+/// The price is that the value compared against must already be materialized at the cast, which
+/// is what the position walk below establishes; an earlier attempt to keep the comparison at the
+/// `ICmp` and hold the box alive across the release instead was reverted.
 pub(super) fn cast_stands_in_for_mixed_comparison(
     function: &Function,
     inst: &Instruction,
-) -> Option<ValueId> {
+) -> Option<(ValueId, ValueId, bool)> {
     if !matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64))) {
         return None; // an EXPLICIT `(int)` really is a conversion
     }
@@ -1279,30 +1296,64 @@ pub(super) fn cast_stands_in_for_mixed_comparison(
     {
         return None;
     }
-    // The comparison reads the BOX, so the box has to still be alive when it runs. An owned
-    // temporary — a property read, a call result — is released right after the cast, BEFORE the
-    // comparison the EIR then performs on the converted integer. Reading it there is a
-    // use-after-free, so only a source nothing releases is admitted; a plain local, which is
-    // what an untyped parameter or variable gives, always qualifies.
-    if function
-        .instructions
-        .iter()
-        .any(|candidate| candidate.op == Op::Release && candidate.operands.contains(source))
-    {
-        return None;
-    }
     let result = inst.result?;
-    let mut used = false;
+    let mut comparison = None;
     for candidate in &function.instructions {
         if !candidate.operands.contains(&result) {
             continue;
         }
-        if candidate.op != Op::ICmp {
+        if candidate.op != Op::ICmp || comparison.is_some() {
+            return None; // the integer is wanted elsewhere, or by more than one comparison
+        }
+        comparison = Some(candidate);
+    }
+    let comparison = comparison?;
+    let [left, right] = comparison.operands.as_slice() else {
+        return None;
+    };
+    let mixed_on_left = *left == result;
+    let other = if mixed_on_left { *right } else { *left };
+    if other == result {
+        return None; // a box compared with itself has no second operand to load
+    }
+    // `__rt_mixed_cmp_i64` is `zend_compare(mixed, long)`. Against a PHP BOOL, PHP converts both
+    // sides to bool first — a different rule — so only a genuine integer is admitted here.
+    let other_value = function.value(other)?;
+    if other_value.ir_type != IrType::I64 || other_value.php_type.codegen_repr() != PhpType::Int {
+        return None;
+    }
+    // The cast and the comparison share a block, so "already materialized" is a question about
+    // one instruction order rather than about dominance.
+    let (cast_block, cast_slot) = instruction_position(function, result)?;
+    let (cmp_block, cmp_slot) = comparison
+        .result
+        .and_then(|value| instruction_position(function, value))?;
+    if cast_block != cmp_block || cmp_slot <= cast_slot {
+        return None;
+    }
+    // A value defined in ANOTHER block dominates this one already — the comparison uses it here.
+    // Only a definition later in THIS block is unavailable at the cast.
+    if let Some((other_block, other_slot)) = instruction_position(function, other) {
+        if other_block == cast_block && other_slot >= cast_slot {
             return None;
         }
-        used = true;
     }
-    used.then_some(*source)
+    Some((*source, other, mixed_on_left))
+}
+
+/// Locates the instruction defining `result` as a `(block index, position within the block)` pair.
+fn instruction_position(function: &Function, result: ValueId) -> Option<(usize, usize)> {
+    let defining = function
+        .instructions
+        .iter()
+        .position(|candidate| candidate.result == Some(result))?;
+    function.blocks.iter().enumerate().find_map(|(block, entry)| {
+        entry
+            .instructions
+            .iter()
+            .position(|id| id.as_raw() as usize == defining)
+            .map(|slot| (block, slot))
+    })
 }
 
 /// The operands of an `ICmp` that is really a PHP comparison against a boxed value.
@@ -1316,7 +1367,7 @@ pub(super) fn icmp_compares_a_boxed_value(
     let [left, right] = inst.operands.as_slice() else {
         return None;
     };
-    let boxed = |value: ValueId| -> Option<ValueId> {
+    let boxed = |value: ValueId| -> Option<(ValueId, ValueId, bool)> {
         let defining = function
             .instructions
             .iter()
@@ -1326,8 +1377,7 @@ pub(super) fn icmp_compares_a_boxed_value(
             .flatten()
     };
     match (boxed(*left), boxed(*right)) {
-        (Some(cell), None) => Some((cell, *right, true)),
-        (None, Some(cell)) => Some((cell, *left, false)),
+        (Some(found), None) | (None, Some(found)) => Some(found),
         _ => None,
     }
 }
@@ -1486,11 +1536,10 @@ fn cast_shape_issue(
     let return_coercion = declared_return_coercion_target(function, inst).is_some()
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
     // A cast that only feeds a comparison is not emitted as a conversion at all: the comparison
-    // reads the box. Admitting it here is what lets the `ICmp` do PHP's own comparison.
+    // reads the box. Admitting it here is what lets PHP's own comparison replace it. The
+    // predicate already names the `ICmp` it feeds, so there is nothing further to look for; the
+    // runtime traps on an object, a resource or a callable, and that diagnostic goes through WASI.
     let comparison_stand_in = cast_stands_in_for_mixed_comparison(function, inst).is_some()
-        && function.instructions.iter().any(|candidate| {
-            candidate.op == Op::ICmp && icmp_compares_a_boxed_value(function, candidate).is_some()
-        })
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
     let admitted_mixed_scalar = (explicit
         || widened_by_checked_arithmetic

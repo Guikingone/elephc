@@ -12244,3 +12244,112 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a read of an UNTYPED property survives the read that precedes it.
+///
+/// `ir_lower` stabilizes a borrowed `PropGet` result with an `Op::Acquire`, and skips that when
+/// the result is already `Owned` — which is exactly what an untyped property produces. The WASM
+/// reader assumed the acquire was unconditional and always borrowed, so the `release` the EIR
+/// pairs with an owned result freed the cell the object still points at: `echo $this->n` left the
+/// slot dangling and the next `$this->n + 1` read a recycled cell, answering 2 for 0 + 1 and then
+/// dying on "Unsupported operand types". A DECLARED `string`/`array` property must keep borrowing,
+/// or each read leaks one reference, so both shapes are exercised here in one object.
+#[test]
+fn test_cli_wasm_reads_an_untyped_property_without_freeing_it() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_untyped_property_read");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Counter {
+    public $count;
+    public string $label;
+    public function __construct(string $label) { $this->count = 0; $this->label = $label; }
+    public function inc() { $this->count += 1; }
+    public function dec() { if ($this->count > 0) { $this->count -= 1; } }
+    public function show() { echo $this->label, "=", $this->count, "\n"; }
+}
+$c = new Counter("a");
+$c->show();
+$c->inc();
+$c->show();
+$c->inc();
+$c->inc();
+$c->show();
+$c->dec();
+$c->show();
+$i = 0;
+while ($i < 400) { $c->show(); $c->inc(); $i = $i + 1; }
+echo "still ", $c->count, "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the property reads to WASM");
+    assert!(
+        output.status.success(),
+        "untyped property compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+console.error(`pages=${instance.exports.memory.buffer.byteLength / 65536}`);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the property reads under Node");
+    assert!(
+        run.status.success(),
+        "the property reads must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    let mut expected = String::from("a=0\na=1\na=3\na=2\n");
+    for step in 2..402 {
+        expected.push_str(&format!("a={}\n", step));
+    }
+    expected.push_str("still 402\n");
+    assert_eq!(stdout, expected, "php-src's own answers");
+
+    // 400 reads of a DECLARED string property alongside them: retaining those would leak one
+    // persisted copy each, which shows up as linear page growth.
+    let pages: usize = String::from_utf8_lossy(&run.stderr)
+        .trim()
+        .rsplit_once('=')
+        .map(|(_, count)| count.parse().unwrap_or(usize::MAX))
+        .unwrap_or(usize::MAX);
+    assert!(
+        pages < 8,
+        "400 property reads grew the heap to {pages} pages, so a read is retaining"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
