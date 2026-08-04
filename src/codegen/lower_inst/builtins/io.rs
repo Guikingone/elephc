@@ -1817,7 +1817,7 @@ fn emit_literal_compress_wrapper_fopen(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)), // skip false boxing after attaching the decompressor
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),// skip false boxing after attaching the decompressor
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)), // skip false boxing after attaching the decompressor
     }
     ctx.emitter.label(&false_label);
     box_stream_fd_or_false_result(ctx, "fopen");

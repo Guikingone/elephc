@@ -233,7 +233,7 @@ fn emit_intdiv_overflow_throw(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction("mov r10, QWORD PTR [rip + _spl_arithmetic_error_class_id]"); // load ArithmeticError's runtime class id for this program
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the ArithmeticError class id in the Throwable header
-            ctx.emitter.instruction(&format!("lea r10, [rip + {}]", msg_label));    // materialize the static ArithmeticError message pointer
+            ctx.emitter.instruction(&format!("lea r10, [rip + {}]", msg_label)); // materialize the static ArithmeticError message pointer
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the static ArithmeticError message pointer
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", msg_len)); // store the exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // store the default zero exception code

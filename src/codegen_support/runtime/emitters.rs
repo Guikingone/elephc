@@ -772,11 +772,13 @@ mod tests {
         // A token is an internal helper label iff it is an `L`-localized `__rt_*`
         // name (what `label()` produces under dead stripping). `.alt_entry`
         // helpers stay bare `__rt_*`, so they never match here.
+        /// Returns whether an assembly token names a dead-strip-local runtime helper.
         fn is_internal(tok: &str) -> bool {
             tok.starts_with("L__rt_")
         }
         // True when `s` is a bare label definition body (no whitespace, label
         // characters only, not purely numeric → not an assembler-local `N:`).
+        /// Returns whether a token can be a non-numeric assembly label definition.
         fn is_label_name(s: &str) -> bool {
             !s.is_empty()
                 && !s.bytes().all(|b| b.is_ascii_digit())
