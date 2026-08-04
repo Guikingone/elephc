@@ -168,6 +168,38 @@ fn collect_body_assigned_vars(body: &[Stmt], out: &mut Vec<String>) {
 /// direct overwrite (e.g. a `new Concrete()` store reverted to its conservative frame-slot type on
 /// exit) and a trailing `$name = <expr>` assignment (whose value the widened slot would otherwise
 /// mask). A later union over the reaching branches then sees the precise per-path type.
+/// Captures a branch's ENTRY environment when that branch cannot fall through.
+///
+/// `check_conditional_path_body` type-checks a clause body against the shared `env` and writes each
+/// assignment straight into it — the recorded `overwrites` are what the JOIN consumes, not what the
+/// body did to `env`. For a branch that ends in `return`/`throw`/`continue`/`break`, nothing it
+/// wrote can be observed after the `if`, so leaving those writes in `env` types the following code
+/// off a path that never reaches it:
+///
+/// ```php
+/// private static function createRequestFromFactory(array $query = [], array $request = [], …) {
+///     if (self::$requestFactory) {
+///         $request = (self::$requestFactory)(…);   // $request becomes a Request OBJECT
+///         if (!$request instanceof self) { throw new \LogicException(…); }
+///         return $request;                          // … and this path RETURNS
+///     }
+///     return new static($query, $request, …);       // yet $request read as Object, not array
+/// }
+/// ```
+///
+/// That is `Symfony\Component\HttpFoundation\Request::createRequestFromFactory`, reported as
+/// `parameter $request expects Array(Never), got Object("…\Request")` on a program PHP runs.
+/// Returning `Some(env.clone())` here, and restoring it once the body has been checked, keeps the
+/// branch's diagnostics while discarding its unreachable type facts. `None` — the fall-through
+/// case — costs nothing.
+fn diverging_branch_entry_env(
+    checker: &Checker,
+    body: &[Stmt],
+    env: &TypeEnv,
+) -> Option<TypeEnv> {
+    checker.body_cannot_fall_through(body).then(|| env.clone())
+}
+
 fn snapshot_branch_exit(
     env: &TypeEnv,
     overwrites: &BTreeMap<String, PhpType>,
@@ -542,6 +574,7 @@ impl Checker {
                         for alias in &guard.aliases {
                             env.insert(alias.clone(), guard.then_ty.clone());
                         }
+                        let diverging_entry_env = diverging_branch_entry_env(self, body, env);
                         let (body_errors, overwrites, final_assignment) = self
                             .check_conditional_path_body(
                             body,
@@ -549,6 +582,9 @@ impl Checker {
                             env,
                         );
                         errors.extend(body_errors);
+                        if let Some(entry_env) = diverging_entry_env {
+                            *env = entry_env;
+                        }
                         if !self.body_cannot_fall_through(body) {
                             if track_single_guard_convergence {
                                 if let Some(exit_ty) = final_assignment
@@ -602,6 +638,7 @@ impl Checker {
                             remember_pre_if_type(&mut saved_vars, var, env);
                             env.insert(var.clone(), then_ty.clone());
                         }
+                        let diverging_entry_env = diverging_branch_entry_env(self, body, env);
                         let (body_errors, overwrites, final_assignment) =
                             self.check_conditional_path_body(
                                 body,
@@ -609,6 +646,9 @@ impl Checker {
                                 env,
                             );
                         errors.extend(body_errors);
+                        if let Some(entry_env) = diverging_entry_env {
+                            *env = entry_env;
+                        }
                         if !self.body_cannot_fall_through(body) {
                             if record_branch_exits {
                                 branch_exit_snapshots.push(snapshot_branch_exit(
@@ -643,6 +683,7 @@ impl Checker {
 
                 // Final else body (if present) is checked with the accumulated complement.
                 if let Some(body) = else_body {
+                    let diverging_entry_env = diverging_branch_entry_env(self, body, env);
                     let (body_errors, overwrites, final_assignment) =
                         self.check_conditional_path_body(
                             body,
@@ -650,6 +691,9 @@ impl Checker {
                             env,
                         );
                     errors.extend(body_errors);
+                    if let Some(entry_env) = diverging_entry_env {
+                        *env = entry_env;
+                    }
                     if !self.body_cannot_fall_through(body) {
                         branch_exit_snapshots.push(snapshot_branch_exit(
                             env,

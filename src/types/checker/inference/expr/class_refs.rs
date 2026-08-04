@@ -16,15 +16,41 @@ use crate::types::{PhpType, TypeEnv};
 use super::super::super::Checker;
 
 impl Checker {
-    /// Validates `new static(...)` late-bound constructor targets by inferring the object type
-    /// for every CONCRETE class that is `base_class` or descends from it.
+    /// Validates `new static(...)` late-bound constructor targets against the CONCRETE classes that
+    /// are `base_class` or descend from it, accepting the call as soon as ONE of them can receive
+    /// it.
     ///
-    /// `static` is late static binding: it resolves at runtime to the concrete class the method
-    /// was *called* on, which can never be abstract. Abstract classes in the hierarchy are skipped
-    /// so a valid `new static()` written inside an abstract class is not flagged with a false
-    /// "cannot instantiate abstract class". When no concrete target exists (an abstract class with
-    /// no concrete subclass in the closed world), the argument expressions are still inferred once
-    /// so genuine errors inside them are not masked.
+    /// `static` is late static binding: it resolves at runtime to the concrete class the method was
+    /// *called* on, which can never be abstract. Abstract classes in the hierarchy are skipped so a
+    /// valid `new static()` written inside an abstract class is not flagged with a false "cannot
+    /// instantiate abstract class". When no concrete target exists (an abstract class with no
+    /// concrete subclass in the closed world), the argument expressions are still inferred once so
+    /// genuine errors inside them are not masked.
+    ///
+    /// Requiring EVERY descendant to accept the call rejects ordinary PHP. A child may declare any
+    /// constructor signature — PHP enforces no constructor covariance — so one subclass narrowing
+    /// its own constructor used to condemn the whole program:
+    ///
+    /// ```php
+    /// class Base {
+    ///     public function __construct(string $a = '', string $b = '', string $c = '') {}
+    ///     public static function build(string $a, string $b, string $c): Base {
+    ///         return new static($a, $b, $c);          // <- reported against Narrow, not Base
+    ///     }
+    /// }
+    /// class Narrow extends Base { public function __construct(public readonly int $n = 0) {} }
+    /// echo Base::build('x', 'y', 'z')->v;             // php: prints "xyz"
+    /// ```
+    ///
+    /// That is `Symfony\Component\HttpFoundation\Request::create()`'s seven-argument
+    /// `new static(...)` measured against `Console\Debug\CliRequest::__construct`, which takes one —
+    /// nothing ever calls `CliRequest::create()`. The binding a given call site produces is not
+    /// knowable here, so the only sound compile-time claim is the one this makes: reject when NO
+    /// runtime binding could accept the call.
+    ///
+    /// The cost is a diagnostic elephc used to give and PHP never did: `Child::make()` reaching an
+    /// inherited `new static()` that cannot satisfy `Child::__construct` is an `ArgumentCountError`
+    /// PHP raises at RUNTIME, and the program now compiles up to that point exactly as PHP does.
     pub(super) fn validate_late_bound_constructor_targets(
         &mut self,
         base_class: &str,
@@ -50,6 +76,12 @@ impl Checker {
             .cloned()
             .collect();
         class_names.sort();
+        // Check the class the author actually wrote the call against first, so when nothing in the
+        // hierarchy can accept it the reported message names the base rather than an arbitrary
+        // alphabetically-first descendant.
+        if let Some(base_index) = class_names.iter().position(|name| name == base_class) {
+            class_names.swap(0, base_index);
+        }
 
         if class_names.is_empty() {
             // No concrete runtime target exists yet (e.g. an abstract class with no concrete
@@ -61,11 +93,21 @@ impl Checker {
             return Ok(());
         }
 
+        let mut first_error = None;
         for class_name in class_names {
-            self.infer_new_object_type(&class_name, args, expr, env)?;
+            match self.infer_new_object_type(&class_name, args, expr, env) {
+                Ok(_) => return Ok(()),
+                Err(err) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                }
+            }
         }
 
-        Ok(())
+        // `class_names` was non-empty, so a failure here means every concrete binding rejected the
+        // call — an error no runtime dispatch can escape.
+        Err(first_error.expect("a non-empty target list either succeeds or records an error"))
     }
 
     /// Checks whether `class_name` is either `base_class` itself or a descendant of it

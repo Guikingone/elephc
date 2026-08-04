@@ -289,13 +289,42 @@ fn test_error_typed_interface_constant_implementation_must_be_compatible() {
     );
 }
 
-/// Verifies that `new static()` on a child with a required constructor parameter
-/// reports a missing argument error.
+/// Verifies that `new static(...)` is rejected only when NO concrete class in the hierarchy can
+/// receive the call, so a subclass narrowing its own constructor cannot condemn the base's factory.
+///
+/// PHP enforces no constructor covariance: a child may declare any signature it likes, and which
+/// one `static` binds to is a runtime fact. Validating every descendant rejected ordinary PHP —
+/// `Symfony\Component\HttpFoundation\Request::create()` passes seven arguments to `new static(...)`
+/// while `Console\Debug\CliRequest::__construct` takes one, and nothing ever calls
+/// `CliRequest::create()`. Five arguments here fit neither `Base` nor `Child`, so no binding can
+/// escape it and the diagnostic still stands.
 #[test]
-fn test_error_new_static_validates_child_constructor() {
+fn test_error_new_static_rejects_arity_no_concrete_target_accepts() {
     expect_error(
-        "<?php class Base { public static function make(): Base { return new static(); } } class Child extends Base { public function __construct(string $name) {} } echo Child::make();",
-        "Constructor 'Child::__construct' expects 1 arguments, got 0",
+        "<?php class Base { public static function make(): Base { return new static(1, 2, 3, 4, 5); } } class Child extends Base { public function __construct(string $name) {} } echo Base::make() instanceof Base ? 'y' : 'n';",
+        "expects 0 arguments, got 5",
+    );
+}
+
+/// The complement of the above, and the shape the descendant scan used to reject: the base accepts
+/// the call, one subclass narrows its constructor to something else entirely, and nothing routes
+/// that subclass through the inherited factory. `php -n` prints `xyz` and `7`.
+#[test]
+fn test_new_static_accepts_when_a_subclass_narrows_its_own_constructor() {
+    expect_ok(
+        "<?php class Base { public string $v = \"b\"; public function __construct(string $a = \"\", string $b = \"\", string $c = \"\") { $this->v = $a . $b . $c; } public static function build(string $a, string $b, string $c): Base { return new static($a, $b, $c); } } class Narrow extends Base { public function __construct(public readonly int $n = 0) {} } echo Base::build(\"x\", \"y\", \"z\")->v; echo (new Narrow(7))->n;",
+    );
+}
+
+/// A branch that ends in `return` must not leak the types it assigned into the code after the
+/// `if`: `$data` is reassigned to an object there, but the only path reaching the final statement
+/// still carries the declared `array`. Regression for
+/// `Symfony\Component\HttpFoundation\Request::createRequestFromFactory`, which reported
+/// `parameter $q expects Array(Mixed), got Object(...)` on a program `php -n` runs.
+#[test]
+fn test_diverging_branch_does_not_leak_its_types_past_the_if() {
+    expect_ok(
+        "<?php class R { public array $q; public function __construct(array $q = []) { $this->q = $q; } } class F { public static function build(array $data = [], ?R $seed = null): R { if (null !== $seed) { $data = $seed; if (!$data instanceof R) { throw new \\LogicException('bad'); } return $data; } return new R($data); } } echo count(F::build(['a', 'b'])->q);",
     );
 }
 
