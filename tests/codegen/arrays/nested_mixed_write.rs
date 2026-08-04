@@ -433,3 +433,44 @@ echo $d->total();
     );
     assert_eq!(out, "2");
 }
+
+/// Vivifying an element of a by-reference array parameter and then writing INTO that element must
+/// lower: the element slot is boxed `Mixed`, and the hash allocation has to carry the boxed tag.
+///
+/// Each half compiles on its own — `$result[$k] = []` alone, and a nested write through a
+/// by-reference parameter alone — so only their sequence under a guard reached
+/// `unsupported EIR backend feature: hash_new result PHP type Mixed`. Reduced from the `parse_str`
+/// prelude body (probes r1..r7), which is what `ErrorHandler\DebugClassLoader` needs.
+#[test]
+#[ignore = "OPEN DEFECT, reduced from 40 lines to 7 (probes r1..r7) and root-caused one layer \
+deeper than it looks. Today it fails to compile: `unsupported EIR backend feature: hash_new result \
+PHP type Mixed` (`hash_value_type_tag`, codegen/lower_inst/hashes.rs). Teaching that function to \
+answer the boxed tag for a `Mixed` slot MAKES IT COMPILE BUT PRINTS \"\" INSTEAD OF \"v\" — a \
+silently wrong answer, strictly worse than the loud refusal, so that one-line change was reverted. \
+The missing piece is the WRITEBACK: the value stored into the freshly vivified element never \
+reaches the caller through the by-reference boundary. Fix the writeback first, then the tag. Each \
+half compiles alone (`$r[$k] = []` by itself, and a nested write through a by-ref parameter by \
+itself), so only their sequence under a guard is affected. Blocks the `parse_str` prelude, hence \
+`ErrorHandler\\DebugClassLoader`."]
+fn test_vivified_by_ref_element_accepts_a_nested_write() {
+    let out = compile_and_run(
+        r#"<?php
+function fill(array &$result): void {
+    $result = [];
+    $base = 'b';
+    $sub = 'c';
+    if (!array_key_exists($base, $result)) {
+        $result[$base] = [];
+    }
+    if ($sub === '') {
+        $result[$base][] = 'v';
+    } else {
+        $result[$base][$sub] = 'v';
+    }
+}
+fill($o);
+echo $o['b']['c'];
+"#,
+    );
+    assert_eq!(out, "v");
+}
