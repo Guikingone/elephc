@@ -77,6 +77,26 @@ foreach ($queue as $value) {
 }
 echo "(removed " . count($removed) . ")\n";
 
+// The same works on a string array, whose elements are wider than a scalar slot, and the
+// replacement may change the element type: PHP just makes the array heterogeneous.
+$words = ["alpha", "beta", "gamma", "delta"];
+$cut = array_splice($words, 1, 2, ["BETA"]);
+echo "Spliced words: " . implode(", ", $words) . " (removed " . implode(", ", $cut) . ")\n";
+
+$mixed = [1, 2, 3];
+array_splice($mixed, 1, 1, ["two", 2.5]);
+echo "Promoted: " . implode(", ", $mixed) . "\n";
+
+// A by-reference parameter is the caller's storage, so a builtin that relocates the array
+// while prepending still reaches the original variable.
+function prepend_all(array &$target): void
+{
+    array_unshift($target, 9, 8, 7, 6, 5, 4, 3, 2, 1);
+}
+$counts = [100, 200];
+prepend_all($counts);
+echo "Unshifted: " . implode(",", $counts) . "\n";
+
 // unset() removes a key without renumbering: the array keeps its other keys (a hole)
 unset($squares[1]);
 echo "After unset(squares[1]): ";

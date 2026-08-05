@@ -366,6 +366,8 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_merge` | Concatenate two indexed arrays into a new array |
 | `__rt_array_merge_into` | Append all elements from source array into dest array (in-place) |
 | `__rt_array_slice` / `__rt_array_splice` | Extract slices and remove splice windows from indexed arrays |
+| `__rt_array_splice_str` | The `array_splice()` removal for indexed **string** arrays, whose payload slots are 16-byte `{pointer, length}` pairs rather than the 8-byte slots the other splice helpers move. The removed strings are MOVED into the result array: an indexed string array owns its persisted bytes exclusively, so retaining them would double free and copying them would leak |
+| `__rt_array_splice_insert` / `_refcounted` / `_boxed` / `_unboxed` / `_str` | Write `array_splice()`'s `$replacement` into the gap the removal opened, growing the destination first. The five variants differ in what one replacement slot becomes: copied verbatim, retained, wrapped in a fresh boxed `Mixed` cell, read back out of one as a plain integer, or duplicated with `__rt_str_persist` into a 16-byte string slot |
 | `__rt_array_unique` | Remove duplicate values |
 | `__rt_array_diff` / `__rt_array_intersect` | Set difference/intersection by value |
 | `__rt_array_diff_key` / `__rt_array_intersect_key` | Set operations by key |

@@ -52,6 +52,7 @@ mod ownership;
 mod pointers;
 mod predicates;
 mod property_values;
+mod receiver_place;
 mod runtime_calls;
 mod scoped_constants;
 mod static_locals;

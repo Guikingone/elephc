@@ -8,8 +8,9 @@
 //!   rewritten call re-enters the ordinary local-variable by-reference lowering.
 //!
 //! Key details:
-//! - Only the local-variable form of a by-reference builtin argument reaches the backend's
-//!   COW write-back (`source_load_local_slot` in `crate::codegen::lower_inst::builtins::arrays`).
+//! - Only a receiver the backend can resolve to a slot reaches its COW write-back
+//!   (`ReceiverPlace` in `crate::codegen::lower_inst::receiver_place`), and a plain local
+//!   variable is the only argument shape that produces one.
 //!   A property or element operand is loaded, `acquire`d, handed to the runtime, and released,
 //!   so `__rt_array_ensure_unique` separates a private copy that nothing ever stores back.
 //!   That is a silent wrong answer: `usort($obj->items, ...)` used to leave `$obj->items`

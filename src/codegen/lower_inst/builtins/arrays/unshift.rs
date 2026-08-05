@@ -12,6 +12,10 @@
 //!   single-slot runtime helper reproduces PHP's `[v0, v1, …, old…]` result.
 //! - Grows the payload before every prepend: `__rt_array_unshift` shifts slots and bumps the
 //!   length without a capacity check, so a full array would write past its allocation.
+//! - The possibly-relocated receiver is published back through `ReceiverPlace`, so a by-reference
+//!   PARAMETER (read with `load_ref_cell`) reaches the caller's storage too. Without it the
+//!   caller kept a pointer into the buffer `__rt_array_grow` had already freed, and a receiver
+//!   with no writable slot at all is now refused instead of silently dropped.
 //! - Returns the new indexed-array length as PHP `int`.
 //! - Supports integer and boolean indexed payloads, matching the existing 8-byte helper.
 
@@ -22,6 +26,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
 use crate::types::PhpType;
 
+use super::super::super::receiver_place::ReceiverPlace;
 use super::super::super::{expect_operand, store_if_result};
 
 /// Lowers `array_unshift()` by ensuring uniqueness, prepending every value, and returning count.
@@ -44,7 +49,11 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
     }
     require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
     if inst.operands.len() > 1 {
-        let source_local = super::source_load_local_slot(ctx, array)?;
+        let receiver = ReceiverPlace::resolve(ctx, array)?;
+        // Every prepend can reach `__rt_array_grow`, and a grown array lives somewhere else, so
+        // a receiver with nowhere to publish the new pointer must be refused rather than left
+        // pointing at freed storage.
+        receiver.require_writable("array_unshift")?;
         ensure_unique_array_unshift_source(ctx, array)?;
         // Reverse source order: prepending v_last first and v_first last leaves the values in
         // PHP's `[v_first, …, v_last, old…]` layout. Growth is re-checked per element because
@@ -57,9 +66,7 @@ pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruct
                 Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value)?,
             }
         }
-        if let Some(slot) = source_local {
-            ctx.store_value_to_local(slot, array)?;
-        }
+        receiver.store_back_value(ctx, array)?;
     }
     // The helper already returns the running count, but the local-slot write-back above may
     // clobber the result register, and the value-less form never calls the helper at all.

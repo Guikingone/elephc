@@ -324,6 +324,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_splice_insert_refcounted(emitter);
     arrays::emit_array_splice_insert_boxed(emitter);
     arrays::emit_array_splice_insert_unboxed(emitter);
+    arrays::emit_array_splice_str(emitter);
+    arrays::emit_array_splice_insert_str(emitter);
     arrays::emit_array_diff_key(emitter);
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_array_to_hash(emitter);

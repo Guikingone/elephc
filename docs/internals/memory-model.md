@@ -350,6 +350,8 @@ Header (24 bytes) │ ptr[0] (8B) │ len[0] (8B) │ ptr[1] (8B) │ len[1] (8B
 
 Access: `base + 24 + (index × 16)` for pointer, `base + 24 + (index × 16) + 8` for length
 
+The wider slot is why a runtime helper that walks an indexed array cannot assume 8-byte payloads. `array_splice()` used to do exactly that on a string receiver, so the removed-elements array came back holding raw heap pointers surfaced as PHP integers; string arrays now go through the dedicated `__rt_array_splice_str` / `__rt_array_splice_insert_str` pair. A string array also owns its payloads exclusively — a copy-on-write split re-persists every slot and a deep free releases every slot — so moving a slot between two string arrays transfers ownership with it, while inserting one duplicates it with `__rt_str_persist`.
+
 ### Array growth
 
 When `array_push` finds that `length >= capacity`, the array grows automatically:
@@ -371,6 +373,8 @@ Indexed arrays and associative arrays now follow **shared-until-modified** seman
 4. If the refcount is greater than 1, the runtime clones the container structure, retains nested heap-backed children (or re-persists immutable strings/keys), decrements the mutator's old owner slot, rewrites the mutating owner to the clone, and only then performs the write
 
 This is what lets PHP-style code such as `$b = $a; $b[0] = 9;` leave `$a` unchanged without requiring deep copies on every assignment. Nested arrays and hashes remain shallow-shared until their own first mutation.
+
+Because both the split in step 4 and any growth relocate the container, a mutating builtin has to publish the new pointer back into the place its receiver was READ from. A plain local is its own frame slot; a **by-reference parameter** is read through a reference cell and must be republished through that cell. Missing that write-back is not a leak but a wrong answer: the caller keeps the pre-split container (so the mutation is invisible) or, after a growth, a pointer into storage the reallocation already freed.
 
 ## Hash table layout (associative arrays)
 

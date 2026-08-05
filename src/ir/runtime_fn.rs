@@ -572,6 +572,14 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayKeys | RuntimeFnId::ArraySlice => {
                 PhpType::Array(Box::new(PhpType::Mixed))
             }
+            // The removed-elements array copies the receiver's payload slots, so its element
+            // layout is the receiver's. A type-changing `$replacement` promotes that receiver to
+            // `array<mixed>` during lowering, and the checker's pre-promotion `array<int>` no
+            // longer describes what the helper produces.
+            RuntimeFnId::ArraySplice => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(PhpType::Array(element)) => PhpType::Array(element),
+                _ => declared.clone(),
+            },
             RuntimeFnId::ArrayValues => match arg_types.first().map(PhpType::codegen_repr) {
                 Some(PhpType::Array(element)) => PhpType::Array(element),
                 Some(PhpType::AssocArray { value, .. }) => PhpType::Array(value),
@@ -631,11 +639,11 @@ impl RuntimeFnId {
     /// helper really produced boxed `Mixed` cells, and every later element read would misinterpret
     /// them.
     ///
-    /// `array_slice()` is the only such target today, because it is the only copying array helper
-    /// with a boxed-`Mixed` lowering at all; every other runtime function accepts the checked type
-    /// unchanged. The accepted shapes mirror `require_array_slice_result_type` in the backend: the
-    /// result element layout must equal the source element layout, or be the `Mixed` widening the
-    /// lowering emits explicitly. A non-array checked type is the key-preserving hash form, whose
+    /// `array_slice()` and `array_splice()` are the only such targets today, because they are the
+    /// only copying array helpers with a boxed-`Mixed` lowering; every other runtime function
+    /// accepts the checked type unchanged. The accepted shapes mirror
+    /// `require_array_slice_result_type` in the backend: the result element layout must equal the
+    /// source element layout, or be the `Mixed` widening the lowering emits explicitly. A non-array checked type is the key-preserving hash form, whose
     /// values carry the source array's runtime value_type header rather than a copied static
     /// element layout, and a source the lowering cannot slice at all is left to the backend so it
     /// reports its own diagnostic. Rejecting here makes the caller fall back to
@@ -647,7 +655,7 @@ impl RuntimeFnId {
     ) -> bool {
         use crate::types::PhpType;
         match self {
-            RuntimeFnId::ArraySlice => {
+            RuntimeFnId::ArraySlice | RuntimeFnId::ArraySplice => {
                 let PhpType::Array(result_element) = checked.codegen_repr() else {
                     return true;
                 };

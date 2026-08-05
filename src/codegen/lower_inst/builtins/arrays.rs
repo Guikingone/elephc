@@ -23,6 +23,7 @@ use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 use super::super::super::context::FunctionContext;
+use super::super::receiver_place::ReceiverPlace;
 use super::super::callables::runtime_string_descriptor_cases;
 use super::super::{expect_operand, resolve_int_operand_to_result, store_if_result};
 
@@ -1466,7 +1467,7 @@ pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let replacement =
         SpliceReplacement::resolve(ctx, inst.operands.get(3).copied(), &elem_ty)?;
     let receiver_ty = ctx.value_php_type(array)?;
-    let receiver = SpliceReceiverPlace::resolve(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_array_pop_source(ctx, array)?;
     receiver.store_back(ctx, array, &receiver_ty)?;
     lower_array_splice_call(ctx, array, offset, length, &elem_ty)?;
@@ -1509,7 +1510,16 @@ enum SpliceReplacement {
     /// An indexed array of boxed Mixed cells read back as plain integers before insertion.
     UnboxedArray(ValueId),
     /// A single scalar wrapped in a one-element array before the insertion.
-    Scalar(ValueId),
+    ///
+    /// `scalar_ty` selects the synthesized array's slot width (16 bytes for a string
+    /// pointer/length pair, 8 for every other scalar). `boxed_tag` is `Some` when the receiver
+    /// stores boxed Mixed cells, in which case that one-element array goes to the boxing insert
+    /// helper with the scalar's runtime value_type tag.
+    Scalar {
+        value: ValueId,
+        scalar_ty: PhpType,
+        boxed_tag: Option<u8>,
+    },
 }
 
 impl SpliceReplacement {
@@ -1562,10 +1572,27 @@ impl SpliceReplacement {
             && splice_insert_slot_is_supported(elem_ty)
             && !elem_ty.is_refcounted()
         {
-            return Ok(Self::Scalar(replacement));
+            return Ok(Self::Scalar {
+                value: replacement,
+                scalar_ty: replacement_ty,
+                boxed_tag: None,
+            });
+        }
+        // A bare scalar into a heterogeneous receiver: PHP casts it to a one-element array, and
+        // that element has to be boxed exactly like an array replacement's elements are.
+        if elem_ty == &PhpType::Mixed && splice_boxable_scalar_slot(&replacement_ty) {
+            let tag = runtime_value_tag("array_splice", &replacement_ty)?;
+            return Ok(Self::Scalar {
+                value: replacement,
+                scalar_ty: replacement_ty,
+                boxed_tag: Some(tag),
+            });
         }
         Err(CodegenIrError::unsupported(format!(
-            "array_splice replacement PHP type {:?} for indexed-array element PHP type {:?}",
+            "array_splice replacement PHP type {:?} for indexed-array element PHP type {:?}. \
+             PHP would make the receiver heterogeneous, which needs an `array<mixed>` receiver \
+             slot; a by-reference parameter, a `&$x` binding, and an object/static property \
+             receiver all share their storage with a slot this call cannot retype",
             replacement_ty, elem_ty
         )))
     }
@@ -1577,7 +1604,16 @@ impl SpliceReplacement {
 
     /// Reports whether the helper receives a one-element array this lowering allocated.
     fn owns_temporary_array(&self) -> bool {
-        matches!(self, Self::Scalar(_))
+        matches!(self, Self::Scalar { .. })
+    }
+
+    /// Returns the runtime value_type tag the boxing insert helper reads, when boxing applies.
+    fn boxing_tag(&self) -> Option<u8> {
+        match self {
+            Self::BoxedArray(_, tag) => Some(*tag),
+            Self::Scalar { boxed_tag, .. } => *boxed_tag,
+            _ => None,
+        }
     }
 }
 
@@ -1596,13 +1632,13 @@ fn splice_boxable_scalar_slot(elem_ty: &PhpType) -> bool {
 
 /// Reports whether the splice insert helpers can move this element type's payload slots.
 ///
-/// They copy 8-byte slots, which covers every scalar and refcounted element representation
-/// except `Str`: indexed string arrays use wider slots, so their payloads must not be moved
-/// eight bytes at a time.
+/// Every scalar and refcounted element representation qualifies. `Str` reaches a dedicated
+/// helper rather than the shared 8-byte one, because indexed string arrays store 16-byte
+/// `{pointer, length}` slots that must not be moved eight bytes at a time.
 fn splice_insert_slot_is_supported(elem_ty: &PhpType) -> bool {
     matches!(
         elem_ty,
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Callable
+        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Str | PhpType::Callable
     ) || elem_ty.is_refcounted()
 }
 
@@ -1611,11 +1647,14 @@ fn array_splice_insert_runtime_helper(
     replacement: &SpliceReplacement,
     elem_ty: &PhpType,
 ) -> &'static str {
-    if matches!(replacement, SpliceReplacement::BoxedArray(_, _)) {
+    if replacement.boxing_tag().is_some() {
         return "__rt_array_splice_insert_boxed";
     }
     if matches!(replacement, SpliceReplacement::UnboxedArray(_)) {
         return "__rt_array_splice_insert_unboxed";
+    }
+    if elem_ty.codegen_repr() == PhpType::Str {
+        return "__rt_array_splice_insert_str";
     }
     if elem_ty.is_refcounted() {
         "__rt_array_splice_insert_refcounted"
@@ -1626,11 +1665,11 @@ fn array_splice_insert_runtime_helper(
 
 /// Materializes the extra value_type-tag argument the boxing insert helper reads.
 fn emit_splice_boxing_tag(ctx: &mut FunctionContext<'_>, replacement: &SpliceReplacement) {
-    let SpliceReplacement::BoxedArray(_, tag) = replacement else {
+    let Some(tag) = replacement.boxing_tag() else {
         return;
     };
     let reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
-    abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(*tag));
+    abi::emit_load_int_immediate(ctx.emitter, reg, i64::from(tag));
 }
 
 /// The registers `__rt_array_splice*` leaves the removed array and the insertion index in.
@@ -1662,7 +1701,7 @@ fn splice_insert_arg_regs(
 fn emit_splice_replacement_insert(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
-    receiver: SpliceReceiverPlace,
+    receiver: ReceiverPlace,
     receiver_ty: &PhpType,
     replacement: &SpliceReplacement,
     elem_ty: &PhpType,
@@ -1670,7 +1709,7 @@ fn emit_splice_replacement_insert(
     if !replacement.inserts_values() {
         return Ok(());
     }
-    receiver.require_writable()?;
+    receiver.require_writable("array_splice replacement")?;
     let (removed_reg, at_reg) = splice_result_regs(ctx);
     let (dst_reg, index_reg, replacement_reg) = splice_insert_arg_regs(ctx);
     // Temporary layout after both pushes: [0] = replacement array, [16] = removed array,
@@ -1701,9 +1740,9 @@ fn emit_splice_replacement_insert(
 
 /// Materializes the replacement's indexed-array pointer into the integer result register.
 ///
-/// An array argument is loaded directly. A bare scalar is boxed into a fresh one-element array
-/// whose payload slot holds the value; the helper retains what it inserts, so the caller frees
-/// that temporary shell afterwards without touching the value itself.
+/// An array argument is loaded directly. A bare scalar is wrapped in a fresh one-element array
+/// whose payload slot holds the value; the insert helpers persist or retain what they insert, so
+/// the caller frees that temporary shell afterwards without touching the value itself.
 fn emit_splice_replacement_pointer(
     ctx: &mut FunctionContext<'_>,
     replacement: &SpliceReplacement,
@@ -1720,21 +1759,16 @@ fn emit_splice_replacement_pointer(
             ctx.load_value_to_reg(*value, result_reg)?;
             Ok(())
         }
-        SpliceReplacement::Scalar(value) => {
+        SpliceReplacement::Scalar {
+            value, scalar_ty, ..
+        } if scalar_ty.codegen_repr() == PhpType::Str => {
+            emit_splice_one_element_string_array(ctx, *value)
+        }
+        SpliceReplacement::Scalar { value, .. } => {
             let scratch = abi::secondary_scratch_reg(ctx.emitter);
             ctx.load_value_to_reg(*value, scratch)?;
             abi::emit_push_reg(ctx.emitter, scratch);
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    abi::emit_load_int_immediate(ctx.emitter, "x0", 1);
-                    abi::emit_load_int_immediate(ctx.emitter, "x1", 8);
-                }
-                Arch::X86_64 => {
-                    abi::emit_load_int_immediate(ctx.emitter, "rdi", 1);
-                    abi::emit_load_int_immediate(ctx.emitter, "rsi", 8);
-                }
-            }
-            abi::emit_call_label(ctx.emitter, "__rt_array_new");
+            emit_splice_one_element_array_new(ctx, 8);
             abi::emit_pop_reg(ctx.emitter, scratch);
             match ctx.emitter.target.arch {
                 Arch::AArch64 => {
@@ -1751,6 +1785,50 @@ fn emit_splice_replacement_pointer(
             Ok(())
         }
     }
+}
+
+/// Allocates the one-element replacement shell with the requested payload slot width.
+fn emit_splice_one_element_array_new(ctx: &mut FunctionContext<'_>, slot_size: i64) {
+    let count_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    let size_reg = abi::int_arg_reg_name(ctx.emitter.target, 1);
+    abi::emit_load_int_immediate(ctx.emitter, count_reg, 1);
+    abi::emit_load_int_immediate(ctx.emitter, size_reg, slot_size);
+    abi::emit_call_label(ctx.emitter, "__rt_array_new");
+}
+
+/// Wraps a bare string replacement in a one-element 16-byte-slot indexed array.
+///
+/// The shell holds the caller's borrowed pointer/length pair: `__rt_array_splice_insert_str`
+/// duplicates it with `__rt_str_persist` and `__rt_array_splice_insert_boxed` persists it into a
+/// Mixed cell, so freeing the shell afterwards never touches the string bytes.
+fn emit_splice_one_element_string_array(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    // The pointer/length pair only both land in the canonical string result registers through
+    // the result loader; a single-register load leaves the length slot holding stale bytes.
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    emit_splice_one_element_array_new(ctx, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldp x10, x11, [sp], #16");                 // pop the borrowed string pointer/length pair after the constructor
+            ctx.emitter.instruction("stp x10, x11, [x0, #24]");                 // store the borrowed pair into the one-element string array
+            ctx.emitter.instruction("mov x10, #1");                             // the synthesized replacement array holds exactly one element
+            ctx.emitter.instruction("str x10, [x0]");                           // publish the one-element logical length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // reload the borrowed string pointer after the constructor
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");            // reload the borrowed string length after the constructor
+            ctx.emitter.instruction("add rsp, 16");                             // release the borrowed string pointer/length staging slot
+            ctx.emitter.instruction("mov QWORD PTR [rax + 24], r10");           // store the borrowed string pointer into the one-element string array
+            ctx.emitter.instruction("mov QWORD PTR [rax + 32], r11");           // store the borrowed string length into the one-element string array
+            ctx.emitter.instruction("mov r10, 1");                              // the synthesized replacement array holds exactly one element
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // publish the one-element logical length
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `array_values()` through the dedicated values-array builtin emitter.
@@ -1892,11 +1970,9 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array = expect_operand(inst, 0)?;
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_array_pop_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_pop_aarch64(ctx, array, &elem_ty)?,
         Arch::X86_64 => lower_array_pop_x86_64(ctx, array, &elem_ty)?,
@@ -2601,16 +2677,12 @@ pub(crate) fn lower_array_multisort(
     eight_byte_indexed_array_element_type(ctx.value_php_type(arr2)?, "array_multisort")?;
 
     // -- copy-on-write split both by-ref arrays and publish the new pointers to their locals --
-    let slot1 = source_load_local_slot(ctx, arr1)?;
+    let receiver1 = ReceiverPlace::resolve(ctx, arr1)?;
     ensure_unique_sort_source(ctx, arr1)?;
-    if let Some(slot) = slot1 {
-        ctx.store_value_to_local(slot, arr1)?;
-    }
-    let slot2 = source_load_local_slot(ctx, arr2)?;
+    receiver1.store_back_value(ctx, arr1)?;
+    let receiver2 = ReceiverPlace::resolve(ctx, arr2)?;
     ensure_unique_sort_source(ctx, arr2)?;
-    if let Some(slot) = slot2 {
-        ctx.store_value_to_local(slot, arr2)?;
-    }
+    receiver2.store_back_value(ctx, arr2)?;
 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -2906,11 +2978,9 @@ fn lower_indexed_array_sort(
     let array = expect_operand(inst, 0)?;
     let elem_ty =
         indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -2938,11 +3008,9 @@ fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &Instruction
     super::ensure_arg_count(inst, "shuffle", 1)?;
     let array = expect_operand(inst, 0)?;
     eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -2972,11 +3040,9 @@ fn lower_user_sort_static_callback(
     let elem_ty = user_sort_element_type(ctx.value_php_type(array)?, name)?;
     let sort_helper = user_sort_runtime_label(&elem_ty);
     let callback_arg_types = [elem_ty.clone(), elem_ty];
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     let callback_ty = ctx.value_php_type(callback)?.codegen_repr();
     let callback_owner = format!("{} callback", name);
     if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback) {
@@ -3251,11 +3317,9 @@ fn lower_hash_link_sort(
     helper: &str,
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_hash_sort_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
@@ -6707,7 +6771,12 @@ fn array_slice_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
 
 /// Returns the helper that matches the spliced element ownership representation.
 fn array_splice_runtime_helper(elem_ty: &PhpType) -> &'static str {
-    if elem_ty.is_refcounted() {
+    if elem_ty.codegen_repr() == PhpType::Str {
+        // Indexed string arrays store 16-byte `{pointer, length}` slots; the shared helpers copy
+        // and compact 8 bytes at a time, which returned raw pointers as PHP integers and left
+        // the receiver half-shifted.
+        "__rt_array_splice_str"
+    } else if elem_ty.is_refcounted() {
         "__rt_array_splice_refcounted"
     } else {
         "__rt_array_splice"
@@ -6952,105 +7021,6 @@ fn emit_array_pop_value_x86_64(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType)
 fn emit_array_pop_null(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
     crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Void);
-}
-/// Where a mutating array builtin's by-reference receiver has to be written back.
-///
-/// `array_splice()` with a `$replacement` can grow its receiver, and growth relocates the
-/// storage, so the new pointer must reach the place the value was READ from. A plain local is
-/// its own frame slot; a by-reference parameter is read with `load_ref_cell` and has to be
-/// republished through that slot's ref-cell representation, or the caller keeps pointing at
-/// storage `__rt_array_grow` already freed.
-#[derive(Clone, Copy)]
-enum SpliceReceiverPlace {
-    /// The receiver was not loaded from a slot this lowering can write back to.
-    Opaque,
-    /// A plain local frame slot.
-    Local(LocalSlotId),
-    /// A slot whose value is reached through its ref-cell representation.
-    RefCell(LocalSlotId),
-}
-
-impl SpliceReceiverPlace {
-    /// Resolves the slot a receiver value was loaded from, if any.
-    fn resolve(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Self> {
-        let Some(value_ref) = ctx.function.value(value) else {
-            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-        };
-        let ValueDef::Instruction { inst, .. } = value_ref.def else {
-            return Ok(Self::Opaque);
-        };
-        let Some(inst_ref) = ctx.function.instruction(inst) else {
-            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-        };
-        let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
-            return Ok(Self::Opaque);
-        };
-        match inst_ref.op {
-            Op::LoadLocal => Ok(Self::Local(slot)),
-            Op::LoadRefCell => Ok(Self::RefCell(slot)),
-            _ => Ok(Self::Opaque),
-        }
-    }
-
-    /// Rejects a receiver this lowering could not resolve to a writable slot.
-    ///
-    /// Only calls that RELOCATE the receiver need this: the removal alone mutates the array in
-    /// place, so the three-argument form is correct even for a receiver whose place is opaque.
-    /// An insertion can grow the payload, and a grown array lives somewhere else, so a receiver
-    /// with nowhere to publish the new pointer must be refused instead of silently dropping the
-    /// mutation.
-    fn require_writable(&self) -> Result<()> {
-        match self {
-            Self::Opaque => Err(CodegenIrError::unsupported(
-                "array_splice replacement for a by-reference receiver that is not a local \
-                 variable slot"
-                    .to_string(),
-            )),
-            _ => Ok(()),
-        }
-    }
-
-    /// Publishes the receiver's current pointer back into the place it was read from.
-    fn store_back(
-        &self,
-        ctx: &mut FunctionContext<'_>,
-        value: ValueId,
-        value_php_type: &PhpType,
-    ) -> Result<()> {
-        match self {
-            Self::Opaque => Ok(()),
-            Self::Local(slot) => ctx.store_value_to_local(*slot, value),
-            Self::RefCell(slot) => crate::codegen::lower_inst::store_value_through_ref_cell_slot(
-                ctx,
-                *slot,
-                value,
-                value_php_type,
-            ),
-        }
-    }
-}
-
-
-/// Returns the local slot loaded by an `array_pop()` argument when it came from `load_local`.
-fn source_load_local_slot(
-    ctx: &FunctionContext<'_>,
-    value: ValueId,
-) -> Result<Option<LocalSlotId>> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(None);
-    };
-    let Some(inst_ref) = ctx.function.instruction(inst) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-    };
-    if inst_ref.op == Op::LoadLocal {
-        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
-            return Ok(Some(slot));
-        }
-    }
-    Ok(None)
 }
 
 /// Describes which indexed-array `array_search()` lowering path applies.

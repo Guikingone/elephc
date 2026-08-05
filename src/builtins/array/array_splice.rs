@@ -28,8 +28,9 @@ builtin! {
     ],
     returns: Mixed,
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArraySplice,
+    semantics: crate::builtins::semantics::with_argument_lowering(
+        crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::ArraySplice),
+        crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice,
     ),
     summary: "Removes a portion of the array and replaces it with something else.",
     php_manual: "https://www.php.net/manual/en/function.array-splice.php",

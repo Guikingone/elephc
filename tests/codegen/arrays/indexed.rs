@@ -23,6 +23,8 @@ mod slice_bounds;
 mod slice_stack_range;
 #[path = "indexed/splice_replacement.rs"]
 mod splice_replacement;
+#[path = "indexed/splice_strings.rs"]
+mod splice_strings;
 #[path = "indexed/set_ops.rs"]
 mod set_ops;
 #[path = "indexed/shape_transforms.rs"]

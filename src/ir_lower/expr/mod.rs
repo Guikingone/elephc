@@ -5669,6 +5669,11 @@ fn lower_builtin_call_args(
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice
+            if !args.iter().any(is_spread_arg) =>
+        {
+            lower_array_splice_args(ctx, sig, args)
+        }
         _ if !crate::types::call_args::has_named_args(args)
             && !args.iter().any(is_spread_arg) =>
         {
@@ -5676,6 +5681,133 @@ fn lower_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Lowers `array_splice()` operands, promoting a typed receiver whose `$replacement` cannot fit.
+///
+/// PHP has no per-array element type, so `$a = [1, 2, 3]; array_splice($a, 1, 1, ["x"])` simply
+/// leaves `[1, "x", 3]`. elephc types an indexed array at its payload slot, so the promotion has
+/// to reach the receiver LOCAL: `__rt_array_to_mixed` re-boxes every live payload and the slot's
+/// storage type widens to `array<mixed>`, which is the representation the boxed insert helper
+/// writes into. Without it the backend would have to store a string pointer/length pair in an
+/// 8-byte integer slot, which is why the untyped case used to be an explicit `unsupported`
+/// diagnostic instead of a wrong answer.
+fn lower_array_splice_args(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+) -> Vec<crate::ir::ValueId> {
+    let mut operands = if crate::types::call_args::has_named_args(args) {
+        lower_args_with_signature(ctx, sig, args)
+    } else {
+        lower_positional_builtin_args_with_signature(ctx, sig, args)
+    };
+    widen_array_splice_receiver_for_replacement(ctx, sig, args, &mut operands);
+    operands
+}
+
+/// Promotes an `array_splice()` receiver local to `array<mixed>` when `$replacement` retypes it.
+///
+/// Runs after the operands are lowered because the decision needs both the receiver's slot
+/// element type and the replacement's EIR type, and the conversion itself re-reads the receiver
+/// local so it observes any mutation the later arguments performed.
+fn widen_array_splice_receiver_for_replacement(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: Option<&FunctionSig>,
+    args: &[Expr],
+    operands: &mut [crate::ir::ValueId],
+) {
+    let Some(sig) = sig else {
+        return;
+    };
+    let Some(replacement) = operands.get(3).copied() else {
+        return;
+    };
+    let Some((name, span)) = array_splice_receiver_local(ctx, sig, args) else {
+        return;
+    };
+    let PhpType::Array(elem_ty) = ctx.local_type(&name).codegen_repr() else {
+        return;
+    };
+    let elem_ty = elem_ty.codegen_repr();
+    if elem_ty == PhpType::Mixed {
+        return;
+    }
+    let replacement_ty = ctx.builder.value_php_type(replacement).codegen_repr();
+    if array_splice_replacement_fits_receiver(&elem_ty, &replacement_ty) {
+        return;
+    }
+    let array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    let local = ctx.load_local(&name, Some(span));
+    let converted = ctx.emit_value(
+        Op::ArrayToMixed,
+        vec![local.value],
+        None,
+        array_ty.clone(),
+        Op::ArrayToMixed.default_effects(),
+        Some(span),
+    );
+    ctx.store_mutated_local(&name, converted, array_ty, Some(span));
+    operands[0] = ctx.load_local(&name, Some(span)).value;
+}
+
+/// Returns the plain local variable bound to `array_splice()`'s by-reference receiver.
+///
+/// Two receiver shapes are deliberately excluded even though they name a local. A by-reference
+/// parameter and a `&$x` binding share storage with a caller slot this function cannot retype,
+/// and the hidden `__eir_place` temporary of the property/element rewrite is written back into a
+/// place whose declared element type is equally out of reach. Widening either would publish
+/// boxed `Mixed` cells through a slot still described as `array<int>`, so both keep the
+/// backend's explicit diagnostic instead.
+fn array_splice_receiver_local(
+    ctx: &LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Option<(String, Span)> {
+    let receiver = args.iter().enumerate().find_map(|(index, arg)| {
+        let (param_index, place) = match &arg.kind {
+            ExprKind::NamedArg { name, value } => (
+                sig.params.iter().position(|(param, _)| param == name)?,
+                value.as_ref(),
+            ),
+            _ => (index, arg),
+        };
+        (param_index == 0).then_some(place)
+    })?;
+    let ExprKind::Variable(name) = &receiver.kind else {
+        return None;
+    };
+    if !ctx.has_local_slot(name) || ctx.is_ref_bound_local(name) {
+        return None;
+    }
+    if name.starts_with("__eir_place") {
+        return None;
+    }
+    Some((name.clone(), receiver.span))
+}
+
+/// Reports whether a `$replacement` can be written into the receiver's existing payload slots.
+///
+/// Mirrors the shapes the backend's `SpliceReplacement` classifier accepts, so a call this
+/// predicate passes never reaches the `unsupported` arm: an omitted/null/empty replacement
+/// inserts nothing, an array of the receiver's own element type is copied verbatim, an array of
+/// boxed `Mixed` cells is read back as plain integers for an `int`/`bool` receiver (the shape
+/// `[$x + 1]` produces), and a bare scalar of the element type becomes a one-element insertion.
+fn array_splice_replacement_fits_receiver(elem_ty: &PhpType, replacement_ty: &PhpType) -> bool {
+    if matches!(replacement_ty, PhpType::Void | PhpType::Never) {
+        return true;
+    }
+    if let PhpType::Array(inner) = replacement_ty {
+        let inner = inner.codegen_repr();
+        if matches!(inner, PhpType::Void | PhpType::Never) {
+            return true;
+        }
+        if &inner == elem_ty {
+            return true;
+        }
+        return inner == PhpType::Mixed && matches!(elem_ty, PhpType::Int | PhpType::Bool);
+    }
+    replacement_ty == elem_ty
 }
 
 /// Lowers plain positional builtin operands without materializing omitted defaults or packing tails.

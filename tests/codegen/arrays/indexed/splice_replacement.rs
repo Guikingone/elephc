@@ -236,3 +236,102 @@ for ($i = 0; $i < 3; $i++) {
         out.stderr
     );
 }
+
+/// Verifies a `$replacement` whose element type differs from the receiver's promotes the
+/// receiver to a heterogeneous array, exactly as PHP does.
+///
+/// PHP has no per-array element type, so `$a = [1,2,3]; array_splice($a, 1, 1, ["x"])` simply
+/// leaves `[1, "x", 3]`. elephc types an indexed array at its payload slot, so the promotion has
+/// to reach the receiver LOCAL before the call: the slot widens to `array<mixed>` and
+/// `__rt_array_to_mixed` re-boxes the live payloads. Every one of these used to be a hard
+/// `unsupported EIR backend feature: array_splice replacement PHP type …` compile error.
+#[test]
+fn test_array_splice_type_changing_replacement_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1,2,3,4,5]; $r1 = array_splice($a, 1, 2, ["x","y","z"]); echo implode(",",$a), "|", implode(",",$r1), "\n";
+$b = [1,2,3]; $r2 = array_splice($b, 1, 1, "solo"); echo implode(",",$b), "|", implode(",",$r2), "\n";
+$c = [1,2,3]; $r3 = array_splice($c, 1, 0, [7.5]); echo implode(",",$c), "|", count($r3), "\n";
+$d = [1,2,3]; $r4 = array_splice($d, 1, 1, [true]); echo implode(",",$d), "|", implode(",",$r4), "\n";
+$e = ["a","b","c"]; $r5 = array_splice($e, 1, 1, [7]); echo implode(",",$e), "|", implode(",",$r5), "\n";
+$f = [1.5,2.5,3.5]; $r6 = array_splice($f, 1, 1, ["mid"]); echo implode(",",$f), "|", implode(",",$r6), "\n";
+$g = [1,2,3]; $r7 = array_splice($g, 1, 1, 4.5); echo implode(",",$g), "|", implode(",",$r7), "\n";
+$h = ["a","b","c"]; $r8 = array_splice($h, 1, 1, 42); echo implode(",",$h), "|", implode(",",$r8), "\n";
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"1,x,y,z,4,5|2,3
+1,solo,3|2
+1,7.5,2,3|0
+1,1,3|2
+a,7,c|b
+1.5,mid,3.5|2.5
+1,4.5,3|2
+a,42,c|b
+"#
+    );
+}
+
+/// Verifies the promoted receiver still reads back as a normal PHP array everywhere else.
+///
+/// The widening rewrites the slot's storage representation, so a later `print_r`, element read,
+/// `count()`, or `foreach` over the same local has to see boxed Mixed cells rather than the raw
+/// integer payloads the slot was originally typed for.
+#[test]
+fn test_array_splice_promoted_receiver_reads_back_as_php_array() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1,2,3,4,5];
+array_splice($a, 1, 2, ["x","y","z"]);
+print_r($a);
+var_dump($a[1]);
+echo count($a), "\n";
+foreach ($a as $k => $v) { echo $k, "=>", $v, "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"Array
+(
+    [0] => 1
+    [1] => x
+    [2] => y
+    [3] => z
+    [4] => 4
+    [5] => 5
+)
+string(1) "x"
+6
+0=>1
+1=>x
+2=>y
+3=>z
+4=>4
+5=>5
+"#
+    );
+}
+
+/// Pins the DOCUMENTED refusal: a type-changing `$replacement` on a receiver whose storage this
+/// call cannot retype stays a named compile error rather than becoming a wrong answer.
+///
+/// A by-reference parameter shares its storage with a caller slot the callee cannot widen, so
+/// promoting it would publish boxed `Mixed` cells through a slot the caller still reads as
+/// `array<int>`. The diagnostic has to say so, because "use a local" is the actual workaround.
+#[test]
+fn test_array_splice_type_changing_replacement_on_by_ref_parameter_is_refused() {
+    let error = crate::support::compile_source_expect_backend_error(
+        r#"<?php
+function f(array &$a): void { array_splice($a, 1, 1, ["x"]); }
+$x = [1,2,3];
+f($x);
+echo implode(",", $x);
+"#,
+    );
+    assert!(
+        error.contains("array_splice replacement PHP type")
+            && error.contains("a by-reference parameter"),
+        "expected the named receiver-promotion diagnostic, got: {error}"
+    );
+}

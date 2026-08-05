@@ -161,6 +161,15 @@ pub enum BuiltinArgumentLowering {
     PositionalRegex,
     /// Preserve by-reference array storage while lowering user-comparator sorts.
     UserValueSort,
+    /// Promote a typed `array_splice()` receiver whose `$replacement` changes the element type.
+    ///
+    /// PHP's `array_splice($a, 1, 1, ["x"])` on `$a = [1, 2, 3]` leaves a heterogeneous
+    /// `[1, "x", 3]`. elephc types an indexed array at its payload slot, so that promotion has
+    /// to happen to the receiver LOCAL before the call: the slot widens to `array<mixed>` and
+    /// `__rt_array_to_mixed` re-boxes the live payloads. Only the argument lowering can see both
+    /// the receiver and the replacement, which is why it is a registry-owned strategy rather
+    /// than a per-argument rule.
+    ArraySplice,
     /// Bind the receiver to its hidden internal-array-pointer cursor slot.
     ///
     /// PHP's `key`/`current`/`next`/`prev`/`reset`/`end` read and move a per-array

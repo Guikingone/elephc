@@ -83,6 +83,7 @@ mod array_slice_to_hash;
 mod array_splice;
 mod array_splice_insert;
 mod array_splice_refcounted;
+mod array_splice_str;
 mod array_sum;
 mod array_sum_mixed;
 mod array_to_hash;
@@ -331,6 +332,7 @@ pub use array_splice_insert::{
 };
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;
+pub use array_splice_str::{emit_array_splice_insert_str, emit_array_splice_str};
 /// Emit refcounted array splice helper.
 pub use array_sum::emit_array_sum;
 /// Emit array sum helper.
