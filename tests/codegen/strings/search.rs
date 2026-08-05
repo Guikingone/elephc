@@ -363,3 +363,92 @@ var_dump([join("-", ["a", "b"]), substr_count("aaa", "a"), strncmp("a", "b", 1),
         "array(4) {\n  [0]=>\n  string(3) \"a-b\"\n  [1]=>\n  int(3)\n  [2]=>\n  int(-1)\n  [3]=>\n  int(0)\n}\n"
     );
 }
+
+/// Verifies `strpos()` accepts PHP's third `$offset` argument positionally and by name, and
+/// resolves a negative offset against the haystack length.
+/// Expected values are verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_strpos_offset_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strpos("hello world", "o"));
+var_dump(strpos("hello world", "o", 5));
+var_dump(strpos("hello world", "o", -4));
+var_dump(strpos("hello world", "o", offset: 5));
+var_dump(strpos("hello world", "o", offset: -4));
+var_dump(strpos("abc", "", 1));
+var_dump(strpos("abc", "", 3));
+var_dump(strpos("abc", "a", 3));
+var_dump(strpos("hello", "z", 2));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(4)\nint(7)\nint(7)\nint(7)\nint(7)\nint(1)\nint(3)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies `strrpos()` accepts PHP's third `$offset` argument positionally and by name.
+/// A non-negative offset starts the right-to-left scan there, while a negative one bounds
+/// where a match may end, so `strrpos("abcabc", "bc", -3)` finds the earlier match.
+/// Expected values are verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_strrpos_offset_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strrpos("hello world", "o", 5));
+var_dump(strrpos("hello world", "o", 8));
+var_dump(strrpos("hello world", "o", -3));
+var_dump(strrpos("hello world", "o", offset: -3));
+var_dump(strrpos("abcabc", "bc", -2));
+var_dump(strrpos("abcabc", "bc", -3));
+var_dump(strrpos("abcabc", "bc", -6));
+var_dump(strrpos("abc", "", 1));
+var_dump(strrpos("abc", "", -1));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(7)\nbool(false)\nint(7)\nint(7)\nint(4)\nint(1)\nbool(false)\nint(3)\nint(2)\n"
+    );
+}
+
+/// Verifies the `$offset` window is computed from values the optimizer cannot fold, so the
+/// backend's own normalization, `ValueError` guard, and match rebasing are exercised rather
+/// than a compile-time constant. `$argc` is 1 for a binary run without arguments.
+/// Expected values are verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_string_position_offset_from_runtime_values() {
+    let out = compile_and_run(
+        r#"<?php
+$haystack = "abcabc" . ($argc > 100 ? "z" : "");
+$needle = "bc";
+var_dump(strpos($haystack, $needle, $argc + 1));
+var_dump(strrpos($haystack, $needle, -$argc - 2));
+var_dump(strrpos($haystack, $needle, offset: -$argc - 5));
+"#,
+    );
+    assert_eq!(out, "int(4)\nint(1)\nbool(false)\n");
+}
+
+/// Verifies both position builtins raise php-src's catchable `ValueError` for an `$offset`
+/// that does not land inside the haystack, in either direction.
+/// Messages are verbatim `LC_ALL=C php` 8.4 output.
+#[test]
+fn test_string_position_offset_out_of_range_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+try { strpos("abc", "a", 4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strpos("abc", "a", -4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strrpos("abc", "a", 4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strrpos("abc", "a", -4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n"
+    );
+}

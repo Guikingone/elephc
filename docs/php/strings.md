@@ -161,8 +161,8 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `strlen()` | `strlen($str): int` | Returns string length |
 | `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
-| `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
-| `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |
+| `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |
+| `strrpos()` | `strrpos($haystack, $needle, $offset = 0): int\|false` | Find last occurrence. A non-negative `$offset` starts the search there; a negative one stops it that many bytes before the end. Returns `false` if not found |
 | `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
@@ -171,7 +171,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `strtoupper()` | `strtoupper($str): string` | Convert to uppercase |
 | `ucfirst()` | `ucfirst($str): string` | Uppercase first character |
 | `lcfirst()` | `lcfirst($str): string` | Lowercase first character |
-| `ucwords()` | `ucwords($str): string` | Uppercase first letter of each word |
+| `ucwords()` | `ucwords($string, $separators = " \t\r\n\f\v"): string` | Uppercase the first letter of each word. `$separators` is a byte set |
 | `trim()` | `trim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from both ends |
 | `ltrim()` | `ltrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the left |
 | `rtrim()` | `rtrim($str [, $chars]): string` | Strip the default mask (`" \n\r\t\v\f\0"`) or explicit characters from the right |
@@ -189,7 +189,7 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `ord()` | `ord($char): int` | ASCII value of first character |
 | `chr()` | `chr($code): string` | Character from ASCII code |
 | `explode()` | `explode($separator, $str [, $limit]): array` | Split string into array. An empty `$separator` throws `\ValueError`. |
-| `implode()` | `implode($glue, $arr): string` | Join array into string |
+| `implode()` | `implode($separator, $array): string`<br>`implode($array): string` | Join array into string; the one-argument form joins with an empty separator |
 | `number_format()` | `number_format($n [, $dec [, $dec_point, $thou_sep]]): string` | Format number. A negative `$dec` is not an error: it rounds to that power of ten and formats with no decimals. |
 | `sprintf()` | `sprintf($fmt, ...): string` | Format string (%s, %d, %f, %x, %e, %g, %o, %c, %%) |
 | `printf()` | `printf($fmt, ...): int` | Format and print |

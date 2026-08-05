@@ -688,3 +688,69 @@ fn test_join_empty_array() {
     let out = compile_and_run(r#"<?php echo "[", implode("", []), join([]), "]";"#);
     assert_eq!(out, "[]");
 }
+
+/// Verifies `ucwords()` accepts PHP's second `$separators` argument positionally and by
+/// name. `$separators` is a byte SET: each listed byte ends a word, an empty set leaves only
+/// the very first character capitalized, and a separator run capitalizes only the byte after
+/// the last one. The final case pins PHP's own default set, which includes the `\r`, `\f`,
+/// and `\v` that the previous hard-coded space/tab/newline scan silently ignored.
+/// Every expected value is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_ucwords_separators_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(ucwords("hello world"));
+var_dump(ucwords("hello|world", "|"));
+var_dump(ucwords("hello-world", "-"));
+var_dump(ucwords("hello world-again", " -"));
+var_dump(ucwords("hello world", ""));
+var_dump(ucwords("", "-"));
+var_dump(ucwords("a.b.c", "."));
+var_dump(ucwords("hello world", separators: "|"));
+var_dump(ucwords(string: "hello|world", separators: "|"));
+var_dump(ucwords("--x", "-"));
+var_dump(ucwords("1abc def"));
+var_dump(ucwords("HELLO world"));
+var_dump(ucwords("hello\tworld\nfoo\rbar\fbaz\vqux"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(11) \"Hello World\"\n\
+string(11) \"Hello|World\"\n\
+string(11) \"Hello-World\"\n\
+string(17) \"Hello World-Again\"\n\
+string(11) \"Hello world\"\n\
+string(0) \"\"\n\
+string(5) \"A.B.C\"\n\
+string(11) \"Hello world\"\n\
+string(11) \"Hello|World\"\n\
+string(3) \"--X\"\n\
+string(8) \"1abc Def\"\n\
+string(11) \"HELLO World\"\n\
+string(27) \"Hello\tWorld\nFoo\rBar\u{0c}Baz\u{0b}Qux\"\n"
+    );
+}
+
+/// Verifies the separator set is honored when neither the subject nor the set can be folded
+/// at compile time, so the runtime membership scan is exercised rather than a constant.
+/// `$argc` is 1 for a binary run without arguments.
+/// Expected values are verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_ucwords_separators_from_runtime_values() {
+    let out = compile_and_run(
+        r#"<?php
+$subject = "hello|world-again" . ($argc > 100 ? "z" : "");
+$separators = "|" . ($argc > 100 ? "" : "-");
+var_dump(ucwords($subject, $separators));
+var_dump(ucwords($subject, separators: $separators));
+var_dump(ucwords($subject));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(17) \"Hello|World-Again\"\n\
+string(17) \"Hello|World-Again\"\n\
+string(17) \"Hello|world-again\"\n"
+    );
+}

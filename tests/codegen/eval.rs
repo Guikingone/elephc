@@ -8407,6 +8407,25 @@ echo ":"; echo function_exists("strpos"); echo function_exists("strrpos");');
     assert_eq!(out, "2:4:F:0:3:1:3:11");
 }
 
+/// Verifies eval honors PHP's third `$offset` argument on both position builtins, including
+/// the named-argument spelling and `strrpos()`'s negative-offset rule (which bounds where a
+/// match may end rather than where the scan starts).
+/// Expected output is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_eval_string_position_builtins_honor_offset_argument() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strpos("hello world", "o", 5);
+echo ":"; echo strrpos("hello world", "o", -3);
+echo ":"; echo strpos("hello world", "o", offset: -4);
+echo ":"; echo strrpos("abcabc", "bc", -6) === false ? "F" : "bad";
+echo ":"; echo strpos("abc", "", 1);
+echo ":"; echo strrpos("abc", "", -1);');
+"#,
+    );
+    assert_eq!(out, "7:7:7:F:1:2");
+}
+
 /// Verifies eval `strstr()` returns matching suffixes, prefixes, and false for misses.
 #[test]
 fn test_eval_dispatches_strstr_builtin_call() {
@@ -28799,4 +28818,25 @@ echo eval('try {
 "#,
     );
     assert_eq!(out, "F1");
+}
+
+/// Verifies eval honors PHP's second `intval()` argument, including the named spelling, the
+/// `strtol()` prefix rules, the silent `0` for an out-of-range base, and the rule that `$base`
+/// is ignored for a non-string subject.
+/// Expected output is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_eval_intval_honors_base_argument() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo intval("42", 8);
+echo ":"; echo intval("0x1A", 0);
+echo ":"; echo intval("0b101", 0);
+echo ":"; echo intval("42", base: 8);
+echo ":"; echo intval("42", 1);
+echo ":"; echo intval(42.9, 8);
+echo ":"; echo intval("ffffffffffffffffff", 16);
+echo ":"; echo intval("42");');
+"#,
+    );
+    assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
 }

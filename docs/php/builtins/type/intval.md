@@ -1,6 +1,6 @@
 ---
 title: "intval()"
-description: "Returns the integer value of a variable."
+description: "Returns the integer value of a variable, optionally using a given base."
 sidebar:
   order: 465
 ---
@@ -8,13 +8,14 @@ sidebar:
 ## intval()
 
 ```php
-function intval(mixed $value): int
+function intval(mixed $value, int $base = 10): int
 ```
 
-Returns the integer value of a variable.
+Returns the integer value of a variable, optionally using a given base.
 
 **Parameters**:
 - `$value` (`mixed`)
+- `$base` (`int`), default `10`, optional
 
 **Returns**: `int`
 

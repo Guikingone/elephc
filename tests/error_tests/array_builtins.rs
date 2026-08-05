@@ -55,11 +55,30 @@ fn test_error_indexed_array_union_requires_compatible_element_types() {
 // --- v0.6: array function argument errors ---
 
 /// Verifies that error array reverse wrong args.
+///
+/// PHP's signature is `array_reverse(array $array, bool $preserve_keys = false)`, so a no-argument
+/// call is short by one and a three-argument call is one too many.
 #[test]
 fn test_error_array_reverse_wrong_args() {
     expect_error(
         "<?php array_reverse();",
-        "array_reverse() takes exactly 1 argument",
+        "array_reverse() takes 1 or 2 arguments",
+    );
+    expect_error(
+        "<?php array_reverse([1], true, 1);",
+        "array_reverse() takes 1 or 2 arguments",
+    );
+}
+
+/// Verifies `array_reverse()` rejects a non-literal `preserve_keys` flag in AOT mode.
+///
+/// The flag decides the result's static shape (indexed array vs integer-keyed hash), so it
+/// cannot be resolved at run time the way `in_array()`'s `strict` flag can.
+#[test]
+fn test_error_array_reverse_non_literal_preserve_keys() {
+    expect_error(
+        "<?php $t = $argc > 0; array_reverse([1, 2], $t);",
+        "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
     );
 }
 
@@ -79,11 +98,18 @@ fn test_error_array_sum_wrong_args() {
 }
 
 /// Verifies that error array search wrong args.
+///
+/// PHP's signature is `array_search(mixed $needle, array $haystack, bool $strict = false)`, so a
+/// one-argument call is short by one and a four-argument call is one too many.
 #[test]
 fn test_error_array_search_wrong_args() {
     expect_error(
         "<?php $a = [1]; array_search($a);",
-        "array_search() takes exactly 2 arguments",
+        "array_search() takes 2 or 3 arguments",
+    );
+    expect_error(
+        "<?php $a = [1]; array_search(1, $a, true, 1);",
+        "array_search() takes 2 or 3 arguments",
     );
 }
 
@@ -115,9 +141,13 @@ fn test_error_array_combine_wrong_args() {
 }
 
 /// Verifies that error range wrong args.
+///
+/// PHP's signature is `range($start, $end, int|float $step = 1)`, so a one-argument call is short
+/// by one and a four-argument call is one too many.
 #[test]
 fn test_error_range_wrong_args() {
-    expect_error("<?php range(1);", "range() takes exactly 2 arguments");
+    expect_error("<?php range(1);", "range() takes 2 or 3 arguments");
+    expect_error("<?php range(1, 5, 2, 3);", "range() takes 2 or 3 arguments");
 }
 
 /// Verifies that error shuffle wrong args.
@@ -220,11 +250,14 @@ fn test_error_array_shift_wrong_args() {
 }
 
 /// Verifies that error array unshift wrong args.
+///
+/// `array_unshift(array &$array, mixed ...$values)` is variadic, so PHP's own minimum is one
+/// argument (`ArgumentCountError: array_unshift() expects at least 1 argument, 0 given`).
 #[test]
 fn test_error_array_unshift_wrong_args() {
     expect_error(
         "<?php array_unshift();",
-        "array_unshift() takes exactly 2 arguments",
+        "array_unshift() takes at least 1 argument",
     );
 }
 

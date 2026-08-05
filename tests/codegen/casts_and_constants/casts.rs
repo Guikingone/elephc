@@ -299,3 +299,63 @@ foreach ($runtime as $s) { echo (float)$s, ",", (int)$s, "|"; }
     assert_eq!(folded, runtime);
     assert_eq!(folded, "0,0|0,0|1,1|42,42|1,1|12,12|");
 }
+
+/// Verifies `intval()` accepts PHP's second `$base` argument positionally and by name, with
+/// `strtol()`'s prefix rules: base 0 auto-detects `0x`/`0b`/a leading octal zero, base 16 and
+/// base 2 accept their prefix optionally, an out-of-range base yields `0` without raising,
+/// and overflow saturates at `PHP_INT_MAX`/`PHP_INT_MIN`.
+/// Every expected value is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_intval_base_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(intval("42", 8));
+var_dump(intval("0x1A", 16));
+var_dump(intval("1A", 16));
+var_dump(intval("0x1A", 0));
+var_dump(intval("0b101", 0));
+var_dump(intval("017", 0));
+var_dump(intval("17", 0));
+var_dump(intval("z", 36));
+var_dump(intval("-0x10", 16));
+var_dump(intval("42", base: 8));
+var_dump(intval(value: "42", base: 8));
+var_dump(intval("42", 1));
+var_dump(intval("42", 37));
+var_dump(intval(42.9, 8));
+var_dump(intval("9223372036854775808", 10));
+var_dump(intval("-ffffffffffffffffff", 16));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(34)\nint(26)\nint(26)\nint(26)\nint(5)\nint(15)\nint(17)\nint(35)\nint(-16)\n\
+int(34)\nint(34)\nint(0)\nint(0)\nint(42)\nint(9223372036854775807)\n\
+int(-9223372036854775808)\n"
+    );
+}
+
+/// Verifies `intval()` applies `$base` only to string subjects when neither the subject nor
+/// the base is known at compile time, which is the boxed-`Mixed` runtime dispatch rather than
+/// the checker-typed string path. `$argc` is 1 for a binary run without arguments, so the
+/// base is 8 and the loop covers string, int, float, bool, and null payloads.
+/// Every expected value is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_intval_base_applies_only_to_runtime_strings() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["42", 42, 42.9, true, null];
+$base = 8 + ($argc - 1);
+foreach ($values as $value) {
+    var_dump(intval($value, $base));
+}
+$text = "0x1A" . ($argc > 100 ? "z" : "");
+var_dump(intval($text, 0));
+var_dump(intval($text, base: 16));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(34)\nint(42)\nint(42)\nint(1)\nint(0)\nint(26)\nint(26)\n"
+    );
+}

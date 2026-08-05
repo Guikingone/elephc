@@ -83,6 +83,7 @@ mod array_splice_refcounted;
 mod array_sum;
 mod array_sum_mixed;
 mod array_to_hash;
+mod array_to_hash_reverse;
 mod array_to_mixed;
 mod array_udiff_uintersect;
 mod array_union;
@@ -150,6 +151,7 @@ mod mixed_instanceof;
 mod mixed_cast_bool;
 mod mixed_cast_float;
 mod mixed_cast_int;
+mod mixed_intval_base;
 mod mixed_cast_string;
 mod mixed_free_deep;
 mod mixed_count;
@@ -325,6 +327,8 @@ pub use array_sum_mixed::emit_array_sum_mixed;
 /// Emit boxed-Mixed array sum helper.
 pub use array_to_hash::emit_array_to_hash;
 /// Emit indexed-array-to-hash converter helper (shared by hash-based set ops).
+pub use array_to_hash_reverse::emit_array_to_hash_reverse;
+/// Emit key-preserving reversed indexed-array-to-hash converter helper (array_reverse preserve_keys).
 pub use array_to_mixed::emit_array_to_mixed;
 /// Emit array-to-Mixed conversion helper.
 pub use array_udiff_uintersect::emit_array_udiff_uintersect;
@@ -445,6 +449,7 @@ pub use mixed_cast_bool::emit_mixed_cast_bool;
 pub use mixed_cast_float::emit_mixed_cast_float;
 /// Emit Mixed-to-float cast helper.
 pub use mixed_cast_int::emit_mixed_cast_int;
+pub use mixed_intval_base::emit_mixed_intval_base;
 /// Emit Mixed-to-integer cast helper.
 pub use mixed_cast_string::emit_mixed_cast_string;
 /// Emit Mixed-to-string cast helper.

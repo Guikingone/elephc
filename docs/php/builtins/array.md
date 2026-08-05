@@ -43,7 +43,7 @@ sidebar:
 | [`array_reduce()`](./array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): int` | `int` | ✓ | ✓ |
 | [`array_replace()`](./array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
 | [`array_replace_recursive()`](./array/array_replace_recursive.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
-| [`array_reverse()`](./array/array_reverse.md) | `(array $array): array` | `array` | ✓ | ✓ |
+| [`array_reverse()`](./array/array_reverse.md) | `(array $array, bool $preserve_keys = false): array` | `array` | ✓ | ✓ |
 | [`array_search()`](./array/array_search.md) | `(mixed $needle, array $haystack, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
 | [`array_shift()`](./array/array_shift.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_slice()`](./array/array_slice.md) | `(array $array, int $offset, int $length = null): array` | `array` | ✓ | ✓ |
@@ -71,7 +71,7 @@ sidebar:
 | [`natsort()`](./array/natsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`next()`](./array/next.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`prev()`](./array/prev.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`range()`](./array/range.md) | `(mixed $start, mixed $end): array` | `array` | ✓ | ✓ |
+| [`range()`](./array/range.md) | `(mixed $start, mixed $end, int $step = 1): array` | `array` | ✓ | ✓ |
 | [`reset()`](./array/reset.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`rsort()`](./array/rsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`shuffle()`](./array/shuffle.md) | `(array $array): bool` | `bool` | ✓ | ✓ |

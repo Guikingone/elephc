@@ -356,9 +356,27 @@ fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType> {
 }
 
 /// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
+///
+/// PHP's `bool $preserve_keys = false` keeps the source integer keys while reversing the
+/// iteration order. A dense indexed array cannot hold keys in descending order, so the
+/// key-preserving form lowers to `__rt_array_to_hash_reverse`, which builds an owned hash. The
+/// checker guarantees the flag is a literal (it decides the result's static shape), so a
+/// non-literal operand can only mean the checker and the backend disagree about this call.
 pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "array_reverse", 1)?;
+    ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;
+    let preserve_keys = match inst.operands.get(1).copied() {
+        None => false,
+        Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
+            CodegenIrError::unsupported(
+                "array_reverse preserve_keys argument that is not a compile-time literal"
+                    .to_string(),
+            )
+        })?,
+    };
+    if preserve_keys {
+        return lower_array_reverse_preserve_keys(ctx, inst, array);
+    }
     let elem_ty =
         eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
     ctx.load_value_to_result(array)?;
@@ -367,6 +385,62 @@ pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruct
     }
     abi::emit_call_label(ctx.emitter, array_reverse_runtime_helper(&elem_ty));
     store_if_result(ctx, inst)
+}
+
+/// Lowers `array_reverse($array, true)` into an owned integer-keyed hash.
+///
+/// The runtime helper walks the source payload from the last slot to the first and inserts each
+/// element at its ORIGINAL index, persisting strings and retaining heap payloads, so the result
+/// is a freshly owned hash whose keys match PHP's `preserve_keys` output exactly. The checker
+/// types this call as `AssocArray { key: Int, value: T }`, which is re-verified here.
+fn lower_array_reverse_preserve_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    let PhpType::Array(_) = ctx.value_php_type(array)?.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_reverse preserve_keys for PHP type {:?}",
+            ctx.value_php_type(array)?
+        )));
+    };
+    let PhpType::AssocArray { .. } = inst.result_php_type.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_reverse preserve_keys result PHP type {:?}",
+            inst.result_php_type
+        )));
+    };
+    ctx.load_value_to_result(array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the key-preserving reverse helper argument
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash_reverse");
+    store_if_result(ctx, inst)
+}
+
+/// Reads a literal boolean operand produced by a constant instruction, or `None` when non-literal.
+///
+/// Accepts `ConstBool`, integer, float, and null const instructions using PHP truthiness, so any
+/// literal flag the frontend folds into an argument slot resolves at compile time.
+fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(value))) => Ok(Some(*value)),
+        (Op::ConstI64, Some(Immediate::I64(value))) => Ok(Some(*value != 0)),
+        (Op::ConstF64, Some(Immediate::F64(value))) => Ok(Some(*value != 0.0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        _ => Ok(None),
+    }
 }
 
 /// Lowers `array_unique()` for indexed arrays with 8-byte payload slots.
@@ -1352,31 +1426,107 @@ pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `range()` for integer endpoints through the shared runtime constructor.
+///
+/// PHP's optional `$step` becomes the helper's third argument. Its sign never chooses the
+/// direction (`start` vs `end` does), so the three `ValueError`s php-src raises for a bad step
+/// are emitted here, before the helper ever sees the arguments.
 pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "range", 2)?;
+    ensure_arg_count_between(inst, "range", 2, 3)?;
     let start = expect_operand(inst, 0)?;
     let end = expect_operand(inst, 1)?;
+    let step = inst.operands.get(2).copied();
     require_range_endpoint(ctx.value_php_type(start)?, "start")?;
     require_range_endpoint(ctx.value_php_type(end)?, "end")?;
+    if let Some(step) = step {
+        require_range_endpoint(ctx.value_php_type(step)?, "step")?;
+    }
     require_range_result_type(&inst.result_php_type.codegen_repr())?;
-    // Resolve each endpoint to a plain integer, unboxing a Mixed cell read from a heterogeneous
-    // array. The end resolution may call __rt_mixed_cast_int, which clobbers caller-saved registers,
-    // so the resolved start is spilled across it instead of being staged in an argument register.
+    // Resolve each argument to a plain integer, unboxing a Mixed cell read from a heterogeneous
+    // array. Each resolution may call __rt_mixed_cast_int, which clobbers caller-saved registers,
+    // so already-resolved values are spilled across it instead of being staged in argument registers.
     resolve_int_operand_to_result(ctx, start, "range start")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     resolve_int_operand_to_result(ctx, end, "range end")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match step {
+        Some(step) => {
+            resolve_int_operand_to_result(ctx, step, "range step")?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x2, x0");                      // move the resolved range step into the third runtime argument
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdx, rax");                    // move the resolved range step into the third runtime argument
+                }
+            }
+        }
+        None => {
+            let step_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x2",
+                Arch::X86_64 => "rdx",
+            };
+            abi::emit_load_int_immediate(ctx.emitter, step_reg, 1);
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                              // move the resolved range end into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x1"); // restore the resolved range end into the second runtime argument
             abi::emit_pop_reg(ctx.emitter, "x0"); // restore the resolved range start into the first runtime argument
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, rax");                            // move the resolved range end into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rsi"); // restore the resolved range end into the second runtime argument
             abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the resolved range start into the first runtime argument
         }
     }
+    if step.is_some() {
+        emit_range_step_guards(ctx);
+    }
     abi::emit_call_label(ctx.emitter, "__rt_range");
     store_if_result(ctx, inst)
+}
+
+/// php-src's verbatim `ValueError` wording for `range()` with a zero `$step`.
+const RANGE_ZERO_STEP_MESSAGE: &str = "range(): Argument #3 ($step) cannot be 0";
+
+/// php-src's verbatim `ValueError` wording for a negative `range()` `$step` on an increasing range.
+const RANGE_NEGATIVE_STEP_MESSAGE: &str =
+    "range(): Argument #3 ($step) must be greater than 0 for increasing ranges";
+
+/// php-src's verbatim `ValueError` wording for a `range()` `$step` wider than the spanned interval.
+const RANGE_STEP_TOO_WIDE_MESSAGE: &str = "range(): Argument #3 ($step) must be less than the range spanned by argument #1 ($start) and argument #2 ($end)";
+
+/// Raises PHP's three `range()` `$step` `ValueError`s before the runtime helper runs.
+///
+/// The guards read `start`/`end`/`step` while they still sit in their ABI argument registers, so
+/// one sequence covers every supported target. Reference PHP rejects, in this order: a zero step,
+/// a negative step when `$start < $end` (a decreasing range accepts either sign), and a step whose
+/// magnitude exceeds the spanned interval — except when `$start === $end`, which always yields the
+/// single-element `[$start]`. The magnitude comparison is UNSIGNED so `PHP_INT_MIN`, whose negation
+/// is itself, still reads as wider than any span instead of wrapping back to a negative "magnitude".
+fn emit_range_step_guards(ctx: &mut FunctionContext<'_>) {
+    let (start_reg, end_reg, step_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi", "rdx"),
+    };
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::NotEqualToImmediate(step_reg, 0),
+        RANGE_ZERO_STEP_MESSAGE,
+    );
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::NonNegativeUnlessSignedBelow(
+            step_reg, start_reg, end_reg,
+        ),
+        RANGE_NEGATIVE_STEP_MESSAGE,
+    );
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::MagnitudeWithinSpan(
+            step_reg, start_reg, end_reg,
+        ),
+        RANGE_STEP_TOO_WIDE_MESSAGE,
+    );
 }
 
 /// Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed.
@@ -2113,12 +2263,49 @@ pub(crate) fn lower_array_multisort(
 }
 
 /// Lowers `array_search()` for indexed arrays with integer-like payloads.
+///
+/// PHP's third parameter (`bool $strict = false`) selects `===` instead of `==`. Every
+/// comparison this emitter can already lower is value-exact, so the two modes only diverge
+/// when the needle and the element type are statically different scalar types — the case
+/// `array_search_strict_never_matches()` detects. There, the strict answer is unconditionally
+/// `false`, so the flag is resolved with a runtime branch around the ordinary search.
 pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "array_search", 2)?;
+    ensure_arg_count_between(inst, "array_search", 2, 3)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let needle_ty = ctx.value_php_type(needle)?;
     let array_ty = ctx.value_php_type(array)?;
+    let strict = inst.operands.get(2).copied();
+    match strict {
+        Some(strict) if array_search_strict_never_matches(&needle_ty, &array_ty) => {
+            let strict_label = ctx.next_label("array_search_strict");
+            let done_label = ctx.next_label("array_search_strict_done");
+            branch_if_bool_value_true(ctx, strict, &strict_label)?;
+            lower_array_search_loose(ctx, needle, array, needle_ty, array_ty)?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&strict_label);
+            box_array_search_miss(ctx);
+            ctx.emitter.label(&done_label);
+        }
+        // Either `strict` was omitted, or the needle and element types agree (or one side is
+        // a boxed `Mixed` compared tag-exactly), in which case `===` and `==` pick the same
+        // element and the flag has no observable effect on the emitted search.
+        _ => lower_array_search_loose(ctx, needle, array, needle_ty, array_ty)?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Emits `array_search()`'s ordinary (non-strict-impossible) element scan.
+///
+/// Leaves the boxed `int|string|false` result in the integer result register for the caller's
+/// `store_if_result`, dispatching between the associative, empty, scalar, and string paths.
+fn lower_array_search_loose(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    needle_ty: PhpType,
+    array_ty: PhpType,
+) -> Result<()> {
     if search::try_lower_assoc_array_search(
         ctx,
         needle,
@@ -2126,7 +2313,6 @@ pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
         needle_ty.clone(),
         array_ty.clone(),
     )? {
-        store_if_result(ctx, inst)?;
         return Ok(());
     }
     match supported_array_search_case(needle_ty, array_ty)? {
@@ -2134,7 +2320,25 @@ pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
         ArraySearchCase::Scalar => lower_array_search_scalar(ctx, needle, array)?,
         ArraySearchCase::String => lower_array_search_string(ctx, needle, array)?,
     }
-    store_if_result(ctx, inst)
+    Ok(())
+}
+
+/// Returns whether `array_search(..., strict: true)` can never match for these static types.
+///
+/// PHP's `===` requires identical types, so a scalar needle can never match an element of a
+/// different scalar type (`array_search(1, [true, false], true)` is `false` while the loose
+/// form finds index 0). A boxed `Mixed` element type carries its type tag at runtime and is
+/// therefore never statically impossible.
+fn array_search_strict_never_matches(needle_ty: &PhpType, array_ty: &PhpType) -> bool {
+    let needle_ty = needle_ty.clone().codegen_repr();
+    let element_ty = match array_ty.clone().codegen_repr() {
+        PhpType::Array(elem) => elem.codegen_repr(),
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        _ => return false,
+    };
+    matches!(needle_ty, PhpType::Int | PhpType::Bool | PhpType::Str)
+        && matches!(element_ty, PhpType::Int | PhpType::Bool | PhpType::Str)
+        && needle_ty != element_ty
 }
 
 /// Lowers `in_array()` for indexed and associative arrays with PHP loose or strict membership.

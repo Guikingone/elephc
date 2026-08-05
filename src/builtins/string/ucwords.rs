@@ -6,9 +6,9 @@
 //!   `crate::builtins::registry`.
 //!
 //! Key details:
-//! - The declared signature carries the full golden param list (`string`, `separators`),
-//!   but `max_args: 1` caps `check_arity` so a second argument is rejected, matching the
-//!   legacy CHECK arm which enforced exactly one argument.
+//! - The declared signature is PHP's own `ucwords(string $string, string $separators = " \t\r\n\f\v")`.
+//!   `$separators` is a byte SET, not a substring: every byte listed ends a word, and the
+//!   backend passes the default set explicitly when the argument is omitted.
 //! - No `check` hook is needed: the return type (`Str`) is fully determined by the
 //!   declaration. The registry dispatch still infers each argument unconditionally, so
 //!   undefined-variable diagnostics fire exactly as the legacy arm produced them.
@@ -18,7 +18,6 @@ builtin! {
     name: "ucwords",
     area: String,
     params: [string: Str, separators: Str = crate::builtins::spec::DefaultSpec::Str(" \t\r\n\u{0c}\u{0b}")],
-    max_args: 1,
     returns: Str,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ucwords,

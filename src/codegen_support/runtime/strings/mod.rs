@@ -17,6 +17,7 @@ mod str_eq;
 mod str_loose_eq;
 mod str_to_number;
 mod str_to_int;
+mod str_to_int_base;
 mod number_format;
 mod atoi;
 mod grapheme_strrev;
@@ -112,6 +113,7 @@ pub use str_to_number::emit_str_to_number;
 pub use str_to_number::emit_str_looks_like_int_for_coercion;
 /// Emit string-to-number conversion helper.
 pub use str_to_int::emit_str_to_int;
+pub use str_to_int_base::emit_str_to_int_base;
 /// Emit PHP string-to-integer cast helper.
 pub use number_format::emit_number_format;
 /// Emit number formatting helper.

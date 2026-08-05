@@ -23,8 +23,8 @@ sidebar:
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `checker_hook`
-- **Result type source**: `checked`
+- **Validation**: `signature`
+- **Result type source**: `declared`
 - **Result ownership**: `independent`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`

@@ -1081,6 +1081,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
     out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");
+    // PHP's own default `ucwords()` separator set, `" \t\r\n\f\v"`. It is a byte SET rather
+    // than a substring, and the backend hands this symbol to `__rt_ucwords` whenever the
+    // optional `$separators` argument is omitted, so the default and an explicitly written
+    // `" \t\r\n\f\v"` take exactly the same code path.
+    out.push_str(
+        ".globl _ucwords_default_seps\n_ucwords_default_seps:\n    .byte 32, 9, 13, 10, 12, 11\n",
+    );
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 

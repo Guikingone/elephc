@@ -43,7 +43,7 @@ sidebar:
 | [`array_reduce()`](./builtins/array/array_reduce.md) | `(array $array, callable $callback, mixed $initial = null): int` | `int` | ✓ | ✓ |
 | [`array_replace()`](./builtins/array/array_replace.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
 | [`array_replace_recursive()`](./builtins/array/array_replace_recursive.md) | `(array $array, array $replacements): mixed` | `mixed` | ✓ | — |
-| [`array_reverse()`](./builtins/array/array_reverse.md) | `(array $array): array` | `array` | ✓ | ✓ |
+| [`array_reverse()`](./builtins/array/array_reverse.md) | `(array $array, bool $preserve_keys = false): array` | `array` | ✓ | ✓ |
 | [`array_search()`](./builtins/array/array_search.md) | `(mixed $needle, array $haystack, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
 | [`array_shift()`](./builtins/array/array_shift.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`array_slice()`](./builtins/array/array_slice.md) | `(array $array, int $offset, int $length = null): array` | `array` | ✓ | ✓ |
@@ -71,7 +71,7 @@ sidebar:
 | [`natsort()`](./builtins/array/natsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`next()`](./builtins/array/next.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`prev()`](./builtins/array/prev.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
-| [`range()`](./builtins/array/range.md) | `(mixed $start, mixed $end): array` | `array` | ✓ | ✓ |
+| [`range()`](./builtins/array/range.md) | `(mixed $start, mixed $end, int $step = 1): array` | `array` | ✓ | ✓ |
 | [`reset()`](./builtins/array/reset.md) | `(array $array): mixed` | `mixed` | ✓ | ✓ |
 | [`rsort()`](./builtins/array/rsort.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
 | [`shuffle()`](./builtins/array/shuffle.md) | `(array $array): bool` | `bool` | ✓ | ✓ |
@@ -473,7 +473,7 @@ sidebar:
 | [`get_resource_id()`](./builtins/type/get_resource_id.md) | `(resource $resource): int` | `int` | ✓ | ✓ |
 | [`get_resource_type()`](./builtins/type/get_resource_type.md) | `(resource $resource): string` | `string` | ✓ | ✓ |
 | [`gettype()`](./builtins/type/gettype.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
-| [`intval()`](./builtins/type/intval.md) | `(mixed $value): int` | `int` | ✓ | ✓ |
+| [`intval()`](./builtins/type/intval.md) | `(mixed $value, int $base = 10): int` | `int` | ✓ | ✓ |
 | [`is_array()`](./builtins/type/is_array.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_bool()`](./builtins/type/is_bool.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_callable()`](./builtins/type/is_callable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |

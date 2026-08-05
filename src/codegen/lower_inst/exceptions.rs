@@ -75,6 +75,24 @@ pub(super) enum ValueGuard<'a> {
     /// Both ends are inclusive; the guard is used for builtin arguments whose accepted
     /// values are a small contiguous set of PHP constants rather than a magnitude limit.
     SignedInRange(&'a str, i64, i64),
+    /// The 64-bit register must not hold the given immediate (`range()`'s zero `$step`).
+    NotEqualToImmediate(&'a str, i64),
+    /// The first register, read as a signed integer, must be `>= 0` unless the second
+    /// register is signed-greater-or-equal to the third (`range()`'s `$step` sign rule).
+    ///
+    /// PHP only rejects a negative `$step` for an INCREASING range: `range(5, 1, -2)` is
+    /// valid while `range(1, 5, -2)` is a `ValueError`. The guard therefore passes as soon
+    /// as `start >= end`, and only then checks the sign of the step.
+    NonNegativeUnlessSignedBelow(&'a str, &'a str, &'a str),
+    /// `|first| <= |third - second|`, compared UNSIGNED, unless the second and third
+    /// registers are equal (`range()`'s `$step` magnitude rule).
+    ///
+    /// PHP rejects a `$step` wider than the interval its endpoints span, but a degenerate
+    /// `range($x, $x, $step)` always yields `[$x]` no matter how large the step is, so an
+    /// equal pair short-circuits the check. The unsigned comparison makes `PHP_INT_MIN`
+    /// (whose negation is itself) read as wider than every span instead of wrapping back
+    /// into a negative "magnitude" that would slip past a signed compare.
+    MagnitudeWithinSpan(&'a str, &'a str, &'a str),
 }
 
 /// Throws a catchable PHP `ValueError` unless the guarded register satisfies `guard`.
@@ -129,6 +147,52 @@ pub(super) fn emit_value_error_unless(
             ctx.emitter.instruction(&format!("cmp {}, {}", reg, maximum));      // compare the materialized argument against the inclusive upper bound
             ctx.emitter.instruction(&format!("jle {}", ok_label));              // a value at or below the upper bound is in range
             ctx.emitter.label(&fail_label);
+        }
+        (Arch::AArch64, ValueGuard::NotEqualToImmediate(reg, forbidden)) => {
+            ctx.emitter.instruction(&format!("cmp {}, #{}", reg, forbidden));   // compare the materialized argument against the value PHP forbids
+            ctx.emitter.instruction(&format!("b.ne {}", ok_label));             // any other value is accepted
+        }
+        (Arch::X86_64, ValueGuard::NotEqualToImmediate(reg, forbidden)) => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", reg, forbidden));    // compare the materialized argument against the value PHP forbids
+            ctx.emitter.instruction(&format!("jne {}", ok_label));              // any other value is accepted
+        }
+        (Arch::AArch64, ValueGuard::NonNegativeUnlessSignedBelow(reg, low, high)) => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval decreasing or degenerate?
+            ctx.emitter.instruction(&format!("b.ge {}", ok_label));             // a decreasing interval accepts either step sign
+            ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // an increasing interval needs a positive step
+            ctx.emitter.instruction(&format!("b.gt {}", ok_label));             // a strictly positive step is in range
+        }
+        (Arch::X86_64, ValueGuard::NonNegativeUnlessSignedBelow(reg, low, high)) => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval decreasing or degenerate?
+            ctx.emitter.instruction(&format!("jge {}", ok_label));              // a decreasing interval accepts either step sign
+            ctx.emitter.instruction(&format!("cmp {}, 0", reg));                // an increasing interval needs a positive step
+            ctx.emitter.instruction(&format!("jg {}", ok_label));               // a strictly positive step is in range
+        }
+        (Arch::AArch64, ValueGuard::MagnitudeWithinSpan(reg, low, high)) => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval degenerate?
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // a single-point interval accepts any step magnitude
+            ctx.emitter.instruction(&format!("subs x9, {}, {}", high, low));    // x9 = high - low, the signed spanned interval
+            ctx.emitter.instruction("cneg x9, x9, mi");                         // x9 = |high - low|, the spanned magnitude
+            ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // is the guarded argument negative?
+            ctx.emitter.instruction(&format!("cneg x10, {}, lt", reg));         // x10 = |argument|, its unsigned magnitude
+            ctx.emitter.instruction("cmp x10, x9");                             // compare the argument magnitude against the spanned magnitude
+            ctx.emitter.instruction(&format!("b.ls {}", ok_label));             // an unsigned magnitude within the span is in range
+        }
+        (Arch::X86_64, ValueGuard::MagnitudeWithinSpan(reg, low, high)) => {
+            ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval degenerate?
+            ctx.emitter.instruction(&format!("je {}", ok_label));               // a single-point interval accepts any step magnitude
+            ctx.emitter.instruction(&format!("mov r10, {}", high));             // stage the interval high endpoint before subtracting the low one
+            ctx.emitter.instruction(&format!("sub r10, {}", low));              // r10 = high - low, the signed spanned interval
+            ctx.emitter.instruction("mov r11, r10");                            // stage the negated span for the conditional magnitude select
+            ctx.emitter.instruction("neg r11");                                 // negate the span so a negative one yields its magnitude
+            ctx.emitter.instruction("test r10, r10");                           // is the spanned interval negative?
+            ctx.emitter.instruction("cmovs r10, r11");                          // r10 = |high - low|, the spanned magnitude
+            ctx.emitter.instruction(&format!("mov r11, {}", reg));              // stage the guarded argument before normalizing its magnitude
+            ctx.emitter.instruction("neg r11");                                 // negate the guarded argument so a negative one yields its magnitude
+            ctx.emitter.instruction(&format!("test {}, {}", reg, reg));         // is the guarded argument negative?
+            ctx.emitter.instruction(&format!("cmovns r11, {}", reg));           // r11 = |argument|, its unsigned magnitude
+            ctx.emitter.instruction("cmp r11, r10");                            // compare the argument magnitude against the spanned magnitude
+            ctx.emitter.instruction(&format!("jbe {}", ok_label));              // an unsigned magnitude within the span is in range
         }
     }
     emit_value_error(ctx, message);

@@ -8,7 +8,7 @@ sidebar:
 ## range()
 
 ```php
-function range(mixed $start, mixed $end): array
+function range(mixed $start, mixed $end, int $step = 1): array
 ```
 
 Create an array containing a range of elements.
@@ -16,6 +16,7 @@ Create an array containing a range of elements.
 **Parameters**:
 - `$start` (`mixed`)
 - `$end` (`mixed`)
+- `$step` (`int`), default `1`, optional
 
 **Returns**: `array`
 

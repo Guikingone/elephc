@@ -71,18 +71,6 @@ pub(super) enum SprintfSpecCat {
     Str,
 }
 
-/// Lowers a one-argument string builtin that directly delegates to a runtime helper.
-pub(crate) fn lower_unary_string_runtime(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    runtime_label: &str,
-) -> Result<()> {
-    load_single_string_arg(ctx, inst, name)?;
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    store_if_result(ctx, inst)
-}
-
 /// Lowers `htmlspecialchars()` / `htmlentities()` — escapes the subject string (operand 0).
 /// `name` is the calling builtin's PHP name, used in argument-coercion diagnostics. The
 /// optional `flags` and `encoding` arguments are accepted (so the common `htmlspecialchars($s,
@@ -921,6 +909,15 @@ const STRNCMP_NEGATIVE_LENGTH_MESSAGE: &str =
 const STRNCASECMP_NEGATIVE_LENGTH_MESSAGE: &str =
     "strncasecmp(): Argument #3 ($length) must be greater than or equal to 0";
 
+/// php-src's verbatim `ValueError` wording, minus the leading function name, for a
+/// `strpos()`-family `$offset` that does not land inside the haystack.
+///
+/// php-src emits the same sentence for `strpos()` and `strrpos()`, differing only in the
+/// function name it is prefixed with, so the shared suffix is stored once and the caller
+/// supplies the PHP spelling of the builtin being lowered.
+const STRING_POSITION_OFFSET_OUT_OF_RANGE_SUFFIX: &str =
+    "(): Argument #3 ($offset) must be contained in argument #1 ($haystack)";
+
 /// php-src's verbatim `ValueError` wording for `substr_count()` with an empty `$needle`.
 const SUBSTR_COUNT_EMPTY_NEEDLE_MESSAGE: &str =
     "substr_count(): Argument #2 ($needle) must not be empty";
@@ -1082,17 +1079,277 @@ pub(crate) fn lower_str_contains(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
+/// The byte length of `_ucwords_default_seps`, PHP's `" \t\r\n\f\v"` separator set.
+const UCWORDS_DEFAULT_SEPARATOR_COUNT: i64 = 6;
+
+/// Lowers `ucwords(string, separators?)` with an explicit separator byte set.
+///
+/// `__rt_ucwords` always scans a caller-supplied set, so an omitted `$separators` is
+/// materialized here as the address of `_ucwords_default_seps`. That keeps PHP's default
+/// (`" \t\r\n\f\v"`, including the `\r`, `\f`, and `\v` the old hard-coded scan missed) and an
+/// explicitly written set on exactly the same runtime path.
+pub(crate) fn lower_ucwords(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "ucwords expected 1 or 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    let (subject_ptr, subject_len, sep_ptr, sep_len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2", "x3", "x4"),
+        Arch::X86_64 => ("rdi", "rsi", "rdx", "rcx"),
+    };
+    if inst.operands.len() == 2 {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                load_string_arg_to_regs(ctx, inst, 0, "ucwords", "x1", "x2")?;
+                ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");             // preserve the subject while the separator set is materialized
+                load_string_arg_to_regs(ctx, inst, 1, "ucwords", "x3", "x4")?;
+                ctx.emitter.instruction("ldp x1, x2, [sp], #16");               // restore the subject into the primary runtime string argument
+            }
+            Arch::X86_64 => {
+                load_string_arg_to_regs(ctx, inst, 0, "ucwords", "rax", "rdx")?;
+                abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+                load_string_arg_to_regs(ctx, inst, 1, "ucwords", "rax", "rdx")?;
+                ctx.emitter.instruction("mov rcx, rdx");                        // pass the separator length as the fourth SysV argument
+                ctx.emitter.instruction("mov rdx, rax");                        // pass the separator pointer as the third SysV argument
+                abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");              // restore the subject into the primary SysV string arguments
+            }
+        }
+    } else {
+        load_string_arg_to_regs(ctx, inst, 0, "ucwords", subject_ptr, subject_len)?;
+        abi::emit_symbol_address(ctx.emitter, sep_ptr, "_ucwords_default_seps");
+        abi::emit_load_int_immediate(ctx.emitter, sep_len, UCWORDS_DEFAULT_SEPARATOR_COUNT);
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_ucwords");
+    store_if_result(ctx, inst)
+}
+
+/// The scan direction of a `strpos()`-family builtin, which decides how `$offset` bounds
+/// the searched window.
+///
+/// PHP resolves the third argument differently for the two directions: `strpos()` always
+/// turns it into the first byte it may match at, while `strrpos()` turns a negative value
+/// into the last byte a match may *end* on. Both spellings share one lowering, so the
+/// direction is carried explicitly rather than re-derived from the runtime symbol name.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum StringPositionDirection {
+    /// Left-to-right search (`strpos()`).
+    Forward,
+    /// Right-to-left search (`strrpos()`).
+    Reverse,
+}
+
 /// Lowers `strpos()`/`strrpos()` and boxes position-or-false results as Mixed.
+///
+/// With two operands this is the plain whole-haystack search. With three, `$offset` is
+/// normalized here rather than inside the runtime helper because an offset outside the
+/// haystack is a catchable `ValueError` in reference PHP, and only the backend can emit a
+/// throw the surrounding `try` will observe. The helper therefore always receives a window
+/// that is known to sit inside the haystack, plus the absolute base offset that has to be
+/// added back to a successful match.
 pub(crate) fn lower_string_position(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
     runtime_label: &str,
+    direction: StringPositionDirection,
 ) -> Result<()> {
-    load_binary_string_args(ctx, inst, name)?;
+    if inst.operands.len() == 2 {
+        load_binary_string_args(ctx, inst, name)?;
+        abi::emit_call_label(ctx.emitter, runtime_label);
+        box_search_result(ctx, name);
+        return store_if_result(ctx, inst);
+    }
+    if inst.operands.len() != 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 2 or 3 args, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    load_string_position_args(ctx, inst, name)?;
+    emit_string_position_offset_guard(ctx, name, direction);
+    abi::emit_push_reg(ctx.emitter, string_position_base_reg(ctx));
     abi::emit_call_label(ctx.emitter, runtime_label);
+    abi::emit_pop_reg(ctx.emitter, string_position_base_reg(ctx));
+    emit_string_position_rebase(ctx, name);
     box_search_result(ctx, name);
     store_if_result(ctx, inst)
+}
+
+/// Returns the scratch register that carries a `strpos()`-family search's base offset.
+///
+/// The base is the number of haystack bytes the runtime helper never sees, so it is also
+/// the value added back to a match before the result is boxed. It deliberately reuses the
+/// register the offset was materialized into, which is the first argument register past
+/// the haystack/needle pointer-length pairs on both supported ABIs.
+fn string_position_base_reg(ctx: &FunctionContext<'_>) -> &'static str {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => "x5",
+        Arch::X86_64 => "r8",
+    }
+}
+
+/// Materializes a three-argument `strpos()`-family call into its runtime ABI registers.
+///
+/// Leaves the haystack in the primary string pointer/length pair, the needle in the
+/// secondary pair, and the raw (still unnormalized) `$offset` in the scratch base register.
+fn load_string_position_args(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<()> {
+    let offset = expect_operand(inst, 2)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, name, "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the haystack pointer and length while the needle is materialized
+            load_string_arg_to_regs(ctx, inst, 1, name, "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the needle pointer and length while the offset is materialized
+            load_as_int(ctx, offset, name)?;
+            ctx.emitter.instruction("mov x5, x0");                              // park the raw search offset until the haystack length is known
+            ctx.emitter.instruction("ldp x3, x4, [sp], #16");                   // restore the needle into the secondary runtime string argument
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the haystack into the primary runtime string argument
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, name, "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_string_arg_to_regs(ctx, inst, 1, name, "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_as_int(ctx, offset, name)?;
+            ctx.emitter.instruction("mov r8, rax");                             // park the raw search offset until the haystack length is known
+            abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");                  // restore the needle into the secondary SysV string argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // restore the haystack into the primary SysV string argument
+        }
+    }
+    Ok(())
+}
+
+/// Turns a raw `strpos()`-family `$offset` into a searched window plus a base offset.
+///
+/// Rejects, with php-src's verbatim `ValueError`, every offset that does not land inside the
+/// haystack: `$offset > strlen($haystack)` in both directions, and `-$offset >
+/// strlen($haystack)` for a negative one. On success the primary string pair describes the
+/// bytes the runtime helper may scan and the base register holds the offset that must be
+/// added back to a match.
+fn emit_string_position_offset_guard(
+    ctx: &mut FunctionContext<'_>,
+    name: &str,
+    direction: StringPositionDirection,
+) {
+    let non_negative_label = ctx.next_label("strpos_offset_non_negative");
+    let bad_label = ctx.next_label("strpos_offset_bad");
+    let ok_label = ctx.next_label("strpos_offset_ok");
+    let whole_label = ctx.next_label("strpos_offset_whole");
+    match (ctx.emitter.target.arch, direction) {
+        (Arch::AArch64, StringPositionDirection::Forward) => {
+            ctx.emitter.instruction("cmp x5, #0");                              // is the requested offset measured from the haystack end?
+            ctx.emitter.instruction(&format!("b.ge {}", non_negative_label));   // a non-negative offset is already absolute
+            ctx.emitter.instruction("add x5, x5, x2");                          // resolve a negative offset against the haystack length
+            ctx.emitter.instruction("cmp x5, #0");                              // did the negative offset reach past the haystack start?
+            ctx.emitter.instruction(&format!("b.ge {}", ok_label));             // an offset still inside the haystack is usable
+            ctx.emitter.instruction(&format!("b {}", bad_label));               // an offset before the haystack start is rejected
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp x5, x2");                              // compare the absolute offset against the haystack length
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));             // an offset at or before the haystack end is usable
+            ctx.emitter.label(&bad_label);
+        }
+        (Arch::AArch64, StringPositionDirection::Reverse) => {
+            ctx.emitter.instruction("cmp x5, #0");                              // is the requested offset measured from the haystack end?
+            ctx.emitter.instruction(&format!("b.ge {}", non_negative_label));   // a non-negative offset starts the right-to-left scan
+            ctx.emitter.instruction("neg x9, x5");                              // take the magnitude of the negative offset
+            ctx.emitter.instruction("cmp x9, x2");                              // did the negative offset reach past the haystack start?
+            ctx.emitter.instruction(&format!("b.gt {}", bad_label));            // an offset before the haystack start is rejected
+            ctx.emitter.instruction("cmp x9, x4");                              // can a match still overlap the trimmed tail?
+            ctx.emitter.instruction(&format!("b.lt {}", whole_label));          // a magnitude below the needle length leaves the whole haystack searchable
+            ctx.emitter.instruction("add x2, x2, x5");                          // drop the trailing bytes the negative offset excludes
+            ctx.emitter.instruction("add x2, x2, x4");                          // keep the bytes a match ending on the boundary still needs
+            ctx.emitter.label(&whole_label);
+            ctx.emitter.instruction("mov x5, #0");                              // a negative offset never slides the haystack, so matches are already absolute
+            ctx.emitter.instruction(&format!("b {}", ok_label));                // the negative-offset window is ready for the runtime helper
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp x5, x2");                              // compare the absolute offset against the haystack length
+            ctx.emitter.instruction(&format!("b.gt {}", bad_label));            // an offset past the haystack end is rejected
+            ctx.emitter.instruction("add x1, x1, x5");                          // slide the haystack pointer to the first searchable byte
+            ctx.emitter.instruction("sub x2, x2, x5");                          // shrink the haystack length to the searched window
+            ctx.emitter.instruction(&format!("b {}", ok_label));                // the non-negative-offset window is ready for the runtime helper
+            ctx.emitter.label(&bad_label);
+        }
+        (Arch::X86_64, StringPositionDirection::Forward) => {
+            ctx.emitter.instruction("cmp r8, 0");                               // is the requested offset measured from the haystack end?
+            ctx.emitter.instruction(&format!("jge {}", non_negative_label));    // a non-negative offset is already absolute
+            ctx.emitter.instruction("add r8, rsi");                             // resolve a negative offset against the haystack length
+            ctx.emitter.instruction("cmp r8, 0");                               // did the negative offset reach past the haystack start?
+            ctx.emitter.instruction(&format!("jge {}", ok_label));              // an offset still inside the haystack is usable
+            ctx.emitter.instruction(&format!("jmp {}", bad_label));             // an offset before the haystack start is rejected
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp r8, rsi");                             // compare the absolute offset against the haystack length
+            ctx.emitter.instruction(&format!("jle {}", ok_label));              // an offset at or before the haystack end is usable
+            ctx.emitter.label(&bad_label);
+        }
+        (Arch::X86_64, StringPositionDirection::Reverse) => {
+            ctx.emitter.instruction("cmp r8, 0");                               // is the requested offset measured from the haystack end?
+            ctx.emitter.instruction(&format!("jge {}", non_negative_label));    // a non-negative offset starts the right-to-left scan
+            ctx.emitter.instruction("mov r10, r8");                             // copy the negative offset before taking its magnitude
+            ctx.emitter.instruction("neg r10");                                 // take the magnitude of the negative offset
+            ctx.emitter.instruction("cmp r10, rsi");                            // did the negative offset reach past the haystack start?
+            ctx.emitter.instruction(&format!("jg {}", bad_label));              // an offset before the haystack start is rejected
+            ctx.emitter.instruction("cmp r10, rcx");                            // can a match still overlap the trimmed tail?
+            ctx.emitter.instruction(&format!("jl {}", whole_label));            // a magnitude below the needle length leaves the whole haystack searchable
+            ctx.emitter.instruction("add rsi, r8");                             // drop the trailing bytes the negative offset excludes
+            ctx.emitter.instruction("add rsi, rcx");                            // keep the bytes a match ending on the boundary still needs
+            ctx.emitter.label(&whole_label);
+            ctx.emitter.instruction("xor r8d, r8d");                            // a negative offset never slides the haystack, so matches are already absolute
+            ctx.emitter.instruction(&format!("jmp {}", ok_label));              // the negative-offset window is ready for the runtime helper
+            ctx.emitter.label(&non_negative_label);
+            ctx.emitter.instruction("cmp r8, rsi");                             // compare the absolute offset against the haystack length
+            ctx.emitter.instruction(&format!("jg {}", bad_label));              // an offset past the haystack end is rejected
+            ctx.emitter.instruction("add rdi, r8");                             // slide the haystack pointer to the first searchable byte
+            ctx.emitter.instruction("sub rsi, r8");                             // shrink the haystack length to the searched window
+            ctx.emitter.instruction(&format!("jmp {}", ok_label));              // the non-negative-offset window is ready for the runtime helper
+            ctx.emitter.label(&bad_label);
+        }
+    }
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!("{}{}", name, STRING_POSITION_OFFSET_OUT_OF_RANGE_SUFFIX),
+    );
+    ctx.emitter.label(&ok_label);
+    if direction == StringPositionDirection::Forward {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("add x1, x1, x5");                      // slide the haystack pointer to the first searchable byte
+                ctx.emitter.instruction("sub x2, x2, x5");                      // shrink the haystack length to the searched window
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("add rdi, r8");                         // slide the haystack pointer to the first searchable byte
+                ctx.emitter.instruction("sub rsi, r8");                         // shrink the haystack length to the searched window
+            }
+        }
+    }
+}
+
+/// Turns a window-relative `strpos()`-family match back into a haystack-absolute offset.
+///
+/// The runtime helper only ever saw the searched window, so a found position has to gain the
+/// base offset again. The not-found sentinel is signed and must survive untouched, which is
+/// why the addition is branched over instead of applied unconditionally.
+fn emit_string_position_rebase(ctx: &mut FunctionContext<'_>, name: &str) {
+    let done_label = ctx.next_label(&format!("{}_rebase_done", name));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // distinguish a window-relative match from the not-found sentinel
+            ctx.emitter.instruction(&format!("b.lt {}", done_label));           // leave the not-found sentinel alone
+            ctx.emitter.instruction("add x0, x0, x5");                          // restore the haystack-absolute offset of the match
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // distinguish a window-relative match from the not-found sentinel
+            ctx.emitter.instruction(&format!("jl {}", done_label));             // leave the not-found sentinel alone
+            ctx.emitter.instruction("add rax, r8");                             // restore the haystack-absolute offset of the match
+        }
+    }
+    ctx.emitter.label(&done_label);
 }
 
 /// Lowers `substr(string, offset, length?)` with target-local pointer arithmetic.
@@ -4377,7 +4634,11 @@ fn load_as_float(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> R
 }
 
 /// Loads a concrete scalar value as an integer runtime argument.
-fn load_as_int(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> Result<()> {
+pub(super) fn load_as_int(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    name: &str,
+) -> Result<()> {
     match ctx.load_value_to_result(value)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => Ok(()),
         PhpType::Void | PhpType::Never => {

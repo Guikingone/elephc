@@ -410,7 +410,11 @@ impl EvalValuesHook {
             Self::Gettype => one_arg(evaluated_args, values, eval_gettype_result),
             Self::Hypot => two_args(evaluated_args, values, eval_hypot_result),
             Self::Floatval => one_arg(evaluated_args, values, eval_floatval_result),
-            Self::Intval => one_arg(evaluated_args, values, eval_intval_result),
+            Self::Intval => match evaluated_args {
+                [value] => eval_intval_result(*value, None, values),
+                [value, base] => eval_intval_result(*value, Some(*base), values),
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::IsArray => one_arg(evaluated_args, values, eval_is_array_result),
             Self::IsBool => one_arg(evaluated_args, values, eval_is_bool_result),
             Self::IsDouble => one_arg(evaluated_args, values, eval_is_double_result),
@@ -583,13 +587,18 @@ impl EvalValuesHook {
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
             }),
-            Self::StringPosition => two_args(evaluated_args, values, |haystack, needle, values| {
+            Self::StringPosition => {
+                let (haystack, needle, offset) = match evaluated_args {
+                    [haystack, needle] => (*haystack, *needle, None),
+                    [haystack, needle, offset] => (*haystack, *needle, Some(*offset)),
+                    _ => return Err(EvalStatus::RuntimeFatal),
+                };
                 match name {
-                    "strpos" => eval_strpos_result(haystack, needle, values),
-                    "strrpos" => eval_strrpos_result(haystack, needle, values),
+                    "strpos" => eval_strpos_result(haystack, needle, offset, values),
+                    "strrpos" => eval_strrpos_result(haystack, needle, offset, values),
                     _ => Err(EvalStatus::RuntimeFatal),
                 }
-            }),
+            }
             Self::StringSearch => two_args(evaluated_args, values, |haystack, needle, values| {
                 match name {
                     "str_contains" => eval_str_contains_result(haystack, needle, values),

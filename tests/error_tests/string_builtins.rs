@@ -130,11 +130,14 @@ fn test_error_substr_wrong_args() {
 }
 
 /// Verifies that `strpos()` with only one argument produces the correct arity error.
+///
+/// The optional third parameter (`$offset`) is now accepted, so the derived phrasing is a
+/// range rather than an exact count.
 #[test]
 fn test_error_strpos_wrong_args() {
     expect_error(
         "<?php strpos(\"hi\");",
-        "strpos() takes exactly 2 arguments",
+        "strpos() takes 2 or 3 arguments",
     );
 }
 

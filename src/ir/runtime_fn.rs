@@ -504,6 +504,7 @@ pub enum RuntimeFnId {
     GetResourceId,
     GetResourceType,
     Gettype,
+    IntvalBase,
     IsCallable,
     IsFinite,
     IsInfinite,
@@ -749,7 +750,6 @@ impl RuntimeFnId {
             RuntimeFnId::Pi |
             RuntimeFnId::Pow |
             RuntimeFnId::Rad2deg |
-            RuntimeFnId::Range |
             RuntimeFnId::Rtrim |
             RuntimeFnId::Sha1 |
             RuntimeFnId::Sin |
@@ -762,8 +762,6 @@ impl RuntimeFnId {
             RuntimeFnId::StrStartsWith |
             RuntimeFnId::Strcasecmp |
             RuntimeFnId::Strcmp |
-            RuntimeFnId::Strpos |
-            RuntimeFnId::Strrpos |
             RuntimeFnId::Strstr |
             RuntimeFnId::Substr |
             RuntimeFnId::SubstrReplace |
@@ -778,8 +776,9 @@ impl RuntimeFnId {
             // empty separator, `str_pad()` empty pad string or bad pad type,
             // `str_repeat()` negative count, `str_split()` non-positive length,
             // `str_word_count()` unknown format, `count_chars()` unknown mode,
-            // `round()` unknown rounding mode,
+            // `range()` zero/negative/oversized `$step`, `round()` unknown rounding mode,
             // `strncmp()`/`strncasecmp()` negative compare length,
+            // `strpos()`/`strrpos()` `$offset` outside the haystack,
             // `substr_count()` empty needle or out-of-subject offset/length,
             // `wordwrap()` empty break or zero cutting width, `min()`/`max()` over an
             // empty array), so they must not be treated
@@ -793,6 +792,7 @@ impl RuntimeFnId {
             | RuntimeFnId::Explode
             | RuntimeFnId::Max
             | RuntimeFnId::Min
+            | RuntimeFnId::Range
             | RuntimeFnId::Round
             | RuntimeFnId::StrPad
             | RuntimeFnId::StrRepeat
@@ -800,6 +800,8 @@ impl RuntimeFnId {
             | RuntimeFnId::StrWordCount
             | RuntimeFnId::Strncasecmp
             | RuntimeFnId::Strncmp
+            | RuntimeFnId::Strpos
+            | RuntimeFnId::Strrpos
             | RuntimeFnId::SubstrCount
             | RuntimeFnId::BaseConvert
             | RuntimeFnId::ChunkSplit
@@ -868,6 +870,10 @@ impl RuntimeFnId {
                 )
             }
             RuntimeFnId::Sleep | RuntimeFnId::Usleep => crate::ir::Effects::WRITES_PROCESS,
+            // `intval($value, $base)` only inspects the subject's bytes: the string parser
+            // allocates nothing, and the boxed-`Mixed` entry point reads the cell before
+            // handing a non-string payload to the ordinary integer cast.
+            RuntimeFnId::IntvalBase => crate::ir::Effects::READS_HEAP,
             // `strtr()` reads the replacement-pair hash and materializes its result through
             // the shared concat reservation front end; it never throws or warns.
             RuntimeFnId::Strtr => crate::ir::Effects::from_bits_retain(
@@ -1088,6 +1094,13 @@ impl RuntimeFnId {
         self,
     ) -> crate::builtins::semantics::BuiltinResultOwnership {
         use crate::builtins::semantics::BuiltinResultOwnership;
+        // `intval($value, $base)` hands back a raw machine integer, never storage. Leaving it
+        // in the default `MayAliasArguments` bucket would keep an owned subject temporary
+        // alive for the integer's whole lifetime, which is the leak shape already documented
+        // for `Strpos` and `Strtr` below.
+        if matches!(self, RuntimeFnId::IntvalBase) {
+            return BuiltinResultOwnership::NonHeap;
+        }
         if matches!(
             self,
             RuntimeFnId::Abs
@@ -1692,6 +1705,7 @@ impl RuntimeFnId {
             RuntimeFnId::GetResourceId => "get_resource_id",
             RuntimeFnId::GetResourceType => "get_resource_type",
             RuntimeFnId::Gettype => "gettype",
+            RuntimeFnId::IntvalBase => "intval_base",
             RuntimeFnId::IsCallable => "is_callable",
             RuntimeFnId::IsFinite => "is_finite",
             RuntimeFnId::IsInfinite => "is_infinite",

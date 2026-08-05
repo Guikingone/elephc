@@ -256,7 +256,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_keys()` | `array_keys($arr): array` | Returns the array keys |
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
-| `array_search()` | `array_search($needle, $arr): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found |
+| `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
 | `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
 | `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks. A `$size` of `0` or less throws `\ValueError`. |
@@ -268,7 +268,7 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values. A negative `$num` throws `\ValueError`. |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |
 | `array_pad()` | `array_pad($arr, $size, $value): array` | Pad to length; a negative `$size` pads on the left. A `$size` whose magnitude exceeds `1073741824` — including `PHP_INT_MIN`, whose magnitude is not representable — throws `\ValueError`. |
-| `range()` | `range($start, $end): array` | Sequential integers |
+| `range()` | `range($start, $end, $step = 1): array` | Sequential integers. `$step`'s sign never picks the direction (`$start` vs `$end` does); a zero step, a negative step on an increasing range, or a step wider than the spanned interval raises `ValueError` |
 | `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2 |
 | `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values in both |
 | `array_diff_key()` | `array_diff_key($arr1, $arr2): array` | Keys in $arr1 not in $arr2 |
@@ -278,10 +278,10 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_udiff()` | `array_udiff($arr1, $arr2, $cmp): array` | Values in $arr1 not in $arr2, equality decided by the two-argument comparator (`$cmp($a, $b) === 0`). Supports string / function / non-capturing closure comparators. |
 | `array_uintersect()` | `array_uintersect($arr1, $arr2, $cmp): array` | Values in both arrays, equality decided by the comparator (`$cmp($a, $b) === 0`). |
 | `array_unique()` | `array_unique($arr): array` | Remove duplicates |
-| `array_reverse()` | `array_reverse($arr): array` | Reverse order |
+| `array_reverse()` | `array_reverse($arr, $preserve_keys = false): array` | Reverse order. `$preserve_keys` must be a literal `bool` in AOT mode because it changes the result shape: `true` keeps the original integer keys, producing an integer-keyed array |
 | `array_flip()` | `array_flip($arr): array` | Exchange keys and values, normalizing integer and numeric-string result keys |
 | `array_shift()` | `array_shift($arr): mixed` | Remove and return first |
-| `array_unshift()` | `array_unshift($arr, $value): int` | Prepend element |
+| `array_unshift()` | `array_unshift($arr, ...$values): int` | Prepend one or more elements, in source order, and return the new count |
 | `array_sum()` | `array_sum($arr): int\|float` | Sum of values |
 | `array_product()` | `array_product($arr): int\|float` | Product of values |
 | `array_column()` | `array_column($arr, $column_key): array` | Extract column from array of assoc rows |

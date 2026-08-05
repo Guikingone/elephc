@@ -78,6 +78,9 @@ pub(super) fn lower(
         RuntimeFnId::Gettype => Some({
             crate::codegen::lower_inst::builtins::lower_gettype(ctx, inst)
         }),
+        RuntimeFnId::IntvalBase => Some({
+            crate::codegen::lower_inst::builtins::types::lower_intval_base(ctx, inst)
+        }),
         RuntimeFnId::IsCallable => Some({
             crate::codegen::lower_inst::builtins::lower_is_callable(ctx, inst)
         }),

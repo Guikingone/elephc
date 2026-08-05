@@ -16,11 +16,12 @@ expect_builtin_arity_error!(
     "strlen() takes exactly 1 argument"
 );
 
-// Tests intval() arity error when called with no arguments.
+// Tests intval() arity error when called with no arguments. The optional second parameter
+// (`$base`) is now accepted, so the derived phrasing is a range rather than an exact count.
 expect_builtin_arity_error!(
     test_error_intval_wrong_args,
     "<?php intval();",
-    "intval() takes exactly 1 argument"
+    "intval() takes 1 or 2 arguments"
 );
 
 /// Verifies the `is_integer()` alias keeps the one-argument predicate contract.
@@ -48,10 +49,12 @@ fn test_error_strval_wrong_args() {
 }
 
 // Tests strrpos() arity error when called with only one argument (needs haystack + needle).
+// The optional third parameter (`$offset`) is now accepted, so the derived phrasing is a
+// range rather than an exact count.
 expect_builtin_arity_error!(
     test_error_strrpos_wrong_args,
     "<?php strrpos(\"abc\");",
-    "strrpos() takes exactly 2 arguments"
+    "strrpos() takes 2 or 3 arguments"
 );
 
 // Tests strstr() arity error when called with only one argument (needs haystack + needle).
@@ -178,18 +181,28 @@ expect_builtin_arity_error!(
     "str_ends_with() takes exactly 2 arguments"
 );
 
-// Tests implode() arity error when called with only one argument (needs separator + array).
+// Tests implode() arity error for a genuinely invalid call. The one-argument form
+// `implode($array)` is valid PHP and now compiles, so the rejected shapes are zero
+// arguments and three, which PHP reports as ArgumentCountError.
 expect_builtin_arity_error!(
     test_error_implode_wrong_args,
-    "<?php implode([\"a\"]);",
-    "implode() takes exactly 2 arguments"
+    "<?php implode();",
+    "implode() takes 1 or 2 arguments"
 );
 
-// Tests ucwords() arity error when called with no arguments.
+// Tests implode() arity error when called with more arguments than PHP accepts.
+expect_builtin_arity_error!(
+    test_error_implode_too_many_args,
+    "<?php implode(\",\", [1], 3);",
+    "implode() takes 1 or 2 arguments"
+);
+
+// Tests ucwords() arity error when called with no arguments. The optional second parameter
+// (`$separators`) is now accepted, so the derived phrasing is a range rather than an exact count.
 expect_builtin_arity_error!(
     test_error_ucwords_wrong_args,
     "<?php ucwords();",
-    "ucwords() takes exactly 1 argument"
+    "ucwords() takes 1 or 2 arguments"
 );
 
 // Tests str_ireplace() arity error when called with only two arguments (needs search, replace, subject).

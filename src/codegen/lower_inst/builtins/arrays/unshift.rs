@@ -7,7 +7,10 @@
 //!
 //! Key details:
 //! - Mutates the caller-visible array after copy-on-write splitting.
-//! - Grows the payload before prepending: `__rt_array_unshift` shifts slots and bumps the
+//! - Accepts PHP's full variadic argument list: `array_unshift($a)` (no values) reads the
+//!   current length, and N values are prepended one at a time in REVERSE source order so the
+//!   single-slot runtime helper reproduces PHP's `[v0, v1, …, old…]` result.
+//! - Grows the payload before every prepend: `__rt_array_unshift` shifts slots and bumps the
 //!   length without a capacity check, so a full array would write past its allocation.
 //! - Returns the new indexed-array length as PHP `int`.
 //! - Supports integer and boolean indexed payloads, matching the existing 8-byte helper.
@@ -21,26 +24,70 @@ use crate::types::PhpType;
 
 use super::super::super::{expect_operand, store_if_result};
 
-/// Lowers `array_unshift()` by ensuring uniqueness, prepending one scalar value, and returning count.
+/// Lowers `array_unshift()` by ensuring uniqueness, prepending every value, and returning count.
+///
+/// The operand list is `[array, value…]` with any number of trailing values, matching PHP's
+/// `array_unshift(array &$array, mixed ...$values)`. Values are prepended last-to-first so the
+/// one-slot `__rt_array_unshift` helper leaves them in source order at the front of the array.
 pub(super) fn lower_array_unshift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_unshift", 2)?;
+    if inst.operands.is_empty() {
+        return Err(CodegenIrError::invalid_module(
+            "array_unshift expected at least 1 arg, got 0".to_string(),
+        ));
+    }
     let array = expect_operand(inst, 0)?;
-    let value = expect_operand(inst, 1)?;
     let elem_ty = array_unshift_element_type(ctx.value_php_type(array)?)?;
-    let value_ty = ctx.value_php_type(value)?.codegen_repr();
-    require_array_unshift_value_type(&elem_ty, &value_ty)?;
+    for index in 1..inst.operands.len() {
+        let value = expect_operand(inst, index)?;
+        let value_ty = ctx.value_php_type(value)?.codegen_repr();
+        require_array_unshift_value_type(&elem_ty, &value_ty)?;
+    }
     require_array_unshift_result_type(&inst.result_php_type.codegen_repr())?;
-    let source_local = super::source_load_local_slot(ctx, array)?;
-    ensure_unique_array_unshift_source(ctx, array)?;
-    ensure_array_unshift_capacity(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
+    if inst.operands.len() > 1 {
+        let source_local = super::source_load_local_slot(ctx, array)?;
+        ensure_unique_array_unshift_source(ctx, array)?;
+        // Reverse source order: prepending v_last first and v_first last leaves the values in
+        // PHP's `[v_first, …, v_last, old…]` layout. Growth is re-checked per element because
+        // `__rt_array_grow` only guarantees room for one more slot at a time.
+        for index in (1..inst.operands.len()).rev() {
+            let value = expect_operand(inst, index)?;
+            ensure_array_unshift_capacity(ctx, array)?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => lower_array_unshift_aarch64(ctx, array, value)?,
+                Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value)?,
+            }
+        }
+        if let Some(slot) = source_local {
+            ctx.store_value_to_local(slot, array)?;
+        }
     }
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_array_unshift_aarch64(ctx, array, value)?,
-        Arch::X86_64 => lower_array_unshift_x86_64(ctx, array, value)?,
-    }
+    // The helper already returns the running count, but the local-slot write-back above may
+    // clobber the result register, and the value-less form never calls the helper at all.
+    // Re-reading the logical length after every mutation covers both cases identically.
+    load_array_unshift_length_to_result(ctx, array)?;
     store_if_result(ctx, inst)
+}
+
+/// Materializes the indexed array's logical length into the result register.
+///
+/// The length lives in the first payload word, so this is the post-mutation `int` count PHP
+/// returns from `array_unshift()`. It is read after every prepend and after the local-slot
+/// write-back, so no earlier call's return register has to survive.
+fn load_array_unshift_length_to_result(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction("ldr x0, [x0]");                            // read the indexed-array logical length as the int result
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rax")?;
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax]");                // read the indexed-array logical length as the int result
+        }
+    }
+    Ok(())
 }
 
 /// Returns the supported element payload type for an indexed-array `array_unshift()`.
@@ -110,7 +157,8 @@ fn ensure_unique_array_unshift_source(ctx: &mut FunctionContext<'_>, array: Valu
 /// copy-on-write split (`__rt_array_clone_shallow` allocates `capacity` slots and copies
 /// `length` slots) both overflowed the clone and read back adjacent heap header words as PHP
 /// values. `__rt_array_grow` at least doubles capacity, so one conditional growth is always
-/// enough for the single prepended element. It returns a possibly-relocated pointer, which the
+/// enough for the single prepended element — which is why a multi-value call re-runs this
+/// check before every individual prepend. It returns a possibly-relocated pointer, which the
 /// caller stores back into the array value before the local-slot write-back runs.
 fn ensure_array_unshift_capacity(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
     let done_label = ctx.next_label("array_unshift_capacity_ok");

@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_reverse(array $array): array
+function array_reverse(array $array, bool $preserve_keys = false): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 
