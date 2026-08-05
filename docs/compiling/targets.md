@@ -93,7 +93,10 @@ The durable tested inventory currently includes:
   Wasmtime, and Node, then executed under all three hosts with exact output and
   `exit(7)`;
 - independent-process WAT/WASM/npm/archive reproducibility, partial `fd_write`,
-  repeated Node imports, npm contents, and strict TypeScript NodeNext checks.
+  repeated Node imports, npm contents, and strict TypeScript NodeNext checks;
+- refcount balance measured as wasm page growth over 20000 iterations, each
+  against a control loop that deliberately retains its children — a flat page
+  count means nothing unless the control grows.
 
 It does not yet include a full php-src differential corpus or exhaustive EIR
 shape, ownership, argument/environment/preopen, and process-status coverage.
@@ -309,6 +312,17 @@ php-src's `Call to a member function hi() on null`. A raw object pointer used to
 be non-zero by construction, so nothing checked; the native backend already
 answered this correctly from the same EIR, so the guard is parity rather than
 caution.
+
+A second audit round found two more, both in the round-one fixes. The
+null-receiver check had been fused to the dispatch load, which misses the
+open-coded `Throwable` accessor — that path resolves and RETURNS before
+dispatching, so `$e = $a[9]; $e->getMessage()` read address 0 plus the property
+offset, printed an empty message and carried on. The check is now separate from
+the load and runs before every path. And a container write with a NEGATIVE index
+leaked: the setters reject one, because php-src stores a negative KEY there and a
+dense array has no slot for it, but the caller increfs the child before the call,
+so returning without storing stranded it — 24 wasm pages over 20000 such writes,
+now 3.
 
 Writing PAST the end is a known shared gap that neither of these caused. PHP
 treats `$a[3]` on a one-element array as a SPARSE key, so `count()` is 2; a dense
