@@ -101,7 +101,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **39
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **42
 compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
 php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
 php-src cannot parse at all, so it has no php-src output to match — meaning
@@ -112,7 +112,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 151 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 148 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -227,6 +227,31 @@ produces `int|null`, and the signature is what the call site believes. Anything
 reading that type inherits the wrong answer, `gettype()` included; patching it in
 one consumer would hide it from the others.
 
+**A method call on an INTERFACE-typed receiver** dispatches on the runtime class.
+This was refused as an `unknown receiver class`, which named the wrong problem: an
+interface is not an unknown class, it is a class-less one. It declares no storage
+and owns no body, so there is nothing to call into — but the object that arrives
+carries its real class id in its own header, which is exactly what PHP dispatches
+on. The callee is therefore the closed set of concrete implementors, and that set
+is enumerable at compile time, so these calls now go through the same class-id
+if-ladder that already serves virtual calls, with the implementors as its arms.
+
+Membership is walked in both directions, because PHP hands a class its parents'
+interfaces and an interface its parents' methods: `class C extends B` where `B
+implements J` and `interface J extends I` makes a `C` a legitimate `I`. Reading
+only a class's own `implements` list would miss every implementor that inherits
+the obligation. Enum cases and anonymous classes are ordinary implementors here.
+
+Two shapes stay refused, both because the implementors cannot share one stub, and
+both by the AUDIT rather than by the stub emitter — the emitter skips an interface
+it cannot serve, so an audit that accepted either would leave the module calling a
+function that was never defined. An interface with no concrete implementor has no
+arm to select. And an interface method with no declared return type lets each
+implementor pick its own, so a `void` body and an `int` body can differ in return
+ARITY and unbalance the wasm stack; that is caught even when the call discards the
+result. Unblocks `examples/intersection-types`, `examples/anonymous-classes` and
+`examples/enum-methods`.
+
 **A subclass argument** may bind to a parameter that declares one of its
 ancestors. The capability audit compares an argument's representation against the
 parameter's, and two object types with different class names read as two
@@ -238,8 +263,8 @@ virtual dispatch both answer off the value rather than the static type. Two obje
 pointers are therefore copy-compatible at the physical layer, and whether a given
 class may stand in for another is decided where the hierarchy is in scope — in
 the audit, which walks `parent` links and so admits a descendant and nothing
-else. An interface-typed parameter stays refused, on the separate ground that
-interface dispatch has no known receiver class. Verified byte-identical to
+else. An interface-typed parameter is a different question, answered by the
+interface dispatch described above rather than by this rule. Verified byte-identical to
 php-src 8.5.6 for inherited field offsets under a subclass that appends fields of
 other representations, virtual dispatch of an overridden method through an
 ancestor-typed parameter, a write through such a parameter landing on the base

@@ -719,6 +719,7 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "by_ref_source_shape_issue",
         "by_ref_parameter_representation_issue",
         "method_call_shape_issue",
+        "interface_method_call_shape_issue",
         "object_new_shape_issue",
         "property_get_shape_issue",
         "property_set_shape_issue",

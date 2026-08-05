@@ -3636,6 +3636,21 @@ fn method_call_shape_issue(
                 ));
             }
             let Some(class_info) = module.class_infos.get(&class_name) else {
+                // An INTERFACE receiver is not an unknown class, it is a class-less one. It
+                // names no storage and has no body, so what decides the call is the closed
+                // set of concrete implementors — enumerable here, and dispatched through the
+                // same class-id if-ladder an ordinary virtual call uses.
+                if module.interface_infos.contains_key(&class_name) {
+                    return interface_method_call_shape_issue(
+                        module,
+                        function,
+                        inst,
+                        arguments,
+                        &class_name,
+                        method_name,
+                        &method_key,
+                    );
+                }
                 return Some(format!("unknown receiver class {class_name}"));
             };
             let Some(signature) = class_info.methods.get(&method_key) else {
@@ -4780,6 +4795,164 @@ fn property_write_shape_issue(
         ));
     }
     None
+}
+
+/// Validates a method call whose receiver is typed by an INTERFACE.
+///
+/// The interface supplies the call's contract — the arity and storage the call site was
+/// compiled against — and every concrete implementor supplies a body that has to honour it.
+/// Both are checked: the arguments against the interface signature, then each implementor's
+/// body against its own declared signature, the call's arguments, and the result. That is
+/// the same obligation an ordinary virtual call carries, for the same reason: PHP picks the
+/// body from the RUNTIME class, so a set that disagrees anywhere cannot share one stub.
+fn interface_method_call_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+    arguments: &[ValueId],
+    interface_name: &str,
+    method_name: &str,
+    method_key: &str,
+) -> Option<String> {
+    let Some(interface_info) = module.interface_infos.get(interface_name) else {
+        return Some(format!("unknown receiver interface {interface_name}"));
+    };
+    let Some(signature) = interface_info.methods.get(method_key) else {
+        return Some(format!(
+            "unknown interface method {interface_name}::{method_name}"
+        ));
+    };
+    if let Some(issue) = method_signature_shape_issue(function, arguments, signature, method_name) {
+        return Some(issue);
+    }
+    let candidates = match interface_dispatch_candidates(module, interface_name, method_key) {
+        Ok(candidates) => candidates,
+        Err(issue) => return Some(issue),
+    };
+    for (candidate, implementation) in candidates {
+        let Some(candidate_info) = module.class_infos.get(&candidate) else {
+            return Some(format!("missing implementor class {candidate}"));
+        };
+        let Some(candidate_signature) = candidate_info.methods.get(method_key) else {
+            return Some(format!(
+                "missing implementor signature {candidate}::{method_name}"
+            ));
+        };
+        let Some(body) = find_method_function(module, &implementation, method_key) else {
+            return Some(format!(
+                "missing method body {implementation}::{method_name} for {interface_name} implementor {candidate}"
+            ));
+        };
+        if let Some(issue) = method_body_signature_shape_issue(
+            body,
+            candidate_signature,
+            IrType::Heap(IrHeapKind::Object),
+        ) {
+            return Some(issue);
+        }
+        if let Some(issue) = method_body_argument_shape_issue(module, function, inst, body) {
+            return Some(issue);
+        }
+        if let Some(issue) =
+            direct_method_result_shape_issue(inst, body, &candidate_signature.return_type)
+        {
+            return Some(issue);
+        }
+    }
+    None
+}
+
+/// Enumerates every concrete class that can arrive at an INTERFACE-typed receiver.
+///
+/// An interface names no storage and has no body: what arrives is one pointer to an object
+/// whose header carries its real class id, and PHP resolves the call on THAT class. So the
+/// receiver's static type is not the callee — the closed set of concrete implementors is,
+/// and the same class-id if-ladder that serves an ordinary virtual call serves this one.
+///
+/// Each pair is `(runtime class, class whose body implements the method)`; the two differ
+/// when an implementor inherits the implementation from a parent. Ordered by class id so the
+/// audit and `emit_method_dispatch_stubs` walk the arms in the same order.
+pub(super) fn interface_dispatch_candidates(
+    module: &Module,
+    interface_name: &str,
+    method_key: &str,
+) -> Result<Vec<(String, String)>, String> {
+    let mut candidates = module
+        .class_infos
+        .iter()
+        .filter(|(class_name, class_info)| {
+            !class_info.is_abstract
+                && class_info.methods.contains_key(method_key)
+                && class_implements_interface(module, class_name, interface_name)
+        })
+        .map(|(class_name, class_info)| {
+            (
+                class_info.class_id,
+                class_name.clone(),
+                class_info
+                    .method_impl_classes
+                    .get(method_key)
+                    .cloned()
+                    .unwrap_or_else(|| class_name.clone()),
+            )
+        })
+        .collect::<Vec<_>>();
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    if candidates.is_empty() {
+        return Err(format!(
+            "interface method {interface_name}::{method_key} has no concrete implementor"
+        ));
+    }
+    Ok(candidates
+        .into_iter()
+        .map(|(_, class_name, implementation)| (class_name, implementation))
+        .collect())
+}
+
+/// Returns whether `class_name` implements `interface_name`, by inheritance or extension.
+///
+/// Both directions have to be walked: PHP gives a class its parents' interfaces, and an
+/// interface its own parents' methods, so `class C extends B` where `B implements J` and
+/// `interface J extends I` makes a `C` a legitimate `I`. Reading only the class's own
+/// `interfaces` list would miss every implementor that inherits the obligation.
+fn class_implements_interface(module: &Module, class_name: &str, interface_name: &str) -> bool {
+    let mut current = Some(class_name.to_string());
+    let mut visited = HashSet::new();
+    while let Some(name) = current {
+        if !visited.insert(name.clone()) {
+            return false;
+        }
+        let Some(class_info) = module.class_infos.get(&name) else {
+            return false;
+        };
+        if class_info
+            .interfaces
+            .iter()
+            .any(|declared| interface_extends(module, declared, interface_name))
+        {
+            return true;
+        }
+        current = class_info.parent.clone();
+    }
+    false
+}
+
+/// Returns whether `interface_name` is, or transitively extends, `ancestor`.
+fn interface_extends(module: &Module, interface_name: &str, ancestor: &str) -> bool {
+    let mut stack = vec![interface_name.to_string()];
+    let mut visited = HashSet::new();
+    while let Some(name) = stack.pop() {
+        if name == ancestor {
+            return true;
+        }
+        if !visited.insert(name.clone()) {
+            continue;
+        }
+        if let Some(interface_info) = module.interface_infos.get(&name) {
+            stack.extend(interface_info.parents.iter().cloned());
+        }
+    }
+    false
 }
 
 /// Returns whether `class_name` belongs to the class subtree rooted at `ancestor`.

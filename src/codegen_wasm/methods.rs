@@ -88,6 +88,15 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
         }
     };
 
+    // An INTERFACE-typed receiver has no class of its own to call into: the body belongs to
+    // whichever concrete implementor actually arrives, which the object's own header names.
+    // The capability audit has already proved every implementor shares one stub signature.
+    if !ctx.module.class_infos.contains_key(&class_name)
+        && ctx.module.interface_infos.contains_key(&class_name)
+    {
+        return lower_interface_method_call(ctx, inst, receiver, &class_name, &method_name, &method_key);
+    }
+
     let ci = ctx
         .module
         .class_infos
@@ -189,6 +198,65 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     } else {
         for _ in 0..return_arity {
             ctx.fb.ins("drop", "discard unused method result");
+        }
+    }
+    Ok(())
+}
+
+/// Lowers a method call whose receiver is typed by an INTERFACE.
+///
+/// The receiver is one object pointer whose header names its real class, so the call goes
+/// through the same class-id if-ladder an ordinary virtual call uses — only the arm set
+/// differs: the interface's concrete implementors rather than one class's subtree. The
+/// capability audit proved that set shares a signature before this runs, and the stub itself
+/// is emitted by `emit_method_dispatch_stubs` from the same candidate list.
+///
+/// `void` needs the same treatment it gets on the direct path: the body pushes nothing, but
+/// PHP still gives the call EXPRESSION the value null, so it is supplied after the call.
+fn lower_interface_method_call(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    receiver: ValueId,
+    interface_name: &str,
+    method_name: &str,
+    method_key: &str,
+) -> Result<()> {
+    let candidates =
+        super::capability::interface_dispatch_candidates(ctx.module, interface_name, method_key)
+            .map_err(WasmError::Unsupported)?;
+    let body_returns_void = candidates
+        .first()
+        .and_then(|(_, implementation)| {
+            find_method_function(&ctx.module.class_methods, implementation, method_key)
+        })
+        .map(|body| body.return_type == IrType::Void)
+        .unwrap_or(false);
+    let return_arity = if body_returns_void {
+        0
+    } else {
+        WasmRepr::val_types(inst.result_type).len()
+    };
+
+    ctx.emit_load_value(receiver)?;
+    for &arg in inst.operands.iter().skip(1) {
+        ctx.emit_load_value(arg)?;
+    }
+    ctx.fb.ins(
+        &format!("call ${}", method_dispatch_symbol(interface_name, method_key)),
+        &format!("{}::{} (interface dispatch)", interface_name, method_name),
+    );
+
+    if body_returns_void && inst.result.is_some() {
+        ctx.fb.ins(
+            "i64.const 9223372036854775806",
+            "null sentinel: a void method call evaluates to null",
+        );
+    }
+    if let Some(result) = inst.result {
+        ctx.emit_store_value(result)?;
+    } else {
+        for _ in 0..return_arity {
+            ctx.fb.ins("drop", "discard unused interface method result");
         }
     }
     Ok(())
@@ -935,6 +1003,88 @@ pub(super) fn emit_method_dispatch_stubs(wm: &mut WatModule, module: &Module) ->
             };
 
             let stub_symbol = method_dispatch_symbol(introducer, method_key);
+            let wat = build_dispatch_stub(&stub_symbol, sig_f, &arms);
+            wm.add_raw_func(&wat);
+        }
+    }
+
+    emit_interface_dispatch_stubs(wm, module)
+}
+
+/// Emits one dispatch stub per (interface, method key), over the interface's implementors.
+///
+/// Same ladder, different arm set: a class subtree is what a virtual call can land on, and
+/// the set of concrete implementors is what an interface-typed call can land on. Interfaces
+/// and classes share one PHP name namespace, so the two stub families cannot collide.
+///
+/// An interface whose implementors disagree on the ABI, or one with an implementor whose
+/// body is missing, is skipped wholesale rather than emitted half-right — the capability
+/// gate refuses those calls, so no `call` will reference the stub that was not emitted.
+fn emit_interface_dispatch_stubs(wm: &mut WatModule, module: &Module) -> Result<()> {
+    let mut interfaces: Vec<_> = module.interface_infos.iter().collect();
+    interfaces.sort_by(|(left, left_info), (right, right_info)| {
+        left_info
+            .interface_id
+            .cmp(&right_info.interface_id)
+            .then_with(|| left.cmp(right))
+    });
+    for (interface_name, interface_info) in interfaces {
+        let mut method_keys: Vec<_> = interface_info.methods.keys().collect();
+        method_keys.sort();
+        for method_key in method_keys {
+            let method_key = method_key.as_str();
+            let Ok(candidates) = super::capability::interface_dispatch_candidates(
+                module,
+                interface_name,
+                method_key,
+            ) else {
+                continue;
+            };
+
+            let mut arms: Vec<(u64, String)> = Vec::new();
+            let mut sig_fn: Option<&Function> = None;
+            let mut unusable = false;
+            for (class_name, implementation) in &candidates {
+                let Some(class_ci) = module.class_infos.get(class_name) else {
+                    unusable = true;
+                    break;
+                };
+                let Some(method) =
+                    find_method_function(&module.class_methods, implementation, method_key)
+                else {
+                    unusable = true;
+                    break;
+                };
+                if let Some(signature) = sig_fn {
+                    if signature.return_type != method.return_type
+                        || signature.params.len() != method.params.len()
+                        || signature
+                            .params
+                            .iter()
+                            .zip(&method.params)
+                            .any(|(left, right)| left.ir_type != right.ir_type)
+                    {
+                        unusable = true;
+                        break;
+                    }
+                }
+                arms.push((class_ci.class_id, function_symbol(method)));
+                if sig_fn.is_none() {
+                    sig_fn = Some(method);
+                }
+            }
+            if unusable {
+                continue;
+            }
+            let Some(sig_f) = sig_fn else {
+                continue;
+            };
+            arms.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+
+            // PHP puts classes and interfaces in ONE name namespace, so an interface stub can
+            // never collide with a class stub, and each (interface, method key) pair is
+            // visited once. `render_checked` rejects a duplicate identifier regardless.
+            let stub_symbol = method_dispatch_symbol(interface_name, method_key);
             let wat = build_dispatch_stub(&stub_symbol, sig_f, &arms);
             wm.add_raw_func(&wat);
         }

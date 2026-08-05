@@ -13330,9 +13330,9 @@ echo $n, "|", $t, "\n";
 /// So the physical layer says two object pointers are copy-compatible, and the semantic question —
 /// may THIS class stand in for THAT one — is answered where the hierarchy is in scope, by
 /// `argument_is_a_descendant_of_the_parameter` in the capability audit. That helper walks `parent`
-/// links only, so it admits a descendant and nothing else; an INTERFACE-typed parameter stays
-/// refused (measured: `hear(Speaks $s)` given a `Dog` still reports `unknown receiver class
-/// Speaks`, an independent gap in interface dispatch).
+/// links only, so it admits a descendant and nothing else; an INTERFACE-typed parameter is a
+/// separate question, answered by the closed-implementor dispatch in
+/// `test_cli_wasm_dispatches_a_method_call_on_an_interface_typed_receiver`.
 ///
 /// Each case below pins an assumption the relaxation depends on, against php-src 8.5.6's own
 /// answers: inherited fields keep their offsets when the subclass adds its own — including fields
@@ -13441,6 +13441,164 @@ process.exitCode = wasi.start(instance);
             expected,
             "{name}: php-src's own answer ({})",
             String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies that a method call on an INTERFACE-typed receiver dispatches on the runtime class.
+///
+/// An interface-typed receiver was refused as an `unknown receiver class`, which named the wrong
+/// problem: an interface is not an unknown class, it is a class-less one. It declares no storage
+/// and owns no body, so there is nothing to call into — but the object that arrives carries its
+/// real class id in its own header, which is exactly what PHP dispatches on. The callee is
+/// therefore the closed set of concrete implementors, and that set is enumerable at compile time.
+///
+/// So this reuses the ladder that already serves virtual calls, with a different arm set: the
+/// interface's implementors rather than one class's subtree. Membership is walked in both
+/// directions, because PHP hands a class its parents' interfaces and an interface its parents'
+/// methods — `class C extends B` where `B implements J` and `interface J extends I` makes a `C` a
+/// legitimate `I`, and reading only a class's own `implements` list would miss it.
+///
+/// The refusals below are the two ways the set can fail to share one stub, and both must be
+/// caught by the AUDIT rather than by the stub emitter: the emitter simply skips an interface it
+/// cannot serve, so an audit that accepted one of these would leave the module calling a function
+/// that was never defined. An interface with no concrete implementor has no arm to select, and an
+/// interface method with no declared return type lets each implementor pick its own — including
+/// `void` against `int`, whose return arities differ, which would unbalance the wasm stack. That
+/// second one is caught even though the call DISCARDS the result.
+///
+/// Unblocks `examples/intersection-types`, `examples/anonymous-classes` and
+/// `examples/enum-methods`, all three byte-identical to php-src.
+#[test]
+fn test_cli_wasm_dispatches_a_method_call_on_an_interface_typed_receiver() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_interface_dispatch");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expected string below is php-src 8.5.6's own answer for the same program.
+    for (name, source, expected) in [
+        // Two implementors: the ladder must pick by runtime class.
+        (
+            "two.php",
+            "<?php\ninterface Speaks { public function say(): string; }\nclass Dog implements Speaks { public function say(): string { return \"woof\"; } }\nclass Cat implements Speaks { public function say(): string { return \"meow\"; } }\nfunction hear(Speaks $s): string { return $s->say(); }\necho hear(new Dog()), \"|\", hear(new Cat()), \"\\n\";\n",
+            "woof|meow\n",
+        ),
+        // The obligation is INHERITED twice over: `Puppy`/`Quiet` never say `implements`, and
+        // `Loud` extends the interface rather than declaring the method. `Quiet` also inherits
+        // the IMPLEMENTATION, so its arm must call `Dog`'s body.
+        (
+            "inherited.php",
+            "<?php\ninterface Speaks { public function say(): string; }\ninterface Loud extends Speaks {}\nclass Dog implements Loud { public function say(): string { return \"woof\"; } }\nclass Puppy extends Dog { public function say(): string { return \"yip\"; } }\nclass Quiet extends Dog {}\nfunction hear(Speaks $s): string { return $s->say(); }\necho hear(new Dog()), \"|\", hear(new Puppy()), \"|\", hear(new Quiet()), \"\\n\";\nfunction hearLoud(Loud $s): string { return $s->say(); }\necho hearLoud(new Puppy()), \"\\n\";\n",
+            "woof|yip|woof\nyip\n",
+        ),
+        // An ABSTRACT implementor cannot be instantiated, so what the ladder must cover is its
+        // concrete subclasses. Also passes an argument and returns a non-string.
+        (
+            "abstract.php",
+            "<?php\ninterface Scales { public function scale(int $by): int; }\nabstract class Shape implements Scales { public function __construct(protected int $size) {} }\nclass Square extends Shape { public function scale(int $by): int { return $this->size * $by; } }\nclass Circle extends Shape { public function scale(int $by): int { return $this->size * $by * 2; } }\nfunction grow(Scales $s, int $by): int { return $s->scale($by); }\necho grow(new Square(3), 4), \"|\", grow(new Circle(3), 4), \"\\n\";\n",
+            "12|24\n",
+        ),
+        // A `void` body pushes nothing, so the stub must not leave a phantom value behind.
+        (
+            "void.php",
+            "<?php\ninterface Sink { public function put(string $line): void; }\nclass Echoer implements Sink { public function put(string $line): void { echo \"e:\", $line, \"\\n\"; } }\nclass Prefixer implements Sink { public function __construct(private string $p) {} public function put(string $line): void { echo $this->p, $line, \"\\n\"; } }\nfunction drain(Sink $s): void { $s->put(\"x\"); $s->put(\"y\"); }\ndrain(new Echoer());\ndrain(new Prefixer(\"p:\"));\n",
+            "e:x\ne:y\np:x\np:y\n",
+        ),
+        // A single implementor: the one-armed ladder must still select it rather than fall
+        // through to the trap, across repeated calls through the same interface-typed local.
+        (
+            "sole.php",
+            "<?php\ninterface Only { public function v(): int; }\nclass Sole implements Only { public function v(): int { return 7; } }\nfunction take(Only $o): int { return $o->v(); }\necho take(new Sole()), \"\\n\";\n$o = new Sole();\necho take($o), take($o), \"\\n\";\n",
+            "7\n77\n",
+        ),
+        // The receiver reaches the call through an interface-typed PROPERTY, not a local.
+        (
+            "property.php",
+            "<?php\ninterface Fmt { public function f(string $v): string; }\nclass Up implements Fmt { public function f(string $v): string { return strtoupper($v); } }\nclass Down implements Fmt { public function f(string $v): string { return strtolower($v); } }\nclass Holder { public function __construct(private Fmt $fmt) {} public function run(string $v): string { return $this->fmt->f($v); } }\necho (new Holder(new Up()))->run(\"hi\"), \"|\", (new Holder(new Down()))->run(\"HI\"), \"\\n\";\n",
+            "HI|hi\n",
+        ),
+        // An enum case and an anonymous class are ordinary implementors to the dispatcher.
+        (
+            "enum.php",
+            "<?php\ninterface HasTag { public function tag(): string; }\nenum Colour: string implements HasTag { case Red = \"r\"; case Blue = \"b\"; public function tag(): string { return $this->value; } }\nclass Named implements HasTag { public function tag(): string { return \"n\"; } }\nfunction label(HasTag $h): string { return $h->tag(); }\necho label(Colour::Red), \"|\", label(Colour::Blue), \"|\", label(new Named()), \"\\n\";\n$anon = new class implements HasTag { public function tag(): string { return \"a\"; } };\necho label($anon), \"\\n\";\n",
+            "r|b|n\na\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the interface dispatch");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the interface dispatch under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    // Both refusals must come from the AUDIT. The stub emitter skips an interface it cannot
+    // serve, so an audit that accepted either of these would leave a `call` to a function that
+    // was never defined.
+    for (name, source, needle) in [
+        (
+            "ghost.php",
+            "<?php\ninterface Ghost { public function boo(): string; }\nfunction scare(Ghost $g): string { return $g->boo(); }\necho \"compiled\\n\";\n",
+            "has no concrete implementor",
+        ),
+        (
+            "arity.php",
+            "<?php\ninterface Runs { public function go(); }\nclass Silent implements Runs { public function go(): void { echo \"s\\n\"; } }\nclass Counting implements Runs { public function go(): int { echo \"c\\n\"; return 1; } }\nfunction fire(Runs $r): void { $r->go(); }\nfire(new Silent());\nfire(new Counting());\n",
+            "differs from method body",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let refused = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to run the compiler over the unservable interface");
+        let stderr = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            !refused.status.success() && stderr.contains(needle),
+            "{name} must be refused with {needle:?}: {stderr}"
         );
     }
 
