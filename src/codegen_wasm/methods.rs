@@ -262,6 +262,164 @@ fn lower_interface_method_call(
     Ok(())
 }
 
+/// Open-codes `Enum::cases()` and `Enum::tryFrom()`, which PHP synthesizes and no body backs.
+///
+/// `cases()` materializes every case, in DECLARATION order, into a pointer-slot array under
+/// `value_type` 4 — the same shape any `array<Object>` uses, so `count()`, `foreach` and an
+/// indexed read all reach it without a special case. The array takes a SHARE of each singleton.
+///
+/// `tryFrom()` walks the same cases as an equality ladder over the BACKING value and boxes the
+/// winner into a Mixed cell under tag 6; a miss boxes null under tag 8, which is exactly what
+/// makes `tryFrom(...) ?? Default` and `is_null(...)` answer the way php-src does.
+fn lower_enum_static_intrinsic(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    enum_name: &str,
+    method_key: &str,
+) -> Result<()> {
+    let cases = ctx
+        .module
+        .enum_infos
+        .get(enum_name)
+        .map(|info| info.cases.clone())
+        .ok_or_else(|| WasmError::Unsupported(format!("{enum_name} is not an enum")))?;
+
+    // Each case's singleton slot is placed by `statics`; resolving here keeps the emitter and
+    // `Op::ScopedConstantGet` reading the same address for the same case.
+    let mut placed = Vec::with_capacity(cases.len());
+    for case in &cases {
+        let label = format!("{enum_name}::{}", case.name);
+        let (slot, _, _) = super::statics::resolve_enum_case(ctx.module, ctx.static_slots, &label)
+            .ok_or_else(|| {
+                WasmError::Unsupported(format!("enum case {label} has no singleton slot"))
+            })?;
+        placed.push((case.clone(), slot.address));
+    }
+
+    if method_key == "cases" {
+        let array = ctx.fresh_temp(ValType::I32);
+        ctx.fb.ins(
+            &format!("(i64.const {})", placed.len()),
+            "one slot per declared case",
+        );
+        ctx.fb.ins("i64.const 8", "pointer slots");
+        ctx.fb
+            .ins("call $__rt_array_new", "fresh array for the cases");
+        ctx.fb.ins(&format!("local.set {}", array), "the cases array");
+        for (case, address) in &placed {
+            let singleton =
+                super::inst::emit_enum_case_singleton(ctx, enum_name, &case.name, case.value.as_ref(), *address)?;
+            ctx.fb.ins(
+                &format!("(call $__rt_incref (local.get {}))", singleton),
+                "the array shares the case singleton",
+            );
+            ctx.fb.ins(&format!("local.get {}", array), "the cases array");
+            ctx.fb
+                .ins(&format!("local.get {}", singleton), "the case singleton");
+            ctx.fb.ins("i64.const 4", "value_type 4 (object) for the slot");
+            ctx.fb.ins(
+                "call $__rt_array_push_ptr",
+                "append the case (may reallocate)",
+            );
+            ctx.fb.ins(&format!("local.set {}", array), "keep the live pointer");
+        }
+        ctx.fb.ins(&format!("local.get {}", array), "the completed cases array");
+        return super::inst::store_result(ctx, inst);
+    }
+
+    // tryFrom: an equality ladder over the backing value, boxing the winner or null.
+    //
+    // The needle is read into locals ONCE, before the ladder: a string arrives as a
+    // (pointer, length) pair, and re-evaluating the operand per case would both duplicate the
+    // work and re-run any effects the operand carries.
+    let needle = super::inst::operand(inst, 0)?;
+    let needle_ptr = ctx.fresh_temp(ValType::I32);
+    let needle_len = ctx.fresh_temp(ValType::I64);
+    let needle_int = ctx.fresh_temp(ValType::I64);
+    let string_backed = placed
+        .iter()
+        .any(|(case, _)| matches!(case.value, Some(crate::types::EnumCaseValue::Str(_))));
+    ctx.emit_load_value(needle)?;
+    if string_backed {
+        ctx.fb.ins(&format!("local.set {}", needle_len), "needle length");
+        ctx.fb.ins(&format!("local.set {}", needle_ptr), "needle bytes");
+    } else {
+        ctx.fb.ins(&format!("local.set {}", needle_int), "needle value");
+    }
+
+    let result = ctx.fresh_temp(ValType::I32);
+    ctx.fb.ins(
+        "(call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0))",
+        "start from php-src's answer for no match: null",
+    );
+    ctx.fb.ins(&format!("local.set {}", result), "the tryFrom result");
+    let matched = ctx.fresh_temp(ValType::I32);
+    for (case, address) in &placed {
+        let Some(value) = case.value.as_ref() else {
+            return Err(WasmError::Unsupported(format!(
+                "enum case {enum_name}::{} has no backing value",
+                case.name
+            )));
+        };
+        match value {
+            crate::types::EnumCaseValue::Int(number) => {
+                ctx.fb.ins(&format!("local.get {}", needle_int), "the needle");
+                ctx.fb.ins(&format!("i64.const {number}"), "this case's backing value");
+                ctx.fb.ins("i64.eq", "does the needle match this case?");
+            }
+            crate::types::EnumCaseValue::Str(text) => {
+                let (pointer, length) = ctx.default_str_literal(text)?;
+                // The length is checked FIRST and separately: `__rt_str_region_eq` reads
+                // `length` bytes of the needle, so comparing a shorter needle against a longer
+                // case would read past its end.
+                ctx.fb.ins(&format!("(local.set {} (i32.const 0))", matched), "assume no match");
+                ctx.fb.ins(
+                    &format!(
+                        "(if (i64.eq (local.get {}) (i64.const {length}))",
+                        needle_len
+                    ),
+                    "same length?",
+                );
+                ctx.fb.ins(
+                    &format!(
+                        "(then (local.set {} (i32.wrap_i64 (call $__rt_str_region_eq (local.get {}) (i32.const {pointer}) (i64.const {length}) (i64.const 0))))))",
+                        matched, needle_ptr
+                    ),
+                    "then compare the bytes",
+                );
+                ctx.fb.ins(&format!("local.get {}", matched), "does the needle match this case?");
+            }
+        }
+        ctx.fb.ins("(if (then", "this case is the match");
+        let singleton = super::inst::emit_enum_case_singleton(
+            ctx,
+            enum_name,
+            &case.name,
+            case.value.as_ref(),
+            *address,
+        )?;
+        // The cell takes a SHARE of the singleton, and the null cell built above is dropped.
+        ctx.fb.ins(
+            &format!("(call $__rt_decref_any (local.get {}))", result),
+            "release the placeholder this match replaces",
+        );
+        ctx.fb.ins("i64.const 6", "Mixed object tag");
+        ctx.fb.ins(
+            &format!("(i64.extend_i32_u (local.get {}))", singleton),
+            "the matching case singleton",
+        );
+        ctx.fb.ins("i64.const 0", "unused high payload");
+        ctx.fb.ins(
+            "call $__rt_mixed_from_value",
+            "box the case as the tryFrom result",
+        );
+        ctx.fb.ins(&format!("local.set {}", result), "keep the boxed case");
+        ctx.fb.ins("))", "close this case's match");
+    }
+    ctx.fb.ins(&format!("local.get {}", result), "the tryFrom result");
+    super::inst::store_result(ctx, inst)
+}
+
 /// Resolves the open-coded `Throwable` accessor for one method call, if any.
 ///
 /// A virtual call can land on any concrete class in the introducer's subtree, so the decision
@@ -782,6 +940,16 @@ pub(super) fn lower_static_method_call(ctx: &mut FnCtx, inst: &Instruction) -> R
         .class_infos
         .get(&receiver_class)
         .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", receiver_class)))?;
+
+    // `cases()` and `tryFrom()` are SYNTHESIZED by PHP for every enum and have no body to call,
+    // so they are open-coded here against the case singletons. The capability audit already
+    // proved the shapes; `from()` is not among them and falls through to fail as a missing body,
+    // because it must raise php-src's `ValueError` on no match.
+    if ctx.module.enum_infos.contains_key(&receiver_class)
+        && matches!(method_key.as_str(), "cases" | "tryfrom")
+    {
+        return lower_enum_static_intrinsic(ctx, inst, &receiver_class, &method_key);
+    }
 
     let true_static = ci.static_methods.contains_key(&method_key);
     let lexical_instance = !true_static

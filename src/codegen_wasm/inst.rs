@@ -3509,10 +3509,33 @@ fn lower_scoped_constant_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
             case.value.clone(),
         )
     };
+    let cached =
+        emit_enum_case_singleton(ctx, &enum_name, &case_name, case_value.as_ref(), address)?;
+    ctx.fb.ins(
+        &format!("(call $__rt_incref (local.get {}))", cached),
+        "a case read hands out an OWNED reference",
+    );
+    ctx.fb.ins(&format!("local.get {}", cached), "the case singleton");
+    store_result(ctx, inst)
+}
+
+/// Materializes one enum case singleton, once, and answers the local holding its pointer.
+///
+/// A case is PHP's own class constant holding a SINGLETON object, so the slot starts at zero and
+/// the object is built on first use — the same lazy shape the native backend uses. The reference
+/// is left BORROWED: a plain `Suit::Hearts` read increfs it for its consumer, and `cases()`
+/// increfs it for the array, so folding the incref in here would double-count one of them.
+pub(super) fn emit_enum_case_singleton(
+    ctx: &mut FnCtx,
+    enum_name: &str,
+    case_name: &str,
+    case_value: Option<&crate::types::EnumCaseValue>,
+    address: u32,
+) -> Result<String> {
     let class_info = ctx
         .module
         .class_infos
-        .get(&enum_name)
+        .get(enum_name)
         .cloned()
         .ok_or_else(|| WasmError::Unsupported(format!("enum {enum_name} has no class shape")))?;
 
@@ -3525,17 +3548,17 @@ fn lower_scoped_constant_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     ctx.fb
         .ins(&format!("(if (i32.eqz (local.get {}))", cached), "materialize once");
     ctx.fb.ins("(then", "first read of this case");
-    let object = super::objects::emit_object_allocation(ctx, &enum_name, &class_info)?;
+    let object = super::objects::emit_object_allocation(ctx, enum_name, &class_info)?;
     // `name` is every case's property; a BACKED enum adds `value`.
     let (_, name_offset, _) = super::objects::resolve_property_slot(&class_info, "name")?;
     super::objects::emit_scalar_default(
         ctx,
         &object,
         name_offset,
-        &crate::codegen::LiteralDefaultValue::Str(case_name.clone()),
+        &crate::codegen::LiteralDefaultValue::Str(case_name.to_string()),
         "name",
     )?;
-    if let Some(value) = &case_value {
+    if let Some(value) = case_value {
         let (_, value_offset, _) = super::objects::resolve_property_slot(&class_info, "value")?;
         let literal = match value {
             crate::types::EnumCaseValue::Int(number) => {
@@ -3556,13 +3579,7 @@ fn lower_scoped_constant_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         "use it for this read too",
     );
     ctx.fb.ins("))", "close the materialization guard");
-
-    ctx.fb.ins(
-        &format!("(call $__rt_incref (local.get {}))", cached),
-        "a case read hands out an OWNED reference",
-    );
-    ctx.fb.ins(&format!("local.get {}", cached), "the case singleton");
-    store_result(ctx, inst)
+    Ok(cached)
 }
 
 /// Drops the reference a static store CONSUMED, when the EIR handed one over.

@@ -724,6 +724,7 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "property_get_shape_issue",
         "property_set_shape_issue",
         "static_method_call_shape_issue",
+        "enum_static_intrinsic_shape_issue",
         "static_property_shape_issue",
         "scoped_constant_shape_issue",
         "method_signature_shape_issue",

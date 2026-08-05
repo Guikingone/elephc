@@ -13872,6 +13872,129 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `Enum::cases()` and `Enum::tryFrom()`, which PHP synthesizes and no body backs.
+///
+/// The refusal was `missing method body Color::cases`, which was true and beside the point: PHP
+/// generates these for every enum, so there is no function to find on either backend. They are
+/// open-coded against the case singletons instead, the same treatment the Throwable accessors
+/// already get, and audited against what the emitter produces rather than against a body that
+/// will never exist.
+///
+/// `cases()` materializes every case in DECLARATION order into a pointer-slot array under
+/// `value_type` 4 — an ordinary `array<Object>`, so `count()`, `foreach` and an indexed read all
+/// reach it with no special case. The array takes a SHARE of each singleton; measured balanced at
+/// 20000 calls holding 3 wasm pages against 32 for a loop that deliberately retains its children.
+///
+/// `tryFrom()` walks the cases as an equality ladder over the BACKING value and boxes the winner
+/// under Mixed tag 6, a miss boxing null under tag 8 — which is what lets `?? Default`, `is_null`
+/// and `===` answer the way php-src does. For a string-backed enum the LENGTH is compared first
+/// and separately, because the byte comparison reads the case's length from the needle and would
+/// otherwise run past a shorter one; `"spade"` against `Spades = "spades"` and `"clubs"` against
+/// `Clubs = "club"` are the two directions of that, and the empty string is the degenerate case.
+///
+/// `from()` is deliberately still refused. It has to raise php-src's `ValueError` naming the enum
+/// and the offending value when nothing matches, and answering it without that raise would turn a
+/// fatal into a wrong value.
+///
+/// Reading a property straight off the boxed `tryFrom` result is a separate prop_get gap
+/// (`property receiver must resolve to a concrete object, got Heap(Mixed)/Mixed`), so the cases
+/// below reach the result through `is_null`, `??` and `===` instead of through `->name`.
+#[test]
+fn test_cli_wasm_open_codes_enum_cases_and_try_from() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_enum_intrinsics");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expected string below is php-src 8.5.6's own answer for the same program.
+    for (name, source, expected) in [
+        // An INT-backed enum: cases() in declaration order, and tryFrom hit/miss.
+        (
+            "int.php",
+            "<?php\nenum Color: int {\n    case Red = 1;\n    case Green = 2;\n    case Blue = 3;\n}\necho count(Color::cases()), \"\\n\";\nforeach (Color::cases() as $c) { echo $c->name, \"=\", $c->value, \" \"; }\necho \"\\n\";\necho is_null(Color::tryFrom(2)) ? \"null\" : \"found\", \"\\n\";\necho is_null(Color::tryFrom(9)) ? \"null\" : \"found\", \"\\n\";\n$picked = Color::tryFrom(4) ?? Color::Red;\necho $picked === Color::Red ? \"fellback\" : \"matched\", \"\\n\";\n$hit = Color::tryFrom(3) ?? Color::Red;\necho $hit === Color::Blue ? \"blue\" : \"other\", \"\\n\";\n",
+            "3\nRed=1 Green=2 Blue=3 \nfound\nnull\nfellback\nblue\n",
+        ),
+        // A STRING-backed enum, with the two prefix directions and the empty needle.
+        (
+            "string.php",
+            "<?php\nenum Suit: string {\n    case Hearts = \"h\";\n    case Spades = \"spades\";\n    case Clubs = \"club\";\n}\necho count(Suit::cases()), \"\\n\";\nforeach (Suit::cases() as $s) { echo $s->name, \"=\", $s->value, \" \"; }\necho \"\\n\";\necho is_null(Suit::tryFrom(\"spades\")) ? \"null\" : \"found\", \"\\n\";\necho is_null(Suit::tryFrom(\"spade\")) ? \"null\" : \"found\", \"\\n\";\necho is_null(Suit::tryFrom(\"clubs\")) ? \"null\" : \"found\", \"\\n\";\necho is_null(Suit::tryFrom(\"h\")) ? \"null\" : \"found\", \"\\n\";\necho is_null(Suit::tryFrom(\"\")) ? \"null\" : \"found\", \"\\n\";\n$s = Suit::tryFrom(\"club\") ?? Suit::Hearts;\necho $s === Suit::Clubs ? \"clubs\" : \"other\", \"\\n\";\n",
+            "3\nHearts=h Spades=spades Clubs=club \nfound\nnull\nnull\nfound\nnull\nclubs\n",
+        ),
+        // A PURE enum has cases() but no backing value, so no tryFrom to call.
+        (
+            "pure.php",
+            "<?php\nenum Direction {\n    case Up;\n    case Down;\n}\necho count(Direction::cases()), \"\\n\";\nforeach (Direction::cases() as $d) { echo $d->name, \" \"; }\necho \"\\n\";\n",
+            "2\nUp Down \n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the enum intrinsics");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the enum intrinsics under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    // `from()` must stay refused: without php-src's ValueError on no match it would answer a
+    // wrong value where PHP terminates.
+    let from = dir.join("from.php");
+    fs::write(
+        &from,
+        "<?php\nenum Color: int { case Red = 1; }\necho Color::from(1)->name, \"\\n\";\n",
+    )
+    .unwrap();
+    let refused = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&from)
+        .output()
+        .expect("failed to run the compiler over Enum::from");
+    assert!(
+        !refused.status.success(),
+        "Enum::from must stay refused: {}",
+        String::from_utf8_lossy(&refused.stdout)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

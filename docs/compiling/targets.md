@@ -101,18 +101,21 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **44
-compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
-php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
-php-src cannot parse at all, so it has no php-src output to match — meaning
-every example this target compiles, it also runs correctly.
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **45
+compile to `wasm32-wasi`**, and every one of them except `ifdef` and `enums`
+reproduces php-src's output byte for byte. Those two have no php-src output to
+match rather than a different one: `ifdef` uses an Elephc-only preprocessor form
+php-src cannot parse at all, and `enums` reaches the Elephc-only builtin
+`SortDirection` enum, which php-src answers with `Class "SortDirection" not
+found` — this target prints the rest, including the line php-src never gets to.
+So every example this target compiles, it also runs correctly.
 
 When comparing against php-src yourself, pass the script path as the module's
 first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 146 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 145 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -128,7 +131,7 @@ times over:
 | Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
 | All three together | 17 |
 
-The blocker-count distribution says the same thing: of the 146 that do not
+The blocker-count distribution says the same thing: of the 145 that do not
 compile, 14 have one distinct blocker, 19 have two, 22 have three, 22 have four,
 and the tail runs past eleven. Progress is roughly one example per fix, so the
 example counter is a poor guide to correctness work — running a differential
@@ -236,6 +239,26 @@ where php-src answers true. The checker infers the read as `int` while the EIR
 produces `int|null`, and the signature is what the call site believes. Anything
 reading that type inherits the wrong answer, `gettype()` included; patching it in
 one consumer would hide it from the others.
+
+**`Enum::cases()` and `Enum::tryFrom()`** are open-coded against the case
+singletons. The refusal was `missing method body Color::cases`, which was true
+and beside the point: PHP synthesizes both for every enum, so there is no
+function to find on either backend. They are emitted directly instead — the same
+treatment the `Throwable` accessors get — and audited against what the emitter
+produces rather than against a body that will never exist.
+
+`cases()` materializes every case in DECLARATION order into a pointer-slot array
+under `value_type` 4, which is an ordinary `array<Object>`: `count()`, `foreach`
+and an indexed read all reach it with no special case. `tryFrom()` walks the
+cases as an equality ladder over the BACKING value and boxes the winner under
+Mixed tag 6, a miss boxing null under tag 8 — which is what makes `?? Default`,
+`is_null` and `===` answer the way php-src does. For a string-backed enum the
+length is compared first and separately, since the byte comparison reads the
+case's length from the needle and would otherwise run past a shorter one.
+
+`from()` stays refused: it must raise php-src's `ValueError` naming the enum and
+the offending value when nothing matches, and answering it without that raise
+would turn a fatal into a wrong value. Unblocks `examples/enums`.
 
 **An element that is itself an ARRAY or an OBJECT** can be read out of an indexed
 array. This was refused because of the MISS rather than the hit: every accepted

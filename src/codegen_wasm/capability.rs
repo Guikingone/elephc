@@ -4881,6 +4881,116 @@ fn interface_method_call_shape_issue(
     None
 }
 
+/// Audits `Enum::cases()` and `Enum::tryFrom()`, which PHP synthesizes and no body backs.
+///
+/// Returns `None` when the call is not one of them, so the caller falls through to the ordinary
+/// body-backed path; `Some(None)` when it is one and is acceptable; `Some(Some(issue))` when it
+/// is one and is not.
+///
+/// `from()` is deliberately left to the ordinary path, where it fails as a missing body: it has
+/// to raise php-src's `ValueError` naming both the enum and the offending value on no match, and
+/// answering it without that raise would turn a fatal into a wrong value.
+fn enum_static_intrinsic_shape_issue(
+    module: &Module,
+    owner: &Function,
+    inst: &Instruction,
+    enum_name: &str,
+    method_key: &str,
+) -> Option<Option<String>> {
+    let Some(enum_info) = module.enum_infos.get(enum_name) else {
+        return None;
+    };
+    match method_key {
+        "cases" => {
+            if !inst.operands.is_empty() {
+                return Some(Some(format!(
+                    "{enum_name}::cases() takes no arguments, got {}",
+                    inst.operands.len()
+                )));
+            }
+            // The emitter builds a pointer-slot array of the case singletons, so the result has
+            // to be exactly that: an owned `array<Enum>` of object pointers.
+            let result_php = inst.result_php_type.codegen_repr();
+            let expects_array = matches!(
+                &result_php,
+                PhpType::Array(element)
+                    if matches!(element.codegen_repr(), PhpType::Object(class) if class == enum_name)
+            );
+            if inst.result.is_none()
+                || inst.result_type != IrType::Heap(IrHeapKind::Array)
+                || !expects_array
+            {
+                return Some(Some(format!(
+                    "{enum_name}::cases() must produce an owned array<{enum_name}>, got {:?}/{result_php:?}",
+                    inst.result_type
+                )));
+            }
+            if inst.result_ownership != Ownership::Owned {
+                return Some(Some(format!(
+                    "{enum_name}::cases() result must be owned, got {:?}",
+                    inst.result_ownership
+                )));
+            }
+            Some(None)
+        }
+        "tryfrom" => {
+            // Only a BACKED enum has a value to look up; a pure one has no `tryFrom` at all.
+            let Some(backing) = enum_info.backing_type.as_ref().map(PhpType::codegen_repr) else {
+                return Some(Some(format!(
+                    "{enum_name}::tryFrom() needs a backed enum"
+                )));
+            };
+            let [argument] = inst.operands.as_slice() else {
+                return Some(Some(format!(
+                    "{enum_name}::tryFrom() takes one argument, got {}",
+                    inst.operands.len()
+                )));
+            };
+            let Some(value) = owner.value(*argument) else {
+                return Some(Some("tryFrom argument is missing from the value table".to_string()));
+            };
+            let argument_matches = match (&backing, value.ir_type, value.php_type.codegen_repr()) {
+                (PhpType::Int, IrType::I64, PhpType::Int) => true,
+                (PhpType::Str, IrType::Str, PhpType::Str) => true,
+                _ => false,
+            };
+            if !argument_matches {
+                return Some(Some(format!(
+                    "{enum_name}::tryFrom() expects its {backing:?} backing value, got {:?}/{:?}",
+                    value.ir_type,
+                    value.php_type.codegen_repr()
+                )));
+            }
+            // A miss is null, so the result has to be able to hold one: a Mixed cell.
+            let result_php = inst.result_php_type.codegen_repr();
+            if inst.result.is_none()
+                || inst.result_type != IrType::Heap(IrHeapKind::Mixed)
+                || result_php != PhpType::Mixed
+            {
+                return Some(Some(format!(
+                    "{enum_name}::tryFrom() must produce a boxed Mixed result, got {:?}/{result_php:?}",
+                    inst.result_type
+                )));
+            }
+            if inst.result_ownership != Ownership::Owned {
+                return Some(Some(format!(
+                    "{enum_name}::tryFrom() result must be owned, got {:?}",
+                    inst.result_ownership
+                )));
+            }
+            // Every case needs a backing value the ladder can compare against.
+            if let Some(case) = enum_info.cases.iter().find(|case| case.value.is_none()) {
+                return Some(Some(format!(
+                    "{enum_name}::{} has no backing value to match",
+                    case.name
+                )));
+            }
+            Some(None)
+        }
+        _ => None,
+    }
+}
+
 /// Enumerates every concrete class that can arrive at an INTERFACE-typed receiver.
 ///
 /// An interface names no storage and has no body: what arrives is one pointer to an object
@@ -5139,6 +5249,17 @@ fn static_method_call_shape_issue(
         method_signature_shape_issue(owner, &inst.operands, signature, method_name)
     {
         return Some(issue);
+    }
+    // `cases()` and `tryFrom()` are SYNTHESIZED by PHP for every enum: they have a signature but
+    // no body on either backend, so they are audited against what the emitter open-codes rather
+    // than against a function that will never exist — the same treatment the Throwable accessors
+    // get.
+    if module.enum_infos.contains_key(receiver_class.as_str()) {
+        if let Some(result) =
+            enum_static_intrinsic_shape_issue(module, owner, inst, &receiver_class, &method_key)
+        {
+            return result;
+        }
     }
     let Some(body) = find_method_function(module, implementation, &method_key) else {
         return Some(format!(
