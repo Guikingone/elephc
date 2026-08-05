@@ -1653,24 +1653,36 @@ pub(crate) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     lower_indexed_array_sort(ctx, inst, "rsort", "__rt_rsort_int", Some("__rt_rsort_str"))
 }
 
-/// Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper.
+/// Lowers `asort()`, routing hash receivers to the insertion-order value sorter.
+///
+/// A hash-backed associative array keeps its key/value association while its iteration
+/// order changes, which `__rt_hash_asort` implements by relinking the table's chain.
+/// Indexed arrays have no separate key storage, so they keep using the slot permuter.
 pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "asort", 1)?;
+    if sort_receiver_is_hash(ctx, inst)? {
+        return lower_hash_link_sort(ctx, inst, "__rt_hash_asort");
+    }
     lower_indexed_array_sort(ctx, inst, "asort", "__rt_asort", None)
 }
 
-/// Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
+/// Lowers `arsort()`, routing hash receivers to the descending insertion-order value sorter.
 pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "arsort", 1)?;
+    if sort_receiver_is_hash(ctx, inst)? {
+        return lower_hash_link_sort(ctx, inst, "__rt_hash_arsort");
+    }
     lower_indexed_array_sort(ctx, inst, "arsort", "__rt_arsort", None)
 }
 
 /// Lowers `ksort()` through the key-sort helper surface.
 pub(crate) fn lower_ksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_key_sort(ctx, inst, "ksort", "__rt_ksort")
+    lower_array_key_sort(ctx, inst, "ksort", KeySortOrder::Ascending)
 }
 
 /// Lowers `krsort()` through the reverse key-sort helper surface.
 pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_key_sort(ctx, inst, "krsort", "__rt_krsort")
+    lower_array_key_sort(ctx, inst, "krsort", KeySortOrder::Descending)
 }
 
 /// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.
@@ -2888,24 +2900,93 @@ fn move_sort_callback_int_result_to_first_arg(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.instruction(&format!("mov {}, {}", arg_reg, result_reg));       // move the callback result into the runtime cast argument register
 }
 
-/// Calls the key-sort helper for array-like values.
+/// Direction of a PHP key sort (`ksort` versus `krsort`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeySortOrder {
+    /// Ascending key order, as produced by `ksort()`.
+    Ascending,
+    /// Descending key order, as produced by `krsort()`.
+    Descending,
+}
+
+/// Lowers `ksort()` / `krsort()` for every receiver shape the backend can represent.
+///
+/// Hash-backed associative arrays are reordered by `__rt_hash_ksort` / `__rt_hash_krsort`,
+/// which relink the table's insertion-order chain and therefore keep each key attached to
+/// its own value. An indexed array stores its keys implicitly as slot positions `0..n-1`,
+/// which are already in ascending key order, so `ksort()` on one is a genuine no-op, as is
+/// either sort over a statically empty indexed array. `krsort()` over a non-empty indexed
+/// array is rejected instead of silently leaving the receiver untouched, because that
+/// storage has no room for a descending key order.
 fn lower_array_key_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
-    helper: &str,
+    order: KeySortOrder,
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    require_array_key_sort_type(ctx.value_php_type(array)?, name)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(array, "x0")?;
+    match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::AssocArray { .. } => {
+            let helper = match order {
+                KeySortOrder::Ascending => "__rt_hash_ksort",
+                KeySortOrder::Descending => "__rt_hash_krsort",
+            };
+            lower_hash_link_sort(ctx, inst, helper)
         }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(array, "rdi")?;
+        PhpType::Array(elem)
+            if order == KeySortOrder::Ascending
+                || matches!(elem.codegen_repr(), PhpType::Never | PhpType::Void) =>
+        {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+            store_if_result(ctx, inst)
         }
+        PhpType::Array(elem) => Err(CodegenIrError::unsupported(format!(
+            "{} for indexed array<{:?}>: an indexed array stores its keys as slot \
+             positions 0..n-1, so descending key order has no representation; convert the \
+             receiver to an associative array (for example with array_reverse($a, true)) \
+             before sorting it by key",
+            name, elem
+        ))),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
     }
+}
+
+/// Reports whether a mutating array builtin's first operand is a hash-backed array.
+fn sort_receiver_is_hash(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<bool> {
+    let array = expect_operand(inst, 0)?;
+    Ok(matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ))
+}
+
+/// Calls one of the `__rt_hash_*sort` insertion-order relinking helpers.
+///
+/// The receiver is split with `__rt_hash_ensure_unique` first, so an aliased copy taken
+/// before the call keeps the original iteration order, and the possibly relocated pointer
+/// is written back to the source local before the sorter runs. The helpers only rewrite
+/// the table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
+fn lower_hash_link_sort(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    helper: &str,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let source_local = source_load_local_slot(ctx, array)?;
+    ensure_unique_hash_sort_source(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, array_arg_reg)?;
     abi::emit_call_label(ctx.emitter, helper);
     abi::emit_load_int_immediate(
         ctx.emitter,
@@ -2913,6 +2994,14 @@ fn lower_array_key_sort(
         0x7fff_ffff_ffff_fffe,
     );
     store_if_result(ctx, inst)
+}
+
+/// Splits a shared hash table before a sort helper relinks its iteration order in place.
+fn ensure_unique_hash_sort_source(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, array_arg_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+    ctx.store_result_value(array)
 }
 
 /// Returns the indexed-array element type accepted by the selected sort helper.
@@ -2985,17 +3074,6 @@ fn user_sort_runtime_label(elem_ty: &PhpType) -> &'static str {
         "__rt_usort_str"
     } else {
         "__rt_usort"
-    }
-}
-
-/// Verifies key-sort helpers only receive array-like PHP values.
-fn require_array_key_sort_type(ty: PhpType, name: &str) -> Result<()> {
-    match ty.codegen_repr() {
-        PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
     }
 }
 

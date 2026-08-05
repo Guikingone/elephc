@@ -298,8 +298,8 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `rsort()` | `rsort($arr): void` | Sort descending |
 | `asort()` | `asort($arr): void` | Sort by value, maintain keys |
 | `arsort()` | `arsort($arr): void` | Sort by value desc, maintain keys |
-| `ksort()` | `ksort($arr): void` | Sort by key ascending |
-| `krsort()` | `krsort($arr): void` | Sort by key descending |
+| `ksort()` | `ksort($arr): void` | Sort by key ascending. On an indexed array this is a no-op, because its keys are already the ascending slot positions `0..n-1` |
+| `krsort()` | `krsort($arr): void` | Sort by key descending. Needs an associative array: an indexed array stores its keys as slot positions, so a descending key order is not representable and the call is refused at compile time |
 | `natsort()` | `natsort($arr): void` | Natural order sort |
 | `natcasesort()` | `natcasesort($arr): void` | Case-insensitive natural sort |
 | `shuffle()` | `shuffle($arr): void` | Randomly shuffle (in-place) |
@@ -328,6 +328,35 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 > `call_user_func_array()` also accepts dynamic indexed and associative argument arrays for callbacks with a known signature, including userland variadic callbacks. When a callable value has no single static signature at the call site, elephc emits an AOT runtime dispatch over user functions and closure/FCC wrappers available in that codegen context, then applies the matched target's descriptor metadata: parameter names, defaults, by-reference flags, variadic position, return shape, captures, hidden receiver arguments, and callable shape. Runtime string callback names dispatch over user functions, supported builtins, and public static-method strings by case-insensitive name matching, materialize the matched descriptor, and invoke its generated descriptor invoker. Descriptor invokers receive a temporary boxed Mixed clone of the argument container and inspect its runtime tag to handle indexed arrays and associative hashes through the same signature-level wrapper, so the source `$args` remains usable with its original static layout after the call. String keys bind named parameters; unconsumed string and numeric keys are copied into `...$rest` for variadic callbacks. Dynamic arrays passed to by-reference callback parameters use temporary reference cells, so callback writes do not mutate the source argument array.
 
 Unannotated callback parameters are typed from the array in every array builtin that takes a callback — `array_all()`, `array_any()`, `array_filter()`, `array_find()`, `array_map()`, `array_reduce()`, `array_udiff()`, `array_uintersect()`, `array_walk()`, `array_walk_recursive()`, `uasort()`, `uksort()` and `usort()`. Value parameters get the element type and key parameters get the key type, so `array_filter($words, fn($v) => strlen($v) > 3)`, `uksort($byName, fn($a, $b) => strlen($a) <=> strlen($b))` and `array_walk($byName, function ($v, $k) { echo strlen($k); })` all check without hand-written type hints. Explicit hints stay authoritative.
+
+### Sorting an associative array
+
+`ksort()`, `krsort()`, `asort()` and `arsort()` reorder an associative array by rewriting its
+iteration order only — every key stays attached to its own value, later key lookups and inserts
+keep working, and PHP's copy-on-write still applies, so a copy taken before the call keeps the
+original order:
+
+```php
+$byName = ["b" => 2, "a" => 3, "c" => 1];
+$snapshot = $byName;
+ksort($byName);
+echo implode(",", array_keys($byName));   // a,b,c
+echo implode(",", array_keys($snapshot)); // b,a,c
+```
+
+Keys are ordered with PHP's standard comparison, not byte-wise, so numeric keys compare as
+numbers even against string keys: `[10 => …, "9" => …, "Banana" => …]` sorts as `9`, `10`,
+`'Banana'`. Ties keep their original relative order in every direction, matching PHP 8's stable
+sorts — `["b" => 2, "d" => 2, "a" => 3]` keeps `b` before `d` under both `asort()` and `arsort()`.
+
+One known deviation: when an array mixes integer keys with string keys that are *not* numeric,
+PHP's own key comparison is not transitive (for `10`, `"20a"` and `6`, PHP reports
+`"20a" < 10`, `10 < 6`… and `6 < "20a"` is false), so no ordering satisfies every pair. In that
+case elephc's result and PHP's result are both consistent with the comparison but can differ,
+because each resolves the cycle through its own sort algorithm.
+
+`uasort()`, `uksort()`, `natsort()` and `natcasesort()` do not yet accept an associative array and
+report a clear unsupported-feature error.
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. `usort()` also sorts arrays of **strings**: `usort($words, fn($a, $b) => strlen($a) <=> strlen($b))` reorders the string array in place, keeps elements the comparator reports equal in their original relative order, and renumbers the keys from zero like PHP. `uasort()` and `uksort()` over a string array still report a clear unsupported-feature error, because they must preserve the original key association.
 

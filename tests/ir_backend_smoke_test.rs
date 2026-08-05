@@ -4506,9 +4506,9 @@ fn ir_backend_handles_indexed_array_sorting() {
             "312",
         ),
         (
-            "krsort_indexed_ints_preserves_slots",
-            "<?php $a = [1, 2, 3]; krsort($a); echo $a[0]; echo $a[1]; echo $a[2];",
-            "123",
+            "krsort_hash_int_keys_preserves_association",
+            "<?php $a = [2 => 'b', 1 => 'a', 3 => 'c']; krsort($a); foreach ($a as $k => $v) { echo $k; echo $v; }",
+            "3c2b1a",
         ),
         (
             "natsort_indexed_ints",

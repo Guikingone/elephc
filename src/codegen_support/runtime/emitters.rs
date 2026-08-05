@@ -331,7 +331,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_merge_recursive(emitter);
     arrays::emit_array_multisort(emitter);
     arrays::emit_asort(emitter);
-    arrays::emit_ksort(emitter);
+    arrays::emit_hash_sort(emitter);
     arrays::emit_natsort(emitter);
     arrays::emit_array_map(emitter);
     arrays::emit_array_map_mixed(emitter);

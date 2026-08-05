@@ -124,6 +124,7 @@ mod hash_map;
 mod hash_iter;
 mod hash_new;
 mod hash_set;
+mod hash_sort;
 mod hash_spread;
 mod hash_sum_mixed;
 mod hash_to_mixed;
@@ -137,7 +138,6 @@ mod heap_debug_validate_free_list;
 mod heap_kind;
 mod heap_free;
 mod in_array_mixed_int;
-mod ksort;
 mod min_max_container;
 mod natsort;
 mod object_free_deep;
@@ -399,6 +399,8 @@ pub use hash_new::emit_hash_new;
 /// Emit new hash helper.
 pub use hash_set::emit_hash_set;
 /// Emit hash set helper.
+pub use hash_sort::emit_hash_sort;
+/// Emit the hash key/value insertion-order sort helpers.
 pub use hash_spread::emit_hash_spread;
 /// Emit hash spread (array-literal flatten) helper.
 pub use hash_sum_mixed::emit_hash_sum_mixed;
@@ -439,8 +441,6 @@ pub use iterable_unsupported_kind::emit_iterable_unsupported_kind;
 /// Emit unsupported iterable kind error helper.
 pub use iterable_write_stdout::emit_iterable_write_stdout;
 /// Emit iterable write to stdout helper.
-pub use ksort::emit_ksort;
-/// Emit key sort helper.
 pub use natsort::emit_natsort;
 /// Emit natural sort helper.
 pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
