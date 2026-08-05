@@ -14664,6 +14664,87 @@ echo strlen(maybe("  abc ") ?? "none"), "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a local that holds `null` at one point and an `int` at another.
+///
+/// `$x = null; is_null($x); $x = 99;` gets ONE one-word slot, and PHP null in a one-word scalar
+/// slot IS the `NULL_SENTINEL` bit pattern — so the store and the later load are the same bits
+/// under two different php types, `Void`/`I64` and `Int`/`I64`, which had no classification.
+///
+/// What makes `is_null` right here is not a runtime comparison but the EIR's flow-sensitive
+/// typing: it types the load AFTER the null store as `php=null`, so the check answers from the
+/// type at a point where the type is true. The reassignment then stores an ordinary int.
+///
+/// The collision this inherits is the sentinel's own, shared with the native backend, which
+/// answers this example identically: an integer that really equals 9223372036854775806 reads as
+/// null. That is the documented cost of the one-word encoding. Unblocks `examples/cli-args`.
+#[test]
+fn test_cli_wasm_local_holds_null_then_an_int() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_null_then_int_local");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let path = dir.join("main.php");
+    fs::write(
+        &path,
+        r#"<?php
+$x = null;
+echo "is_null: " . is_null($x) . "\n";
+$x = 99;
+echo "after reassign: " . $x . "\n";
+echo "is_null now: " . (is_null($x) ? "y" : "n") . "\n";
+$y = 7;
+$y = null;
+echo "back to null: " . (is_null($y) ? "y" : "n") . "\n";
+"#,
+    )
+    .unwrap();
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&path)
+        .output()
+        .expect("failed to compile the null-then-int local");
+    assert!(
+        built.status.success(),
+        "the null-then-int local must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the null-then-int local under Node");
+    // php-src 8.5.6's own answer. `is_null` of a true value echoes "1"; of false, nothing.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "is_null: 1\nafter reassign: 99\nis_null now: n\nback to null: y\n",
+        "php-src's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

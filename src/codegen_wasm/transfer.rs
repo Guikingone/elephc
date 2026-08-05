@@ -273,6 +273,22 @@ pub(super) fn classify_transfer(
     {
         return Ok(TransferKind::TaggedNull);
     }
+    // A local that holds `null` at one point and an `int` at another — `$x = null; is_null($x);
+    // $x = 99;` — gets ONE one-word slot, and PHP null in a one-word scalar slot IS the
+    // `NULL_SENTINEL` bit pattern. Both directions are therefore the same bits, and the EIR's
+    // flow-sensitive typing is what says which meaning is live: it types the load after the null
+    // store `php=null`, so `is_null` there answers from the type rather than from a comparison.
+    //
+    // The collision this inherits is the sentinel's own and is shared with the native backend,
+    // which answers this example identically: an integer that really equals 9223372036854775806
+    // reads as null. That is the documented cost of the one-word encoding, not a new gap.
+    if source_ir == IrType::I64
+        && dest_ir == IrType::I64
+        && matches!(source_php, PhpType::Void | PhpType::Int)
+        && matches!(dest_php, PhpType::Void | PhpType::Int)
+    {
+        return Ok(TransferKind::Copy);
+    }
     // And a concrete scalar into the same nullable slot, which is the other thing a `?int`
     // parameter is ever handed.
     if dest_ir == IrType::TaggedScalar && matches!(dest_repr, WasmRepr::Tagged { .. }) {
