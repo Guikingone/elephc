@@ -104,7 +104,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **50
+claim. Of the 191 examples under `examples/` that carry a `main.php`, **51
 compile to `wasm32-wasi`**, and every one of them except `ifdef`, `union-types`
 and `enums` reproduces php-src's output byte for byte. Those three have no
 php-src output to match rather than a different one: `ifdef` and `union-types`
@@ -121,7 +121,7 @@ reasons that have nothing to do with the backend.
 
 **30 of the 140 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
-WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
+WASI Preview 1 equivalent, so the realistic ceiling is about 161, not 191.
 
 Of the rest, the work is a long tail rather than a few large levers. Counting
 examples whose blockers are *entirely* contained in one subsystem — as opposed
@@ -135,9 +135,14 @@ times over:
 | Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
 | All three together | 17 |
 
-The blocker-count distribution says the same thing: of the 140 that do not
-compile, 13 have one distinct blocker, 15 have two, 22 have three, 21 have four,
-and the tail runs past eleven. Progress is roughly one example per fix, so the
+The blocker-count distribution says the same thing. Counting the distinct
+refusals a single `elephc build --target wasm32-wasi` reports per example: of the
+140 that do not compile, 10 have one distinct blocker, 15 have two, 10 have
+three, 18 have four, and the tail runs well past fifty. The ten reachable by a
+single blocker are `array-access-exception-order`, `constructor-promotion`,
+`hello-preg`, `json-jsonserializable`, `logical`, `pipe-operator`,
+`print_r-return`, `sdl_audio`, `strict-php` and `type-ops` — and `sdl_audio` is
+one of the thirty that never will. Progress is roughly one example per fix, so the
 example counter is a poor guide to correctness work — running a differential
 corpus against php-src has been finding more, and more serious, defects than
 making the counter move.

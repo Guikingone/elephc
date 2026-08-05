@@ -14858,6 +14858,100 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `readline()` reads one line from stdin WITHOUT its newline, and prints no prompt.
+///
+/// Both details come from measuring php-src 8.5.6, and both are places the NATIVE backend is
+/// wrong — `printf 'Ada\n' | ...` answers `Hello Ada\n!` there, with a `> ` prompt php-src never
+/// emits. So this target is checked against php-src directly rather than against native.
+///
+/// - The newline is not part of the result. Keeping it puts a line break in the middle of
+///   `"Hello " . $name . "!"`.
+/// - The prompt goes to the terminal in php-src, not to stdout, so with stdout redirected it does
+///   not appear at all. Writing it would add bytes php-src never emits.
+///
+/// The second case is the one that pins the edges: an empty line answers the empty string rather
+/// than being skipped, and reading past EOF answers the empty string too. php-src answers `false`
+/// at EOF, which the EIR's `Str` result cannot carry — the same dropped-null shape as elsewhere,
+/// not a choice made in the lowering.
+///
+/// This needed a `fd_read` import, which no WASM module carried before: the backend had no stdin
+/// path at all. Bytes land in the legacy concat reservation, dead space kept only so static-data
+/// offsets stay stable. Unblocks `examples/readline`.
+#[test]
+fn test_cli_wasm_readline_reads_a_line_without_its_newline() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_readline");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expected string below is php-src 8.5.6's own answer for the same program and stdin.
+    for (name, source, stdin, expected) in [
+        (
+            "prompt.php",
+            "<?php\n$name = readline(\"> \");\necho \"Hello \" . $name . \"!\\n\";\n",
+            "Ada\n",
+            "Hello Ada!\n",
+        ),
+        (
+            "edges.php",
+            "<?php\n$a = readline(\"\");\n$b = readline(\"\");\n$c = readline(\"\");\n$d = readline(\"\");\necho \"[\", $a, \"][\", $b, \"][\", $c, \"][\", $d, \"]\\n\";\necho strlen($a), \",\", strlen($b), \",\", strlen($c), \",\", strlen($d), \"\\n\";\n",
+            "one\n\nthree\n",
+            "[one][][three][]\n3,0,5,0\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the readline case");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+
+        let stdin_path = dir.join(format!("{name}.in"));
+        fs::write(&stdin_path, stdin).unwrap();
+        let input = fs::File::open(&stdin_path).unwrap();
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .stdin(input)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the readline case under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

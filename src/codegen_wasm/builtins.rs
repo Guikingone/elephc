@@ -3286,6 +3286,18 @@ fn direct_builtin(target: RuntimeFnId, operand_php: &PhpType) -> Option<(DirectS
         RuntimeFnId::Round => float("call $__rt_round"),
         RuntimeFnId::Ceil => float("f64.ceil"),
         RuntimeFnId::Sqrt => float("f64.sqrt"),
+        // The prompt arrives as an ordinary (pointer, length) pair and the line comes back as
+        // one, so this is a plain string-to-string call. `__rt_readline` explains why the prompt
+        // is accepted and not written.
+        RuntimeFnId::Readline => Some((
+            DirectSignature {
+                operand_ir: IrType::Str,
+                operand_php: PhpType::Str,
+                result_ir: IrType::Str,
+                result_php: PhpType::Str,
+            },
+            "call $__rt_readline",
+        )),
         _ => None,
     }
 }
@@ -3300,6 +3312,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Round
             | RuntimeFnId::Ceil
             | RuntimeFnId::Sqrt
+            | RuntimeFnId::Readline
             | RuntimeFnId::Count
             | RuntimeFnId::ArrayIsList
             | RuntimeFnId::ArrayKeys
@@ -7369,6 +7382,47 @@ mod tests {
                 "{needle:?} against elements of {element:?} still needs its measured table"
             );
         }
+    }
+
+    /// Verifies `RuntimeFnId::Readline` reads a string and answers one.
+    ///
+    /// The lowering hands the prompt to `$__rt_readline`, which scans stdin one byte at a
+    /// time and persists what it read. Both ends are strings, so an integral operand or an
+    /// integral result has to be refused rather than reinterpreting a pointer as a number.
+    #[test]
+    fn readline_takes_a_string_prompt_and_answers_a_string() {
+        let ok = call_with(
+            RuntimeFnId::Readline,
+            IrType::Str,
+            PhpType::Str,
+            IrType::Str,
+            PhpType::Str,
+        );
+        assert_eq!(verdict(&ok, RuntimeFnId::Readline), None);
+
+        let numeric_prompt = call_with(
+            RuntimeFnId::Readline,
+            IrType::I64,
+            PhpType::Int,
+            IrType::Str,
+            PhpType::Str,
+        );
+        assert!(
+            verdict(&numeric_prompt, RuntimeFnId::Readline).is_some(),
+            "the prompt is written from a string pointer and length"
+        );
+
+        let numeric_result = call_with(
+            RuntimeFnId::Readline,
+            IrType::Str,
+            PhpType::Str,
+            IrType::I64,
+            PhpType::Int,
+        );
+        assert!(
+            verdict(&numeric_result, RuntimeFnId::Readline).is_some(),
+            "the line comes back as a persisted string, not a number"
+        );
     }
 
     /// Verifies each inline builtin admits exactly the storage its lowering can emit.

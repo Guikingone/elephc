@@ -198,6 +198,14 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         return None;
     }
     let (backend, lowerer, tests) = match id {
+        RuntimeFnId::Readline => (
+            "codegen_wasm::runtime",
+            "codegen_wasm::builtins::lower_direct_builtin",
+            &[
+                "codegen_wasm::builtins::tests::readline_takes_a_string_prompt_and_answers_a_string",
+                "codegen::cli::test_cli_wasm_readline_reads_a_line_without_its_newline",
+            ][..],
+        ),
         RuntimeFnId::GetClass => (
             "codegen_wasm::classes",
             "codegen_wasm::classes::lower_get_class",

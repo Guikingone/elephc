@@ -6528,7 +6528,8 @@ fn callable_return_is_boxable(function: &Function) -> bool {
 /// contract is implemented and differentially tested.
 pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
     match target {
-        RuntimeFnId::GetClass
+        RuntimeFnId::Readline
+        | RuntimeFnId::GetClass
         | RuntimeFnId::ArrayMap
         | RuntimeFnId::Usort
         | RuntimeFnId::ArrayReduce

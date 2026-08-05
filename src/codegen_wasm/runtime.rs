@@ -266,6 +266,14 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
     });
     wm.import_func(FuncImport {
         module: "wasi_snapshot_preview1".to_string(),
+        field: "fd_read".to_string(),
+        internal: "wasi_fd_read".to_string(),
+        // fd, iovs_ptr, iovs_len, nread_ptr -> errno
+        params: vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
+        results: vec![ValType::I32],
+    });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
         field: "args_sizes_get".to_string(),
         internal: "wasi_args_sizes_get".to_string(),
         // argc_ptr, argv_buf_size_ptr -> errno
@@ -291,7 +299,41 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_STRLEN_C);
     wm.add_raw_func(RT_ARGV);
     wm.add_raw_func(RT_MIXED_WRITE_STDOUT);
+    wm.add_raw_func(RT_READLINE);
 }
+
+/// `__rt_readline`: reads one line from stdin, WITHOUT its terminating newline.
+///
+/// Two details come from measuring php-src 8.5.6 rather than from the native backend, which
+/// gets both wrong (`printf 'Ada\n' | ...` answers `Hello Ada\n!` there, and prints the prompt):
+///
+/// - The newline is NOT part of the result. `readline()` strips it; keeping it puts a line break
+///   in the middle of `"Hello " . $name . "!"`.
+/// - The PROMPT is not written to stdout. php-src hands it to the terminal, so with stdout
+///   redirected it does not appear at all — writing it here would add bytes php-src never emits.
+///   The argument is therefore accepted and ignored, which is exactly what a captured run sees.
+///
+/// Bytes land in the legacy concat reservation, which is dead space kept only so static-data
+/// offsets stay stable, so nothing else can be occupying it. Reading one byte at a time keeps the
+/// helper free of any buffering that could swallow input a later read needs.
+///
+/// EOF with nothing read answers the empty string. php-src answers `false` there, which the EIR's
+/// `Str` result cannot carry — the same dropped-null shape as elsewhere, not a choice made here.
+const RT_READLINE: &str = r#"(func $__rt_readline (param $prompt_ptr i32) (param $prompt_len i64) (result i32) (result i64)
+  (local $n i32)
+  (local $rc i32)
+  (block $done (loop $next
+    (br_if $done (i32.ge_u (local.get $n) (i32.const 65535)))     ;; bound by the reservation
+    (i32.store (i32.const 0) (i32.add (i32.const 64) (local.get $n)))  ;; iovec buf = base + n
+    (i32.store (i32.const 4) (i32.const 1))                       ;; iovec len = 1 byte
+    (local.set $rc (call $wasi_fd_read (i32.const 0) (i32.const 0) (i32.const 1) (i32.const 8)))
+    (br_if $done (i32.ne (local.get $rc) (i32.const 0)))          ;; read error -> end the line
+    (br_if $done (i32.eqz (i32.load (i32.const 8))))              ;; 0 bytes read = EOF
+    (br_if $done (i32.eq (i32.load8_u (i32.add (i32.const 64) (local.get $n))) (i32.const 10)))  ;; newline ends it and is dropped
+    (local.set $n (i32.add (local.get $n) (i32.const 1)))
+    (br $next)))
+  (call $__rt_str_persist (i32.const 64) (i64.extend_i32_u (local.get $n))))
+"#;
 
 /// Emits immutable diagnostic data and the command-runtime failure dispatcher.
 ///

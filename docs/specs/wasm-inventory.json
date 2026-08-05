@@ -7904,7 +7904,7 @@
           "name": "readline",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "readline(...)"
           ],
@@ -7912,7 +7912,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::runtime",
+            "lowerer": "codegen_wasm::builtins::lower_direct_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::readline_takes_a_string_prompt_and_answers_a_string",
+              "codegen::cli::test_cli_wasm_readline_reads_a_line_without_its_newline"
+            ]
+          }
         },
         {
           "name": "readlink",
