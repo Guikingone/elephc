@@ -13544,6 +13544,117 @@ echo $n, "|", $t, "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies that an IMPLEMENTOR may bind to a parameter, or a property, that declares an interface.
+///
+/// This is the same root as the ancestor case above and the third variant of it. The audit
+/// compared an argument's representation against the parameter's, and an interface name read as
+/// a different representation from any class name — so `feed(Speaker $s)` handed a `Dog` was
+/// refused, as was storing that `Dog` into a `public Speaker $voice` slot. Neither refusal was a
+/// representation claim that holds: an object is one pointer to a header naming its own runtime
+/// class, and an interface-typed slot holds exactly that pointer.
+///
+/// What the callee then DOES with the value — dispatch a method declared by the interface — is
+/// audited where it happens, against every implementor, because PHP picks the body from the
+/// runtime class. So a call the interface stub cannot serve is still refused, by name, instead
+/// of every argument that could reach it being refused in advance.
+///
+/// Each case pins an assumption the relaxation depends on, against php-src 8.5.6's own answers:
+/// two different implementors reaching one parameter dispatch to their own bodies, an
+/// interface-typed PROPERTY does the same after a store and a reload, a transitively extended
+/// interface is as good as a direct one, and an implementor that also carries fields of its own
+/// keeps them intact across the call. This is what `AppendIterator::append(Iterator $it)` needs
+/// to accept an `ArrayIterator`.
+#[test]
+fn test_cli_wasm_passes_an_implementor_where_the_parameter_declares_an_interface() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_interface_argument");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expected string below is php-src 8.5.6's own answer for the same program.
+    for (name, source, expected) in [
+        // Two implementors through one interface-typed parameter must reach their own bodies.
+        (
+            "param.php",
+            "<?php\ninterface Speaker { public function say(): string; }\nclass Dog implements Speaker { public function say(): string { return \"woof\"; } }\nclass Cat implements Speaker { public function say(): string { return \"meow\"; } }\nfunction feed(Speaker $s): void { echo $s->say(), \"\\n\"; }\nfeed(new Dog());\nfeed(new Cat());\n",
+            "woof\nmeow\n",
+        ),
+        // An interface-typed PROPERTY: the store is the same pointer copy, and the reload
+        // dispatches on the runtime class just as the parameter does.
+        (
+            "property.php",
+            "<?php\ninterface Speaker { public function say(): string; }\nclass Dog implements Speaker { public function say(): string { return \"woof\"; } }\nclass Cat implements Speaker { public function say(): string { return \"meow\"; } }\nclass Pen { public Speaker $voice; public function __construct(Speaker $s) { $this->voice = $s; } public function heard(): string { return $this->voice->say(); } }\necho (new Pen(new Dog()))->heard(), \"|\", (new Pen(new Cat()))->heard(), \"\\n\";\n",
+            "woof|meow\n",
+        ),
+        // A transitively extended interface is as much an implemented interface as a direct one.
+        (
+            "extends.php",
+            "<?php\ninterface Animal { public function say(): string; }\ninterface Pet extends Animal {}\nclass Dog implements Pet { public function say(): string { return \"woof\"; } }\nfunction feed(Animal $a): void { echo $a->say(), \"\\n\"; }\nfeed(new Dog());\n",
+            "woof\n",
+        ),
+        // The implementor's OWN fields must survive the call through the interface-typed
+        // parameter — the sharpest check that nothing was reinterpreted on the way in.
+        (
+            "fields.php",
+            "<?php\ninterface Speaker { public function say(): string; }\nclass Dog implements Speaker { public int $legs = 4; public string $name = \"rex\"; public function say(): string { return \"woof\"; } }\nfunction feed(Speaker $s): void { echo $s->say(), \"\\n\"; }\n$d = new Dog();\nfeed($d);\necho $d->legs, \"|\", $d->name, \"\\n\";\n",
+            "woof\n4|rex\n",
+        ),
+        // An implementor reached through a parameter that names an interface its PARENT declares:
+        // the walk has to cross a `parent` link before it finds the `implements`.
+        (
+            "inherited.php",
+            "<?php\ninterface Speaker { public function say(): string; }\nclass Animal implements Speaker { public function say(): string { return \"...\"; } }\nclass Dog extends Animal { public function say(): string { return \"woof\"; } }\nfunction feed(Speaker $s): void { echo $s->say(), \"\\n\"; }\nfeed(new Animal());\nfeed(new Dog());\n",
+            "...\nwoof\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the interface argument");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the interface argument under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies that a SUBCLASS argument may bind to a parameter that declares one of its ancestors.
 ///
 /// The capability audit compares an argument's representation against the parameter's, and two
@@ -13555,10 +13666,10 @@ echo $n, "|", $t, "\n";
 ///
 /// So the physical layer says two object pointers are copy-compatible, and the semantic question —
 /// may THIS class stand in for THAT one — is answered where the hierarchy is in scope, by
-/// `argument_is_a_descendant_of_the_parameter` in the capability audit. That helper walks `parent`
-/// links only, so it admits a descendant and nothing else; an INTERFACE-typed parameter is a
-/// separate question, answered by the closed-implementor dispatch in
-/// `test_cli_wasm_dispatches_a_method_call_on_an_interface_typed_receiver`.
+/// `argument_is_a_descendant_of_the_parameter` in the capability audit. That helper now walks
+/// `implements` as well as `parent`, so an INTERFACE-typed parameter is admitted on the same
+/// reasoning; the dispatch that follows is pinned by
+/// `test_cli_wasm_passes_an_implementor_where_the_parameter_declares_an_interface`.
 ///
 /// Each case below pins an assumption the relaxation depends on, against php-src 8.5.6's own
 /// answers: inherited fields keep their offsets when the subclass adds its own — including fields

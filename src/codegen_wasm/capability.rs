@@ -4185,6 +4185,7 @@ fn throwable_constructor_shape_issue(
             ));
         };
         if let Some(issue) = property_write_shape_issue(
+            module,
             argument.ir_type,
             &argument.php_type,
             &slot.1.codegen_repr(),
@@ -4813,6 +4814,7 @@ fn property_set_shape_issue(
     };
     let property_type = property_type.codegen_repr();
     property_write_shape_issue(
+        module,
         source.ir_type,
         &source.php_type,
         &property_type,
@@ -4827,11 +4829,25 @@ fn property_set_shape_issue(
 /// transfer contract, and deliberately so: there is no conversion step on that path.
 /// Shared by `PropSet` and by the inherited Throwable constructor that construction open-codes,
 /// so both are audited by the rule the emitter actually implements.
+///
+/// The one relaxation is the same one arguments carry: a DESCENDANT or an IMPLEMENTOR written
+/// into a slot declared as an ancestor class or an interface is a pointer either way, and every
+/// read of that slot dispatches on the runtime class where it happens.
 fn property_write_shape_issue(
+    module: &Module,
     source_ir: IrType,
     source_php: &PhpType,
     property_type: &PhpType,
 ) -> Option<String> {
+    if source_ir == IrType::Heap(IrHeapKind::Object)
+        && argument_is_a_descendant_of_the_parameter(
+            module,
+            &source_php.codegen_repr(),
+            property_type,
+        )
+    {
+        return None;
+    }
     if matches!(
         property_type,
         PhpType::Mixed | PhpType::Union(_) | PhpType::Iterable
@@ -5465,8 +5481,13 @@ fn method_body_signature_shape_issue(
 /// of it, precisely because PHP dispatches on the RUNTIME class. A `Button` is one of the
 /// classes `Widget` was already proven safe for, so refusing it proves nothing extra.
 ///
-/// The relation is the PARENT chain, not `instanceof`: an interface names no storage, so an
-/// interface-typed parameter is a separate question and stays refused here.
+/// An IMPLEMENTOR passed where the parameter declares an interface is the same question and
+/// gets the same answer. `AppendIterator::append(Iterator $it)` handed an `ArrayIterator` was
+/// refused because an interface names no storage of its own — but neither does a parent class,
+/// and the argument here is a pointer either way. What the callee does with an interface-typed
+/// parameter is dispatch on the runtime class, which is audited where it happens: a method call
+/// the interface stub cannot serve is refused there, by name, rather than by forbidding every
+/// argument that could reach it.
 fn argument_is_a_descendant_of_the_parameter(
     module: &Module,
     argument: &PhpType,
@@ -5476,6 +5497,7 @@ fn argument_is_a_descendant_of_the_parameter(
         return false;
     };
     class_descends_from(module, argument, parameter)
+        || class_implements_interface(module, argument, parameter)
 }
 
 /// Validates argument storage against the concrete method body's WASM signature.
