@@ -104,7 +104,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **46
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **47
 compile to `wasm32-wasi`**, and every one of them except `ifdef` and `enums`
 reproduces php-src's output byte for byte. Those two have no php-src output to
 match rather than a different one: `ifdef` uses an Elephc-only preprocessor form
@@ -118,7 +118,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 144 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 143 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -134,7 +134,7 @@ times over:
 | Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
 | All three together | 17 |
 
-The blocker-count distribution says the same thing: of the 144 that do not
+The blocker-count distribution says the same thing: of the 143 that do not
 compile, 14 have one distinct blocker, 19 have two, 22 have three, 22 have four,
 and the tail runs past eleven. Progress is roughly one example per fix, so the
 example counter is a poor guide to correctness work — running a differential
@@ -242,6 +242,16 @@ where php-src answers true. The checker infers the read as `int` while the EIR
 produces `int|null`, and the signature is what the call site believes. Anything
 reading that type inherits the wrong answer, `gettype()` included; patching it in
 one consumer would hide it from the others.
+
+**`foreach ($a as &$x) { $x += n; }`** writes back through the cell. `$x + 5`
+types Mixed because the add can overflow into a float, while the cell it writes
+through is the array's own `int`. The emitter already handled that narrowing; the
+capability gate was the only thing refusing a store the backend could perform.
+The native backend answers this shape correctly, so it was a WASM-only gap. What
+it inherits is the EIR's widening gap rather than a new one: on a REAL overflow
+the value is a float and narrowing it into an `int` cell is wrong, which the
+native backend does there too — refusing the whole shape to avoid that would cost
+every ordinary by-reference accumulate. Unblocks `examples/foreach-ref`.
 
 **A NULLABLE SCALAR parameter** takes both the `null` literal and a concrete value.
 A `?int` is an inline two-word `{payload, tag}` slot, so the literal `null` —

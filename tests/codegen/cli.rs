@@ -14499,6 +14499,88 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `foreach ($a as &$x) { $x += n; }` — a Mixed value narrowing into a concrete cell.
+///
+/// `$x + 5` types Mixed because the add can overflow into a float, while the cell it writes
+/// through is the array's own `int`. The EMITTER already handled that, through
+/// `coerce_mixed_ref_cell_store` and `__rt_mixed_cast_*`; the capability gate was the only thing
+/// refusing a store the backend could perform, with `ref-cell store value Heap(Mixed)/Mixed must
+/// exactly match payload Int`. The native backend answers this shape correctly, so the refusal
+/// was a WASM-only gap rather than a shared one.
+///
+/// What it inherits is the EIR's widening gap, not a new one: on a REAL overflow the value is a
+/// float and narrowing it into an `int` cell is wrong — which the native backend does there too.
+/// Refusing the whole shape to avoid that costs every ordinary by-reference accumulate.
+///
+/// The second pass is the part worth pinning: it must see the first pass's writes, which is what
+/// proves the values went through the cell rather than into a copy. Unblocks
+/// `examples/foreach-ref`.
+#[test]
+fn test_cli_wasm_foreach_by_reference_accumulates_through_the_cell() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_foreach_ref_accumulate");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let path = dir.join("main.php");
+    fs::write(
+        &path,
+        r#"<?php
+$ints = [10, 20, 30];
+foreach ($ints as &$i) { $i += 5; }
+echo $ints[0], ",", $ints[1], ",", $ints[2], "\n";
+foreach ($ints as &$j) { $j += 1; }
+echo $ints[0], ",", $ints[1], ",", $ints[2], "\n";
+echo count($ints), "\n";
+"#,
+    )
+    .unwrap();
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&path)
+        .output()
+        .expect("failed to compile the by-reference accumulate");
+    assert!(
+        built.status.success(),
+        "the by-reference accumulate must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the by-reference accumulate under Node");
+    // php-src 8.5.6's own answer.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "15,25,35\n16,26,36\n3\n",
+        "the second pass must see the first pass's writes ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

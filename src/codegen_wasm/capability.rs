@@ -1145,8 +1145,22 @@ fn store_ref_cell_shape_issue(function: &Function, inst: &Instruction) -> Option
     };
     let source_php = source.php_type.codegen_repr();
     let target_php = inst.result_php_type.codegen_repr();
-    if source_php != target_php
-        || transfer::validate_storage_pair(source.ir_type, &source.php_type).is_err()
+    // A Mixed value narrowing into a concrete payload is the shape `foreach ($a as &$x) { $x +=
+    // 5; }` produces: `$x + 5` types Mixed because the add can overflow into a float, and the
+    // cell it writes through is the array's own `int`. `coerce_mixed_ref_cell_store` already
+    // emits exactly this through `__rt_mixed_cast_*`, so the gate was the only thing refusing a
+    // store the emitter could do — and the native backend answers the same shape correctly.
+    //
+    // What it INHERITS is the EIR's widening gap, not a new one: on a real overflow the value is
+    // a float and narrowing it into an `int` cell is wrong, which is what the native backend
+    // does there too. Refusing the whole shape to avoid that costs every ordinary
+    // `foreach`-by-reference accumulate, which no program writes expecting an overflow.
+    let narrows_mixed_to_concrete = source_php == PhpType::Mixed
+        && matches!(target_php, PhpType::Int | PhpType::Bool | PhpType::Float)
+        && source.ir_type == IrType::Heap(IrHeapKind::Mixed);
+    if !narrows_mixed_to_concrete
+        && (source_php != target_php
+            || transfer::validate_storage_pair(source.ir_type, &source.php_type).is_err())
     {
         return Some(format!(
             "ref-cell store value {:?}/{source_php:?} must exactly match payload {target_php:?}",
