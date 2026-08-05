@@ -18,7 +18,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::{
     BlockId, DataId, Function, Immediate, InstId, LocalKind, LocalSlotId, Module, Op, Ownership,
-    ValueDef, ValueId,
+    RuntimeCallTarget, RuntimeFnId, ValueDef, ValueId,
 };
 use crate::ir_passes::Allocation;
 use crate::types::PhpType;
@@ -285,9 +285,47 @@ impl<'a> FunctionContext<'a> {
             .map(|local| local.id)
     }
 
-    /// Returns whether this slot receives at least one ordinary EIR local store.
+    /// Returns whether this slot receives an EIR store or a typed runtime writeback.
     pub(super) fn local_slot_has_store(&self, slot: LocalSlotId) -> bool {
-        self.local_analysis.has_store(slot)
+        self.local_analysis.has_store(slot) || self.openssl_encrypt_writes_local(slot)
+    }
+
+    /// Returns whether an `openssl_encrypt()` call writes its GCM tag into this local.
+    fn openssl_encrypt_writes_local(&self, slot: LocalSlotId) -> bool {
+        self.function.instructions.iter().any(|inst| {
+            let is_encrypt = matches!(
+                inst.immediate,
+                Some(Immediate::RuntimeCall(RuntimeCallTarget::Function(
+                    RuntimeFnId::OpensslEncrypt
+                )))
+                    | Some(Immediate::RuntimeCall(RuntimeCallTarget::ProfiledFunction {
+                        target: RuntimeFnId::OpensslEncrypt,
+                        ..
+                    }))
+            );
+            is_encrypt
+                && inst
+                    .operands
+                    .get(5)
+                    .and_then(|value| self.loaded_local_slot(*value))
+                    == Some(slot)
+        })
+    }
+
+    /// Resolves a value produced by `LoadLocal` to its source slot.
+    fn loaded_local_slot(&self, value: ValueId) -> Option<LocalSlotId> {
+        let value_ref = self.function.value(value)?;
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return None;
+        };
+        let inst = self.function.instruction(inst)?;
+        if !matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
+            return None;
+        }
+        let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+            return None;
+        };
+        Some(slot)
     }
 
     /// Returns whether this slot is represented as a ref-cell pointer anywhere in the function.
@@ -694,6 +732,68 @@ impl<'a> FunctionContext<'a> {
                 Ok(())
             }
         }
+    }
+
+    /// Releases the value held by a string-producing by-reference output before overwriting it.
+    pub(super) fn release_local_before_string_writeback(
+        &mut self,
+        slot: LocalSlotId,
+    ) -> Result<()> {
+        let ty = self.local_php_type(slot)?.codegen_repr();
+        if !matches!(ty, PhpType::Str | PhpType::Mixed) {
+            return Err(CodegenIrError::unsupported(format!(
+                "string writeback into PHP type {:?}",
+                ty
+            )));
+        }
+        match self.local_slot_representation(slot) {
+            LocalSlotRepresentation::Raw => {
+                let offset = self.local_offset(slot)?;
+                super::frame::emit_owned_local_cleanup(self, slot, offset, &ty);
+            }
+            LocalSlotRepresentation::RefCell => self.release_ref_cell_value(slot, &ty)?,
+            LocalSlotRepresentation::Dynamic => {
+                let state_offset = self.dynamic_ref_cell_state_offset(slot)?;
+                let ref_cell = self.next_label("string_writeback_release_ref_cell");
+                let done = self.next_label("string_writeback_release_done");
+                let state_reg = abi::secondary_scratch_reg(self.emitter);
+                abi::load_at_offset(self.emitter, state_reg, state_offset);
+                match self.emitter.target.arch {
+                    Arch::AArch64 => {
+                        self.emitter
+                            .instruction(&format!("cbnz {}, {}", state_reg, ref_cell)); // release through the promoted ref-cell when active
+                    }
+                    Arch::X86_64 => {
+                        self.emitter
+                            .instruction(&format!("test {}, {}", state_reg, state_reg)); // inspect the local's runtime representation
+                        self.emitter
+                            .instruction(&format!("jne {}", ref_cell));                  // release through the promoted ref-cell when active
+                    }
+                }
+                let offset = self.local_offset(slot)?;
+                super::frame::emit_owned_local_cleanup(self, slot, offset, &ty);
+                self.emit_branch(&done);
+                self.emitter.label(&ref_cell);
+                self.release_ref_cell_value(slot, &ty)?;
+                self.emitter.label(&done);
+            }
+        }
+        Ok(())
+    }
+
+    /// Releases a string or Mixed payload stored through a local ref-cell pointer.
+    fn release_ref_cell_value(&mut self, slot: LocalSlotId, ty: &PhpType) -> Result<()> {
+        let offset = self.local_offset(slot)?;
+        let cell_reg = abi::symbol_scratch_reg(self.emitter);
+        let result_reg = abi::int_result_reg(self.emitter);
+        abi::load_at_offset(self.emitter, cell_reg, offset);
+        abi::emit_load_from_address(self.emitter, result_reg, cell_reg, 0);
+        if *ty == PhpType::Str {
+            abi::emit_call_label(self.emitter, "__rt_heap_free_safe");
+        } else {
+            abi::emit_decref_if_refcounted(self.emitter, ty);
+        }
+        Ok(())
     }
 
     /// After an in-place hash/array mutation whose runtime helper returns the

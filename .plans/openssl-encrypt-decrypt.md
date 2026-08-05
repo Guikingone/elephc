@@ -592,9 +592,19 @@ provides the encrypt tag buffer/writeback and decrypt tag input.
 
 ### Phase 3 — AEAD (`$tag`, `$aad`, `$tag_length`)
 
-- [ ] Bridge GCM path complete.
-- [ ] AOT by-ref tag writeback on encrypt; by-value tag on decrypt.
-- [ ] Codegen GCM tests.
+- [x] Bridge GCM path complete.
+- [x] AOT by-ref tag writeback on encrypt; by-value tag on decrypt.
+- [x] Codegen GCM tests.
+
+Phase 3 baseline: the existing bridge GCM implementation is now reachable from
+the AOT runtime on AArch64 and x86_64. Encrypt allocates a bounded owned tag
+buffer, transfers it into direct, pre-existing, named-argument, and ref-parameter
+PHP locals only after authenticated GCM success, and releases it on non-AEAD or
+failure paths. Decrypt forwards the by-value tag and AAD to the bridge. Focused
+tests pin raw and base64 round trips, PHP ciphertext/tag goldens for all three
+AES-GCM key sizes, tag lengths 1, 4, 12, and 16, empty plaintext, a 16-byte IV,
+wrong/missing tags, wrong AAD, empty IV, invalid tag lengths, missing encrypt tag
+targets, and tag-storage overwrite.
 
 ### Phase 4 — Magician
 

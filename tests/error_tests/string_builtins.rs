@@ -424,3 +424,12 @@ fn test_error_vprintf_wrong_args() {
         "vprintf() takes exactly 2 arguments",
     );
 }
+
+/// Verifies `openssl_encrypt()` rejects a non-variable GCM tag output argument.
+#[test]
+fn test_error_openssl_encrypt_tag_must_be_variable() {
+    expect_error(
+        r#"<?php openssl_encrypt("data", "aes-256-gcm", "key", 1, "iv", "tag");"#,
+        "openssl_encrypt() parameter $tag must be passed a variable",
+    );
+}

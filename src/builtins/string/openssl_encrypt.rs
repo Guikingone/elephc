@@ -6,8 +6,11 @@
 //!
 //! Key details:
 //! - `$tag` is an optional by-reference output and is validated without reading an undefined local.
-//! - The checked result is `string|false`; GCM tag writeback is added by the AEAD phase.
+//! - Dedicated argument lowering promotes tag storage before the target-aware AEAD writeback.
 
+use crate::builtins::semantics::{
+    runtime_fn_semantics, with_argument_lowering, BuiltinArgumentLowering, BuiltinSemantics,
+};
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
@@ -29,11 +32,17 @@ builtin! {
     returns: Mixed,
     check: check,
     lazy_check: true,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::OpensslEncrypt,
-    ),
+    semantics: openssl_encrypt_semantics(),
     summary: "Encrypts data with a supported AES cipher.",
     php_manual: "https://www.php.net/manual/en/function.openssl-encrypt.php",
+}
+
+/// Builds encrypt semantics that preserve the by-reference tag target during EIR lowering.
+const fn openssl_encrypt_semantics() -> BuiltinSemantics {
+    with_argument_lowering(
+        runtime_fn_semantics(crate::ir::RuntimeFnId::OpensslEncrypt),
+        BuiltinArgumentLowering::OpensslEncrypt,
+    )
 }
 
 /// Validates the optional by-reference tag target and returns `string|false`.

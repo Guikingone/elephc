@@ -7,11 +7,12 @@
 //! Key details:
 //! - Encrypt/decrypt arguments are staged in target-neutral field blocks before large C ABI calls.
 //! - Runtime helpers own base64 handling and returned storage; the bridge always receives raw bytes.
-//! - Phase 2 leaves GCM tag input/output empty until the dedicated AEAD lowering is added.
+//! - GCM encrypt writes a fresh tag into a direct local target; decrypt borrows its input tag.
 
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, CodegenIrError, Result};
-use crate::ir::Instruction;
+use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::strings::{
@@ -30,7 +31,13 @@ pub(crate) fn lower_openssl_encrypt(
             inst.operands.len()
         )));
     }
-    const FRAME_SIZE: usize = 96;
+    const FRAME_SIZE: usize = 128;
+    let tag_slot = inst
+        .operands
+        .get(5)
+        .copied()
+        .map(|value| openssl_output_local_slot(ctx, value))
+        .transpose()?;
     abi::emit_reserve_temporary_stack(ctx.emitter, FRAME_SIZE);
     stage_openssl_string_field(ctx, inst, 0, 0, "openssl_encrypt data")?;
     stage_openssl_string_field(ctx, inst, 1, 16, "openssl_encrypt cipher_algo")?;
@@ -39,9 +46,16 @@ pub(crate) fn lower_openssl_encrypt(
     stage_openssl_optional_string_field(ctx, inst, 4, 56, "openssl_encrypt iv")?;
     stage_openssl_optional_string_field(ctx, inst, 6, 72, "openssl_encrypt aad")?;
     stage_openssl_int_field(ctx, inst, 7, 88, 16, "openssl_encrypt tag_length")?;
+    stage_openssl_empty_string_field(ctx, 96);
+    stage_openssl_flag_field(ctx, 112, tag_slot.is_some());
     crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
     stage_openssl_frame_pointer(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_openssl_encrypt");
+    preserve_openssl_string_result(ctx, 112);
+    if let Some(slot) = tag_slot {
+        store_openssl_tag_writeback(ctx, slot)?;
+    }
+    restore_openssl_string_result(ctx, 112);
     abi::emit_release_temporary_stack(ctx.emitter, FRAME_SIZE);
     super::io::box_owned_string_or_false_result(ctx, "openssl_encrypt");
     store_if_result(ctx, inst)
@@ -66,7 +80,7 @@ pub(crate) fn lower_openssl_decrypt(
     stage_openssl_int_field(ctx, inst, 3, 48, 0, "openssl_decrypt options")?;
     stage_openssl_optional_string_field(ctx, inst, 4, 56, "openssl_decrypt iv")?;
     stage_openssl_optional_string_field(ctx, inst, 6, 72, "openssl_decrypt aad")?;
-    stage_openssl_empty_string_field(ctx, 88);
+    stage_openssl_optional_string_field(ctx, inst, 5, 88, "openssl_decrypt tag")?;
     crate::codegen::hash_crypto::publish_elephc_cipher_function_pointers(ctx.emitter);
     stage_openssl_frame_pointer(ctx);
     abi::emit_call_label(ctx.emitter, "__rt_openssl_decrypt");
@@ -168,6 +182,19 @@ fn stage_openssl_int_field(
     Ok(())
 }
 
+/// Stages a boolean marker into one OpenSSL runtime field.
+fn stage_openssl_flag_field(
+    ctx: &mut FunctionContext<'_>,
+    field_offset: usize,
+    enabled: bool,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, i64::from(enabled));
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_temporary_stack_address(ctx.emitter, scratch, field_offset);
+    abi::emit_store_to_address(ctx.emitter, result_reg, scratch, 0);
+}
+
 /// Stores a pointer/length pair into the current OpenSSL runtime field block.
 fn store_openssl_field_pair(
     ctx: &mut FunctionContext<'_>,
@@ -188,6 +215,90 @@ fn stage_openssl_frame_pointer(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => "rdi",
     };
     abi::emit_temporary_stack_address(ctx.emitter, arg_reg, 0);
+}
+
+/// Resolves an OpenSSL by-reference output operand to its direct local slot.
+fn openssl_output_local_slot(
+    ctx: &FunctionContext<'_>,
+    value: ValueId,
+) -> Result<LocalSlotId> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Err(CodegenIrError::unsupported(
+            "openssl_encrypt tag argument that is not a local load",
+        ));
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    if !matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
+        return Err(CodegenIrError::unsupported(
+            "openssl_encrypt tag argument that is not a local variable",
+        ));
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
+        return Err(CodegenIrError::invalid_module(
+            "openssl_encrypt tag load missing local slot",
+        ));
+    };
+    if !matches!(ctx.local_php_type(slot)?.codegen_repr(), PhpType::Str | PhpType::Mixed) {
+        return Err(CodegenIrError::unsupported(
+            "openssl_encrypt tag local that cannot store a string",
+        ));
+    }
+    Ok(slot)
+}
+
+/// Saves the current owned string result into the active OpenSSL field block.
+fn preserve_openssl_string_result(ctx: &mut FunctionContext<'_>, field_offset: usize) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    store_openssl_field_pair(ctx, field_offset, ptr_reg, len_reg);
+}
+
+/// Restores an owned string result from the active OpenSSL field block.
+fn restore_openssl_string_result(ctx: &mut FunctionContext<'_>, field_offset: usize) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_temporary_stack_address(ctx.emitter, scratch, field_offset);
+    abi::emit_load_from_address(ctx.emitter, ptr_reg, scratch, 0);
+    abi::emit_load_from_address(ctx.emitter, len_reg, scratch, 8);
+}
+
+/// Transfers a successful GCM tag from the runtime field block into its PHP local.
+fn store_openssl_tag_writeback(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+) -> Result<()> {
+    let no_tag = ctx.next_label("openssl_encrypt_no_tag_writeback");
+    let tag_ptr_reg = abi::int_result_reg(ctx.emitter);
+    let scratch = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_temporary_stack_address(ctx.emitter, scratch, 96);
+    abi::emit_load_from_address(ctx.emitter, tag_ptr_reg, scratch, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz {}, {}", tag_ptr_reg, no_tag)); // skip writeback when encryption produced no AEAD tag
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", tag_ptr_reg, tag_ptr_reg)); // test whether encryption produced an AEAD tag
+            ctx.emitter
+                .instruction(&format!("jz {}", no_tag));                       // skip writeback for non-AEAD or failed encryption
+        }
+    }
+    let storage_ty = ctx.local_php_type(slot)?.codegen_repr();
+    ctx.release_local_before_string_writeback(slot)?;
+    restore_openssl_string_result(ctx, 96);
+    if storage_ty == PhpType::Mixed {
+        crate::codegen::emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Str);
+    }
+    ctx.store_current_result_to_local(slot)?;
+    ctx.emitter.label(&no_tag);
+    Ok(())
 }
 
 /// Boxes a nonnegative integer result or any negative bridge status as PHP false.

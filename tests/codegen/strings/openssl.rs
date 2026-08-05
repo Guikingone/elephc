@@ -1,12 +1,12 @@
 //! Purpose:
-//! End-to-end AOT tests for OpenSSL constants, helpers, and non-AEAD AES modes.
+//! End-to-end AOT tests for OpenSSL constants, helpers, and AES cipher modes.
 //!
 //! Called from:
 //! - `cargo test --test codegen_tests openssl` through the Rust test harness.
 //!
 //! Key details:
 //! - Ciphertext expectations come from the checked-in PHP 8.4/OpenSSL 3.6 fixtures.
-//! - GCM is intentionally excluded until the phase-3 by-reference tag path is wired.
+//! - GCM cases pin by-reference tags, AAD authentication, non-default IVs, and failures.
 
 use super::*;
 
@@ -119,4 +119,147 @@ echo openssl_decrypt("%%%", "aes-256-cbc", $key, 0, $iv) === false ? "b" : "bad"
 "#,
     );
     assert_eq!(out, "edkb");
+}
+
+/// Verifies every GCM key size and supported truncated-tag edge matches PHP end to end.
+#[test]
+fn test_openssl_gcm_php_goldens_and_tag_writeback() {
+    let out = compile_and_run(
+        r#"<?php
+$pt = "The quick brown fox jumps over the lazy dog";
+$key = str_repeat("k", 32);
+$iv = str_repeat("i", 12);
+$ciphertext = openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag, "fixture-aad");
+echo bin2hex($ciphertext), ":", bin2hex($tag), "|";
+$short = openssl_encrypt(tag: $short_tag, data: $pt, cipher_algo: "AES-256-GCM", passphrase: $key, options: OPENSSL_RAW_DATA, iv: $iv, aad: "fixture-aad", tag_length: 12);
+echo bin2hex($short), ":", bin2hex($short_tag), "|";
+$key128 = str_repeat("k", 16);
+$cipher128 = openssl_encrypt($pt, "aes-128-gcm", $key128, OPENSSL_RAW_DATA, $iv, $tag128, "fixture-aad");
+$plain128 = openssl_decrypt($cipher128, "aes-128-gcm", $key128, OPENSSL_RAW_DATA, $iv, $tag128, "fixture-aad");
+echo bin2hex($cipher128), ":", bin2hex($tag128), ":", ($plain128 === $pt ? "ok" : "bad"), "|";
+$key192 = str_repeat("k", 24);
+$cipher192 = openssl_encrypt($pt, "aes-192-gcm", $key192, OPENSSL_RAW_DATA, $iv, $tag192, "fixture-aad");
+$plain192 = openssl_decrypt($cipher192, "aes-192-gcm", $key192, OPENSSL_RAW_DATA, $iv, $tag192, "fixture-aad");
+echo bin2hex($cipher192), ":", bin2hex($tag192), ":", ($plain192 === $pt ? "ok" : "bad"), "|";
+$cipher1 = openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag1, "fixture-aad", 1);
+$plain1 = openssl_decrypt($cipher1, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag1, "fixture-aad");
+echo bin2hex($tag1), ":", ($plain1 === $pt ? "ok" : "bad"), "|";
+$cipher4 = openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag4, "fixture-aad", 4);
+$plain4 = openssl_decrypt($cipher4, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag4, "fixture-aad");
+echo bin2hex($tag4), ":", ($plain4 === $pt ? "ok" : "bad");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "8eec9d54438dc8679074830af4604b47f4cb062a754edb3c561d21b76dbac62b",
+            "6fd7b2c040ca67e3e5647a:9dc8b5e7b800bfed5c1be43fc4614f51|",
+            "8eec9d54438dc8679074830af4604b47f4cb062a754edb3c561d21b76dbac62b",
+            "6fd7b2c040ca67e3e5647a:9dc8b5e7b800bfed5c1be43f|",
+            "498c432b6dc88827705706a39e646b6a0698aa89834fb084768c9c416f758018",
+            "ccc5ae865bc43a1db8b91a:bec1dfa8e8781396a92dc401358ee08c:ok|",
+            "4213f3f4708cef7d03ac167c8487ec43b14e740e0f0ea458b41ae4eca28cb9cb",
+            "46d24ec873f24e40010cf5:f9ebd39bfa23886420d8a159d50f4dad:ok|",
+            "9d:ok|9dc8b5e7:ok",
+        )
+    );
+}
+
+/// Verifies GCM decrypt authenticates AAD and accepts a non-default 16-byte IV.
+#[test]
+fn test_openssl_gcm_roundtrip_aad_and_non_default_iv() {
+    let out = compile_and_run(
+        r#"<?php
+$pt = "The quick brown fox jumps over the lazy dog";
+$key = str_repeat("k", 32);
+$iv = str_repeat("i", 16);
+$ciphertext = openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag, "fixture-aad");
+echo bin2hex($ciphertext), ":", bin2hex($tag), "|";
+echo openssl_decrypt($ciphertext, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag, "fixture-aad"), "|";
+echo openssl_decrypt($ciphertext, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag, "wrong-aad") === false ? "false" : "bad", "|";
+$default_iv = str_repeat("i", 12);
+$encoded = openssl_encrypt($pt, "aes-256-gcm", $key, 0, $default_iv, $encoded_tag, "fixture-aad");
+echo $encoded, ":", bin2hex($encoded_tag), ":";
+echo openssl_decrypt($encoded, "aes-256-gcm", $key, 0, $default_iv, $encoded_tag, "fixture-aad");
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "058c1967af117fc4142b6c851c3ca083c65b71f3c28d9041a8247fc5f3070afb",
+            "513839a2043457948c44b6:69490efb2851c5a47142b09f074b143e|",
+            "The quick brown fox jumps over the lazy dog|false|",
+            "juydVEONyGeQdIMK9GBLR/TLBip1Tts8Vh0ht226xitv17LAQMpn4+Vkeg==:",
+            "9dc8b5e7b800bfed5c1be43fc4614f51:The quick brown fox jumps over the lazy dog",
+        )
+    );
+}
+
+/// Verifies GCM rejects missing/wrong tags, empty IVs, and invalid requested tag lengths.
+#[test]
+fn test_openssl_gcm_failure_paths_return_false() {
+    let out = compile_and_run(
+        r#"<?php
+$pt = "The quick brown fox jumps over the lazy dog";
+$key = str_repeat("k", 32);
+$iv = str_repeat("i", 12);
+$ciphertext = openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag, "fixture-aad");
+echo openssl_decrypt($ciphertext, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, str_repeat("x", 16), "fixture-aad") === false ? "w" : "bad";
+echo openssl_decrypt($ciphertext, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv) === false ? "m" : "bad";
+echo openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, "", $empty_iv_tag, "fixture-aad") === false ? "i" : "bad";
+echo openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $zero_tag, "fixture-aad", 0) === false ? "z" : "bad";
+echo openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $long_tag, "fixture-aad", 17) === false ? "l" : "bad";
+echo openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv) === false ? "t" : "bad";
+"#,
+    );
+    assert_eq!(out, "wmizlt");
+}
+
+/// Verifies empty GCM plaintext still writes and authenticates the PHP-golden tag.
+#[test]
+fn test_openssl_gcm_empty_plaintext_tag() {
+    let out = compile_and_run(
+        r#"<?php
+$key = str_repeat("k", 32);
+$iv = str_repeat("i", 12);
+$ciphertext = openssl_encrypt("", "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag, "fixture-aad");
+echo strlen($ciphertext), ":", bin2hex($tag), ":";
+$plain = openssl_decrypt($ciphertext, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag, "fixture-aad");
+echo $plain === false ? "false" : strlen($plain);
+"#,
+    );
+    assert_eq!(out, "0:76a0e5a2ff64c6f1c8ee0f2c0f066c91:0");
+}
+
+/// Verifies GCM replaces tag storage while non-AEAD encryption leaves it unchanged.
+#[test]
+fn test_openssl_gcm_tag_overwrites_existing_and_ref_parameter_storage() {
+    let out = compile_and_run(
+        r#"<?php
+function encrypt_with_tag(string $data, string $key, string $iv, &$tag) {
+    return openssl_encrypt($data, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $tag, "fixture-aad");
+}
+$pt = "The quick brown fox jumps over the lazy dog";
+$key = str_repeat("k", 32);
+$iv = str_repeat("i", 12);
+$scalar_tag = 123;
+$scalar_ciphertext = openssl_encrypt($pt, "aes-256-gcm", $key, OPENSSL_RAW_DATA, $iv, $scalar_tag, "fixture-aad");
+echo bin2hex($scalar_ciphertext), ":", bin2hex($scalar_tag), "|";
+$tag = "old-tag";
+$ciphertext = encrypt_with_tag($pt, $key, $iv, $tag);
+echo bin2hex($ciphertext), ":", bin2hex($tag), "|";
+$cbc_tag = "keep";
+openssl_encrypt($pt, "aes-256-cbc", $key, OPENSSL_RAW_DATA, $iv, $cbc_tag);
+echo $cbc_tag;
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "8eec9d54438dc8679074830af4604b47f4cb062a754edb3c561d21b76dbac62b",
+            "6fd7b2c040ca67e3e5647a:9dc8b5e7b800bfed5c1be43fc4614f51|",
+            "8eec9d54438dc8679074830af4604b47f4cb062a754edb3c561d21b76dbac62b",
+            "6fd7b2c040ca67e3e5647a:9dc8b5e7b800bfed5c1be43fc4614f51|keep",
+        )
+    );
 }

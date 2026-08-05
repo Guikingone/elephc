@@ -7,7 +7,7 @@
 //! Key details:
 //! - Callers pass a target-neutral field block so the helpers own the large C ABI calls.
 //! - The bridge always sees raw bytes; this glue applies PHP's base64 option semantics.
-//! - Phase 2 supplies no GCM tag output/input, so AEAD calls return false until phase 3.
+//! - GCM tags use owned heap storage transferred to the caller only for requested writeback.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
@@ -42,7 +42,12 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp raw ciphertext allocation
     emitter.instruction("str x0, [sp, #88]");                                   // retain raw output pointer
     emitter.instruction("str xzr, [sp, #104]");                                 // initialize ciphertext output length
-    emitter.instruction("str xzr, [sp, #112]");                                 // initialize ignored tag output length
+    emitter.instruction("str xzr, [sp, #112]");                                 // initialize tag output length
+    emitter.instruction("mov x0, #16");                                         // maximum supported GCM tag capacity
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    emitter.instruction("mov x9, #1");                                          // heap kind 1 = owned string
+    emitter.instruction("str x9, [x0, #-8]");                                   // stamp tag allocation
+    emitter.instruction("str x0, [sp, #136]");                                  // retain tag output pointer
 
     emitter.instruction("ldr x10, [sp, #80]");                                  // reload caller field block
     emitter.instruction("ldr x9, [x10, #48]");                                  // options
@@ -59,8 +64,10 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("str x9, [sp, #40]");                                   // C stack arg13 = output capacity
     emitter.instruction("add x9, sp, #104");
     emitter.instruction("str x9, [sp, #48]");                                   // C stack arg14 = output length pointer
-    emitter.instruction("str xzr, [sp, #56]");                                  // C stack arg15 = no phase-2 tag buffer
-    emitter.instruction("str xzr, [sp, #64]");                                  // C stack arg16 = zero tag capacity
+    emitter.instruction("ldr x9, [sp, #136]");                                  // GCM tag destination
+    emitter.instruction("str x9, [sp, #56]");                                   // C stack arg15 = tag output pointer
+    emitter.instruction("mov x9, #16");                                         // maximum supported GCM tag capacity
+    emitter.instruction("str x9, [sp, #64]");                                   // C stack arg16 = tag capacity
     emitter.instruction("add x9, sp, #112");
     emitter.instruction("str x9, [sp, #72]");                                   // C stack arg17 = tag length pointer
 
@@ -77,6 +84,20 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
     emitter.instruction("cbz x9, __rt_openssl_encrypt_fail");                   // missing bridge returns PHP false
     abi::emit_call_reg(emitter, "x9");
     emitter.instruction("cbnz x0, __rt_openssl_encrypt_fail");                  // nonzero bridge status returns PHP false
+
+    emitter.instruction("ldr x10, [sp, #80]");                                  // recover caller field block after C call
+    emitter.instruction("ldr x9, [sp, #112]");                                  // produced GCM tag length
+    emitter.instruction("cbz x9, __rt_openssl_encrypt_discard_tag");            // non-AEAD calls do not publish a tag
+    emitter.instruction("ldr x11, [x10, #112]");                                // inspect whether the caller supplied a tag target
+    emitter.instruction("cbz x11, __rt_openssl_encrypt_fail");                  // GCM without a tag target returns PHP false
+    emitter.instruction("ldr x11, [sp, #136]");                                 // transfer owned tag pointer to the caller block
+    emitter.instruction("str x11, [x10, #96]");                                 // publish owned tag pointer
+    emitter.instruction("str x9, [x10, #104]");                                 // publish produced tag length
+    emitter.instruction("b __rt_openssl_encrypt_tag_ready");
+    emitter.label("__rt_openssl_encrypt_discard_tag");
+    emitter.instruction("ldr x0, [sp, #136]");                                  // release the unused non-AEAD tag allocation
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    emitter.label("__rt_openssl_encrypt_tag_ready");
 
     emitter.instruction("ldr x10, [sp, #80]");                                  // recover field block after C call
     emitter.instruction("ldr x9, [x10, #48]");                                  // inspect OPENSSL_RAW_DATA
@@ -100,6 +121,8 @@ fn emit_openssl_encrypt(emitter: &mut Emitter) {
 
     emitter.label("__rt_openssl_encrypt_fail");
     emitter.instruction("ldr x0, [sp, #88]");                                   // release unused raw output allocation
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    emitter.instruction("ldr x0, [sp, #136]");                                  // release unused tag output allocation
     abi::emit_call_label(emitter, "__rt_heap_free_safe");
     emitter.instruction("mov x1, #0");                                          // null pointer is the string|false failure sentinel
     emitter.instruction("mov x2, #0");                                          // clear failure length
@@ -131,7 +154,15 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp raw ciphertext as owned string
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // retain raw output pointer
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize ciphertext output length
-    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize ignored tag output length
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // initialize tag output length
+    emitter.instruction("mov rax, 16");                                         // maximum supported GCM tag capacity
+    abi::emit_call_label(emitter, "__rt_heap_alloc");
+    emitter.instruction(&format!(
+        "mov r10, 0x{:x}",
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(1)
+    ));
+    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp tag allocation as owned string
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // retain tag output pointer
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload caller field block
     emitter.instruction("mov r11, QWORD PTR [r10 + 56]");
@@ -152,8 +183,9 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 56], r11");                       // C stack arg13 = output capacity
     emitter.instruction("lea r11, [rbp - 32]");
     emitter.instruction("mov QWORD PTR [rsp + 64], r11");                       // C stack arg14 = output length pointer
-    emitter.instruction("mov QWORD PTR [rsp + 72], 0");                         // C stack arg15 = no phase-2 tag buffer
-    emitter.instruction("mov QWORD PTR [rsp + 80], 0");                         // C stack arg16 = zero tag capacity
+    emitter.instruction("mov r11, QWORD PTR [rbp - 64]");                       // GCM tag destination
+    emitter.instruction("mov QWORD PTR [rsp + 72], r11");                       // C stack arg15 = tag output pointer
+    emitter.instruction("mov QWORD PTR [rsp + 80], 16");                        // C stack arg16 = tag capacity
     emitter.instruction("lea r11, [rbp - 40]");
     emitter.instruction("mov QWORD PTR [rsp + 88], r11");                       // C stack arg17 = tag length pointer
     emitter.instruction("mov rdi, QWORD PTR [r10 + 16]");                       // C arg0 = cipher-name pointer
@@ -168,6 +200,21 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
     abi::emit_call_reg(emitter, "r11");
     emitter.instruction("test eax, eax");                                       // zero is the bridge success status
     emitter.instruction("jnz __rt_openssl_encrypt_fail_linux_x86_64");
+
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover caller field block after C call
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // produced GCM tag length
+    emitter.instruction("test r9, r9");                                         // distinguish GCM from non-AEAD success
+    emitter.instruction("jz __rt_openssl_encrypt_discard_tag_linux_x86_64");
+    emitter.instruction("cmp QWORD PTR [r10 + 112], 0");                        // inspect whether the caller supplied a tag target
+    emitter.instruction("je __rt_openssl_encrypt_fail_linux_x86_64");           // GCM without a tag target returns PHP false
+    emitter.instruction("mov r11, QWORD PTR [rbp - 64]");                       // transfer owned tag pointer to caller block
+    emitter.instruction("mov QWORD PTR [r10 + 96], r11");                       // publish owned tag pointer
+    emitter.instruction("mov QWORD PTR [r10 + 104], r9");                       // publish produced tag length
+    emitter.instruction("jmp __rt_openssl_encrypt_tag_ready_linux_x86_64");
+    emitter.label("__rt_openssl_encrypt_discard_tag_linux_x86_64");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // release the unused non-AEAD tag allocation
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    emitter.label("__rt_openssl_encrypt_tag_ready_linux_x86_64");
 
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // recover field block after C call
     emitter.instruction("test QWORD PTR [r10 + 48], 1");                        // inspect OPENSSL_RAW_DATA
@@ -191,6 +238,8 @@ fn emit_openssl_encrypt_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_openssl_encrypt_fail_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // release unused raw output allocation
+    abi::emit_call_label(emitter, "__rt_heap_free_safe");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // release unused tag output allocation
     abi::emit_call_label(emitter, "__rt_heap_free_safe");
     emitter.instruction("xor eax, eax");                                        // null pointer is the string|false failure sentinel
     emitter.instruction("xor edx, edx");                                        // clear failure length

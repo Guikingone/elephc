@@ -161,6 +161,8 @@ pub enum BuiltinArgumentLowering {
     PositionalRegex,
     /// Preserve by-reference array storage while lowering user-comparator sorts.
     UserValueSort,
+    /// Promote the by-reference OpenSSL tag target before ordinary argument planning.
+    OpensslEncrypt,
 }
 
 impl BuiltinRuntimeFunctions {

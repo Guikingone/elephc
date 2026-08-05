@@ -5,7 +5,7 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through the builtin registry.
 //!
 //! Key details:
-//! - The checked result is `string|false`; phase 2 handles CBC, CTR, and ECB.
+//! - The checked result is `string|false`; GCM consumes the by-value tag and optional AAD.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
