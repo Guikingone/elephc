@@ -3327,6 +3327,31 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb
                 .ins("call $__rt_array_get_mixed_str", "indexed array get (boxed string|null)");
         }
+        // An element that is itself an ARRAY, or an OBJECT, is one pointer in an 8-byte slot.
+        // Both read the same way, and both use pointer 0 for the miss — the same null the
+        // native backend hands back, and the value every getter now treats as "read through a
+        // missed element" rather than loading from address 0.
+        //
+        // `__rt_array_get_object` hands back the stored pointer BORROWED, but the EIR types this
+        // result `own=owned` and emits a matching `release`. Without a reference of its own that
+        // release drops the PARENT's, freeing a child the parent still points at — which is why
+        // `$g[1][0][1]` read freed memory while `$x = $g[1]; count($x)` did not: the chained form
+        // has no `acquire` to balance it. `__rt_incref` is null-safe, so a miss stays a miss.
+        (PhpType::Array(_) | PhpType::Object(_), WasmRepr::Ptr(pointer)) => {
+            let pointer = pointer.clone();
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(index)?;
+            ctx.fb.ins(
+                "call $__rt_array_get_object",
+                "indexed array get (pointer element, 0 when missing)",
+            );
+            if inst.result_ownership == Ownership::Owned {
+                ctx.fb.ins(&format!("local.tee {pointer}"), "keep the pointer on the stack");
+                ctx.fb
+                    .ins("call $__rt_incref", "the caller owns what it reads (null-safe)");
+                ctx.fb.ins(&format!("local.get {pointer}"), "restore the read result");
+            }
+        }
         (element, repr) => {
             return Err(WasmError::Unsupported(format!(
                 "array_get element {:?} into {:?}",
@@ -3336,34 +3361,62 @@ fn lower_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     store_result(ctx, inst)?;
     if inst.op == Op::ArrayGet {
-        emit_undefined_array_index_warning_if_null(ctx, index, &result_repr)?;
+        emit_undefined_array_index_warning_if_null(
+            ctx,
+            array,
+            index,
+            &element_type,
+            &result_repr,
+        )?;
     }
     Ok(())
 }
 
 /// Emits the warning-only branch for a normal indexed read whose result is null.
 ///
-/// Tagged integers carry the null tag in their i32 tag local. Boxed bool/string
-/// reads carry it at offset zero of the fresh Mixed cell. The index SSA value is
-/// reloaded only after the getter has completed, so it is evaluated exactly once.
+/// Tagged integers carry the null tag in their i32 tag local. Boxed bool/string reads carry it
+/// at offset zero of the fresh Mixed cell. A POINTER element — a nested array or an object —
+/// is null when the pointer itself is 0; reading a tag at its offset zero would read an array's
+/// LENGTH instead, which is why the element type rather than the representation decides. The
+/// index SSA value is reloaded only after the getter has completed, so it is evaluated exactly
+/// once.
+///
+/// PHP has two different diagnostics here and picks between them by looking at the SOURCE, not
+/// the result. Reading a missing key off a real array is `Undefined array key N`; reading any
+/// offset off a null — which is what a chained read gets after an earlier miss — is `Trying to
+/// access array offset on null`. Both produce a null result, so the source pointer is what
+/// separates them:
+///
+/// ```text
+///   $a = [[1, 2]];  $b = $a[5];  echo $b[1];
+///   php-src: Warning: Undefined array key 5
+///            Warning: Trying to access array offset on null
+/// ```
 fn emit_undefined_array_index_warning_if_null(
     ctx: &mut FnCtx,
+    array: ValueId,
     index: ValueId,
+    element_type: &PhpType,
     result_repr: &WasmRepr,
 ) -> Result<()> {
-    match result_repr {
-        WasmRepr::Tagged { tag, .. } => {
+    match (element_type, result_repr) {
+        (PhpType::Array(_) | PhpType::Object(_), WasmRepr::Ptr(pointer)) => {
+            ctx.fb
+                .ins(&format!("local.get {pointer}"), "read the pointer element");
+            ctx.fb.ins("i32.eqz", "a null pointer IS the missing element");
+        }
+        (_, WasmRepr::Tagged { tag, .. }) => {
             ctx.fb.ins(&format!("local.get {tag}"), "read nullable result tag");
             ctx.fb.ins("i32.const 8", "Mixed null tag");
             ctx.fb.ins("i32.eq", "missing indexed element");
         }
-        WasmRepr::Ptr(cell) => {
+        (_, WasmRepr::Ptr(cell)) => {
             ctx.fb.ins(&format!("local.get {cell}"), "load boxed nullable result");
             ctx.fb.ins("i64.load", "Mixed tag @ +0");
             ctx.fb.ins("i64.const 8", "Mixed null tag");
             ctx.fb.ins("i64.eq", "missing indexed element");
         }
-        other => {
+        (_, other) => {
             return Err(WasmError::Unsupported(format!(
                 "array_get warning for result representation {:?}",
                 other
@@ -3371,11 +3424,23 @@ fn emit_undefined_array_index_warning_if_null(
         }
     }
     ctx.fb.ins("if", "warn only when the indexed read produced null");
+    // A null SOURCE means this read was chained onto an earlier miss, which is PHP's other
+    // diagnostic. The source is loaded here rather than reused from before the getter so the
+    // non-null path pays nothing for it.
+    ctx.emit_load_value(array)?;
+    ctx.fb.ins("i32.eqz", "was the array itself null?");
+    ctx.fb.ins("if", "select PHP's diagnostic from the SOURCE");
+    ctx.fb.ins(
+        "call $__rt_warn_array_offset_on_null",
+        "offset read through a null",
+    );
+    ctx.fb.ins("else", "a real array with no such key");
     ctx.emit_load_value(index)?;
     ctx.fb.ins(
         "call $__rt_warn_undefined_array_key_int",
         "emit PHP undefined-array-key warning",
     );
+    ctx.fb.ins("end", "end diagnostic selection");
     ctx.fb.ins("end", "continue with the stored null result");
     Ok(())
 }
@@ -4506,6 +4571,20 @@ fn emit_is_null_test(ctx: &mut FnCtx, op0: crate::ir::ValueId) -> Result<()> {
             ctx.fb
                 .ins(&format!("local.get {}", local), "nullable container pointer");
             ctx.fb.ins("i32.eqz", "nullable container is null");
+            ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+        }
+        // A raw ARRAY or OBJECT pointer is null exactly when it is 0, whatever the static type
+        // says. The type is not always right — reading a missing element of `array<array<int>>`
+        // is typed `array<int>` because the null gets dropped at that boundary — and the
+        // fallback below answers from the type, so without this a pointer that IS 0 reports
+        // itself non-null. Testing the pointer cannot be wrong: a live array or object is
+        // allocated, so 0 is never one of them.
+        (WasmRepr::Ptr(local), PhpType::Array(_) | PhpType::Object(_), IrType::Heap(kind))
+            if matches!(kind, IrHeapKind::Array | IrHeapKind::Object) =>
+        {
+            ctx.fb
+                .ins(&format!("local.get {}", local), "container pointer");
+            ctx.fb.ins("i32.eqz", "a null pointer IS null");
             ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
         }
         (

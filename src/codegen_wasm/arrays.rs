@@ -347,6 +347,11 @@ const RT_ARRAY_PUSH_PTR: &str = r#"(func $__rt_array_push_ptr (param $array i32)
 /// OWNED value (`iter_current_value` is `own=owned` and the EIR releases it), so it increfs; a
 /// boxing caller hands the pointer to `__rt_mixed_from_value`, which increfs refcounted children
 /// itself.
+/// Also serves an element that is itself an ARRAY, which shares this exact layout: an 8-byte
+/// slot holding one pointer, marked in the header's `value_type` field (object 4, nested
+/// array 5) so the collector still traverses it. A miss answers pointer 0, which is the same
+/// null the native backend produces — and because a null SOURCE also answers 0, a read
+/// chained onto a miss stays total instead of loading from address 0.
 const RT_ARRAY_GET_OBJECT: &str = r#"(func $__rt_array_get_object (param $array i32) (param $index i64) (result i32)
   (local $len i64)
   (if (i32.eqz (local.get $array))
@@ -367,6 +372,8 @@ const RT_ARRAY_GET_OBJECT: &str = r#"(func $__rt_array_get_object (param $array 
 /// "present" read through the boxed accessor instead.
 const RT_ARRAY_GET_FLOAT: &str = r#"(func $__rt_array_get_float (param $array i32) (param $index i64) (result f64)
   (local $len i64)
+  (if (i32.eqz (local.get $array))                          ;; null array -> NaN
+    (then (return (f64.const nan))))
   (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> NaN
     (then (return (f64.const nan))))
   (local.set $len (i64.load (local.get $array)))            ;; length
@@ -380,6 +387,8 @@ const RT_ARRAY_GET_FLOAT: &str = r#"(func $__rt_array_get_float (param $array i3
 /// for scalar (8-byte slot) arrays.
 const RT_ARRAY_GET_INT: &str = r#"(func $__rt_array_get_int (param $array i32) (param $index i64) (result i64)
   (local $len i64)
+  (if (i32.eqz (local.get $array))                          ;; null array -> null
+    (then (return (i64.const 9223372036854775806))))                             ;; reading through a missed element
   (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> null
     (then (return (i64.const 9223372036854775806))))                             ;; negative index -> null sentinel
   (local.set $len (i64.load (local.get $array)))            ;; length
@@ -394,6 +403,8 @@ const RT_ARRAY_GET_INT: &str = r#"(func $__rt_array_get_int (param $array i32) (
 /// former null sentinel remains a valid, distinguishable PHP integer in-bounds.
 const RT_ARRAY_GET_TAGGED_INT: &str = r#"(func $__rt_array_get_tagged_int (param $array i32) (param $index i64) (result i64) (result i32)
   (local $len i64)
+  (if (i32.eqz (local.get $array))                          ;; null array -> tagged null
+    (then (return (i64.const 0) (i32.const 8))))             ;; reading through a missed element
   (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> tagged null
     (then (return (i64.const 0) (i32.const 8))))             ;; payload 0, null tag
   (local.set $len (i64.load (local.get $array)))            ;; length
@@ -409,6 +420,8 @@ const RT_ARRAY_GET_TAGGED_INT: &str = r#"(func $__rt_array_get_tagged_int (param
 /// `is_null`, casts, and coalescing cannot observe the old integer sentinel.
 const RT_ARRAY_GET_MIXED_BOOL: &str = r#"(func $__rt_array_get_mixed_bool (param $array i32) (param $index i64) (result i32)
   (local $len i64)
+  (if (i32.eqz (local.get $array))                          ;; null array -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
   (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> boxed null
     (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
   (local.set $len (i64.load (local.get $array)))            ;; length
@@ -460,6 +473,8 @@ const RT_ARRAY_PUSH_STR: &str = r#"(func $__rt_array_push_str (param $array i32)
 const RT_ARRAY_GET_STR: &str = r#"(func $__rt_array_get_str (param $array i32) (param $index i64) (result i32) (result i64)
   (local $len i64)
   (local $slot i32)
+  (if (i32.eqz (local.get $array))                        ;; null array -> null pair
+    (then (return (i32.const 0) (i64.const 0))))                                 ;; reading through a missed element
   (if (i64.lt_s (local.get $index) (i64.const 0))         ;; negative index -> null pair
     (then (return (i32.const 0) (i64.const 0))))                                 ;; negative index -> null pair
   (local.set $len (i64.load (local.get $array)))          ;; length
@@ -477,6 +492,8 @@ const RT_ARRAY_GET_STR: &str = r#"(func $__rt_array_get_str (param $array i32) (
 const RT_ARRAY_GET_MIXED_STR: &str = r#"(func $__rt_array_get_mixed_str (param $array i32) (param $index i64) (result i32)
   (local $len i64)
   (local $slot i32)
+  (if (i32.eqz (local.get $array))                          ;; null array -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
   (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> boxed null
     (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
   (local.set $len (i64.load (local.get $array)))            ;; length
@@ -506,6 +523,8 @@ const RT_ARRAY_GET_MIXED_STR: &str = r#"(func $__rt_array_get_mixed_str (param $
 const RT_ARRAY_GET_MIXED_CELL: &str = r#"(func $__rt_array_get_mixed_cell (param $array i32) (param $index i64) (result i32)
   (local $len i64)
   (local $cell i32)
+  (if (i32.eqz (local.get $array))                          ;; null array -> boxed null
+    (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
   (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> boxed null
     (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
   (local.set $len (i64.load (local.get $array)))            ;; length

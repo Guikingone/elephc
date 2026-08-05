@@ -13605,6 +13605,165 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies reading an element that is itself an ARRAY (or an object) out of an indexed array.
+///
+/// The refusal said `element Array(Int) cannot lower into Heap(Array)/Array(Int)`, and the reason
+/// was the MISS rather than the hit: every accepted element type had somewhere to put PHP's
+/// missing-key null — an int became a tagged scalar, a bool/string/mixed became a Mixed cell — and
+/// a raw container pointer appeared to have nowhere. It does: pointer 0, which is the same null
+/// the native backend already produces, and which no live array or object can collide with because
+/// both are allocated.
+///
+/// Three things had to become true together, and each one is a case below.
+///
+/// The getters had to survive a null SOURCE, since a read chained onto a miss now passes one. They
+/// were loading the length straight off the pointer, which for 0 reads address 0 — valid linear
+/// memory in wasm, so it would have answered from whatever happened to be there instead of
+/// trapping. Each one now answers its own miss value for a null array.
+///
+/// PHP then has TWO diagnostics here and picks between them by looking at the source, not the
+/// result — both produce null:
+///
+/// ```text
+///   $a = [[1, 2], [3, 4]];  $b = $a[5];  echo $b[1];
+///   php-src: Warning: Undefined array key 5
+///            Warning: Trying to access array offset on null
+/// ```
+///
+/// And `is_null` had to stop answering from the static type. Its fallback was `statically
+/// non-null`, which is a claim the EIR cannot back: reading a missing element of
+/// `array<array<int>>` is typed `array<int>`, the null having been dropped at that boundary, so a
+/// pointer that IS 0 reported itself non-null. Testing the pointer cannot be wrong.
+///
+/// The last case is the one that made the difference between reading memory and reading FREED
+/// memory. `__rt_array_get_object` hands the stored pointer back BORROWED, but the EIR types this
+/// result `own=owned` and emits a matching `release`. Without a reference of its own that release
+/// drops the PARENT's, so `$g[1][0][1]` freed a child its parent still pointed at, while
+/// `$x = $g[1]; count($x)` did not — the chained form has no `acquire` to balance it. Measured
+/// after adding the incref: 20000 iterations of build-then-read hold at 3 wasm pages, the same as
+/// the identical loop without the read, while a loop that deliberately retains every child grows
+/// to 32 — so the flat number is a balanced refcount and not a blind measurement.
+#[test]
+fn test_cli_wasm_reads_a_nested_array_element() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_nested_array_read");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // php-src 8.5.6's own answers. Its CLI prints diagnostics to stdout and this backend prints
+    // them to stderr, so the two streams are checked separately rather than concatenated.
+    for (name, source, expected_out, expected_err) in [
+        // The inner array through a local, and the same read chained.
+        (
+            "local.php",
+            "<?php\n$a = [[1, 2], [3, 4]];\n$b = $a[0];\necho $b[1], \"\\n\";\n",
+            "2\n",
+            "",
+        ),
+        (
+            "chained.php",
+            "<?php\n$a = [[1, 2], [3, 4]];\necho $a[0][1], \"\\n\";\n",
+            "2\n",
+            "",
+        ),
+        // A miss is null, and says so.
+        (
+            "miss.php",
+            "<?php\n$a = [[1, 2], [3, 4]];\n$b = $a[5];\necho is_null($b) ? \"null\" : \"notnull\", \"\\n\";\n",
+            "null\n",
+            "Warning: Undefined array key 5\n",
+        ),
+        // Reading THROUGH the miss is PHP's other diagnostic, and execution continues.
+        (
+            "through.php",
+            "<?php\n$a = [[1, 2], [3, 4]];\n$b = $a[5];\necho $b[1], \"\\n\";\necho \"after\\n\";\n",
+            "\nafter\n",
+            "Warning: Undefined array key 5\nWarning: Trying to access array offset on null\n",
+        ),
+        // An OBJECT element is the same 8-byte pointer slot and the same 0 sentinel.
+        (
+            "object.php",
+            "<?php\nclass P { public int $v = 7; }\n$a = [new P()];\n$hit = $a[0];\necho $hit->v, \"\\n\";\n$miss = $a[9];\necho is_null($miss) ? \"null\" : \"notnull\", \"\\n\";\n",
+            "7\nnull\n",
+            "Warning: Undefined array key 9\n",
+        ),
+        // THREE levels chained — the case that read freed memory before the read took a
+        // reference of its own.
+        (
+            "deep.php",
+            "<?php\n$g = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]];\necho $g[1][0][1], \"\\n\";\n",
+            "6\n",
+            "",
+        ),
+        // Three levels with VARIABLE indices, so nothing is decidable at compile time, mixed
+        // with reads bound to locals and a `count()` of an inner array.
+        (
+            "vars.php",
+            "<?php\n$g = [[[1, 2], [3, 4]], [[5, 6], [7, 8]]];\n$i = 1;\n$j = 0;\n$k = 1;\necho $g[$i][$j][$k], \"\\n\";\n$row = $g[0];\n$cell = $row[1];\necho $cell[0], \"\\n\";\necho count($g[1]), \"\\n\";\n",
+            "6\n3\n2\n",
+            "",
+        ),
+        // Enough elements that the outer array must GROW past its initial capacity while it is
+        // already shaped to pointer slots.
+        (
+            "grows.php",
+            "<?php\n$a = [[1], [2], [3], [4]];\necho count($a), \"\\n\";\necho $a[0][0], $a[1][0], $a[2][0], $a[3][0], \"\\n\";\n",
+            "4\n1234\n",
+            "",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the nested array read");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the nested array read under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected_out,
+            "{name}: php-src's own stdout"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stderr),
+            expected_err,
+            "{name}: php-src's own diagnostics"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

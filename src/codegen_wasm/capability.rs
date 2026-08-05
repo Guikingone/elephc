@@ -2908,6 +2908,17 @@ fn array_get_shape_issue(
         PhpType::Bool | PhpType::Str | PhpType::Mixed => {
             inst.result_type == IrType::Heap(IrHeapKind::Mixed) && result_php == PhpType::Mixed
         }
+        // A nested ARRAY or an OBJECT element is one pointer in an 8-byte slot, and pointer 0
+        // carries the missing-index null — the same sentinel the native backend uses, and the
+        // one every getter now reads as "through a missed element" instead of dereferencing
+        // address 0. The result must keep the element's own class or element type: the read
+        // hands back the stored pointer unchanged, so anything else would be a relabelling.
+        PhpType::Array(_) => {
+            inst.result_type == IrType::Heap(IrHeapKind::Array) && result_php == element_type
+        }
+        PhpType::Object(_) => {
+            inst.result_type == IrType::Heap(IrHeapKind::Object) && result_php == element_type
+        }
         _ => false,
     };
     if !supported_result {
@@ -2919,6 +2930,14 @@ fn array_get_shape_issue(
     let ownership_is_supported = match &element_type {
         PhpType::Int => inst.result_ownership == Ownership::NonHeap,
         PhpType::Bool | PhpType::Str | PhpType::Mixed => matches!(
+            inst.result_ownership,
+            Ownership::Owned | Ownership::MaybeOwned
+        ),
+        // Only the two the lowering can honour: `Owned` takes a reference of its own after the
+        // borrowed read, and `MaybeOwned` is already the caller's to release. A `Borrowed`
+        // result would leave the release side ambiguous, and getting that wrong frees a child
+        // its parent still points at.
+        PhpType::Array(_) | PhpType::Object(_) => matches!(
             inst.result_ownership,
             Ownership::Owned | Ownership::MaybeOwned
         ),
