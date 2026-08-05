@@ -57,6 +57,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_CLONE_SHALLOW);
     wm.add_raw_func(RT_ARRAY_PREFLIGHT_SET);
     wm.add_raw_func(RT_ARRAY_SET_INT);
+    wm.add_raw_func(RT_ARRAY_SET_PTR);
     wm.add_raw_func(RT_ARRAY_SET_STR);
     wm.add_raw_func(RT_ARRAY_FREE_DEEP);
     wm.add_raw_func(RT_DECREF_ARRAY);
@@ -1044,6 +1045,52 @@ const RT_ARRAY_SET_INT: &str = r#"(func $__rt_array_set_int (param $array i32) (
       (i64.store (local.get $array) (i64.add (local.get $index) (i64.const 1)))))  ;; length = index+1
   (i64.store (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8)))) (local.get $value))  ;; store element
   (local.get $array))                                                            ;; return the (possibly new) array
+"#;
+
+/// `__rt_array_set_ptr`: assigns a container (nested array or object) at `index`.
+///
+/// The scalar shape with one addition that decides correctness: the slot's previous occupant is
+/// a refcounted child, so overwriting it has to RELEASE it or the old array leaks. The release
+/// happens AFTER the store, which is what makes `$a[0] = $a[0]` safe — the caller has already
+/// increfed the incoming pointer, so a self-assignment nets to no change instead of freeing the
+/// value mid-write.
+///
+/// A gap between the old length and `index` is filled with pointer 0 rather than the scalar
+/// path's zero payload — the same value a missing element reads as, so `__rt_array_free_deep`
+/// walking a gap releases nothing.
+const RT_ARRAY_SET_PTR: &str = r#"(func $__rt_array_set_ptr (param $array i32) (param $index i64) (param $obj i32) (param $vt i64) (result i32)
+  (local $oldlen i64)
+  (local $j i64)
+  (local $slot i32)
+  (local $old i32)
+  (if (i64.lt_s (local.get $index) (i64.const 0))
+    (then (return (local.get $array))))                     ;; reject negative index
+  (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 8))  ;; prove growth before COW
+  (local.set $array (call $__rt_array_ensure_unique (local.get $array)))  ;; copy-on-write split
+  (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as a pointer array
+    (then
+      (i64.store (i32.add (local.get $array) (i32.const 16)) (i64.const 8))  ;; elem_size = 8
+      (i64.store (i32.sub (local.get $array) (i32.const 8))
+                 (i64.or (i64.and (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const -32513)) (i64.shl (local.get $vt) (i64.const 8))))))  ;; value_type = vt
+  (block $gend (loop $grow
+    (br_if $gend (i64.lt_s (local.get $index) (i64.load (i32.add (local.get $array) (i32.const 8)))))  ;; index < capacity -> fits
+    (local.set $array (call $__rt_array_grow (local.get $array)))  ;; double capacity
+    (br $grow)))
+  (local.set $oldlen (i64.load (local.get $array)))         ;; length after grow (grow preserves it)
+  (if (i64.ge_s (local.get $index) (local.get $oldlen))     ;; writing at/after the end extends
+    (then
+      (local.set $j (local.get $oldlen))
+      (block $fend (loop $fill
+        (br_if $fend (i64.ge_s (local.get $j) (local.get $index)))  ;; fill [oldlen, index)
+        (i64.store (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $j) (i64.const 8)))) (i64.const 0))  ;; gap slot = null pointer
+        (local.set $j (i64.add (local.get $j) (i64.const 1)))
+        (br $fill)))
+      (i64.store (local.get $array) (i64.add (local.get $index) (i64.const 1)))))  ;; length = index+1
+  (local.set $slot (i32.add (i32.add (local.get $array) (i32.const 24)) (i32.wrap_i64 (i64.mul (local.get $index) (i64.const 8)))))
+  (local.set $old (i32.wrap_i64 (i64.load (local.get $slot))))  ;; the child being replaced
+  (i64.store (local.get $slot) (i64.extend_i32_u (local.get $obj)))  ;; store the new child
+  (call $__rt_decref_any (local.get $old))                  ;; release the replaced child (null-safe, after the store)
+  (local.get $array))                                       ;; return the (possibly new) array
 "#;
 
 /// `__rt_array_set_str`: assigns a string at `index`. Splits a shared array (COW),

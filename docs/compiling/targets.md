@@ -101,7 +101,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **43
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **44
 compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
 php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
 php-src cannot parse at all, so it has no php-src output to match — meaning
@@ -112,7 +112,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 147 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 146 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -128,7 +128,7 @@ times over:
 | Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
 | All three together | 17 |
 
-The blocker-count distribution says the same thing: of the 147 that do not
+The blocker-count distribution says the same thing: of the 146 that do not
 compile, 14 have one distinct blocker, 19 have two, 22 have three, 22 have four,
 and the tail runs past eleven. Progress is roughly one example per fix, so the
 example counter is a poor guide to correctness work — running a differential
@@ -264,9 +264,22 @@ the PARENT's: `$g[1][0][1]` freed a child its parent still pointed at, where
 `$x = $g[1]; count($x)` did not, the chained form having no `acquire` to balance
 it. Verified balanced by measurement, not by reading: 20000 build-then-read
 iterations hold at 3 wasm pages, exactly like the same loop without the read,
-while a loop that deliberately retains every child grows to 32. Unblocks
-`examples/nested-arrays`; writing one back (`array_set` of a container) is still
-refused, which is what `examples/cow` now waits on.
+while a loop that deliberately retains every child grows to 32.
+
+WRITING one back works the same way, with one addition the read does not need:
+the slot's previous occupant is a refcounted child, so overwriting it has to
+RELEASE it. That release happens AFTER the store, which is what makes
+`$a[0] = $a[0]` safe — the incoming pointer is already increfed, so a
+self-assignment nets to no change instead of freeing the value mid-write.
+Measured the same way: 20000 overwrites of one slot hold at 3 pages against the
+retaining loop's 32. Together these unblock `examples/nested-arrays` and
+`examples/cow`, the latter matching php-src's copy-on-write output byte for byte.
+
+Writing PAST the end is a known shared gap that neither of these caused. PHP
+treats `$a[3]` on a one-element array as a SPARSE key, so `count()` is 2; a dense
+representation with no occupancy bit fills the gap with nulls and answers 4.
+Measured identically on the scalar setter that predates this work, so the
+container setter matches it rather than adding a second wrong answer.
 
 **A method call on an INTERFACE-typed receiver** dispatches on the runtime class.
 This was refused as an `unknown receiver class`, which named the wrong problem: an

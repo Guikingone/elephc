@@ -13764,6 +13764,114 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies WRITING an array or object element into an indexed array — the read's counterpart.
+///
+/// The capability audit already accepted this shape; only the lowering was missing, which is why
+/// the failure read `array_set of Ptr(...)` rather than a refusal. The slot is the same 8-byte
+/// pointer `array_push` writes, and the array takes a SHARE of the child while the EIR releases
+/// the operand right after the set.
+///
+/// What the setter has to do that the push does not is RELEASE the slot's previous occupant,
+/// since that child is refcounted and would otherwise be stranded. The release happens AFTER the
+/// store, which is what makes `$a[0] = $a[0]` safe: the incoming pointer was already increfed, so
+/// a self-assignment nets to no change instead of freeing the value mid-write. Measured: 20000
+/// overwrites of one slot hold at 3 wasm pages, against 32 for a loop that deliberately retains
+/// every child — so the flat number is a balanced refcount, not a blind measurement.
+///
+/// Writing PAST the end is deliberately not covered here, because both backends get it wrong in
+/// the same pre-existing way and this change neither caused nor widened it. PHP treats `$a[3]` on
+/// a one-element array as a SPARSE key, so `count()` is 2; a dense representation with no
+/// occupancy bit fills the gap instead and answers 4. Measured identically on the scalar setter
+/// that predates this work (`$a = [1]; $a[3] = 4; count($a)` → 4), so the container setter matches
+/// the scalar one rather than introducing a second wrong answer.
+///
+/// Unblocks `examples/cow`, whose copy-on-write output now matches php-src byte for byte.
+#[test]
+fn test_cli_wasm_writes_a_nested_array_element() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_nested_array_write");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expected string below is php-src 8.5.6's own answer for the same program.
+    for (name, source, expected) in [
+        // Replace one inner array; the untouched sibling must survive.
+        (
+            "replace.php",
+            "<?php\n$a = [[1, 2], [3, 4]];\n$a[0] = [7, 8];\necho $a[0][0], $a[0][1], \"|\", $a[1][0], \"\\n\";\necho count($a), \"\\n\";\n",
+            "78|3\n2\n",
+            ),
+        // Self-assignment: the release must come after the store, or this frees the value
+        // it is writing.
+        (
+            "self.php",
+            "<?php\n$a = [[1, 2], [3, 4]];\n$a[0] = $a[0];\necho $a[0][0], $a[0][1], \"\\n\";\n$a[1] = [9];\necho count($a[1]), \"|\", $a[1][0], \"\\n\";\necho count($a), \"\\n\";\n",
+            "12\n1|9\n2\n",
+        ),
+        // Overwriting the same slot repeatedly, then reading through it.
+        (
+            "repeat.php",
+            "<?php\n$a = [[0, 0]];\n$i = 0;\nwhile ($i < 5) {\n    $a[0] = [1, 2];\n    $i = $i + 1;\n}\necho count($a), \"|\", $a[0][0], $a[0][1], \"\\n\";\n",
+            "1|12\n",
+        ),
+        // An OBJECT element written into the same pointer slot. The reads bind to locals
+        // first: reading a property straight off an array element is a separate prop_get
+        // gap (`result TaggedScalar must exactly match declared slot Int`) and would test
+        // that rather than this.
+        (
+            "object.php",
+            "<?php\nclass P { public int $v = 0; public function __construct(int $v) { $this->v = $v; } }\n$a = [new P(1), new P(2)];\n$a[0] = new P(9);\n$first = $a[0];\n$second = $a[1];\necho $first->v, $second->v, \"\\n\";\n",
+            "92\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the nested array write");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the nested array write under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

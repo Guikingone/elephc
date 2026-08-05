@@ -4112,6 +4112,41 @@ fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             ctx.fb
                 .ins("call $__rt_array_set_str", "set string element (COW, persists, may reallocate)");
         }
+        // A container element — a nested array or an object — is one pointer in an 8-byte slot,
+        // the same shape `array_push` writes. The array takes a SHARE of the child (incref here)
+        // and the EIR releases the operand right after the set, exactly as it does for a push.
+        // An `array<mixed>` is NOT this shape: its slots hold Mixed cells, and storing a raw
+        // pointer into a cell-strided array reads back as a denormal float, so it is left to the
+        // arm below rather than routed here.
+        WasmRepr::Ptr(_)
+            if matches!(
+                ctx.function.value(value).map(|v| v.ir_type),
+                Some(IrType::Heap(IrHeapKind::Array | IrHeapKind::Object | IrHeapKind::Hash))
+            ) && !array_stores_mixed_cells(ctx, array) =>
+        {
+            let container_tag = match ctx.function.value(value).map(|v| v.ir_type) {
+                Some(IrType::Heap(IrHeapKind::Object)) => 4,
+                Some(IrType::Heap(IrHeapKind::Array)) => 5,
+                _ => 6,
+            };
+            let child = ctx.fresh_temp(ValType::I32);
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(&format!("local.set {}", child), "container to store");
+            ctx.fb.ins(
+                &format!("(call $__rt_incref (local.get {}))", child),
+                "the array shares the child (the EIR releases the operand after the set)",
+            );
+            ctx.emit_load_value(array)?; // array pointer
+            ctx.emit_load_value(index)?; // index (i64)
+            ctx.fb
+                .ins(&format!("local.get {}", child), "child pointer for the store");
+            ctx.fb
+                .ins(&format!("i64.const {container_tag}"), "value_type for the slot");
+            ctx.fb.ins(
+                "call $__rt_array_set_ptr",
+                "set container element (COW, releases the replaced child)",
+            );
+        }
         other => return Err(WasmError::Unsupported(format!("array_set of {:?}", other))),
     }
     stamp_bool_array_result_type(ctx, array, value)?;
