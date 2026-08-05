@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Added OpenSSL-compatible symmetric encryption across compiled and `eval()` code with `openssl_encrypt()`, `openssl_decrypt()`, `openssl_cipher_iv_length()`, and `openssl_get_cipher_methods()`: a pure-Rust, pay-for-use crypto bridge implements AES-128/192/256 CBC, CTR, ECB, and GCM; supports raw/Base64 data, PHP key and IV normalization, zero-padding flags, GCM AAD and 1–16 byte by-reference tags; and requires no system OpenSSL dependency on any supported target.
 
 ## [0.26.3] - 2026-08-05
 - Added tagless `.lfc` source files with per-file PHP/LFC classification across entry points, includes, and autoload; LFC always enables elephc extensions, while `--strict-php` remains PHP-only and now composes with `--define`, callable dispatch, and `eval()`.

@@ -6,17 +6,17 @@ Ship PHP-compatible symmetric crypto builtins on **both** the AOT path and
 `elephc-magician`, with a single pure-Rust implementation behind
 `elephc-crypto`:
 
-- [ ] `openssl_encrypt`
-- [ ] `openssl_decrypt`
-- [ ] `openssl_cipher_iv_length`
-- [ ] `openssl_get_cipher_methods`
-- [ ] Predefined constants: `OPENSSL_RAW_DATA`, `OPENSSL_ZERO_PADDING`,
+- [x] `openssl_encrypt`
+- [x] `openssl_decrypt`
+- [x] `openssl_cipher_iv_length`
+- [x] `openssl_get_cipher_methods`
+- [x] Predefined constants: `OPENSSL_RAW_DATA`, `OPENSSL_ZERO_PADDING`,
       `OPENSSL_DONT_ZERO_PAD_KEY`
-- [ ] Shared bridge ABI in `crates/elephc-crypto` (RustCrypto, no system OpenSSL)
-- [ ] AOT registry + `RuntimeFnId` + runtime helpers + lowering (all supported
+- [x] Shared bridge ABI in `crates/elephc-crypto` (RustCrypto, no system OpenSSL)
+- [x] AOT registry + `RuntimeFnId` + runtime helpers + lowering (all supported
       targets)
-- [ ] Magician `eval_builtin!` homes calling the same bridge ABI
-- [ ] Codegen + magician + crypto unit tests, example, docs, CHANGELOG
+- [x] Magician `eval_builtin!` homes calling the same bridge ABI
+- [x] Codegen + magician + crypto unit tests, example, docs, CHANGELOG
 
 This is one PR on branch `feat/openssl-encrypt-decrypt`.
 
@@ -623,10 +623,20 @@ helpers, named arguments, callable smoke coverage, tag overwrite, and failures.
 
 ### Phase 5 — Polish
 
-- [ ] Example `examples/openssl_crypt/`.
-- [ ] Docs + generated builtin registry.
-- [ ] CHANGELOG.
-- [ ] `cargo build` clean; focused tests green; `git diff --check`.
+- [x] Example `examples/openssl_crypt/`.
+- [x] Docs + generated builtin registry.
+- [x] CHANGELOG.
+- [x] `cargo build` clean; focused tests green; `git diff --check`.
+
+Phase 5 baseline: the checked-in example demonstrates reproducible AES-256-CBC
+and AES-256-GCM round trips, including raw ciphertext, AAD, tag writeback, IV
+length lookup, and the 12-method inventory. User documentation lists the exact
+cipher matrix, option flags, key/IV behavior, GCM contract, pay-for-use bridge,
+and the currently deferred PHP warning text. Generated user/internals pages and
+the builtin registry were regenerated and pass both documentation audits. The
+Unreleased changelog records the complete AOT/eval feature. Final focused gates
+pass for the 28 bridge tests, 10 AOT codegen tests, 7 magician tests, 8 registry
+parity tests, the compiled example, `cargo build`, and `git diff --check`.
 
 ## Verification commands (focused; no full suite by default)
 
