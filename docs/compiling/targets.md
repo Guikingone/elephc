@@ -101,7 +101,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **36
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **38
 compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
 php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
 php-src cannot parse at all, so it has no php-src output to match — meaning
@@ -112,7 +112,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 154 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 152 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -227,13 +227,28 @@ produces `int|null`, and the signature is what the call site believes. Anything
 reading that type inherits the wrong answer, `gettype()` included; patching it in
 one consumer would hide it from the others.
 
-Known WASM-only defect, refused rather than answered: a **by-reference container
-parameter**. The ref cell a caller synthesizes and the writeback that follows it
-do not round-trip an array — `function m(array &$a) { $a[] = 41; } $v = [7];
-m($v); echo count($v);` answered `106808` where php-src answers `2`, and the
-`$a[0] = 41` form answered `0` for `1`. By-reference `int` and `string` both
-round-trip correctly and remain supported, so only the container payload is
-refused. The native backend answers correctly for the same program.
+**By-reference container parameters** are supported. A by-ref argument arrives as
+a ref-cell pointer, so the callee loads it with `LoadRefCell` rather than
+`LoadLocal`; the writeback recognised only the latter, so a callee that MOVED the
+array — `$a[] = 41` growing it past its capacity — had nowhere to put the new
+pointer and dropped it. That answered `106808` where php-src answers `2`, and the
+`$a[0] = 41` form answered `0` for `1`. Writing the pointer THROUGH the cell when
+the slot is ref-bound repairs appends, offset writes, associative keys, wholesale
+reassignment, several by-ref parameters at once, nested by-ref calls, repeated
+calls and by-ref callees that also return a value — all verified byte-identical
+to php-src 8.5.6.
+
+One narrower shape stays refused, and it is a shared defect rather than a WASM
+one: a callee that **replaces the container's representation**. `$a[] = $i` where
+`$i` came from `$i++` appends a `mixed`, because the increment can overflow into
+a float; EIR then widens the whole array with `ArrayToMixed` and stores the wider
+array back through the cell. The caller receives the new pointer but keeps the
+`array<int>` element type it passed in, and reads 24-byte Mixed cells as a dense
+i64 buffer. `count()` stays right — the length field IS shared — so nothing
+announces the mismatch. The native backend prints the same raw heap addresses
+from the same EIR, so the gap is upstream: the callee's post-condition never
+reaches the call site's type facts. This target refuses the call rather than
+answering garbage.
 
 A shared front-end bug surfaced while measuring this and is fixed: an
 `if`/`elseif`/`else` chain whose FIRST condition folded to false propagated the

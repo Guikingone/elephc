@@ -38,7 +38,7 @@
 //!   stay branchless via `select` plus null-safe runtime calls.
 
 use super::context::{FnCtx, Result};
-use super::inst::{operand, store_result, value_source_slot};
+use super::inst::{operand, store_result};
 use super::values::WasmRepr;
 use super::wat::ValType;
 use super::WasmError;
@@ -154,16 +154,7 @@ pub(super) fn lower_hash_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
     // the hash operand value's local and mirror it to the source slot so a later
     // LoadLocal sees the live pointer.
     ctx.emit_store_value(hash)?;
-    if let Some(slot) = value_source_slot(ctx, hash) {
-        let hash_ref = ctx.value_repr(hash)?.local_refs();
-        let slot_ref = ctx.slot_repr(slot)?.local_refs();
-        if hash_ref.len() == 1 && slot_ref.len() == 1 {
-            ctx.fb
-                .ins(&format!("local.get {}", hash_ref[0]), "reallocated hash pointer");
-            ctx.fb
-                .ins(&format!("local.set {}", slot_ref[0]), "write back to the hash slot");
-        }
-    }
+    super::inst::write_back_container_slot(ctx, hash)?;
     Ok(())
 }
 
@@ -193,16 +184,7 @@ pub(super) fn lower_hash_unset(ctx: &mut FnCtx, inst: &Instruction) -> Result<()
     // The runtime returned the (possibly cloned) pointer: store it back into the hash operand
     // value's local and mirror it to the source slot so a later LoadLocal sees the live pointer.
     ctx.emit_store_value(hash)?;
-    if let Some(slot) = value_source_slot(ctx, hash) {
-        let hash_ref = ctx.value_repr(hash)?.local_refs();
-        let slot_ref = ctx.slot_repr(slot)?.local_refs();
-        if hash_ref.len() == 1 && slot_ref.len() == 1 {
-            ctx.fb
-                .ins(&format!("local.get {}", hash_ref[0]), "rewritten hash pointer");
-            ctx.fb
-                .ins(&format!("local.set {}", slot_ref[0]), "write back to the hash slot");
-        }
-    }
+    super::inst::write_back_container_slot(ctx, hash)?;
     Ok(())
 }
 
@@ -280,16 +262,7 @@ pub(super) fn lower_hash_append(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     // hash operand value's local and mirror it to the source slot so a later LoadLocal
     // sees the live pointer.
     ctx.emit_store_value(hash)?;
-    if let Some(slot) = value_source_slot(ctx, hash) {
-        let hash_ref = ctx.value_repr(hash)?.local_refs();
-        let slot_ref = ctx.slot_repr(slot)?.local_refs();
-        if hash_ref.len() == 1 && slot_ref.len() == 1 {
-            ctx.fb
-                .ins(&format!("local.get {}", hash_ref[0]), "reallocated hash pointer");
-            ctx.fb
-                .ins(&format!("local.set {}", slot_ref[0]), "write back to the hash slot");
-        }
-    }
+    super::inst::write_back_container_slot(ctx, hash)?;
     Ok(())
 }
 

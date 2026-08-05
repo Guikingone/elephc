@@ -4975,16 +4975,7 @@ fn lower_scalar_sort(ctx: &mut FnCtx, inst: &Instruction, descending: bool) -> R
     }
     // `sort($a)` rebinds `$a`: the runtime may have cloned, so the pointer goes back.
     ctx.emit_store_value(array)?;
-    if let Some(slot) = super::inst::value_source_slot(ctx, array) {
-        let array_ref = ctx.value_repr(array)?.local_refs();
-        let slot_ref = ctx.slot_repr(slot)?.local_refs();
-        if array_ref.len() == 1 && slot_ref.len() == 1 {
-            ctx.fb
-                .ins(&format!("local.get {}", array_ref[0]), "sorted array pointer");
-            ctx.fb
-                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
-        }
-    }
+    super::inst::write_back_container_slot(ctx, array)?;
     Ok(())
 }
 

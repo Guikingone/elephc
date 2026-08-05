@@ -3337,6 +3337,62 @@ fn array_to_hash_shape_issue(function: &Function, inst: &Instruction) -> Option<
 
 /// Validates one direct-call target, its lowered arity, storage transfers, and
 /// by-reference source forms against the exact resolver used by emission.
+/// Refuses a by-reference parameter whose callee REPLACES the storage representation.
+///
+/// A ref cell carries a pointer, not a type. When the callee widens the container it was
+/// handed — `$a[] = $i` on an `array<int>` promotes to `array<mixed>` via `Op::ArrayToMixed`,
+/// then `store_ref_cell`s the wider array back — the caller receives the new pointer but keeps
+/// reading it with the element type it passed in. Measured against php-src 8.5.6: with
+/// `function m(array &$a) { for ($i = 0; $i < 5; $i++) { $a[] = $i; } } $v = [0]; m($v);` the
+/// caller reads `106920 0 106960 0 106824 0` for php-src's `0 0 1 2 3 4` — raw heap addresses,
+/// because 24-byte Mixed cells are being read as a dense i64 buffer. `count()` is right (the
+/// length field IS shared), so nothing announces the mismatch.
+///
+/// This is not a WASM defect: the NATIVE backend prints the same raw pointers from the same
+/// EIR, so the disagreement is upstream — the callee's post-condition never reaches the call
+/// site's type facts. Until that is repaired in the checker, WASM refuses the call rather than
+/// answering garbage. `$a[] = 7` (no widening) and by-ref `int`/`string` are unaffected.
+fn by_ref_parameter_representation_issue(
+    callee: &Function,
+    index: usize,
+    parameter: &crate::ir::FunctionParam,
+) -> Option<String> {
+    let expected = parameter.php_type.codegen_repr();
+    for block in &callee.blocks {
+        for inst_id in &block.instructions {
+            let Some(inst) = callee.instruction(*inst_id) else {
+                continue;
+            };
+            if inst.op != Op::StoreRefCell {
+                continue;
+            }
+            let Some(Immediate::LocalSlot(slot)) = inst.immediate.as_ref() else {
+                continue;
+            };
+            if slot.as_raw() as usize != index {
+                continue;
+            }
+            let Some(stored) = inst.operands.first().and_then(|value| callee.value(*value)) else {
+                continue;
+            };
+            if stored.ir_type == parameter.ir_type
+                && stored.php_type.codegen_repr() == expected
+            {
+                continue;
+            }
+            return Some(format!(
+                "callee {:?} stores {:?}/{:?} back through the cell, replacing the caller's {:?}/{:?} representation",
+                callee.name,
+                stored.ir_type,
+                stored.php_type.codegen_repr(),
+                parameter.ir_type,
+                expected
+            ));
+        }
+    }
+    None
+}
+
 fn direct_call_shape_issue(
     module: &Module,
     owner: &Function,
@@ -3364,24 +3420,6 @@ fn direct_call_shape_issue(
             target.name
         ));
     }
-    // A by-reference parameter carrying a CONTAINER is silently wrong today: the ref cell the
-    // caller synthesizes and the writeback that follows it do not round-trip an array. Measured
-    // against php-src — `function m(array &$a) { $a[] = 41; } $v = [7]; m($v); echo count($v);`
-    // answered 106808 for php-src's 2, and the `$a[0] = 41` form answered 0 for 1. A by-ref
-    // `int` and a by-ref `string` both round-trip correctly, so only the container payload is
-    // refused, and it is refused rather than left answering garbage.
-    if let Some(parameter) = target.function.params.iter().find(|param| {
-        param.by_ref
-            && matches!(
-                param.ir_type,
-                IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash)
-            )
-    }) {
-        return Some(format!(
-            "target {:?} takes ${} as a by-reference container, whose ref-cell writeback is not exact",
-            target.name, parameter.name
-        ));
-    }
     if target.function.params.len() != inst.operands.len() {
         return Some(format!(
             "target {:?} expects {} lowered operands, got {}",
@@ -3403,6 +3441,11 @@ fn direct_call_shape_issue(
             let source = classify_by_ref_source(owner, *operand);
             if let Some(issue) =
                 by_ref_source_shape_issue(owner, value, parameter, source)
+            {
+                return Some(format!("by-reference argument #{index}: {issue}"));
+            }
+            if let Some(issue) =
+                by_ref_parameter_representation_issue(target.function, index, parameter)
             {
                 return Some(format!("by-reference argument #{index}: {issue}"));
             }

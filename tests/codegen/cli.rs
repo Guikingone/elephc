@@ -12722,10 +12722,10 @@ fn test_cli_wasm_refuses_mutating_an_iterated_container_it_cannot_see() {
         String::from_utf8_lossy(&accepted.stderr)
     );
 
-    // A by-reference CONTAINER parameter is refused wherever it appears, loop or no loop: its
-    // ref-cell writeback does not round-trip an array, which was measured answering 106808 for
-    // php-src's 2. So the "the widening ends where the iterator does" half of this rule is
-    // carried by the by-VALUE case above, not by a post-loop by-ref call.
+    // The SAME by-reference callee, called AFTER the loop, must compile and answer — that is the
+    // "the widening ends where the iterator does" half of the rule. It is the sharper control of
+    // the two: `callee.php` above differs from this only in where the call sits, so a guard that
+    // refused the whole function rather than the loop's blocks would fail here and nowhere else.
     let after = dir.join("after.php");
     fs::write(
         &after,
@@ -12739,11 +12739,40 @@ fn test_cli_wasm_refuses_mutating_an_iterated_container_it_cannot_see() {
         .output()
         .expect("failed to run the compiler over the post-loop callee mutation");
     assert!(
-        !output.status.success()
-            && String::from_utf8_lossy(&output.stderr).contains("by-reference container"),
-        "a by-reference container is refused for its writeback, not for the loop: {}",
+        output.status.success(),
+        "a by-reference call AFTER the loop must compile: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    if Command::new("node").arg("--version").output().is_ok() {
+        let runner = dir.join("run.mjs");
+        fs::write(
+            &runner,
+            r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+        )
+        .unwrap();
+        let after_run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join("after.wasm"))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the post-loop callee mutation under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&after_run.stdout),
+            "5 3 9 1 | 5\n",
+            "php-src's own answer ({})",
+            String::from_utf8_lossy(&after_run.stderr)
+        );
+    }
 
     let _ = fs::remove_dir_all(&dir);
 }
@@ -13093,10 +13122,12 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Verifies a by-reference CONTAINER parameter is refused, while by-reference scalars still work.
+/// Verifies a by-reference CONTAINER parameter round-trips, and pins the one shape still refused.
 ///
-/// The ref cell a caller synthesizes for a by-reference argument, and the writeback that follows
-/// it, do not round-trip an array. Measured against php-src:
+/// A by-ref parameter arrives as a ref-cell pointer, so the callee loads it with `Op::LoadRefCell`
+/// rather than `Op::LoadLocal`. `value_source_slot` only recognised `LoadLocal`, so a callee that
+/// MOVED the array — `$a[] = 41` growing it past its capacity — had nowhere to write the new
+/// pointer back and dropped it on the floor. Measured against php-src 8.5.6 before the fix:
 ///
 /// ```text
 ///   function m(array &$a) { $a[] = 41; }  $v = [7];  m($v);  echo count($v);
@@ -13105,43 +13136,138 @@ process.exitCode = wasi.start(instance);
 ///   php-src: 1      this target: 0
 /// ```
 ///
-/// The caller's array simply does not come back. A by-reference `int` and a by-reference `string`
-/// both round-trip correctly, so only the container payload is refused — and it is refused rather
-/// than left answering garbage, which is what it did before. The native backend answers `41|42`
-/// for the same program, so this is a WASM-only defect.
+/// Writing the pointer THROUGH the cell when the slot is ref-bound repairs both, along with assoc
+/// keys, wholesale reassignment, several by-ref parameters at once, nested by-ref calls, repeated
+/// calls, and by-ref callees that also return a value.
+///
+/// What stays refused is narrower and different in kind: a callee that REPLACES the representation.
+/// `$a[] = $i` where `$i` came from `$i++` appends a `mixed`, so EIR widens the whole array with
+/// `Op::ArrayToMixed` and stores the wider array back through the cell. The caller gets the new
+/// pointer but keeps its `array<int>` element type, and reads 24-byte Mixed cells as a dense i64
+/// buffer — `count()` is right, since the length field IS shared, so nothing announces it. The
+/// NATIVE backend prints the same raw heap addresses from the same EIR, so that one is an upstream
+/// type-facts gap, not a WASM defect; WASM refuses it rather than answering garbage.
 #[test]
-fn test_cli_wasm_refuses_a_by_reference_container_parameter() {
+fn test_cli_wasm_round_trips_a_by_reference_container_parameter() {
     if Command::new("node").arg("--version").output().is_err() {
         return;
     }
 
     let dir = make_cli_test_dir("elephc_cli_wasm_by_ref_container");
 
-    for (name, source) in [
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expected string below is php-src 8.5.6's own answer for the same program.
+    for (name, source, expected) in [
         (
             "push.php",
-            "<?php\nfunction m(array &$a): void { $a[] = 41; }\n$v = [7];\nm($v);\necho count($v), \"\\n\";\n",
+            "<?php\nfunction m(array &$a): void { $a[] = 41; }\n$v = [7];\nm($v);\necho count($v), \"|\", $v[0], \"|\", $v[1], \"\\n\";\n",
+            "2|7|41\n",
         ),
         (
             "set.php",
-            "<?php\nfunction m(array &$a): void { $a[0] = 41; }\n$v = [7];\nm($v);\necho count($v), \"\\n\";\n",
+            "<?php\nfunction m(array &$a): void { $a[0] = 41; }\n$v = [7];\nm($v);\necho count($v), \"|\", $v[0], \"\\n\";\n",
+            "1|41\n",
+        ),
+        (
+            "assoc.php",
+            "<?php\nfunction m(array &$a): void { $a['k'] = 1; $a['j'] = 2; }\n$v = ['x' => 9];\nm($v);\nforeach ($v as $k => $x) { echo $k, \"=\", $x, \"|\"; }\necho \"\\n\";\n",
+            "x=9|k=1|j=2|\n",
+        ),
+        (
+            "replace.php",
+            "<?php\nfunction m(array &$a): void { $a = [1, 2, 3]; }\n$v = [7];\nm($v);\necho count($v), \"|\", $v[0], \"|\", $v[2], \"\\n\";\n",
+            "3|1|3\n",
+        ),
+        (
+            "two.php",
+            "<?php\nfunction m(array &$a, array &$b): void { $a[] = 1; $b[] = 2; $b[] = 3; }\n$x = [0];\n$y = [0];\nm($x, $y);\necho count($x), \"|\", count($y), \"|\", $y[2], \"\\n\";\n",
+            "2|3|3\n",
+        ),
+        (
+            "nested.php",
+            "<?php\nfunction inner(array &$a): void { $a[] = 2; }\nfunction outer(array &$a): void { $a[] = 1; inner($a); }\n$v = [0];\nouter($v);\necho count($v), \"|\", $v[1], \"|\", $v[2], \"\\n\";\n",
+            "3|1|2\n",
+        ),
+        (
+            "repeat.php",
+            "<?php\nfunction m(array &$a): void { $a[] = 1; }\n$v = [];\nm($v);\nm($v);\nm($v);\necho count($v), \"\\n\";\n",
+            "3\n",
+        ),
+        (
+            "returns.php",
+            "<?php\nfunction m(array &$a): int { $a[] = 5; return count($a); }\n$v = [0];\n$r = m($v);\necho $r, \"|\", count($v), \"\\n\";\n",
+            "2|2\n",
+        ),
+        (
+            "grows.php",
+            "<?php\nfunction m(array &$a): void { $a[] = 0; $a[] = 10; $a[] = 20; $a[] = 30; $a[] = 40; }\n$v = [0];\nm($v);\necho count($v), \"|\", $v[1], \"|\", $v[5], \"\\n\";\n",
+            "6|0|40\n",
         ),
     ] {
         let path = dir.join(name);
         fs::write(&path, source).unwrap();
-        let refused = elephc_cli_command(&dir)
+        let built = elephc_cli_command(&dir)
             .arg("--target")
             .arg("wasm32-wasi")
             .arg(&path)
             .output()
-            .expect("failed to run the compiler over the by-ref container");
+            .expect("failed to compile the by-ref container");
         assert!(
-            !refused.status.success()
-                && String::from_utf8_lossy(&refused.stderr).contains("by-reference container"),
-            "{name} must be refused: {}",
-            String::from_utf8_lossy(&refused.stderr)
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the by-ref container under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
         );
     }
+
+    // The representation-replacing callee stays refused. `$i` is `mixed` because `$i++` can
+    // overflow into a float, so appending it widens the array the caller still reads as
+    // `array<int>`. Refusing beats the raw heap addresses it would otherwise print.
+    let widens = dir.join("widens.php");
+    fs::write(
+        &widens,
+        "<?php\nfunction m(array &$a): void { for ($i = 0; $i < 5; $i++) { $a[] = $i; } }\n$v = [0];\nm($v);\necho count($v), \"\\n\";\n",
+    )
+    .unwrap();
+    let refused = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&widens)
+        .output()
+        .expect("failed to run the compiler over the widening callee");
+    assert!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr).contains("replacing the caller's"),
+        "the widening callee must be refused: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
 
     // A by-reference SCALAR does round-trip, and must keep working — refusing those too would
     // cost real programs for a defect they do not have.
@@ -13171,21 +13297,6 @@ echo $n, "|", $t, "\n";
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let runner = dir.join("run.mjs");
-    fs::write(
-        &runner,
-        r#"import { readFileSync } from "node:fs";
-import { WASI } from "node:wasi";
-const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
-const bytes = readFileSync(process.argv[2]);
-const instance = await WebAssembly.instantiate(
-  await WebAssembly.compile(bytes),
-  wasi.getImportObject(),
-);
-process.exitCode = wasi.start(instance);
-"#,
-    )
-    .unwrap();
     let run = Command::new("node")
         .arg("--no-warnings")
         .arg(&runner)
@@ -13310,6 +13421,94 @@ echo (new Good())->show(), "\n";
             && String::from_utf8_lossy(&refused.stderr).contains("may be uninitialized"),
         "a descendant that does not initialize must refuse the read: {}",
         String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies an INHERITED method keeps the return type inferred from its body.
+///
+/// Class schemas are built before any body is checked, so a subclass copies its parent's
+/// signatures while they still carry the placeholder return type. The inference pass then wrote
+/// the real type back into the DECLARING class only, leaving every inheritor claiming the
+/// placeholder — an untyped `label()` returning a string answered `Str` for `A::label` and `Int`
+/// for `B::label`, and the mere existence of an EMPTY `class B extends A {}` was enough to
+/// trigger it. A subclass that OVERRIDES the method has its own implementation and is untouched,
+/// which the `Dog::speak` arm here exercises.
+#[test]
+fn test_cli_wasm_inherited_method_keeps_its_inferred_return_type() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_inherited_signature");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Animal {
+    protected $name = "animal";
+    public function label() { return $this->name; }
+    public function speak() { return "animal"; }
+    public function run() { return $this->speak(); }
+}
+class Dog extends Animal {
+    public function __construct() { $this->name = "dog"; }
+    public function speak() { return parent::speak() . "-woof"; }
+}
+class Cat extends Animal {}
+$d = new Dog();
+$c = new Cat();
+echo $d->label(), "|", $d->run(), "\n";
+echo $c->label(), "|", $c->run(), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the inherited-signature probe to WASM");
+    assert!(
+        output.status.success(),
+        "inherited-signature compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the inherited-signature probe under Node");
+    assert!(
+        run.status.success(),
+        "the inherited calls must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "dog|animal-woof\nanimal|animal\n",
+        "php-src's own answers"
     );
 
     let _ = fs::remove_dir_all(&dir);

@@ -717,6 +717,7 @@ pub(super) fn shape_predicates() -> Vec<ShapePredicate> {
         "loose_eq_shape_issue",
         "direct_call_shape_issue",
         "by_ref_source_shape_issue",
+        "by_ref_parameter_representation_issue",
         "method_call_shape_issue",
         "object_new_shape_issue",
         "property_get_shape_issue",

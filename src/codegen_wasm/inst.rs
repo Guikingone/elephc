@@ -2613,16 +2613,7 @@ fn lower_user_sort(ctx: &mut FnCtx, inst: &Instruction, name: &str) -> Result<()
     ctx.emit_store_value(array)?;
     // And mirror it to the source slot so a later LoadLocal sees the sorted pointer —
     // the verbatim lower_array_set / lower_array_push by-ref writeback.
-    if let Some(slot) = value_source_slot(ctx, array) {
-        let array_ref = ctx.value_repr(array)?.local_refs();
-        let slot_ref = ctx.slot_repr(slot)?.local_refs();
-        if array_ref.len() == 1 && slot_ref.len() == 1 {
-            ctx.fb
-                .ins(&format!("local.get {}", array_ref[0]), "sorted array pointer");
-            ctx.fb
-                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
-        }
-    }
+    write_back_container_slot(ctx, array)?;
 
     // The user-comparator sort returns bool true; materialize it only when the call
     // site uses the result.
@@ -3195,12 +3186,51 @@ pub(super) fn value_source_slot(ctx: &FnCtx, value: ValueId) -> Option<LocalSlot
         return None;
     };
     let inst = ctx.function.instruction(inst)?;
-    if inst.op == Op::LoadLocal {
+    // A REF-CELL load names its slot exactly as a plain load does. Reading only `LoadLocal` left
+    // a by-reference container with no slot to write back to, so a runtime that MOVED the array —
+    // `$a[] = 41` growing it — dropped the new pointer on the floor and the caller kept the stale
+    // one. Measured: `function m(array &$a) { $a[] = 41; } $v = [7]; m($v); count($v)` answered
+    // 106808 for php-src's 2.
+    if matches!(inst.op, Op::LoadLocal | Op::LoadRefCell) {
         if let Some(Immediate::LocalSlot(slot)) = inst.immediate {
             return Some(slot);
         }
     }
     None
+}
+
+/// Writes a container pointer that the runtime may have MOVED back into the slot it came from.
+///
+/// A plain local takes the pointer directly. A by-reference slot is a CELL the caller owns, so
+/// the pointer has to go through it — writing the callee's own local instead would leave the
+/// caller holding the pre-move address. Callers that grow, sort, or otherwise rebind a container
+/// use this rather than open-coding the local store, so the two slot kinds cannot drift apart.
+pub(super) fn write_back_container_slot(ctx: &mut FnCtx, value: ValueId) -> Result<()> {
+    let Some(slot) = value_source_slot(ctx, value) else {
+        return Ok(());
+    };
+    let value_ref = ctx.value_repr(value)?.local_refs();
+    if value_ref.len() != 1 {
+        return Ok(());
+    }
+    let pointer = value_ref[0].clone();
+    if let Ok(cell) = ctx.ref_cell_ptr(slot.as_raw()) {
+        let cell = cell.to_string();
+        ctx.fb.ins(&format!("local.get {cell}"), "by-ref cell address");
+        ctx.fb
+            .ins(&format!("local.get {pointer}"), "container pointer after the call");
+        ctx.fb
+            .ins("i32.store offset=0", "write the moved container through the cell");
+        return Ok(());
+    }
+    let slot_ref = ctx.slot_repr(slot)?.local_refs();
+    if slot_ref.len() == 1 {
+        ctx.fb
+            .ins(&format!("local.get {pointer}"), "container pointer after the call");
+        ctx.fb
+            .ins(&format!("local.set {}", slot_ref[0]), "write back to the container slot");
+    }
+    Ok(())
 }
 
 /// Lowers `Op::ArrayNew`: allocates an empty indexed array with the immediate
@@ -3830,18 +3860,7 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 );
                 stamp_bool_array_result_type(ctx, array, value)?;
                 ctx.emit_store_value(array)?;
-                if let Some(slot) = value_source_slot(ctx, array) {
-                    let array_ref = ctx.value_repr(array)?.local_refs();
-                    let slot_ref = ctx.slot_repr(slot)?.local_refs();
-                    if array_ref.len() == 1 && slot_ref.len() == 1 {
-                        ctx.fb.ins(
-                            &format!("local.get {}", array_ref[0]),
-                            "reallocated array pointer",
-                        );
-                        ctx.fb
-                            .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
-                    }
-                }
+                write_back_container_slot(ctx, array)?;
                 return Ok(());
             }
             let cell = ctx.fresh_temp(ValType::I32);
@@ -3866,16 +3885,7 @@ fn lower_array_push(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // the array operand value's local.
     ctx.emit_store_value(array)?;
     // And mirror it to the source slot so a later LoadLocal sees the live pointer.
-    if let Some(slot) = value_source_slot(ctx, array) {
-        let array_ref = ctx.value_repr(array)?.local_refs();
-        let slot_ref = ctx.slot_repr(slot)?.local_refs();
-        if array_ref.len() == 1 && slot_ref.len() == 1 {
-            ctx.fb
-                .ins(&format!("local.get {}", array_ref[0]), "reallocated array pointer");
-            ctx.fb
-                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
-        }
-    }
+    write_back_container_slot(ctx, array)?;
     Ok(())
 }
 
@@ -3996,16 +4006,7 @@ fn push_boxed_scalar(
     // child loop and leak every cell. The bool lives INSIDE its cell here; the array's
     // value_type 7 that `__rt_array_push_mixed` writes is the correct one.
     ctx.emit_store_value(array)?;
-    if let Some(slot) = value_source_slot(ctx, array) {
-        let array_ref = ctx.value_repr(array)?.local_refs();
-        let slot_ref = ctx.slot_repr(slot)?.local_refs();
-        if array_ref.len() == 1 && slot_ref.len() == 1 {
-            ctx.fb
-                .ins(&format!("local.get {}", array_ref[0]), "reallocated array pointer");
-            ctx.fb
-                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
-        }
-    }
+    write_back_container_slot(ctx, array)?;
     let _ = inst;
     Ok(())
 }
@@ -4053,16 +4054,7 @@ fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // back into the array operand value's local.
     ctx.emit_store_value(array)?;
     // And mirror it to the source slot so a later LoadLocal sees the live pointer.
-    if let Some(slot) = value_source_slot(ctx, array) {
-        let array_ref = ctx.value_repr(array)?.local_refs();
-        let slot_ref = ctx.slot_repr(slot)?.local_refs();
-        if array_ref.len() == 1 && slot_ref.len() == 1 {
-            ctx.fb
-                .ins(&format!("local.get {}", array_ref[0]), "reallocated array pointer");
-            ctx.fb
-                .ins(&format!("local.set {}", slot_ref[0]), "write back to the array slot");
-        }
-    }
+    write_back_container_slot(ctx, array)?;
     Ok(())
 }
 
