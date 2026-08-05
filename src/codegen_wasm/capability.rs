@@ -2933,14 +2933,13 @@ fn array_get_shape_issue(
             inst.result_ownership,
             Ownership::Owned | Ownership::MaybeOwned
         ),
-        // Only the two the lowering can honour: `Owned` takes a reference of its own after the
-        // borrowed read, and `MaybeOwned` is already the caller's to release. A `Borrowed`
-        // result would leave the release side ambiguous, and getting that wrong frees a child
-        // its parent still points at.
-        PhpType::Array(_) | PhpType::Object(_) => matches!(
-            inst.result_ownership,
-            Ownership::Owned | Ownership::MaybeOwned
-        ),
+        // Only `Owned`, which is the one the lowering answers: it takes a reference of its own
+        // after the borrowed read. `MaybeOwned` was admitted here too, but the lowering increfs
+        // for `Owned` alone — and an admitted shape the emitter does not handle is exactly the
+        // asymmetry that frees a child its parent still points at. No input has been found that
+        // stamps this op `MaybeOwned` (every measured pointer-element read is `own=owned`), so
+        // narrowing costs nothing observable and closes the gap rather than resting on that.
+        PhpType::Array(_) | PhpType::Object(_) => inst.result_ownership == Ownership::Owned,
         _ => false,
     };
     if !ownership_is_supported {

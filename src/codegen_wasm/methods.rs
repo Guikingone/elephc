@@ -331,11 +331,11 @@ fn lower_enum_static_intrinsic(
     enum_name: &str,
     method_key: &str,
 ) -> Result<()> {
-    let cases = ctx
+    let (cases, backing_type) = ctx
         .module
         .enum_infos
         .get(enum_name)
-        .map(|info| info.cases.clone())
+        .map(|info| (info.cases.clone(), info.backing_type.clone()))
         .ok_or_else(|| WasmError::Unsupported(format!("{enum_name} is not an enum")))?;
 
     // Each case's singleton slot is placed by `statics`; resolving here keeps the emitter and
@@ -390,9 +390,16 @@ fn lower_enum_static_intrinsic(
     let needle_ptr = ctx.fresh_temp(ValType::I32);
     let needle_len = ctx.fresh_temp(ValType::I64);
     let needle_int = ctx.fresh_temp(ValType::I64);
-    let string_backed = placed
-        .iter()
-        .any(|(case, _)| matches!(case.value, Some(crate::types::EnumCaseValue::Str(_))));
+    // The needle's WIDTH comes from the enum's DECLARED backing type, never from the cases: a
+    // string arrives as a (pointer, length) pair and an int as one value, and `enum E: string {}`
+    // with no cases at all is legal PHP. Reading the width off the case list made that enum take
+    // the int path, popping one operand from a two-operand push and leaving the pointer behind —
+    // `values remaining on stack at end of block`, rejected by wasm validation, for a program
+    // php-src answers with NULL.
+    let string_backed = matches!(
+        backing_type.as_ref().map(PhpType::codegen_repr),
+        Some(PhpType::Str)
+    );
     ctx.emit_load_value(needle)?;
     if string_backed {
         ctx.fb.ins(&format!("local.set {}", needle_len), "needle length");

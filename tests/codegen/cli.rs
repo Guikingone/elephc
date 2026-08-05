@@ -13943,6 +13943,16 @@ process.exitCode = wasi.start(instance);
             "<?php\nenum Direction {\n    case Up;\n    case Down;\n}\necho count(Direction::cases()), \"\\n\";\nforeach (Direction::cases() as $d) { echo $d->name, \" \"; }\necho \"\\n\";\n",
             "2\nUp Down \n",
         ),
+        // A backed enum with ZERO cases is legal PHP, and its needle WIDTH still comes from the
+        // declared backing type. Reading that width off the case list instead made this take the
+        // int path, popping one operand from a string's two-operand push and leaving the pointer
+        // behind — `values remaining on stack at end of block`, rejected by wasm validation, for
+        // a program php-src answers with null.
+        (
+            "empty_backed.php",
+            "<?php\nenum E: string {}\n$x = E::tryFrom(\"H\");\necho is_null($x) ? \"null\" : \"found\", \"\\n\";\necho count(E::cases()), \"\\n\";\n",
+            "null\n0\n",
+        ),
     ] {
         let path = dir.join(name);
         fs::write(&path, source).unwrap();
