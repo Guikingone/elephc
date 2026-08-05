@@ -4653,7 +4653,12 @@ fn emit_is_null_test(ctx: &mut FnCtx, op0: crate::ir::ValueId) -> Result<()> {
             ctx.fb.ins("i64.eq", "boxed value is null");
             ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
         }
-        (WasmRepr::Tagged { tag, .. }, PhpType::TaggedScalar, IrType::TaggedScalar) => {
+        // The TAG is the truth for any two-word scalar, whatever the static type calls it. A
+        // `?int` PARAMETER carries its nullability in the declaration rather than in a
+        // `TaggedScalar` php type, so requiring that name here sent it to the `statically
+        // non-null` fallback below — and `describe_maybe(null)` then took the non-null branch
+        // over a value whose tag said 8. Same failure shape as the pointer arm above.
+        (WasmRepr::Tagged { tag, .. }, _, IrType::TaggedScalar) => {
             ctx.fb.ins(&format!("local.get {}", tag), "tagged scalar tag");
             ctx.fb.ins("i32.const 8", "tagged null tag");
             ctx.fb.ins("i32.eq", "tagged scalar is null");

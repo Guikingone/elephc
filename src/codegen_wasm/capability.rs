@@ -896,7 +896,9 @@ fn value_transfer_shape_issue(
             transfer::TransferKind::Copy
             | transfer::TransferKind::BoxMixed
             | transfer::TransferKind::WidenArrayToMixed { .. }
-            | transfer::TransferKind::NullPointer,
+            | transfer::TransferKind::NullPointer
+            | transfer::TransferKind::TaggedNull
+            | transfer::TransferKind::TaggedScalarFromConcrete { .. },
         ) => None,
         Err(error) => Some(error.to_string()),
     }

@@ -14405,6 +14405,100 @@ console.log(instance.exports.memory.buffer.byteLength / 65536);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the `null` LITERAL reaching a nullable-scalar parameter, and `is_null` reading it.
+///
+/// A `?int` parameter is an inline two-word `{payload, tag}` slot, and the literal `null` arrives
+/// as `Void`/`I64` — a different width, so the transfer is a conversion rather than a copy and had
+/// no classification at all: `argument #0: unsupported wasm value transfer from I64 (Void/I64) to
+/// Tagged (TaggedScalar/TaggedScalar)`.
+///
+/// The second half is what makes it correct rather than merely compilable. `is_null` required the
+/// operand's php type to literally be `TaggedScalar`, but a `?int` PARAMETER carries its
+/// nullability in the declaration instead, so the test fell through to the `statically non-null`
+/// fallback and `describe(null)` took the non-null branch over a value whose tag said 8 — printing
+/// `NULL:` where php-src prints `NULL:null`. The tag is the truth for any two-word scalar whatever
+/// the static type calls it, which is the same correction the pointer arm needed.
+///
+/// Unblocks `examples/functions`.
+#[test]
+fn test_cli_wasm_passes_null_to_a_nullable_scalar_parameter() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_tagged_null_argument");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // php-src 8.5.6's own answers.
+    for (name, source, expected) in [
+        // The literal, a non-null value through the same parameter, and `gettype` of both.
+        (
+            "int.php",
+            "<?php\nfunction d(?int $v): string {\n    if (is_null($v)) { return \"NULL:null\"; }\n    return gettype($v) . \":\" . $v;\n}\necho d(null), \"\\n\";\necho d(42), \"\\n\";\n",
+            "NULL:null\ninteger:42\n",
+        ),
+        // A nullable FLOAT uses the same two-word slot. (Testing a nullable BOOL here would
+        // measure a different gap: the truthiness of a tagged value is refused separately,
+        // pending its NaN diagnostics.)
+        (
+            "float.php",
+            "<?php\nfunction f(?float $v): string { return is_null($v) ? \"n\" : \"v\" . $v; }\necho f(null), f(2.5), \"\\n\";\n",
+            "nv2.5\n",
+        ),
+        // The null flows on through a second call, so the tagged pair has to survive a transfer
+        // between two nullable parameters rather than only the literal site.
+        (
+            "chain.php",
+            "<?php\nfunction inner(?int $v): string { return is_null($v) ? \"inner-null\" : \"inner-\" . $v; }\nfunction outer(?int $v): string { return inner($v); }\necho outer(null), \"\\n\";\necho outer(7), \"\\n\";\n",
+            "inner-null\ninner-7\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the nullable-scalar argument");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the nullable-scalar argument under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

@@ -50,6 +50,20 @@ pub(super) enum TransferKind {
     /// refcount helpers guard on and what a missed object read already answers — so the
     /// transfer is the i64 source dropped and a zero pointer pushed in its place.
     NullPointer,
+    /// PHP `null` is stored into a TAGGED scalar destination.
+    ///
+    /// The nullable-scalar twin of `NullPointer`: a `?int` parameter is a two-word
+    /// `{payload, tag}` slot, and null there is tag 8 with an unread payload — the same pair
+    /// `__rt_array_get_tagged_int` answers for a missing element. Passing the `null` LITERAL to
+    /// one arrives as `Void`/`I64`, which is a different width, so it is a conversion rather
+    /// than a copy.
+    TaggedNull,
+    /// A concrete scalar is widened into a TAGGED scalar destination.
+    ///
+    /// The non-null half of `TaggedNull`: `d(42)` on `d(?int $v)` carries the value in the
+    /// payload and names its kind in the tag. `tag` is the Mixed tag for the source's own type,
+    /// and `reinterpret` says whether the payload has to be read out of an f64.
+    TaggedScalarFromConcrete { tag: i32, reinterpret: bool },
 }
 
 /// Returns the cell tag and source slot stride for widening an `array<T>` to `array<mixed>`.
@@ -249,6 +263,28 @@ pub(super) fn classify_transfer(
         && matches!(dest_repr, WasmRepr::Ptr(_))
     {
         return Ok(TransferKind::NullPointer);
+    }
+    // The same `null` reaching a NULLABLE SCALAR — `?int`, `?float`, `?bool` — which this target
+    // stores as an inline `{payload, tag}` pair rather than a pointer.
+    if source_php == PhpType::Void
+        && matches!(source_ir, IrType::I64 | IrType::Void)
+        && dest_ir == IrType::TaggedScalar
+        && matches!(dest_repr, WasmRepr::Tagged { .. })
+    {
+        return Ok(TransferKind::TaggedNull);
+    }
+    // And a concrete scalar into the same nullable slot, which is the other thing a `?int`
+    // parameter is ever handed.
+    if dest_ir == IrType::TaggedScalar && matches!(dest_repr, WasmRepr::Tagged { .. }) {
+        let concrete = match (source_ir, source_php.clone()) {
+            (IrType::I64, PhpType::Int) => Some((0, false)),
+            (IrType::I64, PhpType::Bool | PhpType::False) => Some((3, false)),
+            (IrType::F64, PhpType::Float) => Some((2, true)),
+            _ => None,
+        };
+        if let Some((tag, reinterpret)) = concrete {
+            return Ok(TransferKind::TaggedScalarFromConcrete { tag, reinterpret });
+        }
     }
     if reprs_match_for_copy(
         &source_repr,
@@ -541,6 +577,29 @@ fn convert_temps_to_dest(
         TransferKind::NullPointer => {
             ctx.fb
                 .ins("i32.const 0", "PHP null is the zero pointer in a heap slot");
+            Ok(None)
+        }
+        TransferKind::TaggedNull => {
+            // The pair is pushed payload-first, matching every other tagged producer; tag 8 is
+            // what `is_null` and the coercion sites already read as null.
+            ctx.fb
+                .ins("i64.const 0", "tagged null carries no payload");
+            ctx.fb.ins("i32.const 8", "Mixed null tag");
+            Ok(None)
+        }
+        TransferKind::TaggedScalarFromConcrete { tag, reinterpret } => {
+            // Like every arm here, the source is READ from its temps rather than assumed to be
+            // on the stack. It becomes the payload, then the tag is appended so the pair reads
+            // payload-first like every other tagged producer.
+            ctx.fb.ins(
+                &format!("local.get {}", source_temps[0]),
+                "the value becomes the tagged payload",
+            );
+            if reinterpret {
+                ctx.fb
+                    .ins("i64.reinterpret_f64", "a tagged payload carries the float's bits");
+            }
+            ctx.fb.ins(&format!("i32.const {tag}"), "the value's own Mixed tag");
             Ok(None)
         }
         TransferKind::UnboxMixed => {
