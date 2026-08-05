@@ -151,6 +151,10 @@ const ERR_COUNT_PREFIX: &[u8] =
 const ERR_COUNT_SUFFIX: &[u8] = b" given\n";
 /// `$s[$i]` outside the string answers the EMPTY string after this warning, which names the
 /// index AS WRITTEN — a negative one is reported negative, not resolved from the end first.
+/// Exact php-src 8.5 diagnostic for a property read through a null receiver. The property name
+/// is written between the two fragments, so a live data segment is not needed for the message.
+const WARN_PROPERTY_ON_NULL_PREFIX: &[u8] = b"Warning: Attempt to read property \"";
+const WARN_PROPERTY_ON_NULL_SUFFIX: &[u8] = b"\" on null\n";
 const WARN_UNINIT_STRING_OFFSET: &[u8] = b"Warning: Uninitialized string offset ";
 /// The newline closing that warning, in this emitter's own data group.
 const WARN_OFFSET_NEWLINE: &[u8] = b"\n";
@@ -223,7 +227,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_COUNT_PREFIX.len() as u32
     + ERR_COUNT_SUFFIX.len() as u32
     + WARN_UNINIT_STRING_OFFSET.len() as u32
-    + WARN_OFFSET_NEWLINE.len() as u32;
+    + WARN_OFFSET_NEWLINE.len() as u32
+    + WARN_PROPERTY_ON_NULL_PREFIX.len() as u32
+    + WARN_PROPERTY_ON_NULL_SUFFIX.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -369,6 +375,10 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_COUNT_SUFFIX,
         WARN_UNINIT_STRING_OFFSET,
         WARN_OFFSET_NEWLINE,
+        // Appended LAST, like the return-coercion fragments above: every index already in use
+        // keeps pointing at the same message, so the positional slices below do not move.
+        WARN_PROPERTY_ON_NULL_PREFIX,
+        WARN_PROPERTY_ON_NULL_SUFFIX,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -418,6 +428,25 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     emit_method_call_failure_runtime(wm, &method_offsets);
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
     emit_return_coercion_runtime(wm, &warning_offsets[17..34], &method_offsets[2..11]);
+    emit_property_on_null_warning_runtime(wm, &warning_offsets[34..36]);
+}
+
+/// Emits php-src's warning for a property read whose receiver is null.
+///
+/// A raw object pointer can be 0 since a missed `array<Object>` element reads as null with the
+/// element's own non-null type, and PHP names the property rather than just the receiver:
+/// `Warning: Attempt to read property "age" on null`. The name arrives as a (pointer, length)
+/// pair from the instruction's own interned string, so no per-property data segment is needed.
+fn emit_property_on_null_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 2);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (suffix_ptr, suffix_len) = offsets[1];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_property_on_null (param $name_ptr i32) (param $name_len i32)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $name_ptr) (local.get $name_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len}))))"#
+    ));
 }
 
 /// Emits the fatal path used when a `Mixed` receiver is not an object.

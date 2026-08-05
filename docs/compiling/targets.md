@@ -333,14 +333,20 @@ was read off the case list rather than the enum's declared backing type, so
 `enum E: string {}` — a backed enum with no cases, which is legal PHP — took the
 int path and left half a string on the operand stack.
 
-One finding from that seam stays OPEN, and it is worth stating plainly: reading a
-PROPERTY through the missed element answers garbage with no diagnostic, where
-php-src warns `Attempt to read property "age" on null` and evaluates to null. The
-warning needs a message this runtime's fixed table does not carry, and the value
-needs a nullable result the EIR does not produce — the native backend emits the
-warning but prints the null sentinel rather than nothing, so it is not fully right
-there either. It is the same dropped-null family as the entry above, and it is
-tracked with the rest of that family rather than papered over here.
+Reading a PROPERTY through the missed element was the last of that seam. It used
+to answer a bare `1` off address 0 with no diagnostic at all; it now emits
+php-src's own `Attempt to read property "age" on null`, in php-src's order, and
+substitutes a defined value instead of whatever the data segments start with. The
+VALUE is still not php-src's — the read evaluates to null there, and the EIR types
+the result a non-nullable `int` — so the substitute is the same null sentinel the
+NATIVE backend leaves in that slot, which puts the two backends in exact agreement
+on a null neither can type. A string property answers the empty string and a
+container property a null pointer, both of which ARE php-src's answers.
+
+The warning helper lives in the command runtime, so a reactor/library module —
+which has no `main`, no stderr contract and no `__rt_warn_*` at all — emits the
+plain load exactly as before. That is the same line the warning-producing indexed
+read already draws.
 
 Writing PAST the end is a known shared gap that neither of these caused. PHP
 treats `$a[3]` on a one-element array as a SPARSE key, so `count()` is 2; a dense

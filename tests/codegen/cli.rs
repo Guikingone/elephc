@@ -14193,6 +14193,46 @@ process.exitCode = wasi.start(instance);
         String::from_utf8_lossy(&run.stdout)
     );
 
+    // Reading a PROPERTY through the missed element must name php-src's own warning. It used to
+    // answer a bare `1` off address 0 with no diagnostic at all. The VALUE still is not php-src's
+    // — the read evaluates to null there, and the EIR types this result a non-nullable `int` —
+    // so this asserts the diagnostic, which is exact, and pins the value to what the NATIVE
+    // backend leaves in that slot, which is the null sentinel.
+    let property = dir.join("property_on_null.php");
+    fs::write(
+        &property,
+        "<?php\nclass P { public int $age = 7; }\n$a = [new P()];\n$b = $a[9];\necho $b->age, \"\\n\";\necho \"survived\\n\";\n",
+    )
+    .unwrap();
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&property)
+        .output()
+        .expect("failed to compile the null property read");
+    assert!(
+        built.status.success(),
+        "property_on_null.php must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("property_on_null.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the null property read under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr),
+        "Warning: Undefined array key 9\nWarning: Attempt to read property \"age\" on null\n",
+        "php-src's own diagnostics, in its own order"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "9223372036854775806\nsurvived\n",
+        "the native backend's null sentinel, and execution continues as php-src does"
+    );
+
     // A method call on the missed OBJECT element must name php-src's own Error.
     let call = dir.join("call_on_null.php");
     fs::write(

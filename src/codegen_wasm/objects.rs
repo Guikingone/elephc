@@ -1539,9 +1539,114 @@ pub(super) fn lower_prop_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> 
         Some(value) if value.ownership == Ownership::Owned => PropertyLoad::Owned,
         _ => PropertyLoad::Borrowed,
     };
+
+    // A raw object pointer can be 0 since a missed `array<Object>` element reads as null while
+    // still carrying the element's own non-null type. Reading `obj + offset` off 0 answers
+    // whatever sits in low linear memory — measured as a bare `1` for an int property, with no
+    // diagnostic at all, where php-src warns and evaluates to null. Both backends drop the null
+    // itself (the result type cannot carry one), but the WARNING is exact, and the substituted
+    // value is at least defined rather than whatever the data segments happen to start with.
+    //
+    // The warning helper lives in the COMMAND runtime, which only a main-bearing module carries
+    // — a reactor/library module has no stderr contract and no `__rt_warn_*` at all. Without a
+    // main the plain load is emitted, exactly as before this guard existed, which is the same
+    // line `array_get_shape_issue` already draws for its own warning-producing read.
+    let has_main = ctx.module.functions.iter().any(|function| function.flags.is_main);
+    if !has_main {
+        emit_declared_property_load(ctx, &obj_ref, offset, &prop_type, &property, load)?;
+        store_result(ctx, inst)?;
+        return Ok(());
+    }
+
+    let (name_ptr, name_len) = ctx.str_literal(prop_data)?;
+    let null_receiver = ctx.fresh_temp(ValType::I32);
+    ctx.fb
+        .ins(&format!("local.get {}", obj_ref), "property receiver");
+    ctx.fb
+        .ins(&format!("local.tee {}", null_receiver), "keep it for the null test");
+    ctx.fb.ins("i32.eqz", "is the receiver null?");
+    // Both arms leave a property value, so the block has to declare what that is: an `if` with
+    // no result type is `[] -> []` and pushing inside it does not validate.
+    ctx.fb.ins(
+        &format!("if (result {})", property_value_val_types(&prop_type)?),
+        "php-src warns and yields null here",
+    );
+    ctx.fb.ins(
+        &format!(
+            "(call $__rt_warn_property_on_null (i32.const {name_ptr}) (i32.const {name_len}))"
+        ),
+        "Attempt to read property \"X\" on null",
+    );
+    emit_null_property_value(ctx, &prop_type)?;
+    ctx.fb.ins("else", "an ordinary receiver reads its slot");
     emit_declared_property_load(ctx, &obj_ref, offset, &prop_type, &property, load)?;
+    ctx.fb.ins("end", "both arms leave one property value");
 
     store_result(ctx, inst)?;
+    Ok(())
+}
+
+/// Answers the wasm result types one property read leaves on the stack.
+///
+/// Kept beside `emit_declared_property_load` and `emit_null_property_value`, which must agree
+/// with it: the null-receiver guard branches between them, and the block's declared result is
+/// what makes both arms type-check.
+fn property_value_val_types(prop_type: &PhpType) -> Result<&'static str> {
+    Ok(match prop_type {
+        PhpType::Int | PhpType::Bool => "i64",
+        PhpType::Float => "f64",
+        PhpType::Str => "i32 i64",
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Object(_)
+        | PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Iterable => "i32",
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "property read result types for {:?}",
+                other
+            )))
+        }
+    })
+}
+
+/// Pushes the stand-in a null receiver's property read leaves on the stack.
+///
+/// Same arity and value types as `emit_declared_property_load`, so both arms of the guard agree
+/// and the block type-checks. The values are chosen to be the closest thing each representation
+/// has to PHP's null: an empty string and a null container pointer ARE what php-src answers, and
+/// the int arm carries the same `NULL_SENTINEL` the native backend leaves in a non-nullable int
+/// slot, which keeps the two backends saying the same thing about a null neither can type.
+fn emit_null_property_value(ctx: &mut FnCtx, prop_type: &PhpType) -> Result<()> {
+    match prop_type {
+        PhpType::Int | PhpType::Bool => {
+            ctx.fb
+                .ins("i64.const 9223372036854775806", "null sentinel, as the native backend leaves");
+        }
+        PhpType::Float => {
+            ctx.fb.ins("f64.const 0", "null reads as 0.0 in a float slot");
+        }
+        PhpType::Str => {
+            ctx.fb.ins("i32.const 0", "empty string pointer — php-src's own answer for null");
+            ctx.fb.ins("i64.const 0", "empty string length");
+        }
+        PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Object(_)
+        | PhpType::Mixed
+        | PhpType::Union(_)
+        | PhpType::Iterable => {
+            ctx.fb
+                .ins("i32.const 0", "a null container pointer IS null, and `is_null` reads it");
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "null-receiver property stand-in for {:?}",
+                other
+            )));
+        }
+    }
     Ok(())
 }
 
