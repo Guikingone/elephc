@@ -989,6 +989,65 @@ $a[] = 2;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `(float) $string` parses the leading numeric prefix exactly as php-src does.
+///
+/// The runtime parser was already there — `(int) $string` routes float-form prefixes through
+/// it — so only the conversion itself was missing. The cases below are the ones a hand-written
+/// parser gets wrong: `"0x1A"` is not hex to PHP, `"INF"` and `"NAN"` as text are not infinity
+/// and not-a-number, an underscore stops the parse where a numeric literal would allow it, and
+/// an exponent past the range answers INF rather than saturating.
+///
+/// Every expected value is php-src 8.5.6's own answer for the same cast.
+#[test]
+fn test_cli_wasm_string_to_float_cast_takes_the_leading_numeric_prefix() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_string_to_float");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$cases = ["12.5", "abc", "12abc", "  7.5  ", "-3.25", "+4", "1e3", ".5", "5.", "", "0x1A", "1e400", "INF", "NAN", "1_000", "  .25e2xyz"];
+foreach ($cases as $s) {
+    echo (float) $s, "|";
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the string-to-float fixture to WASM");
+    assert!(
+        output.status.success(),
+        "string-to-float compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let run = Command::new("wasmer")
+        .arg("run")
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the string-to-float fixture under Wasmer");
+    assert!(
+        run.status.success(),
+        "string-to-float fixture trapped: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "12.5|0|12|7.5|-3.25|4|1000|0.5|5|0|0|INF|0|0|1|25|",
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `$mixed[$key]` reads every receiver tag the way php-src does.
 ///
 /// The receiver here is genuinely unknown at compile time — it comes back out of a hash, so the

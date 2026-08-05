@@ -138,7 +138,7 @@ times over:
 The blocker-count distribution says the same thing. Counting the distinct
 refusals a single `elephc build --target wasm32-wasi` reports per example: of the
 140 that do not compile, 10 have one distinct blocker, 16 have two, 11 have
-three, 20 have four, and the tail runs well past fifty. The ten reachable by a
+three, 21 have four, and the tail runs well past fifty. The ten reachable by a
 single blocker are `array-access-exception-order`, `constructor-promotion`,
 `hello-preg`, `json-jsonserializable`, `logical`, `pipe-operator`,
 `print_r-return`, `sdl_audio`, `strict-php` and `type-ops` — and three of those
@@ -188,6 +188,13 @@ against measured php-src 8.5.6 output rather than by analogy:
   two places the native backend answers a silent null and this one does not.
   A string indexed by a string key, and an object receiver, still answer null
   here as they do natively, rather than php-src's `TypeError` and `Error`.
+- **`(float) $string`.** PHP parses the LEADING numeric prefix and answers
+  `0.0` when there is none, silently. `"12abc"` is `12.0`, `"  .25e2xyz"` is
+  `25.0`, `"0x1A"` is `0.0` because PHP reads no hex here, `"INF"` and `"NAN"`
+  as text are `0.0`, an underscore stops the parse so `"1_000"` is `1.0`, and
+  `"1e400"` answers `INF` rather than saturating. This is the same parser
+  `(int) $string` routes float-form prefixes through, so the two spellings
+  cannot disagree about what a string holds.
 - **Coercion at a declared `int`, `float` or `bool` return.** This is not the
   `(int)` cast: returning `null` from a function declared `int` is a
   `TypeError`, and returning `5.7` deprecates before truncating. A non-numeric

@@ -1754,6 +1754,13 @@ fn cast_shape_issue(
         (IrType::I64, IrType::F64) => {
             source_php == PhpType::Int && result_php == PhpType::Float
         }
+        // `(float) $string` parses the LEADING numeric prefix and answers 0.0 for anything
+        // else, silently — the same parser `(int) $string` routes float-form prefixes through.
+        // Only the EXPLICIT cast: an implicit string-to-float coercion happens in arithmetic,
+        // where PHP warns about a non-numeric value first, which is a different rule.
+        (IrType::Str, IrType::F64) => {
+            explicit && source_php == PhpType::Str && result_php == PhpType::Float
+        }
         // `(string) $float` renders through the same `__rt_ftoa` a float in a string context
         // uses, so the two spellings cannot disagree.
         (IrType::F64, IrType::Str) => {

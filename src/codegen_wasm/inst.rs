@@ -1939,6 +1939,37 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         );
         return store_result(ctx, inst);
     }
+    // `(float) $string`: PHP parses the LEADING numeric prefix and answers 0.0 when there is
+    // none, silently — measured on 8.5.6, `"12abc"` is 12.0, `"0x1A"` and `"INF"` are 0.0, and
+    // `"1e400"` is INF. That is the same parser `__rt_str_to_int` already routes float-form
+    // prefixes through, so the two spellings cannot disagree about what a string holds.
+    if source.ir_type == IrType::Str
+        && target == IrType::F64
+        && source.php_type.codegen_repr() == PhpType::Str
+    {
+        ctx.emit_load_value(value)?;
+        ctx.fb
+            .ins("i32.wrap_i64", "narrow the string length for the parser");
+        ctx.fb.ins(
+            "global.get $__float_scratch",
+            "the parser writes its result here",
+        );
+        ctx.fb.ins("i32.const 10240", "clear of the strtod bignum buffers");
+        ctx.fb.ins("i32.add", "result address = scratch + 10240");
+        ctx.fb
+            .ins("global.get $__float_scratch", "the parser's bignum region");
+        ctx.fb.ins(
+            "call $__rt_str_to_f64",
+            "PHP's (float) of a string: leading numeric prefix, else 0.0",
+        );
+        ctx.fb
+            .ins("global.get $__float_scratch", "reload the result address");
+        ctx.fb.ins("i32.const 10240", "same offset the parser wrote to");
+        ctx.fb.ins("i32.add", "result address");
+        ctx.fb.ins("i64.load", "the parsed f64 bit pattern");
+        ctx.fb.ins("f64.reinterpret_i64", "bits -> float");
+        return store_result(ctx, inst);
+    }
     if source.ir_type == IrType::Heap(IrHeapKind::Object) && target == IrType::Str {
         if let PhpType::Object(class_name) = source.php_type.clone() {
             if emit_object_to_string(ctx, value, &class_name)? {
