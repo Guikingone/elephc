@@ -331,6 +331,19 @@ Unannotated callback parameters are typed from the array in every array builtin 
 
 `usort()` and `uasort()` sort arrays of **objects** as well as scalars. The comparator receives each element as its object handle, so an unannotated comparator's parameters are typed from the array element automatically — `usort($items, fn($a, $b) => $a->weight <=> $b->weight)` works without writing `($a, $b)` type hints, and `usort($dates, fn($a, $b) => $a <=> $b)` over `DateTime`/`DateTimeImmutable` compares by instant. Explicit hints (`function (Item $a, Item $b)`) are equally accepted. `usort()` also sorts arrays of **strings**: `usort($words, fn($a, $b) => strlen($a) <=> strlen($b))` reorders the string array in place, keeps elements the comparator reports equal in their original relative order, and renumbers the keys from zero like PHP. `uasort()` and `uksort()` over a string array still report a clear unsupported-feature error, because they must preserve the original key association.
 
+Array builtins that take their first argument **by reference** — `sort()`, `rsort()`, `asort()`, `arsort()`, `ksort()`, `krsort()`, `natsort()`, `natcasesort()`, `shuffle()`, `usort()`, `uasort()`, `uksort()`, `array_push()`, `array_pop()`, `array_shift()`, `array_unshift()`, `array_splice()` and `array_walk()` — mutate the caller's storage whether that storage is a local variable, an object property (`sort($obj->items)`, `sort($this->items)`, `sort($outer->inner->items)`), a static property (`sort(Foo::$items)`, `sort(self::$items)`), or a container element (`sort($rows[0])`, `sort($map["k"])`). PHP's copy-on-write applies as usual: a copy taken before the call keeps the original element order.
+
+```php
+class Basket { public $items = [3, 1, 2]; }
+$b = new Basket();
+$snapshot = $b->items;
+usort($b->items, fn($x, $y) => $x <=> $y);
+echo implode(",", $b->items);   // 1,2,3
+echo implode(",", $snapshot);   // 3,1,2 — the copy is untouched
+```
+
+A receiver elephc cannot resolve to writable storage — a nullsafe read (`sort($obj?->items)`, which PHP rejects too) or a property whose type is only known as `mixed` — is reported as a named unsupported-feature error rather than compiled into a silent no-op.
+
 `array_reduce()` folds arrays of **strings** too — `array_reduce($words, fn($carry, $word) => $carry + strlen($word), 0)` passes each element to the callback as a string. The accumulator itself must still be an `int` or `bool`; a string accumulator reports a clear unsupported-feature error.
 
 ## The internal array pointer

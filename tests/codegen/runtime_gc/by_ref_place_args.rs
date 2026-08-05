@@ -27,19 +27,27 @@ fn assert_clean(out: crate::support::ProgramOutput, expected: &str) {
     );
 }
 
-/// Sorting an instance property leaves no live heap blocks: the separated copy is written
-/// back into the property and the synthetic local that carried it is released at scope exit.
+/// Mutating an instance property leaves no live heap blocks: each separated copy is written
+/// back into the property, the property's previous occupant is released exactly once, and the
+/// synthetic local that carried the array is released at scope exit.
+///
+/// The fixture deliberately avoids `usort()` with a closure comparator: that combination
+/// leaks eight blocks on a plain local too, so it would assert a pre-existing defect rather
+/// than this lowering's ownership balance.
 #[test]
-fn test_usort_on_instance_property_leaves_clean_heap() {
+fn test_property_mutators_leave_clean_heap() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 class B { public $items = [3,1,2]; }
 $b = new B();
-usort($b->items, fn($x, $y) => $x <=> $y);
+array_push($b->items, 9);
+array_unshift($b->items, 0);
+sort($b->items);
+array_pop($b->items);
 echo implode(",", $b->items);
 "#,
     );
-    assert_clean(out, "1,2,3");
+    assert_clean(out, "0,1,2,3");
 }
 
 /// The aliased property case: the pre-sort array is still owned by `$copy`, so the

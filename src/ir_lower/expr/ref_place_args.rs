@@ -33,7 +33,7 @@
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
 use crate::names::Name;
 use crate::parser::ast::{Expr, ExprKind};
-use crate::types::PhpType;
+use crate::types::{FunctionSig, PhpType};
 
 use super::{
     call_signature, is_spread_arg, lower_expr, lower_function_call,
@@ -77,16 +77,16 @@ pub(super) fn lower_builtin_ref_place_call(
     if !sig.ref_params.iter().any(|is_ref| *is_ref) {
         return None;
     }
-    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
+    if args.iter().any(is_spread_arg) {
+        // A spread cannot be split into per-parameter places here; PHP also rejects spreading
+        // into a by-reference parameter, and the checker already reports that.
         return None;
     }
-    let regular_param_count = crate::types::call_args::regular_param_count(&sig);
     let rewrite_indices: Vec<usize> = args
         .iter()
         .enumerate()
-        .take(regular_param_count)
         .filter(|(index, arg)| {
-            sig.ref_params.get(*index).copied().unwrap_or(false) && is_array_place(ctx, arg)
+            ref_param_place(&sig, *index, arg).is_some_and(|place| is_array_place(ctx, place))
         })
         .map(|(index, _)| index)
         .collect();
@@ -97,25 +97,66 @@ pub(super) fn lower_builtin_ref_place_call(
     let mut plans: Vec<RefPlacePlan> = Vec::with_capacity(rewrite_indices.len());
     for index in rewrite_indices {
         let arg = &args[index];
-        let place = stabilize_place(ctx, arg)?;
+        let place_arg = ref_param_place(&sig, index, arg)?;
+        let place = stabilize_place(ctx, place_arg);
         let read = lower_expr(ctx, &place);
         let value_type = normalize_value_php_type(ctx.builder.value_php_type(read.value));
         let temp = ctx.declare_synthetic_php_local(value_type.clone());
-        ctx.store_local(&temp, read, value_type, Some(arg.span));
-        call_args[index] = Expr::new(ExprKind::Variable(temp.clone()), arg.span);
+        ctx.store_local(&temp, read, value_type, Some(place_arg.span));
+        let variable = Expr::new(ExprKind::Variable(temp.clone()), place_arg.span);
+        call_args[index] = match &arg.kind {
+            ExprKind::NamedArg { name, .. } => Expr::new(
+                ExprKind::NamedArg {
+                    name: name.clone(),
+                    value: Box::new(variable),
+                },
+                arg.span,
+            ),
+            _ => variable,
+        };
         plans.push(RefPlacePlan { index, place, temp });
     }
-    // Every rewritten argument is now a plain local, so the recursive call takes the ordinary
-    // by-reference path and this rewrite cannot re-fire.
-    debug_assert!(plans
-        .iter()
-        .all(|plan| matches!(call_args[plan.index].kind, ExprKind::Variable(_))));
+    // Every rewritten argument now names a plain local (directly, or as the value of the named
+    // argument it replaced), so the recursive call takes the ordinary by-reference path and
+    // this rewrite cannot re-fire.
+    debug_assert!(plans.iter().all(|plan| {
+        let rewritten = &call_args[plan.index];
+        let place = match &rewritten.kind {
+            ExprKind::NamedArg { value, .. } => value.as_ref(),
+            _ => rewritten,
+        };
+        matches!(place.kind, ExprKind::Variable(_))
+    }));
     let result = lower_function_call(ctx, name, &call_args, expr);
     for plan in plans {
         let value = Expr::new(ExprKind::Variable(plan.temp), plan.place.span);
         lower_non_local_assignment_write(ctx, &plan.place, &value, plan.place.span);
     }
     Some(result)
+}
+
+/// Returns the argument expression bound to a by-reference parameter, or `None`.
+///
+/// A positional argument binds to the parameter at the same index; a named argument
+/// (`sort(array: $obj->items)`) binds to the parameter its name selects, so both call forms
+/// reach the same rewrite. Variadic tail positions are excluded because only the visible
+/// regular parameters carry the registry's by-reference markers.
+fn ref_param_place<'a>(sig: &FunctionSig, index: usize, arg: &'a Expr) -> Option<&'a Expr> {
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let (param_index, place) = match &arg.kind {
+        ExprKind::NamedArg { name, value } => (
+            sig.params.iter().position(|(param, _)| param == name)?,
+            value.as_ref(),
+        ),
+        _ => (index, arg),
+    };
+    if param_index >= regular_param_count {
+        return None;
+    }
+    if !sig.ref_params.get(param_index).copied().unwrap_or(false) {
+        return None;
+    }
+    Some(place)
 }
 
 /// Returns whether a by-reference argument is a non-local place holding array storage.
@@ -200,36 +241,38 @@ fn place_object_class_name(ctx: &LoweringContext<'_, '_>, object: &Expr) -> Opti
 /// Rebuilds a place expression so it can be evaluated twice — once to read, once to write.
 ///
 /// Container indexes are the only sub-expression that may carry side effects, so a non-trivial
-/// index is evaluated once into a hidden temporary and both evaluations read that temporary.
-/// The receiver chain is composed exclusively of the place shapes `static_place_type` resolves,
-/// which are side-effect-free property and element reads.
-fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Option<Expr> {
+/// index is evaluated once into a synthetic local and both evaluations read that local. The
+/// rest of the receiver chain is composed exclusively of the shapes `static_place_type`
+/// resolves, which are side-effect-free local, property, and element reads.
+///
+/// Infallible by construction: the caller only reaches this for an argument
+/// `static_place_type` already resolved, and that resolver matches exactly the variants below.
+/// An unmatched shape is returned unchanged, which is the conservative identity — it cannot be
+/// reached without emitting IR for a place this module then refuses to write back.
+fn stabilize_place(ctx: &mut LoweringContext<'_, '_>, place: &Expr) -> Expr {
     match &place.kind {
-        ExprKind::Variable(_) | ExprKind::This | ExprKind::StaticPropertyAccess { .. } => {
-            Some(place.clone())
-        }
         ExprKind::PropertyAccess { object, property } => {
-            let object = stabilize_place(ctx, object)?;
-            Some(Expr::new(
+            let object = stabilize_place(ctx, object);
+            Expr::new(
                 ExprKind::PropertyAccess {
                     object: Box::new(object),
                     property: property.clone(),
                 },
                 place.span,
-            ))
+            )
         }
         ExprKind::ArrayAccess { array, index } => {
-            let array = stabilize_place(ctx, array)?;
+            let array = stabilize_place(ctx, array);
             let index = stabilize_index(ctx, index);
-            Some(Expr::new(
+            Expr::new(
                 ExprKind::ArrayAccess {
                     array: Box::new(array),
                     index: Box::new(index),
                 },
                 place.span,
-            ))
+            )
         }
-        _ => None,
+        _ => place.clone(),
     }
 }
 

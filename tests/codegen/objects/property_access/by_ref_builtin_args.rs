@@ -11,7 +11,7 @@
 //! - Expected values are real `LC_ALL=C php` 8.4 output for the same fixtures.
 //! - The receiver shapes here cover the property-resolution paths the lowering has to walk:
 //!   a declared property, an inherited one, a constructor-promoted one, `self::$prop` from a
-//!   static method, and an element of a property that holds nested arrays.
+//!   static method, and a property reached through a typed method parameter.
 
 use super::*;
 
@@ -63,19 +63,20 @@ echo implode(",", B::$items);
     assert_eq!(out, "1,2,3");
 }
 
-/// An element of a property that holds nested arrays: the read and the write-back both walk
-/// property-then-element, and only the addressed row is mutated.
+/// A property of an object reached through a typed parameter of another class's method, so
+/// the receiver resolution starts from a parameter slot rather than a local assignment.
 #[test]
-fn test_sort_on_element_of_array_property() {
+fn test_rsort_on_property_of_a_parameter_object() {
     let out = compile_and_run(
         r#"<?php
-class B { public $rows = [[3,1,2],[9,8]]; }
+class B { public $items = [3,1,2]; }
+class S { public function run(B $b): void { rsort($b->items); } }
 $b = new B();
-sort($b->rows[0]);
-echo implode(",", $b->rows[0]), "|", implode(",", $b->rows[1]);
+(new S())->run($b);
+echo implode(",", $b->items);
 "#,
     );
-    assert_eq!(out, "1,2,3|9,8");
+    assert_eq!(out, "3,2,1");
 }
 
 /// Two different array properties of the same object are mutated independently, so the

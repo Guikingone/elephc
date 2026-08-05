@@ -226,6 +226,25 @@ echo implode(",", $m[0]), "|", $calls;
     assert_eq!(out, "1,2,3|1");
 }
 
+/// A by-reference place passed as a *named* argument binds to the same parameter and takes the
+/// same rewrite, including when the named arguments are written out of parameter order.
+#[test]
+fn test_named_by_ref_argument_on_property_mutates_property() {
+    let out = compile_and_run(
+        r#"<?php
+class B { public $items = [3,1,2]; }
+$b = new B();
+$copy = $b->items;
+sort(array: $b->items);
+echo implode(",", $b->items), "|", implode(",", $copy), "|";
+$c = new B();
+usort(callback: fn($x, $y) => $y <=> $x, array: $c->items);
+echo implode(",", $c->items);
+"#,
+    );
+    assert_eq!(out, "1,2,3|3,1,2|3,2,1");
+}
+
 /// `shuffle()` on a property permutes the property's own storage. The permutation is random,
 /// so the assertion checks the multiset and length rather than an order.
 #[test]
