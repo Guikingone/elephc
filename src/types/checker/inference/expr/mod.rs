@@ -710,10 +710,18 @@ impl Checker {
             }
             ExprKind::YieldFrom(inner) => {
                 let inner_ty = self.infer_type(inner, env)?;
+                // `yield from` over an array is desugared by EIR lowering into an
+                // iterator loop that re-yields every key/value pair, and that loop
+                // handles indexed and keyed literals alike (`lower_yield_from_array`
+                // dispatches on `Array` *and* `AssocArray`). Accept a keyed literal
+                // (`[5 => "x", "s" => "y"]`, `[$i * 10 => "L"]`) the same way an
+                // indexed one is accepted; PHP accepts both.
                 let supported = match &inner.kind {
-                    ExprKind::ArrayLiteral(_) => true,
+                    ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => true,
                     ExprKind::FunctionCall { .. } | ExprKind::Variable(_) => {
-                        self.type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty)
+                        matches!(inner_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                            || self
+                                .type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty)
                     }
                     _ => false,
                 };

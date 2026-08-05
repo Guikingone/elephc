@@ -17,5 +17,6 @@ mod control_flow;
 mod get_return;
 mod interop;
 mod keys;
+mod methods;
 mod send_throw;
 mod yield_from;
