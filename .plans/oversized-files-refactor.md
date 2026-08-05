@@ -3,23 +3,23 @@
 ## Task checklist
 
 - [x] Record the authoritative oversized-file inventory and cohesion rules.
-- [ ] Split AST-to-EIR expression and statement lowering into focused modules.
-- [ ] Split EIR program/function/context responsibilities where files mix state,
+- [x] Split AST-to-EIR expression and statement lowering into focused modules.
+- [x] Split EIR program/function/context responsibilities where files mix state,
       discovery, declaration, and lowering concerns.
-- [ ] Reduce EIR codegen dispatcher and facade files to routing/orchestration.
-- [ ] Split codegen builtin families for I/O, arrays, strings, objects,
+- [x] Reduce EIR codegen dispatcher and facade files to routing/orchestration.
+- [x] Split codegen builtin families for I/O, arrays, strings, objects,
       Reflection, and eval along semantic boundaries.
-- [ ] Split checker-owned Reflection and date/time synthetic metadata by class or
+- [x] Split checker-owned Reflection and date/time synthetic metadata by class or
       metadata family.
-- [ ] Split eval, OPcache, and PHAR files that combine independent analysis,
+- [x] Split eval, OPcache, and PHAR files that combine independent analysis,
       rendering, archive-format, or FFI responsibilities.
-- [ ] Slim the remaining pipeline, optimizer, parser, runtime, Magician, and
+- [x] Slim the remaining pipeline, optimizer, parser, runtime, Magician, and
       native-dependency orchestrators.
-- [ ] Split oversized test files only when they mix independent feature areas;
+- [x] Split oversized test files only when they mix independent feature areas;
       preserve cohesive API-surface and regression corpora.
-- [ ] Run focused validation after every slice, then perform a final build,
+- [x] Run focused validation after every slice, then perform a final build,
       hygiene check, and residual oversized-file audit.
-- [ ] Document why every production Rust file still above 500 physical lines is
+- [x] Document why every production Rust file still above 500 physical lines is
       a cohesive leaf, generated/source data, or an intentionally indivisible
       target-specific emitter.
 
@@ -38,6 +38,13 @@ The baseline is branch `refactor/split-oversized-files` at
 found 382 files above 500 physical lines: 251 production Rust files, 95 test
 files, 22 documentation/plan files, 7 generated/data/asset files, 6 tooling/CI
 files, and one showcase source file.
+
+The completion census excludes the `.agents/skills` gitlink and records 354
+tracked regular files above 500 physical lines: 223 production Rust files, 95
+focused test corpora, and 36 documentation, generated-data, tooling, workflow,
+showcase, and lockfile artifacts. Every path, current line count, classification,
+and residual cohesion rationale is recorded in
+[`oversized-files-residual.md`](oversized-files-residual.md).
 
 ## Scope
 
