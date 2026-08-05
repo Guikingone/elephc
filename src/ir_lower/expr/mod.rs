@@ -1658,7 +1658,12 @@ fn lower_conditional_non_local_null_coalesce_assignment(
     else {
         return None;
     };
-    let current = lower_expr(ctx, current);
+    // `??=` reads its target with ISSET semantics, exactly as `??` does: a missing key is the
+    // condition being tested, not a mistake to report. Lowering it as an ordinary expression
+    // emitted the WARNING-producing read, so `$i[$k] ??= ($k = 0)` printed `Warning: Undefined
+    // array key 5` where php-src prints nothing — on BOTH backends, since this is the shared
+    // EIR. `lower_null_coalesce_value` is the same suppression the plain `??` already uses.
+    let current = lower_null_coalesce_value(ctx, current);
     let is_null = ctx.emit_value(
         Op::IsNull,
         vec![current.value],
