@@ -30,6 +30,7 @@ mod column;
 mod internal_pointer;
 mod key_exists;
 mod keys;
+mod range_size;
 mod search;
 mod shift;
 mod unshift;
@@ -1564,9 +1565,7 @@ pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the resolved range start into the first runtime argument
         }
     }
-    if step.is_some() {
-        emit_range_step_guards(ctx);
-    }
+    emit_range_guards(ctx, step.is_some());
     abi::emit_call_label(ctx.emitter, "__rt_range");
     store_if_result(ctx, inst)
 }
@@ -1581,38 +1580,46 @@ const RANGE_NEGATIVE_STEP_MESSAGE: &str =
 /// php-src's verbatim `ValueError` wording for a `range()` `$step` wider than the spanned interval.
 const RANGE_STEP_TOO_WIDE_MESSAGE: &str = "range(): Argument #3 ($step) must be less than the range spanned by argument #1 ($start) and argument #2 ($end)";
 
-/// Raises PHP's three `range()` `$step` `ValueError`s before the runtime helper runs.
+/// Raises every `range()` `ValueError` reference PHP checks before the runtime helper runs.
 ///
 /// The guards read `start`/`end`/`step` while they still sit in their ABI argument registers, so
 /// one sequence covers every supported target. Reference PHP rejects, in this order: a zero step,
-/// a negative step when `$start < $end` (a decreasing range accepts either sign), and a step whose
+/// a negative step when `$start < $end` (a decreasing range accepts either sign), a step whose
 /// magnitude exceeds the spanned interval — except when `$start === $end`, which always yields the
-/// single-element `[$start]`. The magnitude comparison is UNSIGNED so `PHP_INT_MIN`, whose negation
-/// is itself, still reads as wider than any span instead of wrapping back to a negative "magnitude".
-fn emit_range_step_guards(ctx: &mut FunctionContext<'_>) {
+/// single-element `[$start]` — and finally a requested element count past the maximum array size.
+/// The magnitude comparison is UNSIGNED so `PHP_INT_MIN`, whose negation is itself, still reads as
+/// wider than any span instead of wrapping back to a negative "magnitude".
+///
+/// `has_explicit_step` skips the three `$step` guards for a two-argument `range()`: the implicit
+/// step is the literal `1` this lowering just materialized, which none of them can reject. The
+/// size guard runs either way, because `range(1, 3000000000)` is oversized without any `$step`.
+fn emit_range_guards(ctx: &mut FunctionContext<'_>, has_explicit_step: bool) {
     let (start_reg, end_reg, step_reg) = match ctx.emitter.target.arch {
         Arch::AArch64 => ("x0", "x1", "x2"),
         Arch::X86_64 => ("rdi", "rsi", "rdx"),
     };
-    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
-        ctx,
-        crate::codegen::lower_inst::exceptions::ValueGuard::NotEqualToImmediate(step_reg, 0),
-        RANGE_ZERO_STEP_MESSAGE,
-    );
-    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
-        ctx,
-        crate::codegen::lower_inst::exceptions::ValueGuard::NonNegativeUnlessSignedBelow(
-            step_reg, start_reg, end_reg,
-        ),
-        RANGE_NEGATIVE_STEP_MESSAGE,
-    );
-    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
-        ctx,
-        crate::codegen::lower_inst::exceptions::ValueGuard::MagnitudeWithinSpan(
-            step_reg, start_reg, end_reg,
-        ),
-        RANGE_STEP_TOO_WIDE_MESSAGE,
-    );
+    if has_explicit_step {
+        crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+            ctx,
+            crate::codegen::lower_inst::exceptions::ValueGuard::NotEqualToImmediate(step_reg, 0),
+            RANGE_ZERO_STEP_MESSAGE,
+        );
+        crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+            ctx,
+            crate::codegen::lower_inst::exceptions::ValueGuard::NonNegativeUnlessSignedBelow(
+                step_reg, start_reg, end_reg,
+            ),
+            RANGE_NEGATIVE_STEP_MESSAGE,
+        );
+        crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+            ctx,
+            crate::codegen::lower_inst::exceptions::ValueGuard::MagnitudeWithinSpan(
+                step_reg, start_reg, end_reg,
+            ),
+            RANGE_STEP_TOO_WIDE_MESSAGE,
+        );
+    }
+    range_size::emit_range_size_guard(ctx);
 }
 
 /// Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed.
@@ -5419,13 +5426,26 @@ fn lower_array_fill_call(
 const ARRAY_FILL_NEGATIVE_COUNT_MESSAGE: &str =
     "array_fill(): Argument #2 ($count) must be greater than or equal to 0";
 
-/// Rejects the negative `array_fill()` `$count` reference PHP refuses to build an array for.
+/// The largest `array_fill()` `$count` reference PHP will even attempt to build an array for.
+///
+/// php-src bounds the count against `INT_MAX` — not against the maximum array size — before it
+/// reaches the allocator, so `array_fill(0, 2147483647, …)` is accepted (and then fails on
+/// memory) while `array_fill(0, 2147483648, …)` is a `ValueError` for every `$start` and value.
+const ARRAY_FILL_MAX_COUNT: i64 = 2_147_483_647;
+
+/// php-src's verbatim `ValueError` wording for an oversized `array_fill()` `$count`.
+const ARRAY_FILL_COUNT_TOO_LARGE_MESSAGE: &str = "array_fill(): Argument #2 ($count) is too large";
+
+/// Rejects the `array_fill()` `$count` values reference PHP refuses to build an array for.
 ///
 /// The fill helpers write `$count` straight into the array header's length field without
 /// clamping it, so a negative count produced an array whose header claimed a negative length
-/// — `count()` answered `-1` and every walk over it read past the payload. `second_arg_reg`
-/// selects which ABI register currently holds `$count`: the string fill helper takes
-/// `(count, ptr, len)`, every other fill helper takes `(start, count, value)`.
+/// — `count()` answered `-1` and every walk over it read past the payload. A count past
+/// `INT_MAX` is memory-safe today (the allocation guards catch it) but reported the process's
+/// uncatchable heap fatal where reference PHP throws, so `try { … } catch (ValueError $e)`
+/// could never see it; bounding the argument here raises PHP's own error instead.
+/// `second_arg_reg` selects which ABI register currently holds `$count`: the string fill helper
+/// takes `(count, ptr, len)`, every other fill helper takes `(start, count, value)`.
 fn emit_array_fill_count_guard(ctx: &mut FunctionContext<'_>, second_arg_reg: bool) {
     let count_reg = match (ctx.emitter.target.arch, second_arg_reg) {
         (Arch::AArch64, false) => "x0",
@@ -5437,6 +5457,14 @@ fn emit_array_fill_count_guard(ctx: &mut FunctionContext<'_>, second_arg_reg: bo
         ctx,
         crate::codegen::lower_inst::exceptions::ValueGuard::SignedAtLeast(count_reg, 0),
         ARRAY_FILL_NEGATIVE_COUNT_MESSAGE,
+    );
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::SignedAtMost(
+            count_reg,
+            ARRAY_FILL_MAX_COUNT,
+        ),
+        ARRAY_FILL_COUNT_TOO_LARGE_MESSAGE,
     );
 }
 

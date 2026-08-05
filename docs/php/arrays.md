@@ -265,10 +265,10 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_replace()` | `array_replace($arr, $replacements): array` | Overwrite matching keys in `$arr` (in place, keeping position) and append new keys from `$replacements`; later values win. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |
 | `array_replace_recursive()` | `array_replace_recursive($arr, $replacements): array` | Like `array_replace()`, but when both values at a key are associative arrays they are merged recursively instead of overwritten. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed arrays are overwritten, not merged. |
 | `array_combine()` | `array_combine($keys, $values): array` | Create array from keys/values |
-| `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values. A negative `$num` throws `\ValueError`. |
+| `array_fill()` | `array_fill($start, $num, $value): array` | Fill with values. A negative `$num` throws `\ValueError`, and so does a `$num` above `2147483647` (`array_fill(): Argument #2 ($count) is too large`). |
 | `array_fill_keys()` | `array_fill_keys($keys, $value): array` | Fill with values using keys |
 | `array_pad()` | `array_pad($arr, $size, $value): array` | Pad to length; a negative `$size` pads on the left. A `$size` whose magnitude exceeds `1073741824` — including `PHP_INT_MIN`, whose magnitude is not representable — throws `\ValueError`. |
-| `range()` | `range($start, $end, $step = 1): array` | Sequential integers. `$step`'s sign never picks the direction (`$start` vs `$end` does); a zero step, a negative step on an increasing range, or a step wider than the spanned interval raises `ValueError` |
+| `range()` | `range($start, $end, $step = 1): array` | Sequential integers. `$step`'s sign never picks the direction (`$start` vs `$end` does); a zero step, a negative step on an increasing range, or a step wider than the spanned interval raises `ValueError`, and so does a range of more than `1073741823` elements (`The supplied range exceeds the maximum array size: start=… end=… step=…`, naming the ordered endpoints and `abs($step)`) |
 | `array_diff()` | `array_diff($arr1, $arr2): array` | Values in $arr1 not in $arr2 |
 | `array_intersect()` | `array_intersect($arr1, $arr2): array` | Values in both |
 | `array_diff_key()` | `array_diff_key($arr1, $arr2): array` | Keys in $arr1 not in $arr2 |

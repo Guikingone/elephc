@@ -9,7 +9,10 @@
 //!   allocated 32 bytes, published a 2^61-element header, and the fill loop then ran off the heap
 //!   (observed as SIGBUS). `range()` additionally overflows in `end - start + 1`.
 //! - Runtime fatals here are process-terminating writes to stderr, so they are asserted through
-//!   `compile_and_run_expect_failure`, not through PHP-catchable exceptions.
+//!   `compile_and_run_expect_failure`, not through PHP-catchable exceptions. The uncaught
+//!   `ValueError` diagnostics reach the same stream: the sizes that reference PHP rejects with a
+//!   `ValueError` are now stopped by the lowering guards before any allocator sees them, and
+//!   `arrays::size_bounds` asserts those from inside a `catch`.
 //! - One test cross-checks the linux-x86_64 runtime text directly, because the emitted x86_64 guard
 //!   cannot be executed from an aarch64 host but must still ship in the same change.
 
@@ -27,49 +30,57 @@ fn runtime_asm_function<'a>(asm: &'a str, label: &str) -> &'a str {
 }
 
 /// Verifies `array_fill()` with a count whose `count * 8` payload size wraps the machine word
-/// aborts with the array-size fatal instead of allocating a 32-byte block and filling 2^61 slots.
+/// never reaches the allocator at all: the count is past `INT_MAX`, which reference PHP rejects
+/// with a catchable `ValueError` before it looks at memory, so the lowering guard raises that
+/// instead of letting `__rt_array_new` report the array-size fatal. See `arrays::size_bounds` for
+/// the full bounds matrix; the `__rt_array_new` guard behind it is pinned by
+/// `test_x86_64_runtime_array_new_carries_size_guard`.
 #[test]
 fn test_array_fill_overflowing_count_is_fatal() {
     let err = compile_and_run_expect_failure(
         "<?php $a = array_fill(0, 0x2000000000000004, 7); echo count($a);",
     );
     assert!(
-        err.contains("requested array size exceeds the maximum allowed array size"),
+        err.contains("Uncaught ValueError: array_fill(): Argument #2 ($count) is too large"),
         "{}",
         err
     );
 }
 
-/// Verifies the associative `array_fill()` path is guarded too: a non-zero start routes the caller's
+/// Verifies the associative `array_fill()` path is bounded too: a non-zero start routes the caller's
 /// count into `__rt_hash_new` as a bucket capacity, where `count * 64` wrapped to 256 bytes and the
-/// entry-zeroing loop then ran off the heap (observed as SIGSEGV).
+/// entry-zeroing loop then ran off the heap (observed as SIGSEGV). The count is past `INT_MAX`, so
+/// reference PHP's `ValueError` now keeps it away from that helper entirely.
 #[test]
 fn test_array_fill_assoc_overflowing_count_is_fatal() {
     let err = compile_and_run_expect_failure(
         "<?php $a = array_fill(5, 0x0400000000000004, 7); echo count($a);",
     );
     assert!(
-        err.contains("requested array size exceeds the maximum allowed array size"),
+        err.contains("Uncaught ValueError: array_fill(): Argument #2 ($count) is too large"),
         "{}",
         err
     );
 }
 
 /// Verifies `range()` over an interval whose element count overflows a signed 64-bit word aborts.
-/// `range(1, PHP_INT_MAX)` keeps a positive count, so it is the `capacity * elem_size` guard that
-/// must reject it.
+/// `range(1, PHP_INT_MAX)` keeps a positive count, and reference PHP reports it as an oversized
+/// range — a catchable `ValueError` naming the normalized interval — rather than as an allocation
+/// failure, so the lowering guard raises that before `__rt_range` sizes anything.
 #[test]
 fn test_range_overflowing_count_is_fatal() {
     let err = compile_and_run_expect_failure("<?php $a = range(1, PHP_INT_MAX); echo count($a);");
     assert!(
-        err.contains("requested array size exceeds the maximum allowed array size"),
+        err.contains(
+            "Uncaught ValueError: The supplied range exceeds the maximum array size: start=1 end=9223372036854775807 step=1"
+        ),
         "{}",
         err
     );
 }
 
-/// Verifies the widest possible interval, whose `end - start + 1` wraps to zero, is rejected by the
-/// dedicated `range()` count guard rather than silently producing an empty array.
+/// Verifies the widest possible interval, whose `end - start + 1` wraps to zero, is rejected with
+/// reference PHP's oversized-range `ValueError` rather than silently producing an empty array.
 #[test]
 fn test_range_wrapping_element_count_is_fatal() {
     let err = compile_and_run_expect_failure(

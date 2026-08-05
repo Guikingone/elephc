@@ -21,6 +21,9 @@
 //!   oversized array lengths) from ever reaching a runtime helper that would read
 //!   uninitialized memory, allocate an unrepresentable size, or loop forever, and raises
 //!   reference PHP's catchable `ValueError` instead.
+//! - `emit_value_error_from_string_result()` is the same guard outcome for php-src's
+//!   `ValueError`s that interpolate the offending values into their wording, where the caller
+//!   has already built the exact message at runtime.
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
@@ -62,6 +65,13 @@ pub(super) enum ValueGuard<'a> {
     /// The 64-bit register, read as a signed integer, must be `>= minimum`
     /// (`str_split()` chunk length, `str_repeat()`/`array_fill()` counts).
     SignedAtLeast(&'a str, i64),
+    /// The 64-bit register, read as a signed integer, must be `<= maximum`
+    /// (`array_fill()`'s `$count` ceiling).
+    ///
+    /// The bound is materialized into a scratch register first, so a limit wider than the
+    /// target's compare-immediate encoding (`INT_MAX` does not fit AArch64's 12-bit form)
+    /// is still checked exactly instead of being truncated by the assembler.
+    SignedAtMost(&'a str, i64),
     /// The 64-bit register, read as a signed integer, must satisfy
     /// `-maximum <= value <= maximum` (`array_pad()`'s `$length` magnitude).
     ///
@@ -84,14 +94,20 @@ pub(super) enum ValueGuard<'a> {
     /// valid while `range(1, 5, -2)` is a `ValueError`. The guard therefore passes as soon
     /// as `start >= end`, and only then checks the sign of the step.
     NonNegativeUnlessSignedBelow(&'a str, &'a str, &'a str),
-    /// `|first| <= |third - second|`, compared UNSIGNED, unless the second and third
-    /// registers are equal (`range()`'s `$step` magnitude rule).
+    /// `|first|` must not exceed the UNSIGNED width the second and third registers span,
+    /// unless those two are equal (`range()`'s `$step` magnitude rule).
     ///
     /// PHP rejects a `$step` wider than the interval its endpoints span, but a degenerate
     /// `range($x, $x, $step)` always yields `[$x]` no matter how large the step is, so an
     /// equal pair short-circuits the check. The unsigned comparison makes `PHP_INT_MIN`
     /// (whose negation is itself) read as wider than every span instead of wrapping back
     /// into a negative "magnitude" that would slip past a signed compare.
+    ///
+    /// The endpoints are ordered before the width is taken, and the subtraction that follows
+    /// is read as unsigned, exactly like php-src's `(zend_ulong) (high - low)`. Taking a
+    /// signed absolute of the raw difference instead would report `range(PHP_INT_MIN,
+    /// PHP_INT_MAX, 2)` as a span of `1` and reject it, where PHP spans `2^64 - 1` and goes on
+    /// to reject the range for its size instead.
     MagnitudeWithinSpan(&'a str, &'a str, &'a str),
 }
 
@@ -114,6 +130,16 @@ pub(super) fn emit_value_error_unless(
         (Arch::X86_64, ValueGuard::SignedAtLeast(reg, minimum)) => {
             ctx.emitter.instruction(&format!("cmp {}, {}", reg, minimum));      // compare the materialized argument against its PHP minimum
             ctx.emitter.instruction(&format!("jge {}", ok_label));              // an argument at or above the minimum is in range
+        }
+        (Arch::AArch64, ValueGuard::SignedAtMost(reg, maximum)) => {
+            abi::emit_load_int_immediate(ctx.emitter, "x9", *maximum);
+            ctx.emitter.instruction(&format!("cmp {}, x9", reg));                // compare the materialized argument against its PHP maximum
+            ctx.emitter.instruction(&format!("b.le {}", ok_label));              // an argument at or below the maximum is in range
+        }
+        (Arch::X86_64, ValueGuard::SignedAtMost(reg, maximum)) => {
+            abi::emit_load_int_immediate(ctx.emitter, "r10", *maximum);
+            ctx.emitter.instruction(&format!("cmp {}, r10", reg));               // compare the materialized argument against its PHP maximum
+            ctx.emitter.instruction(&format!("jle {}", ok_label));               // an argument at or below the maximum is in range
         }
         (Arch::AArch64, ValueGuard::SignedMagnitudeAtMost(reg, maximum)) => {
             let fail_label = ctx.next_label("value_guard_fail");
@@ -171,27 +197,27 @@ pub(super) fn emit_value_error_unless(
         (Arch::AArch64, ValueGuard::MagnitudeWithinSpan(reg, low, high)) => {
             ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval degenerate?
             ctx.emitter.instruction(&format!("b.eq {}", ok_label));             // a single-point interval accepts any step magnitude
-            ctx.emitter.instruction(&format!("subs x9, {}, {}", high, low));    // x9 = high - low, the signed spanned interval
-            ctx.emitter.instruction("cneg x9, x9, mi");                         // x9 = |high - low|, the spanned magnitude
+            ctx.emitter.instruction(&format!("csel x9, {}, {}, le", low, high)); // x9 = the smaller of the two endpoints
+            ctx.emitter.instruction(&format!("csel x10, {}, {}, le", high, low)); // x10 = the larger of the two endpoints
+            ctx.emitter.instruction("sub x9, x10, x9");                         // x9 = high - low, the spanned interval as an unsigned width
             ctx.emitter.instruction(&format!("cmp {}, #0", reg));               // is the guarded argument negative?
             ctx.emitter.instruction(&format!("cneg x10, {}, lt", reg));         // x10 = |argument|, its unsigned magnitude
-            ctx.emitter.instruction("cmp x10, x9");                             // compare the argument magnitude against the spanned magnitude
+            ctx.emitter.instruction("cmp x10, x9");                             // compare the argument magnitude against the spanned width
             ctx.emitter.instruction(&format!("b.ls {}", ok_label));             // an unsigned magnitude within the span is in range
         }
         (Arch::X86_64, ValueGuard::MagnitudeWithinSpan(reg, low, high)) => {
             ctx.emitter.instruction(&format!("cmp {}, {}", low, high));         // is the interval degenerate?
             ctx.emitter.instruction(&format!("je {}", ok_label));               // a single-point interval accepts any step magnitude
-            ctx.emitter.instruction(&format!("mov r10, {}", high));             // stage the interval high endpoint before subtracting the low one
-            ctx.emitter.instruction(&format!("sub r10, {}", low));              // r10 = high - low, the signed spanned interval
-            ctx.emitter.instruction("mov r11, r10");                            // stage the negated span for the conditional magnitude select
-            ctx.emitter.instruction("neg r11");                                 // negate the span so a negative one yields its magnitude
-            ctx.emitter.instruction("test r10, r10");                           // is the spanned interval negative?
-            ctx.emitter.instruction("cmovs r10, r11");                          // r10 = |high - low|, the spanned magnitude
-            ctx.emitter.instruction(&format!("mov r11, {}", reg));              // stage the guarded argument before normalizing its magnitude
-            ctx.emitter.instruction("neg r11");                                 // negate the guarded argument so a negative one yields its magnitude
+            ctx.emitter.instruction(&format!("mov r10, {}", low));              // stage the first endpoint before ordering the pair
+            ctx.emitter.instruction(&format!("mov r11, {}", high));             // stage the second endpoint before ordering the pair
+            ctx.emitter.instruction(&format!("cmovg r10, {}", high));           // r10 = the smaller of the two endpoints
+            ctx.emitter.instruction(&format!("cmovg r11, {}", low));            // r11 = the larger of the two endpoints
+            ctx.emitter.instruction("sub r11, r10");                            // r11 = high - low, the spanned interval as an unsigned width
+            ctx.emitter.instruction(&format!("mov r10, {}", reg));              // stage the guarded argument before normalizing its magnitude
+            ctx.emitter.instruction("neg r10");                                 // negate the guarded argument so a negative one yields its magnitude
             ctx.emitter.instruction(&format!("test {}, {}", reg, reg));         // is the guarded argument negative?
-            ctx.emitter.instruction(&format!("cmovns r11, {}", reg));           // r11 = |argument|, its unsigned magnitude
-            ctx.emitter.instruction("cmp r11, r10");                            // compare the argument magnitude against the spanned magnitude
+            ctx.emitter.instruction(&format!("cmovns r10, {}", reg));           // r10 = |argument|, its unsigned magnitude
+            ctx.emitter.instruction("cmp r10, r11");                            // compare the argument magnitude against the spanned width
             ctx.emitter.instruction(&format!("jbe {}", ok_label));              // an unsigned magnitude within the span is in range
         }
     }
@@ -234,9 +260,25 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     ctx.load_string_value_to_regs(message, message_ptr_reg, message_len_reg)?;
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
-    emit_uncaught_dynamic_error_fatal_if_no_handler(ctx);
-    emit_dynamic_error_object(ctx);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "Error");
+    emit_dynamic_throwable_object(ctx, "_spl_error_class_id");
     Ok(())
+}
+
+/// Throws a catchable PHP `ValueError` whose message already sits in the string-result registers.
+///
+/// The static `emit_value_error()` covers the builtin guards whose wording is fixed. A few of
+/// php-src's own `ValueError`s interpolate the offending values instead — `range()`'s
+/// `"The supplied range exceeds the maximum array size: start=… end=… step=…"` is the one that
+/// reaches here — so the caller builds the exact message at runtime and hands it over as a
+/// persisted pointer/length pair. The uncaught diagnostic names `ValueError` just like the static
+/// path, so an unhandled oversized range still reports PHP's error class rather than the
+/// unwinder's generic fallback.
+pub(super) fn emit_value_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "ValueError");
+    emit_dynamic_throwable_object(ctx, "_spl_value_error_class_id");
 }
 
 /// Allocates one built-in throwable and transfers control to the standard unwinder.
@@ -323,10 +365,18 @@ fn emit_uncaught_exception_fatal_if_no_handler(
     ctx.emitter.label(&throw_label);
 }
 
-/// Writes an uncaught dynamic `Error` diagnostic, or continues when a handler exists.
-fn emit_uncaught_dynamic_error_fatal_if_no_handler(ctx: &mut FunctionContext<'_>) {
+/// Writes an uncaught dynamic throwable diagnostic, or continues when a handler exists.
+///
+/// `class_name` names the PHP class in the fatal line (`Error`, `ValueError`, …); the message
+/// itself is read from the 16-byte temporary the caller pushed, so this works for any throwable
+/// whose text is only known at runtime.
+fn emit_uncaught_dynamic_throwable_fatal_if_no_handler(
+    ctx: &mut FunctionContext<'_>,
+    class_name: &str,
+) {
     let throw_label = ctx.next_label("dynamic_error_throw");
-    let (prefix_label, prefix_len) = ctx.data.add_string(b"Fatal error: Uncaught Error: ");
+    let prefix = format!("Fatal error: Uncaught {}: ", class_name);
+    let (prefix_label, prefix_len) = ctx.data.add_string(prefix.as_bytes());
     let (suffix_label, suffix_len) = ctx.data.add_string(b"\n");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -371,8 +421,12 @@ fn emit_uncaught_dynamic_error_fatal_if_no_handler(ctx: &mut FunctionContext<'_>
     ctx.emitter.label(&throw_label);
 }
 
-/// Allocates a built-in `Error` that owns the runtime message stored on the stack.
-fn emit_dynamic_error_object(ctx: &mut FunctionContext<'_>) {
+/// Allocates a built-in throwable that owns the runtime message stored on the stack.
+///
+/// `class_id_symbol` selects the built-in class the object reports (`_spl_error_class_id`,
+/// `_spl_value_error_class_id`, …). The message pointer/length come from the 16-byte temporary
+/// the caller pushed, which is released once both words have been copied into the object.
+fn emit_dynamic_throwable_object(ctx: &mut FunctionContext<'_>, class_id_symbol: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_load_int_immediate(ctx.emitter, "x0", 56); // compact Throwable: message/code/previous
@@ -380,8 +434,8 @@ fn emit_dynamic_error_object(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov x9, #6");                              // heap kind 6 = throwable object instance
             ctx.emitter.instruction("str x9, [x0, #-8]");                       // stamp the allocation as a runtime object
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
-            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", "_spl_error_class_id", 0);
-            ctx.emitter.instruction("str x9, [x0]");                            // store the built-in Error class id
+            abi::emit_load_symbol_to_reg(ctx.emitter, "x9", class_id_symbol, 0);
+            ctx.emitter.instruction("str x9, [x0]");                            // store the built-in throwable class id
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 0);
             ctx.emitter.instruction("str x9, [x0, #8]");                        // store the runtime exception message pointer
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x9", 8);
@@ -399,8 +453,8 @@ fn emit_dynamic_error_object(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
             ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");            // stamp the allocation as a runtime object
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
-            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", "_spl_error_class_id", 0);
-            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in Error class id
+            abi::emit_load_symbol_to_reg(ctx.emitter, "r10", class_id_symbol, 0);
+            ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store the built-in throwable class id
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store the runtime exception message pointer
             abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 8);
