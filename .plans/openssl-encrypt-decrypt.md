@@ -573,11 +573,22 @@ much larger method list).
 
 ### Phase 2 — AOT constants + non-AEAD encrypt/decrypt + helpers
 
-- [ ] `openssl_constants.rs` wired.
-- [ ] Builtins for all four functions (encrypt/decrypt may still ignore tag
+- [x] `openssl_constants.rs` wired.
+- [x] Builtins for all four functions (encrypt/decrypt may still ignore tag
       path initially **within the same PR branch**, but do not merge without AEAD).
-- [ ] Runtime + lowering for CBC/ECB/CTR + iv_length + get_cipher_methods.
-- [ ] Focused codegen tests for non-AEAD.
+- [x] Runtime + lowering for CBC/ECB/CTR + iv_length + get_cipher_methods.
+- [x] Focused codegen tests for non-AEAD.
+
+Phase 2 baseline: the three OpenSSL option constants resolve through the
+checker, name resolver, and codegen prescan. All four PHP functions have
+registry homes backed by typed `RuntimeFnId` entries and require
+`elephc_crypto`. Target-aware AArch64 and x86_64 runtime glue publishes the
+four cipher ABI entries, keeps base64 outside the bridge, boxes failures as
+PHP `false`, and returns owned string/array results. CBC, ECB, and CTR are
+covered by raw PHP-golden ciphertexts, base64/raw round trips, zero-padding,
+failure, case-insensitive/namespaced-call, IV-length, constant, and exact
+12-method-inventory tests. GCM calls deliberately return `false` until phase 3
+provides the encrypt tag buffer/writeback and decrypt tag input.
 
 ### Phase 3 — AEAD (`$tag`, `$aad`, `$tag_length`)
 

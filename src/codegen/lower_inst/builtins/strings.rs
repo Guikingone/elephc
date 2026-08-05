@@ -1012,7 +1012,7 @@ fn string_len_reg(ctx: &FunctionContext<'_>) -> &'static str {
 }
 
 /// Loads the sole argument for a string-transform builtin into string result registers.
-fn load_single_string_arg(
+pub(super) fn load_single_string_arg(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -3273,7 +3273,7 @@ fn load_as_float(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> R
 }
 
 /// Loads a concrete scalar value as an integer runtime argument.
-fn load_as_int(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> Result<()> {
+pub(super) fn load_as_int(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> Result<()> {
     match ctx.load_value_to_result(value)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => Ok(()),
         PhpType::Void | PhpType::Never => {

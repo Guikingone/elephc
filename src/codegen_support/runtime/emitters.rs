@@ -105,6 +105,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_hash_equals(emitter);
     strings::emit_hash_algos_list(emitter);
     strings::emit_hash_context(emitter);
+    strings::emit_openssl_methods(emitter);
+    strings::emit_openssl_cipher(emitter);
     strings::emit_digest_to_string(emitter);
     strings::emit_base64_encode(emitter);
     strings::emit_base64_decode(emitter);

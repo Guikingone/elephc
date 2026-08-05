@@ -104,6 +104,18 @@ pub(super) fn lower(
         RuntimeFnId::HashUpdate => Some({
             crate::codegen::lower_inst::builtins::strings::lower_hash_update(ctx, inst)
         }),
+        RuntimeFnId::OpensslCipherIvLength => Some({
+            crate::codegen::lower_inst::builtins::openssl::lower_openssl_cipher_iv_length(ctx, inst)
+        }),
+        RuntimeFnId::OpensslDecrypt => Some({
+            crate::codegen::lower_inst::builtins::openssl::lower_openssl_decrypt(ctx, inst)
+        }),
+        RuntimeFnId::OpensslEncrypt => Some({
+            crate::codegen::lower_inst::builtins::openssl::lower_openssl_encrypt(ctx, inst)
+        }),
+        RuntimeFnId::OpensslGetCipherMethods => Some({
+            crate::codegen::lower_inst::builtins::openssl::lower_openssl_get_cipher_methods(ctx, inst)
+        }),
         RuntimeFnId::Htmlentities => Some({
             crate::codegen::lower_inst::builtins::strings::lower_html_escape(ctx, inst, "htmlentities")
         }),

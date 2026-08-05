@@ -21,6 +21,8 @@ mod formatting;
 mod interpolation_and_hashes;
 #[path = "strings/misc.rs"]
 mod misc;
+#[path = "strings/openssl.rs"]
+mod openssl;
 
 /// Verifies `mb_strlen()` counts valid UTF-8 across ASCII, multibyte, and empty strings.
 #[test]

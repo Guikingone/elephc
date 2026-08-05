@@ -73,6 +73,8 @@ pub(crate) mod hash_algos;
 mod hash_context;
 mod hash_equals;
 mod hash_hmac;
+mod openssl_methods;
+mod openssl;
 mod digest_to_string;
 mod sscanf;
 mod rtrim_mask;
@@ -204,6 +206,8 @@ pub use mb_strlen::emit_mb_strlen;
 pub use hash::emit_hash;
 /// Emit generic hash helper.
 pub use hash_hmac::emit_hash_hmac;
+pub use openssl_methods::emit_openssl_methods;
+pub use openssl::emit_openssl_cipher;
 /// Emit keyed-hash HMAC helper.
 pub use hash_algos::emit_hash_algos_list;
 pub use hash_context::emit_hash_context;
