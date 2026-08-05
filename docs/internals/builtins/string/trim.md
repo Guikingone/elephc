@@ -2,7 +2,7 @@
 title: "trim() — internals"
 description: "Compiler internals for trim(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 448
+  order: 451
 ---
 
 ## `trim()` — internals

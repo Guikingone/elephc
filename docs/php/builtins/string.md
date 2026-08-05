@@ -10,7 +10,7 @@ sidebar:
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`addslashes()`](./string/addslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
-| [`base64_decode()`](./string/base64_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`base64_decode()`](./string/base64_decode.md) | `(string $string, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
 | [`base64_encode()`](./string/base64_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`bin2hex()`](./string/bin2hex.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`chop()`](./string/chop.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
@@ -50,6 +50,7 @@ sidebar:
 | [`number_format()`](./string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`ord()`](./string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`printf()`](./string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
+| [`quoted_printable_encode()`](./string/quoted_printable_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`quotemeta()`](./string/quotemeta.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurldecode()`](./string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
@@ -68,12 +69,14 @@ sidebar:
 | [`str_word_count()`](./string/str_word_count.md) | `(string $string, int $format = 0, string $characters = null): array|int` | `array|int` | ✓ | ✓ |
 | [`strcasecmp()`](./string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`strcmp()`](./string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`stripos()`](./string/stripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stripslashes()`](./string/stripslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strlen()`](./string/strlen.md) | `(string $string): int` | `int` | ✓ | ✓ |
 | [`strncasecmp()`](./string/strncasecmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
 | [`strncmp()`](./string/strncmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
 | [`strpos()`](./string/strpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrev()`](./string/strrev.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`strripos()`](./string/strripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrpos()`](./string/strrpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strstr()`](./string/strstr.md) | `(string $haystack, string $needle, bool $before_needle = false): mixed` | `mixed` | ✓ | ✓ |
 | [`strtolower()`](./string/strtolower.md) | `(string $string): string` | `string` | ✓ | ✓ |

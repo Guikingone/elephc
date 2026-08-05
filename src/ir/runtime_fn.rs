@@ -388,6 +388,7 @@ pub enum RuntimeFnId {
     SplClasses,
     SplObjectHash,
     SplObjectId,
+    Base64Decode,
     Chop,
     Chr,
     ChunkSplit,
@@ -443,7 +444,9 @@ pub enum RuntimeFnId {
     Strcmp,
     Strncasecmp,
     Strncmp,
+    Stripos,
     Strpos,
+    Strripos,
     Strrpos,
     Strtr,
     Strstr,
@@ -575,6 +578,25 @@ impl RuntimeFnId {
                 Some(other) => other,
                 None => declared.clone(),
             },
+            // Reversing keeps the container shape, so a synthetic or callable-dispatched
+            // `array_reverse()` with no checked call-site type still returns concrete array
+            // metadata. Without it the broad declared `mixed` reached the backend, which stored a
+            // raw array pointer into a boxed-Mixed slot: `$f = 'array_reverse'; $f([1, 2])` then
+            // read the pointer as a Mixed cell and crashed. The `$preserve_keys` hash shape needs
+            // a compile-time literal, which a dynamic wrapper cannot provide, so it is dropped
+            // from the callable ABI by `refine_runtime_callable_wrapper_sig`.
+            RuntimeFnId::ArrayReverse => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(element @ (PhpType::Array(_) | PhpType::AssocArray { .. })) => element,
+                _ => declared.clone(),
+            },
+            // A synthetic or callable-dispatched `array_chunk()` cannot pass a literal
+            // `$preserve_keys`, so it always produces the renumbered `array<array<T>>` nesting.
+            RuntimeFnId::ArrayChunk => match arg_types.first().map(PhpType::codegen_repr) {
+                Some(PhpType::Array(element)) => {
+                    PhpType::Array(Box::new(PhpType::Array(element)))
+                }
+                _ => declared.clone(),
+            },
             RuntimeFnId::ClassAttributeArgs => PhpType::AssocArray {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
@@ -644,6 +666,19 @@ impl RuntimeFnId {
         use crate::types::PhpType;
         match self {
             RuntimeFnId::Count => truncate_callable_params(sig, 1),
+            // `array_reverse()`'s `$preserve_keys` and `array_slice()`'s `$preserve_keys` pick
+            // between an indexed array and an integer-keyed hash, so the backend needs them as
+            // compile-time literals. A dynamic callable wrapper receives runtime parameters, so
+            // the flag is dropped from the wrapper ABI exactly like `count()`'s `$mode`; the
+            // wrapper then always produces the renumbered indexed result. `array_slice()`'s
+            // return type is pinned to the concrete indexed layout its helpers materialize,
+            // because the wrapper has no per-call-site checked type to read.
+            RuntimeFnId::ArrayReverse => truncate_callable_params(sig, 1),
+            RuntimeFnId::ArrayChunk => truncate_callable_params(sig, 2),
+            RuntimeFnId::ArraySlice => {
+                truncate_callable_params(sig, 3);
+                sig.return_type = PhpType::Array(Box::new(PhpType::Mixed));
+            }
             RuntimeFnId::ArraySum | RuntimeFnId::ArrayProduct => {
                 set_callable_param_type(sig, 0, PhpType::Array(Box::new(PhpType::Int)));
             }
@@ -699,6 +734,11 @@ impl RuntimeFnId {
             RuntimeFnId::ArrayValues |
             RuntimeFnId::Asin |
             RuntimeFnId::Atan |
+            // `base64_decode()` only reads the subject's bytes and writes its answer into a
+            // fresh concat reservation; even `$strict = true` reports a bad character as a
+            // plain `false` return rather than a diagnostic, so nothing observable is lost
+            // when an unused call is eliminated.
+            RuntimeFnId::Base64Decode |
             RuntimeFnId::Atan2 |
             RuntimeFnId::Ceil |
             RuntimeFnId::Chop |
@@ -778,7 +818,7 @@ impl RuntimeFnId {
             // `str_word_count()` unknown format, `count_chars()` unknown mode,
             // `range()` zero/negative/oversized `$step`, `round()` unknown rounding mode,
             // `strncmp()`/`strncasecmp()` negative compare length,
-            // `strpos()`/`strrpos()` `$offset` outside the haystack,
+            // `strpos()`/`strrpos()`/`stripos()`/`strripos()` `$offset` outside the haystack,
             // `substr_count()` empty needle or out-of-subject offset/length,
             // `wordwrap()` empty break or zero cutting width, `min()`/`max()` over an
             // empty array), so they must not be treated
@@ -800,7 +840,9 @@ impl RuntimeFnId {
             | RuntimeFnId::StrWordCount
             | RuntimeFnId::Strncasecmp
             | RuntimeFnId::Strncmp
+            | RuntimeFnId::Stripos
             | RuntimeFnId::Strpos
+            | RuntimeFnId::Strripos
             | RuntimeFnId::Strrpos
             | RuntimeFnId::SubstrCount
             | RuntimeFnId::BaseConvert
@@ -1137,6 +1179,12 @@ impl RuntimeFnId {
                 | RuntimeFnId::ArraySlice
                 | RuntimeFnId::ArrayUnique
                 | RuntimeFnId::ArrayValues
+                // `base64_decode()`'s result is `string|false`, so its lowering boxes BOTH
+                // arms into a fresh Mixed cell and `__rt_mixed_from_value` persists (copies)
+                // the decoded payload. Nothing handed back points into the encoded subject,
+                // so the default `MayAliasArguments` bucket would only keep an owned subject
+                // temporary alive for the boxed result's whole lifetime.
+                | RuntimeFnId::Base64Decode
                 // hexdec()/bindec()/octdec() box their `int|float` answer through
                 // `__rt_mixed_from_value`, so the cell handed back is a fresh allocation
                 // that cannot alias the parsed subject string.
@@ -1203,7 +1251,9 @@ impl RuntimeFnId {
                 // format 2 persists each word before inserting it into a brand-new hash. Nothing
                 // handed back can alias the subject or the character-list argument.
                 | RuntimeFnId::StrWordCount
+                | RuntimeFnId::Stripos
                 | RuntimeFnId::Strpos
+                | RuntimeFnId::Strripos
                 | RuntimeFnId::Strrpos
                 // `strtr()` writes into a reservation taken from `__rt_concat_reserve` and then
                 // copies the finished bytes into owned heap storage through `__rt_str_persist`,
@@ -1588,6 +1638,7 @@ impl RuntimeFnId {
             RuntimeFnId::SplClasses => "spl_classes",
             RuntimeFnId::SplObjectHash => "spl_object_hash",
             RuntimeFnId::SplObjectId => "spl_object_id",
+            RuntimeFnId::Base64Decode => "base64_decode",
             RuntimeFnId::Chop => "chop",
             RuntimeFnId::Chr => "chr",
             RuntimeFnId::ChunkSplit => "chunk_split",
@@ -1644,7 +1695,9 @@ impl RuntimeFnId {
             RuntimeFnId::Strcmp => "strcmp",
             RuntimeFnId::Strncasecmp => "strncasecmp",
             RuntimeFnId::Strncmp => "strncmp",
+            RuntimeFnId::Stripos => "stripos",
             RuntimeFnId::Strpos => "strpos",
+            RuntimeFnId::Strripos => "strripos",
             RuntimeFnId::Strrpos => "strrpos",
             RuntimeFnId::Strtr => "strtr",
             RuntimeFnId::Strstr => "strstr",

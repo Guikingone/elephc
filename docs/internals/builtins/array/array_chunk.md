@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_chunk(array $array, int $length): array
+function array_chunk(array $array, int $length, bool $preserve_keys = false): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 2 arguments.
+- **Arity**: takes 2–3 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

@@ -191,3 +191,74 @@ unlink("ts.txt");
     assert_eq!(out, "ok");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `file()`'s `$flags` bitmask over every combination PHP distinguishes.
+///
+/// The fixture writes a file with two empty lines so `FILE_IGNORE_NEW_LINES` and
+/// `FILE_SKIP_EMPTY_LINES` are separable: PHP applies the newline trimming FIRST, so
+/// `FILE_SKIP_EMPTY_LINES` alone drops nothing (a bare `"\n"` line still has length 1). Each line
+/// is reported as `index/strlen/trimmed-content` so the trailing-terminator handling is visible.
+/// `FILE_USE_INCLUDE_PATH` is accepted and has no effect, matching PHP's default empty
+/// `include_path`. The expected values are verbatim `LC_ALL=C php` output from PHP 8.4.20.
+#[test]
+fn test_file_flags_combinations() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("f1.txt", "alpha\n\nbeta\n\ngamma");
+function dump($label, $lines) { echo $label, ":", count($lines); foreach ($lines as $i => $l) { echo " ", $i, "/", strlen($l), "/", rtrim($l, "\r\n"); } echo "|"; }
+dump("plain", file("f1.txt"));
+dump("ignore", file("f1.txt", FILE_IGNORE_NEW_LINES));
+dump("skip", file("f1.txt", FILE_SKIP_EMPTY_LINES));
+dump("both", file("f1.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
+dump("incpath", file("f1.txt", FILE_USE_INCLUDE_PATH));
+unlink("f1.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "plain:5 0/6/alpha 1/1/ 2/5/beta 3/1/ 4/5/gamma|\
+ignore:5 0/5/alpha 1/0/ 2/4/beta 3/0/ 4/5/gamma|\
+skip:5 0/6/alpha 1/1/ 2/5/beta 3/1/ 4/5/gamma|\
+both:3 0/5/alpha 1/4/beta 2/5/gamma|\
+incpath:5 0/6/alpha 1/1/ 2/5/beta 3/1/ 4/5/gamma|"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `file()` accepts its `$flags` as a named argument and as a run-time value.
+///
+/// The flag is a plain bitmask rather than a shape-changing literal, so a variable must work.
+#[test]
+fn test_file_flags_named_and_runtime() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("f1.txt", "alpha\n\nbeta\n\ngamma");
+function dump($label, $lines) { echo $label, ":", count($lines); foreach ($lines as $i => $l) { echo " ", $i, "/", strlen($l), "/", rtrim($l, "\r\n"); } echo "|"; }
+dump("named", file(filename: "f1.txt", flags: FILE_IGNORE_NEW_LINES));
+$f = FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES;
+dump("runtime", file("f1.txt", $f));
+unlink("f1.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "named:5 0/5/alpha 1/0/ 2/4/beta 3/0/ 4/5/gamma|runtime:3 0/5/alpha 1/4/beta 2/5/gamma|"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `FILE_IGNORE_NEW_LINES` removes a CRLF pair, not just the line feed.
+#[test]
+fn test_file_flags_strip_crlf() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("f2.txt", "a\r\nb\r\n\r\nc");
+function dump($label, $lines) { echo $label, ":", count($lines); foreach ($lines as $i => $l) { echo " ", $i, "/", strlen($l), "/", rtrim($l, "\r\n"); } echo "|"; }
+dump("crlf", file("f2.txt", FILE_IGNORE_NEW_LINES));
+dump("crlfboth", file("f2.txt", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES));
+unlink("f2.txt");
+"#,
+    );
+    assert_eq!(out, "crlf:4 0/1/a 1/1/b 2/0/ 3/1/c|crlfboth:3 0/1/a 1/1/b 2/1/c|");
+    let _ = fs::remove_dir_all(&dir);
+}

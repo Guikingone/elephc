@@ -2239,6 +2239,24 @@ fn emit_builtin_call_value(
     call
 }
 
+/// Resolves the result type of a builtin reached through a resolved static callable binding.
+///
+/// A callable binding has already collapsed the source argument list into lowered operands, so the
+/// registry descriptor is consulted with an empty AST argument list; builtins whose result type is
+/// argument-VALUE dependent therefore fall back to the typed runtime target's
+/// representation-safe layout instead of the broad declared `returns` type. Without this, a
+/// container-returning builtin invoked as `$f = 'array_slice'; $f($a, 1, 2)` reached the backend
+/// typed `mixed` while a direct `array_slice($a, 1, 2)` call reached it typed `array<mixed>`.
+fn static_callable_builtin_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    operands: &[crate::ir::ValueId],
+    span: Span,
+) -> PhpType {
+    registry_builtin_result_type(ctx, name, &[], operands, span)
+        .unwrap_or_else(|| call_return_type(ctx, name, operands))
+}
+
 /// Resolves a migrated registry builtin's result type from the same descriptor as the checker.
 fn registry_builtin_result_type(
     ctx: &LoweringContext<'_, '_>,
@@ -4362,7 +4380,12 @@ fn lower_static_callable_value_call(
             ))
         }
         StaticCallableBinding::Builtin(function_name) => {
-            let php_type = call_return_type(ctx, &function_name, &operands);
+            let php_type = static_callable_builtin_result_type(
+                ctx,
+                &function_name,
+                &operands,
+                expr.span,
+            );
             Some(emit_builtin_call_value(
                 ctx,
                 &function_name,
@@ -4804,7 +4827,12 @@ fn lower_static_callable_call(
                 source_prefers_extension_builtin(&function_name),
             );
             let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
-            let php_type = call_return_type(ctx, &function_name, &operands);
+            let php_type = static_callable_builtin_result_type(
+                ctx,
+                &function_name,
+                &operands,
+                expr.span,
+            );
             Some(emit_builtin_call_value(
                 ctx,
                 &function_name,

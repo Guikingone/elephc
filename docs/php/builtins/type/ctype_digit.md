@@ -2,7 +2,7 @@
 title: "ctype_digit()"
 description: "Checks if all characters in the string are digits."
 sidebar:
-  order: 459
+  order: 462
 ---
 
 ## ctype_digit()

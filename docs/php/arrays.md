@@ -257,9 +257,9 @@ foreach ([[1, 2], [3, 4]] as [$x, $y]) {
 | `array_values()` | `array_values($arr): array` | Returns copy of values |
 | `array_key_exists()` | `array_key_exists($key, $arr): bool` | Check if key exists |
 | `array_search()` | `array_search($needle, $haystack, $strict = false): int\|string\|false` | Search for value, returning an integer index for indexed arrays, the first matching associative-array key, or `false` if not found. `$strict` compares with `===` |
-| `array_slice()` | `array_slice($arr, $offset [, $length]): array` | Extract a slice |
+| `array_slice()` | `array_slice($arr, $offset [, $length [, $preserve_keys]]): array` | Extract a slice. `$preserve_keys` keeps the source integer keys and must be a literal `true`/`false`. |
 | `array_splice()` | `array_splice($arr, $offset [, $length]): array` | Remove a slice in place and return the removed elements |
-| `array_chunk()` | `array_chunk($arr, $size): array` | Split into chunks. A `$size` of `0` or less throws `\ValueError`. |
+| `array_chunk()` | `array_chunk($arr, $size [, $preserve_keys]): array` | Split into chunks. A `$size` of `0` or less throws `\ValueError`. `$preserve_keys` keeps each chunk's source integer keys and must be a literal `true`/`false`. |
 | `array_merge()` | `array_merge($arr1, $arr2): array` | Merge two arrays |
 | `array_merge_recursive()` | `array_merge_recursive($arr1, $arr2): array` | Recursively merge two arrays: integer keys append (renumbered), string keys that collide recurse when both values are arrays and otherwise combine into a list. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool); nested indexed-array values are treated as opaque. |
 | `array_replace()` | `array_replace($arr, $replacements): array` | Overwrite matching keys in `$arr` (in place, keeping position) and append new keys from `$replacements`; later values win. Accepts associative arrays or **indexed arrays of scalars** (int/float/bool). |

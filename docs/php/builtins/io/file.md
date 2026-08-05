@@ -8,13 +8,14 @@ sidebar:
 ## file()
 
 ```php
-function file(string $filename): array
+function file(string $filename, int $flags = 0): array
 ```
 
 Reads an entire file into an array.
 
 **Parameters**:
 - `$filename` (`string`)
+- `$flags` (`int`), default `0`, optional
 
 **Returns**: `array`
 

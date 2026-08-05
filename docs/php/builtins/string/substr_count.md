@@ -2,7 +2,7 @@
 title: "substr_count()"
 description: "Counts the number of non-overlapping substring occurrences."
 sidebar:
-  order: 446
+  order: 449
 ---
 
 ## substr_count()

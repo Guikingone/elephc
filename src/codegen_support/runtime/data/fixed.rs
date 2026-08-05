@@ -23,6 +23,9 @@ use super::{
     STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
+use crate::codegen_support::runtime::strings::{
+    B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE,
+};
 use crate::codegen_support::platform::Target;
 use crate::types::checker::builtins::{
     all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
@@ -1091,12 +1094,22 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _b64_encode_tbl\n_b64_encode_tbl:\n    .ascii \"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/\"\n");
     out.push_str(".globl _b64_decode_tbl\n_b64_decode_tbl:\n");
 
-    let mut decode_tbl = vec![0u8; 256];
+    // php-src's `base64_reverse_table`, transposed from its signed `short` entries onto
+    // unsigned bytes: an alphabet character keeps its 0-63 sextet value, `-1` (skippable
+    // whitespace) becomes `B64_DECODE_SKIP`, and `-2` (everything else, including `=`)
+    // becomes `B64_DECODE_INVALID`. `__rt_base64_decode` needs the two rejection classes
+    // apart: whitespace is dropped in BOTH modes, while any other stray byte is dropped in
+    // the lax mode and makes `$strict = true` return `false`. Encoding both as 0 — the old
+    // table's behavior — is what silently decoded `"SGVs bG8="` to garbage.
+    let mut decode_tbl = vec![B64_DECODE_INVALID; 256];
     for (i, &c) in b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
         .iter()
         .enumerate()
     {
         decode_tbl[c as usize] = i as u8;
+    }
+    for &c in B64_DECODE_WHITESPACE {
+        decode_tbl[c as usize] = B64_DECODE_SKIP;
     }
 
     out.push_str("    .byte ");

@@ -10,6 +10,7 @@
 
 mod array_chunk;
 mod array_chunk_refcounted;
+mod array_chunk_to_hash;
 mod array_count_values;
 mod array_column;
 mod array_column_mixed;
@@ -78,6 +79,7 @@ mod array_search;
 mod array_shift;
 mod array_slice;
 mod array_slice_refcounted;
+mod array_slice_to_hash;
 mod array_splice;
 mod array_splice_refcounted;
 mod array_sum;
@@ -177,6 +179,8 @@ pub use array_chunk::emit_array_chunk;
 /// Emit array chunk helper (split array into chunks).
 pub use array_chunk_refcounted::emit_array_chunk_refcounted;
 /// Emit refcounted array chunk helper.
+pub use array_chunk_to_hash::emit_array_chunk_to_hash;
+/// Emit key-preserving array chunk helper (array_chunk preserve_keys).
 pub use array_column::emit_array_column;
 pub use array_count_values::{emit_array_count_values, ARRAY_COUNT_VALUES_SKIPPED_MESSAGES};
 /// Emit array column extraction helper.
@@ -317,6 +321,8 @@ pub use array_slice::emit_array_slice;
 /// Emit array slice extraction helper.
 pub use array_slice_refcounted::emit_array_slice_refcounted;
 /// Emit refcounted array slice helper.
+pub use array_slice_to_hash::emit_array_slice_to_hash;
+/// Emit key-preserving array slice helper (array_slice preserve_keys).
 pub use array_splice::emit_array_splice;
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;

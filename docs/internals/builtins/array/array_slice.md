@@ -24,7 +24,7 @@ sidebar:
 
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
-- **Result type source**: `shared`
+- **Result type source**: `checked`
 - **Result ownership**: `fresh`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_slice(array $array, int $offset, int $length = null): array
+function array_slice(array $array, int $offset, int $length = null, bool $preserve_keys = false): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 2–4 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

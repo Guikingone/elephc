@@ -17,34 +17,34 @@ sidebar:
 ### Lowering notes
 
 - Uses the `runtime_call` strategy from the single-source builtin descriptor.
-- Emits the typed EIR target `runtime.string.base64_decode` through `BuiltinLoweringContext`.
+- Emits the typed EIR target `runtime.base64_decode` through `BuiltinLoweringContext`.
 - The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch.
 
 ## Semantic descriptor
 
 - **Target strategy**: `runtime_call`
-- **Validation**: `signature`
-- **Result type source**: `declared`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
 - **Result ownership**: `fresh`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
-- **Callable policy**: `dynamic`
+- **Callable policy**: `static_only`
 - **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 
 ## EIR and runtime boundary
 
-- **Typed EIR target**: `runtime.string.base64_decode`
+- **Typed EIR target**: `runtime.base64_decode`
 - **Backend boundary**: `src/codegen/lower_inst/runtime_calls.rs` resolves the typed target without PHP-name dispatch.
 
 ## Signature summary
 
 ```php
-function base64_decode(string $string): string
+function base64_decode(string $string, bool $strict = false): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes exactly 1 argument.
+- **Arity**: takes 1–2 arguments (1 optional).
 
 ## Eval interpreter (magician)
 

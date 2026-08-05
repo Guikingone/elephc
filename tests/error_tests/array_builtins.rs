@@ -82,6 +82,68 @@ fn test_error_array_reverse_non_literal_preserve_keys() {
     );
 }
 
+/// Verifies `array_chunk()` rejects a non-literal `preserve_keys` flag in AOT mode.
+///
+/// The flag decides whether each chunk is a renumbered indexed array or an integer-keyed hash,
+/// so it cannot be resolved at run time.
+#[test]
+fn test_error_array_chunk_non_literal_preserve_keys() {
+    expect_error(
+        "<?php $t = $argc > 0; array_chunk([1, 2], 1, $t);",
+        "array_chunk() preserve_keys argument must be a literal bool in AOT mode",
+    );
+}
+
+/// Verifies `array_chunk()` reports PHP's full 2-to-3 argument range.
+#[test]
+fn test_error_array_chunk_wrong_args() {
+    expect_error(
+        "<?php array_chunk([1]);",
+        "array_chunk() takes 2 or 3 arguments",
+    );
+    expect_error(
+        "<?php array_chunk([1], 1, true, 5);",
+        "array_chunk() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies `array_slice()` reports PHP's full 2-to-4 argument range.
+#[test]
+fn test_error_array_slice_wrong_args() {
+    expect_error(
+        "<?php array_slice([1]);",
+        "array_slice() takes 2 to 4 arguments",
+    );
+    expect_error(
+        "<?php array_slice([1], 1, 2, true, 5);",
+        "array_slice() takes 2 to 4 arguments",
+    );
+}
+
+/// Verifies `array_slice()` rejects a non-literal `preserve_keys` flag in AOT mode.
+///
+/// The flag decides the result's static shape (renumbered indexed array vs integer-keyed hash),
+/// exactly like `array_reverse()`'s flag, so it cannot be resolved at run time.
+#[test]
+fn test_error_array_slice_non_literal_preserve_keys() {
+    expect_error(
+        "<?php $t = $argc > 0; array_slice([1, 2], 0, 1, $t);",
+        "array_slice() preserve_keys argument must be a literal bool in AOT mode",
+    );
+}
+
+/// Verifies a key-preserving `array_slice()` of a boxed array is rejected, not miscompiled.
+///
+/// The key-preserving helper copies the source header's `value_type` into the result hash, so
+/// the element layout has to be known statically.
+#[test]
+fn test_error_array_slice_preserve_keys_boxed_source() {
+    expect_error(
+        r#"<?php $m = json_decode("[1,2,3]"); array_slice($m, 1, 2, true);"#,
+        "array_slice() preserve_keys requires a statically known array type",
+    );
+}
+
 /// Verifies that error array merge wrong args.
 #[test]
 fn test_error_array_merge_wrong_args() {
@@ -124,10 +186,10 @@ fn test_error_array_key_exists_wrong_args() {
 
 /// Verifies that error array slice wrong args.
 #[test]
-fn test_error_array_slice_wrong_args() {
+fn test_error_array_slice_too_few_args() {
     expect_error(
         "<?php $a = [1]; array_slice($a);",
-        "array_slice() takes 2 or 3 arguments",
+        "array_slice() takes 2 to 4 arguments",
     );
 }
 
@@ -281,10 +343,10 @@ fn test_error_array_flip_wrong_args() {
 
 /// Verifies that error array chunk wrong args.
 #[test]
-fn test_error_array_chunk_wrong_args() {
+fn test_error_array_chunk_no_args() {
     expect_error(
         "<?php array_chunk();",
-        "array_chunk() takes exactly 2 arguments",
+        "array_chunk() takes 2 or 3 arguments",
     );
 }
 

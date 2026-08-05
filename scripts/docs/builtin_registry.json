@@ -3680,6 +3680,12 @@
           "default": null,
           "name": "length",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "preserve_keys",
+          "optional": true
         }
       ],
       "required_param_count": 2,
@@ -3761,6 +3767,13 @@
           "name": "length",
           "optional": false,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "preserve_keys",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "return_type": "array",
@@ -7355,6 +7368,12 @@
           "default": "null",
           "name": "length",
           "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "preserve_keys",
+          "optional": true
         }
       ],
       "required_param_count": 2,
@@ -7404,7 +7423,7 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "shared",
+      "result_type": "checked",
       "runtime_functions": [
         "array_slice"
       ],
@@ -7441,6 +7460,13 @@
           "name": "length",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "preserve_keys",
+          "optional": true,
+          "type": "bool"
         }
       ],
       "return_type": "array",
@@ -9012,6 +9038,12 @@
           "default": null,
           "name": "string",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "strict",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -9030,7 +9062,7 @@
       "codegen_line": 506,
       "notes": [
         "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
-        "Emits the typed EIR target `runtime.string.base64_decode` through `BuiltinLoweringContext`.",
+        "Emits the typed EIR target `runtime.base64_decode` through `BuiltinLoweringContext`.",
         "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
       ],
       "runtime_helpers": [],
@@ -9042,7 +9074,8 @@
     "semantics": {
       "argument_lowering": "standard",
       "callable": {
-        "kind": "dynamic"
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
       },
       "effects": {
         "kind": "static",
@@ -9050,7 +9083,7 @@
       },
       "lowering": {
         "kind": "runtime_call",
-        "target": "string.base64_decode"
+        "target": "base64_decode"
       },
       "ownership": {
         "argument_indexes": [],
@@ -9060,8 +9093,10 @@
         "kind": "static",
         "values": []
       },
-      "result_type": "declared",
-      "runtime_functions": [],
+      "result_type": "checked",
+      "runtime_functions": [
+        "base64_decode"
+      ],
       "target_strategy": "runtime_call",
       "target_support": [
         "macos-aarch64",
@@ -9069,7 +9104,8 @@
         "linux-x86_64"
       ],
       "validation": {
-        "kind": "signature"
+        "kind": "checker_hook",
+        "lazy": false
       }
     },
     "sig": {
@@ -9080,9 +9116,16 @@
           "name": "string",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "strict",
+          "optional": true,
+          "type": "bool"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "base64_decode",
@@ -16979,6 +17022,12 @@
           "default": null,
           "name": "filename",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -17068,6 +17117,13 @@
           "name": "filename",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "array",
@@ -40255,6 +40311,100 @@
   },
   {
     "area": "String",
+    "canonical_name": "quoted_printable_encode",
+    "description": "Encodes a string with the MIME quoted-printable transfer encoding.",
+    "eval": {
+      "area": "string",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/quoted_printable_encode.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false
+        }
+      ],
+      "required_param_count": 1,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 506,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.string.quoted_printable_encode` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/quoted_printable_encode.rs",
+      "sig_line": null
+    },
+    "name": "quoted_printable_encode",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "dynamic"
+      },
+      "effects": {
+        "kind": "static",
+        "names": []
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "string.quoted_printable_encode"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "declared",
+      "runtime_functions": [],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "signature"
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "string",
+          "optional": false,
+          "type": "string"
+        }
+      ],
+      "return_type": "string",
+      "variadic": null
+    },
+    "slug": "quoted_printable_encode",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
     "canonical_name": "quotemeta",
     "description": "Prefixes each regular-expression metacharacter in a string with a backslash.",
     "eval": {
@@ -52156,6 +52306,132 @@
   },
   {
     "area": "String",
+    "canonical_name": "stripos",
+    "description": "Finds the numeric position of the first case-insensitive occurrence of a substring.",
+    "eval": {
+      "area": "string",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/stripos.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "haystack",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "needle",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 506,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.stripos` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/stripos.rs",
+      "sig_line": null
+    },
+    "name": "stripos",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "stripos"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "stripos"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "haystack",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "needle",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "stripos",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
     "canonical_name": "stripslashes",
     "description": "Removes backslashes from a string previously escaped by addslashes.",
     "eval": {
@@ -52751,6 +53027,132 @@
       "variadic": null
     },
     "slug": "strrev",
+    "sub_area": "String"
+  },
+  {
+    "area": "String",
+    "canonical_name": "strripos",
+    "description": "Finds the numeric position of the last case-insensitive occurrence of a substring.",
+    "eval": {
+      "area": "string",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/strripos.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "haystack",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "needle",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 506,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.strripos` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/strripos.rs",
+      "sig_line": null
+    },
+    "name": "strripos",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "strripos"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "strripos"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "haystack",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "needle",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "strripos",
     "sub_area": "String"
   },
   {

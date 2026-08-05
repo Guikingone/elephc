@@ -1,0 +1,38 @@
+---
+title: "stripos()"
+description: "Finds the numeric position of the first case-insensitive occurrence of a substring."
+sidebar:
+  order: 435
+---
+
+## stripos()
+
+```php
+function stripos(string $haystack, string $needle, int $offset = 0): mixed
+```
+
+Finds the numeric position of the first case-insensitive occurrence of a substring.
+
+**Parameters**:
+- `$haystack` (`string`)
+- `$needle` (`string`)
+- `$offset` (`int`), default `0`, optional
+
+**Returns**: `mixed`
+
+## Availability
+
+- **Compiled (AOT)**: supported by the Elephc code generator.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/stripos.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/stripos.rs)).
+
+_No examples yet — check `examples/` and `showcases/` for usage patterns._
+
+
+
+
+
+
+
+## Internals
+
+For how `stripos` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/stripos.md).

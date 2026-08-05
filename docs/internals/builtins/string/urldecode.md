@@ -2,7 +2,7 @@
 title: "urldecode() — internals"
 description: "Compiler internals for urldecode(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 451
+  order: 454
 ---
 
 ## `urldecode()` — internals

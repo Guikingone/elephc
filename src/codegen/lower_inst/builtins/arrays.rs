@@ -105,16 +105,39 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
+///
+/// PHP's `bool $preserve_keys = false` keeps each chunk's source integer keys instead of
+/// renumbering it from zero. A dense indexed array cannot hold a window that does not start at
+/// key 0, so the key-preserving form lowers to `__rt_array_chunk_to_hash`, which builds one owned
+/// hash per chunk. The checker guarantees the flag is a literal (it decides the result's static
+/// shape), so a non-literal operand can only mean the checker and the backend disagree.
 pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "array_chunk", 2)?;
+    ensure_arg_count_between(inst, "array_chunk", 2, 3)?;
     let array = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
+    let preserve_keys = match inst.operands.get(2).copied() {
+        None => false,
+        Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
+            CodegenIrError::unsupported(
+                "array_chunk preserve_keys argument that is not a compile-time literal".to_string(),
+            )
+        })?,
+    };
     let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
     let result_elem_ty =
         result_array_element_type("array_chunk", &inst.result_php_type.codegen_repr())?;
-    let result_inner_elem_ty = array_chunk_result_inner_element_type(&result_elem_ty)?;
+    let result_inner_elem_ty = if preserve_keys {
+        array_chunk_result_inner_hash_value_type(&result_elem_ty)?
+    } else {
+        array_chunk_result_inner_element_type(&result_elem_ty)?
+    };
     require_array_chunk_result_type(&source_elem_ty, &result_inner_elem_ty)?;
-    lower_array_chunk_call(ctx, array, length, &source_elem_ty)?;
+    let runtime_label = if preserve_keys {
+        "__rt_array_chunk_to_hash"
+    } else {
+        array_chunk_runtime_helper(&source_elem_ty)
+    };
+    lower_array_chunk_call(ctx, array, length, runtime_label)?;
     crate::codegen::emit_array_value_type_stamp(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -1314,9 +1337,18 @@ pub(crate) fn lower_array_intersect_key(
 }
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
+///
+/// PHP's `bool $preserve_keys = false` keeps the source integer keys of the selected window
+/// instead of renumbering it from zero. A dense indexed array cannot hold a window that does not
+/// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
+/// owned hash. The checker guarantees the flag is a literal (it decides the result's static
+/// shape), so a non-literal operand can only mean the checker and the backend disagree.
 pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "array_slice", 2, 3)?;
+    ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
+    if slice_like_preserve_keys(ctx, inst, "array_slice")? {
+        return lower_array_slice_preserve_keys(ctx, inst, array);
+    }
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
@@ -1324,11 +1356,7 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_mixed_array_slice(ctx, inst);
     }
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
-        Some(expect_operand(inst, 2)?)
-    } else {
-        None
-    };
+    let length = slice_like_length_operand(inst)?;
     let source_elem_ty = array_slice_source_element_type(ctx.value_php_type(array)?)?;
     let result_elem_ty =
         result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
@@ -1338,15 +1366,73 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
     store_if_result(ctx, inst)
 }
 
+/// Lowers `array_slice($array, $offset, $length, true)` into an owned integer-keyed hash.
+///
+/// The runtime helper normalizes the PHP window through the same `emit_slice_bounds` prologue as
+/// `__rt_array_slice`, then inserts each selected element at its ORIGINAL index, persisting
+/// strings and retaining heap payloads, so the result is a freshly owned hash whose keys match
+/// PHP's `preserve_keys` output exactly. The checker types this call as
+/// `AssocArray { key: Int, value: T }`, which is re-verified here.
+fn lower_array_slice_preserve_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    let PhpType::Array(_) = ctx.value_php_type(array)?.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_slice preserve_keys for PHP type {:?}",
+            ctx.value_php_type(array)?
+        )));
+    };
+    let PhpType::AssocArray { .. } = inst.result_php_type.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_slice preserve_keys result PHP type {:?}",
+            inst.result_php_type
+        )));
+    };
+    let offset = expect_operand(inst, 1)?;
+    let length = slice_like_length_operand(inst)?;
+    lower_slice_like_args(ctx, array, offset, length, "array_slice")?;
+    abi::emit_call_label(ctx.emitter, "__rt_array_slice_to_hash");
+    store_if_result(ctx, inst)
+}
+
+/// Returns the `$length` operand of a slice-like call, or `None` when the argument was omitted.
+///
+/// PHP's `$length` is the third parameter, so a call that also passes `$preserve_keys` always
+/// materializes it — the argument planner fills the gap with the parameter's `null` default.
+fn slice_like_length_operand(inst: &Instruction) -> Result<Option<ValueId>> {
+    if inst.operands.len() >= 3 {
+        return Ok(Some(expect_operand(inst, 2)?));
+    }
+    Ok(None)
+}
+
+/// Reads the literal `$preserve_keys` flag of a slice-like call.
+///
+/// The checker rejects a non-literal flag because it decides the result's static shape, so a
+/// non-literal operand here can only mean the checker and the backend disagree about this call.
+fn slice_like_preserve_keys(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+) -> Result<bool> {
+    match inst.operands.get(3).copied() {
+        None => Ok(false),
+        Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
+            CodegenIrError::unsupported(format!(
+                "{} preserve_keys argument that is not a compile-time literal",
+                name
+            ))
+        }),
+    }
+}
+
 /// Lowers `array_slice()` for an indexed array stored inside a boxed Mixed cell.
 fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
-        Some(expect_operand(inst, 2)?)
-    } else {
-        None
-    };
+    let length = slice_like_length_operand(inst)?;
     let result_elem_ty =
         result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
     require_array_slice_result_type(&PhpType::Mixed, &result_elem_ty)?;
@@ -5581,6 +5667,23 @@ fn array_chunk_result_inner_element_type(result_elem_ty: &PhpType) -> Result<Php
     }
 }
 
+/// Returns the chunk value type from a key-preserving `array<assoc<int, T>>` result.
+///
+/// `array_chunk($a, $n, true)` builds one integer-keyed hash per chunk, so the result element is
+/// an `AssocArray` whose keys are the preserved source indices and whose values carry the source
+/// element layout the runtime helper copies.
+fn array_chunk_result_inner_hash_value_type(result_elem_ty: &PhpType) -> Result<PhpType> {
+    match result_elem_ty {
+        PhpType::AssocArray { key, value } if key.codegen_repr() == PhpType::Int => {
+            Ok(value.codegen_repr())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_chunk preserve_keys result element PHP type {:?}",
+            other
+        ))),
+    }
+}
+
 /// Verifies that the runtime slice helper can copy this element representation.
 fn require_array_slice_element_layout(elem: &PhpType) -> Result<()> {
     if matches!(
@@ -6044,7 +6147,7 @@ fn lower_array_chunk_call(
     ctx: &mut FunctionContext<'_>,
     array: ValueId,
     length: ValueId,
-    source_elem_ty: &PhpType,
+    runtime_label: &str,
 ) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -6057,7 +6160,7 @@ fn lower_array_chunk_call(
         }
     }
     emit_array_chunk_length_guard(ctx);
-    abi::emit_call_label(ctx.emitter, array_chunk_runtime_helper(source_elem_ty));
+    abi::emit_call_label(ctx.emitter, runtime_label);
     Ok(())
 }
 

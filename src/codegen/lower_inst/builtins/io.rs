@@ -17,6 +17,7 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+use super::super::resolve_int_operand_to_result;
 
 const STREAM_METADATA_SLOT: usize = 14;
 const STREAM_WRAPPER_UNLINK_SLOT: usize = 15;
@@ -3696,9 +3697,43 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
-/// Lowers `file(path)` through the target-aware runtime line-array helper.
+/// Lowers `file(path, flags)` through the target-aware runtime line-array helper.
+///
+/// PHP's `$flags` bitmask is an ordinary run-time integer, so it needs no literal: the helper
+/// applies `FILE_IGNORE_NEW_LINES` / `FILE_SKIP_EMPTY_LINES` while it produces each line. The
+/// flags are resolved and spilled BEFORE the path, because coercing a non-string path calls a
+/// conversion helper that clobbers the caller-saved register the flags would otherwise sit in.
 pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "file", "__rt_file")
+    ensure_arg_count_between(inst, "file", 1, 2)?;
+    let path = expect_operand(inst, 0)?;
+    match inst.operands.get(1).copied() {
+        None => {
+            load_string_to_result(ctx, path, "file")?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x0, #0");                      // no $flags argument: request PHP's default behavior
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("xor edi, edi");                    // no $flags argument: request PHP's default behavior
+                }
+            }
+        }
+        Some(flags) => {
+            resolve_int_operand_to_result(ctx, flags, "file flags")?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            load_string_to_result(ctx, path, "file")?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_pop_reg(ctx.emitter, "x0"); // restore the resolved $flags bitmask into the first runtime argument
+                }
+                Arch::X86_64 => {
+                    abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the resolved $flags bitmask into the first runtime argument
+                }
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_file");
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `realpath(path)` and boxes the owned runtime string-or-false result.

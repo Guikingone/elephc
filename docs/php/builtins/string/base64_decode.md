@@ -8,15 +8,16 @@ sidebar:
 ## base64_decode()
 
 ```php
-function base64_decode(string $string): string
+function base64_decode(string $string, bool $strict = false): mixed
 ```
 
 Decodes a Base64-encoded string back into its original data.
 
 **Parameters**:
 - `$string` (`string`)
+- `$strict` (`bool`), default `false`, optional
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 

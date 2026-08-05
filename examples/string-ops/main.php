@@ -6,6 +6,11 @@ $str = "Hello, World!";
 // Searching
 echo "--- Search ---\n";
 echo "strpos: " . strpos($str, "World") . "\n";
+// stripos()/strripos() are the case-insensitive twins of strpos()/strrpos();
+// the optional $offset works the same way, negative values included
+echo "stripos: " . stripos($str, "WORLD") . "\n";
+echo "strripos: " . strripos($str, "O") . "\n";
+echo "stripos(offset): " . stripos($str, "L", 4) . "\n";
 echo "str_contains: " . (str_contains($str, "World") ? "yes" : "no") . "\n";
 echo "str_starts_with: " . (str_starts_with($str, "Hello") ? "yes" : "no") . "\n";
 echo "str_ends_with: " . (str_ends_with($str, "!") ? "yes" : "no") . "\n";
@@ -154,6 +159,12 @@ echo "mb_strlen bytes: " . mb_strlen("héllo", "8bit") . "\n";
 echo "htmlspecialchars: " . htmlspecialchars("<b>bold</b>") . "\n";
 echo "urlencode: " . urlencode("hello world") . "\n";
 echo "base64: " . base64_encode("Hello") . "\n";
+// base64_decode() skips whitespace and tolerates missing padding; $strict = true
+// instead returns false for anything outside the Base64 alphabet
+echo "base64_decode: " . base64_decode("SGVs bG8") . "\n";
+var_dump(base64_decode("SGVsbG8*", true));
+// quoted_printable_encode() escapes control, high-bit, and "=" bytes as =XX
+echo "quoted_printable_encode: " . quoted_printable_encode("caf\xC3\xA9 = 1\tunit") . "\n";
 
 // Validation
 echo "\n--- Validation ---\n";
