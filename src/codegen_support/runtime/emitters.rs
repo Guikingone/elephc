@@ -41,6 +41,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // String runtime functions
     strings::emit_itoa(emitter);
     strings::emit_resource_to_string(emitter);
+    strings::emit_resource_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
@@ -176,6 +177,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
+    exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
 
@@ -770,11 +772,13 @@ mod tests {
         // A token is an internal helper label iff it is an `L`-localized `__rt_*`
         // name (what `label()` produces under dead stripping). `.alt_entry`
         // helpers stay bare `__rt_*`, so they never match here.
+        /// Returns whether an assembly token names a dead-strip-local runtime helper.
         fn is_internal(tok: &str) -> bool {
             tok.starts_with("L__rt_")
         }
         // True when `s` is a bare label definition body (no whitespace, label
         // characters only, not purely numeric → not an assembler-local `N:`).
+        /// Returns whether a token can be a non-numeric assembly label definition.
         fn is_label_name(s: &str) -> bool {
             !s.is_empty()
                 && !s.bytes().all(|b| b.is_ascii_digit())

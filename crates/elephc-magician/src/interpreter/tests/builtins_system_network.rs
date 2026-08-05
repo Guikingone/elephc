@@ -35,8 +35,8 @@ return function_exists("sys_get_temp_dir");"#,
         values.output,
         format!(
             "time:{}:/tmp:cwd:call-time:{}:call-cwd:/tmp:111",
-            EVAL_PHP_VERSION,
-            EVAL_PHP_VERSION
+            crate::eval_php_profile::eval_php_version_string(),
+            crate::eval_php_profile::eval_php_version_string()
         )
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));

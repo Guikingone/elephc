@@ -138,13 +138,21 @@ try {
 
 /// Verifies the full Throwable API surface on a caught Exception: getMessage,
 /// getCode, getFile, getLine, getTrace, getTraceAsString, getPrevious, and
-/// __toString all return expected values. File/line reflect the throw site.
+/// __toString all return expected values.
+///
+/// `getFile()` is compared against `__FILE__` rather than to a literal: both resolve through the
+/// same canonicalization, and the test's script lives in a temp directory whose name changes on
+/// every run. `getLine()` is `1` because the whole probe is one line — and it is the line of the
+/// `new`, which is what PHP records; the two coincide here only because they are the same line.
+///
+/// `getTrace()`/`getTraceAsString()` stay empty: elephc keeps no call stack to render, where
+/// reference PHP would report `#0 {main}`.
 #[test]
 fn test_builtin_throwable_catch_exposes_standard_api() {
     let out = compile_and_run(
-        "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile(); echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
+        "<?php try { throw new Exception(\"caught\", 42); } catch (Throwable $e) { echo $e->getMessage(); echo \":\"; echo $e->getCode(); echo \":\"; echo $e->getFile() === __FILE__ ? \"file\" : \"BAD(\" . $e->getFile() . \")\"; echo \":\"; echo $e->getLine(); echo \":\"; echo count($e->getTrace()); echo \":\"; echo $e->getTraceAsString(); echo \":\"; echo $e->getPrevious() === null ? \"none\" : \"some\"; echo \":\"; echo $e->__toString(); }",
     );
-    assert_eq!(out, "caught:42::0:0::none:caught");
+    assert_eq!(out, "caught:42:file:1:0::none:caught");
 }
 
 /// Tests a user-defined interface (AppThrowable) that extends Throwable and an
@@ -311,10 +319,12 @@ fn test_exception_throw_in_finally_overrides_prior_exception() {
 /// Verifies exception uncaught reports fatal error.
 #[test]
 fn test_exception_uncaught_reports_fatal_error() {
-    // Throws an exception with no enclosing try-catch. Verifies the compiler
-    // reports a "Fatal error: uncaught exception" rather than silently ignoring it.
+    // Throws an exception with no enclosing try-catch. The diagnostic names the CLASS, and
+    // carries no `": "` because the message is empty — reference PHP 8.5.6 prints exactly
+    // `Fatal error: Uncaught Exception in <file>:<line>` here, and elephc emits everything up
+    // to that suffix (there is no throw-site origin to report; see issue #660).
     let err = compile_and_run_expect_failure("<?php throw new Exception();");
-    assert!(err.contains("Fatal error: uncaught exception"), "{err}");
+    assert!(err.contains("Fatal error: Uncaught Exception"), "{err}");
 }
 
 /// Verifies exception with properties.
@@ -545,9 +555,12 @@ fn test_private_method_access_uncaught_is_fatal() {
         "<?php class C { private function secret() {} } $c = new C(); $c->secret();",
     );
     assert!(!output.success, "expected a fatal exit");
+    // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
     assert!(
-        output.stderr.contains("Fatal error: uncaught exception"),
-        "expected a fatal diagnostic on stderr, got: {}",
+        output
+            .stderr
+            .contains("Fatal error: Uncaught Error: Call to private method C::secret() from global scope"),
+        "expected a fatal diagnostic naming the class and message, got: {}",
         output.stderr
     );
 }
@@ -559,9 +572,12 @@ fn test_readonly_property_write_uncaught_is_fatal() {
         "<?php class Box { public readonly int $x; public function __construct() { $this->x = 1; } } $b = new Box(); $b->x = 2;",
     );
     assert!(!output.success, "expected a fatal exit");
+    // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix.
     assert!(
-        output.stderr.contains("Fatal error: uncaught exception"),
-        "expected a fatal diagnostic on stderr, got: {}",
+        output
+            .stderr
+            .contains("Fatal error: Uncaught Error: Cannot modify readonly property Box::$x"),
+        "expected a fatal diagnostic naming the class and message, got: {}",
         output.stderr
     );
 }

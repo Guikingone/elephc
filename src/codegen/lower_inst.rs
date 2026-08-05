@@ -237,6 +237,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FirstClassCallableNew => lower_first_class_callable_new(ctx, &inst),
         Op::Acquire => ownership::lower_acquire(ctx, &inst),
         Op::Release => ownership::lower_release(ctx, &inst),
+        Op::ReleaseUnlessAliases => ownership::lower_release_unless_aliases(ctx, &inst),
         Op::GcCollect => lower_gc_collect(ctx),
         Op::Move | Op::Borrow => ownership::lower_forward(ctx, &inst),
         Op::EchoValue => lower_echo_value(ctx, &inst),
@@ -4129,8 +4130,9 @@ fn lower_throwable_standard_method_loaded(
     let return_ty = match php_symbol_key(method_name).as_str() {
         "getmessage" => lower_throwable_get_message(ctx, object_reg),
         "getcode" => lower_throwable_get_code(ctx, object_reg),
-        "getfile" | "gettraceasstring" => lower_throwable_empty_string(ctx),
-        "getline" => lower_throwable_zero_int(ctx),
+        "getfile" => lower_throwable_get_file(ctx),
+        "gettraceasstring" => lower_throwable_empty_string(ctx),
+        "getline" => lower_throwable_get_line(ctx, object_reg),
         "gettrace" => lower_throwable_empty_trace_array(ctx),
         "getprevious" => lower_throwable_get_previous(ctx, object_reg, inst),
         "__tostring" => lower_throwable_get_message(ctx, object_reg),
@@ -4164,7 +4166,10 @@ fn lower_throwable_get_code(ctx: &mut FunctionContext<'_>, object_reg: &str) -> 
     Ok(PhpType::Int)
 }
 
-/// Materializes the synthetic empty-string result used by Throwable file/trace methods.
+/// Materializes the synthetic empty-string result used by `Throwable::getTraceAsString()`.
+///
+/// Still synthetic: reference PHP returns at least `#0 {main}`, and elephc keeps no call stack to
+/// render. `getFile()` no longer shares this path — see [`lower_throwable_get_file`].
 fn lower_throwable_empty_string(ctx: &mut FunctionContext<'_>) -> Result<PhpType> {
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     let (label, len) = ctx.data.add_string(b"");
@@ -4173,9 +4178,37 @@ fn lower_throwable_empty_string(ctx: &mut FunctionContext<'_>) -> Result<PhpType
     Ok(PhpType::Str)
 }
 
-/// Materializes the synthetic zero integer used by `Throwable::getLine()`.
-fn lower_throwable_zero_int(ctx: &mut FunctionContext<'_>) -> Result<PhpType> {
-    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+/// Loads `Throwable::getFile()` from the compiled script's canonical path.
+///
+/// The path is a per-MODULE constant rather than a per-object field because EIR spans carry a line
+/// and column but no filename (`crate::span::Span`), so the compiler has exactly one path to
+/// report. That is the same string `__FILE__` yields, and it is right for every single-file
+/// program; code merged in from an `include` reports the including script's path, which is the
+/// known limit of this approximation.
+///
+/// `__rt_str_persist` gives the caller an owned copy, matching `getMessage()`, so the result can be
+/// released like any other string without freeing the shared constant.
+fn lower_throwable_get_file(ctx: &mut FunctionContext<'_>) -> Result<PhpType> {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, "_script_source_file");
+    abi::emit_load_symbol_to_reg(ctx.emitter, len_reg, "_script_source_file_len", 0);
+    abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    Ok(PhpType::Str)
+}
+
+/// Loads `Throwable::getLine()` from the creation line stamped into the compact payload.
+///
+/// Zero means the Throwable had no user `new` behind it — an `ArithmeticError` raised by a
+/// division, say — which is the same value the method returned for everything before the slot
+/// existed.
+fn lower_throwable_get_line(ctx: &mut FunctionContext<'_>, object_reg: &str) -> Result<PhpType> {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_from_address(
+        ctx.emitter,
+        result_reg,
+        object_reg,
+        crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET as usize,
+    );
     Ok(PhpType::Int)
 }
 
@@ -7108,7 +7141,7 @@ fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the int result to the placeholder slot above the saved Mixed pointer
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                 }
                 // Pop the saved Mixed pointer into result_reg for decref_mixed.
@@ -7130,7 +7163,7 @@ fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the bool result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the bool result to the placeholder slot
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the bool result to the placeholder slot
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, result_reg);

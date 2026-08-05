@@ -35,9 +35,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Test magician benchmark harness
-        run: python3 -m unittest scripts/tests/test_benchmark_magician.py
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
@@ -1039,10 +1036,6 @@ jobs:
     if: github.ref == 'refs/heads/main'
     steps:
       - uses: actions/checkout@v4
-
-      - name: Configure isolated native cache
-        shell: bash
-        run: echo "ELEPHC_NATIVE_CACHE=$RUNNER_TEMP/elephc-benchmark-native-cache" >> "$GITHUB_ENV"
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable

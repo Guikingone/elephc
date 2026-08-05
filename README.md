@@ -88,7 +88,7 @@ I made the project as modular as possible. Every function has its own codegen fi
 
 You can write PHP using the constructs documented in the [docs](docs/). Classes with single inheritance, interfaces, `instanceof`, nullsafe access (`?->`), abstract classes, final classes, methods and typed/static properties, PHP-style static property redeclarations, constructor property promotion, traits, constructors, instance/static methods, case-insensitive PHP symbol lookup for functions/classes/methods, `self::` / `parent::` / `static::` with late static binding, `readonly` properties and classes, enums, PHP 8 attributes on declarations, named arguments, first-class callables, typed function and method parameters and returns, `try` / `catch` / `finally` / `throw`, visibility modifiers, union and nullable types, copy-on-write arrays, associative arrays with PHP insertion order and integer/numeric-string key normalization, array union with `+`, closures, generator functions and generator closures with `yield` / `yield from`, namespaces, includes, compile-time Composer/SPL autoloading, class/introspection helpers, `PDO` database access (`PDO` / `PDOStatement` / `PDOException`) with SQLite, PostgreSQL, and MySQL/MariaDB drivers, image creation and manipulation (GD raster I/O, drawing, transforms/filters, Exif/IPTC metadata, and the `Imagick`/`Gmagick`/Cairo object APIs) on a pure-Rust codec/raster bridge, and PHP 8.1-style `Fiber` coroutines on macOS ARM64, Linux ARM64, and Linux x86_64.
 
-Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/) and [`examples/eval-globals/`](examples/eval-globals/).
+Experimental [`eval()` support](docs/php/eval.md) AOT-lowers eligible literal fragments and falls back to the optional, statically linked Magician interpreter for dynamic fragments. Runnable examples live in [`examples/eval/`](examples/eval/), [`examples/eval-globals/`](examples/eval-globals/), and the opt-in regex example [`examples/eval_regex/`](examples/eval_regex/).
 
 For performance-oriented code, elephc exposes compiler extensions beyond standard PHP — see the Why section above.
 
@@ -223,7 +223,7 @@ elephc --no-ir-opt hot.php
 # Link extra native libraries or frameworks for FFI
 elephc app.php -l sqlite3 -L /opt/homebrew/lib --framework Cocoa
 
-# Force-enable a bridge crate (pdo, tls, crypto, phar, tz, image, eval, web) regardless of auto-detection
+# Force-enable an optional bridge (pdo, tls, crypto, phar, tz, image, eval, web)
 elephc app.php --with-pdo --with-crypto
 # --with-eval force-links Magician; normal eval use is detected automatically
 elephc app.php --with-eval
@@ -231,6 +231,8 @@ elephc app.php --with-eval
 # Declare, lock, and install the managed PCRE2 package for a regex project
 elephc native add pcre2
 elephc regex.php
+# Dynamic eval source needs the explicit regex capability
+elephc --with-regex eval_regex.php
 
 # Reproduce committed native state in CI (add --offline when already cached)
 elephc native install --locked
@@ -405,9 +407,9 @@ The full list of supported constructs, operators, and control structures is in t
 
 </details>
 
-### Built-in functions (420+)
+### Built-in functions (450+)
 
-Over 420 PHP built-ins are implemented natively, grouped here by category — strings, arrays, math, I/O, streams/sockets, system, and more.
+Over 450 PHP built-ins are implemented natively, grouped here by category — strings, arrays, math, I/O, streams/sockets, system, and more.
 
 <details>
 <summary>Show all built-in functions by category</summary>
@@ -418,7 +420,7 @@ Over 420 PHP built-ins are implemented natively, grouped here by category — st
 
 **Math:** `abs`, `floor`, `ceil`, `round`, `sqrt`, `pow`, `min`, `max`, `clamp`, `intdiv`, `fmod`, `fdiv`, `rand`, `mt_rand`, `random_int`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `atan2`, `sinh`, `cosh`, `tanh`, `log`, `log2`, `log10`, `exp`, `hypot`, `deg2rad`, `rad2deg`, `pi`
 
-**Types and class introspection:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_float`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `is_resource`, `is_array`, `is_object`, `is_scalar`, `boolval`, `floatval`, `intval`, `get_resource_type`, `get_resource_id`, `class_exists`, `interface_exists`, `trait_exists`, `enum_exists`, `class_alias`, `get_class`, `get_parent_class`, `get_declared_classes`, `get_declared_interfaces`, `get_declared_traits`, `is_a`, `is_subclass_of`, `class_implements`, `class_parents`, `class_uses`, `method_exists`, `property_exists`, `strval`
+**Types and class introspection:** `gettype`, `settype`, `empty`, `unset`, `is_int`, `is_integer`, `is_long`, `is_float`, `is_double`, `is_real`, `is_string`, `is_bool`, `is_null`, `is_numeric`, `is_nan`, `is_finite`, `is_infinite`, `is_iterable`, `is_callable`, `is_resource`, `is_array`, `is_object`, `is_scalar`, `boolval`, `floatval`, `intval`, `get_resource_type`, `get_resource_id`, `class_exists`, `interface_exists`, `trait_exists`, `enum_exists`, `class_alias`, `get_class`, `get_parent_class`, `get_declared_classes`, `get_declared_interfaces`, `get_declared_traits`, `is_a`, `is_subclass_of`, `class_implements`, `class_parents`, `class_uses`, `method_exists`, `property_exists`, `strval`
 
 **I/O:** `fopen`, `fclose`, `fread`, `fwrite`, `fprintf`, `vfprintf`, `fscanf`, `fgets`, `fgetc`, `fpassthru`, `flock`, `tmpfile`, `readfile`, `feof`, `readline`, `fseek`, `ftell`, `rewind`, `file_get_contents`, `file_put_contents`, `file`, `hash_file`, `fgetcsv`, `fputcsv`, `file_exists`, `is_file`, `is_dir`, `is_readable`, `is_writable`, `is_writeable`, `is_executable`, `is_link`, `symlink`, `link`, `readlink`, `linkinfo`, `filesize`, `filemtime`, `fileatime`, `filectime`, `fileperms`, `fileowner`, `filegroup`, `fileinode`, `filetype`, `stat`, `lstat`, `fstat`, `clearstatcache`, `disk_free_space`, `disk_total_space`, `basename`, `dirname`, `pathinfo`, `realpath`, `realpath_cache_get`, `realpath_cache_size`, `fnmatch`, `touch`, `chmod`, `chown`, `chgrp`, `lchown`, `lchgrp`, `umask`, `ftruncate`, `fflush`, `fsync`, `fdatasync`, `copy`, `rename`, `unlink`, `mkdir`, `rmdir`, `opendir`, `readdir`, `rewinddir`, `closedir`, `scandir`, `glob`, `getcwd`, `chdir`, `tempnam`, `sys_get_temp_dir`, `var_dump`, `print_r`
 
@@ -426,7 +428,7 @@ Over 420 PHP built-ins are implemented natively, grouped here by category — st
 
 **Streams and sockets:** `stream_isatty`, `stream_is_local`, `stream_supports_lock`, `stream_get_wrappers`, `stream_get_transports`, `stream_get_filters`, `stream_context_create`, `stream_context_get_default`, `stream_context_set_default`, `stream_context_set_option`, `stream_context_set_params`, `stream_context_get_options`, `stream_context_get_params`, `stream_resolve_include_path`, `stream_get_contents`, `stream_copy_to_stream`, `stream_get_line`, `stream_get_meta_data`, `stream_set_chunk_size`, `stream_set_read_buffer`, `stream_set_write_buffer`, `stream_set_blocking`, `stream_set_timeout`, `stream_select`, `stream_filter_register`, `stream_filter_append`, `stream_filter_prepend`, `stream_filter_remove`, `stream_bucket_new`, `stream_bucket_make_writeable`, `stream_bucket_append`, `stream_bucket_prepend`, `stream_wrapper_register`, `stream_wrapper_unregister`, `stream_wrapper_restore`, `stream_socket_server`, `stream_socket_client`, `stream_socket_accept`, `stream_socket_enable_crypto`, `stream_socket_shutdown`, `stream_socket_sendto`, `stream_socket_recvfrom`, `stream_socket_get_name`, `stream_socket_pair`, `fsockopen`, `pfsockopen`, `popen`, `pclose`, `gethostname`, `gethostbyname`, `gethostbyaddr`, `getprotobyname`, `getprotobynumber`, `getservbyname`, `getservbyport`
 
-**System:** `exit`, `die`, `time`, `microtime`, `hrtime`, `date`, `gmdate`, `mktime`, `gmmktime`, `checkdate`, `getdate`, `localtime`, `strtotime`, `date_default_timezone_get`, `date_default_timezone_set`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `json_last_error_msg`, `json_validate`, `preg_match`, `preg_match_all`, `preg_replace_callback`, `preg_replace`, `preg_split`, `define`, `defined`, `class_attribute_names`, `class_attribute_args`, `class_get_attributes`, `serialize`, `unserialize`, `header`, `http_response_code`
+**System:** `exit`, `die`, `time`, `microtime`, `hrtime`, `date`, `gmdate`, `mktime`, `gmmktime`, `checkdate`, `getdate`, `localtime`, `strtotime`, `date_default_timezone_get`, `date_default_timezone_set`, `sleep`, `usleep`, `getenv`, `putenv`, `php_uname`, `phpversion`, `extension_loaded`, `get_loaded_extensions`, `exec`, `shell_exec`, `system`, `passthru`, `json_encode`, `json_decode`, `json_last_error`, `json_last_error_msg`, `json_validate`, `preg_match`, `preg_match_all`, `preg_replace_callback`, `preg_replace`, `preg_split`, `define`, `defined`, `class_attribute_names`, `class_attribute_args`, `class_get_attributes`, `serialize`, `unserialize`, `header`, `http_response_code`
 
 **SPL/autoload:** `spl_autoload_register`, `spl_autoload_unregister`, `spl_autoload_functions`, `spl_autoload_extensions`, `spl_autoload_call`, `spl_autoload`, `spl_classes`, `spl_object_id`, `spl_object_hash`, `iterator_to_array`, `iterator_count`, `iterator_apply`
 
@@ -470,7 +472,7 @@ elephc already performs a small but useful AST-level optimization pipeline befor
 - **Constant propagation after type checking**: forwards scalar local values through straight-line code, across agreeing `if` / `switch` / `try` merges, through known-subject `switch` paths, through non-throwing `try` bodies without poisoning the merge with unreachable catches, through uniform local `?:` / `match` assignments, through fixed scalar destructuring like `[$a, $b] = [2, 3]`, and across simple loops when untouched locals or stable `for` init assignments can be proven safe even with conservative nested `switch`, `try/catch/finally`, `foreach`, other simple nested loop writes, local array mutations like `$items[] = $i` / `$items[0] = $i`, local property writes like `$box->last = $i` / `$box->items[] = $i`, or targeted local invalidations like `unset($tmp)`. It also uses local loop path summaries for known `while(false)`, `do...while(false)`, `while(true)` / `for(;;)` break exits, and branch-local loop exits that agree on scalar values, which in turn unlocks more folding in later expressions such as `$x ** $y`.
 - **Control-flow pruning after type checking**: removes constant-dead `if` / `elseif` / `while (false)` / `for (...; false; ...)` branches, materializes constant `switch` execution, prunes `match` arms, and trims unreachable statements after terminating constructs such as `return`, `throw`, `break`, and `continue`.
 - **Control-flow normalization after pruning**: canonicalizes equivalent residual shapes such as nested `elseif` chains, merged `if` heads/tails, single-case or fallthrough-only `switch` shells, canonical multi-catch handlers, folded outer `finally` wrappers, and identical `if` branches so later passes see fewer structurally different but semantically identical trees.
-- **Dead-code elimination after normalization**: removes empty control shells, simplifies single-path conditionals, prunes guard contradictions across boolean, strict-scalar, loose-equality, and safe relational checks, uses CFG-lite reachability for local `if` / `switch` / `try` shapes, hoists safe non-throwing `try` prefixes, and drops unused pure expression statements and dead pure subexpressions when the surrounding expression already determines the result.
+- **Dead-code elimination after normalization**: removes empty control shells, simplifies single-path conditionals, and prunes guard contradictions across boolean, strict-scalar, loose-equality, proven-integer range, and cross-variable relational checks. Exact `int` parameters and typed locals seed discrete ranges; strict relational substitution feeds the full exact/truthiness/switch model; and pure, non-throwing `while` / `for` conditions strengthen their body entry. The pass also uses CFG-lite reachability for local `if` / `switch` / `try` shapes, hoists safe non-throwing `try` prefixes, and drops unused pure expression statements and dead pure subexpressions when the surrounding expression already determines the result.
 - **Local effect summaries for purity / may-throw reasoning**: tracks known pure and non-throwing builtins, user functions, static methods, private `$this` methods, closures, first-class callables, and merged callable aliases through `if` / `switch` / `try` control flow so the optimizer can simplify `try` regions and prune dead handlers more precisely.
 
 The optimizer is intentionally conservative. It does not yet do full function-level CFG fixed-point propagation, aggressive whole-program optimization, or assembly-level peephole rewriting, but it does compute lightweight effect summaries and local CFG-lite reachability for known call targets and structured control flow so AST rewrites can stay more precise without becoming risky.
@@ -674,7 +676,7 @@ ELEPHC_PHP_CHECK=1 cargo test   # cross-check output with PHP interpreter
 
 The **[docs/](docs/)** directory is a complete wiki covering every aspect of the compiler. Inside you'll find:
 
-- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 420+ built-in functions with signatures and examples
+- **PHP syntax reference** — types, operators, control structures, functions, classes, namespaces, and all 450+ built-in functions with signatures and examples
 - **Compiler extensions** — pointers, `buffer<T>`, `packed class`, FFI with `extern`, and conditional compilation with `ifdef` — the features that take PHP beyond the web
 - **Compiler internals** — a step-by-step walkthrough of the full pipeline, from lexing to Pratt parsing to type checking to code generation and runtime structure
 - **ARM64 primer** — an introduction to ARM64 assembly for people who've never seen it, plus a quick reference of the ARM64 instruction set used by elephc's AArch64 backend
@@ -696,10 +698,7 @@ MIT
 
 ## Star History
 
-<a href="https://www.star-history.com/?type=date&repos=illegalstudio%2Felephc">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&theme=dark&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=illegalstudio/elephc&type=date&legend=top-left&sealed_token=EQEmXlxMmVDs1v5rzSNsUSteRrE0JAStXJfEZTdWICM7iAlfoR7s3K86rK1-DPBD9s1ZEtWxIlT60K_2NpKFy58a3IINIamTOE_A8XrxqQyFkogm0ThuNY6desq_LayMIwk-GN2EeQpmClT97SY8-rR9W5R_AFj5dyaIAtHNcXE8KsuWFRt9r6Fx7jbh" />
- </picture>
-</a>
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/traffic/star-history-dark.svg" />
+  <img alt="Elephc star history chart" src=".github/traffic/star-history-light.svg" />
+</picture>

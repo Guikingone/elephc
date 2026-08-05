@@ -33,6 +33,10 @@ mod system;
 mod zval;
 
 pub(crate) use data::emit_runtime_data_fixed;
+/// PHP's process exit status for an uncaught exception, shared with the codegen guards in
+/// `codegen::lower_inst::exceptions` that report their own synthesized errors without ever
+/// reaching `__rt_report_uncaught_exception`.
+pub(crate) use exceptions::UNCAUGHT_EXIT_STATUS;
 /// The PHP object-handle pool: binding a handle at allocation and reading one back.
 /// Every object-allocation site in codegen calls `emit_acquire_object_handle`.
 pub(crate) use objects::{

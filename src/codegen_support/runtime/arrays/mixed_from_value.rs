@@ -20,15 +20,26 @@
 //!   (a descriptor number the kernel reissued after `fclose`) call
 //!   `__rt_resource_id_mint` first, which overwrites instead of preserving; see
 //!   `runtime::resource_ids`.
-//! - ONE RESOURCE KIND IS EXCLUDED: kind 2, the raw incremental-hash context. PHP 8
+//! - TWO RESOURCE KINDS ARE EXCLUDED, both of them incremental-hash contexts. PHP 8
 //!   makes `hash_init()` return a `HashContext` OBJECT (`crate::hash_prelude`), so the
 //!   context belongs to the OBJECT handle space and must consume nothing from the
 //!   resource counter — otherwise every `fopen()` in a hashing program would report an
-//!   id one higher than PHP's. The cell is still tag 9 because that is what owns the
-//!   native context (`__rt_mixed_free_deep` → `__rt_hash_ctx_free`); only the id
-//!   binding is skipped. It is safe to skip because the cell lives in an object
-//!   property and never reaches a display path: should one ever be reached anyway,
-//!   `__rt_resource_id_of` still mints lazily, so no path can print a raw address.
+//!   id one higher than PHP's. The cell is still tag 9 because that is the shape the
+//!   hash helpers read back; only the id binding is skipped. It is safe to skip because
+//!   these cells live in an object property or an eval-local scope and never reach a
+//!   display path: should one ever be reached anyway, `__rt_resource_id_of` still mints
+//!   lazily, so no path can print a raw address.
+//!   - KIND 2 is the HOST context. Its low payload word IS the malloc'd
+//!     `elephc_crypto` handle, and the tag-9 cell OWNS it: `__rt_mixed_free_deep`
+//!     routes kind 2 to `__rt_hash_ctx_free`.
+//!   - KIND 5 is the EVAL context, and it is INERT — id-less AND destructor-less.
+//!     `eval()`'s hash builtins keep the real `elephc_crypto` handle inside
+//!     `elephc_magician::stream_resources::EvalHashContext`, which frees it in its own
+//!     `Drop`; the boxed low word is only a table KEY carrying
+//!     `EVAL_RESOURCE_PAYLOAD_BASE` (`1 << 62`). That is exactly why kind 5 exists
+//!     instead of reusing kind 2: handing `0x4000000000000000 + n` to
+//!     `elephc_crypto_free` would be a wild free. Kind 5 has no arm in
+//!     `__rt_mixed_free_deep`'s kind ladder and falls through to the plain box free.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -87,6 +98,8 @@ pub fn emit_mixed_from_value(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_from_value_resource");
     emitter.instruction("cmp x2, #2");                                          // resource kind 2 = the raw incremental-hash context
     emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // a HashContext is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("cmp x2, #5");                                          // resource kind 5 = eval's inert handle on the same HashContext
+    emitter.instruction("b.eq __rt_mixed_from_value_alloc");                    // eval hashing must not shift the ids the host program's fopen() reports
     emitter.instruction("mov x0, x1");                                          // move the native resource payload into the registry argument
     emitter.instruction("bl __rt_resource_id_of");                              // bind a display id if this payload does not already have one
     emitter.instruction("b __rt_mixed_from_value_alloc");                       // the id lives in the side table; the cell is boxed unchanged
@@ -167,6 +180,8 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_from_value_resource");
     emitter.instruction("cmp QWORD PTR [rbp - 24], 2");                         // resource kind 2 = the raw incremental-hash context
     emitter.instruction("je __rt_mixed_from_value_alloc");                      // a HashContext is an OBJECT in PHP and must consume no resource id
+    emitter.instruction("cmp QWORD PTR [rbp - 24], 5");                         // resource kind 5 = eval's inert handle on the same HashContext
+    emitter.instruction("je __rt_mixed_from_value_alloc");                      // eval hashing must not shift the ids the host program's fopen() reports
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // move the native resource payload into the registry argument
     emitter.instruction("call __rt_resource_id_of");                            // bind a display id if this payload does not already have one
     emitter.instruction("jmp __rt_mixed_from_value_alloc");                     // the id lives in the side table; the cell is boxed unchanged
@@ -203,4 +218,105 @@ fn emit_mixed_from_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the temporary payload spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning
     emitter.instruction("ret");                                                 // return the boxed mixed pointer in rax
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits `__rt_mixed_from_value` for one target and returns the assembly text.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_mixed_from_value(&mut emitter);
+        emitter.output()
+    }
+
+    /// Pins BOTH hash-context exclusions in the tag-9 arm, as exact multi-line sequences.
+    ///
+    /// WHY THE WHOLE SEQUENCE AND NOT A SUBSTRING. `contains("cmp x2, #5")` is satisfied
+    /// by `cmp x2, #50`, and `contains("cmp x2, #2")` by the `#2` inside `#24` — a pin
+    /// that loose passes while the arm it claims to protect is gone. Pinning the compare
+    /// TOGETHER WITH the branch that must follow it is what makes the test fail when
+    /// either half is deleted, reordered, or pointed at a different label.
+    ///
+    /// Nothing pinned kind 2 on either target before this module existed, which is how
+    /// the exclusion could have been dropped unnoticed; kind 5 was added beside it and
+    /// both are asserted here so neither can regress alone.
+    #[test]
+    fn aarch64_excludes_both_hash_context_kinds_from_resource_id_binding() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(asm.contains("__rt_mixed_from_value_resource:\n"), "{asm}");
+        assert!(
+            asm.contains(
+                "    cmp x2, #2\n\
+                 \x20   b.eq __rt_mixed_from_value_alloc\n\
+                 \x20   cmp x2, #5\n\
+                 \x20   b.eq __rt_mixed_from_value_alloc\n\
+                 \x20   mov x0, x1\n\
+                 \x20   bl __rt_resource_id_of\n"
+            ),
+            "{asm}"
+        );
+    }
+
+    /// Pins the same two exclusions on x86_64.
+    ///
+    /// Separate emitters, separate arms: forgetting one target is the default way this
+    /// change goes wrong, and an aarch64-only pin would not notice.
+    #[test]
+    fn x86_64_excludes_both_hash_context_kinds_from_resource_id_binding() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(asm.contains("__rt_mixed_from_value_resource:\n"), "{asm}");
+        assert!(
+            asm.contains(
+                "    cmp QWORD PTR [rbp - 24], 2\n\
+                 \x20   je __rt_mixed_from_value_alloc\n\
+                 \x20   cmp QWORD PTR [rbp - 24], 5\n\
+                 \x20   je __rt_mixed_from_value_alloc\n\
+                 \x20   mov rax, QWORD PTR [rbp - 16]\n\
+                 \x20   call __rt_resource_id_of\n"
+            ),
+            "{asm}"
+        );
+    }
+
+    /// Pins that the exclusions read the resource KIND word, not the payload word.
+    ///
+    /// The one substitution that would keep both compares present and still be wrong:
+    /// testing the LOW word (`x1` / `[rbp - 16]`) would compare an eval table key —
+    /// `EVAL_RESOURCE_PAYLOAD_BASE + n`, never 2 or 5 — and silently bind ids again,
+    /// while every sequence pin above still matched on the other target.
+    #[test]
+    fn the_exclusions_test_the_kind_word_on_both_targets() {
+        for (target, kind_operand, payload_operand) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "x2", "x1"),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "QWORD PTR [rbp - 24]",
+                "QWORD PTR [rbp - 16]",
+            ),
+        ] {
+            let asm = emit_for(target);
+            for kind in [2, 5] {
+                assert!(
+                    asm.contains(&format!("    cmp {kind_operand}, {}{kind}\n", sigil(target))),
+                    "kind {kind} exclusion must compare the resource kind word\n{asm}"
+                );
+                assert!(
+                    !asm.contains(&format!("    cmp {payload_operand}, {}{kind}\n", sigil(target))),
+                    "kind {kind} exclusion must not compare the native payload word\n{asm}"
+                );
+            }
+        }
+    }
+
+    /// Returns the immediate-operand sigil the target's assembly syntax uses.
+    fn sigil(target: Target) -> &'static str {
+        if target.arch == Arch::X86_64 {
+            ""
+        } else {
+            "#"
+        }
+    }
 }

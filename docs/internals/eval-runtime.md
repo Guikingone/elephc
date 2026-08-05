@@ -49,7 +49,7 @@ front end has already preserved PHP's dynamic semantics and diagnostics.
 | No-scope AOT | A literal fragment with no caller-scope access | Internal EIR function; no eval context, scope, or Magician library |
 | Direct-read AOT | A statically lowerable literal with read-only caller values | Internal EIR function with boxed `Mixed` parameters; no eval scope or Magician library |
 | Scope-backed AOT | A statically lowerable literal with known scope writes | Internal EIR function plus core `eval_scope`; no interpreter library |
-| Interpreter fallback | A dynamic string or a literal requiring dynamic declarations, includes, references, dynamic calls, or another unsupported AOT shape | `eval_bridge`, synchronized scopes, PCRE2, and `elephc_magician` |
+| Interpreter fallback | A dynamic string or a literal requiring dynamic declarations, includes, references, dynamic calls, or another unsupported AOT shape | `eval_bridge`, synchronized scopes, and `elephc_magician`; optional capabilities such as regex are linked separately |
 
 `src/eval_aot.rs` parses literal fragments at compile time, applies call-site
 magic-constant metadata, records known scope reads and writes, and produces an
@@ -143,6 +143,15 @@ When interpreter fallback is required, generated code performs these steps:
 7. Reload dirty, created, or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
 
+Magician has no direct PCRE2 symbols in its base static library. If the final
+EIR module requires the regex runtime, generated eval setup registers the
+managed `elephc_pcre2_v1_*` shim callbacks before creating the context.
+Magician then exposes its regex builtin area through that opaque provider. With
+no provider, `preg_*` names are absent from dynamic eval lookup and calling one
+fails at runtime. Opaque dynamic source can opt into that capability with
+`--with-regex`; visible static regex use enables it through normal feature
+detection.
+
 Top-level scope setup also seeds `$argc` and `$argv`. Function fragments can
 bind those values or compiler-known program globals with PHP `global` aliases.
 By-value closure captures synchronize only their captured copy; by-reference
@@ -182,12 +191,14 @@ capacity.
 ## Linking and targets
 
 `RuntimeFeatures::eval_scope` emits only the core scope helpers.
-`RuntimeFeatures::eval_bridge` additionally links PCRE2 and
-`libelephc_magician.a`. The bridge is registered in `src/linker.rs` as
-`--with-eval` with the optional `ELEPHC_MAGICIAN_LIB_DIR` archive-directory
-override. Normal compilation derives the feature automatically; `--with-eval`
-force-loads the archive and increases binary size but does not alter AOT
-eligibility.
+`RuntimeFeatures::eval_bridge` additionally links `libelephc_magician.a`, but
+not PCRE2. `RuntimeFeatures::regex` independently resolves managed PCRE2 and
+causes eval setup to register the provider callbacks. The bridge is registered
+in `src/linker/` as `--with-eval` with the optional
+`ELEPHC_MAGICIAN_LIB_DIR` archive-directory override. Normal compilation
+derives both features independently; `--with-eval` force-loads the archive,
+while `--with-regex` force-enables the regex runtime for opaque source. Neither
+flag alters AOT eligibility.
 
 All eval lowering and bridge ABI paths are target-aware and covered by
 dedicated integration shards on macOS ARM64, Linux ARM64, and Linux x86_64.

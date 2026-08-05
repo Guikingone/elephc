@@ -61,7 +61,7 @@ selection, toolchain overrides, and transactional behavior.
 | `--strict-php` | — | off | Reject elephc extensions in every physical PHP-mode file; `.lfc` remains extension-enabled. See [Strict PHP mode](#strict-php-mode). |
 | `--source-map` | — | off | Emit a `.map` JSON sidecar next to the assembly ([schema](source-maps.md)). |
 | `--debug-info` | — | off | Embed DWARF `.file`/`.loc` line directives in the assembly for lldb/gdb/profilers. |
-| `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. |
+| `--php-version VERSION` | `8.2`, `8.3`, `8.4`, `8.5` | detected, else `8.5` | Select the maintained PHP compatibility profile for version-dependent behavior. Sessions use it for PHP 8.4 deprecations/validation and PHP 8.5 CHIPS/option semantics. Usually unnecessary — see [Where the profile comes from](#where-the-profile-comes-from) and [Profile dependence](#profile-dependence). |
 | `--web` | — | off | Compile a prefork HTTP server binary instead of a CLI executable. See [Web Server](../beyond-php/web.md). |
 
 `--emit-ir`, `--emit-asm`, and `--check` are mutually exclusive. `--web` cannot
@@ -73,7 +73,135 @@ be combined with `--check`, `--emit cdylib`, `--emit-asm`, or `--emit-ir`.
 The WASM pipeline rejects native-only options rather than silently ignoring
 them. This currently includes `--web`, `--source-map`, `--debug-info`,
 `--gc-stats`, `--heap-debug`, explicit `--heap-size`, `--null-repr`, or
-`--regalloc` overrides, native linker flags, and `--with-CRATE`.
+`--regalloc` overrides, native linker flags, and `--with-NAME`.
+
+### Where the profile comes from
+
+Without an explicit `--php-version`, elephc uses the profile the project already
+declares. It walks up from the entry file's directory to the filesystem root and
+takes the first directory that declares one, trying these in order:
+
+| Source | Meaning |
+|---|---|
+| `--php-version` | Always wins. |
+| `composer.lock` → `platform-overrides.php` | What the project actually installed against. |
+| `composer.json` → `config.platform.php` | Composer's own "resolve as if PHP were exactly this". |
+| `.php-version` | The phpenv/asdf toolchain convention. |
+| `composer.json` → `require.php` | Only when it *excludes* the newest profile — see below. |
+| *(nothing)* | The newest maintained profile. |
+
+```
+$ elephc src/app.php          # composer.json pins config.platform.php = "8.3.11"
+php profile 8.3 (composer.json); 2 constructs depend on it
+```
+
+**Nothing is required.** Every source is optional at every level, so a lone
+`.php` file compiles with no manifest, exactly as before. Only the patch
+component is ignored — `8.3.11` and `8.3` name the same profile.
+
+A `require.php` **constraint** is a range rather than a pin, so it is honored
+only when it *narrows* — when the newest profile it admits is not the one that
+would have been chosen anyway:
+
+| Constraint | Effect |
+|---|---|
+| `"^8.2"` | Nothing. It admits everything through the newest profile, so it says nothing elephc did not already assume. |
+| `"~8.3.0"` | Profile `8.3`. It excludes everything above 8.3, which is a deliberate statement. |
+| `">=8.2 <8.5"` | Profile `8.4`. |
+| `"~7.4.0"` | Nothing — it admits no maintained profile, so the default stands. |
+
+Picking a point inside a range is a judgement call, and this makes it only in
+the case where every reasonable reading agrees: the project has explicitly
+ruled newer PHP out. Composer's range syntax is parsed on its own terms, not
+Cargo's — Composer's `~8.2` means `>=8.2 <9.0` where Cargo's means
+`>=8.2 <8.3`. Hyphen ranges follow Composer too: `8.2 - 8.4` admits 8.4,
+because a partial upper bound admits everything carrying that prefix. A
+constraint elephc cannot read leaves the default in place rather than being
+half-read into a wrong answer.
+
+A pin outside the maintained range is clamped to the nearest supported profile
+and reported, never applied silently. A malformed `composer.json` never fails
+the build; elephc says the pin was not read and carries on.
+
+### Profile dependence
+
+`--php-version` selects a **semantics profile**, not a compatibility floor. A
+compiled binary *is* its own runtime — there is no target machine's PHP for it
+to be compatible with — so the only question the profile answers is *which
+PHP's observable behavior should this binary emulate?*
+
+For most programs the answer never matters, and elephc says nothing. A program
+has to go out of its way to notice which profile it was built for: by asking
+the runtime about its own version (`PHP_VERSION`, `PHP_VERSION_ID`,
+`PHP_MINOR_VERSION`, `phpversion()`, `zend_version()`), by querying OPcache
+(`opcache_get_configuration()`, `opcache_get_status()`, `ini_get('opcache.*')`,
+`ini_get_all()`), or — under `--web` — by driving sessions.
+
+When a program *does* depend on the profile, the compiler says so and points at
+the construct responsible:
+
+```
+$ elephc app.php
+php profile 8.5 (default); 2 constructs depend on it — pin it with --php-version to make the choice explicit
+  note[3:5]: PHP_VERSION_ID reports 80200 through 80500 depending on the profile
+  note[6:6]: phpversion() returns the profile's version string
+```
+
+The report is emitted whether or not `--php-version` was passed. With an
+explicit flag it drops the pinning suggestion and confirms what that flag is
+governing, so a deliberate choice stays visible rather than silently doing work
+you cannot see.
+
+These are `note[…]` lines, not warnings: nothing is wrong with the program.
+They stay out of the `warning[…]` stream that tooling scans for real problems.
+
+Detection is argument-aware where the dependence is: `ini_get('opcache.jit')`
+reads a directive whose value moves with the profile, while
+`ini_get('precision')` does not, and only the first is reported. An argument
+the compiler cannot resolve to a literal is treated as a dependence, since it
+cannot know what the program will ask for at runtime.
+
+`eval()` counts too, and is matched on what its fragment *contains* rather than
+on what it names — a fragment is a program, not a subject. `eval('echo
+PHP_VERSION;')` is reported; `eval('echo 1 + 1;')` is not; `eval($code)` is,
+because the compiler cannot read a string it does not have. Eval'd code sees
+the profile the binary was compiled for, the same one the surrounding code
+sees — see [eval()](../php/eval.md).
+
+`PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and `PHP_EXTRA_VERSION` are never
+reported: across the maintained profiles they are invariant (`8`, `0` and `""`
+— every profile is an `8.x` at patch `.0`).
+
+### Minimum version
+
+elephc's parser is version-agnostic: it accepts the whole language whatever
+`--php-version` says. A profile older than the program's own syntax is
+therefore rejected, so a binary cannot claim a version its source could never
+have run under:
+
+```
+$ elephc --php-version 8.2 app.php
+error[3:5]: this program needs PHP 8.4 (property hooks), but --php-version selected 8.2; a binary built for 8.2 could not have run this source
+```
+
+Detected today: the pipe operator `|>` (8.5), property hooks and asymmetric
+property visibility (8.4), typed class constants (8.3), and calls to functions
+introduced after 8.2 (`json_validate`, `array_find`, `array_any`, `array_all`).
+
+Two properties worth knowing:
+
+- **A default build is never rejected.** The default profile is the newest
+  maintained one and the minimum can never exceed it, so this check fires only
+  when `--php-version` explicitly names an older profile.
+- **Feature detection is honored.** `function_exists('json_validate')` anywhere
+  in the program suppresses that function's requirement — it is the idiom for
+  staying portable, and rejecting it would defeat its purpose. The guard is
+  inert inside elephc (these builtins exist at every profile), but it states
+  the author's intent, and that is what the check serves.
+
+Where a construct's version mapping is not certain, it is left out rather than
+guessed. A missed requirement preserves existing behavior; an invented one
+would break a working build of valid code.
 
 ## Web server binary runtime arguments
 
@@ -138,7 +266,7 @@ See [Optimization and codegen controls](optimization.md).
 | `--link LIB` / `-l LIB` / `-lLIB` | library name | — | Link an extra native library (repeatable). |
 | `--link-path DIR` / `-L DIR` / `-LDIR` | directory | — | Add a library search path (repeatable). |
 | `--framework NAME` | framework name | — | Link a macOS framework (repeatable). |
-| `--with-CRATE` | `pdo`, `tls`, `crypto`, `phar`, `tz`, `image`, `eval`, `web` | — | Force-enable a bridge crate regardless of feature auto-detection (repeatable). Force-links the staticlib (whole-archived, so it is not dead-stripped) and, for crates with a PHP-surface prelude (`pdo`, `tz`, `image`), force-injects that prelude so the API is available. `--with-eval` force-links Magician but is not required for normal `eval()` use; eligible literal eval can remain bridge-free. `--with-web` is an alias for `--web`. An unknown crate name is an error. |
+| `--with-NAME` | `pdo`, `tls`, `crypto`, `phar`, `tz`, `image`, `eval`, `regex`, `web` | — | Force-enable an optional bridge or runtime capability (repeatable). Bridge names force-link their staticlib and inject any PHP-surface prelude. `--with-regex` enables managed PCRE2 for opaque dynamic eval; the project must declare `pcre2`. `--with-eval` force-links Magician but is not required for normal `eval()` use. `--with-web` is an alias for `--web`. An unknown name is an error. |
 
 See [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md).
 
@@ -208,6 +336,7 @@ and one at run time.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `--ini KEY=VALUE` / `--ini=KEY=VALUE` | any `opcache.*` directive | — | Compile-time override of one INI directive. Repeatable; last wins for a repeated key. Splits on the FIRST `=`, so a value may itself contain `=`. An unknown key is accepted and ignored. |
+| `--strict-opcache` | — | off | Throw a `RuntimeException` when `opcache_invalidate($file, true)` targets code compiled into this binary, instead of reporting the success reference PHP reports. Off, the default is byte-identical to reference PHP. See [`--strict-opcache`](../php/opcache.md#--strict-opcache). |
 
 ```bash
 elephc --ini opcache.enable_cli=1 --ini opcache.jit=tracing app.php
@@ -279,8 +408,10 @@ The other 44 directives of the PHP 8.5 set are runtime-overridable.
 | Flag | Values | Default | Description |
 |---|---|---|---|
 | `--timings` | — | off | Print per-phase compiler timings to stderr. |
+| `--quiet` / `-q` | — | off | Disable progress lines and colorized compiler output. |
 | `--gc-stats` | — | off | Print allocation/free counters at exit. |
 | `--heap-debug` | — | off | Enable runtime heap verification (double-free, bad refcount, free-list corruption). |
+| `--mascotte` | — | off | Print the embedded ASCII mascot and a randomly selected quote before normal output. |
 
 See [Output formats and diagnostics](output-and-diagnostics.md).
 

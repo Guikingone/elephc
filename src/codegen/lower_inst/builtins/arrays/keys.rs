@@ -75,46 +75,46 @@ fn lower_boxed_mixed_array_keys(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #4");                               // runtime tag 4 = indexed-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));         // positional integer keys come from the indexed path
-            ctx.emitter.instruction("cmp x0, #5");                               // runtime tag 5 = associative-hash payload
-            ctx.emitter.instruction(&format!("b.eq {}", assoc_label));           // insertion-order hash keys come from the associative path
-            ctx.emitter.instruction("cmp x0, #3");                               // runtime tag 3 = bool payload
-            ctx.emitter.instruction(&format!("b.eq {}", bool_dispatch_label));   // php-src names the literal `true`/`false`, not `bool`
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 = indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", indexed_label));        // positional integer keys come from the indexed path
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 = associative-hash payload
+            ctx.emitter.instruction(&format!("b.eq {}", assoc_label));          // insertion-order hash keys come from the associative path
+            ctx.emitter.instruction("cmp x0, #3");                              // runtime tag 3 = bool payload
+            ctx.emitter.instruction(&format!("b.eq {}", bool_dispatch_label));  // php-src names the literal `true`/`false`, not `bool`
             for (tag, _, label) in &error_labels {
-                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));           // identify the non-array payload kind for PHP's TypeError wording
-                ctx.emitter.instruction(&format!("b.eq {}", label));             // raise the TypeError naming this payload kind
+                ctx.emitter.instruction(&format!("cmp x0, #{}", tag));          // identify the non-array payload kind for PHP's TypeError wording
+                ctx.emitter.instruction(&format!("b.eq {}", label));            // raise the TypeError naming this payload kind
             }
-            ctx.emitter.instruction(&format!("b {}", fallback_error_label));     // any remaining tag is still not an array
+            ctx.emitter.instruction(&format!("b {}", fallback_error_label));    // any remaining tag is still not an array
             ctx.emitter.label(&assoc_label);
-            ctx.emitter.instruction("mov x0, x1");                               // move the unboxed hash pointer into the key-extraction input register
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed hash pointer into the key-extraction input register
             lower_assoc_array_keys_aarch64(ctx, &PhpType::Mixed, result_elem_ty)?;
-            ctx.emitter.instruction(&format!("b {}", done_label));               // skip the indexed and error paths after hash key materialization
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the indexed and error paths after hash key materialization
             ctx.emitter.label(&indexed_label);
-            ctx.emitter.instruction("mov x0, x1");                               // move the unboxed indexed-array pointer into the key-extraction input register
+            ctx.emitter.instruction("mov x0, x1");                              // move the unboxed indexed-array pointer into the key-extraction input register
             lower_indexed_array_keys_aarch64(ctx, result_elem_ty)?;
-            ctx.emitter.instruction(&format!("b {}", done_label));               // skip the error paths after indexed key materialization
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip the error paths after indexed key materialization
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 4");                               // runtime tag 4 = indexed-array payload
-            ctx.emitter.instruction(&format!("je {}", indexed_label));           // positional integer keys come from the indexed path
-            ctx.emitter.instruction("cmp rax, 5");                               // runtime tag 5 = associative-hash payload
-            ctx.emitter.instruction(&format!("je {}", assoc_label));             // insertion-order hash keys come from the associative path
-            ctx.emitter.instruction("cmp rax, 3");                               // runtime tag 3 = bool payload
-            ctx.emitter.instruction(&format!("je {}", bool_dispatch_label));     // php-src names the literal `true`/`false`, not `bool`
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 = indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", indexed_label));          // positional integer keys come from the indexed path
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 = associative-hash payload
+            ctx.emitter.instruction(&format!("je {}", assoc_label));            // insertion-order hash keys come from the associative path
+            ctx.emitter.instruction("cmp rax, 3");                              // runtime tag 3 = bool payload
+            ctx.emitter.instruction(&format!("je {}", bool_dispatch_label));    // php-src names the literal `true`/`false`, not `bool`
             for (tag, _, label) in &error_labels {
-                ctx.emitter.instruction(&format!("cmp rax, {}", tag));           // identify the non-array payload kind for PHP's TypeError wording
-                ctx.emitter.instruction(&format!("je {}", label));               // raise the TypeError naming this payload kind
+                ctx.emitter.instruction(&format!("cmp rax, {}", tag));          // identify the non-array payload kind for PHP's TypeError wording
+                ctx.emitter.instruction(&format!("je {}", label));              // raise the TypeError naming this payload kind
             }
-            ctx.emitter.instruction(&format!("jmp {}", fallback_error_label));   // any remaining tag is still not an array
+            ctx.emitter.instruction(&format!("jmp {}", fallback_error_label));  // any remaining tag is still not an array
             ctx.emitter.label(&assoc_label);
-            ctx.emitter.instruction("mov rax, rdi");                             // move the unboxed hash pointer into the key-extraction input register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed hash pointer into the key-extraction input register
             lower_assoc_array_keys_x86_64(ctx, &PhpType::Mixed, result_elem_ty)?;
-            ctx.emitter.instruction(&format!("jmp {}", done_label));             // skip the indexed and error paths after hash key materialization
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the indexed and error paths after hash key materialization
             ctx.emitter.label(&indexed_label);
-            ctx.emitter.instruction("mov rax, rdi");                             // move the unboxed indexed-array pointer into the key-extraction input register
+            ctx.emitter.instruction("mov rax, rdi");                            // move the unboxed indexed-array pointer into the key-extraction input register
             lower_indexed_array_keys_x86_64(ctx, result_elem_ty)?;
-            ctx.emitter.instruction(&format!("jmp {}", done_label));             // skip the error paths after indexed key materialization
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the error paths after indexed key materialization
         }
     }
     ctx.emitter.label(&bool_dispatch_label);

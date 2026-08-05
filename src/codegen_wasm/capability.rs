@@ -7202,6 +7202,11 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::IncludeOnceGuard
         | Op::FunctionVariantMark
         | Op::FunctionVariantDispatch
+        // A CONDITIONAL release: the argument is released only when the call's returned
+        // payload is a different pointer than the one passed in. That comparison has no
+        // lowering here yet, and releasing unconditionally would double-free the value a
+        // callee handed back. Refused until the comparison is emitted.
+        | Op::ReleaseUnlessAliases
         | Op::EnsureOwned => false,
     }
 }

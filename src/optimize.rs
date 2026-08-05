@@ -126,12 +126,13 @@ pub fn eliminate_dead_code(program: Program) -> Program {
     let (function_effects, static_method_effects, instance_method_effects) =
         compute_program_callable_effects(&program);
     let instance_dispatch_metadata = collect_instance_dispatch_metadata(&program);
+    let signatures = collect_by_ref_signatures(&program);
     with_callable_effects(
         function_effects,
         static_method_effects,
         instance_method_effects,
         instance_dispatch_metadata,
-        || dce_block(program),
+        || with_by_ref_signatures(signatures, || dce_block(program)),
     )
 }
 

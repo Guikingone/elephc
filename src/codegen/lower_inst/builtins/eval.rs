@@ -265,6 +265,7 @@ pub(super) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     save_eval_code_string(ctx);
     ensure_eval_context(ctx)?;
     mark_eval_strict_php(ctx, inst);
+    mark_eval_php_version(ctx);
     set_eval_call_site(ctx, inst);
     ensure_eval_scope(ctx)?;
     ensure_eval_global_scope(ctx)?;
@@ -2130,6 +2131,7 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_branch_if_int_result_nonzero(ctx.emitter, &ready);
+    register_eval_regex_provider(ctx);
     let symbol = ctx
         .emitter
         .target
@@ -2143,6 +2145,30 @@ fn ensure_eval_context(ctx: &mut FunctionContext<'_>) -> Result<()> {
     abi::load_at_offset(ctx.emitter, result_reg, offset);
     abi::emit_store_to_sp(ctx.emitter, result_reg, EVAL_CONTEXT_HANDLE_OFFSET);
     Ok(())
+}
+
+/// Registers managed PCRE2 shim callbacks when regex is enabled for this binary.
+fn register_eval_regex_provider(ctx: &mut FunctionContext<'_>) {
+    if !ctx.module.required_runtime_features.regex {
+        return;
+    }
+    for (index, provider_symbol) in [
+        "elephc_pcre2_v1_compile",
+        "elephc_pcre2_v1_exec",
+        "elephc_pcre2_v1_free",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, index);
+        let symbol = ctx.emitter.target.extern_symbol(provider_symbol);
+        abi::emit_symbol_address(ctx.emitter, arg_reg, &symbol);
+    }
+    let register = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_register_regex_provider");
+    abi::emit_call_label(ctx.emitter, &register);
 }
 
 /// Writes the physical eval call site's strict profile before every runtime dispatch.
@@ -2163,6 +2189,22 @@ fn mark_eval_strict_php(ctx: &mut FunctionContext<'_>, inst: &Instruction) {
         .emitter
         .target
         .extern_symbol("__elephc_eval_set_strict_php");
+    abi::emit_call_label(ctx.emitter, &symbol);
+}
+
+/// Writes the compilation's PHP profile before every runtime dispatch.
+///
+/// Without this, `PHP_VERSION` and its siblings fork at the eval boundary: a binary compiled
+/// `--php-version 8.2` would report `8.2.0` natively and `8.5.0` from inside `eval()`. The
+/// bridge defaults to the newest profile, so this call is what makes the older ones true.
+fn mark_eval_php_version(ctx: &mut FunctionContext<'_>) {
+    let version_id = i64::from(crate::codegen::compile_php_version().version_id());
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    abi::emit_load_int_immediate(ctx.emitter, arg_reg, version_id);
+    let symbol = ctx
+        .emitter
+        .target
+        .extern_symbol("__elephc_eval_set_php_version_id");
     abi::emit_call_label(ctx.emitter, &symbol);
 }
 

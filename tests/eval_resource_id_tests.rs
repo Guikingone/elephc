@@ -65,6 +65,10 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
+/// Expected capability reminder for eval fixtures that intentionally omit regex support.
+const EVAL_WITHOUT_REGEX_REMINDER: &str =
+    "warning: dynamic eval was compiled without optional regex support";
+
 /// Creates an isolated temp dir unique across parallel test threads/processes.
 fn make_test_dir(prefix: &str) -> PathBuf {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
@@ -92,15 +96,18 @@ fn elephc_bin() -> String {
 /// Linking also surfaces the HOST linker's warnings, which are environmental rather
 /// than anything elephc emitted: GNU `ld` on Linux reports the static-`getaddrinfo`
 /// glibc notes and the `.note.GNU-stack` deprecation, while Apple's linker stays silent.
+/// The intentional eval capability reminder is excluded exactly; every other compiler
+/// diagnostic still surfaces.
 fn elephc_diagnostics(stderr: &str) -> String {
     stderr
         .lines()
         .filter(|line| {
-            line.starts_with("error")
-                || line.starts_with("Error")
-                || line.starts_with("warning")
-                || line.starts_with("Warning: ")
-                || line.starts_with("EIR backend error")
+            *line != EVAL_WITHOUT_REGEX_REMINDER
+                && (line.starts_with("error")
+                    || line.starts_with("Error")
+                    || line.starts_with("warning")
+                    || line.starts_with("Warning: ")
+                    || line.starts_with("EIR backend error"))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -317,4 +324,256 @@ echo get_resource_id($a), ",", get_resource_id($b), ",", get_resource_id($c), "\
     let _ = fs::remove_dir_all(&dir);
     assert_eq!(first, "5,6,8\n", "first run diverged from PHP 8.5.6");
     assert_eq!(second, first, "eval resource ids changed between two runs");
+}
+
+/// Verifies every string context inside an AOT-compiled `eval()` renders a HOST
+/// resource the way PHP 8.5.6 does, open and closed.
+///
+/// Captured from PHP 8.5.6 (`php -d xdebug.mode=off`) running this exact program.
+/// A literal `eval()` body that elephc can compile ahead of time becomes an EIR scope
+/// function, so it reaches the very same `__rt_mixed_cast_string` the host program
+/// uses — which is why all four value-producing forms were empty here too, and why one
+/// tag-9 arm fixes both. The two trailing lines pin the closed handle: PHP keeps
+/// printing `Resource id #5` after `fclose()`.
+#[test]
+fn eval_renders_a_host_resource_in_every_string_context() {
+    let source = r#"<?php
+$r = fopen("first.txt", "r");
+eval('echo "interp:$r\n";');
+eval('echo "concat:" . $r . "\n";');
+eval('echo "cast:" . (string) $r . "\n";');
+eval('echo "strval:" . strval($r) . "\n";');
+eval('echo "print:"; print $r; echo "\n";');
+fclose($r);
+eval('echo "closed-interp:$r\n";');
+eval('echo "closed-strval:" . strval($r) . "\n";');
+"#;
+    assert_program_output(
+        "elephc_eval_res_str_aot",
+        source,
+        "interp:Resource id #5\nconcat:Resource id #5\ncast:Resource id #5\n\
+         strval:Resource id #5\nprint:Resource id #5\n\
+         closed-interp:Resource id #5\nclosed-strval:Resource id #5\n",
+    );
+}
+
+/// Verifies the same rendering through the RUNTIME eval interpreter, which is a
+/// different code path from the AOT one above.
+///
+/// Captured from PHP 8.5.6 running this exact program. The `eval()` argument is built
+/// at run time (`explode()` over a joined literal), so elephc cannot compile the body
+/// ahead of time and `elephc-magician` interprets it instead. `strval()` is the form
+/// that separates the two paths: the interpreter reaches it through
+/// `RuntimeValueOps::cast_string`, whose host wrapper `__elephc_eval_value_cast_string`
+/// re-implements its OWN tag dispatch in the eval bridge. That dispatch needed its own
+/// tag-9 arm; with only the boxed-Mixed cast fixed, `strval($r)` still returned the
+/// empty string here while concatenation already worked.
+#[test]
+fn the_eval_interpreter_renders_a_host_resource_in_every_string_context() {
+    let source = r#"<?php
+$r = fopen("first.txt", "r");
+$srcs = explode("@@", 'echo "concat:" . $r . "\n";@@echo "cast:" . (string) $r . "\n";@@echo "strval:" . strval($r) . "\n";@@echo "print:"; print $r; echo "\n";');
+foreach ($srcs as $s) {
+    eval($s);
+}
+fclose($r);
+$after = explode("@@", 'echo "closed-concat:" . $r . "\n";@@echo "closed-strval:" . strval($r) . "\n";');
+foreach ($after as $s) {
+    eval($s);
+}
+"#;
+    assert_program_output(
+        "elephc_eval_res_str_dyn",
+        source,
+        "concat:Resource id #5\ncast:Resource id #5\nstrval:Resource id #5\n\
+         print:Resource id #5\nclosed-concat:Resource id #5\nclosed-strval:Resource id #5\n",
+    );
+}
+
+/// Verifies a resource CREATED inside `eval()` renders like PHP's too.
+///
+/// Captured from PHP 8.5.6 running this exact program. An eval-created stream is keyed
+/// in `EvalStreamResources` and lifted clear of host descriptor numbers by
+/// `EVAL_RESOURCE_PAYLOAD_BASE`, so this exercises the registry through a payload no
+/// host resource can present while still sharing the one id counter — `Resource id #5`
+/// is the first id in the request either way.
+#[test]
+fn an_eval_created_resource_renders_in_every_string_context() {
+    let source = r#"<?php
+eval('
+$r = fopen("first.txt", "r");
+echo "concat:" . $r . "\n";
+echo "cast:" . (string) $r . "\n";
+echo "strval:" . strval($r) . "\n";
+echo "print:"; print $r; echo "\n";
+');
+"#;
+    assert_program_output(
+        "elephc_eval_res_str_inner",
+        source,
+        "concat:Resource id #5\ncast:Resource id #5\nstrval:Resource id #5\n\
+         print:Resource id #5\n",
+    );
+}
+
+/// Verifies `hash_init()` inside `eval()` consumes NO PHP resource id.
+///
+/// PHP 8's `hash_init()` returns a `HashContext` OBJECT. Objects and resources are two
+/// unrelated numbering spaces in php-src (`zend_object.handle` vs `zend_resource.handle`),
+/// so a hash context takes nothing from the counter `get_resource_id()` reports. elephc's
+/// NATIVE side already modelled that — `__rt_hash_init` boxes resource kind 2, which
+/// `__rt_mixed_from_value` excludes from id binding — but the eval interpreter boxed its
+/// context as an ordinary resource, so this exact program printed `6,7` where PHP prints
+/// `5,6`. The fix gives eval's context its own excluded kind (5).
+///
+/// TWO streams, not one: a single id would still look plausible if the counter were
+/// merely offset. The pair pins that the counter is intact, not just shifted back.
+#[test]
+fn eval_hash_init_consumes_no_resource_id() {
+    let source = r#"<?php
+eval('
+$h = hash_init("md5");
+$x = fopen("php://memory", "r");
+$y = fopen("php://memory", "r");
+echo get_resource_id($x), ",", get_resource_id($y), "\n";
+');
+"#;
+    assert_program_output("elephc_eval_hash_no_id", source, "5,6\n");
+}
+
+/// Verifies an `eval()` that hashes does not shift the HOST program's resource ids.
+///
+/// The strongest shape of the same defect, and the reason it mattered beyond `eval()`:
+/// PHP keeps ONE resource-id counter per request and elephc deliberately shares its
+/// registry across the eval boundary, so an id burned inside `eval()` moved every
+/// resource the compiled program created AFTERWARDS. Before the fix this printed
+/// `5 / <digest> / 7`; PHP 8.5.6 prints `5 / <digest> / 6`.
+///
+/// The digest is asserted too, so the test cannot pass by breaking hashing: an
+/// implementation that made `hash_init()` fail outright would also consume no id.
+#[test]
+fn eval_hashing_does_not_shift_host_resource_ids() {
+    let source = r#"<?php
+$f0 = fopen("php://memory", "r");
+echo get_resource_id($f0), "\n";
+eval('
+$h = hash_init("md5");
+hash_update($h, "abc");
+echo hash_final($h), "\n";
+');
+$f1 = fopen("php://memory", "r");
+echo get_resource_id($f1), "\n";
+"#;
+    assert_program_output(
+        "elephc_eval_hash_host_ids",
+        source,
+        "5\n900150983cd24fb0d6963f7d28e17f72\n6\n",
+    );
+}
+
+/// Verifies `hash_copy()` and repeated `hash_init()` are id-free too, and still hash.
+///
+/// `hash_copy()` leaked an id by the same mechanism, and each `hash_init()` leaked one
+/// of its own: before the fix this program printed `8` for the inner stream and `9` for
+/// the outer one, against PHP's `5` and `6`. The two digests pin that the contexts stay
+/// independent across the copy — `$a` sees only "abc", `$b` sees "abcdef" — so the ids
+/// cannot be made to match by degrading the contexts into a single shared one.
+#[test]
+fn eval_hash_copy_and_repeated_hash_init_consume_no_resource_ids() {
+    let source = r#"<?php
+eval('
+$a = hash_init("md5");
+hash_update($a, "abc");
+$b = hash_copy($a);
+hash_update($b, "def");
+$c = hash_init("sha1");
+$x = fopen("php://memory", "r");
+echo get_resource_id($x), "\n";
+echo hash_final($a), "\n";
+echo hash_final($b), "\n";
+');
+$y = fopen("php://memory", "r");
+echo get_resource_id($y), "\n";
+"#;
+    assert_program_output(
+        "elephc_eval_hash_copy_no_id",
+        source,
+        "5\n900150983cd24fb0d6963f7d28e17f72\ne80b5017098950fc58aad83c8c14978e\n6\n",
+    );
+}
+
+/// Verifies a resource CREATED and CLOSED inside `eval()` renames its type to `Unknown`.
+///
+/// Captured from PHP 8.5.6 running this exact program. An eval-created resource carries no
+/// close sentinel — its payload IS the key of `EvalStreamResources`, and negating it the
+/// way the compiled side does would break every builtin that later resolves the handle —
+/// so the interpreter reads the close state from the tables instead
+/// (`EvalStreamResources::is_live`). Both display sites are asserted, because
+/// `get_resource_type()` was a second, independent constant `"stream"`.
+///
+/// The last two lines are the guard for the numbering this must not disturb: the closed
+/// handle keeps id 5, and the next `fopen()` inside the same `eval()` still gets 6.
+#[test]
+fn an_eval_created_resource_reports_the_type_unknown_once_closed() {
+    let source = r#"<?php
+eval('
+$r = fopen("first.txt", "r");
+var_dump($r);
+var_dump(get_resource_type($r));
+fclose($r);
+var_dump($r);
+var_dump(get_resource_type($r));
+var_dump(get_resource_id($r));
+$n = fopen("first.txt", "r");
+var_dump($n);
+');
+"#;
+    assert_program_output(
+        "elephc_eval_res_type_own",
+        source,
+        "resource(5) of type (stream)\nstring(6) \"stream\"\n\
+         resource(5) of type (Unknown)\nstring(7) \"Unknown\"\nint(5)\n\
+         resource(6) of type (stream)\n",
+    );
+}
+
+/// Verifies a HOST resource closed by the compiled program reports `Unknown` when it is
+/// displayed from a RUNTIME-INTERPRETED `eval()`.
+///
+/// Captured from PHP 8.5.6 running this exact program. This is the OTHER close
+/// representation and a different code path from the test above: the cell arrives inside
+/// `eval()` carrying the NEGATIVE `-id` sentinel that `fclose` stamped into its Mixed box,
+/// with no `EvalStreamResources` entry to consult. Reading that payload through
+/// `i64::try_from` — the way `eval_resource_payload()` does — rejects it outright, so the
+/// predicate reads it as `as i64`.
+///
+/// The `eval()` argument is built at run time (`explode()` over a joined literal) so
+/// elephc cannot compile the body ahead of time and `elephc-magician` interprets it; a
+/// literal `eval('var_dump($r);')` is AOT-compiled and would only re-test the native fix.
+#[test]
+fn the_eval_interpreter_reports_a_closed_host_resource_as_unknown() {
+    let source = r#"<?php
+$r = fopen("first.txt", "r");
+$probe = explode("@@", 'var_dump($r);@@var_dump(get_resource_type($r));');
+foreach ($probe as $s) {
+    eval($s);
+}
+fclose($r);
+foreach ($probe as $s) {
+    eval($s);
+}
+$after = explode("@@", 'var_dump(get_resource_id($r));');
+foreach ($after as $s) {
+    eval($s);
+}
+$n = fopen("first.txt", "r");
+var_dump($n);
+"#;
+    assert_program_output(
+        "elephc_eval_res_type_host",
+        source,
+        "resource(5) of type (stream)\nstring(6) \"stream\"\n\
+         resource(5) of type (Unknown)\nstring(7) \"Unknown\"\nint(5)\n\
+         resource(6) of type (stream)\n",
+    );
 }

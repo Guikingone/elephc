@@ -248,7 +248,7 @@ fn lower_hash_flip(
                 .instruction(&format!("mov x1, #{}", dest_value_tag));           // pass the destination value_type tag to the hash-flip helper
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax");                             // pass the source hash pointer as the first hash-flip argument
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the source hash pointer as the first hash-flip argument
             ctx.emitter
                 .instruction(&format!("mov rsi, {}", dest_value_tag));           // pass the destination value_type tag to the hash-flip helper
         }

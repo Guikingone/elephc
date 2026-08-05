@@ -304,7 +304,7 @@ in the outer cache key:
 The internal fingerprint still prevents an unsafe hit after a compiler or SDK
 bump; the outer key controls restore efficiency rather than compatibility.
 
-## Four dependency mechanisms
+## Five dependency mechanisms
 
 These mechanisms solve different problems and are intentionally separate:
 
@@ -313,6 +313,7 @@ These mechanisms solve different problems and are intentionally separate:
 | Native packages | Curated external C/C++ source built into verified target-specific static archives | `elephc native` + `elephc.toml`/`elephc.lock` |
 | Composer packages | PHP source discovered and inlined ahead of time | Composer metadata and Elephc's compile-time autoloader |
 | Rust bridge crates | Optional Elephc workspace `staticlib` implementations such as `pdo`, `tls`, or `crypto` | Feature detection and `--with-<crate>` |
+| Runtime capabilities | Optional helpers hidden behind opaque dynamic source, such as regex inside `eval()` | Feature detection and explicit flags such as `--with-regex`; managed packages remain separately declared |
 | Toolchains | Assemblers, linkers, C compilers, Make, SDKs, and cross tools | The user or operating system |
 
 The v1 catalog is deliberately runtime/builtin-oriented. It is not a general

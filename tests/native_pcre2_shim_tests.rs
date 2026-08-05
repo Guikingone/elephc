@@ -104,6 +104,28 @@ static int check_invalid_pattern_and_empty_match(void) {
     return 0;
 }
 
+static int check_startend_offsets(void) {
+    void *handle = NULL;
+    uint64_t slots = 0;
+    int64_t pairs[2] = {4, 8};
+    int32_t result;
+
+    result = elephc_pcre2_v1_compile(&handle, "[a-z]+", 0, &slots);
+    CHECK(result == 0 && handle != NULL && slots == 1, "start/end fixture must compile");
+    result = elephc_pcre2_v1_exec(handle, "one two", 1, pairs, 0x0080);
+    CHECK(result == 0, "REG_STARTEND must search inside the supplied byte range");
+    CHECK(pairs[0] == 4 && pairs[1] == 7, "REG_STARTEND must preserve absolute offsets");
+
+    pairs[0] = -1;
+    pairs[1] = 8;
+    CHECK(
+        elephc_pcre2_v1_exec(handle, "one two", 1, pairs, 0x0080) != 0,
+        "REG_STARTEND must reject a negative start offset"
+    );
+    elephc_pcre2_v1_free(handle);
+    return 0;
+}
+
 static int check_guard_contracts(void) {
     void *handle = (void *)(uintptr_t)1;
     uint64_t slots = UINT64_MAX;
@@ -153,6 +175,10 @@ int main(void) {
         return result;
     }
     result = check_invalid_pattern_and_empty_match();
+    if (result != 0) {
+        return result;
+    }
+    result = check_startend_offsets();
     if (result != 0) {
         return result;
     }

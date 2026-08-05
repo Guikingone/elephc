@@ -9,8 +9,13 @@
 //! Key details:
 //! - Fragment line metadata is captured while scanning magic constants.
 //! - PHP opening tags are rejected before tokenization by the parser entry point.
+//! - Double-quoted literal interpolation lives in `strings` and rewrites one literal into
+//!   a concatenation token stream the existing grammar already understands.
 
 mod scan;
+mod strings;
+#[cfg(test)]
+mod tests;
 mod token;
 
 pub(crate) use scan::tokenize;

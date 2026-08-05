@@ -3214,16 +3214,63 @@ process.exitCode = wasi.start(instance);
         String::from_utf8_lossy(&wasm_run.stderr)
     );
 
+    // `getFile()` and `getLine()` are the one pair the two backends no longer answer alike, and
+    // the difference is a WASM gap rather than a disagreement: the native backend reports the
+    // Throwable's CONSTRUCTION SITE — the script path from the `_script_source_file` symbol and
+    // the line stamped into the object payload at `new` — while this target still answers the
+    // empty string and 0, which is what BOTH answered before that landed natively. Comparing the
+    // full stdout would assert a parity that is simply not true today, so the location fields are
+    // normalized out and the rest is still compared exactly.
+    let normalize_location = |text: &str| -> String {
+        text.lines()
+            .map(|line| {
+                // The `getFile()|getLine()` line is rendered as `[<path>]<line>`.
+                match (line.find('['), line.rfind(']')) {
+                    (Some(start), Some(end)) if start == 0 && end > start => "[]0".to_string(),
+                    _ => line.to_string(),
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
     assert_eq!(
-        String::from_utf8_lossy(&wasm_run.stdout),
-        String::from_utf8_lossy(&native_run.stdout),
-        "the two backends must answer the Throwable accessors identically"
+        normalize_location(&String::from_utf8_lossy(&wasm_run.stdout)),
+        normalize_location(&String::from_utf8_lossy(&native_run.stdout)),
+        "the two backends must answer every Throwable accessor identically apart from the \
+         construction-site file and line, which this target does not carry yet"
+    );
+    // And state the gap as a fact rather than leaving it implicit: native reports a real path
+    // and line, this target reports neither. When WASM grows the construction-site stamp, this
+    // assertion is what fails and tells you to restore the exact comparison above.
+    assert!(
+        String::from_utf8_lossy(&wasm_run.stdout).contains("[]0"),
+        "WASM is expected to answer getFile()/getLine() as []/0 until it carries the \
+         construction site: {}",
+        String::from_utf8_lossy(&wasm_run.stdout)
+    );
+    assert!(
+        !String::from_utf8_lossy(&native_run.stdout).contains("[]0"),
+        "the native backend is expected to report a real construction site: {}",
+        String::from_utf8_lossy(&native_run.stdout)
     );
     // Pinned so a change to elephc's synthetic answers has to be deliberate on both backends.
+    // The native location line carries an absolute path into a per-run temp directory, so the
+    // path itself cannot be pinned — the file it names and the line number can, and those are
+    // what the construction-site stamp is actually asserting.
+    let native_stdout = String::from_utf8_lossy(&native_run.stdout);
+    let native_lines: Vec<&str> = native_stdout.lines().collect();
     assert_eq!(
-        String::from_utf8_lossy(&native_run.stdout),
-        "outer|9\n[]0\n[]\nouter\ninner|3\nend\n"
+        native_lines.len(),
+        6,
+        "unexpected native accessor output: {native_stdout}"
     );
+    assert_eq!(native_lines[0], "outer|9");
+    assert!(
+        native_lines[1].starts_with('[') && native_lines[1].ends_with("main.php]7"),
+        "native getFile()/getLine() must name the construction site: {}",
+        native_lines[1]
+    );
+    assert_eq!(&native_lines[2..], &["[]", "outer", "inner|3", "end"]);
 
     let _ = fs::remove_dir_all(&dir);
 }

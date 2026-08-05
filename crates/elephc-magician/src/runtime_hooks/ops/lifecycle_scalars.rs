@@ -83,6 +83,16 @@ macro_rules! impl_lifecycle_scalar_ops {
         Self::handle(unsafe { __elephc_eval_value_resource(value) })
     }
 
+    /// Creates a boxed inert hash-context Mixed cell through the generated runtime wrapper.
+    ///
+    /// The wrapper stamps resource kind 5, so `__rt_mixed_from_value` skips PHP id
+    /// binding and `__rt_mixed_free_deep` runs no destructor: PHP counts a
+    /// `HashContext` in the object-handle space, and the native context behind this key
+    /// is owned by `crate::stream_resources::EvalHashContext`.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_hash_context(value) })
+    }
+
     /// Creates a boxed float Mixed cell through the generated runtime wrapper.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_float(value) })

@@ -485,6 +485,9 @@ fn validate_opcode_rules(
         | PtrCheckNonnull => {
             check_count(inst_id, inst, 1, "1")
         }
+        ReleaseUnlessAliases => {
+            check_count(inst_id, inst, 2, "2")
+        }
         MixedTagOf | MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat
         | MixedCastString => {
             check_heap_unary(function, inst_id, inst, IrHeapKind::Mixed, "Heap(Mixed)")

@@ -19,6 +19,7 @@ use std::collections::HashSet;
 
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
+use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET;
 use crate::codegen::{
     abi, callable_descriptor, emit_box_current_value_as_mixed, runtime_value_tag,
 };
@@ -814,6 +815,7 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionConte
             )); // load static exception message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store static exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
@@ -839,6 +841,7 @@ fn emit_throw_iterator_iterator_downcast_logic_exception(ctx: &mut FunctionConte
                 ITERATOR_ITERATOR_DOWNCAST_MESSAGE.len()
             )); // store static exception message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             ctx.emitter
                 .instruction("mov QWORD PTR [rip + _exc_value], rax"); // publish the active exception object
@@ -922,7 +925,11 @@ fn lower_builtin_throwable_new(
             inst.operands.len()
         )));
     }
-    emit_throwable_allocation(ctx, class_id);
+    // PHP's `getLine()` is the line of the `new`, not of the `throw`, and this instruction IS the
+    // `new` — so the span it already carries is exactly the right one. A missing span (an
+    // exception synthesized by an optimizer pass, say) degrades to zero rather than to a guess.
+    let creation_line = inst.span.map_or(0, |span| span.line);
+    emit_throwable_allocation(ctx, class_id, creation_line);
     preserve_throwable_for_init(ctx);
     emit_throwable_message_fields(ctx, inst.operands.first().copied())?;
     emit_throwable_code_field(ctx, inst.operands.get(1).copied())?;
@@ -1006,8 +1013,13 @@ fn class_declares_own_constructor(class_name: &str, class_info: &ClassInfo) -> b
 /// Compact Throwable payload bytes: class_id + message(16) + code(16) + previous(16).
 const THROWABLE_COMPACT_PAYLOAD_SIZE: u64 = 56;
 
-/// Allocates a compact Throwable payload and stamps its heap kind and class id.
-fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
+/// Allocates a compact Throwable payload and stamps its heap kind, class id and creation line.
+///
+/// `creation_line` is the ONE-BASED source line of the `new` expression, or `0` when the
+/// instruction carried no span. PHP records the line where a Throwable is CONSTRUCTED, not where
+/// it is thrown — `$e = new RuntimeException(...)` on line 2 followed by `throw $e;` on line 5
+/// reports line 2 — so the value belongs here rather than on the throw terminator.
+fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64, creation_line: u32) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             // -- allocate and stamp the compact Throwable payload --
@@ -1018,6 +1030,7 @@ fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
             ctx.emitter.instruction("bl __rt_object_handle_acquire");           // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov x9, #{}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("str x9, [x0]");                            // store class id at payload offset zero
+            emit_throwable_creation_line_aarch64(ctx, "x0", "x9", creation_line);
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null until constructor init
         }
         Arch::X86_64 => {
@@ -1032,9 +1045,50 @@ fn emit_throwable_allocation(ctx: &mut FunctionContext<'_>, class_id: u64) {
             ctx.emitter.instruction("call __rt_object_handle_acquire");         // bind the new object to its PHP object handle
             ctx.emitter.instruction(&format!("mov r10, {}", class_id));         // materialize the Throwable runtime class id
             ctx.emitter.instruction("mov QWORD PTR [rax], r10");                // store class id at payload offset zero
+            emit_throwable_creation_line_x86_64(ctx, "rax", creation_line);
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null until constructor init
         }
     }
+}
+
+/// Writes an AArch64 Throwable creation line into the payload, via `scratch_reg`.
+///
+/// `payload_reg` holds the freshly allocated payload. The store is UNCONDITIONAL even for line
+/// `0`: `__rt_heap_alloc` recycles blocks without zeroing them, so an unwritten slot would hand
+/// `getLine()` whatever the previous owner left behind.
+fn emit_throwable_creation_line_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    payload_reg: &str,
+    scratch_reg: &str,
+    creation_line: u32,
+) {
+    if creation_line == 0 {
+        ctx.emitter.instruction(&format!(
+            "str xzr, [{}, #{}]",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        )); // no span on the allocating instruction: an unknown line reads back as zero
+        return;
+    }
+    abi::emit_load_int_immediate(ctx.emitter, scratch_reg, i64::from(creation_line));
+    ctx.emitter.instruction(&format!(
+        "str {}, [{}, #{}]",
+        scratch_reg, payload_reg, THROWABLE_CREATION_LINE_OFFSET
+    )); // store the one-based source line of the `new` expression
+}
+
+/// Writes an x86_64 Throwable creation line into the payload.
+///
+/// Mirrors [`emit_throwable_creation_line_aarch64`]; the two architectures emit independently, and
+/// an upstream fix has already been lost once by living on only one of them.
+fn emit_throwable_creation_line_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    payload_reg: &str,
+    creation_line: u32,
+) {
+    ctx.emitter.instruction(&format!(
+        "mov QWORD PTR [{} + {}], {}",
+        payload_reg, THROWABLE_CREATION_LINE_OFFSET, creation_line
+    )); // store the one-based source line of the `new` expression (zero when unknown)
 }
 
 /// Saves the newly allocated Throwable object while constructor operands are loaded.
@@ -6173,6 +6227,7 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction(&format!("mov x9, #{}", message_len));      // load Error message length
             ctx.emitter.instruction("str x9, [x0, #16]");                       // store exception message length
             ctx.emitter.instruction("str xzr, [x0, #24]");                      // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "x0");
             ctx.emitter.instruction("str xzr, [x0, #40]");                      // previous defaults to null
             abi::emit_symbol_address(ctx.emitter, "x9", "_exc_value");             // materialize the active exception cell
             ctx.emitter.instruction("str x0, [x9]");                            // publish the active exception object
@@ -6193,6 +6248,7 @@ fn emit_uninitialized_typed_property_fatal(
             ctx.emitter.instruction("mov QWORD PTR [rax + 8], r10");            // store static Error message pointer
             ctx.emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store Error message length
             ctx.emitter.instruction("mov QWORD PTR [rax + 24], 0");             // exception code defaults to zero
+            crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(ctx.emitter, "rax");
             ctx.emitter.instruction("mov QWORD PTR [rax + 40], 0");             // previous defaults to null
             abi::emit_store_reg_to_symbol(ctx.emitter, "rax", "_exc_value", 0);   // publish the active exception object
             ctx.emitter.instruction("mov rsp, rbp");                            // release helper frame before throwing
@@ -6255,7 +6311,7 @@ fn emit_normalized_dynamic_instanceof_value(
     Ok(())
 }
 
-/// Unboxes a Mixed value and leaves its object payload or null in the result register.
+/// Normalizes an unboxed Mixed object pointer into the integer result register for `instanceof`.
 fn emit_mixed_instanceof_value_normalization(ctx: &mut FunctionContext<'_>) {
     let object_label = ctx.next_label("instanceof_dynamic_value_object");
     let done = ctx.next_label("instanceof_dynamic_value_done");

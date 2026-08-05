@@ -46,6 +46,7 @@ pub(crate) fn compile(config: CliConfig) {
         heap_size,
         gc_stats,
         heap_debug,
+        strict_opcache,
         emit_ir,
         null_repr,
         emit_asm,
@@ -58,6 +59,7 @@ pub(crate) fn compile(config: CliConfig) {
         ir_opt,
         target,
         php_version,
+        php_version_provenance,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,
@@ -163,6 +165,24 @@ pub(crate) fn compile(config: CliConfig) {
     };
     let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
+
+    // Report how the PHP profile is observable in THIS program, while `ast` is still the
+    // user's own code: after include resolution, but before any compiler prelude is injected.
+    // The `--web` prelude both calls `__elephc_php_version_id()` and defines the whole session
+    // surface, so scanning any later would report every `--web` build as profile-dependent on
+    // the strength of elephc's own generated code. Silent unless the profile actually changes
+    // what this program computes.
+    crate::php_profile::report(&ast, web, php_version, php_version_provenance);
+
+    // Reject a profile the program's own syntax could never have run under. elephc's parser
+    // accepts the whole language whatever `--php-version` says, so without this a file using
+    // 8.4 property hooks compiles under `--php-version 8.2` and bakes `PHP_VERSION = "8.2.0"`
+    // into a binary its source contradicts.
+    if let Some(error) = crate::php_profile::floor_violation(&ast, php_version) {
+        crate::progress::clear();
+        errors::report(&error);
+        process::exit(1);
+    }
 
     // Snapshot the USER-declared function/class names for `opcache.preload`'s
     // `preload_statistics`, taken HERE — after include resolution but BEFORE any compiler prelude
@@ -274,6 +294,7 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_manifest,
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
+        strict_opcache,
     );
     timings.record_since("opcache-prelude", phase_started);
 
@@ -382,6 +403,7 @@ pub(crate) fn compile(config: CliConfig) {
         &opcache_manifest,
         &ini_overrides,
         opcache_preload_statistics.as_ref(),
+        strict_opcache,
     );
     timings.record_since("opcache-manifest-bake", phase_started);
 
@@ -546,6 +568,16 @@ pub(crate) fn compile(config: CliConfig) {
     }
     timings.record_since("ir-opt", phase_started);
 
+    // Dynamic source is opaque to AOT feature detection. `--with-regex`
+    // explicitly enables the ordinary regex runtime/native requirement and
+    // lets eval setup register that managed provider with Magician.
+    //
+    // Set BEFORE the WASM early return below, so the flag lands on the module for every
+    // target rather than only the ones that reach the native path.
+    if with_crates.contains("regex") {
+        ir_module.required_runtime_features.regex = true;
+    }
+
     // WebAssembly target: lower EIR to a `.wat` module and emit `.wat`/`.wasm`.
     // This bypasses the native runtime object, assembler, and linker entirely.
     if target.is_wasm() {
@@ -560,6 +592,7 @@ pub(crate) fn compile(config: CliConfig) {
         return;
     }
 
+
     let mut runtime_features = ir_module.required_runtime_features;
     // `--web` selects the output-capture variant of `__rt_stdout_write`. This is the
     // sole driver of the web runtime feature: it is CLI-driven, not derived from the
@@ -570,10 +603,10 @@ pub(crate) fn compile(config: CliConfig) {
     let runtime_link_requirements =
         codegen::link_requirements_for_runtime_features(runtime_features);
 
-    // `--with-<crate>` force-links each named bridge staticlib (whole-archived,
-    // via `forced_bridge_libs`, so it is not dead-stripped) regardless of feature
-    // auto-detection. Crates with a PHP-surface prelude (pdo/tz/image) also had
-    // that prelude force-injected above, so their classes/functions are available.
+    // Bridge-backed `--with-<name>` values force-link their staticlib
+    // (whole-archived via `forced_bridge_libs`) regardless of feature
+    // auto-detection. Runtime-only capabilities such as regex have already
+    // updated `runtime_features` and intentionally do not map to a bridge.
     let mut forced_bridge_libs: Vec<String> = Vec::new();
     let mut sorted_with_crates: Vec<&String> = with_crates.iter().collect();
     sorted_with_crates.sort();
@@ -783,6 +816,9 @@ pub(crate) fn compile(config: CliConfig) {
 
     crate::progress::clear();
     timings.report();
+    if let Some(warning) = dynamic_eval_capability_warning(runtime_features) {
+        eprintln!("{warning}");
+    }
     crate::progress::finish_ok(
         &format!("Compiled '{}' -> '{}'", filename, output_paths.bin.display()),
         timings.elapsed(),
@@ -872,6 +908,18 @@ fn emit_wasm_artifacts(
     } else {
         println!("Compiled '{}' -> '{}'", filename, output_paths.bin.display());
     }
+}
+
+/// Returns the post-link reminder for dynamic eval without optional regex support.
+fn dynamic_eval_capability_warning(
+    runtime_features: codegen::RuntimeFeatures,
+) -> Option<&'static str> {
+    (runtime_features.eval_bridge && !runtime_features.regex).then_some(concat!(
+        "warning: dynamic eval was compiled without optional regex support\n",
+        "evaluated code that uses preg_* or mb_ereg_match() will fail at runtime; enable it with:\n",
+        "  elephc native add pcre2\n",
+        "  elephc --with-regex <source-file>",
+    ))
 }
 
 /// Computes output paths for .s (assembly), .o (object), binary, and .map (source map) files

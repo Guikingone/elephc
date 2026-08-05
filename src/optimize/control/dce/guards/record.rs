@@ -15,14 +15,17 @@ use super::eval::{
     scalar_guard_value,
     strict_scalar_guard,
 };
+use super::range::{extend_range_guards, record_exact_int_range};
+use super::relational::extend_relational_guards;
 use super::super::*;
-use super::super::state::{ConditionGuard, ExactGuard, GuardLiteral, GuardState};
+use super::super::state::{ConditionGuard, ExactGuard, GuardLiteral, GuardState, RelSide};
 
 /// Removes all guard entries associated with a variable name.
 ///
 /// Clears the variable from `truthy_vars`, `falsy_vars`, `bool_true_vars`,
-/// `bool_false_vars`, `exact_guards`, `excluded_guards`, and any `condition_guards`
-/// that track the named variable. Called when a variable is reassigned.
+/// `bool_false_vars`, `exact_guards`, `excluded_guards`, `range_guards`,
+/// `integer_domain_vars`, `relational_guards`, and any `condition_guards` that track the named variable.
+/// Called when a variable is reassigned.
 pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut GuardState, name: &str) {
     guards.truthy_vars.retain(|known| known != name);
     guards.falsy_vars.retain(|known| known != name);
@@ -30,9 +33,24 @@ pub(in crate::optimize::control::dce) fn clear_guards_for_name(guards: &mut Guar
     guards.bool_false_vars.retain(|known| known != name);
     guards.exact_guards.retain(|known| known.name != name);
     guards.excluded_guards.retain(|known| known.name != name);
+    guards.integer_domain_vars.retain(|known| known != name);
+    guards.range_guards.retain(|known| known.name != name);
+    guards.relational_guards.retain(|known| {
+        let mentions_left = matches!(&known.left, RelSide::Var(v) if v == name);
+        let mentions_right = matches!(&known.right, RelSide::Var(v) if v == name);
+        !mentions_left && !mentions_right
+    });
     guards
         .condition_guards
         .retain(|known| !known.names.iter().any(|known_name| known_name == name));
+}
+
+/// Removes any facts recreated for roots whose surviving references make them volatile.
+fn clear_reference_volatile_guard_facts(guards: &mut GuardState) {
+    let volatile_names = guards.reference_volatile_vars.clone();
+    for name in volatile_names {
+        clear_guards_for_name(guards, &name);
+    }
 }
 /// Pushes a variable name into the tracker list if not already present.
 ///
@@ -61,9 +79,14 @@ fn record_truthy_guard(guards: &mut GuardState, name: &str, known_truthy: bool) 
 ///
 /// Clears all existing guards for the name, then adds the exact value to `exact_guards`,
 /// records the variable as bool-true/false if the value is boolean, and calls
-/// records a truthiness guard only when PHP can coerce the literal without a
-/// diagnostic.
-fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardLiteral) {
+/// `record_truthy_guard` with the literal's truthiness — but only when PHP can coerce the
+/// literal without a diagnostic, which is why `guard_literal_truthy` answers an `Option`.
+/// An int literal additionally records an exact range.
+pub(super) fn record_exact_literal_guard(
+    guards: &mut GuardState,
+    name: &str,
+    value: GuardLiteral,
+) {
     clear_guards_for_name(guards, name);
     if let GuardLiteral::Bool(value) = &value {
         if *value {
@@ -78,6 +101,9 @@ fn record_exact_literal_guard(guards: &mut GuardState, name: &str, value: GuardL
     });
     if let Some(truthy) = guard_literal_truthy(&value) {
         record_truthy_guard(guards, name, truthy);
+    }
+    if let GuardLiteral::Int(n) = value {
+        record_exact_int_range(guards, name, n);
     }
 }
 
@@ -316,7 +342,7 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case(subject: 
         return guards.clone();
     };
 
-    match &subject.kind {
+    let mut next = match &subject.kind {
         ExprKind::BoolLiteral(subject_bool) => extend_guards(guards, pattern, *subject_bool),
         ExprKind::Variable(name) => {
             let mut next = guards.clone();
@@ -326,7 +352,9 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case(subject: 
             next
         }
         _ => guards.clone(),
-    }
+    };
+    clear_reference_volatile_guard_facts(&mut next);
+    next
 }
 
 /// Extends guard state for switch case fallthrough when the subject boolean does not match patterns.
@@ -369,7 +397,7 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case_no_match_
         return guards.clone();
     };
 
-    patterns.iter().fold(guards.clone(), |mut guards, pattern| {
+    let mut next = patterns.iter().fold(guards.clone(), |mut guards, pattern| {
         match &pattern.kind {
             ExprKind::BoolLiteral(pattern_bool) => {
                 record_truthy_guard(&mut guards, name, !pattern_bool);
@@ -381,7 +409,9 @@ pub(in crate::optimize::control::dce) fn extend_guards_for_switch_case_no_match_
             }
         }
         guards
-    })
+    });
+    clear_reference_volatile_guard_facts(&mut next);
+    next
 }
 
 /// Main guard extension dispatcher for a branch taken at a conditional point.
@@ -433,11 +463,14 @@ pub(in crate::optimize::control::dce) fn extend_guards(guards: &GuardState, cond
     }
 
     record_condition_guard(&mut next, condition, branch_taken);
+    extend_range_guards(&mut next, condition, branch_taken);
+    extend_relational_guards(&mut next, condition, branch_taken);
 
     if let Some((name, truthy_if_true)) = guard_variable_name(condition) {
         let known_truthy = if branch_taken { truthy_if_true } else { !truthy_if_true };
         record_truthy_guard(&mut next, name, known_truthy);
     };
 
+    clear_reference_volatile_guard_facts(&mut next);
     next
 }

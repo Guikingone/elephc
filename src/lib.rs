@@ -65,6 +65,9 @@ pub mod optimize;
 pub mod parser;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
+
+/// PHP language-profile selection and profile-dependence analysis.
+pub mod php_profile;
 /// Resolution of includes.
 pub mod resolver;
 /// Physical source-file classification and per-file language profiles.

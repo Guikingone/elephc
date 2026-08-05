@@ -334,6 +334,42 @@ script keeps its shared-memory slot until the next restart. A **non**-forced
 call discards nothing (the file's mtime has not moved, so php-src's timestamp
 validation succeeds).
 
+#### `--strict-opcache`
+
+What the discard above reproduces is the **reported** cache state. What it
+cannot reproduce is the effect reference PHP's users are usually after: there,
+a forced invalidate means the next `include` re-reads and re-compiles the file
+**from disk**. Code that elephc compiled into the binary is frozen at link time
+and can never be re-read, so a program that invalidates in order to pick up
+*changed code* — a dev-mode cache-buster, a plugin reloader — keeps running the
+old code with no signal at all. This is divergence **D5**, and it is the only
+one in this model that can silently change what a program *does* rather than
+what it *reports*.
+
+Compile with `--strict-opcache` to make that case throw a `RuntimeException`
+instead:
+
+```console
+$ elephc --strict-opcache --ini opcache.enable=1 --ini opcache.enable_cli=1 app.php
+```
+
+The throw is deliberately narrow — only the request that cannot be honored:
+
+| `$force` | path in manifest | reference PHP | default | `--strict-opcache` |
+|----------|------------------|---------------|---------|--------------------|
+| `false`  | yes              | `true`        | `true`  | `true`             |
+| `true`   | no               | `true`        | `true`  | `true`             |
+| `true`   | yes              | `true`        | `true`  | **throws**         |
+
+Without `$force`, reference PHP discards nothing either, so elephc is not
+failing to do anything. A non-manifest path is a file this binary never
+compiled, so invalidating it is a no-op there too. A **disabled** cache still
+returns `false` without throwing, exactly as reference PHP short-circuits before
+invalidating.
+
+The flag is opt-in and changes nothing when absent: the default remains
+byte-identical to reference PHP.
+
 ### `opcache_compile_file()`
 
 ```php
@@ -706,6 +742,49 @@ php -d xdebug.mode=off \
     -d opcache.enable=1 -d opcache.enable_cli=1 \
     -d opcache.file_update_protection=0 probe.php
 ```
+
+### Verify on Linux, not macOS
+
+macOS's shared-memory model hides the `scripts` map from reference PHP entirely,
+so a local A/B there compares an empty entry set against elephc's populated one
+and cannot see inside it at all. The official Docker images are the oracle:
+
+```bash
+docker run --rm -v "$PWD:/w" -w /w php:8.2-cli \
+    php -d opcache.enable=1 -d opcache.enable_cli=1 probe.php
+```
+
+Running that across `php:8.2-cli` … `php:8.5-cli` confirmed the per-version
+directive matrix byte for byte — 53/53/53/54 directives, identical values, and
+the same nine `opcache_get_status()` keys — and it is what caught elephc
+reporting a `revalidate` key in every script entry under `--php-version 8.2`,
+where reference PHP only added that key in 8.3. That divergence was structurally
+invisible on macOS.
+
+### FPM is deliberately NOT used as a reference
+
+An earlier plan called for capturing the same fixtures under `php-fpm`. That is
+**out of scope on purpose**, for two independent reasons.
+
+elephc does not target FPM and cannot: FPM is a process manager for the PHP
+*interpreter*, while elephc emits native binaries. `--web` is elephc's own
+prefork server — it replaces FPM rather than plugging into it, so there is no
+integration to validate.
+
+What FPM would additionally expose is cross-request state: accumulating `hits`
+and `misses`, a growing `scripts` map, and `opcache_reset()`'s deferred restart
+(`manual_restarts` / `last_restart_time` landing on the *next* request). Under
+AOT there is no cache to accumulate into — the code is frozen in the binary — so
+those counters are **class-B** values by design: synthetic but internally
+coherent. Deferred restart belongs to the same family as divergence **D5**:
+elephc cannot restart a cache that does not exist. Comparing either against FPM
+would measure the fidelity of a number the model deliberately invents.
+
+The defects worth catching here are **class-A** — reporting a key or a value the
+targeted PHP version does not have — and the CLI images above expose all of
+them. What remains useful for `--web` is that the surface stay *self-consistent*
+across requests within elephc's own model, which needs no reference at all and
+is pinned by `tests/web_tests.rs`.
 
 ## Limitations
 

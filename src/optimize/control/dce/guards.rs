@@ -9,7 +9,9 @@
 //! - The pass must remain conservative around throws, finally blocks, switch fallthrough, method calls, and variable writes.
 
 mod eval;
+mod range;
 mod record;
+mod relational;
 
 pub(super) use eval::{
     guard_literal_truthy,
@@ -18,6 +20,7 @@ pub(super) use eval::{
     known_exact_guard,
     scalar_guard_value,
 };
+pub(super) use range::known_range_guard;
 pub(super) use record::{
     clear_guards_for_name,
     extend_guards,

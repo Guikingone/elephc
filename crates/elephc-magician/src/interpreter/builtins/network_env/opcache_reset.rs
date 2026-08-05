@@ -42,11 +42,6 @@ mod state;
 
 use state::opcache_cache_enabled;
 
-/// The `PHP_VERSION_ID` the eval interpreter reports for OPcache state. Fixed to the
-/// newest maintained profile (8.5), matching the native default target and the value
-/// `opcache_get_configuration` reports in eval.
-const EVAL_OPCACHE_PHP_VERSION_ID: u32 = 80500;
-
 /// Returns whether `name` (already lowercased and unqualified) is the OPcache reset
 /// function, so `function_exists` reports it as existing even though it is not a
 /// PHP-visible eval builtin.
@@ -74,6 +69,6 @@ pub(in crate::interpreter) fn eval_opcache_reset_call(
 pub(in crate::interpreter) fn eval_opcache_reset_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    let enabled = opcache_cache_enabled(EVAL_OPCACHE_PHP_VERSION_ID, false);
+    let enabled = opcache_cache_enabled(crate::eval_php_profile::eval_php_version_id(), false);
     values.bool_value(enabled)
 }

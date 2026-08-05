@@ -25,13 +25,34 @@ pub(crate) fn compile_source_to_asm_with_options(
     gc_stats: bool,
     heap_debug: bool,
 ) -> (String, String, TestLinkRequirements) {
-    compile_source_to_asm_with_defines(
+    compile_source_to_asm_with_options_and_regex(
+        source,
+        dir,
+        heap_size,
+        gc_stats,
+        heap_debug,
+        false,
+    )
+}
+
+/// Compiles one fixture while optionally mirroring the CLI's explicit `--with-regex` capability.
+fn compile_source_to_asm_with_options_and_regex(
+    source: &str,
+    dir: &Path,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    with_regex: bool,
+) -> (String, String, TestLinkRequirements) {
+    compile_source_to_asm_with_defines_repr_and_regex(
         source,
         dir,
         &HashSet::new(),
         heap_size,
         gc_stats,
         heap_debug,
+        default_null_repr(),
+        with_regex,
     )
 }
 
@@ -82,6 +103,30 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
 ) -> (String, String, TestLinkRequirements) {
+    compile_source_to_asm_with_defines_repr_and_regex(
+        source,
+        dir,
+        defines,
+        heap_size,
+        gc_stats,
+        heap_debug,
+        null_repr,
+        false,
+    )
+}
+
+/// Runs the full fixture pipeline and optionally force-enables the runtime regex capability.
+#[allow(clippy::too_many_arguments)]
+fn compile_source_to_asm_with_defines_repr_and_regex(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    with_regex: bool,
+) -> (String, String, TestLinkRequirements) {
     elephc::codegen::set_null_repr(null_repr);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -112,8 +157,11 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         .required_libraries
         .iter()
         .any(|lib| lib == "elephc_tls");
-    let ir_module =
+    let mut ir_module =
         lower_and_validate_ir_for_codegen_fixture(&optimized, &check_result, &synthetic_main);
+    if with_regex {
+        ir_module.required_runtime_features.regex = true;
+    }
     let exported_functions = HashMap::new();
     // Honor ELEPHC_REGALLOC so the whole codegen suite can be run under both
     // the linear-scan allocator (default) and the stack fallback.
@@ -320,6 +368,19 @@ pub(crate) fn compile_and_run_with_gc_stats(source: &str) -> ProgramOutput {
 // capturing stdout and stderr from the resulting binary. Cleans up the temp directory.
 /// Provides the Compile and run capture helper used by the compiler module.
 pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
+    compile_and_run_capture_with_optional_regex(source, false)
+}
+
+/// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.
+pub(crate) fn compile_and_run_capture_with_regex(source: &str) -> ProgramOutput {
+    compile_and_run_capture_with_optional_regex(source, true)
+}
+
+/// Compiles and captures one fixture while optionally enabling managed regex support.
+fn compile_and_run_capture_with_optional_regex(
+    source: &str,
+    with_regex: bool,
+) -> ProgramOutput {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -327,7 +388,9 @@ pub(crate) fn compile_and_run_capture(source: &str) -> ProgramOutput {
     fs::create_dir_all(&dir).unwrap();
 
     let (user_asm, runtime_asm, required_libraries) =
-        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, 8_388_608, false, false, with_regex,
+        );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
     let output = assemble_and_run_capture(
         &user_asm,
@@ -398,6 +461,15 @@ pub(crate) fn parse_gc_stats(stderr: &str) -> (u64, u64) {
 // Only spawns as + ld + binary execution.
 /// Provides the Compile and run with heap size helper used by the compiler module.
 pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> String {
+    compile_and_run_with_heap_size_and_optional_regex(source, heap_size, false)
+}
+
+/// Compiles and runs one fixture while optionally enabling managed regex support.
+fn compile_and_run_with_heap_size_and_optional_regex(
+    source: &str,
+    heap_size: usize,
+    with_regex: bool,
+) -> String {
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tid = std::thread::current().id();
     let pid = std::process::id();
@@ -405,7 +477,9 @@ pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> 
     fs::create_dir_all(&dir).unwrap();
 
     let (user_asm, runtime_asm, required_libraries) =
-        compile_source_to_asm_with_options(source, &dir, heap_size, false, false);
+        compile_source_to_asm_with_options_and_regex(
+            source, &dir, heap_size, false, false, with_regex,
+        );
     let runtime_obj = runtime_obj_for_asm(&runtime_asm);
 
     let elephc_out = assemble_and_run(
@@ -443,6 +517,11 @@ pub(crate) fn compile_and_run_with_heap_size(source: &str, heap_size: usize) -> 
 /// Provides the Compile and run helper used by the compiler module.
 pub(crate) fn compile_and_run(source: &str) -> String {
     compile_and_run_with_heap_size(source, 8_388_608)
+}
+
+/// Compiles and runs a fixture with the same explicit regex capability as `--with-regex`.
+pub(crate) fn compile_and_run_with_regex(source: &str) -> String {
+    compile_and_run_with_heap_size_and_optional_regex(source, 8_388_608, true)
 }
 
 /// Compiles and runs a PHP source with the legacy sentinel null representation forced on,
@@ -504,4 +583,34 @@ fn compile_and_run_with_repr(source: &str, null_repr: elephc::codegen::NullRepr)
 
     let _ = fs::remove_dir_all(&dir);
     elephc_out
+}
+
+/// Returns `user_asm` with the compiled script's embedded path removed, for needle assertions.
+///
+/// `_script_source_file` carries the CANONICAL PATH of the compiled script, read by
+/// `Throwable::getFile()` and by the ` in <file>:<line>` suffix of the uncaught-exception report.
+/// For a fixture that path is the harness's own temp directory — and those directories are named
+/// after the test, so a needle the test searches for is often a substring of the path it just
+/// compiled from. `!user_asm.contains("pow")` in a fixture compiled under
+/// `elephc_constant_folding_pow` matched the DIRECTORY NAME, not a surviving `pow` call.
+///
+/// Only the path bytes are dropped. Every instruction and every other data literal survives, so an
+/// assertion keeps exactly the meaning it had — in particular, string literals an optimizer was
+/// supposed to eliminate are still visible, which is what several of these tests actually check.
+///
+/// This cannot be folded into `compile_source_to_asm_with_options`: callers pass its result on to
+/// `assemble_and_run`, and a `_script_source_file` with no bytes would make the assembled program
+/// report a garbage filename.
+pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
+    let mut out = Vec::new();
+    let mut drop_next_ascii = false;
+    for line in user_asm.lines() {
+        if drop_next_ascii && line.trim_start().starts_with(".ascii") {
+            drop_next_ascii = false;
+            continue;
+        }
+        drop_next_ascii = line.trim() == "_script_source_file:";
+        out.push(line);
+    }
+    out.join("\n")
 }

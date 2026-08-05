@@ -1770,3 +1770,146 @@ echo $r["outer"]["inner"], "\n";
         out.stderr
     );
 }
+
+// --- Issue #581: var_dump() of a value carrying the null-container sentinel ---
+
+/// Regression for issue #581: the exact repro. `$a[7]` misses, so the Array-typed
+/// local `$arr` carries the in-band null-container sentinel. `var_dump($arr)` must
+/// print `NULL` and keep running instead of walking the sentinel as an array header.
+#[test]
+fn test_var_dump_missed_indexed_read_prints_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+var_dump($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #581: the same miss taken from a hash source, whose value
+/// type is an indexed array, reaches the identical Array dump branch.
+#[test]
+fn test_var_dump_missed_hash_read_of_array_value_prints_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ['k' => ['x', 'y']];
+$arr = $a['zz'];
+var_dump($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\ndone\n");
+    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+}
+
+/// Regression for issue #581: a hash source whose value type is itself a hash takes
+/// the `AssocArray` dump branch, which shares the same unguarded header walk.
+#[test]
+fn test_var_dump_missed_hash_read_of_hash_value_prints_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ['k' => ['x' => 1]];
+$arr = $a['zz'];
+var_dump($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\ndone\n");
+    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+}
+
+/// Regression for issue #581: a miss forwarded through `?? null` keeps the sentinel
+/// payload while suppressing the warning; the dump must still print `NULL`.
+#[test]
+fn test_var_dump_missed_read_through_coalesce_null_prints_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7] ?? null;
+var_dump($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\ndone\n");
+    assert_eq!(out.stderr, "");
+}
+
+/// Guard for issue #581: a genuine null local and a present array keep their existing
+/// renderings, so the added sentinel guard does not reroute live containers to `NULL`.
+#[test]
+fn test_var_dump_null_local_and_present_arrays_are_unchanged() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$n = null;
+var_dump($n);
+$a = [['x', 'y']];
+var_dump($a[0]);
+$h = ['k' => 'v'];
+var_dump($h);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "NULL\narray(2) {\n  [0]=>\n  string(1) \"x\"\n  [1]=>\n  string(1) \"y\"\n}\n\
+array(1) {\n  [\"k\"]=>\n  string(1) \"v\"\n}\ndone\n"
+    );
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #581: the null-container sentinel must be recognized before the
+/// array-header load on the `var_dump` array branch, on every supported target. The plain
+/// zero check that used to guard this branch let the non-zero sentinel through, so the
+/// assertion is on ordering: the sentinel comparison has to precede the header load inside
+/// the array body. Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
+#[test]
+fn test_var_dump_array_emits_null_container_guard_before_header_load() {
+    let dir = make_cli_test_dir("elephc_var_dump_null_container_guard");
+    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+var_dump($arr);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    // The zero check branches to the null label first, so the label's first mention opens
+    // the array body and its definition closes it; the guard and the walk sit in between.
+    let body_start = user_asm
+        .find("var_dump_array_null")
+        .expect("missing var_dump array null branch");
+    let body_end = user_asm
+        .match_indices("var_dump_array_null")
+        .map(|(pos, _)| pos)
+        .find(|pos| user_asm[*pos..].lines().next().is_some_and(|l| l.ends_with(':')))
+        .expect("missing var_dump array null label definition");
+    let body = &user_asm[body_start..body_end];
+
+    let (sentinel_cmp, header_load) = match target().arch {
+        Arch::AArch64 => ("cmp x0, x10", "ldr x0, [x0]"),
+        Arch::X86_64 => ("cmp rax, r10", "mov rax, QWORD PTR [rax]"),
+    };
+    let cmp_pos = body
+        .find(sentinel_cmp)
+        .unwrap_or_else(|| panic!("missing sentinel comparison `{sentinel_cmp}` in:\n{body}"));
+    let load_pos = body
+        .find(header_load)
+        .unwrap_or_else(|| panic!("missing array header load `{header_load}` in:\n{body}"));
+    assert!(
+        cmp_pos < load_pos,
+        "sentinel comparison must precede the array header load, got:\n{body}"
+    );
+}

@@ -1817,7 +1817,7 @@ fn emit_literal_compress_wrapper_fopen(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)), // skip false boxing after attaching the decompressor
-        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),// skip false boxing after attaching the decompressor
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)), // skip false boxing after attaching the decompressor
     }
     ctx.emitter.label(&false_label);
     box_stream_fd_or_false_result(ctx, "fopen");
@@ -2058,10 +2058,27 @@ pub(crate) fn lower_stream_bucket_make_writeable(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_bucket_append` and `stream_bucket_prepend` over the `_buckets` array.
-pub(crate) fn lower_stream_bucket_append_or_prepend(
+/// Lowers `stream_bucket_append()` by adding the bucket at the brigade tail.
+pub(crate) fn lower_stream_bucket_append(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+) -> Result<()> {
+    lower_stream_bucket_insert(ctx, inst, false)
+}
+
+/// Lowers `stream_bucket_prepend()` by adding the bucket at the brigade head.
+pub(crate) fn lower_stream_bucket_prepend(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_stream_bucket_insert(ctx, inst, true)
+}
+
+/// Lowers append/prepend insertion over a brigade object's `_buckets` array.
+fn lower_stream_bucket_insert(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_bucket_append/prepend", 2)?;
     let brigade = expect_operand(inst, 0)?;
@@ -2073,20 +2090,22 @@ pub(crate) fn lower_stream_bucket_append_or_prepend(
     let init = ctx.next_label("sba_init");
     let existing = ctx.next_label("sba_existing");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_stream_bucket_append_aarch64(
+        Arch::AArch64 => lower_stream_bucket_insert_aarch64(
             ctx,
             bucket,
             brigade_is_mixed,
+            prepend,
             &buckets_sym,
             buckets_len,
             &done,
             &init,
             &existing,
         )?,
-        Arch::X86_64 => lower_stream_bucket_append_x86_64(
+        Arch::X86_64 => lower_stream_bucket_insert_x86_64(
             ctx,
             bucket,
             brigade_is_mixed,
+            prepend,
             &buckets_sym,
             buckets_len,
             &done,
@@ -6851,11 +6870,12 @@ fn lower_stream_bucket_new_x86_64(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 }
 
-/// Emits the AArch64 body for stream bucket append/prepend.
-fn lower_stream_bucket_append_aarch64(
+/// Emits the AArch64 body for stream bucket insertion at the requested end.
+fn lower_stream_bucket_insert_aarch64(
     ctx: &mut FunctionContext<'_>,
     bucket: ValueId,
     brigade_is_mixed: bool,
+    prepend: bool,
     buckets_sym: &str,
     buckets_len: usize,
     done: &str,
@@ -6905,6 +6925,24 @@ fn lower_stream_bucket_append_aarch64(
     abi::emit_pop_reg(ctx.emitter, "x0");
     ctx.emitter.instruction("ldr x1, [sp, #0]");                                // pass the bucket Mixed cell to array_push
     abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+    if prepend {
+        let shift = ctx.next_label("sbp_shift");
+        let insert = ctx.next_label("sbp_insert");
+        ctx.emitter.instruction("ldr x9, [x0]");                                // load the post-append brigade length
+        ctx.emitter.instruction("sub x9, x9, #1");                              // point at the appended bucket's last slot
+        ctx.emitter.instruction("add x10, x0, #24");                            // compute the brigade payload base
+        ctx.emitter.instruction("ldr x11, [x10, x9, lsl #3]");                  // preserve the appended bucket while shifting
+        ctx.emitter.label(&shift);
+        ctx.emitter.instruction("cmp x9, #0");                                  // check whether the front slot is now available
+        ctx.emitter.instruction(&format!("b.eq {}", insert));                   // finish once every prior bucket moved right
+        ctx.emitter.instruction("sub x12, x9, #1");                             // select the preceding bucket slot
+        ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]");                 // load the preceding bucket pointer
+        ctx.emitter.instruction("str x13, [x10, x9, lsl #3]");                  // shift the preceding bucket one slot right
+        ctx.emitter.instruction("mov x9, x12");                                 // continue toward the brigade head
+        ctx.emitter.instruction(&format!("b {}", shift));                       // shift the next preceding bucket
+        ctx.emitter.label(&insert);
+        ctx.emitter.instruction("str x11, [x10]");                              // install the prepended bucket at index zero
+    }
     ctx.emitter.instruction("mov x1, x0");                                      // pass the bucket array as the Mixed payload
     ctx.emitter.instruction("mov x2, #0");                                      // indexed-array Mixed payloads do not use the high word
     ctx.emitter.instruction("mov x0, #4");                                      // runtime tag 4 = indexed array
@@ -6919,11 +6957,12 @@ fn lower_stream_bucket_append_aarch64(
     Ok(())
 }
 
-/// Emits the x86_64 body for stream bucket append/prepend.
-fn lower_stream_bucket_append_x86_64(
+/// Emits the x86_64 body for stream bucket insertion at the requested end.
+fn lower_stream_bucket_insert_x86_64(
     ctx: &mut FunctionContext<'_>,
     bucket: ValueId,
     brigade_is_mixed: bool,
+    prepend: bool,
     buckets_sym: &str,
     buckets_len: usize,
     done: &str,
@@ -6978,6 +7017,24 @@ fn lower_stream_bucket_append_x86_64(
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the `_buckets` array to array_push
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // pass the bucket Mixed cell to array_push
     abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+    if prepend {
+        let shift = ctx.next_label("sbp_shift");
+        let insert = ctx.next_label("sbp_insert");
+        ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                    // load the post-append brigade length
+        ctx.emitter.instruction("sub r10, 1");                                  // point at the appended bucket's last slot
+        ctx.emitter.instruction("lea r11, [rax + 24]");                         // compute the brigade payload base
+        ctx.emitter.instruction("mov r8, QWORD PTR [r11 + r10 * 8]");           // preserve the appended bucket while shifting
+        ctx.emitter.label(&shift);
+        ctx.emitter.instruction("test r10, r10");                               // check whether the front slot is now available
+        ctx.emitter.instruction(&format!("jz {}", insert));                     // finish once every prior bucket moved right
+        ctx.emitter.instruction("lea rcx, [r10 - 1]");                          // select the preceding bucket slot
+        ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + rcx * 8]");          // load the preceding bucket pointer
+        ctx.emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rdx");          // shift the preceding bucket one slot right
+        ctx.emitter.instruction("mov r10, rcx");                                // continue toward the brigade head
+        ctx.emitter.instruction(&format!("jmp {}", shift));                     // shift the next preceding bucket
+        ctx.emitter.label(&insert);
+        ctx.emitter.instruction("mov QWORD PTR [r11], r8");                     // install the prepended bucket at index zero
+    }
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the bucket array as the Mixed payload
     ctx.emitter.instruction("xor esi, esi");                                    // indexed-array Mixed payloads do not use the high word
     ctx.emitter.instruction("mov rax, 4");                                      // runtime tag 4 = indexed array
@@ -8087,25 +8144,65 @@ fn capture_resource_box_for_release(
     Ok(true)
 }
 
-/// Pops the stashed Mixed box pointer and writes the `-1` release sentinel into
+/// Pops the stashed Mixed box pointer and writes a NEGATIVE release sentinel into
 /// its low payload word so scope cleanup (`__rt_mixed_free_deep`) skips the
 /// already-closed handle — preventing a second `close`/`pclose`/`closedir` on a
 /// descriptor whose number may have been reused. A no-op when nothing was
-/// captured. Preserves the close result already in the int result register.
+/// captured. Preserves the native handle already in the int result register, which
+/// the caller still needs for its own close dispatch.
+///
+/// The sentinel is `-id`, not a bare `-1`, and that is what keeps PHP's display
+/// identity intact: php-src leaves `zend_resource.handle` untouched when a resource
+/// is closed, so `fclose($r); echo "$r";` still prints `Resource id #5` and
+/// `get_resource_id($r)` still answers 5 under 8.5.6. Stamping a bare `-1` erased
+/// the only key the resource-id registry had, so every later display path missed the
+/// table, minted a FRESH id, and printed `Resource id #6` while also stealing an id
+/// from the next `fopen()`. Encoding the id in the sentinel lets
+/// `__rt_resource_id_of` answer negative payloads directly (see
+/// `runtime::resource_ids`) without a table lookup and without a mint.
+///
+/// Every existing consumer of the sentinel is unaffected: the three
+/// `__rt_mixed_free_deep` resource arms gate on the UNSIGNED threshold
+/// `0x40000000` (`b.hs` / `jae`), and every negative payload is unsigned-huge, so a
+/// `-id` sentinel is skipped exactly like `-1` was. No native payload can collide
+/// with it either: descriptors are small positives, `DIR*`/`FILE*`/HashContext
+/// handles are userspace addresses with bit 63 clear, the synthetic wrapper and PHAR
+/// bases are `0x40000000`/`0x50000000`, and `EVAL_RESOURCE_PAYLOAD_BASE` is `1 << 62`.
 fn apply_resource_release_sentinel(ctx: &mut FunctionContext<'_>, captured: bool) {
     if !captured {
         return;
     }
-    match ctx.emitter.target.arch {
+    emit_resource_release_sentinel(ctx.emitter);
+}
+
+/// Emits the sentinel stamp itself, split out of `apply_resource_release_sentinel` so
+/// both target variants can be pinned at assembly level without a `FunctionContext`.
+///
+/// Entry state: the native handle is in the int result register (`x0` / `rax`) and the
+/// resource's Mixed box pointer is on top of the stack, where
+/// `capture_resource_box_for_release` pushed it. Exit state: the box's low payload word
+/// holds `-id`, the stash slot is released, and the int result register still holds the
+/// native handle. `__rt_resource_id_of` preserves every register it touches on both
+/// targets (AArch64 saves `x9`–`x14`, x86_64 pushes `rcx`, `rdx`, `rsi`, `r8`–`r11`), so
+/// the box pointer and the saved handle survive the call in `x9`/`x11` and `r11`/`r10`.
+fn emit_resource_release_sentinel(emitter: &mut crate::codegen::emit::Emitter) {
+    match emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x9, [sp], #16");                       // restore the stashed resource Mixed box pointer
-            ctx.emitter.instruction("mov x10, #-1");                            // -1 marks the resource handle as already released
-            ctx.emitter.instruction("str x10, [x9, #8]");                       // overwrite the low payload word so scope cleanup skips it
+            emitter.instruction("ldr x9, [sp], #16");                           // restore the stashed resource Mixed box pointer
+            emitter.instruction("mov x11, x0");                                 // preserve the native handle the caller still has to close
+            abi::emit_call_label(emitter, "__rt_resource_id_of");               // resolve the id this handle keeps for the rest of the request
+            emitter.instruction("neg x10, x0");                                 // a negative payload encodes "closed, PHP id = -payload"
+            emitter.instruction("str x10, [x9, #8]");                           // overwrite the low payload word so scope cleanup skips it
+            emitter.instruction("mov x0, x11");                                 // restore the native handle for the caller's close dispatch
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r11, QWORD PTR [rsp]");                // restore the stashed resource Mixed box pointer
-            ctx.emitter.instruction("add rsp, 16");                             // release the stash slot
-            ctx.emitter.instruction("mov QWORD PTR [r11 + 8], -1");             // overwrite the low payload word so scope cleanup skips it
+            emitter.instruction("mov r11, QWORD PTR [rsp]");                    // restore the stashed resource Mixed box pointer
+            emitter.instruction("add rsp, 16");                                 // release the stash slot
+            emitter.instruction("mov r10, rax");                                // preserve the native handle the caller still has to close
+            abi::emit_call_label(emitter, "__rt_resource_id_of");               // resolve the id this handle keeps for the rest of the request
+            emitter.instruction("neg rax");                                     // a negative payload encodes "closed, PHP id = -payload"
+            emitter.instruction("mov QWORD PTR [r11 + 8], rax");                // overwrite the low payload word so scope cleanup skips it
+            emitter.instruction("mov rax, r10");                                // restore the native handle for the caller's close dispatch
         }
     }
 }
@@ -9050,5 +9147,76 @@ fn require_string_array(ty: PhpType, name: &str) -> Result<()> {
             name,
             other
         ))),
+    }
+}
+
+#[cfg(test)]
+mod resource_release_sentinel_tests {
+    use super::emit_resource_release_sentinel;
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    /// Emits the release sentinel for one target and returns the assembly text.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_resource_release_sentinel(&mut emitter);
+        emitter.output()
+    }
+
+    /// Pins the AArch64 stamp: look the id up BEFORE overwriting the payload, store the
+    /// negated id, and hand the native handle back to the caller's close dispatch.
+    ///
+    /// The bare `mov x10, #-1` this replaced erased the registry key, so every later
+    /// display of the closed handle missed the table and minted a fresh id — PHP 8.5.6
+    /// keeps `Resource id #5` and `get_resource_id($r) === 5` after `fclose($r)`.
+    #[test]
+    fn aarch64_stamps_the_negated_resource_id() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(asm.contains("ldr x9, [sp], #16"), "{asm}");
+        assert!(asm.contains("mov x11, x0"), "{asm}");
+        assert!(asm.contains("bl __rt_resource_id_of"), "{asm}");
+        assert!(asm.contains("neg x10, x0"), "{asm}");
+        assert!(asm.contains("str x10, [x9, #8]"), "{asm}");
+        assert!(asm.contains("mov x0, x11"), "{asm}");
+        assert!(
+            !asm.contains("mov x10, #-1"),
+            "the identity-erasing bare -1 sentinel must not come back:\n{asm}"
+        );
+    }
+
+    /// Pins the same stamp on x86_64. The stash slot is released BEFORE the call so the
+    /// helper runs on the frame's own alignment, and `r10`/`r11` carry the handle and the
+    /// box pointer across it — both are pushed and popped by `__rt_resource_id_of`.
+    #[test]
+    fn x86_64_stamps_the_negated_resource_id() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(asm.contains("mov r11, QWORD PTR [rsp]"), "{asm}");
+        assert!(asm.contains("add rsp, 16"), "{asm}");
+        assert!(asm.contains("mov r10, rax"), "{asm}");
+        assert!(asm.contains("call __rt_resource_id_of"), "{asm}");
+        assert!(asm.contains("neg rax"), "{asm}");
+        assert!(asm.contains("mov QWORD PTR [r11 + 8], rax"), "{asm}");
+        assert!(asm.contains("mov rax, r10"), "{asm}");
+        assert!(
+            !asm.contains("mov QWORD PTR [r11 + 8], -1"),
+            "the identity-erasing bare -1 sentinel must not come back:\n{asm}"
+        );
+    }
+
+    /// The stamped payload must stay NEGATIVE on both targets, because that is the only
+    /// property the three `__rt_mixed_free_deep` resource arms rely on: they skip any
+    /// payload at or above the UNSIGNED threshold `0x40000000`, and every negative value
+    /// is unsigned-huge. A sentinel that stopped being negative would let scope cleanup
+    /// close an already-closed descriptor a second time.
+    #[test]
+    fn the_sentinel_stays_negative_on_both_targets() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            let negates = asm.contains("neg x10, x0") || asm.contains("neg rax");
+            assert!(negates, "the stamped payload must be a negated id ({target:?}):\n{asm}");
+        }
     }
 }

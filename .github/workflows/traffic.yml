@@ -1,4 +1,4 @@
-name: Traffic Stats
+name: Repository Stats
 
 on:
   schedule:
@@ -56,11 +56,24 @@ jobs:
           TOTAL=$(python3 -c "import json; print(json.load(open('.github/traffic/clones.json'))['total_uniques'])")
           curl -s "https://img.shields.io/badge/cloners-${TOTAL}-FF7A1A?style=flat-square&logo=git&logoColor=white" -o .github/traffic/clones-badge.svg
 
+      - name: Generate static star history
+        run: |
+          set -o pipefail
+          GH_TOKEN="${{ github.token }}" gh api --paginate --slurp \
+            -H "Accept: application/vnd.github.star+json" \
+            -H "X-GitHub-Api-Version: 2026-03-10" \
+            "repos/${{ github.repository }}/stargazers?per_page=100" \
+            | python3 .github/scripts/generate-star-history.py \
+                --input - \
+                --repository "${{ github.repository }}" \
+                --light-output .github/traffic/star-history-light.svg \
+                --dark-output .github/traffic/star-history-dark.svg
+
       - name: Commit updated stats
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .github/traffic/
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "update traffic stats"
+          git commit -m "chore: update repository stats"
           git push

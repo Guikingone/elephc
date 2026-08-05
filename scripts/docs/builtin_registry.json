@@ -20470,7 +20470,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -28932,7 +28932,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -31547,7 +31547,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -51631,7 +51631,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -53065,7 +53065,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 48,
+      "codegen_line": 49,
       "notes": [
         "Rejects `unset()` calls that were not converted into direct EIR unbind operations."
       ],
