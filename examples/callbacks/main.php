@@ -214,7 +214,11 @@ class OffsetCallbacks {
 $offsets = new OffsetCallbacks();
 echo "method callable array_reduce: " . array_reduce([1, 2], $offsets->add_offset(...), 0) . "\n";
 echo "method callable array_walk: ";
-array_walk([1, 2], $offsets->show_shifted(...));
+// `array_walk()` takes its array BY REFERENCE, and PHP cannot bind a literal to a
+// by-reference parameter — it is a fatal `could not be passed by reference`, so the
+// array has to live in a variable first.
+$walked = [1, 2];
+array_walk($walked, $offsets->show_shifted(...));
 echo "\n";
 
 class SelectedOffsetCallbacks {
@@ -248,7 +252,8 @@ $selected_map = array_map($use_small_offsets ? $small_offsets->map_selected(...)
 echo "selected callable array_map: " . $selected_map[0] . " " . $selected_map[1] . "\n";
 echo "selected callable array_reduce: " . array_reduce([1, 2], $use_small_offsets ? $small_offsets->add_selected(...) : $large_offsets->add_selected(...), 0) . "\n";
 echo "selected callable array_walk: ";
-array_walk([1, 2], $use_small_offsets ? $small_offsets->show_selected(...) : $large_offsets->show_selected(...));
+$selected_walked = [1, 2];
+array_walk($selected_walked, $use_small_offsets ? $small_offsets->show_selected(...) : $large_offsets->show_selected(...));
 echo "\n";
 
 class SelectedCalculator {
