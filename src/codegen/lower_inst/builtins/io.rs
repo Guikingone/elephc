@@ -2058,10 +2058,27 @@ pub(crate) fn lower_stream_bucket_make_writeable(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_bucket_append` and `stream_bucket_prepend` over the `_buckets` array.
-pub(crate) fn lower_stream_bucket_append_or_prepend(
+/// Lowers `stream_bucket_append()` by adding the bucket at the brigade tail.
+pub(crate) fn lower_stream_bucket_append(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+) -> Result<()> {
+    lower_stream_bucket_insert(ctx, inst, false)
+}
+
+/// Lowers `stream_bucket_prepend()` by adding the bucket at the brigade head.
+pub(crate) fn lower_stream_bucket_prepend(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    lower_stream_bucket_insert(ctx, inst, true)
+}
+
+/// Lowers append/prepend insertion over a brigade object's `_buckets` array.
+fn lower_stream_bucket_insert(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_bucket_append/prepend", 2)?;
     let brigade = expect_operand(inst, 0)?;
@@ -2073,20 +2090,22 @@ pub(crate) fn lower_stream_bucket_append_or_prepend(
     let init = ctx.next_label("sba_init");
     let existing = ctx.next_label("sba_existing");
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_stream_bucket_append_aarch64(
+        Arch::AArch64 => lower_stream_bucket_insert_aarch64(
             ctx,
             bucket,
             brigade_is_mixed,
+            prepend,
             &buckets_sym,
             buckets_len,
             &done,
             &init,
             &existing,
         )?,
-        Arch::X86_64 => lower_stream_bucket_append_x86_64(
+        Arch::X86_64 => lower_stream_bucket_insert_x86_64(
             ctx,
             bucket,
             brigade_is_mixed,
+            prepend,
             &buckets_sym,
             buckets_len,
             &done,
@@ -6851,11 +6870,12 @@ fn lower_stream_bucket_new_x86_64(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 }
 
-/// Emits the AArch64 body for stream bucket append/prepend.
-fn lower_stream_bucket_append_aarch64(
+/// Emits the AArch64 body for stream bucket insertion at the requested end.
+fn lower_stream_bucket_insert_aarch64(
     ctx: &mut FunctionContext<'_>,
     bucket: ValueId,
     brigade_is_mixed: bool,
+    prepend: bool,
     buckets_sym: &str,
     buckets_len: usize,
     done: &str,
@@ -6905,6 +6925,24 @@ fn lower_stream_bucket_append_aarch64(
     abi::emit_pop_reg(ctx.emitter, "x0");
     ctx.emitter.instruction("ldr x1, [sp, #0]");                                // pass the bucket Mixed cell to array_push
     abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+    if prepend {
+        let shift = ctx.next_label("sbp_shift");
+        let insert = ctx.next_label("sbp_insert");
+        ctx.emitter.instruction("ldr x9, [x0]");                                // load the post-append brigade length
+        ctx.emitter.instruction("sub x9, x9, #1");                              // point at the appended bucket's last slot
+        ctx.emitter.instruction("add x10, x0, #24");                            // compute the brigade payload base
+        ctx.emitter.instruction("ldr x11, [x10, x9, lsl #3]");                  // preserve the appended bucket while shifting
+        ctx.emitter.label(&shift);
+        ctx.emitter.instruction("cmp x9, #0");                                  // check whether the front slot is now available
+        ctx.emitter.instruction(&format!("b.eq {}", insert));                   // finish once every prior bucket moved right
+        ctx.emitter.instruction("sub x12, x9, #1");                             // select the preceding bucket slot
+        ctx.emitter.instruction("ldr x13, [x10, x12, lsl #3]");                 // load the preceding bucket pointer
+        ctx.emitter.instruction("str x13, [x10, x9, lsl #3]");                  // shift the preceding bucket one slot right
+        ctx.emitter.instruction("mov x9, x12");                                 // continue toward the brigade head
+        ctx.emitter.instruction(&format!("b {}", shift));                       // shift the next preceding bucket
+        ctx.emitter.label(&insert);
+        ctx.emitter.instruction("str x11, [x10]");                              // install the prepended bucket at index zero
+    }
     ctx.emitter.instruction("mov x1, x0");                                      // pass the bucket array as the Mixed payload
     ctx.emitter.instruction("mov x2, #0");                                      // indexed-array Mixed payloads do not use the high word
     ctx.emitter.instruction("mov x0, #4");                                      // runtime tag 4 = indexed array
@@ -6919,11 +6957,12 @@ fn lower_stream_bucket_append_aarch64(
     Ok(())
 }
 
-/// Emits the x86_64 body for stream bucket append/prepend.
-fn lower_stream_bucket_append_x86_64(
+/// Emits the x86_64 body for stream bucket insertion at the requested end.
+fn lower_stream_bucket_insert_x86_64(
     ctx: &mut FunctionContext<'_>,
     bucket: ValueId,
     brigade_is_mixed: bool,
+    prepend: bool,
     buckets_sym: &str,
     buckets_len: usize,
     done: &str,
@@ -6978,6 +7017,24 @@ fn lower_stream_bucket_append_x86_64(
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the `_buckets` array to array_push
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp]");                        // pass the bucket Mixed cell to array_push
     abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+    if prepend {
+        let shift = ctx.next_label("sbp_shift");
+        let insert = ctx.next_label("sbp_insert");
+        ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                    // load the post-append brigade length
+        ctx.emitter.instruction("sub r10, 1");                                  // point at the appended bucket's last slot
+        ctx.emitter.instruction("lea r11, [rax + 24]");                         // compute the brigade payload base
+        ctx.emitter.instruction("mov r8, QWORD PTR [r11 + r10 * 8]");           // preserve the appended bucket while shifting
+        ctx.emitter.label(&shift);
+        ctx.emitter.instruction("test r10, r10");                               // check whether the front slot is now available
+        ctx.emitter.instruction(&format!("jz {}", insert));                     // finish once every prior bucket moved right
+        ctx.emitter.instruction("lea rcx, [r10 - 1]");                          // select the preceding bucket slot
+        ctx.emitter.instruction("mov rdx, QWORD PTR [r11 + rcx * 8]");          // load the preceding bucket pointer
+        ctx.emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rdx");          // shift the preceding bucket one slot right
+        ctx.emitter.instruction("mov r10, rcx");                                // continue toward the brigade head
+        ctx.emitter.instruction(&format!("jmp {}", shift));                     // shift the next preceding bucket
+        ctx.emitter.label(&insert);
+        ctx.emitter.instruction("mov QWORD PTR [r11], r8");                     // install the prepended bucket at index zero
+    }
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the bucket array as the Mixed payload
     ctx.emitter.instruction("xor esi, esi");                                    // indexed-array Mixed payloads do not use the high word
     ctx.emitter.instruction("mov rax, 4");                                      // runtime tag 4 = indexed array

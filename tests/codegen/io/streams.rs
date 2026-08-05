@@ -6671,7 +6671,7 @@ fclose($m);
     assert_eq!(out, "[alpha][beta][gamma]|done");
 }
 
-/// Verifies compiled PHP output for stream bucket prepend then pop in reverse insertion order.
+/// Verifies prepend order and brigade growth beyond the initial bucket-array capacity.
 #[test]
 fn test_stream_bucket_prepend_then_pop_in_reverse_insertion_order() {
     let out = compile_and_run(
@@ -6681,6 +6681,9 @@ $brigade = new stdClass();
 stream_bucket_prepend($brigade, stream_bucket_new($m, "alpha"));
 stream_bucket_prepend($brigade, stream_bucket_new($m, "beta"));
 stream_bucket_prepend($brigade, stream_bucket_new($m, "gamma"));
+stream_bucket_prepend($brigade, stream_bucket_new($m, "delta"));
+stream_bucket_prepend($brigade, stream_bucket_new($m, "epsilon"));
+stream_bucket_prepend($brigade, stream_bucket_new($m, "zeta"));
 while (true) {
     $b = stream_bucket_make_writeable($brigade);
     if (is_null($b)) break;
@@ -6690,7 +6693,7 @@ echo "|done";
 fclose($m);
 "#,
     );
-    assert_eq!(out, "[gamma][beta][alpha]|done");
+    assert_eq!(out, "[zeta][epsilon][delta][gamma][beta][alpha]|done");
 }
 
 /// Verifies compiled PHP output for user filter 4arg brigade dispatch.
