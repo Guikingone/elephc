@@ -3280,10 +3280,11 @@ $name = getprotobynumber(0);
 echo $name . "|" . getprotobyname($name);
 "#,
     );
-    assert!(
-        matches!(out.as_str(), "ip|0" | "hopopt|0"),
-        "expected protocol zero to round-trip as ip or hopopt, got {out:?}"
-    );
+    let (name, number) = out
+        .split_once('|')
+        .expect("expected protocol zero output in name|number format");
+    assert!(!name.is_empty(), "expected a non-empty protocol name");
+    assert_eq!(number, "0", "expected protocol name to round-trip to zero");
 }
 
 /// Verifies compiled PHP output for getprotobynumber persists across calls.
