@@ -25,7 +25,7 @@ sidebar:
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
 - **Result type source**: `checked`
-- **Result ownership**: `may_alias_arguments`
+- **Result ownership**: `fresh`
 - **Effects**: `static (16 declared effects)`
 - **Requirements**: `static (0 requirements)`
 - **Callable policy**: `static_only`
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_splice(array $array, int $offset, int $length = null): array
+function array_splice(array $array, int $offset, int $length = null, array $replacement = []): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 2–4 arguments (2 optional).
 - **By-reference parameters**: `$array`.
 
 ## Eval interpreter (magician)

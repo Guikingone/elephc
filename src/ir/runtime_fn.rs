@@ -1319,6 +1319,12 @@ impl RuntimeFnId {
                 // constant 48 bytes, and that `sys_get_temp_dir()` and `tmpfile()` — named
                 // alongside it in that report — are both clean.
                 | RuntimeFnId::Tempnam
+                // `array_splice()` always answers with the array `__rt_array_new` allocated for
+                // the removed window; the receiver is mutated through its by-reference slot and
+                // is never handed back. The default `MayAliasArguments` bucket suppressed the
+                // release of an owned `$replacement` argument, so `array_splice($a, 1, 2, [9])`
+                // leaked the literal replacement array on every call.
+                | RuntimeFnId::ArraySplice
                 | RuntimeFnId::ZvalUnpack
         ) {
             BuiltinResultOwnership::Fresh

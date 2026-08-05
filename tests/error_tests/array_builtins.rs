@@ -323,12 +323,17 @@ fn test_error_array_unshift_wrong_args() {
     );
 }
 
-/// Verifies that error array splice wrong args.
+/// Verifies `array_splice()` rejects both ends of its PHP 8.4 arity range: `$array`/`$offset`
+/// are required and `$replacement` is the last accepted argument.
 #[test]
 fn test_error_array_splice_wrong_args() {
     expect_error(
         "<?php array_splice();",
-        "array_splice() takes 2 or 3 arguments",
+        "array_splice() takes 2 to 4 arguments",
+    );
+    expect_error(
+        "<?php $a = [1]; array_splice($a, 0, 0, [], 5);",
+        "array_splice() takes 2 to 4 arguments",
     );
 }
 

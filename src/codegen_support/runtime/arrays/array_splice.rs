@@ -22,7 +22,8 @@ use crate::codegen_support::runtime::arrays::slice_bounds::emit_slice_bounds;
 /// ## ARM64 ABI
 /// - **Input**: `x0` = source array pointer, `x1` = `$offset`, `x2` = `$length`, `x3` = 1 when a
 ///   `$length` was supplied and 0 when it was omitted or `null`
-/// - **Output**: `x0` = new array containing the removed elements
+/// - **Output**: `x0` = new array containing the removed elements, `x1` = the normalized removal
+///   offset, i.e. the index a `$replacement` is inserted at
 /// - **Behavior**: The original array is modified in-place; remaining elements shift left to fill the gap.
 /// - **Clamping**: `emit_slice_bounds` normalizes the window first, so the removal count is always in
 ///   `[0, array_length - offset]` — a negative `$length` stops that many elements before the end and
@@ -112,6 +113,7 @@ pub fn emit_array_splice(emitter: &mut Emitter) {
 
     // -- return result array --
     emitter.instruction("ldr x0, [sp, #24]");                                   // x0 = result array pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = normalized offset, the index a $replacement is inserted at
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = removed elements array
@@ -124,7 +126,8 @@ pub fn emit_array_splice(emitter: &mut Emitter) {
 /// ## x86_64 ABI
 /// - **Input**: `rdi` = source array pointer, `rsi` = `$offset`, `rdx` = `$length`, `rcx` = 1 when a
 ///   `$length` was supplied and 0 when it was omitted or `null`
-/// - **Output**: `rax` = new array containing the removed elements
+/// - **Output**: `rax` = new array containing the removed elements, `rdx` = the normalized removal
+///   offset, i.e. the index a `$replacement` is inserted at
 /// - **Behavior**: Same semantics as ARM64 — in-place mutation, left-shift to fill gap, clamped length.
 /// - **Frame layout**: 32-byte aligned spill area at `[rbp - 8]` through `[rbp - 32]` preserves:
 ///   source array pointer, offset, clamped length, and result array pointer across constructor calls.
@@ -189,6 +192,7 @@ fn emit_array_splice_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [r10], r11");                            // persist the shortened source indexed-array logical length back into the array header
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the result indexed-array pointer before publishing its logical length
     emitter.instruction("mov QWORD PTR [rax], r9");                             // store the clamped removal length as the result indexed-array logical length
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the normalized removal offset, the index a $replacement is inserted at
     emitter.instruction("add rsp, 32");                                         // release the scalar splice spill slots before returning to the caller
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the scalar splice helper completes
     emitter.instruction("ret");                                                 // return the result indexed-array pointer in rax

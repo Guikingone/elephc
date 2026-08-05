@@ -584,3 +584,56 @@ eval('try { str_word_count("ab", 5); } catch (\ValueError $e) { echo $e->getMess
         "str_word_count(): Argument #2 ($format) must be a valid format value"
     );
 }
+
+/// Verifies the eval interpreter reproduces `file_get_contents()`'s `$offset`/`$length` window,
+/// its unreachable-seek `false`, and its negative-`$length` `ValueError`, matching what the
+/// compiled backend produces for the same reads.
+///
+/// Both sides now declare the same five-parameter PHP 8.4 signature, so this fixture also pins
+/// that the eval dispatcher accepts every argument position the static catalog advertises.
+#[test]
+fn test_eval_file_get_contents_offset_length_parity() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("eval_fgc.txt", "ABCDEFGHIJ");
+echo file_get_contents("eval_fgc.txt", false, null, 3, 4), ":";
+eval('echo file_get_contents("eval_fgc.txt", false, null, 3, 4), ":";
+echo file_get_contents("eval_fgc.txt", false, null, -3), ":";
+echo file_get_contents("eval_fgc.txt", false, null, 20) === "" ? "past-eof" : "bad", ":";
+echo file_get_contents("eval_fgc.txt", true, null, 4, 3), ":";
+try { file_get_contents("eval_fgc.txt", false, null, 0, -1); } catch (\ValueError $e) { echo $e->getMessage(); }');
+unlink("eval_fgc.txt");
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "DEFG:DEFG:HIJ:past-eof:EFG:file_get_contents(): Argument #5 ($length) must be greater than or equal to 0"
+    );
+}
+
+/// Verifies the eval interpreter and the compiled backend agree on `array_splice()`'s
+/// `$replacement`: the same removed slice and the same mutated receiver on both sides.
+#[test]
+fn test_eval_array_splice_replacement_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1,2,3,4,5];
+$removed = array_splice($a, 1, 2, [90,91,92]);
+echo implode(",", $a), "|", implode(",", $removed), ":";
+eval('$b = [1,2,3,4,5];
+$removed2 = array_splice($b, 1, 2, [90,91,92]);
+echo implode(",", $b), "|", implode(",", $removed2), ":";
+$c = [1,2,3];
+echo count(array_splice($c, 1, 0, [7,8])), "|", implode(",", $c), ":";
+$d = [1,2,3];
+array_splice($d, 1, 1, 9);
+echo implode(",", $d);');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "1,90,91,92,4,5|2,3:1,90,91,92,4,5|2,3:0|1,7,8,2,3:1,9,3"
+    );
+}

@@ -1788,6 +1788,34 @@ echo "|" . ($m === false ? "false" : "open");
     assert_eq!(out, "Hello from phar!\n[inner content here]|false");
 }
 
+/// Verifies a literal `phar://` `file_get_contents()` honors PHP's `$offset`/`$length` window.
+///
+/// The entry bytes are extracted at COMPILE time and served from read-only `.data`, so the
+/// windowing path — which trims its input in place and frees a failed read — must copy them into
+/// an owned string first. Without that copy the trim would move and free a rodata pointer.
+#[test]
+fn test_file_get_contents_literal_phar_entry_honors_offset_and_length() {
+    let phar = build_minimal_phar(&[("hello.txt", b"Hello from phar!\n")]);
+    let path =
+        std::env::temp_dir().join(format!("elephc_phar_fgc_range_{}.phar", std::process::id()));
+    std::fs::write(&path, &phar).unwrap();
+    let src = format!(
+        r#"<?php
+var_dump(file_get_contents("phar://{p}/hello.txt"));
+var_dump(file_get_contents("phar://{p}/hello.txt", false, null, 6, 4));
+var_dump(file_get_contents("phar://{p}/hello.txt", false, null, -6, 5));
+var_dump(@file_get_contents("phar://{p}/hello.txt", false, null, -99));
+"#,
+        p = path.display()
+    );
+    let out = compile_and_run(&src);
+    std::fs::remove_file(&path).ok();
+    assert_eq!(
+        out,
+        "string(17) \"Hello from phar!\n\"\nstring(4) \"from\"\nstring(5) \"phar!\"\nbool(false)\n"
+    );
+}
+
 /// Runtime phar:// read: when the archive path arrives via a variable (not a
 /// compile-time literal), `fopen` routes through `__rt_fopen_maybe_phar` →
 /// `__rt_phar_read_entry`, which reads and parses the archive at run time and

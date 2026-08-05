@@ -81,6 +81,7 @@ mod array_slice;
 mod array_slice_refcounted;
 mod array_slice_to_hash;
 mod array_splice;
+mod array_splice_insert;
 mod array_splice_refcounted;
 mod array_sum;
 mod array_sum_mixed;
@@ -324,6 +325,10 @@ pub use array_slice_refcounted::emit_array_slice_refcounted;
 pub use array_slice_to_hash::emit_array_slice_to_hash;
 /// Emit key-preserving array slice helper (array_slice preserve_keys).
 pub use array_splice::emit_array_splice;
+pub use array_splice_insert::{
+    emit_array_splice_insert, emit_array_splice_insert_boxed,
+    emit_array_splice_insert_refcounted, emit_array_splice_insert_unboxed,
+};
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;
 /// Emit refcounted array splice helper.

@@ -262,3 +262,214 @@ unlink("f2.txt");
     assert_eq!(out, "crlf:4 0/1/a 1/1/b 2/0/ 3/1/c|crlfboth:3 0/1/a 1/1/b 2/1/c|");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies PHP's `$offset`/`$length` window on `file_get_contents()` for every shape reference
+/// PHP accepts: a positive offset, an offset plus a length, a negative offset counted from the
+/// end, a negative offset with a length, a length that runs past EOF, an offset past EOF, an
+/// offset exactly at EOF, and a zero length.
+///
+/// The expected block is verbatim `LC_ALL=C php` 8.4 output for the same fixture.
+#[test]
+fn test_file_get_contents_offset_and_length_match_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("range.txt", "ABCDEFGHIJ");
+var_dump(file_get_contents("range.txt"));
+var_dump(file_get_contents("range.txt", false, null, 3));
+var_dump(file_get_contents("range.txt", false, null, 3, 4));
+var_dump(file_get_contents("range.txt", false, null, -3));
+var_dump(file_get_contents("range.txt", false, null, -3, 2));
+var_dump(file_get_contents("range.txt", false, null, -10));
+var_dump(file_get_contents("range.txt", false, null, 0, 100));
+var_dump(file_get_contents("range.txt", false, null, 20));
+var_dump(file_get_contents("range.txt", false, null, 10));
+var_dump(file_get_contents("range.txt", false, null, 0, 0));
+unlink("range.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"string(10) "ABCDEFGHIJ"
+string(7) "DEFGHIJ"
+string(4) "DEFG"
+string(3) "HIJ"
+string(2) "HI"
+string(10) "ABCDEFGHIJ"
+string(10) "ABCDEFGHIJ"
+string(0) ""
+string(0) ""
+string(0) ""
+"#
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `$offset` and `$length` also work when they only become known at run time, so the
+/// window is not folded away by the frontend before the backend sees it.
+#[test]
+fn test_file_get_contents_runtime_offset_and_length_match_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("dyn.txt", "ABCDEFGHIJ");
+$offset = 2 * $argc;
+$length = 3 * $argc;
+var_dump(file_get_contents("dyn.txt", false, null, $offset, $length));
+$none = null;
+var_dump(file_get_contents("dyn.txt", false, null, $offset, $none));
+unlink("dyn.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"string(3) "CDE"
+string(8) "CDEFGHIJ"
+"#
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a negative `$offset` whose magnitude exceeds the file size reproduces php-src's
+/// "Failed to seek to position N in the stream" warning and returns `false`, instead of
+/// clamping to the start of the file.
+#[test]
+fn test_file_get_contents_unreachable_negative_offset_warns_and_returns_false() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("seek.txt", "ABCDEFGHIJ");
+var_dump(file_get_contents("seek.txt", false, null, -30));
+var_dump(@file_get_contents("seek.txt", false, null, -11));
+unlink("seek.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\n");
+    assert!(
+        out.stderr
+            .contains("Warning: file_get_contents(): Failed to seek to position -30 in the stream"),
+        "expected the php-src seek warning, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("position -11"),
+        "the @-suppressed read must not warn, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies a `$length` far larger than the file is bounded by the bytes that are actually
+/// there, and that `PHP_INT_MAX` neither wraps the kept byte count nor sizes an allocation.
+///
+/// This is the H4 bound: the buffer and the copy are sized by the same value, so a huge
+/// `$length` can only ever mean "to the end of the data".
+#[test]
+fn test_file_get_contents_huge_length_is_bounded_by_the_file() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("huge.txt", "ABCDEFGHIJ");
+echo strlen(file_get_contents("huge.txt", false, null, 0, PHP_INT_MAX)), "\n";
+echo strlen(file_get_contents("huge.txt", false, null, 5, PHP_INT_MAX)), "\n";
+echo strlen(file_get_contents("huge.txt", false, null, -4, PHP_INT_MAX)), "\n";
+var_dump(file_get_contents("huge.txt", false, null, PHP_INT_MAX));
+var_dump(file_get_contents("huge.txt", false, null, PHP_INT_MAX, PHP_INT_MAX));
+unlink("huge.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"10
+5
+4
+string(0) ""
+string(0) ""
+"#
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a negative `$length` raises php-src's catchable `ValueError` with its exact wording
+/// and argument number, BEFORE the file is opened — a missing file plus a negative length still
+/// throws instead of warning about the missing file.
+#[test]
+fn test_file_get_contents_negative_length_raises_value_error() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("neg.txt", "ABCDEFGHIJ");
+try {
+    file_get_contents("neg.txt", false, null, 0, -1);
+} catch (ValueError $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+try {
+    file_get_contents("does-not-exist.txt", false, null, 0, -5);
+} catch (Throwable $e) {
+    echo get_class($e), ": ", $e->getMessage(), "\n";
+}
+unlink("neg.txt");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "ValueError: file_get_contents(): Argument #5 ($length) must be greater than or equal to 0\nValueError: file_get_contents(): Argument #5 ($length) must be greater than or equal to 0\n"
+    );
+    assert!(
+        !out.stderr.contains("Failed to open stream"),
+        "the negative-length ValueError must precede the open, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies `$use_include_path = true` is accepted and reads the same file.
+///
+/// elephc resolves paths against the current directory only — the same thing an include path of
+/// `"."` does — so `true` and `false` cannot differ here.
+#[test]
+fn test_file_get_contents_use_include_path_reads_the_same_file() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("incl.txt", "ABCDEFGHIJ");
+var_dump(file_get_contents("incl.txt", true));
+var_dump(file_get_contents("incl.txt", true, null, 4, 3));
+unlink("incl.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"string(10) "ABCDEFGHIJ"
+string(3) "EFG"
+"#
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a non-null `$context` is refused with a diagnostic that names the parameter, rather
+/// than being silently ignored: elephc has no stream-context plumbing on the read path, so a
+/// caller's context options could not be honored.
+#[test]
+fn test_file_get_contents_rejects_a_non_null_stream_context() {
+    let error = compile_source_expect_backend_error(
+        r#"<?php
+$context = stream_context_create([]);
+echo file_get_contents("x.txt", false, $context);
+"#,
+    );
+    assert!(
+        error.contains("file_get_contents() $context argument"),
+        "expected a diagnostic naming $context, got: {error}"
+    );
+}
+
+/// Verifies the 1-argument form is unchanged: a literal `null` context and an omitted one both
+/// compile, and a missing file still returns `false` with the open warning.
+#[test]
+fn test_file_get_contents_null_context_and_missing_file_are_unchanged() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(@file_get_contents("still-missing.txt", false, null));
+var_dump(@file_get_contents("still-missing.txt", false, null, 2, 3));
+echo "after";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nafter");
+}

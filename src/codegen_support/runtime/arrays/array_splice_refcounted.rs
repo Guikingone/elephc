@@ -31,6 +31,7 @@ use crate::codegen_support::runtime::arrays::slice_bounds::emit_slice_bounds;
 ///
 /// # Output registers (ARM64 calling convention)
 /// * `x0` - new array containing the removed elements (caller owns)
+/// * `x1` - the normalized removal offset, i.e. the index a `$replacement` is inserted at
 ///
 /// # ABI details
 /// * `emit_slice_bounds` normalizes the offset/length pair first, so the removal count is always in
@@ -107,6 +108,7 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
 
     // -- return removed-elements result array --
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload result array pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // return the normalized removal offset, the index a $replacement is inserted at
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return result array
@@ -116,7 +118,8 @@ pub fn emit_array_splice_refcounted(emitter: &mut Emitter) {
 ///
 /// Identical in behavior to the ARM64 variant but emits x86_64 instructions using the
 /// System V AMD64 ABI (registers: rdi=array, rsi=`$offset`, rdx=`$length`, rcx=1 when a `$length`
-/// was supplied and 0 when it was omitted or `null`; return in rax).
+/// was supplied and 0 when it was omitted or `null`; returns the removed-elements array in rax and
+/// the normalized removal offset in rdx).
 ///
 /// The implementation mirrors the ARM64 logic: normalize the removal window, copy removed elements
 /// into a new result array, shift remaining elements left in-place, and return the result array.
@@ -185,6 +188,7 @@ fn emit_array_splice_refcounted_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub r11, r9");                                         // compute the shortened source indexed-array logical length after removing the splice window
     emitter.instruction("mov QWORD PTR [r10], r11");                            // persist the shortened source indexed-array logical length back into the array header
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the removed-elements result indexed-array pointer before returning it to the caller
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the normalized removal offset, the index a $replacement is inserted at
     emitter.instruction("add rsp, 48");                                         // release the refcounted splice spill slots before returning
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
     emitter.instruction("ret");                                                 // return the removed-elements result indexed-array pointer in rax

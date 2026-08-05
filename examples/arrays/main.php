@@ -67,6 +67,16 @@ foreach ($slice as $value) {
 }
 echo "\n";
 
+// array_splice() removes a window IN PLACE and returns what it removed; the optional
+// fourth argument is spliced in where the removed window was, so the array can grow.
+$queue = [10, 20, 30, 40, 50];
+$removed = array_splice($queue, 1, 2, [21, 22, 23]);
+echo "Spliced queue: ";
+foreach ($queue as $value) {
+    echo $value . " ";
+}
+echo "(removed " . count($removed) . ")\n";
+
 // unset() removes a key without renumbering: the array keeps its other keys (a hole)
 unset($squares[1]);
 echo "After unset(squares[1]): ";

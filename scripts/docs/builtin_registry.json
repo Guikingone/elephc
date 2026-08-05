@@ -7570,7 +7570,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -7613,6 +7613,13 @@
           "name": "length",
           "optional": true,
           "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "[]",
+          "name": "replacement",
+          "optional": true,
+          "type": "array"
         }
       ],
       "return_type": "array",
@@ -17264,6 +17271,30 @@
           "default": null,
           "name": "filename",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "use_include_path",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -17352,6 +17383,34 @@
           "name": "filename",
           "optional": false,
           "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "use_include_path",
+          "optional": true,
+          "type": "bool"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true,
+          "type": "mixed"
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true,
+          "type": "int"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "mixed",

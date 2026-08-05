@@ -320,6 +320,10 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_column_str(emitter);
     arrays::emit_array_splice(emitter);
     arrays::emit_array_splice_refcounted(emitter);
+    arrays::emit_array_splice_insert(emitter);
+    arrays::emit_array_splice_insert_refcounted(emitter);
+    arrays::emit_array_splice_insert_boxed(emitter);
+    arrays::emit_array_splice_insert_unboxed(emitter);
     arrays::emit_array_diff_key(emitter);
     arrays::emit_array_intersect_key(emitter);
     arrays::emit_array_to_hash(emitter);
@@ -611,6 +615,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_ob_get_status(emitter);
     io::emit_ob_list_handlers(emitter);
     io::emit_file_get_contents(emitter);
+    io::emit_file_get_contents_range(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
     io::emit_stat(emitter);
