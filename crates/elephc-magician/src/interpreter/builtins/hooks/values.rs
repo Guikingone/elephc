@@ -205,6 +205,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     MtRand,
     /// Dispatches `quotemeta(...)`.
     QuoteMeta,
+    /// Dispatches `quoted_printable_encode(...)`.
+    QuotedPrintableEncode,
     /// Dispatches `rad2deg(...)`.
     Rad2deg,
     /// Dispatches `rand(...)`.
@@ -366,7 +368,14 @@ impl EvalValuesHook {
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),
             Self::Atan2 => two_args(evaluated_args, values, eval_atan2_result),
             Self::BaseConvert => three_args(evaluated_args, values, eval_base_convert_result),
-            Self::Base64Decode => one_arg(evaluated_args, values, eval_base64_decode_result),
+            Self::Base64Decode => match evaluated_args {
+                [value] => eval_base64_decode_result(*value, false, values),
+                [value, strict] => {
+                    let strict = values.truthy(*strict)?;
+                    eval_base64_decode_result(*value, strict, values)
+                }
+                _ => Err(EvalStatus::RuntimeFatal),
+            },
             Self::Base64Encode => one_arg(evaluated_args, values, eval_base64_encode_result),
             Self::Bin2Hex => one_arg(evaluated_args, values, eval_bin2hex_result),
             Self::Boolval => one_arg(evaluated_args, values, eval_boolval_result),
@@ -525,6 +534,9 @@ impl EvalValuesHook {
             Self::Printf => eval_printf_result(evaluated_args, values),
             Self::Pow => two_args(evaluated_args, values, eval_pow_result),
             Self::QuoteMeta => one_arg(evaluated_args, values, eval_quotemeta_result),
+            Self::QuotedPrintableEncode => {
+                one_arg(evaluated_args, values, eval_quoted_printable_encode_result)
+            }
             Self::Rad2deg => one_arg(evaluated_args, values, eval_rad2deg_result),
             Self::Rand => eval_rand_values_result(evaluated_args, values),
             Self::RandomInt => eval_random_int_values_result(evaluated_args, values),
@@ -594,7 +606,9 @@ impl EvalValuesHook {
                     _ => return Err(EvalStatus::RuntimeFatal),
                 };
                 match name {
+                    "stripos" => eval_stripos_result(haystack, needle, offset, values),
                     "strpos" => eval_strpos_result(haystack, needle, offset, values),
+                    "strripos" => eval_strripos_result(haystack, needle, offset, values),
                     "strrpos" => eval_strrpos_result(haystack, needle, offset, values),
                     _ => Err(EvalStatus::RuntimeFatal),
                 }

@@ -1125,6 +1125,62 @@ pub(crate) fn lower_ucwords(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Lowers `base64_decode(string, strict?)` and boxes its `string|false` answer as Mixed.
+///
+/// `__rt_base64_decode` reports a strict-mode rejection out of band — the decoded string
+/// pair plus a separate success flag — because PHP's `false` and a successfully decoded
+/// empty string are two different values that share the same empty pointer/length pair.
+/// Both arms are boxed here, so the caller always receives one `Mixed` cell.
+pub(crate) fn lower_base64_decode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "base64_decode expected 1 or 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    if inst.result.is_some() && inst.result_php_type.codegen_repr() != PhpType::Mixed {
+        // `crate::builtins::string::base64_decode::check` types EVERY call `string|false`,
+        // whose representation is `Mixed`, and both arms below leave a BOXED cell in the
+        // integer result register. A `Str` result type here would make `store_if_result` copy
+        // the string-pair registers instead, which no longer hold the answer.
+        return Err(CodegenIrError::invalid_module(format!(
+            "base64_decode result must be Mixed (string|false), got {:?}",
+            inst.result_php_type
+        )));
+    }
+    let false_label = ctx.next_label("base64_decode_false");
+    let end_label = ctx.next_label("base64_decode_end");
+    // `$strict` is materialized FIRST and parked on the temporary stack: the truthiness
+    // helpers clobber the same caller-saved registers the subject materialization needs.
+    materialize_truthy_flag(ctx, inst, 1, "base64_decode")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "base64_decode", "x1", "x2")?;
+            abi::emit_pop_reg(ctx.emitter, "x3");                                // reload the parked $strict flag into the decoder's flag argument
+            abi::emit_call_label(ctx.emitter, "__rt_base64_decode");
+            ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // a strict decode that hit a bad character returns PHP's false
+        }
+        Arch::X86_64 => {
+            load_string_arg_to_regs(ctx, inst, 0, "base64_decode", "rax", "rdx")?;
+            abi::emit_pop_reg(ctx.emitter, "rdi");                               // reload the parked $strict flag into the decoder's flag argument
+            abi::emit_call_label(ctx.emitter, "__rt_base64_decode");
+            ctx.emitter.instruction("test r8, r8");                             // did the decoder accept the encoded input?
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // a strict decode that hit a bad character returns PHP's false
+        }
+    }
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", end_label)),  // skip the false arm once the decoded string is boxed
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", end_label)), // skip the false arm once the decoded string is boxed
+    }
+    ctx.emitter.label(&false_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    ctx.emitter.label(&end_label);
+    store_if_result(ctx, inst)
+}
+
 /// The scan direction of a `strpos()`-family builtin, which decides how `$offset` bounds
 /// the searched window.
 ///

@@ -31,6 +31,8 @@ mod ltrim;
 mod rtrim;
 mod strpos;
 mod strrpos;
+mod stripos;
+mod strripos;
 mod str_repeat;
 mod strrev;
 mod chr;
@@ -60,6 +62,7 @@ mod chunk_split;
 mod count_chars;
 mod strtr;
 mod quotemeta;
+mod quoted_printable_encode;
 mod wordwrap;
 mod bin2hex;
 mod base_to_number;
@@ -140,6 +143,10 @@ pub use strpos::emit_strpos;
 /// Emit string position lookup (first occurrence).
 pub use strrpos::emit_strrpos;
 /// Emit string position lookup (last occurrence).
+pub use stripos::emit_stripos;
+/// Emit case-insensitive string position lookup (first occurrence).
+pub use strripos::emit_strripos;
+/// Emit case-insensitive string position lookup (last occurrence).
 pub use str_repeat::emit_str_repeat;
 /// Emit string repeat helper.
 pub use strrev::emit_strrev;
@@ -197,6 +204,8 @@ pub use count_chars::emit_count_chars;
 pub use strtr::emit_strtr;
 /// Emit the quotemeta regular-expression metacharacter escaper.
 pub use quotemeta::emit_quotemeta;
+/// Emit the quoted_printable_encode MIME transfer encoder.
+pub use quoted_printable_encode::emit_quoted_printable_encode;
 /// Emit the str_word_count word scanner.
 pub use str_word_count::emit_str_word_count;
 /// Emit newline to `<br>` conversion.
@@ -232,6 +241,9 @@ pub use base64_encode::emit_base64_encode;
 /// Emit Base64 encoding helper.
 pub use base64_decode::emit_base64_decode;
 /// Emit Base64 decoding helper.
+/// Re-export the php-src reverse-table sentinels so `runtime::data::fixed` builds
+/// `_b64_decode_tbl` from the exact classification `__rt_base64_decode` reads back.
+pub use base64_decode::{B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE};
 pub use sprintf::emit_sprintf;
 pub use vsprintf::emit_vsprintf;
 /// Emit sprintf formatting helper.

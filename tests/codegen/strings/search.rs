@@ -452,3 +452,126 @@ strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
 strrpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n"
     );
 }
+
+/// Verifies `stripos()` finds the FIRST case-insensitive occurrence of a needle.
+///
+/// Folding is ASCII-only, matching php-src's locale-independent `zend_tolower_ascii`: the
+/// bracket/brace case checks that the byte range just outside `A`-`Z` is compared verbatim,
+/// and `stripos("Été", "é")` is 3 rather than 1 because `0x89` and `0xA9` do not fold onto
+/// each other. Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_stripos_finds_first_case_insensitive_match() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(stripos("Hello World", "WORLD"));
+var_dump(stripos("Hello World", "world"));
+var_dump(stripos("ABCabc", "abc"));
+var_dump(stripos("Hello World", "zz"));
+var_dump(stripos("Hello World", ""));
+var_dump(stripos("[]{}", "{"));
+var_dump(stripos("\xC3\x89t\xC3\xA9", "\xC3\xA9"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(6)\nint(6)\nint(0)\nbool(false)\nint(0)\nint(2)\nint(3)\n"
+    );
+}
+
+/// Verifies `strripos()` finds the LAST case-insensitive occurrence of a needle.
+///
+/// The overlapping `strripos("aAaA", "aa")` case pins the right-to-left scan: a left-to-right
+/// search would answer 0. An empty needle answers the haystack length, like `strrpos()`.
+/// Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_strripos_finds_last_case_insensitive_match() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strripos("Hello World", "O"));
+var_dump(strripos("ABCabc", "ABC"));
+var_dump(strripos("aAaA", "aa"));
+var_dump(strripos("Hello World", "zz"));
+var_dump(strripos("Hello World", ""));
+"#,
+    );
+    assert_eq!(out, "int(7)\nint(3)\nint(2)\nbool(false)\nint(11)\n");
+}
+
+/// Verifies `stripos()`/`strripos()` accept PHP's third `$offset` argument positionally and
+/// by name, with the same direction-dependent negative-offset rules as `strpos()`/`strrpos()`.
+/// Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_case_insensitive_position_offset_positional_and_named() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(stripos("Hello World", "O", 5));
+var_dump(stripos("Hello World", "O", -4));
+var_dump(stripos("Hello World", "L", offset: 4));
+var_dump(stripos("aAaA", "aa", 1));
+var_dump(strripos("Hello World", "O", 5));
+var_dump(strripos("aAaA", "aa", -2));
+var_dump(strripos("ABCabc", "ABC", offset: 1));
+var_dump(stripos("abc", "B", 3));
+var_dump(strripos("abc", "B", -3));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(7)\nint(7)\nint(9)\nint(1)\nint(7)\nint(2)\nint(3)\nbool(false)\nbool(false)\n"
+    );
+}
+
+/// Verifies the case-insensitive `$offset` window is computed from values the optimizer cannot
+/// fold, so the backend's own normalization, `ValueError` guard, and match rebasing run rather
+/// than a compile-time constant. `$argc` is 1 for a binary run without arguments.
+/// Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_case_insensitive_position_offset_from_runtime_values() {
+    let out = compile_and_run(
+        r#"<?php
+$haystack = "aBcaBc" . ($argc > 100 ? "z" : "");
+$needle = "bC";
+var_dump(stripos($haystack, $needle, $argc + 1));
+var_dump(strripos($haystack, $needle, -$argc - 2));
+var_dump(strripos($haystack, $needle, offset: -$argc - 5));
+"#,
+    );
+    assert_eq!(out, "int(4)\nint(1)\nbool(false)\n");
+}
+
+/// Verifies both case-insensitive position builtins raise php-src's catchable `ValueError`
+/// for an `$offset` that does not land inside the haystack, in either direction.
+/// Messages are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_case_insensitive_position_offset_out_of_range_value_errors() {
+    let out = compile_and_run(
+        r#"<?php
+try { stripos("abc", "a", 4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { stripos("abc", "a", -4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strripos("abc", "a", 4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+try { strripos("abc", "a", -4); } catch (ValueError $e) { echo $e->getMessage(), "\n"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+stripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+strripos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n"
+    );
+}
+
+/// Verifies `stripos()`/`strripos()` through case-insensitive, namespaced, and dynamic call
+/// sites, so the registry catalog resolves all three spellings to the same runtime target.
+#[test]
+fn test_case_insensitive_position_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+var_dump(\STRIPOS("Hello World", "WORLD"));
+var_dump(StrRiPos("Hello World", "o"));
+var_dump(call_user_func('stripos', 'FooBar', 'BAR'));
+"#,
+    );
+    assert_eq!(out, "int(6)\nint(7)\nint(3)\n");
+}

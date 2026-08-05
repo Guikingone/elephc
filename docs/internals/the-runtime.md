@@ -200,6 +200,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_mb_strlen` | Multibyte-aware string length for `mb_strlen()` (emitted only for programs that use it) | `x1`/`x2` | `x0` |
 | `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
+| `__rt_stripos` | Find substring, ASCII case-insensitive | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
+| `__rt_strripos` | Find last occurrence, ASCII case-insensitive | `x1`/`x2` + `x3`/`x4` | `x0` |
 | `__rt_str_repeat` | Repeat N times with heap fallback for large results | `x1`/`x2` + count | `x1`/`x2` |
 | `__rt_str_replace` | Replace all occurrences | search + replace + subject | `x1`/`x2` |
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |
@@ -218,7 +220,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_sha1` | SHA1 hash | `x1`/`x2` | `x1`/`x2` |
 | `__rt_sprintf` | Format string | format + args on stack | `x1`/`x2` |
 | `__rt_base64_encode` | Base64 encode | `x1`/`x2` | `x1`/`x2` |
-| `__rt_base64_decode` | Base64 decode | `x1`/`x2` | `x1`/`x2` |
+| `__rt_base64_decode` | Base64 decode (php-src semantics, `$strict` in `x3`) | `x1`/`x2`/`x3` | `x0` ok flag + `x1`/`x2` |
+| `__rt_quoted_printable_encode` | MIME quoted-printable encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_urlencode` | URL encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_urldecode` | URL decode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_htmlspecialchars` | HTML escape | `x1`/`x2` | `x1`/`x2` |

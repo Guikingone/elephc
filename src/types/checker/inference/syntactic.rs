@@ -310,7 +310,7 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "ucwords" | "str_pad" | "implode" | "sprintf" | "vsprintf" | "nl2br" | "wordwrap" | "md5"
             | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
             | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"
-            | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
+            | "base64_encode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
             | "chunk_split" | "quotemeta" | "base_convert"
             // `join` is `implode`'s alias, and dechex/decbin/decoct render integers as
@@ -318,13 +318,18 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             // the `_ => PhpType::Int` fallback below, type the element `int`, and read the
             // string result registers as an integer — `["a"]` came out as `[0]`.
             | "join" | "dechex" | "decbin" | "decoct" => PhpType::Str,
-            "strpos" | "strrpos" | "array_search" | "grapheme_strrev" | "fileatime"
+            "strpos" | "strrpos" | "stripos" | "strripos"
+            | "array_search" | "grapheme_strrev" | "fileatime"
             | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
             | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile"
             | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp"
             // hexdec/bindec/octdec return `int|float`, whose shared codegen representation
             // is `Mixed`; the boxed cell must not be read back as a raw integer.
-            | "hexdec" | "bindec" | "octdec" => {
+            | "hexdec" | "bindec" | "octdec"
+            // `base64_decode()` returns `string|false` because `$strict = true` rejects a
+            // character outside the Base64 alphabet with `false`. Its representation is the
+            // same boxed `Mixed` cell, so it must not be read back as a string pair.
+            | "base64_decode" => {
                 PhpType::Mixed
             }
             "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]),

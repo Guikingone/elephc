@@ -24,7 +24,13 @@ expect_builtin_arity_error!(
 expect_builtin_arity_error!(
     test_error_base64_decode_wrong_args,
     "<?php base64_decode();",
-    "base64_decode() takes exactly 1 argument"
+    "base64_decode() takes 1 or 2 arguments"
+);
+
+expect_builtin_arity_error!(
+    test_error_base64_decode_too_many_args,
+    "<?php base64_decode(\"SGk=\", true, 1);",
+    "base64_decode() takes 1 or 2 arguments"
 );
 
 expect_builtin_arity_error!(
@@ -138,6 +144,45 @@ fn test_error_strpos_wrong_args() {
     expect_error(
         "<?php strpos(\"hi\");",
         "strpos() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `stripos()` with only one argument produces the correct arity error.
+///
+/// The optional third parameter (`$offset`) is accepted, so the derived phrasing is a range
+/// rather than an exact count, exactly like `strpos()`.
+#[test]
+fn test_error_stripos_wrong_args() {
+    expect_error(
+        "<?php stripos(\"hi\");",
+        "stripos() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `strripos()` with four arguments produces the correct arity error.
+#[test]
+fn test_error_strripos_too_many_args() {
+    expect_error(
+        "<?php strripos(\"hi\", \"h\", 0, 1);",
+        "strripos() takes 2 or 3 arguments",
+    );
+}
+
+/// Verifies that `quoted_printable_encode()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_quoted_printable_encode_wrong_args() {
+    expect_error(
+        "<?php quoted_printable_encode();",
+        "quoted_printable_encode() takes exactly 1 argument",
+    );
+}
+
+/// Verifies that `quoted_printable_encode()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_quoted_printable_encode_too_many_args() {
+    expect_error(
+        "<?php quoted_printable_encode(\"a\", \"b\");",
+        "quoted_printable_encode() takes exactly 1 argument",
     );
 }
 

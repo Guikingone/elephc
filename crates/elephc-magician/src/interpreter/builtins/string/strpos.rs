@@ -84,14 +84,27 @@ pub(in crate::interpreter) fn eval_string_position_named_result(
         None => 0,
     };
     let window = string_position_window(name, &haystack, needle.len(), offset)?;
+    // `stripos`/`strripos` fold both operands with php-src's locale-independent ASCII rule,
+    // so a non-ASCII byte is still matched verbatim, then reuse the identical search.
+    let folded = matches!(name, "stripos" | "strripos");
+    let haystack = if folded {
+        haystack.iter().map(u8::to_ascii_lowercase).collect()
+    } else {
+        haystack
+    };
+    let needle = if folded {
+        needle.iter().map(u8::to_ascii_lowercase).collect()
+    } else {
+        needle
+    };
     let searched = &haystack[window.clone()];
     let position = match name {
-        "strpos" if needle.is_empty() => Some(0),
-        "strpos" => searched
+        "strpos" | "stripos" if needle.is_empty() => Some(0),
+        "strpos" | "stripos" => searched
             .windows(needle.len())
             .position(|candidate| candidate == needle),
-        "strrpos" if needle.is_empty() => Some(searched.len()),
-        "strrpos" => searched
+        "strrpos" | "strripos" if needle.is_empty() => Some(searched.len()),
+        "strrpos" | "strripos" => searched
             .windows(needle.len())
             .rposition(|candidate| candidate == needle),
         _ => return Err(EvalStatus::UnsupportedConstruct),
@@ -126,7 +139,7 @@ fn string_position_window(
         let start = usize::try_from(offset).map_err(|_| EvalStatus::RuntimeFatal)?;
         return Ok(start..haystack.len());
     }
-    if name == "strpos" {
+    if matches!(name, "strpos" | "stripos") {
         let start = usize::try_from(length + offset).map_err(|_| EvalStatus::RuntimeFatal)?;
         return Ok(start..haystack.len());
     }

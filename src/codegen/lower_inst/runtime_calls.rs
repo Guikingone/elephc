@@ -65,13 +65,13 @@ fn lower_unary_string(
 fn unary_string_symbol(runtime: UnaryStringRuntime) -> &'static str {
     match runtime {
         UnaryStringRuntime::AddSlashes => "__rt_addslashes",
-        UnaryStringRuntime::Base64Decode => "__rt_base64_decode",
         UnaryStringRuntime::Base64Encode => "__rt_base64_encode",
         UnaryStringRuntime::BinToHex => "__rt_bin2hex",
         UnaryStringRuntime::HexToBin => "__rt_hex2bin",
         UnaryStringRuntime::HtmlEntityDecode => "__rt_html_entity_decode",
         UnaryStringRuntime::NlToBr => "__rt_nl2br",
         UnaryStringRuntime::QuoteMeta => "__rt_quotemeta",
+        UnaryStringRuntime::QuotedPrintableEncode => "__rt_quoted_printable_encode",
         UnaryStringRuntime::RawUrlDecode => "__rt_urldecode",
         UnaryStringRuntime::RawUrlEncode => "__rt_rawurlencode",
         UnaryStringRuntime::StripSlashes => "__rt_stripslashes",

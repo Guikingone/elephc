@@ -202,6 +202,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     MtRand,
     /// Dispatches `quotemeta(...)`.
     QuoteMeta,
+    /// Dispatches `quoted_printable_encode(...)`.
+    QuotedPrintableEncode,
     /// Dispatches `rad2deg(...)`.
     Rad2deg,
     /// Dispatches `rand(...)`.
@@ -460,6 +462,9 @@ impl EvalDirectHook {
             Self::Printf => eval_builtin_printf(args, context, scope, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),
             Self::QuoteMeta => eval_builtin_quotemeta(args, context, scope, values),
+            Self::QuotedPrintableEncode => {
+                eval_builtin_quoted_printable_encode(args, context, scope, values)
+            }
             Self::Rad2deg => eval_builtin_rad2deg(args, context, scope, values),
             Self::Rand => eval_builtin_rand(args, context, scope, values),
             Self::RandomInt => eval_builtin_random_int(args, context, scope, values),
@@ -513,7 +518,9 @@ impl EvalDirectHook {
                 _ => Err(EvalStatus::RuntimeFatal),
             },
             Self::StringPosition => match name {
+                "stripos" => eval_builtin_stripos(args, context, scope, values),
                 "strpos" => eval_builtin_strpos(args, context, scope, values),
+                "strripos" => eval_builtin_strripos(args, context, scope, values),
                 "strrpos" => eval_builtin_strrpos(args, context, scope, values),
                 _ => Err(EvalStatus::RuntimeFatal),
             },

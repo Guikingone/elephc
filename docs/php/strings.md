@@ -163,6 +163,8 @@ documented divergence (PHP's `E_DEPRECATED` notices are not emitted).
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
 | `strpos()` | `strpos($haystack, $needle, $offset = 0): int\|false` | Find first occurrence at or after `$offset`. A negative `$offset` counts from the end; one outside the haystack raises `ValueError`. Returns `false` if not found |
 | `strrpos()` | `strrpos($haystack, $needle, $offset = 0): int\|false` | Find last occurrence. A non-negative `$offset` starts the search there; a negative one stops it that many bytes before the end. Returns `false` if not found |
+| `stripos()` | `stripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strpos()`. Folding is ASCII-only (`A`-`Z`), so non-ASCII bytes are matched verbatim. `$offset` behaves exactly as in `strpos()` |
+| `strripos()` | `strripos($haystack, $needle, $offset = 0): int\|false` | Case-insensitive `strrpos()`. Folding is ASCII-only (`A`-`Z`). `$offset` behaves exactly as in `strrpos()` |
 | `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
@@ -328,7 +330,8 @@ Known divergences:
 | `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
 | `rawurldecode()` | `rawurldecode($str): string` | URL-decode (RFC 3986) |
 | `base64_encode()` | `base64_encode($str): string` | Base64 encode |
-| `base64_decode()` | `base64_decode($str): string` | Base64 decode |
+| `base64_decode()` | `base64_decode($string, $strict = false): string\|false` | Base64 decode. Whitespace inside the payload is skipped and missing padding is tolerated; the default (lax) mode also drops any other character outside the Base64 alphabet, while `$strict = true` returns `false` for such a character, for data after a padding character, for a truncated final group, and for an invalid amount of padding |
+| `quoted_printable_encode()` | `quoted_printable_encode($string): string` | MIME quoted-printable encode. Control bytes, `0x7F`, high-bit bytes, `=`, and a space directly before a `CR` become `=XX`; an embedded `CRLF` is kept as a hard line break; lines are folded at 75 columns with a trailing `=` |
 | `gzcompress()` | `gzcompress(string $data, int $level = -1): string` | Compress a string with zlib (system `libz`); `$level` is `-1` (default) or `0`–`9` |
 | `gzuncompress()` | `gzuncompress(string $data): string\|false` | Decompress a `gzcompress()`-produced string; `false` on a zlib error |
 | `gzdeflate()` | `gzdeflate(string $data, int $level = -1): string` | Compress a string into raw DEFLATE — no zlib header or trailer; `$level` is `-1` (default) or `0`–`9` |

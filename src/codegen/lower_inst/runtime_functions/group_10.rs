@@ -128,6 +128,24 @@ pub(super) fn lower(
                     "__rt_strncmp",
                 )
         }),
+        RuntimeFnId::Stripos => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position(
+                    ctx,
+                    inst,
+                    "stripos",
+                    "__rt_stripos",
+                    crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Forward,
+                )
+        }),
+        RuntimeFnId::Strripos => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_string_position(
+                    ctx,
+                    inst,
+                    "strripos",
+                    "__rt_strripos",
+                    crate::codegen::lower_inst::builtins::strings::StringPositionDirection::Reverse,
+                )
+        }),
         RuntimeFnId::Strpos => Some({
             crate::codegen::lower_inst::builtins::strings::lower_string_position(
                     ctx,

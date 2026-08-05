@@ -256,6 +256,148 @@ fn test_base64_roundtrip() {
     assert_eq!(out, "Test 123!");
 }
 
+/// Regression: `base64_decode()` skips embedded whitespace instead of decoding it.
+///
+/// The old chunked decoder consumed four raw bytes per iteration, so a space, newline, or tab
+/// inside the payload shifted the rest of the input into the wrong quartet lane and produced
+/// silent garbage (`"SGVs bG8="` decoded to `48656c01b1bc` instead of `Hello`). php-src's
+/// reverse table marks exactly tab, LF, FF, CR, and space skippable, so all four spellings
+/// below decode to `Hello`. Expected values are `LC_ALL=C php 8.4.20` output.
+#[test]
+fn test_base64_decode_skips_embedded_whitespace() {
+    let out = compile_and_run(
+        r#"<?php
+echo base64_decode("SGVs bG8="), "|";
+echo base64_decode("SGVs\nbG8="), "|";
+echo base64_decode("SGVs\tbG8="), "|";
+echo base64_decode("SGVs\r\nbG8=");
+"#,
+    );
+    assert_eq!(out, "Hello|Hello|Hello|Hello");
+}
+
+/// Regression: `base64_decode()` decodes an unpadded final group.
+///
+/// The old decoder required a full four-character chunk, so it dropped the trailing group
+/// entirely and returned `"Hel"` for `"SGVsbG8"`. php-src flushes whatever the accumulator
+/// holds: 2 leftover characters yield 1 byte and 3 yield 2. Expected values are
+/// `LC_ALL=C php 8.4.20` output.
+#[test]
+fn test_base64_decode_accepts_missing_padding() {
+    let out = compile_and_run(
+        r#"<?php
+echo base64_decode("SGVsbG8"), "|";
+echo bin2hex(base64_decode("ab")), "|";
+echo bin2hex(base64_decode("abc")), "|";
+echo bin2hex(base64_decode("a")), "|";
+echo bin2hex(base64_decode("AA==")), "|";
+echo bin2hex(base64_decode("AAA="));
+"#,
+    );
+    assert_eq!(out, "Hello|69|69b7||00|0000");
+}
+
+/// Regression: a stray byte is DROPPED by the lax decoder, not folded into the output.
+///
+/// The old table mapped every non-alphabet byte to sextet 0, so `"SGVsbG8*"` decoded to
+/// `"Hello\0"` — one byte longer than PHP's `"Hello"`. The same rule makes a `=` in the middle
+/// of the payload transparent in lax mode. Expected values are `LC_ALL=C php 8.4.20` output.
+#[test]
+fn test_base64_decode_lax_drops_invalid_characters() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(base64_decode("SGVsbG8*")), "|";
+echo bin2hex(base64_decode("SGV=sbG8=")), "|";
+echo bin2hex(base64_decode("=SGVsbG8=")), "|";
+echo bin2hex(base64_decode("!!!!")), "|";
+echo bin2hex(base64_decode("SGVsbG8=extra"));
+"#,
+    );
+    assert_eq!(out, "48656c6c6f|48656c6c6f|48656c6c6f||48656c6c6f1ec6dada");
+}
+
+/// Verifies the `$strict` parameter returns `false` on every input php-src rejects.
+///
+/// Covers all four `goto fail` paths: a byte outside the alphabet, data after a padding
+/// character, a truncated one-character final group, and an invalid padding amount. Whitespace
+/// stays skippable in strict mode, and an empty string is still a successful empty decode.
+/// Expected values are `LC_ALL=C php 8.4.20` output.
+#[test]
+fn test_base64_decode_strict_mode() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(base64_decode("SGVsbG8=", true));
+var_dump(base64_decode("SGVsbG8", true));
+var_dump(base64_decode("SGVs bG8=", true));
+var_dump(base64_decode("SGVsbG8*", true));
+var_dump(base64_decode("SGV=sbG8=", true));
+var_dump(base64_decode("a", true));
+var_dump(base64_decode("SGVsbG8==", true));
+var_dump(base64_decode("A===", true));
+var_dump(base64_decode("", true));
+var_dump(base64_decode("==", true));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "string(5) \"Hello\"\n",
+            "string(5) \"Hello\"\n",
+            "string(5) \"Hello\"\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "bool(false)\n",
+            "string(0) \"\"\n",
+            "bool(false)\n",
+        )
+    );
+}
+
+/// Verifies `base64_decode()` through a case-insensitive and a namespaced call site.
+///
+/// PHP resolves an unqualified builtin call inside a namespace by falling back to the global
+/// function table, and builtin names are case-insensitive; both spellings must reach the same
+/// typed runtime target as the plain lowercase call.
+#[test]
+fn test_base64_decode_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+echo \BASE64_DECODE("SGVsbG8="), "|";
+echo Base64_Decode("SGk="), "|";
+var_dump(base64_decode("SGVsbG8*", true));
+"#,
+    );
+    assert_eq!(out, "Hello|Hi|bool(false)\n");
+}
+
+/// Verifies `base64_decode()` over an input far past the 64 KiB bounded-scratch capacity.
+///
+/// A 160000-character payload cannot be served from `_concat_buf`, so `__rt_concat_reserve`
+/// hands back an owned heap block instead; the decode must still round-trip exactly, and the
+/// strict decoder must handle a `chunk_split()`-wrapped copy whose embedded newlines are
+/// skipped rather than decoded.
+#[test]
+fn test_base64_decode_above_scratch_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$raw = str_repeat("elephc-base64-bounded-scratch-", 4000);
+$enc = base64_encode($raw);
+echo strlen($enc), "|", strlen(base64_decode($enc)), "|";
+echo (base64_decode($enc) === $raw ? "roundtrip-ok" : "roundtrip-bad"), "|";
+$wrapped = chunk_split($enc, 76, "\n");
+echo (base64_decode($wrapped, true) === $raw ? "wrapped-ok" : "wrapped-bad"), "|";
+var_dump(base64_decode($wrapped . "*", true));
+"#,
+    );
+    assert_eq!(
+        out,
+        "160000|120000|roundtrip-ok|wrapped-ok|bool(false)\n"
+    );
+}
+
 /// Verifies `ctype_alpha()` returns `"1"` (truthy) for an all-alphabetic string "Hello".
 #[test]
 fn test_gzcompress_roundtrip() {
@@ -930,4 +1072,118 @@ echo strlen($out), "|", substr($out, 0, 8), "|", substr($out, -8);
 "#,
     );
     assert_eq!(out, "200000|cdefcdef|cdefcdef");
+}
+
+/// Verifies `quoted_printable_encode()` escapes exactly the byte classes php-src escapes.
+///
+/// Control bytes, `0x7F`, high-bit bytes, and `=` itself always become `=XX`; ordinary
+/// printable ASCII is copied through. A TRAILING space stays a literal space (php-src only
+/// escapes a space that is directly followed by a `CR`), while a trailing tab is a control
+/// byte and always becomes `=09`. Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_quoted_printable_encode_escapes_php_byte_classes() {
+    let out = compile_and_run(
+        r#"<?php
+echo quoted_printable_encode("Hello, World!"), "|";
+echo quoted_printable_encode(""), "|";
+echo quoted_printable_encode("a=b=c"), "|";
+echo quoted_printable_encode("caf\xC3\xA9"), "|";
+echo quoted_printable_encode("\x00\x01\x1F\x7F\x80"), "|";
+echo quoted_printable_encode("a\tb"), "|";
+echo quoted_printable_encode("a "), "|";
+echo quoted_printable_encode("a\t");
+"#,
+    );
+    assert_eq!(
+        out,
+        "Hello, World!||a=3Db=3Dc|caf=C3=A9|=00=01=1F=7F=80|a=09b|a |a=09"
+    );
+}
+
+/// Verifies `quoted_printable_encode()` line-ending handling.
+///
+/// An embedded `CRLF` is a hard line break and is copied through unchanged, but a lone `CR`
+/// or `LF` is an ordinary control byte and becomes `=0D`/`=0A`. A space directly before a
+/// `CRLF` is escaped so transport cannot strip it. Expected values are verbatim
+/// `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_quoted_printable_encode_line_endings() {
+    let out = compile_and_run(
+        r#"<?php
+echo bin2hex(quoted_printable_encode("a \r\nb")), "|";
+echo bin2hex(quoted_printable_encode("a\r\nb")), "|";
+echo bin2hex(quoted_printable_encode("a\nb")), "|";
+echo bin2hex(quoted_printable_encode("a\rb")), "|";
+echo bin2hex(quoted_printable_encode("line1\r\nline2\r\n"));
+"#,
+    );
+    assert_eq!(
+        out,
+        "613d32300d0a62|610d0a62|613d304162|613d304462|6c696e65310d0a6c696e65320d0a"
+    );
+}
+
+/// Verifies the 76-character soft line break: 75 columns of payload followed by a trailing `=`
+/// and a `CRLF`.
+///
+/// A 75-byte line is emitted whole; the 76th byte moves to a new line behind `=\r\n`
+/// (`...61 3d 0d 0a 61`). 30 `=` characters encode to 93 bytes — more than php-src's own
+/// `3 * length` allocation bound, which is why the runtime reserves `4 * len + 8`. The last
+/// two cases pin php-src's UTF-8 lookahead allowance: a 2-byte lead breaks one column earlier
+/// than an ASCII escape and a 3-byte lead two columns earlier, so a character is never split
+/// across the fold. Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_quoted_printable_encode_soft_line_breaks() {
+    let out = compile_and_run(
+        r#"<?php
+echo strlen(quoted_printable_encode(str_repeat("a", 75))), "|";
+echo bin2hex(quoted_printable_encode(str_repeat("a", 76))), "|";
+echo strlen(quoted_printable_encode(str_repeat("=", 30))), "|";
+echo bin2hex(quoted_printable_encode(str_repeat("a", 74) . "\xC3\xA9")), "|";
+echo bin2hex(quoted_printable_encode(str_repeat("a", 73) . "\xE2\x82\xAC"));
+"#,
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "75|6161616161616161616161616161616161616161616161616161616161616161616161616",
+            "1616161616161616161616161616161616161616161616161616161616161616161616161616",
+            "13d0d0a61|93|616161616161616161616161616161616161616161616161616161616161616",
+            "1616161616161616161616161616161616161616161616161616161616161616161616161616",
+            "1616161613d0d0a3d43333d4139|616161616161616161616161616161616161616161616161",
+            "6161616161616161616161616161616161616161616161616161616161616161616161616161",
+            "61616161616161616161613d0d0a3d45323d38323d4143",
+        )
+    );
+}
+
+/// Verifies `quoted_printable_encode()` through case-insensitive, namespaced, named-argument,
+/// and dynamic call sites, so the registry catalog resolves every spelling to one target.
+#[test]
+fn test_quoted_printable_encode_case_insensitive_and_namespaced() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+echo \QUOTED_PRINTABLE_ENCODE("caf\xC3\xA9"), "|";
+echo Quoted_Printable_Encode("a=b"), "|";
+echo quoted_printable_encode(string: "x\tz"), "|";
+echo call_user_func('quoted_printable_encode', "= ");
+"#,
+    );
+    assert_eq!(out, "caf=C3=A9|a=3Db|x=09z|=3D ");
+}
+
+/// Verifies `quoted_printable_encode()` over a result far past the 64 KiB bounded-scratch
+/// capacity, so `__rt_concat_reserve` serves the reservation from an owned heap block.
+/// Expected values are verbatim `LC_ALL=C php` 8.4.20 output.
+#[test]
+fn test_quoted_printable_encode_above_scratch_capacity() {
+    let out = compile_and_run(
+        r#"<?php
+$raw = str_repeat("=\xC3\xA9 x", 20000);
+$out = quoted_printable_encode($raw);
+echo strlen($raw), "|", strlen($out), "|", md5($out);
+"#,
+    );
+    assert_eq!(out, "100000|228997|e5e2d387e026fd978522763ba791144f");
 }
