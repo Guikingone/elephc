@@ -324,6 +324,24 @@ dense array has no slot for it, but the caller increfs the child before the call
 so returning without storing stranded it — 24 wasm pages over 20000 such writes,
 now 3.
 
+A third and fourth round pushed on the same seam, which is where the null that
+the EIR drops meets consumers that trust the type. `count()` of the missed
+element answered `4295050542` off address 0 and carried on, where php-src raises
+`TypeError: count(): Argument #1 ($value) must be of type Countable|array, null
+given` and terminates; it now raises exactly that. And `tryFrom`'s needle width
+was read off the case list rather than the enum's declared backing type, so
+`enum E: string {}` — a backed enum with no cases, which is legal PHP — took the
+int path and left half a string on the operand stack.
+
+One finding from that seam stays OPEN, and it is worth stating plainly: reading a
+PROPERTY through the missed element answers garbage with no diagnostic, where
+php-src warns `Attempt to read property "age" on null` and evaluates to null. The
+warning needs a message this runtime's fixed table does not carry, and the value
+needs a nullable result the EIR does not produce — the native backend emits the
+warning but prints the null sentinel rather than nothing, so it is not fully right
+there either. It is the same dropped-null family as the entry above, and it is
+tracked with the rest of that family rather than papered over here.
+
 Writing PAST the end is a known shared gap that neither of these caused. PHP
 treats `$a[3]` on a one-element array as a SPARSE key, so `count()` is 2; a dense
 representation with no occupancy bit fills the gap with nulls and answers 4.
