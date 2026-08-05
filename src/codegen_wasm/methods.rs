@@ -94,7 +94,16 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     if !ctx.module.class_infos.contains_key(&class_name)
         && ctx.module.interface_infos.contains_key(&class_name)
     {
-        return lower_interface_method_call(ctx, inst, receiver, &class_name, &method_name, &method_key);
+        return lower_interface_method_call(
+            ctx,
+            inst,
+            receiver,
+            &class_name,
+            &method_name,
+            &method_key,
+            method_ptr,
+            method_len,
+        );
     }
 
     let ci = ctx
@@ -175,7 +184,7 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     } else {
         WasmRepr::val_types(inst.result_type).len()
     };
-    ctx.emit_load_value(receiver)?;
+    emit_null_receiver_guard(ctx, receiver, method_ptr, method_len)?;
     for &arg in inst.operands.iter().skip(1) {
         ctx.emit_load_value(arg)?;
     }
@@ -220,6 +229,8 @@ fn lower_interface_method_call(
     interface_name: &str,
     method_name: &str,
     method_key: &str,
+    method_ptr: u32,
+    method_len: u32,
 ) -> Result<()> {
     let candidates =
         super::capability::interface_dispatch_candidates(ctx.module, interface_name, method_key)
@@ -237,7 +248,7 @@ fn lower_interface_method_call(
         WasmRepr::val_types(inst.result_type).len()
     };
 
-    ctx.emit_load_value(receiver)?;
+    emit_null_receiver_guard(ctx, receiver, method_ptr, method_len)?;
     for &arg in inst.operands.iter().skip(1) {
         ctx.emit_load_value(arg)?;
     }
@@ -259,6 +270,49 @@ fn lower_interface_method_call(
             ctx.fb.ins("drop", "discard unused interface method result");
         }
     }
+    Ok(())
+}
+
+/// Loads the receiver and terminates with PHP's own message when it is null.
+///
+/// A raw object pointer used to be non-zero by construction, so the dispatch stub's fallthrough
+/// trap was the only thing standing behind a bad one. That stopped being true once a missed
+/// `array<Object>` element started reading as pointer 0 with the element's own class as its
+/// static type — the null the EIR drops at that boundary. php-src names this case exactly, and
+/// the NATIVE backend already answers it from the same EIR:
+///
+/// ```text
+///   class A { public function hi(): int { return 42; } }
+///   $a = [new A()];  $x = $a[9];  echo $x->hi();
+///   php-src / native: Warning: Undefined array key 9
+///                     Fatal error: Uncaught Error: Call to a member function hi() on null
+///   wasm before this: Uncaught Error: Invalid callable dispatch
+/// ```
+///
+/// Tag 8 is the Mixed null tag, which is what makes the shared helper print `on null`. The
+/// receiver is left on the stack for the call that follows.
+fn emit_null_receiver_guard(
+    ctx: &mut FnCtx,
+    receiver: ValueId,
+    method_ptr: u32,
+    method_len: u32,
+) -> Result<()> {
+    let pointer = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(receiver)?;
+    ctx.fb
+        .ins(&format!("local.set {}", pointer), "the method receiver");
+    ctx.fb.ins(
+        &format!("(if (i32.eqz (local.get {}))", pointer),
+        "a null receiver is PHP's own Error, not a dispatch failure",
+    );
+    ctx.fb.ins(
+        &format!(
+            "(then (call $__rt_fail_method_call_non_object (i32.const {method_ptr}) (i32.const {method_len}) (i32.const 8))))"
+        ),
+        "Call to a member function X() on null",
+    );
+    ctx.fb
+        .ins(&format!("local.get {}", pointer), "receiver for the call");
     Ok(())
 }
 

@@ -298,6 +298,18 @@ Measured the same way: 20000 overwrites of one slot hold at 3 pages against the
 retaining loop's 32. Together these unblock `examples/nested-arrays` and
 `examples/cow`, the latter matching php-src's copy-on-write output byte for byte.
 
+Two CONSUMERS of that null needed the same treatment, and a multi-model audit
+(GLM 5.2, Kimi K2.7, Kimi K3) is what surfaced them. Writing through the null was
+the worse one, because it answered rather than stopped: php-src AUTOVIVIFIES
+silently, building a fresh array, where this backend exhausted memory treating
+address 0 as an array header. The setters now build the array php-src builds.
+Calling a method on the null terminated either way but named the wrong thing —
+`Invalid callable dispatch`, the dispatch ladder's fallthrough trap, instead of
+php-src's `Call to a member function hi() on null`. A raw object pointer used to
+be non-zero by construction, so nothing checked; the native backend already
+answered this correctly from the same EIR, so the guard is parity rather than
+caution.
+
 Writing PAST the end is a known shared gap that neither of these caused. PHP
 treats `$a[3]` on a one-element array as a SPARSE key, so `count()` is 2; a dense
 representation with no occupancy bit fills the gap with nulls and answers 4.

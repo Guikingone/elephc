@@ -13995,6 +13995,147 @@ process.exitCode = wasi.start(instance);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the two consumers of a null container that a multi-model audit found unguarded.
+///
+/// Reading a missing element of an `array<array<…>>` or `array<Object>` answers pointer 0 while
+/// the EIR still types the result as the element's own non-null type — the null it drops at that
+/// boundary. Hardening the getters and `is_null` against that value covered reading it; two
+/// consumers were left trusting the type, and both were reachable only because that read became
+/// possible. An independent audit by GLM 5.2, Kimi K2.7 and Kimi K3 surfaced them.
+///
+/// WRITING through the null was the worse of the two, because it answered rather than stopped:
+/// php-src AUTOVIVIFIES silently, building a fresh array, where this backend exhausted memory
+/// trying to treat address 0 as an array header. The setters now build the array php-src builds.
+///
+/// CALLING a method on the null terminated either way, but said the wrong thing: `Invalid
+/// callable dispatch` — the dispatch ladder's fallthrough trap — instead of php-src's `Call to a
+/// member function hi() on null`. A raw object pointer used to be non-zero by construction, so
+/// nothing checked. The NATIVE backend already answers this correctly from the same EIR, so the
+/// guard is parity rather than caution.
+///
+/// (php-src also prints a file, line and stack trace after the message; this backend prints no
+/// trace for any fatal, so only the message is compared — the same convention its other fatal
+/// tests use.)
+#[test]
+fn test_cli_wasm_guards_the_consumers_of_a_missed_container_element() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_missed_container_consumers");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // php-src 8.5.6's own answers: stdout, then the diagnostics it writes with
+    // display_errors=stderr.
+    for (name, source, expected_out, expected_err) in [
+        // Writing a CONTAINER through the miss: php-src autovivifies and carries on.
+        (
+            "write_container.php",
+            "<?php\n$a = [[[1]]];\n$b = $a[9];\n$b[0] = [2];\necho count($b), \"\\n\";\necho \"survived\\n\";\n",
+            "1\nsurvived\n",
+            "Warning: Undefined array key 9\n",
+        ),
+        // The same through a SCALAR setter, reachable by exactly the same route.
+        (
+            "write_scalar.php",
+            "<?php\n$a = [[1]];\n$b = $a[9];\n$b[0] = 5;\necho count($b), \"|\", $b[0], \"\\n\";\necho \"survived\\n\";\n",
+            "1|5\nsurvived\n",
+            "Warning: Undefined array key 9\n",
+        ),
+        // Writing PAST the end of the autovivified array still extends it.
+        (
+            "write_offset.php",
+            "<?php\n$a = [[1]];\n$b = $a[9];\n$b[2] = 7;\necho count($b), \"|\", $b[2], \"\\n\";\n",
+            "3|7\n",
+            "Warning: Undefined array key 9\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the missed-container consumer");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the missed-container consumer under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected_out,
+            "{name}: php-src's own stdout"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stderr),
+            expected_err,
+            "{name}: php-src's own diagnostics"
+        );
+    }
+
+    // A method call on the missed OBJECT element must name php-src's own Error.
+    let call = dir.join("call_on_null.php");
+    fs::write(
+        &call,
+        "<?php\nclass A { public function hi(): int { return 42; } }\n$a = [new A()];\n$x = $a[9];\necho $x->hi(), \"\\n\";\n",
+    )
+    .unwrap();
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&call)
+        .output()
+        .expect("failed to compile the null-receiver call");
+    assert!(
+        built.status.success(),
+        "call_on_null.php must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("call_on_null.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the null-receiver call under Node");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(
+        stderr.contains("Warning: Undefined array key 9")
+            && stderr.contains("Call to a member function hi() on null"),
+        "the null receiver must raise php-src's own Error, got: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Invalid callable dispatch"),
+        "the dispatch fallthrough must not stand in for PHP's diagnostic: {stderr}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

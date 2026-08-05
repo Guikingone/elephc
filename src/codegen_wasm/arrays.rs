@@ -1020,6 +1020,8 @@ const RT_ARRAY_PREFLIGHT_SET: &str = r#"(func $__rt_array_preflight_set (param $
 const RT_ARRAY_SET_INT: &str = r#"(func $__rt_array_set_int (param $array i32) (param $index i64) (param $value i64) (result i32)
   (local $oldlen i64)
   (local $j i64)
+  (if (i32.eqz (local.get $array))                          ;; writing into a null AUTOVIVIFIES
+    (then (local.set $array (call $__rt_array_new (i64.const 8) (i64.const 8)))))  ;; php-src builds a fresh array, silently
   (if (i64.lt_s (local.get $index) (i64.const 0))
     (then (return (local.get $array))))                     ;; reject negative index
   (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 8))  ;; prove index+1 and all growth before COW
@@ -1063,6 +1065,8 @@ const RT_ARRAY_SET_PTR: &str = r#"(func $__rt_array_set_ptr (param $array i32) (
   (local $j i64)
   (local $slot i32)
   (local $old i32)
+  (if (i32.eqz (local.get $array))                          ;; writing into a null AUTOVIVIFIES
+    (then (local.set $array (call $__rt_array_new (i64.const 8) (i64.const 8)))))  ;; php-src builds a fresh array, silently
   (if (i64.lt_s (local.get $index) (i64.const 0))
     (then (return (local.get $array))))                     ;; reject negative index
   (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 8))  ;; prove growth before COW
@@ -1104,6 +1108,8 @@ const RT_ARRAY_SET_STR: &str = r#"(func $__rt_array_set_str (param $array i32) (
   (local $oldp i32)
   (local $slot i32)
   (local $j i64)
+  (if (i32.eqz (local.get $array))                          ;; writing into a null AUTOVIVIFIES
+    (then (local.set $array (call $__rt_array_new (i64.const 8) (i64.const 16)))))  ;; php-src builds a fresh array, silently
   (if (i64.lt_s (local.get $index) (i64.const 0))
     (then (return (local.get $array))))                     ;; reject negative index
   (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 16))  ;; prove index+1 and all growth before COW
