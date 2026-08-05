@@ -128,11 +128,21 @@ times over:
 | Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
 | All three together | 17 |
 
-The blocker-count distribution says the same thing: 16 examples have one
-distinct blocker, 20 have two, 22 have three, and the tail runs past eleven.
-Progress is roughly one example per fix, so the example counter is a poor guide
-to correctness work — running a differential corpus against php-src has been
-finding more, and more serious, defects than making the counter move.
+The blocker-count distribution says the same thing: of the 148 that do not
+compile, 16 have one distinct blocker, 19 have two, 22 have three, 22 have four,
+and the tail runs past eleven. Progress is roughly one example per fix, so the
+example counter is a poor guide to correctness work — running a differential
+corpus against php-src has been finding more, and more serious, defects than
+making the counter move.
+
+Note also that the example suite is not a pure PHP corpus, so "matches php-src"
+is not a question that can be asked of all of it. Measured with `php -n` over all
+190: **10 do not parse under php-src at all** (`ffi`, `ffi-memory`, `hot-path`,
+`ifdef`, `pointers`, `union-types` and the four `sdl_*`), because they use
+Elephc-only syntax; and 25 more reach a fatal, most of them legitimately — an
+Elephc-only builtin (`clamp`, `log2`, `grapheme_strrev`, `zval_pack`,
+`class_attribute_names`), an extension this machine lacks (Imagick, Gmagick,
+Cairo), or a service that is not running (the PDO driver examples).
 
 ### PHP semantics this target reproduces exactly
 
