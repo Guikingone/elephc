@@ -392,6 +392,15 @@ impl Checker {
                         decl.span,
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
+                    // PHP applies `strict_types` to a variadic element exactly like a regular
+                    // declared parameter, so the strict rejection runs here too; the coercive
+                    // widenings `require_compatible_arg_type` allows are unchanged otherwise.
+                    self.require_strict_types_param_binding(
+                        &elem_ty,
+                        &ty,
+                        arg.span,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
                     self.require_compatible_arg_type(
                         &elem_ty,
                         &ty,

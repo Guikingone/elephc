@@ -84,6 +84,14 @@ pub(crate) struct Checker {
     /// Tracks callable signatures inferred for user-function callable parameters,
     /// keyed by (function_name, param_name).
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Whether the statement currently being checked was written in a file that opened with
+    /// `declare(strict_types=1)`.
+    ///
+    /// PHP scopes the directive to the file containing the *call site*, so this is installed
+    /// from `Stmt::strict_types` by `check_stmt` and restored afterwards. It is `false` outside
+    /// any statement check, which keeps class/constant/default-value checking on PHP's coercive
+    /// rules — the behaviour elephc had before the directive was honoured.
+    pub strict_types: bool,
     /// Tracks which undeclared function parameters have already had their type
     /// adopted from a real call site, keyed by (function_name, param_index). The
     /// first such call adopts the actual argument type; later disagreeing calls

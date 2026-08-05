@@ -241,7 +241,7 @@ Narrowing applies to function and method parameters. A parameter whose call site
 
 ### Parameter type coercion
 
-PHP's default (coercive) mode converts a scalar argument to a declared scalar parameter type when the call runs. elephc applies the same conversions, but only where it can reproduce PHP's result exactly. `declare(strict_types=1)` does not change any of this — elephc has one binding model, see [Control Structures → declare](./control-structures.md#declare).
+PHP's default (coercive) mode converts a scalar argument to a declared scalar parameter type when the call runs. elephc applies the same conversions, but only where it can reproduce PHP's result exactly. Everything in this section describes a file **without** `declare(strict_types=1)`; see [Strict types](#strict-types) for what the directive changes.
 
 **Always accepted.** These conversions are total (every value converts), produce no PHP diagnostic, and use the same code as the corresponding explicit cast, so they match PHP byte for byte for both literals and runtime values:
 
@@ -278,6 +278,55 @@ Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat(
 - **Builtin functions** keep their own per-builtin argument rules.
 - **Classes injected by the compiler** (SPL, `Exception`, reflection) stay strict, because several of their members are lowered by dedicated emitters rather than the shared argument path.
 - **Nullable and union parameters** (`?string $s`, `int|string $v`) stay strict; only a plain declared scalar type binds coercively.
+
+### Strict types
+
+A file that opens with `declare(strict_types=1);` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
+
+| Argument type → | `int` | `float` | `string` | `bool` |
+|---|---|---|---|---|
+| **declared `int`** | accepted | rejected | rejected | rejected |
+| **declared `float`** | accepted (widened) | accepted | rejected | rejected |
+| **declared `string`** | rejected | rejected | accepted | rejected |
+| **declared `bool`** | rejected | rejected | rejected | accepted |
+
+```php
+<?php
+
+declare(strict_types=1);
+
+function takesInt(int $i) { return $i; }
+function takesFloat(float $f) { return $f; }
+
+echo takesFloat(42);       // 42   — the one implicit conversion strict mode keeps
+echo takesInt((int) "7");  // 7    — an explicit cast is always accepted
+echo takesInt(true);       // compile error: must be of type int, bool given
+echo takesInt("42");       // compile error: must be of type int, string given
+```
+
+The directive is scoped to the physical file it appears in, exactly as in PHP. It does not propagate into included files, and the file containing the **call site** decides — not the file declaring the callee:
+
+```php
+// lib.php  (no declare)
+function coerceHere(int $i) { return $i; }
+function fromLooseFile() { return coerceHere(true); }   // still coerces to 1
+
+// main.php
+declare(strict_types=1);
+require __DIR__ . '/lib.php';
+echo fromLooseFile();       // 1 — the call above lives in a coercive file
+echo coerceHere(true);      // compile error — this call lives in a strict file
+```
+
+**What the directive covers.** Declared by-value parameters of user functions, methods, static methods, constructors, closures, arrow functions, first-class callables, declared variadic element types, and `call_user_func`/`call_user_func_array` — which forward the caller's frame in PHP and therefore stay strict.
+
+**What it does not cover.**
+
+- **Callbacks invoked by other internal functions** (`array_map`, `usort`, `array_walk`, `preg_replace_callback`, …) keep coercive binding, matching PHP: the engine calls them from its own frame, which never carries the directive. `array_map('g', [true])` still passes `1` to `g(int $i)` in a strict file.
+- **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
+- **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
+- **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
+- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules.
 
 ### Callable strings
 

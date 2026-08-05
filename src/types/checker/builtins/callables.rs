@@ -223,6 +223,28 @@ pub(crate) fn check_array_callback_builtin_call(
     env: &TypeEnv,
     label: &str,
 ) -> Result<PhpType, CompileError> {
+    checker.with_internal_callback_binding(|checker| {
+        check_array_callback_builtin_call_in_engine_frame(
+            checker,
+            callback,
+            callback_arg_types,
+            span,
+            env,
+            label,
+        )
+    })
+}
+
+/// Type-checks an array-callback builtin's callback after the caller's `strict_types` setting
+/// has been suspended, matching the coercive frame PHP's engine invokes such callbacks from.
+fn check_array_callback_builtin_call_in_engine_frame(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_arg_types: &[PhpType],
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
     let mut callback_env = env.clone();
     let callback_args = callback_arg_types
         .iter()
@@ -786,6 +808,28 @@ fn callback_descriptor_env_ownership(callback: &Expr) -> CallbackDescriptorEnvOw
 /// Returns the callback's return type on success, or an error if the callback
 /// does not have a statically known callable signature.
 pub(crate) fn check_callback_builtin_call(
+    checker: &mut Checker,
+    callback: &Expr,
+    callback_args: &[Expr],
+    span: crate::span::Span,
+    env: &TypeEnv,
+    label: &str,
+) -> Result<PhpType, CompileError> {
+    checker.with_internal_callback_binding(|checker| {
+        check_callback_builtin_call_in_engine_frame(
+            checker,
+            callback,
+            callback_args,
+            span,
+            env,
+            label,
+        )
+    })
+}
+
+/// Type-checks a callback builtin's callback after the caller's `strict_types` setting has been
+/// suspended, matching the coercive frame PHP's engine invokes such callbacks from.
+fn check_callback_builtin_call_in_engine_frame(
     checker: &mut Checker,
     callback: &Expr,
     callback_args: &[Expr],

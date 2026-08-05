@@ -1,13 +1,19 @@
 //! Purpose:
 //! Owns the PHP parameter-binding rules that let a declared parameter accept an argument
-//! of a different type: coercive scalar binding (`string $s` accepting `42`) and
-//! callable-name strings (`callable $f` accepting `"strtoupper"`).
+//! of a different type: coercive scalar binding (`string $s` accepting `42`), callable-name
+//! strings (`callable $f` accepting `"strtoupper"`), and the `declare(strict_types=1)` mode
+//! that switches every one of those conversions off.
 //!
 //! Called from:
 //! - `crate::types::checker::functions::resolution` (acceptance + diagnostics)
 //! - `crate::ir_lower::expr` (the matching argument rewrite)
 //!
 //! Key details:
+//! - `strict_types` is decided by the file the *call site* is written in, not the file the
+//!   callee is declared in, so the rejection below is driven by the checker's current statement
+//!   (`crate::parser::ast::Stmt::strict_types`) and never by the callee's signature.
+//! - Under `strict_types=1` the checker rejects the call outright, so EIR lowering never reaches
+//!   the matching rewrite for a strict-mode violation. The rewrites stay coercive-only.
 //! - The checker and EIR lowering MUST agree: every binding the checker accepts here is
 //!   rewritten by lowering through `rewrite_param_bound_arg`, and nothing else is. A binding
 //!   accepted without a matching rewrite would pass raw storage into a differently typed
@@ -85,6 +91,79 @@ pub(crate) fn classify_param_binding(
         | (PhpType::Float, PhpType::Str) => classify_numeric_binding(expected, arg),
         _ => ParamBinding::Rejected,
     }
+}
+
+/// The four PHP scalar type declarations `declare(strict_types=1)` compares by identity.
+///
+/// `false` collapses into `Bool` because it is a subtype of `bool`, not a separate scalar for
+/// binding purposes. Every non-scalar declaration — objects, arrays, `iterable`, `callable`,
+/// `mixed`, unions, elephc's `Mixed`/`Pointer`/`Resource` — is deliberately absent: strict mode
+/// changes nothing about how those bind, so they must keep their existing acceptance rules.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StrictScalar {
+    Int,
+    Float,
+    Str,
+    Bool,
+}
+
+impl StrictScalar {
+    /// Returns the PHP spelling used in a `TypeError` message and in a cast suggestion.
+    fn php_name(self) -> &'static str {
+        match self {
+            StrictScalar::Int => "int",
+            StrictScalar::Float => "float",
+            StrictScalar::Str => "string",
+            StrictScalar::Bool => "bool",
+        }
+    }
+}
+
+/// Classifies a declared type as one of PHP's scalar type declarations, or `None` when strict
+/// mode has nothing to say about it.
+///
+/// The *declared* type is inspected rather than `codegen_repr()`, which would flatten a union to
+/// `Mixed` and a resource to `Int` and so invent scalar identities strict mode must not judge.
+fn strict_scalar_kind(ty: &PhpType) -> Option<StrictScalar> {
+    match ty {
+        PhpType::Int => Some(StrictScalar::Int),
+        PhpType::Float => Some(StrictScalar::Float),
+        PhpType::Str => Some(StrictScalar::Str),
+        PhpType::Bool | PhpType::False => Some(StrictScalar::Bool),
+        _ => None,
+    }
+}
+
+/// Reports why `declare(strict_types=1)` forbids binding `actual` to a declared `expected`
+/// parameter, or `None` when PHP performs the binding in strict mode too.
+///
+/// PHP keeps exactly one implicit conversion under the directive — widening `int` to a declared
+/// `float` — and throws `TypeError` for every other scalar pair, including the `bool`→`int`,
+/// `int`→`string` and numeric-string→`int` conversions its coercive mode performs silently.
+/// Verified against PHP 8.4.20 for the full 4x4 scalar matrix.
+///
+/// Returns `None` for any pair involving a non-scalar declared type: strict mode does not change
+/// how those bind, so the caller's normal compatibility rules stay in charge.
+pub(crate) fn strict_param_binding_rejection(
+    expected: &PhpType,
+    actual: &PhpType,
+) -> Option<String> {
+    let expected_kind = strict_scalar_kind(expected)?;
+    let actual_kind = strict_scalar_kind(actual)?;
+    if expected_kind == actual_kind {
+        return None;
+    }
+    if expected_kind == StrictScalar::Float && actual_kind == StrictScalar::Int {
+        return None;
+    }
+    Some(format!(
+        "`declare(strict_types=1)` is active in this file, so PHP performs no conversion here \
+         and throws `TypeError: ... must be of type {}, {} given`; add an explicit `({})` cast \
+         at the call site",
+        expected_kind.php_name(),
+        actual_kind.php_name(),
+        expected_kind.php_name()
+    ))
 }
 
 /// Classifies a string argument bound to a declared `callable` parameter.
@@ -480,6 +559,62 @@ mod tests {
         );
         let binding = classify_param_binding(&PhpType::Callable, &PhpType::Str, &arg);
         assert!(matches!(binding, ParamBinding::NeedsRuntimeCheck(_)));
+    }
+
+    /// Verifies `declare(strict_types=1)` keeps only the `int`→`float` widening across the full
+    /// 4x4 scalar matrix, matching PHP 8.4.20's accept/reject table.
+    #[test]
+    fn strict_types_keeps_only_the_int_to_float_widening() {
+        let scalars = [
+            PhpType::Int,
+            PhpType::Float,
+            PhpType::Str,
+            PhpType::Bool,
+        ];
+        for expected in &scalars {
+            for actual in &scalars {
+                let accepted = strict_param_binding_rejection(expected, actual).is_none();
+                let should_accept = expected == actual
+                    || (*expected == PhpType::Float && *actual == PhpType::Int);
+                assert_eq!(
+                    accepted, should_accept,
+                    "strict binding of {:?} into {:?}",
+                    actual, expected
+                );
+            }
+        }
+    }
+
+    /// Verifies the strict rejection stays out of every non-scalar declaration, so `mixed`,
+    /// arrays, unions, `callable` and class types keep the acceptance rules they already had.
+    #[test]
+    fn strict_types_ignores_non_scalar_declarations() {
+        assert!(strict_param_binding_rejection(&PhpType::Mixed, &PhpType::Int).is_none());
+        assert!(strict_param_binding_rejection(&PhpType::Int, &PhpType::Mixed).is_none());
+        assert!(strict_param_binding_rejection(&PhpType::Callable, &PhpType::Str).is_none());
+        assert!(strict_param_binding_rejection(
+            &PhpType::Array(Box::new(PhpType::Int)),
+            &PhpType::Str
+        )
+        .is_none());
+        assert!(strict_param_binding_rejection(
+            &PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+            &PhpType::Bool
+        )
+        .is_none());
+        // `false` is a subtype of `bool`, not a distinct scalar for binding purposes.
+        assert!(strict_param_binding_rejection(&PhpType::Bool, &PhpType::False).is_none());
+    }
+
+    /// Verifies the strict diagnostic names PHP's `TypeError` types and suggests the cast that
+    /// makes the call legal, so the message is actionable rather than just a refusal.
+    #[test]
+    fn strict_types_diagnostic_names_the_php_type_error() {
+        let detail = strict_param_binding_rejection(&PhpType::Int, &PhpType::Str)
+            .expect("string into int is rejected under strict_types");
+        assert!(detail.contains("declare(strict_types=1)"), "{}", detail);
+        assert!(detail.contains("must be of type int, string given"), "{}", detail);
+        assert!(detail.contains("`(int)` cast"), "{}", detail);
     }
 
     /// Verifies a scalar bound to `string` becomes an explicit `(string)` cast, which is the

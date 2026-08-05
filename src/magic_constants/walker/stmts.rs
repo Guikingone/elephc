@@ -31,6 +31,7 @@ pub(in crate::magic_constants) fn walk_program<P: Pass>(stmts: Vec<Stmt>, pass: 
 pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
     let span = stmt.span;
     let source_mode = stmt.source_mode;
+    let strict_types = stmt.strict_types;
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(walk_program(stmts, pass)),
@@ -419,6 +420,7 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         kind,
         span,
         source_mode,
+        strict_types,
         attributes,
     }
 }

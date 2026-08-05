@@ -11,12 +11,18 @@
 //! - The accept/reject decision lives in `crate::types::param_binding`, shared with the
 //!   matching EIR argument rewrite. This file only turns that decision into a diagnostic and
 //!   registers the callable signature a bound callable string implies.
-//! - It runs *after* `types_compatible` / `type_accepts` have already failed, so it can only
-//!   widen what is accepted, never narrow it.
+//! - Coercive binding runs *after* `types_compatible` / `type_accepts` have already failed, so
+//!   it can only widen what is accepted, never narrow it.
+//! - The `declare(strict_types=1)` rejection runs *before* them instead, because the widenings
+//!   PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible`
+//!   already accepts on its own.
 
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
-use crate::types::param_binding::{classify_param_binding, ParamBinding};
+use crate::span::Span;
+use crate::types::param_binding::{
+    classify_param_binding, strict_param_binding_rejection, ParamBinding,
+};
 use crate::types::{FunctionSig, PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -35,6 +41,9 @@ impl Checker {
     /// temporary instead, so a by-reference parameter stays on the strict path rather than
     /// silently dropping the callee's writes.
     ///
+    /// When the call site's file declared `strict_types=1`, the strict rejection runs first and
+    /// no coercive binding is considered at all.
+    ///
     /// # Errors
     /// Returns the standard `<context> expects <expected>, got <actual>` mismatch, extended
     /// with the PHP behaviour elephc cannot reproduce when a binding rule exists but is not
@@ -49,6 +58,7 @@ impl Checker {
         owner: Option<(&str, &str)>,
         by_ref: bool,
     ) -> Result<(), CompileError> {
+        self.require_strict_types_param_binding(expected, actual, arg.span, context)?;
         if Self::types_compatible(expected, actual) || self.type_accepts(expected, actual) {
             return Ok(());
         }
@@ -83,6 +93,56 @@ impl Checker {
         }
     }
 
+    /// Rejects a declared-parameter argument that `declare(strict_types=1)` forbids at this
+    /// call site.
+    ///
+    /// No-op unless the statement being checked came from a file that declared the directive,
+    /// and no-op for every conversion PHP still performs in strict mode (the `int`→`float`
+    /// widening and every non-scalar declared type). It is called from the coercive binding
+    /// path *and* from the call surfaces that never had coercive binding — declared variadic
+    /// element types and the sig-based closure/first-class-callable path — so the directive
+    /// reaches every declared parameter, not only the coercively bound ones.
+    ///
+    /// # Errors
+    /// Returns the standard `<context> expects <expected>, got <actual>` mismatch extended with
+    /// the `TypeError` PHP would throw at run time.
+    pub(crate) fn require_strict_types_param_binding(
+        &self,
+        expected: &PhpType,
+        actual: &PhpType,
+        span: Span,
+        context: &str,
+    ) -> Result<(), CompileError> {
+        if !self.strict_types {
+            return Ok(());
+        }
+        match strict_param_binding_rejection(expected, actual) {
+            Some(detail) => Err(Self::binding_mismatch_error(
+                expected, actual, span, context, &detail,
+            )),
+            None => Ok(()),
+        }
+    }
+
+    /// Runs `operation` with `declare(strict_types=1)` parameter binding suspended.
+    ///
+    /// PHP invokes a callback handed to an internal function (`array_map`, `usort`,
+    /// `array_walk`, `preg_replace_callback`, …) from the engine's own frame, which is never
+    /// strict, so the calling file's directive does not reach the callback's parameters —
+    /// `array_map('g', [true])` still coerces `true` into `g(int $i)` under `strict_types=1`.
+    /// `call_user_func`/`call_user_func_array` are the documented exception: they forward the
+    /// caller's frame and therefore stay on the strict path. Verified on PHP 8.4.20.
+    pub(crate) fn with_internal_callback_binding<T>(
+        &mut self,
+        operation: impl FnOnce(&mut Self) -> T,
+    ) -> T {
+        let outer_strict_types = self.strict_types;
+        self.strict_types = false;
+        let result = operation(self);
+        self.strict_types = outer_strict_types;
+        result
+    }
+
     /// Builds the extended parameter mismatch diagnostic, appending the PHP behaviour that
     /// explains why elephc refuses the binding.
     fn param_binding_error(
@@ -92,8 +152,20 @@ impl Checker {
         context: &str,
         detail: &str,
     ) -> CompileError {
+        Self::binding_mismatch_error(expected, actual, arg.span, context, detail)
+    }
+
+    /// Formats one parameter-binding rejection at `span`, shared by the coercive and strict
+    /// paths so both diagnostics read identically apart from the explanation.
+    fn binding_mismatch_error(
+        expected: &PhpType,
+        actual: &PhpType,
+        span: Span,
+        context: &str,
+        detail: &str,
+    ) -> CompileError {
         CompileError::new(
-            arg.span,
+            span,
             &format!(
                 "{} expects {:?}, got {:?} — {}",
                 context, expected, actual, detail

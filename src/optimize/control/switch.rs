@@ -23,6 +23,7 @@ pub(crate) fn prune_switch_stmt(
     default: Option<Vec<Stmt>>,
     span: crate::span::Span,
     source_mode: crate::source::SourceMode,
+    strict_types: bool,
 ) -> Vec<Stmt> {
     let subject = prune_expr(subject);
     let cases = normalize_switch_cases(drop_shadowed_switch_patterns(normalize_switch_cases(
@@ -48,6 +49,7 @@ pub(crate) fn prune_switch_stmt(
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }];
     }
@@ -79,6 +81,7 @@ pub(crate) fn prune_switch_stmt(
             },
             span,
             source_mode,
+            strict_types,
             attributes: Vec::new(),
         }];
     };
@@ -97,6 +100,7 @@ pub(crate) fn prune_switch_stmt(
                     },
                     span,
                     source_mode,
+                    strict_types,
                     attributes: Vec::new(),
                 }];
             }

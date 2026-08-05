@@ -1127,3 +1127,128 @@ fn test_error_by_ref_parameter_is_not_coerced() {
         "Function 'f' parameter $s expects Str, got Int",
     );
 }
+
+/// Verifies `declare(strict_types=1)` rejects the `bool`→`int` binding PHP's coercive mode
+/// performs silently, and that the diagnostic names the `TypeError` PHP would throw.
+///
+/// This is the audit repro: before the directive was honoured, elephc compiled `ti(true)` to
+/// `int(1)` while PHP 8.4.20 fatals with
+/// `TypeError: ti(): Argument #1 ($i) must be of type int, true given`.
+#[test]
+fn test_error_strict_types_rejects_bool_into_int_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies the strict diagnostic identifies the directive as the reason and suggests the cast
+/// that makes the call legal, rather than reading as a plain type mismatch.
+#[test]
+fn test_error_strict_types_diagnostic_names_the_directive() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);",
+        "`declare(strict_types=1)` is active in this file",
+    );
+}
+
+/// Verifies every scalar that binds to a `string` parameter in coercive mode is rejected under
+/// the directive: `int`, `float` and `bool` sources all throw `TypeError` in PHP 8.4.20.
+#[test]
+fn test_error_strict_types_rejects_scalars_into_string_parameter() {
+    for (argument, php_type) in [("42", "int"), ("4.5", "float"), ("true", "bool")] {
+        expect_error(
+            &format!(
+                "<?php declare(strict_types=1); function ts(string $s) {{ return $s; }} echo ts({});",
+                argument
+            ),
+            &format!("must be of type string, {} given", php_type),
+        );
+    }
+}
+
+/// Verifies every scalar that binds to a `bool` parameter in coercive mode is rejected under the
+/// directive.
+#[test]
+fn test_error_strict_types_rejects_scalars_into_bool_parameter() {
+    for (argument, php_type) in [("1", "int"), ("1.5", "float"), ("\"a\"", "string")] {
+        expect_error(
+            &format!(
+                "<?php declare(strict_types=1); function tb(bool $b) {{ return $b; }} echo tb({});",
+                argument
+            ),
+            &format!("must be of type bool, {} given", php_type),
+        );
+    }
+}
+
+/// Verifies the constant `float`/numeric-string arguments coercive mode folds into an `int`
+/// parameter are rejected under the directive instead.
+#[test]
+fn test_error_strict_types_rejects_constants_into_int_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(5.0);",
+        "must be of type int, float given",
+    );
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(\"42\");",
+        "must be of type int, string given",
+    );
+}
+
+/// Verifies a numeric string is rejected at a `float` parameter under the directive, even though
+/// coercive mode binds it as a constant.
+#[test]
+fn test_error_strict_types_rejects_numeric_string_into_float_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function tf(float $f) { return $f; } echo tf(\"1.5\");",
+        "must be of type float, string given",
+    );
+}
+
+/// Verifies the directive reaches method calls, not just plain functions.
+#[test]
+fn test_error_strict_types_rejects_method_argument() {
+    expect_error(
+        "<?php declare(strict_types=1); class C { public function m(int $i) { return $i; } } $c = new C(); echo $c->m(true);",
+        "Method C::m parameter $i expects Int, got Bool",
+    );
+}
+
+/// Verifies the directive reaches a closure invoked through a variable, which is validated on a
+/// different checker path from a named function call.
+#[test]
+fn test_error_strict_types_rejects_closure_argument() {
+    expect_error(
+        "<?php declare(strict_types=1); $f = function (int $i) { return $i; }; echo $f(true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies the directive reaches a declared variadic element type, which PHP checks exactly
+/// like a regular declared parameter.
+#[test]
+fn test_error_strict_types_rejects_variadic_element() {
+    expect_error(
+        "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } echo f(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// Verifies `call_user_func` stays on the strict path. Unlike `array_map`, it forwards the
+/// caller's frame, so PHP 8.4.20 throws `TypeError` for `call_user_func('g', true)` in a
+/// strict file.
+#[test]
+fn test_error_strict_types_reaches_call_user_func() {
+    expect_error(
+        "<?php declare(strict_types=1); function g(int $i) { return $i; } echo call_user_func('g', true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies a coercive file is unaffected: the same `bool`→`int` call still binds, so the
+/// directive genuinely narrows only the files that declare it.
+#[test]
+fn test_strict_types_absent_keeps_coercive_binding() {
+    expect_no_error("<?php function ti(int $i) { return $i; } echo ti(true);");
+}

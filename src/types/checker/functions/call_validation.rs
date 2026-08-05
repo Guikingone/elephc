@@ -505,6 +505,19 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
+                    // `strict_types` applies to every declared parameter type, including the
+                    // closure and first-class-callable surfaces that stay off the coercive
+                    // path. Builtin signatures carry `declared_params: false` throughout
+                    // (`crate::builtins::registry`), so this never fires for an internal
+                    // function whose parameter types the checker does not consume.
+                    if sig.declared_params.get(param_idx).copied().unwrap_or(false) {
+                        self.require_strict_types_param_binding(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
                     if coercive_param_binding
                         && sig.declared_params.get(param_idx).copied().unwrap_or(false)
                     {
@@ -529,6 +542,17 @@ impl Checker {
             } else if let (Some(vname), Some(expected_ty)) =
                 (sig.variadic.as_ref(), variadic_elem_ty.as_ref())
             {
+                // The variadic occupies the last `declared_params` slot, so gating on it keeps
+                // the strict rejection off builtin variadics, whose registry-derived parameter
+                // types the checker does not otherwise consume.
+                if sig.declared_params.last().copied().unwrap_or(false) {
+                    self.require_strict_types_param_binding(
+                        expected_ty,
+                        &actual_ty,
+                        arg.span,
+                        &format!("{} variadic parameter ${}", callee_desc, vname),
+                    )?;
+                }
                 self.require_compatible_arg_type(
                     expected_ty,
                     &actual_ty,

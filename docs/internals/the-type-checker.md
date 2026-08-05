@@ -106,6 +106,12 @@ The first assignment determines a variable's type. After that, reassignment is o
 
 Declared boundaries are looser than plain reassignment. A `Mixed` value is accepted where a declared parameter, return, or property expects a plain `Int`, `Float`, `Bool`, or `Str` (PHP's coercive mode): the checker lets it through and codegen inserts the runtime unboxing/narrowing conversion. Union values are accepted member-wise — every member of the actual union must be accepted by some member of the expected type.
 
+### Per-file `strict_types`
+
+`declare(strict_types=1)` is scoped to one physical file, but the checker only ever sees the single flat program the resolver produces after include/autoload merging, and `Span` carries no file identity. The flag therefore rides on the AST: the parser records the directive on its per-file source profile (`crate::source`), `Stmt::strict_types` inherits it at construction alongside `Stmt::source_mode`, and every statement-rewriting pass re-installs the whole `SourceProfile` — which is why `with_parse_mode`/`scoped_parse_mode` take the profile rather than the mode alone.
+
+`Checker::check_stmt` installs `Stmt::strict_types` on `Checker::strict_types` and restores the outer value afterwards, so the setting always reflects the file the *call site* was written in — matching PHP, where a strict file calling into a coercive one is strict and a coercive file calling a function declared in a strict one is not. `Checker::require_strict_types_param_binding` then runs *before* `types_compatible`, because the widenings PHP drops in strict mode (`bool`→`int`, `int`→`bool`, …) are ones `types_compatible` accepts on its own. `Checker::with_internal_callback_binding` suspends the flag while validating a callback that an internal function invokes (`array_map`, `usort`, …), which PHP calls from an engine frame that never carries the directive.
+
 This means elephc rejects code that PHP would allow:
 
 ```php

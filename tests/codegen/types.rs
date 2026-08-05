@@ -20,6 +20,8 @@ mod type_annotations;
 mod narrowing;
 #[path = "types/param_coercion.rs"]
 mod param_coercion;
+#[path = "types/strict_types.rs"]
+mod strict_types;
 #[path = "types/named_arguments/mod.rs"]
 mod named_arguments;
 #[path = "types/examples.rs"]
