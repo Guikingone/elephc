@@ -1424,13 +1424,30 @@ fn direct_closure_return_type(
 /// which would otherwise coerce a boxed Mixed argument to an integer on return. A
 /// `return $obj->prop` where `$obj` is a captured/parameter object of a known class adopts
 /// the property's declared type, so a `fn &() => $o->items` closure returns the array type
-/// rather than the syntactic integer default.
+/// rather than the syntactic integer default. An array literal built out of those same
+/// variables resolves its element/value slots the same way (see
+/// `direct_closure_return_array_element_type`).
 fn direct_closure_return_expr_type(
     expr: &crate::parser::ast::Expr,
     captures: &[(String, PhpType, bool)],
     params: &[(String, PhpType)],
     classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
 ) -> PhpType {
+    // An array literal returned directly is stamped with this inferred type and its elements
+    // are coerced into it by `lower_return_expr`, so its slots must be resolved against the
+    // closure signature instead of the syntactic integer default.
+    if let ExprKind::ArrayLiteral(items) = &expr.kind {
+        if !items.is_empty() {
+            return PhpType::Array(Box::new(direct_closure_return_array_element_type(
+                items, captures, params, classes,
+            )));
+        }
+    }
+    if let ExprKind::ArrayLiteralAssoc(pairs) = &expr.kind {
+        if !pairs.is_empty() {
+            return direct_closure_return_assoc_literal_type(pairs, captures, params, classes);
+        }
+    }
     if let ExprKind::Variable(name) = &expr.kind {
         if let Some((_, php_type, _)) = captures
             .iter()
@@ -1471,6 +1488,100 @@ fn direct_closure_return_expr_type(
         }
     }
     crate::types::checker::infer_expr_type_syntactic(expr)
+}
+
+/// Returns the EIR storage element type for an indexed array literal returned directly
+/// from a closure, resolving every item against the closure's captures and parameters.
+///
+/// This mirrors `crate::ir_lower::expr::array_literal_type_for_ir`, which types the very
+/// same literal while lowering the body from `LoweringContext::local_types`. The two must
+/// agree: `lower_return_expr` feeds the inferred return element type back into
+/// `lower_array_literal_with_expected_type`, so a slot typed `int` here casts a boxed
+/// `Mixed` argument to an integer on the way into the array — `function (mixed $a, mixed $b)
+/// { return [$a, $b]; }` called as `(1, "z")` produced `[1, 0]`. The syntactic fallback used
+/// before this helper existed types every unrecognized item `int`, which also mis-stamped
+/// `string`, `float`, `bool`, and `array` parameters.
+fn direct_closure_return_array_element_type(
+    items: &[crate::parser::ast::Expr],
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> PhpType {
+    let mut elem_ty = PhpType::Never;
+    for item in items {
+        elem_ty = crate::ir_lower::expr::merge_ir_indexed_element_type(
+            elem_ty,
+            direct_closure_return_array_item_type(item, captures, params, classes),
+        );
+    }
+    elem_ty
+}
+
+/// Returns the EIR storage element type contributed by one indexed array-literal item.
+///
+/// A spread contributes its source array's element type (widened to `Mixed` for an
+/// empty/unknown source, since `Void`/`Never` has no array-element representation), matching
+/// the `ExprKind::Spread` arm of `array_literal_element_type_for_ir`.
+fn direct_closure_return_array_item_type(
+    item: &crate::parser::ast::Expr,
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> PhpType {
+    if let ExprKind::Spread(inner) = &item.kind {
+        let source = direct_closure_return_array_item_type(inner, captures, params, classes);
+        return match source.codegen_repr() {
+            PhpType::Array(elem) => match elem.codegen_repr() {
+                PhpType::Void | PhpType::Never => PhpType::Mixed,
+                other => other,
+            },
+            _ => PhpType::Mixed,
+        };
+    }
+    // `null` has no narrower storage than the boxed cell, exactly as the lowering-side
+    // `ExprKind::Null` arm decides.
+    if matches!(item.kind, ExprKind::Null) {
+        return PhpType::Mixed;
+    }
+    crate::ir_lower::expr::ir_array_storage_type(direct_closure_return_expr_type(
+        item, captures, params, classes,
+    ))
+}
+
+/// Returns the EIR storage type for an associative array literal returned directly from a
+/// closure, resolving each value against the closure's captures and parameters.
+///
+/// Keys keep the syntactic rules (`normalized_array_key_type` / `merge_array_key_types`)
+/// used by `assoc_array_literal_type_for_ir`; only the value slots need the signature,
+/// since a `function (string $s) { return ['k' => $s]; }` value slot typed `int` made the
+/// caller read the string payload back as a raw integer.
+fn direct_closure_return_assoc_literal_type(
+    pairs: &[(crate::parser::ast::Expr, crate::parser::ast::Expr)],
+    captures: &[(String, PhpType, bool)],
+    params: &[(String, PhpType)],
+    classes: &std::collections::HashMap<String, crate::types::ClassInfo>,
+) -> PhpType {
+    let mut key_ty = PhpType::Never;
+    let mut value_ty = PhpType::Never;
+    for (key, value) in pairs {
+        let next_key = crate::types::normalized_array_key_type(
+            key,
+            crate::types::checker::infer_expr_type_syntactic(key),
+        );
+        key_ty = if matches!(key_ty, PhpType::Never) {
+            next_key
+        } else {
+            crate::types::merge_array_key_types(key_ty, next_key)
+        };
+        value_ty = crate::ir_lower::expr::merge_ir_assoc_value_type(
+            value_ty,
+            direct_closure_return_array_item_type(value, captures, params, classes),
+        );
+    }
+    PhpType::AssocArray {
+        key: Box::new(key_ty),
+        value: Box::new(value_ty),
+    }
 }
 
 /// Returns true when a statement list contains a `return <expr>` for its own function body.

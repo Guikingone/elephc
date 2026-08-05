@@ -5,10 +5,11 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins, the internal array pointer family, the hash key/value sorts that relink iteration order, runtime allocation-size guards, mutating builtins whose by-reference argument is a property, static property, or container element, and array builtin parameters widened to match reference PHP's parameter lists.
+//! - Submodules group focused fixtures for associative arrays, indexed, associative-array helper builtins, nested arrays, array callbacks, list/key-edge builtins, the internal array pointer family, the hash key/value sorts that relink iteration order, runtime allocation-size guards, mutating builtins whose by-reference argument is a property, static property, or container element, array builtin parameters widened to match reference PHP's parameter lists, and the storage type stamped on array literals returned directly from a closure.
 
 mod allocation_guards;
 mod assoc;
+mod closure_literal_returns;
 mod by_ref_places;
 mod indexed;
 mod internal_pointer;
