@@ -5678,7 +5678,42 @@ fn check_runtime_call(
                 ));
             }
         }
-        _ => issues.push(format!("{context}: missing typed runtime target")),
+        other => {
+            let operands = call
+                .operands
+                .iter()
+                .map(|operand| {
+                    function
+                        .value(*operand)
+                        .map_or_else(|| "?".to_string(), |value| format!("{:?}", value.ir_type))
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            issues.push(format!(
+                "{context}: missing typed runtime target, carries {} over ({operands})",
+                runtime_call_immediate_kind(other.as_ref())
+            ));
+        }
+    }
+}
+
+/// Names the immediate an `Op::RuntimeCall` carries when it is not a typed runtime target.
+///
+/// Without this, every such refusal reads as one opaque `missing typed runtime target`, which
+/// says nothing about what is actually missing — and it is the single most frequent refusal in
+/// the example suite, so an unnamed bucket hides the largest piece of remaining work. The
+/// operand types are printed alongside because an untyped call carries no other discriminator.
+fn runtime_call_immediate_kind(immediate: Option<&Immediate>) -> String {
+    let Some(immediate) = immediate else {
+        return "no immediate at all".to_string();
+    };
+    match immediate {
+        Immediate::RuntimeRef(id) => format!("the untyped runtime#{}", id.0),
+        Immediate::BuiltinRef(id) => format!("the untyped builtin#{}", id.0),
+        Immediate::FunctionRef(id) => format!("function#{}", id.as_raw()),
+        Immediate::Data(id) => format!("data#{}", id.as_raw()),
+        Immediate::ProfiledData { data, .. } => format!("profiled data#{}", data.as_raw()),
+        other => format!("{other:?}"),
     }
 }
 
