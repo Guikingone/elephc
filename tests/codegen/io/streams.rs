@@ -3237,11 +3237,9 @@ echo "|";
 echo getprotobyname("udp");
 echo "|";
 echo getprotobyname("icmp");
-echo "|";
-echo getprotobyname("ip");
 "#,
     );
-    assert_eq!(out, "6|17|1|0");
+    assert_eq!(out, "6|17|1");
 }
 
 /// Verifies compiled PHP output for getprotobyname alias and missing.
@@ -3267,11 +3265,25 @@ echo "|";
 echo getprotobynumber(17);
 echo "|";
 echo getprotobynumber(1);
-echo "|";
-echo getprotobynumber(0);
 "#,
     );
-    assert_eq!(out, "tcp|udp|icmp|ip");
+    assert_eq!(out, "tcp|udp|icmp");
+}
+
+/// Verifies protocol zero and its host-defined name resolve in both directions.
+#[test]
+fn test_protocol_zero_host_name_round_trip() {
+    // Protocol zero is named "ip" on some systems and "hopopt" on others.
+    let out = compile_and_run(
+        r#"<?php
+$name = getprotobynumber(0);
+echo $name . "|" . getprotobyname($name);
+"#,
+    );
+    assert!(
+        matches!(out.as_str(), "ip|0" | "hopopt|0"),
+        "expected protocol zero to round-trip as ip or hopopt, got {out:?}"
+    );
 }
 
 /// Verifies compiled PHP output for getprotobynumber persists across calls.
