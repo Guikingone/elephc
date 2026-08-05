@@ -39,7 +39,106 @@ pub(super) fn emit_mixed_runtime(wm: &mut WatModule, has_main: bool) {
     wm.add_raw_func(&mixed_cast_float(has_main));
     wm.add_raw_func(&mixed_cast_string(has_main));
     wm.add_raw_func(RT_MIXED_CAST_STRING_REF);
+    if has_main {
+        wm.add_raw_func(RT_MIXED_ARRAY_GET_MISSING);
+        wm.add_raw_func(RT_MIXED_ARRAY_GET);
+    }
 }
+
+/// `__rt_mixed_array_get`: reads `$mixed[$key]`, dispatching on the receiver's RUNTIME tag.
+///
+/// The receiver is genuinely unknown at compile time — `$deep["db"]["host"]` reaches this
+/// because the inner read answers `mixed` — so nothing here can be decided by the checker. The
+/// key arrives already normalized the way `__rt_hash_get` wants it: `(value, -1)` is an integer
+/// key and `(pointer, length)` a string one, which is also what makes `$a["1"]` find the element
+/// `$a[1]` holds. `warn` is zero for `isset()` and `??`, which read the same way but say nothing.
+///
+/// Every answer is an OWNED cell. Two arms go further than the native backend, which answers a
+/// silent null for both and is wrong about it: a STRING receiver is indexed by byte, and a
+/// scalar receiver warns before answering null. Two arms deliberately match native rather than
+/// php-src, because the message php-src raises is a `TypeError`/`Error` this backend has no data
+/// for: indexing a string with a string key, and indexing an object.
+///
+/// Emitted only into main-bearing modules — it calls the warning helpers, which are part of the
+/// command runtime. The capability audit refuses the shape everywhere else.
+const RT_MIXED_ARRAY_GET: &str = r#"(func $__rt_mixed_array_get (param $cell i32) (param $key_lo i64) (param $key_hi i64) (param $warn i32) (result i32)
+  (local $tag i64)
+  (local $lo i64)
+  (local $hi i64)
+  (local $elem i32)
+  (local $found i32)
+  (local $vlo i64)
+  (local $vhi i64)
+  (local $vtag i64)
+  (local $index i64)
+  (call $__rt_mixed_unbox (local.get $cell))                ;; -> (tag, lo, hi), hi on top
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 4))               ;; indexed array
+    (then
+      (if (i64.ne (local.get $key_hi) (i64.const -1))       ;; a string key never indexes a list
+        (then (return (call $__rt_mixed_array_get_missing (local.get $key_lo) (local.get $key_hi) (local.get $warn)))))
+      (local.set $elem (call $__rt_array_elem_to_mixed (i32.wrap_i64 (local.get $lo)) (local.get $key_lo)))
+      (if (i32.eqz (local.get $elem))                       ;; absent index
+        (then (return (call $__rt_mixed_array_get_missing (local.get $key_lo) (local.get $key_hi) (local.get $warn)))))
+      (return (local.get $elem))))
+  (if (i64.eq (local.get $tag) (i64.const 5))               ;; hash
+    (then
+      (call $__rt_hash_get (i32.wrap_i64 (local.get $lo)) (local.get $key_lo) (local.get $key_hi))
+      (local.set $vtag)                                     ;; -> (found, value_lo, value_hi, value_tag)
+      (local.set $vhi)
+      (local.set $vlo)
+      (local.set $found)
+      (if (i32.eqz (local.get $found))
+        (then (return (call $__rt_mixed_array_get_missing (local.get $key_lo) (local.get $key_hi) (local.get $warn)))))
+      (return (call $__rt_mixed_from_value (local.get $vtag) (local.get $vlo) (local.get $vhi)))))
+  (if (i64.eq (local.get $tag) (i64.const 1))               ;; string: one byte, by offset
+    (then
+      (if (i64.ne (local.get $key_hi) (i64.const -1))       ;; php-src raises a TypeError here; native answers null
+        (then (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+      (local.set $index (local.get $key_lo))
+      (if (i64.lt_s (local.get $index) (i64.const 0))       ;; a negative offset counts from the end
+        (then (local.set $index (i64.add (local.get $index) (local.get $hi)))))
+      (if (i32.or (i64.lt_s (local.get $index) (i64.const 0))
+                  (i64.ge_s (local.get $index) (local.get $hi)))
+        (then
+          (if (local.get $warn)                             ;; the index is reported AS WRITTEN
+            (then (call $__rt_warn_uninit_string_offset (local.get $key_lo))))
+          (return (call $__rt_mixed_from_value (i64.const 1) (local.get $lo) (i64.const 0)))))
+      (return (call $__rt_mixed_from_value (i64.const 1)
+        (i64.add (local.get $lo) (local.get $index))
+        (i64.const 1)))))
+  (if (i64.eq (local.get $tag) (i64.const 8))               ;; null receiver
+    (then
+      (if (local.get $warn)
+        (then (call $__rt_warn_array_offset_on_null)))
+      (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (if (i32.or (i32.or
+        (i64.eq (local.get $tag) (i64.const 0))             ;; int
+        (i64.eq (local.get $tag) (i64.const 2)))            ;; float
+        (i64.eq (local.get $tag) (i64.const 3)))            ;; bool
+    (then
+      (if (local.get $warn)
+        (then (call $__rt_warn_array_offset_on_scalar (local.get $tag) (local.get $lo))))
+      (return (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))))
+  (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))
+"#;
+
+/// `__rt_mixed_array_get_missing`: the shared miss answer — warn about the key, then box null.
+///
+/// The two key shapes need different diagnostics, and PHP quotes a string key but not an
+/// integer one. Split out because three arms of the read reach the same place.
+const RT_MIXED_ARRAY_GET_MISSING: &str = r#"(func $__rt_mixed_array_get_missing (param $key_lo i64) (param $key_hi i64) (param $warn i32) (result i32)
+  (if (local.get $warn)
+    (then
+      (if (i64.eq (local.get $key_hi) (i64.const -1))
+        (then (call $__rt_warn_undefined_array_key_int (local.get $key_lo)))
+        (else (call $__rt_warn_undefined_array_key_str
+          (i32.wrap_i64 (local.get $key_lo))
+          (i32.wrap_i64 (local.get $key_hi)))))))
+  (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0)))
+"#;
 
 /// `__rt_mixed_from_value`: boxes a `(tag, lo, hi)` triple into a fresh 24-byte
 /// Mixed cell, persisting a string payload and increfing a refcounted child so the

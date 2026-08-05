@@ -137,15 +137,28 @@ times over:
 
 The blocker-count distribution says the same thing. Counting the distinct
 refusals a single `elephc build --target wasm32-wasi` reports per example: of the
-140 that do not compile, 10 have one distinct blocker, 15 have two, 10 have
-three, 18 have four, and the tail runs well past fifty. The ten reachable by a
+140 that do not compile, 10 have one distinct blocker, 16 have two, 11 have
+three, 20 have four, and the tail runs well past fifty. The ten reachable by a
 single blocker are `array-access-exception-order`, `constructor-promotion`,
 `hello-preg`, `json-jsonserializable`, `logical`, `pipe-operator`,
-`print_r-return`, `sdl_audio`, `strict-php` and `type-ops` — and `sdl_audio` is
-one of the thirty that never will. Progress is roughly one example per fix, so the
-example counter is a poor guide to correctness work — running a differential
-corpus against php-src has been finding more, and more serious, defects than
-making the counter move.
+`print_r-return`, `sdl_audio`, `strict-php` and `type-ops` — and three of those
+are dead ends rather than work: `sdl_audio` is one of the thirty that never
+will, `strict-php` fails in the type checker on every target rather than here,
+and php-src itself fatals on `constructor-promotion`, so compiling it would
+match nothing.
+
+Read that distribution with one caveat: a refusal counted once can stand for a
+whole subsystem. The most frequent one used to be a catch-all — 47 of the 140
+reported `missing typed runtime target` and nothing more, because every
+`Op::RuntimeCall` without a typed immediate fell into the same arm. Naming what
+those calls actually carry split the bucket, and serving the two largest shapes
+(the generic `$mixed[$key]` read, 34 examples with a string key and 25 with an
+integer one) took it from 47 examples to 18. What is left there is the coercion
+family on a single boxed operand, and `ArrayAccess` on an object receiver.
+
+Progress is otherwise roughly one example per fix, so the example counter is a
+poor guide to correctness work — running a differential corpus against php-src
+has been finding more, and more serious, defects than making the counter move.
 
 Note also that the example suite is not a pure PHP corpus, so "matches php-src"
 is not a question that can be asked of all of it. Measured with `php -n` over all
@@ -161,6 +174,20 @@ Cairo), or a service that is not running (the PDO driver examples).
 Behaviour that a naive lowering gets wrong, and that this backend implements
 against measured php-src 8.5.6 output rather than by analogy:
 
+- **`$mixed[$key]` on a receiver whose type is only known at runtime.** Reading
+  one element out of another (`$deep["db"]["host"]`) makes the inner read answer
+  `mixed`, so the outer one dispatches on the cell's tag. An array or hash reads
+  normally and warns `Undefined array key` on a miss, quoting a string key and
+  not an integer one; a STRING is indexed by byte, counting a negative offset
+  from the end and warning `Uninitialized string offset` past either end before
+  answering `""`; and an int, float, bool or null warns before answering null.
+  That last wording is version-profiled the same way the null receiver already
+  was: before 8.3 PHP names the type for all of them, and from 8.3 it names the
+  type for int and float but the VALUE for a boolean, so `on true` and
+  `on false` are distinct messages there. The string and scalar receivers are
+  two places the native backend answers a silent null and this one does not.
+  A string indexed by a string key, and an object receiver, still answer null
+  here as they do natively, rather than php-src's `TypeError` and `Error`.
 - **Coercion at a declared `int`, `float` or `bool` return.** This is not the
   `(int)` cast: returning `null` from a function declared `int` is a
   `TypeError`, and returning `5.7` deprecates before truncating. A non-numeric

@@ -5678,6 +5678,11 @@ fn check_runtime_call(
                 ));
             }
         }
+        // The generic `$mixed[$key]` read: no immediate, a boxed receiver, a key, and PHP's own
+        // warning flag. `__rt_mixed_array_get` dispatches the rest on the receiver's runtime tag,
+        // so the only compile-time questions are the shapes of the three operands and whether the
+        // module carries the command runtime the warnings live in.
+        None if mixed_array_read_is_supported(module, function, call) => {}
         other => {
             let operands = call
                 .operands
@@ -5695,6 +5700,46 @@ fn check_runtime_call(
             ));
         }
     }
+}
+
+/// Returns true when an untyped `Op::RuntimeCall` is the generic `$mixed[$key]` read this
+/// backend serves.
+///
+/// The native backend discriminates these calls by operand count and type rather than by an
+/// immediate, and this is the three-operand form with a result: a boxed receiver, a key, and
+/// PHP's warning flag. The receiver's tag is settled at RUNTIME, so the only questions here are
+/// representational.
+///
+/// The key must be one `materialize_hash_key` can normalize — an int, a float, a string, or a
+/// boxed cell — because that normalization is what makes `$a["1"]` find the element `$a[1]`
+/// holds. And the read must be in a main-bearing module: its miss and its bad-receiver answers
+/// go through the warning helpers, which are part of the command runtime.
+fn mixed_array_read_is_supported(module: &Module, function: &Function, call: &Instruction) -> bool {
+    if call.operands.len() != 3 || call.is_void() {
+        return false;
+    }
+    if !module.functions.iter().any(|f| f.flags.is_main) {
+        return false;
+    }
+    if call.result_type != IrType::Heap(IrHeapKind::Mixed) {
+        return false;
+    }
+    let operand_ir = |index: usize| {
+        call.operands
+            .get(index)
+            .and_then(|value| function.value(*value))
+            .map(|value| value.ir_type)
+    };
+    if operand_ir(0) != Some(IrType::Heap(IrHeapKind::Mixed)) {
+        return false;
+    }
+    if !matches!(
+        operand_ir(1),
+        Some(IrType::I64 | IrType::F64 | IrType::Str | IrType::Heap(IrHeapKind::Mixed))
+    ) {
+        return false;
+    }
+    operand_ir(2) == Some(IrType::I64)
 }
 
 /// Names the immediate an `Op::RuntimeCall` carries when it is not a typed runtime target.
@@ -6792,7 +6837,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::PrintR
         | RuntimeFnId::Readdir
         | RuntimeFnId::Readfile
-        | RuntimeFnId::Readline
         | RuntimeFnId::Readlink
         | RuntimeFnId::Realpath
         | RuntimeFnId::RealpathCacheGet
@@ -9370,12 +9414,27 @@ mod tests {
         let wat = validate_module(&module)
             .expect("nullable array-get shapes must pass the gate")
             .into_wat();
+        // Counted inside the generated function alone: runtime helpers call the same warning,
+        // and a module-wide count would answer for them rather than for the reads under test.
         assert_eq!(
-            wat.matches("call $__rt_warn_undefined_array_key_int")
+            generated_function_body(&wat, "_entry")
+                .matches("call $__rt_warn_undefined_array_key_int")
                 .count(),
             2,
             "only the two normal reads should call the warning helper: {wat}"
         );
+    }
+
+    /// Returns the WAT text of one generated function, so a call-site count answers for the
+    /// code under test rather than for any runtime helper that happens to use the same symbol.
+    fn generated_function_body<'a>(wat: &'a str, name: &str) -> &'a str {
+        let start = wat
+            .find(&format!("(func ${name} "))
+            .or_else(|| wat.find(&format!("(func ${name}\n")))
+            .unwrap_or_else(|| panic!("generated function ${name} must be in the module:\n{wat}"));
+        let rest = &wat[start + 1..];
+        let end = rest.find("\n  (func ").map_or(rest.len(), |offset| offset);
+        &rest[..end]
     }
 
     /// A warning-producing read cannot be admitted into an import-free reactor,
@@ -9687,15 +9746,16 @@ mod tests {
         let wat = validate_module(&module)
             .expect("nullable hash-get shapes must pass the gate")
             .into_wat();
+        // Counted inside the generated function alone, for the same reason as the array case:
+        // runtime helpers share these symbols and would answer for themselves otherwise.
+        let body = generated_function_body(&wat, "_entry");
         assert_eq!(
-            wat.matches("call $__rt_warn_undefined_array_key_int")
-                .count(),
+            body.matches("call $__rt_warn_undefined_array_key_int").count(),
             3,
             "only normal reads should call the integer warning arm: {wat}"
         );
         assert_eq!(
-            wat.matches("call $__rt_warn_undefined_array_key_str")
-                .count(),
+            body.matches("call $__rt_warn_undefined_array_key_str").count(),
             3,
             "only normal reads should call the string warning arm: {wat}"
         );

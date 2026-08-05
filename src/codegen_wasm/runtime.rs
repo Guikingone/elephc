@@ -155,6 +155,20 @@ const ERR_COUNT_SUFFIX: &[u8] = b" given\n";
 /// is written between the two fragments, so a live data segment is not needed for the message.
 const WARN_PROPERTY_ON_NULL_PREFIX: &[u8] = b"Warning: Attempt to read property \"";
 const WARN_PROPERTY_ON_NULL_SUFFIX: &[u8] = b"\" on null\n";
+/// Indexing a NON-container scalar warns and answers null. PHP 8.3 renamed the value in this
+/// message the same way it did for null, and for a boolean it names the VALUE rather than the
+/// type — measured on 8.5.6: `on true`, not `on bool`. Each case is one complete message rather
+/// than a prefix plus a word, because the two profiles do not agree on how many pieces there are.
+const WARN_OFFSET_ON_TRUE: &[u8] = b"Warning: Trying to access array offset on true\n";
+const WARN_OFFSET_ON_FALSE: &[u8] = b"Warning: Trying to access array offset on false\n";
+const WARN_OFFSET_ON_INT: &[u8] = b"Warning: Trying to access array offset on int\n";
+const WARN_OFFSET_ON_FLOAT: &[u8] = b"Warning: Trying to access array offset on float\n";
+const WARN_OFFSET_ON_TYPE_BOOL: &[u8] =
+    b"Warning: Trying to access array offset on value of type bool\n";
+const WARN_OFFSET_ON_TYPE_INT: &[u8] =
+    b"Warning: Trying to access array offset on value of type int\n";
+const WARN_OFFSET_ON_TYPE_FLOAT: &[u8] =
+    b"Warning: Trying to access array offset on value of type float\n";
 const WARN_UNINIT_STRING_OFFSET: &[u8] = b"Warning: Uninitialized string offset ";
 /// The newline closing that warning, in this emitter's own data group.
 const WARN_OFFSET_NEWLINE: &[u8] = b"\n";
@@ -229,7 +243,14 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_UNINIT_STRING_OFFSET.len() as u32
     + WARN_OFFSET_NEWLINE.len() as u32
     + WARN_PROPERTY_ON_NULL_PREFIX.len() as u32
-    + WARN_PROPERTY_ON_NULL_SUFFIX.len() as u32;
+    + WARN_PROPERTY_ON_NULL_SUFFIX.len() as u32
+    + WARN_OFFSET_ON_TRUE.len() as u32
+    + WARN_OFFSET_ON_FALSE.len() as u32
+    + WARN_OFFSET_ON_INT.len() as u32
+    + WARN_OFFSET_ON_FLOAT.len() as u32
+    + WARN_OFFSET_ON_TYPE_BOOL.len() as u32
+    + WARN_OFFSET_ON_TYPE_INT.len() as u32
+    + WARN_OFFSET_ON_TYPE_FLOAT.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -421,6 +442,13 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         // keeps pointing at the same message, so the positional slices below do not move.
         WARN_PROPERTY_ON_NULL_PREFIX,
         WARN_PROPERTY_ON_NULL_SUFFIX,
+        WARN_OFFSET_ON_TRUE,
+        WARN_OFFSET_ON_FALSE,
+        WARN_OFFSET_ON_INT,
+        WARN_OFFSET_ON_FLOAT,
+        WARN_OFFSET_ON_TYPE_BOOL,
+        WARN_OFFSET_ON_TYPE_INT,
+        WARN_OFFSET_ON_TYPE_FLOAT,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -471,6 +499,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     emit_undefined_array_key_warning_runtime(wm, &warning_offsets[..17]);
     emit_return_coercion_runtime(wm, &warning_offsets[17..34], &method_offsets[2..11]);
     emit_property_on_null_warning_runtime(wm, &warning_offsets[34..36]);
+    emit_offset_on_scalar_warning_runtime(wm, &warning_offsets[36..43]);
+    emit_uninit_string_offset_warning_runtime(wm, &warning_offsets[32..34]);
 }
 
 /// Emits php-src's warning for a property read whose receiver is null.
@@ -488,6 +518,58 @@ fn emit_property_on_null_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u3
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
   (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $name_ptr) (local.get $name_len)))
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len}))))"#
+    ));
+}
+
+/// Emits the warning a read of `$scalar[$key]` produces, dispatched on the runtime tag.
+///
+/// PHP answers null for every non-container receiver, but it says so first, and WHAT it says
+/// depends on the version profile the module was compiled for — the same split the null
+/// receiver already carries. Before 8.3 the message names the TYPE for all three; from 8.3 it
+/// names the type for int and float and the VALUE for a boolean, so `true` and `false` are two
+/// distinct messages there and one shared message before.
+///
+/// The tag is the Mixed cell's own: 0 int, 2 float, 3 bool. Any other tag reaches this only if a
+/// caller mis-dispatched, and writes nothing rather than a message for the wrong type.
+fn emit_offset_on_scalar_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 7);
+    let php83_or_later = crate::codegen_support::runtime::array_offset_on_null_warning()
+        == crate::ir::ARRAY_OFFSET_ON_NULL_WARNING;
+    let (true_ptr, true_len) = if php83_or_later { offsets[0] } else { offsets[4] };
+    let (false_ptr, false_len) = if php83_or_later { offsets[1] } else { offsets[4] };
+    let (int_ptr, int_len) = if php83_or_later { offsets[2] } else { offsets[5] };
+    let (float_ptr, float_len) = if php83_or_later { offsets[3] } else { offsets[6] };
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_array_offset_on_scalar (param $tag i64) (param $lo i64)
+  (if (i64.eq (local.get $tag) (i64.const 0))                     ;; int receiver
+    (then (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {int_ptr}) (i32.const {int_len})) (return)))
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; float receiver
+    (then (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_ptr}) (i32.const {float_len})) (return)))
+  (if (i64.eq (local.get $tag) (i64.const 3))                     ;; bool receiver: the VALUE names it from 8.3
+    (then
+      (if (i64.eqz (local.get $lo))
+        (then (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {false_ptr}) (i32.const {false_len})))
+        (else (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {true_ptr}) (i32.const {true_len})))))))"#
+    ));
+}
+
+/// Emits the warning a string offset outside the string produces.
+///
+/// The index is written AS GIVEN — php-src reports a negative one negative, without resolving it
+/// from the end first — and the read answers the empty string afterwards.
+fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 2);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (newline_ptr, newline_len) = offsets[1];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_uninit_string_offset (param $index i64)
+  (local $ptr i32) (local $len i32)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len}))
+  (call $__rt_itoa (local.get $index) (global.get $__float_scratch))
+  (local.set $len)
+  (local.set $ptr)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $ptr) (local.get $len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {newline_ptr}) (i32.const {newline_len})))"#
     ));
 }
 

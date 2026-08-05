@@ -431,6 +431,46 @@ pub(super) fn lower_array_key_exists(ctx: &mut FnCtx, inst: &Instruction) -> Res
 /// hash's own stored reference. Every path stays branchless via `select` plus null-safe
 /// runtime calls. Integer reads can also materialize the target's nullable
 /// `(payload, tag)` scalar representation.
+/// Lowers the untyped 3-operand `Op::RuntimeCall` that reads `$mixed[$key]`.
+///
+/// The EIR emits this whenever the receiver's PHP type is `mixed`, which happens as soon as one
+/// read feeds another — `$deep["db"]["host"]` reaches it because the inner `hash_get` answers
+/// `mixed`. Nothing about the receiver is known here, so the whole dispatch belongs to
+/// `__rt_mixed_array_get`; this only normalizes the key the way that helper (and `__rt_hash_get`
+/// under it) expects, which is the same materializer every other hash read uses.
+///
+/// The third operand is PHP's own warning flag: normal reads diagnose a missing key, while
+/// `isset()` and `??` read exactly the same way and stay quiet.
+pub(super) fn lower_mixed_array_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let receiver = operand(inst, 0)?;
+    let key = operand(inst, 1)?;
+    let warn = operand(inst, 2)?;
+    let result = inst.result.ok_or_else(|| {
+        WasmError::Unsupported("mixed array read without a result".to_string())
+    })?;
+    let result_ir = ctx.function.value(result).map(|v| v.ir_type);
+    if !matches!(result_ir, Some(IrType::Heap(IrHeapKind::Mixed))) {
+        return Err(WasmError::Unsupported(format!(
+            "mixed array read into {:?}",
+            result_ir
+        )));
+    }
+
+    let (key_lo, key_hi) = materialize_hash_key(ctx, key)?;
+    ctx.emit_load_value(receiver)?; // i32 Mixed cell pointer
+    ctx.fb
+        .ins(&format!("local.get {}", key_lo), "normalized key low word");
+    ctx.fb
+        .ins(&format!("local.get {}", key_hi), "normalized key high word");
+    ctx.emit_load_value(warn)?;
+    ctx.fb.ins("i32.wrap_i64", "warning flag as i32");
+    ctx.fb.ins(
+        "call $__rt_mixed_array_get",
+        "read $mixed[$key], dispatching on the receiver's runtime tag",
+    );
+    store_result(ctx, inst)
+}
+
 pub(super) fn lower_hash_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let hash = operand(inst, 0)?;
     let key = operand(inst, 1)?;

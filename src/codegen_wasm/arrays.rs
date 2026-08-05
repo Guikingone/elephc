@@ -41,6 +41,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_GET_OBJECT);
     wm.add_raw_func(RT_ARRAY_GET_FLOAT);
     wm.add_raw_func(RT_ARRAY_GET_MIXED_CELL);
+    wm.add_raw_func(RT_ARRAY_ELEM_TO_MIXED);
     wm.add_raw_func(RT_ARRAY_PUSH_MIXED);
     wm.add_raw_func(RT_ARRAY_WIDEN_TO_MIXED);
     wm.add_raw_func(RT_ARRAY_SLICE);
@@ -515,6 +516,60 @@ const RT_ARRAY_GET_MIXED_STR: &str = r#"(func $__rt_array_get_mixed_str (param $
 /// `__rt_mixed_from_value` and transfers that ownership to the array, whose
 /// `__rt_array_free_deep` (reached through `__rt_decref_any` kind-2) releases every
 /// cell. Returns the (possibly new) array pointer.
+/// `__rt_array_elem_to_mixed`: boxes element `index` of an indexed array of ANY element
+/// storage into a Mixed cell, answering 0 when the index is absent.
+///
+/// `__rt_array_get_mixed_cell` reads `array<mixed>` alone, where the slot already holds a cell.
+/// This one serves the case where the element storage is known only at RUNTIME: the array
+/// arrived inside a Mixed cell, so its `value_type` is the only description of what the slots
+/// hold. The two 16-byte-slot storages are `value_type` 1 (string) and 7 (Mixed cell); every
+/// other storage is one 8-byte word.
+///
+/// A miss answers 0 rather than a boxed null so the caller can tell an absent key — which PHP
+/// warns about — from a present null, which it does not. `__rt_mixed_from_value` persists a
+/// string payload and increfs a refcounted child on its own, so nothing is increfed here except
+/// the already-boxed cell of `value_type` 7, which is handed back as a share.
+const RT_ARRAY_ELEM_TO_MIXED: &str = r#"(func $__rt_array_elem_to_mixed (param $array i32) (param $index i64) (result i32)
+  (local $vt i64)
+  (local $slot i32)
+  (local $cell i32)
+  (if (i32.eqz (local.get $array))                          ;; null array -> absent
+    (then (return (i32.const 0))))
+  (if (i64.lt_s (local.get $index) (i64.const 0))           ;; negative index -> absent
+    (then (return (i32.const 0))))
+  (if (i64.ge_u (local.get $index) (i64.load (local.get $array)))  ;; past the length -> absent
+    (then (return (i32.const 0))))
+  (local.set $vt (i64.and
+    (i64.shr_u (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const 8))
+    (i64.const 127)))                                       ;; value_type = kind word bits 8..14
+  (local.set $slot (i32.add
+    (i32.add (local.get $array) (i32.const 24))             ;; slots start after the 24-byte header
+    (i32.wrap_i64 (i64.mul (local.get $index) (select
+      (i64.const 16) (i64.const 8)
+      (i32.or (i64.eq (local.get $vt) (i64.const 1))        ;; string slots are 16 bytes,
+              (i64.eq (local.get $vt) (i64.const 7))))))))  ;; and so are Mixed-cell slots
+  (if (i64.eq (local.get $vt) (i64.const 7))                ;; already a cell: hand back a share
+    (then
+      (local.set $cell (i32.wrap_i64 (i64.load (local.get $slot))))
+      (call $__rt_incref (local.get $cell))
+      (return (local.get $cell))))
+  (if (i64.eq (local.get $vt) (i64.const 1))                ;; string: (pointer, length)
+    (then (return (call $__rt_mixed_from_value (i64.const 1)
+      (i64.load (local.get $slot))
+      (i64.load (i32.add (local.get $slot) (i32.const 8)))))))
+  (if (i64.eq (local.get $vt) (i64.const 2))                ;; float bits
+    (then (return (call $__rt_mixed_from_value (i64.const 2) (i64.load (local.get $slot)) (i64.const 0)))))
+  (if (i64.eq (local.get $vt) (i64.const 3))                ;; bool, stamped by the pushes
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.load (local.get $slot)) (i64.const 0)))))
+  (if (i64.eq (local.get $vt) (i64.const 4))                ;; object pointer -> cell tag 6
+    (then (return (call $__rt_mixed_from_value (i64.const 6) (i64.load (local.get $slot)) (i64.const 0)))))
+  (if (i64.eq (local.get $vt) (i64.const 5))                ;; nested indexed array -> cell tag 4
+    (then (return (call $__rt_mixed_from_value (i64.const 4) (i64.load (local.get $slot)) (i64.const 0)))))
+  (if (i64.eq (local.get $vt) (i64.const 6))                ;; hash -> cell tag 5
+    (then (return (call $__rt_mixed_from_value (i64.const 5) (i64.load (local.get $slot)) (i64.const 0)))))
+  (call $__rt_mixed_from_value (i64.const 0) (i64.load (local.get $slot)) (i64.const 0)))
+"#;
+
 /// `__rt_array_get_mixed_cell`: reads one element of an `array<mixed>`.
 ///
 /// The slot already holds a Mixed cell, so the miss and the hit meet in the same

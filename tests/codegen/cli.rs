@@ -989,6 +989,126 @@ $a[] = 2;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `$mixed[$key]` reads every receiver tag the way php-src does.
+///
+/// The receiver here is genuinely unknown at compile time — it comes back out of a hash, so the
+/// checker only knows `mixed` and the whole dispatch happens at runtime on the cell's tag. That
+/// is the single most frequent shape the WASM audit used to refuse.
+///
+/// Every expected byte below is php-src 8.5.6's own answer for the same program. Two arms are
+/// places the NATIVE backend is wrong and this one is not: a string receiver is indexed by byte
+/// (native answers an empty string), and a scalar receiver warns before answering null (native
+/// says nothing at all).
+///
+/// The warning wording is version-profiled, the same split the null receiver already carried:
+/// before 8.3 PHP names the TYPE for all of them, and from 8.3 it names the type for int and
+/// float but the VALUE for a boolean, so `true` and `false` read differently there.
+#[test]
+fn test_cli_wasm_mixed_array_read_dispatches_on_the_receiver_tag() {
+    if Command::new("wasmer").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_array_read");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function box(mixed $v): mixed {
+    $holder = ["it" => $v];
+    return $holder["it"];
+}
+echo "[", box([10, 20, 30])[1], "]";
+echo "[", box([10, 20, 30])["1"], "]";
+echo "[", box(["x", "y"])[1], "]";
+echo "[", box([1.5, 2.5])[0], "]";
+echo "[", box(["a" => 7])["a"], "]";
+echo "[", count(box([[1, 2], [3, 4, 5]])[1]), "]";
+echo "[", box("hello")[1], "]";
+echo "[", box("hello")[-2], "]";
+echo "|";
+echo "[", box([10, 20, 30])[7], "]";
+echo "[", box(["a" => 7])["z"], "]";
+echo "[", box("hello")[9], "]";
+echo "[", box(null)["k"], "]";
+echo "[", box(42)["k"], "]";
+echo "[", box(1.5)["k"], "]";
+echo "[", box(true)["k"], "]";
+echo "[", box(false)["k"], "]";
+"#,
+    )
+    .unwrap();
+
+    // Hits are identical across profiles; only the wording of the diagnostics moves.
+    let expected_stdout = "[20][20][y][1.5][7][3][e][l]|[][][][][][][][]";
+    for (version, expected_stderr) in [
+        (
+            "8.2",
+            concat!(
+                "Warning: Undefined array key 7\n",
+                "Warning: Undefined array key \"z\"\n",
+                "Warning: Uninitialized string offset 9\n",
+                "Warning: Trying to access array offset on value of type null\n",
+                "Warning: Trying to access array offset on value of type int\n",
+                "Warning: Trying to access array offset on value of type float\n",
+                "Warning: Trying to access array offset on value of type bool\n",
+                "Warning: Trying to access array offset on value of type bool\n",
+            ),
+        ),
+        (
+            "8.5",
+            concat!(
+                "Warning: Undefined array key 7\n",
+                "Warning: Undefined array key \"z\"\n",
+                "Warning: Uninitialized string offset 9\n",
+                "Warning: Trying to access array offset on null\n",
+                "Warning: Trying to access array offset on int\n",
+                "Warning: Trying to access array offset on float\n",
+                "Warning: Trying to access array offset on true\n",
+                "Warning: Trying to access array offset on false\n",
+            ),
+        ),
+    ] {
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg("--php-version")
+            .arg(version)
+            .arg(&php_path)
+            .output()
+            .expect("failed to compile the mixed array read fixture to WASM");
+        assert!(
+            output.status.success(),
+            "PHP {version} mixed array read compilation failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let run = Command::new("wasmer")
+            .arg("run")
+            .arg(dir.join("main.wasm"))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the mixed array read fixture under Wasmer");
+        assert!(
+            run.status.success(),
+            "PHP {version} mixed array read trapped: {}",
+            String::from_utf8_lossy(&run.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected_stdout,
+            "PHP {version} values"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stderr),
+            expected_stderr,
+            "PHP {version} diagnostics"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Compiles the exact php-src next-free origin split through PHP -> EIR -> WASM
 /// for every supported compatibility profile. PHP 8.2 promotes immutable `[]`
 /// with next=0, while a direct mutable `[-3 => 1]` starts at LONG_MIN; PHP

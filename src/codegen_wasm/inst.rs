@@ -2318,6 +2318,11 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 target
             )));
         }
+        // An untyped call is discriminated by its operands, exactly as the native backend does
+        // it: three operands with a result is the generic `$mixed[$key]` read.
+        None if inst.operands.len() == 3 && !inst.is_void() => {
+            return super::inst_hash::lower_mixed_array_get(ctx, inst);
+        }
         _ => {
             return Err(WasmError::Unsupported(format!(
                 "untyped runtime call returning {:?}",
