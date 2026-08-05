@@ -14745,6 +14745,119 @@ echo "back to null: " . (is_null($y) ? "y" : "n") . "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies writing a RAW scalar into an `array<mixed>`, and that a boxed cell stays refused.
+///
+/// An `array<mixed>` stores 16-byte slots holding a boxed cell, so a raw scalar reaching one is
+/// boxed at the write site and its single reference handed over — the same contract `array_push`
+/// already uses for the same value shape. Overwriting also RELEASES the replaced cell, which is
+/// required rather than optional: skipping it leaks one cell per write, measured at 24 wasm pages
+/// over 20000 against 3 for a balanced loop.
+///
+/// The refusal at the end is the point of the test. An ALREADY-boxed cell carries the OTHER
+/// ownership contract — the EIR releases the operand, so the array must take a share — and taking
+/// that share then releasing the replaced cell corrupts a slot when an earlier write went through
+/// this same setter. That was bisected to `[literal] → raw write → boxed write` and is not yet
+/// explained, so it stays refused. Admitting it would answer `$s[0]` as empty where php-src
+/// answers 0. This assertion is what fails if someone widens the arm without solving that.
+#[test]
+fn test_cli_wasm_writes_a_raw_scalar_into_a_mixed_array() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_mixed_array_scalar_write");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // php-src 8.5.6's own answers.
+    for (name, source, expected) in [
+        // One write over a heterogeneous literal, and the untouched neighbour.
+        (
+            "one.php",
+            "<?php\n$s = [2, \"x\"];\n$s[1] = 7;\necho $s[0], \",\", $s[1], \"\\n\";\necho $s[0], \",\", $s[1], \"\\n\";\n",
+            "2,7\n2,7\n",
+        ),
+        // Two writes, the second over the slot the first left alone.
+        (
+            "two.php",
+            "<?php\n$s = [2, \"x\"];\n$s[1] = 7;\n$s[0] = 9;\necho $s[0], \",\", $s[1], \"\\n\";\necho count($s), \"\\n\";\n",
+            "9,7\n2\n",
+        ),
+        // A string and a float into the same array, and a write PAST the end.
+        (
+            "kinds.php",
+            "<?php\n$s = [1, \"a\"];\n$s[0] = \"str\";\n$s[1] = 2.5;\necho $s[0], \",\", $s[1], \"\\n\";\n",
+            "str,2.5\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the mixed-array scalar write");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the mixed-array scalar write under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    // Storing an ALREADY-boxed cell stays refused, for the reason in the doc comment above.
+    // The raw write before the read is what keeps the read from folding to a constant — without
+    // it the EIR answers `$a[0]` as the literal and the boxed path is never reached at all.
+    let boxed = dir.join("boxed.php");
+    fs::write(
+        &boxed,
+        "<?php\n$a = [1, \"two\"];\n$a[0] = 9;\n$b = [1, \"two\"];\n$b[1] = $a[0];\necho $b[1], \"\\n\";\n",
+    )
+    .unwrap();
+    let refused = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&boxed)
+        .output()
+        .expect("failed to run the compiler over the boxed-cell write");
+    assert!(
+        !refused.status.success()
+            && String::from_utf8_lossy(&refused.stderr)
+                .contains("does not match supported element storage Mixed"),
+        "storing an already-boxed cell must stay refused: {}",
+        String::from_utf8_lossy(&refused.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

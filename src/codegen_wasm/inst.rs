@@ -3996,6 +3996,34 @@ fn push_boxed_scalar(
     value: ValueId,
     value_repr: &WasmRepr,
 ) -> Result<()> {
+    let cell = box_value_into_mixed_cell(ctx, value, value_repr)?;
+    ctx.emit_load_value(array)?;
+    ctx.fb
+        .ins(&format!("local.get {}", cell), "mixed cell pointer");
+    ctx.fb.ins(
+        "call $__rt_array_push_mixed",
+        "append into a value_type-7 array (may reallocate)",
+    );
+    // Deliberately NOT stamp_bool_array_result_type: pushing a bool would restamp the array's
+    // value_type to 3 (scalar), and `__rt_array_free_deep` would then skip the child loop and
+    // leak every cell. The bool lives INSIDE its cell here.
+    ctx.emit_store_value(array)?;
+    write_back_container_slot(ctx, array)?;
+    let _ = inst;
+    Ok(())
+}
+
+/// Boxes one raw value into a fresh Mixed cell and answers the local holding it.
+///
+/// Shared by the `array_push` and `array_set` paths into a `value_type`-7 array, which need the
+/// identical composition and differ only in the runtime call that follows. The cell carries ONE
+/// reference, handed to the array without increfing — for a container operand the boxing increfed
+/// the child, so the operand's own reference is dropped here to leave the cell as sole owner.
+fn box_value_into_mixed_cell(
+    ctx: &mut FnCtx,
+    value: ValueId,
+    value_repr: &WasmRepr,
+) -> Result<String> {
     let php = ctx
         .function
         .value(value)
@@ -4076,21 +4104,7 @@ fn push_boxed_scalar(
         ctx.fb.ins(&format!("local.get {}", boxed), "boxed object cell");
     }
     ctx.fb.ins(&format!("local.set {}", cell), "boxed element");
-    ctx.emit_load_value(array)?;
-    ctx.fb
-        .ins(&format!("local.get {}", cell), "mixed cell pointer");
-    ctx.fb.ins(
-        "call $__rt_array_push_mixed",
-        "append into a value_type-7 array (may reallocate)",
-    );
-    // Deliberately NOT stamp_bool_array_result_type: pushing a bool would restamp the
-    // array's value_type to 3 (scalar), and `__rt_array_free_deep` would then skip the
-    // child loop and leak every cell. The bool lives INSIDE its cell here; the array's
-    // value_type 7 that `__rt_array_push_mixed` writes is the correct one.
-    ctx.emit_store_value(array)?;
-    write_back_container_slot(ctx, array)?;
-    let _ = inst;
-    Ok(())
+    Ok(cell)
 }
 
 /// Lowers `Op::ArraySet` (`$a[i] = v`). Calls the copy-on-write-aware runtime
@@ -4114,6 +4128,38 @@ fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         }
     }
     let value_repr = ctx.value_repr(value)?.clone();
+
+    // An `array<mixed>` stores 16-byte slots holding a boxed cell, so a RAW scalar reaching one
+    // is boxed at the write site and its single reference handed over — the same contract
+    // `array_push` uses for the same value shape.
+    //
+    // An ALREADY-boxed cell is deliberately NOT routed here. Its ownership is the other
+    // contract (the EIR releases the operand, so the array must take a share), and taking that
+    // share then releasing the replaced cell corrupts a slot when an earlier write went through
+    // this same setter — measured, bisected, and not yet explained, so it stays refused rather
+    // than shipped. `array<mixed>` writes of a raw scalar are safe on their own: two consecutive
+    // ones and a write over a widened literal both answer php-src exactly.
+    let value_is_boxed_cell = matches!(
+        ctx.function.value(value).map(|v| v.ir_type),
+        Some(IrType::Heap(IrHeapKind::Mixed))
+    );
+    if array_stores_mixed_cells(ctx, array) && !value_is_boxed_cell {
+        let cell = box_value_into_mixed_cell(ctx, value, &value_repr)?;
+        ctx.emit_load_value(array)?;
+        ctx.emit_load_value(index)?;
+        ctx.fb
+            .ins(&format!("local.get {}", cell), "mixed cell pointer");
+        ctx.fb.ins(
+            "call $__rt_array_set_mixed",
+            "set boxed element (COW, releases the replaced cell)",
+        );
+        // Deliberately NOT stamp_bool_array_result_type: a bool lives INSIDE its cell here, and
+        // restamping the array's value_type to 3 would make the deep free skip every child.
+        ctx.emit_store_value(array)?;
+        write_back_container_slot(ctx, array)?;
+        return Ok(());
+    }
+
     match value_repr {
         WasmRepr::I64(_) => {
             ctx.emit_load_value(array)?; // array pointer

@@ -104,7 +104,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **49
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **50
 compile to `wasm32-wasi`**, and every one of them except `ifdef`, `union-types`
 and `enums` reproduces php-src's output byte for byte. Those three have no
 php-src output to match rather than a different one: `ifdef` and `union-types`
@@ -119,7 +119,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 141 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 140 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -135,8 +135,8 @@ times over:
 | Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
 | All three together | 17 |
 
-The blocker-count distribution says the same thing: of the 141 that do not
-compile, 14 have one distinct blocker, 19 have two, 22 have three, 22 have four,
+The blocker-count distribution says the same thing: of the 140 that do not
+compile, 13 have one distinct blocker, 15 have two, 22 have three, 21 have four,
 and the tail runs past eleven. Progress is roughly one example per fix, so the
 example counter is a poor guide to correctness work — running a differential
 corpus against php-src has been finding more, and more serious, defects than

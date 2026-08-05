@@ -2206,15 +2206,20 @@ fn array_store_shape_issue(
         {
             true
         }
-        // A raw scalar boxed into a Mixed cell at the push site. Each of these has an
-        // exact tag and payload; a heap container has neither, so it stays refused.
+        // A raw scalar boxed into a Mixed cell at the WRITE site — push or set alike, since
+        // `__rt_array_set_mixed` stores what `__rt_array_push_mixed` appends. Each of these has
+        // an exact tag and payload; a heap container has neither, so it stays refused.
+        //
+        // An ALREADY-boxed cell stays push-only (the arm above). Its ownership is the other
+        // contract, and taking a share then releasing the replaced cell corrupts a slot when an
+        // earlier write went through the same setter — bisected and unexplained, so refused.
         (
             PhpType::Mixed,
             IrType::I64,
             PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Void,
-        ) if is_push => true,
-        (PhpType::Mixed, IrType::F64, PhpType::Float) if is_push => true,
-        (PhpType::Mixed, IrType::Str, PhpType::Str) if is_push => true,
+        ) => true,
+        (PhpType::Mixed, IrType::F64, PhpType::Float) => true,
+        (PhpType::Mixed, IrType::Str, PhpType::Str) => true,
         // An object boxes into a cell under tag 6, which is what an array of interface
         // implementors is: the checker types it `array<mixed>` because the classes differ.
         (PhpType::Mixed, IrType::Heap(IrHeapKind::Object), PhpType::Object(_)) if is_push => true,
