@@ -141,6 +141,39 @@ fn test_error_phpversion_wrong_args() {
     );
 }
 
+/// Verifies `get_loaded_extensions()` rejects more than its optional flag argument.
+#[test]
+fn test_error_get_loaded_extensions_wrong_args() {
+    expect_error(
+        "<?php get_loaded_extensions(false, true);",
+        "get_loaded_extensions() takes at most 1 argument",
+    );
+}
+
+/// Verifies `hrtime()` rejects more than its optional numeric-format flag.
+#[test]
+fn test_error_hrtime_wrong_args() {
+    expect_error(
+        "<?php hrtime(false, true);",
+        "hrtime() takes at most 1 argument",
+    );
+}
+
+/// Verifies `header()` requires between one and three arguments.
+#[test]
+fn test_error_header_wrong_args() {
+    expect_error("<?php header();", "header() takes 1 to 3 arguments");
+}
+
+/// Verifies `http_response_code()` rejects more than one optional status code.
+#[test]
+fn test_error_http_response_code_wrong_args() {
+    expect_error(
+        "<?php http_response_code(200, 201);",
+        "http_response_code() takes 0 or 1 arguments",
+    );
+}
+
 /// Verifies that `php_uname()` with two arguments yields a wrong-args diagnostic.
 #[test]
 fn test_error_php_uname_wrong_args() {

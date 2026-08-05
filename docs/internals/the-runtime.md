@@ -25,6 +25,11 @@ ABI helpers. It is embedded only when the final EIR module requires the
 `eval_bridge` runtime feature; the presence of a fully native literal
 `eval()` call does not force it into the binary.
 
+Magician's base archive does not reference PCRE2. When static detection or
+`--with-regex` enables the regex runtime, generated eval setup registers the
+managed PCRE2 shim as an opaque provider; otherwise regex builtins are absent
+from dynamic eval dispatch.
+
 The compile-time planner, scope/context lifecycle, eval-specific EIR
 instructions, parse cache, ownership rules, and bridge linking contract are
 documented in [Eval Runtime Architecture](eval-runtime.md). PHP-visible
@@ -219,7 +224,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Callable routines
 
-**Source:** `src/codegen_support/runtime/callables/` (4 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/callables/` (5 files including `mod.rs`)
 
 These routines implement the runtime fallback path for `is_callable()` when the argument is not a compile-time literal or statically known callable value, plus the `Closure::bind` family helper. They consult generated metadata for builtins, user functions, public methods, public static methods, and `__invoke` objects.
 
@@ -246,7 +251,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (148 files)
+**Source:** `src/codegen_support/runtime/arrays/` (155 files)
 
 ### Core allocation
 
@@ -405,7 +410,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ## Exception routines
 
-**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (6 files)
+**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (7 files)
 
 elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
 
@@ -508,9 +513,11 @@ unmatched and surplus slots to `[-1, -1]`.
 historic symbol name for compatibility but only materializes a null-terminated
 pattern. `__rt_mb_ereg_match` backs `mb_ereg_match()` through the same shim. The
 whole regex family is emitted only when the program's `RuntimeFeatures` request
-it. A final-link regex or dynamic-eval program resolves the managed `pcre2` package and
-links exact verified archives in shim, POSIX, then 8-bit order. There is no
-production system-PCRE2 fallback; compilation itself never installs a package.
+it. A final-link regex program resolves the managed `pcre2` package and links
+exact verified archives in shim, POSIX, then 8-bit order. Dynamic eval does so
+only when static regex detection or `--with-regex` requests the same feature.
+There is no production system-PCRE2 fallback; compilation itself never installs
+a package.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
@@ -523,7 +530,7 @@ production system-PCRE2 fallback; compilation itself never installs a package.
 
 ## I/O routines
 
-**Source:** `src/codegen_support/runtime/io/` (117 files)
+**Source:** `src/codegen_support/runtime/io/` (118 files)
 
 These routines handle file and filesystem operations through target-aware libc/syscall helpers. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to C or OS APIs — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
 
@@ -734,7 +741,7 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type.
 
 ## Object and stdClass routines
 
-**Source:** `src/codegen_support/runtime/objects/` (6 files)
+**Source:** `src/codegen_support/runtime/objects/` (10 files)
 
 These helpers support `stdClass`, `json_decode()` object results, boxed Mixed property/index access, object destructor dispatch, and dynamic `new $name()` instantiation. `stdClass` instances use a compact `[class_id][hash_ptr]` payload, with dynamic properties stored in a hash of boxed `Mixed` values.
 
@@ -858,6 +865,17 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 ```
 
 Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_class_implements_interface`, `__rt_callable_descriptor_release`, `__rt_closure_bind`, `__rt_serialize_value`, `__rt_unserialize_begin`, `__rt_spl_dll_new`, `__rt_spl_fixed_new`, `__rt_gen_suspend`, `__rt_gen_current`, `__rt_gen_send`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_stdout_write`, `__rt_vd_write`, `__rt_pr_write`, `__rt_ob_start_ex`, `__rt_ob_apply_handler`, `__rt_ob_flush_all`, `__rt_zval_pack`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
+
+### Internal helper inventory
+
+The tables above document the public runtime operations. The emitters also split complex operations into the following internal symbols so the linker can dead-strip each unit independently:
+
+- **Arrays, hashes, and Mixed values:** `__rt_abs_mixed`, `__rt_amr_box_value`, `__rt_array_edge_key`, `__rt_array_ensure_elem_for_write`, `__rt_array_fill_assoc`, `__rt_array_fill_str`, `__rt_array_find_any_all`, `__rt_array_get_mixed_key`, `__rt_array_is_list`, `__rt_array_merge_recursive`, `__rt_array_multisort`, `__rt_array_replace`, `__rt_array_replace_recursive`, `__rt_array_set_int`, `__rt_array_set_mixed`, `__rt_array_set_mixed_key`, `__rt_array_set_refcounted`, `__rt_array_set_str`, `__rt_array_sum_mixed`, `__rt_array_to_hash`, `__rt_array_udiff_uintersect`, `__rt_array_walk_recursive`, `__rt_assoc_diff_intersect`, `__rt_hash_flip`, `__rt_hash_map`, `__rt_hash_sum_mixed`, `__rt_hash_to_indexed_array`, `__rt_in_array_mixed_int`, `__rt_mixed_array_append`, `__rt_mixed_array_get_for_write`, `__rt_mixed_cell_autovivify_array`, `__rt_mixed_cell_promote_to_hash`, `__rt_mixed_new_empty_array_cell`, and `__rt_mixed_numeric_common`.
+- **Strings, dates, JSON, and serialization:** `__rt_concat_append`, `__rt_date_entry`, `__rt_implode_bool`, `__rt_json_validate_number`, `__rt_json_validate_string`, `__rt_microtime_build_into`, `__rt_microtime_mixed`, `__rt_microtime_str`, `__rt_mktime_shifted`, `__rt_serialize_begin`, `__rt_serialize_hash_body`, `__rt_serialize_indexed_body`, `__rt_serialize_pstr`, `__rt_serialize_uint`, `__rt_unser_at`, and `__rt_unser_key`.
+- **Objects, callables, resources, and zvals:** `__rt_box_wrapper_stat_result`, `__rt_function_exists_lookup`, `__rt_obj_store_prop`, `__rt_object_handle_acquire`, `__rt_object_handle_of`, `__rt_object_handle_release`, `__rt_resource_id_mint`, `__rt_resource_id_of`, `__rt_resource_type_name`, `__rt_spl_object_hash`, `__rt_zval_pack_element`.
+- **Files, streams, sockets, and networking:** `__rt_addr_is_udp`, `__rt_build_sockaddr_in6`, `__rt_chgrp_group`, `__rt_chown_user`, `__rt_disk_space`, `__rt_fd_write`, `__rt_file_get_contents_maybe_url`, `__rt_format_sockaddr_in`, `__rt_format_sockaddr_in6`, `__rt_format_sockaddr_unix`, `__rt_fsockopen`, `__rt_fwrite`, `__rt_get_int_context_option`, `__rt_get_string_context_option`, `__rt_http_build_copy_aarch64`, `__rt_http_build_copy_x86`, `__rt_inet6_pton`, `__rt_inet_addr_parse`, `__rt_lchgrp_group`, `__rt_lchown_user`, `__rt_opendir`, `__rt_opendir_glob`, `__rt_path_is_wrapper`, `__rt_popen`, `__rt_readdir`, `__rt_readfile_wrapper`, `__rt_rewinddir`, `__rt_servent_load`, `__rt_stash_connect_host`, `__rt_stream_wrapper_register`, and `__rt_stream_wrapper_unregister`.
+- **User stream wrappers:** `__rt_user_wrapper_dir_closedir`, `__rt_user_wrapper_dir_readdir`, `__rt_user_wrapper_dir_rewinddir`, `__rt_user_wrapper_fclose`, `__rt_user_wrapper_feof`, `__rt_user_wrapper_fflush`, `__rt_user_wrapper_flock`, `__rt_user_wrapper_fread`, `__rt_user_wrapper_fseek`, `__rt_user_wrapper_fstat`, `__rt_user_wrapper_ftell`, `__rt_user_wrapper_ftruncate`, `__rt_user_wrapper_fwrite`, `__rt_user_wrapper_opendir`, `__rt_user_wrapper_path_op`, `__rt_user_wrapper_rename`, `__rt_user_wrapper_set_option`, `__rt_user_wrapper_stream_cast`, `__rt_user_wrapper_url_stat`, and `__rt_user_wrapper_url_stat_field`.
+- **Diagnostics and structured output:** `__rt_touch_meta_array`, `__rt_var_dump_array_bool`, `__rt_var_dump_array_float`, `__rt_var_dump_array_int`, `__rt_var_dump_array_str`, `__rt_var_dump_close_container`, `__rt_var_dump_emit_bool_line`, `__rt_var_dump_emit_float_line`, `__rt_var_dump_emit_indexed_key`, `__rt_var_dump_emit_int_line`, `__rt_var_dump_emit_null_line`, `__rt_var_dump_emit_object_key`, `__rt_var_dump_emit_recursion_line`, `__rt_var_dump_emit_string_key`, `__rt_var_dump_emit_string_line`, `__rt_var_dump_emit_uninit_line`, `__rt_var_dump_indexed`, `__rt_var_dump_object`, `__rt_var_dump_open_container`, `__rt_var_dump_open_object`, `__rt_var_dump_value`, `__rt_vd_indent_pop`, `__rt_vd_indent_push`, `__rt_vd_obj_count`, `__rt_vd_obj_desc`, `__rt_vd_pad`, `__rt_vd_seen_find`, `__rt_vd_seen_pop`, `__rt_vd_seen_push`, `__rt_warn_array_offset_on_null`, `__rt_warn_foreach_non_iterable`, `__rt_warn_nan_coerced_bool`, and `__rt_warn_undefined_array_key_str`.
 
 Compiled **executables** dead-strip unreachable runtime helpers at link time. On Linux each `__rt_*` helper is emitted in its own `.text.<name>` section and collected with `--gc-sections`; on macOS the runtime object carries a `.subsections_via_symbols` footer so each helper is a separately collectable atom dropped by `-dead_strip` (internal cross-helper labels stay assembler-local `L`-locals, with the few helpers reached by a `b`/`bl` from another atom marked `.alt_entry` so they remain live symbols). Combined with the AST-side control-flow pruning and dead-code elimination elephc already does before codegen, only the helpers a program actually reaches are linked. Shared libraries (`--emit cdylib`) keep the full runtime so every exported entry stays callable.
 

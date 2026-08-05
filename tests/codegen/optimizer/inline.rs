@@ -16,6 +16,7 @@ use std::process::Command;
 
 use super::*;
 
+/// Compiles and runs a PHP fixture with EIR optimization explicitly enabled or disabled.
 fn compile_run_with_ir_opt(src: &str, ir_opt_on: bool) -> String {
     let id = std::sync::atomic::AtomicUsize::new(0);
     let id = id.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
@@ -42,6 +43,7 @@ fn compile_run_with_ir_opt(src: &str, ir_opt_on: bool) -> String {
     String::from_utf8_lossy(&run_out.stdout).into_owned()
 }
 
+/// Verifies a small scalar helper with one argument is inlined without changing its result.
 #[test]
 fn test_inline_small_function_with_arg() {
     // Small fn (<=24 non-nop), direct call with arg from $argc (unknown). Typed
@@ -55,6 +57,7 @@ echo add2($argc);
     assert_eq!(out.trim(), "3");
 }
 
+/// Verifies a small returning helper is inlined independently of neighboring calls.
 #[test]
 fn test_inline_small_void_and_returning() {
     // Separate to avoid any splicing interaction in one host for this basic test.
@@ -66,6 +69,7 @@ echo get7();
     assert_eq!(out, "7");
 }
 
+/// Verifies inlining preserves the branches of a small multi-block helper.
 #[test]
 fn test_inline_multi_block_small_fn() {
     // Typed scalar param so the multi-block callee is ownership-safe and inlined.
@@ -140,6 +144,7 @@ fn test_inline_emits_no_call_for_typed_scalar_helper() {
 // e2e using real lowered PHP for the overall small fn inlining (Call sites lower from PHP source).
 // FVC sites are covered at EIR construction level in units (lowering uses Call for public user fn names;
 // FVC opcode appears in variant dispatch paths).
+/// Verifies optimized and unoptimized compilation produce identical observable output.
 #[test]
 fn test_inline_semantics_preserved_on_off() {
     let src = r#"<?php

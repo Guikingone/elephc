@@ -16,6 +16,9 @@ pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
 use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
 
+/// Non-bridge runtime capabilities accepted by `--with-<name>`.
+const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex"];
+
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
 pub(crate) const USAGE: &str = "Usage: elephc [OPTIONS] <source-file>";
@@ -98,7 +101,7 @@ Target:
 
 Codegen:
   --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
-  --null-repr=MODE        sentinel (default) | tagged
+  --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
   --gc-stats              Print GC statistics at exit
@@ -111,7 +114,7 @@ Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-CRATE            Force-link a bridge crate (pdo, tls, crypto, phar, tz, image, web, eval)
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, web, eval, regex)
 
 Diagnostics:
   --timings               Show a per-phase timing table on stderr
@@ -163,10 +166,10 @@ pub(crate) struct CliConfig {
     /// `packed class`, `extern`, `ifdef`, extension builtins) become compile errors.
     pub(crate) strict_php: bool,
     pub(crate) web: bool,
-    /// Bridge crates the user force-enabled with `--with-<crate>` (short flag
-    /// names such as `"pdo"`). Each one force-links the matching staticlib and,
-    /// for crates with a PHP-surface prelude, forces that prelude's injection so
-    /// the API is available even when feature auto-detection would not trigger.
+    /// Optional capabilities the user force-enabled with `--with-<name>` (short
+    /// names such as `"pdo"` or `"regex"`). Bridge names force-link their
+    /// staticlib; runtime capabilities enable their helper/native requirements.
+    /// Crates with a PHP-surface prelude also force that prelude's injection.
     /// `--with-web` is folded into `web` instead, since it aliases `--web`.
     pub(crate) with_crates: HashSet<String>,
     /// Suppresses live/completed progress and bridge-library "Linking" event lines,
@@ -368,18 +371,18 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
             web = true;
         } else if let Some(name) = arg.strip_prefix("--with-") {
             // `--with-web` aliases the full `--web` mode (it owns the program
-            // entry point); every other known crate is recorded for force-link
-            // and prelude forcing. An unknown crate name is a hard error so a
-            // typo never silently no-ops.
+            // entry point); every other known bridge or runtime capability is
+            // recorded for pipeline forcing. An unknown name is a hard error
+            // so a typo never silently no-ops.
             if name == "web" {
                 web = true;
-            } else if crate::linker::bridge_lib_for_flag(name).is_some() {
+            } else if with_flag_is_known(name) {
                 with_crates.insert(name.to_string());
             } else {
                 fail(&format!(
-                    "Unknown crate for --with-{}: expected one of: {}",
+                    "Unknown capability for --with-{}: expected one of: {}",
                     name,
-                    crate::linker::crate_flag_names().join(", ")
+                    with_flag_names().join(", ")
                 ));
             }
         } else if arg.starts_with("--") {
@@ -455,6 +458,20 @@ fn parse_compile_args(args: &[String]) -> CliConfig {
         quiet,
         ini_overrides,
     }
+}
+
+/// Returns whether a `--with-<name>` suffix selects a bridge or runtime capability.
+fn with_flag_is_known(name: &str) -> bool {
+    crate::linker::bridge_lib_for_flag(name).is_some()
+        || RUNTIME_CAPABILITY_FLAGS.contains(&name)
+}
+
+/// Returns accepted `--with-<name>` suffixes in stable help/error order.
+fn with_flag_names() -> Vec<&'static str> {
+    crate::linker::crate_flag_names()
+        .into_iter()
+        .chain(RUNTIME_CAPABILITY_FLAGS.iter().copied())
+        .collect()
 }
 
 /// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
@@ -724,7 +741,20 @@ mod tests {
         assert!(!config.web);
     }
 
-    /// Verifies multiple `--with-<crate>` flags accumulate into the forced set.
+    /// Verifies `--with-regex` records the dynamic-code regex capability without web mode.
+    #[test]
+    fn with_regex_records_runtime_capability() {
+        let args = vec![
+            "elephc".into(),
+            "--with-regex".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("regex"));
+        assert!(!config.web);
+    }
+
+    /// Verifies multiple `--with-<name>` flags accumulate into the forced set.
     #[test]
     fn multiple_with_crates_accumulate() {
         let args = vec![

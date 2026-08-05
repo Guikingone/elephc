@@ -7117,7 +7117,7 @@ fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the int result to the placeholder slot above the saved Mixed pointer
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the int result to the placeholder slot above the saved Mixed pointer
                     }
                 }
                 // Pop the saved Mixed pointer into result_reg for decref_mixed.
@@ -7139,7 +7139,7 @@ fn coerce_ref_cell_store_value(
                         ctx.emitter.instruction("str x0, [sp, #16]");           // save the bool result to the placeholder slot
                     }
                     Arch::X86_64 => {
-                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");    // save the bool result to the placeholder slot
+                        ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax"); // save the bool result to the placeholder slot
                     }
                 }
                 abi::emit_pop_reg(ctx.emitter, result_reg);

@@ -339,8 +339,7 @@ fn emit_materializer_prologue(emitter: &mut Emitter, symbol: &str, what: &str) {
                         lo, hi, AARCH64_SAVE_AREA
                     )); // open the caller-saved save area and store the first pair
                 } else {
-                    emitter.instruction(&format!("stp {}, {}, [sp, #{}]", lo, hi, index * 16));
-                    // preserve one more caller-saved integer pair
+                    emitter.instruction(&format!("stp {}, {}, [sp, #{}]", lo, hi, index * 16)); // preserve one more caller-saved integer pair
                 }
             }
         }
@@ -377,8 +376,7 @@ fn emit_materializer_epilogue(emitter: &mut Emitter, done: &str) {
                         lo, hi, AARCH64_SAVE_AREA
                     )); // restore the first pair and close the caller-saved save area
                 } else {
-                    emitter.instruction(&format!("ldp {}, {}, [sp, #{}]", lo, hi, index * 16));
-                    // restore one more caller-saved integer pair
+                    emitter.instruction(&format!("ldp {}, {}, [sp, #{}]", lo, hi, index * 16)); // restore one more caller-saved integer pair
                 }
             }
         }

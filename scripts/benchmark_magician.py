@@ -15,7 +15,6 @@ from typing import Any
 
 
 SOURCE_KINDS = {"literal", "dynamic"}
-NATIVE_PROJECT_FILES = ("elephc.toml", "elephc.lock")
 
 
 @dataclass
@@ -103,12 +102,8 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
 
 
-def benchmark_project_root() -> Path:
-    return repo_root() / "benchmarks" / "magician"
-
-
 def benchmark_root() -> Path:
-    return benchmark_project_root() / "cases"
+    return repo_root() / "benchmarks" / "magician" / "cases"
 
 
 def release_artifacts_ready() -> bool:
@@ -194,26 +189,6 @@ def run_process(cmd: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         ) from error
 
 
-def prepare_managed_native_dependencies() -> None:
-    manifest = benchmark_project_root() / "elephc.toml"
-    run_process(
-        [
-            str(elephc_bin()),
-            "native",
-            "install",
-            "--locked",
-            "--manifest-path",
-            str(manifest),
-        ],
-        benchmark_project_root(),
-    )
-
-
-def stage_native_project(destination: Path) -> None:
-    for filename in NATIVE_PROJECT_FILES:
-        shutil.copy2(benchmark_project_root() / filename, destination / filename)
-
-
 def run_checked(cmd: list[str], cwd: Path, expected: str) -> None:
     output = run_process(cmd, cwd)
     if output.stdout != expected:
@@ -265,9 +240,7 @@ def measure_case(case_dir: Path, iterations: int, warmup: int) -> BenchmarkResul
         expected += "\n"
 
     with tempfile.TemporaryDirectory(prefix=f"elephc-magician-bench-{case_dir.name}-") as temp_dir:
-        project_dir = Path(temp_dir)
-        stage_native_project(project_dir)
-        cwd = project_dir / case_dir.name
+        cwd = Path(temp_dir) / case_dir.name
         shutil.copytree(case_dir, cwd)
 
         native_binary = compile_elephc_variant("native", cwd)
@@ -399,7 +372,6 @@ def render_markdown(results: list[BenchmarkResult]) -> str:
 
 
 def run_benchmarks(cases: list[Path], iterations: int, warmup: int) -> list[BenchmarkResult]:
-    prepare_managed_native_dependencies()
     return [measure_case(case_dir, iterations, warmup) for case_dir in cases]
 
 

@@ -198,8 +198,7 @@ pub fn emit_load(emitter: &mut Emitter, ty: &PhpType, offset: usize) {
 pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label));
-            // branch when the coerced integer truthiness result is zero
+            emitter.instruction(&format!("cbz {}, {}", int_result_reg(emitter), label)); // branch when the coerced integer truthiness result is zero
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(
@@ -219,8 +218,7 @@ pub fn emit_branch_if_int_result_zero(emitter: &mut Emitter, label: &str) {
 pub fn emit_branch_if_int_result_nonzero(emitter: &mut Emitter, label: &str) {
     match emitter.target.arch {
         crate::codegen_support::platform::Arch::AArch64 => {
-            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label));
-            // branch when the coerced integer truthiness result is non-zero
+            emitter.instruction(&format!("cbnz {}, {}", int_result_reg(emitter), label)); // branch when the coerced integer truthiness result is non-zero
         }
         crate::codegen_support::platform::Arch::X86_64 => {
             emitter.instruction(&format!(

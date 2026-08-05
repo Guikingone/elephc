@@ -32,6 +32,9 @@
 //! - The refusal test matters as much as the positive ones. `"$a[]"` is a PHP parse error
 //!   (`syntax error, unexpected token "]"`); a lexer that invents an empty-string key
 //!   there would look "fixed" while accepting invalid PHP.
+//! - These fixtures intentionally exercise runtime eval without optional regex support. The
+//!   expected capability reminder is filtered exactly; every other compiler diagnostic remains
+//!   visible to the assertions below.
 //! - Host-target only; this is a pure host-side Rust lexer change with no emitted assembly.
 
 use std::fs;
@@ -41,44 +44,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 static TEST_ID: AtomicUsize = AtomicUsize::new(0);
 
-/// Cache root shared by every test in this file, so `pcre2` is fetched at most once.
-///
-/// Provisioning into a COLD cache root costs ~22s; against a warm one it is ~0.4s. Giving
-/// each test its own root would pay the cold price six times over.
-static SHARED_CACHE_ROOT: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
-
-/// Returns the shared `XDG_CACHE_HOME` every compile in this file runs against.
-fn shared_cache_root() -> &'static Path {
-    SHARED_CACHE_ROOT.get_or_init(|| {
-        let root = std::env::temp_dir().join("elephc_interp_shared_cache");
-        fs::create_dir_all(&root).unwrap();
-        root
-    })
-}
-
-/// Provisions the managed `pcre2` package into one test project.
-///
-/// Compiling ANY program that reaches the runtime eval interpreter requires it — the
-/// interpreter links PCRE2 for `preg_*`, so the requirement is a property of the
-/// interpreted-eval path itself, not of interpolation. Verified by compiling a dynamic
-/// `eval()` fragment containing NO interpolation at all: it fails identically with
-/// `native project error: regex support requires managed native package pcre2`.
-///
-/// `elephc native add` is per-PROJECT, so every test dir needs its own call; the shared
-/// cache root above is what keeps that call cheap.
-fn provision_pcre2(dir: &Path) {
-    let output = Command::new(elephc_bin())
-        .env("XDG_CACHE_HOME", shared_cache_root())
-        .current_dir(dir)
-        .args(["native", "add", "pcre2"])
-        .output()
-        .expect("failed to spawn elephc native add");
-    assert!(
-        output.status.success(),
-        "failed to provision pcre2:\n{}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
+/// Expected capability reminder for eval fixtures that intentionally omit regex support.
+const EVAL_WITHOUT_REGEX_REMINDER: &str =
+    "warning: dynamic eval was compiled without optional regex support";
 
 /// The `dyn()` helper every fragment goes through to defeat AOT constant folding.
 const DYN_HELPER: &str = "function dyn(string $s): string { return substr('x' . $s, 1); }";
@@ -108,16 +76,18 @@ fn elephc_bin() -> String {
 /// Keeps only elephc's own diagnostics from a compile's stderr.
 ///
 /// Linking also surfaces the HOST linker's warnings, which are environmental rather than
-/// anything elephc emitted.
+/// anything elephc emitted. The intentional eval capability reminder is excluded exactly;
+/// every other compiler diagnostic still surfaces.
 fn elephc_diagnostics(stderr: &str) -> String {
     stderr
         .lines()
         .filter(|line| {
-            line.starts_with("error")
-                || line.starts_with("Error")
-                || line.starts_with("warning")
-                || line.starts_with("Warning: ")
-                || line.starts_with("EIR backend error")
+            *line != EVAL_WITHOUT_REGEX_REMINDER
+                && (line.starts_with("error")
+                    || line.starts_with("Error")
+                    || line.starts_with("warning")
+                    || line.starts_with("Warning: ")
+                    || line.starts_with("EIR backend error"))
         })
         .collect::<Vec<_>>()
         .join("\n")
@@ -125,11 +95,10 @@ fn elephc_diagnostics(stderr: &str) -> String {
 
 /// Compiles `source` to a plain executable, asserting elephc reported no diagnostic.
 fn compile(dir: &Path, source: &str, stem: &str) -> PathBuf {
-    provision_pcre2(dir);
     let php = dir.join(format!("{}.php", stem));
     fs::write(&php, source).unwrap();
     let mut cmd = Command::new(elephc_bin());
-    cmd.env("XDG_CACHE_HOME", shared_cache_root());
+    cmd.env("XDG_CACHE_HOME", dir.join("cache-root"));
     cmd.current_dir(dir);
     cmd.arg(&php);
     let output = cmd.output().expect("failed to spawn elephc");

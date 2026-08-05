@@ -86,7 +86,7 @@ pub(super) fn lower(
             crate::codegen::lower_inst::builtins::io::lower_stat(ctx, inst)
         }),
         RuntimeFnId::StreamBucketAppend => Some({
-            crate::codegen::lower_inst::builtins::io::lower_stream_bucket_append_or_prepend(ctx, inst)
+            crate::codegen::lower_inst::builtins::io::lower_stream_bucket_append(ctx, inst)
         }),
         RuntimeFnId::StreamBucketMakeWriteable => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_bucket_make_writeable(ctx, inst)
@@ -95,7 +95,7 @@ pub(super) fn lower(
             crate::codegen::lower_inst::builtins::io::lower_stream_bucket_new(ctx, inst)
         }),
         RuntimeFnId::StreamBucketPrepend => Some({
-            crate::codegen::lower_inst::builtins::io::lower_stream_bucket_append_or_prepend(ctx, inst)
+            crate::codegen::lower_inst::builtins::io::lower_stream_bucket_prepend(ctx, inst)
         }),
         RuntimeFnId::StreamContextCreate => Some({
             crate::codegen::lower_inst::builtins::io::lower_stream_context_create(ctx, inst)

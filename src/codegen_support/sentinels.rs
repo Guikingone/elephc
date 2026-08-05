@@ -98,13 +98,11 @@ pub(crate) fn emit_tagged_scalar_null(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             super::abi::emit_load_int_immediate(emitter, "x0", NULL_SENTINEL);
-            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL));
-            // runtime tag 8 marks the tagged scalar as PHP null
+            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL)); // runtime tag 8 marks the tagged scalar as PHP null
         }
         Arch::X86_64 => {
             super::abi::emit_load_int_immediate(emitter, "rax", NULL_SENTINEL);
-            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL));
-            // runtime tag 8 marks the tagged scalar as PHP null
+            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL)); // runtime tag 8 marks the tagged scalar as PHP null
         }
     }
 }
@@ -114,12 +112,10 @@ pub(crate) fn emit_tagged_scalar_null(emitter: &mut Emitter) {
 pub(crate) fn emit_tagged_scalar_from_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_INT));
-            // runtime tag 0 marks the tagged scalar payload as an int
+            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_INT)); // runtime tag 0 marks the tagged scalar payload as an int
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_INT));
-            // runtime tag 0 marks the tagged scalar payload as an int
+            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_INT)); // runtime tag 0 marks the tagged scalar payload as an int
         }
     }
 }
@@ -226,10 +222,10 @@ pub(crate) fn emit_float_null_sentinel(emitter: &mut Emitter) {
     super::abi::emit_load_int_immediate(emitter, scratch, NULL_SENTINEL);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("fmov d0, {}", scratch));               // reinterpret the in-band null sentinel word as the float miss marker
+            emitter.instruction(&format!("fmov d0, {}", scratch));              // reinterpret the in-band null sentinel word as the float miss marker
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("movq xmm0, {}", scratch));             // reinterpret the in-band null sentinel word as the float miss marker
+            emitter.instruction(&format!("movq xmm0, {}", scratch));            // reinterpret the in-band null sentinel word as the float miss marker
         }
     }
 }
@@ -240,10 +236,10 @@ pub(crate) fn emit_float_null_sentinel(emitter: &mut Emitter) {
 pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("fmov x0, d0");                                  // move the float payload bits where the sentinel comparison can see them
+            emitter.instruction("fmov x0, d0");                                 // move the float payload bits where the sentinel comparison can see them
         }
         Arch::X86_64 => {
-            emitter.instruction("movq rax, xmm0");                               // move the float payload bits where the sentinel comparison can see them
+            emitter.instruction("movq rax, xmm0");                              // move the float payload bits where the sentinel comparison can see them
         }
     }
 }

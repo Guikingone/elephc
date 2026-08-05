@@ -55,7 +55,7 @@ Standard PHP features supported by elephc. Implemented PHP syntax is intended to
 - [OPcache](php/opcache.md) — the observable Zend OPcache API over elephc's compile-time script manifest: `opcache_get_status()`/`opcache_get_configuration()`, the `opcache.*` directive matrix, `ini_get`/`ini_get_all`, `extension_loaded()`
 - [Magic Constants](php/magic-constants.md) — `__DIR__`, `__FILE__`, `__LINE__`, `__FUNCTION__`, `__CLASS__`, `__METHOD__`, `__NAMESPACE__`, `__TRAIT__`
 - [Fibers](php/fibers.md) — cooperative coroutines (PHP 8.1+ Fiber): start, suspend, resume, FiberError
-- [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, state-machine codegen
+- [Generators](php/generators.md) — `yield`, `yield from`, `Generator::send` / `throw` / `getReturn`, stackful coroutine codegen
 - [PDO (Databases)](php/pdo.md) — PDO connections, prepared statements, fetch modes, transactions, and PDOException for SQLite, PostgreSQL, and MySQL/MariaDB drivers
 - [Date and Time](php/datetime.md) — `DateTime`, `DateTimeImmutable`, `DateTimeZone`, `DateInterval`: construct, format, setters, `add`/`sub`, `diff`
 - [Calendar](php/calendar.md) — `ext/calendar`: Julian Day conversions for the Gregorian, Julian, French Republican and Jewish calendars, Easter, day/month names, `cal_*` dispatch

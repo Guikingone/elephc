@@ -79,12 +79,14 @@ struct Param {
 }
 
 impl std::fmt::Debug for Param {
+    /// Formats the inferred PostgreSQL target type without exposing the bound value.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "Param({:?})", self.ty)
     }
 }
 
 impl ToSql for Param {
+    /// Re-encodes the pending PDO bind for the type inferred by PostgreSQL.
     fn to_sql(
         &self,
         ty: &Type,
@@ -127,6 +129,7 @@ impl ToSql for Param {
         }
     }
 
+    /// Accepts every inferred target type because `to_sql` performs the required conversion.
     fn accepts(_ty: &Type) -> bool {
         // The value is re-encoded for whatever type the prepared statement
         // inferred for this parameter, so accept every target type.
