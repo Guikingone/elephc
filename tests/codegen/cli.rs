@@ -14107,6 +14107,45 @@ process.exitCode = wasi.start(instance);
         );
     }
 
+    // `count()` of the missed element is php-src's TypeError, and it TERMINATES. Loading the
+    // length off pointer 0 answered `4295050542` and carried on.
+    let counted = dir.join("count_on_null.php");
+    fs::write(
+        &counted,
+        "<?php\n$a = [[1, 2]];\n$b = $a[9];\necho count($b), \"\\n\";\necho \"survived\\n\";\n",
+    )
+    .unwrap();
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&counted)
+        .output()
+        .expect("failed to compile the null count");
+    assert!(
+        built.status.success(),
+        "count_on_null.php must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("count_on_null.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the null count under Node");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains(
+            "count(): Argument #1 ($value) must be of type Countable|array, null given"
+        ),
+        "count() of a null must raise php-src's own TypeError, got: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&run.stdout).contains("survived"),
+        "php-src terminates here: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+
     // A method call on the missed OBJECT element must name php-src's own Error.
     let call = dir.join("call_on_null.php");
     fs::write(

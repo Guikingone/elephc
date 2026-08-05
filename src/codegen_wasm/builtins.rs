@@ -6000,6 +6000,25 @@ fn lower_count(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             return store_result(ctx, inst);
         }
     }
+    // A raw container pointer can be 0 now that a missed `array<array<…>>` element reads as
+    // null with the element's own non-null type. Loading the length off it reads address 0 and
+    // answers whatever is there — measured `4295050542` where php-src raises
+    // `TypeError: count(): Argument #1 ($value) must be of type Countable|array, null given`
+    // and terminates. Boxing the null and handing it to `__rt_mixed_count` reaches that exact
+    // message rather than restating it here; the helper exits, so nothing follows.
+    let container_ptr = ctx.fresh_temp(super::wat::ValType::I32);
+    ctx.fb.ins(
+        &format!("local.tee {}", container_ptr),
+        "keep the container pointer for the null test",
+    );
+    ctx.fb.ins(
+        &format!("(if (i32.eqz (local.get {}))", container_ptr),
+        "count() of a null is a PHP TypeError, not a header load",
+    );
+    ctx.fb.ins(
+        "(then (drop (call $__rt_mixed_count (call $__rt_mixed_from_value (i64.const 8) (i64.const 0) (i64.const 0))))))",
+        "php-src's own count() diagnostic for null",
+    );
     ctx.fb.ins("i64.load", "container element count @ +0");
     store_result(ctx, inst)
 }
