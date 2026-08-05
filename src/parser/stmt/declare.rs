@@ -6,7 +6,8 @@
 //! - `crate::parser::stmt::parse_stmt()` when the current token is `declare`.
 //!
 //! Key details:
-//! - Directives are compile-time syntax only because elephc always uses strict typing.
+//! - Directives are compile-time syntax only: elephc applies one parameter-binding model to
+//!   every file (`crate::types::param_binding`), so `strict_types` has nothing to toggle.
 //! - Bodies lower through `Synthetic` so they execute in the enclosing scope.
 
 use crate::errors::CompileError;

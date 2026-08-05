@@ -6093,6 +6093,11 @@ fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
+    // A by-reference parameter must receive the caller's storage, not a converted temporary,
+    // so declared-parameter scalar binding never applies to one. The checker keeps those on
+    // the strict path for the same reason.
+    let bindable = sig.declared_params.get(index).copied().unwrap_or(false)
+        && !sig.ref_params.get(index).copied().unwrap_or(false);
     let param_ty = param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
@@ -6101,7 +6106,31 @@ fn coerce_scalar_arg_to_param_storage(
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
+    if bindable {
+        if let Some(cast) = crate::types::param_binding::scalar_param_cast(&param_ty, &source_ty) {
+            return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
+        }
+    }
     value
+}
+
+/// Applies a declared-parameter scalar binding to an already-lowered argument value.
+///
+/// The conversion is the one elephc emits for the equivalent explicit cast, which is why the
+/// binding is expressed as a `CastType`: `(string)` and `(bool)` are total over the scalar
+/// sources `crate::types::param_binding` admits, so no runtime failure path is needed here.
+fn apply_scalar_param_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    cast: CastType,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    match cast {
+        CastType::String => coerce_to_string_at_span(ctx, value, span),
+        CastType::Bool => lower_truthy_bool(ctx, value, span),
+        // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
+        CastType::Int | CastType::Float | CastType::Array => value,
+    }
 }
 
 /// Normalizes reordered call operands to their declared scalar parameter storage.
@@ -6141,6 +6170,19 @@ fn coerce_operands_to_params(
                 ir_type: ctx.builder.value_type(value),
             };
             operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+        } else if sig.declared_params.get(index).copied().unwrap_or(false) {
+            // Same declared-parameter scalar binding the positional path applies, run here in
+            // parameter order because named and spread arguments are lowered in source order
+            // and only reordered afterwards.
+            if let Some(cast) =
+                crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty)
+            {
+                let lowered = LoweredValue {
+                    value,
+                    ir_type: ctx.builder.value_type(value),
+                };
+                operands[index] = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+            }
         }
     }
     operands
@@ -6247,6 +6289,8 @@ fn lower_args_with_signature(
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
+    let literal_bound = rewrite_literal_param_bindings(sig, args);
+    let args = literal_bound.as_deref().unwrap_or(args);
     if crate::types::call_args::has_named_args(args) {
         let operands = lower_named_args_with_signature(ctx, sig, args);
         return coerce_operands_to_params(ctx, sig, operands);
@@ -6300,6 +6344,73 @@ fn lower_args_with_signature(
         operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
     }
     coerce_operands_to_params(ctx, sig, operands)
+}
+
+/// Replaces arguments whose declared-parameter binding is decided by their literal spelling.
+///
+/// Runs before any argument is lowered so a callable-name string never materializes as string
+/// storage and a constant bound to `int`/`float` is emitted already coerced. Positional and
+/// named arguments are both handled; a spread makes the positional mapping unknowable, so the
+/// remaining arguments are left alone.
+///
+/// Returns `None` when nothing needed rewriting, which is the overwhelmingly common case.
+fn rewrite_literal_param_bindings(sig: &FunctionSig, args: &[Expr]) -> Option<Vec<Expr>> {
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    let mut rewritten: Option<Vec<Expr>> = None;
+    let mut positional_idx = 0usize;
+    let mut positional_known = true;
+    for (arg_idx, arg) in args.iter().enumerate() {
+        let (param_idx, value) = match &arg.kind {
+            ExprKind::Spread(_) => {
+                positional_known = false;
+                continue;
+            }
+            ExprKind::NamedArg { name, value } => {
+                let Some(param_idx) = sig
+                    .params
+                    .iter()
+                    .take(regular_param_count)
+                    .position(|(param_name, _)| param_name == name)
+                else {
+                    continue;
+                };
+                (param_idx, value.as_ref())
+            }
+            _ => {
+                if !positional_known {
+                    continue;
+                }
+                let param_idx = positional_idx;
+                positional_idx += 1;
+                (param_idx, arg)
+            }
+        };
+        if param_idx >= regular_param_count
+            || !sig.declared_params.get(param_idx).copied().unwrap_or(false)
+            || sig.ref_params.get(param_idx).copied().unwrap_or(false)
+        {
+            continue;
+        }
+        let Some((_, param_ty)) = sig.params.get(param_idx) else {
+            continue;
+        };
+        let Some(bound) = crate::types::param_binding::rewrite_literal_param_binding(param_ty, value)
+        else {
+            continue;
+        };
+        let slots = rewritten.get_or_insert_with(|| args.to_vec());
+        slots[arg_idx] = match &arg.kind {
+            ExprKind::NamedArg { name, .. } => Expr::new(
+                ExprKind::NamedArg {
+                    name: name.clone(),
+                    value: Box::new(bound),
+                },
+                arg.span,
+            ),
+            _ => bound,
+        };
+    }
+    rewritten
 }
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.

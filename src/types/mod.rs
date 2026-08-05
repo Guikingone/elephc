@@ -32,6 +32,8 @@ mod ffi;
 pub(crate) mod json_constants;
 /// PHP math integer constants (`PHP_ROUND_HALF_*` rounding modes).
 pub(crate) mod math_constants;
+/// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
+pub(crate) mod param_binding;
 /// PHP type model and type environment for tracking variable types.
 mod model;
 /// Preg/PCRE flag constants shared by checker and codegen.

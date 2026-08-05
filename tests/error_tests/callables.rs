@@ -511,3 +511,24 @@ fn test_error_func_get_args_in_interface_implementation() {
         "the inherited signature cannot be widened to collect surplus arguments",
     );
 }
+
+/// Verifies a callable string that names nothing is rejected at compile time with the reason
+/// spelled out. PHP throws `TypeError` when the call runs; elephc resolves callables
+/// statically, so the same program cannot be built.
+#[test]
+fn test_error_callable_parameter_rejects_unknown_name_string() {
+    expect_error(
+        "<?php function apply(callable $f, string $s) { return $f($s); } echo apply(\"nosuchfn\", \"a\");",
+        "Undefined function for first-class callable: nosuchfn",
+    );
+}
+
+/// Verifies a callable string that is only known at run time is rejected with a named
+/// diagnostic instead of being bound to storage the callee could not invoke.
+#[test]
+fn test_error_callable_parameter_rejects_runtime_string() {
+    expect_error(
+        "<?php function apply(callable $f, string $s) { return $f($s); } $n = $argc > 0 ? \"strtoupper\" : \"strtolower\"; echo apply($n, \"a\");",
+        "a callable string must be a compile-time constant here",
+    );
+}

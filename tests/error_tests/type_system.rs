@@ -1054,3 +1054,76 @@ fn test_null_probe_on_a_later_assigned_variable_is_still_rejected() {
         "Undefined variable: $cfg",
     );
 }
+
+/// Verifies a lossy float constant at an `int` parameter is rejected instead of silently
+/// truncated. PHP passes `5` after emitting `Deprecated: Implicit conversion from float 5.5 to
+/// int loses precision`; elephc has no runtime deprecation channel, so it refuses the program
+/// rather than dropping the notice.
+#[test]
+fn test_error_int_parameter_rejects_lossy_float_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(5.5);",
+        "PHP emits `Deprecated: Implicit conversion from float 5.5 to int loses precision`",
+    );
+}
+
+/// Verifies a non-numeric string constant at an `int` parameter is rejected with PHP's
+/// failure mode named. PHP throws `TypeError` when the call runs.
+#[test]
+fn test_error_int_parameter_rejects_non_numeric_string_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(\"abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"abc\" at an `int` parameter",
+    );
+}
+
+/// Verifies a leading-numeric string constant is rejected too: PHP's `(int)` cast would give
+/// `42`, but parameter binding throws `TypeError` because the string is not fully numeric.
+#[test]
+fn test_error_int_parameter_rejects_leading_numeric_string_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(\"42abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"42abc\" at an `int` parameter",
+    );
+}
+
+/// Verifies a runtime float at an `int` parameter is rejected, because deciding between PHP's
+/// silent conversion, its deprecation notice and its `TypeError` needs a runtime check elephc
+/// cannot perform at a parameter boundary.
+#[test]
+fn test_error_int_parameter_rejects_runtime_float() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } $f = 5.5 * $argc; echo ti($f);",
+        "add an explicit cast at the call site",
+    );
+}
+
+/// Verifies a non-numeric string constant at a `float` parameter is rejected the same way.
+#[test]
+fn test_error_float_parameter_rejects_non_numeric_string_constant() {
+    expect_error(
+        "<?php function tf(float $f) { return $f; } echo tf(\"abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"abc\" at a `float` parameter",
+    );
+}
+
+/// Verifies an out-of-range float constant at an `int` parameter reports PHP's `TypeError`
+/// rather than wrapping around.
+#[test]
+fn test_error_int_parameter_rejects_out_of_range_float_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(1e20);",
+        "PHP throws `TypeError` for the float",
+    );
+}
+
+/// Verifies a pass-by-reference parameter stays on the strict path. PHP converts the caller's
+/// variable in place and writes the converted value back; elephc's binding would pass a
+/// converted temporary and silently drop the callee's writes, so the call is rejected instead.
+#[test]
+fn test_error_by_ref_parameter_is_not_coerced() {
+    expect_error(
+        "<?php function f(string &$s) { $s = $s . \"!\"; } $n = 42; f($n);",
+        "Function 'f' parameter $s expects Str, got Int",
+    );
+}

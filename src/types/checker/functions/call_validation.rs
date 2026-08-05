@@ -314,7 +314,71 @@ impl Checker {
             caller_env,
             callee_desc,
             false,
+            false,
         )
+    }
+
+    /// Validates a direct call to a method or constructor of `owner_class`, applying PHP's
+    /// coercive parameter binding when that class is declared in user source.
+    ///
+    /// Only surfaces whose arguments reach EIR through `lower_args_with_signature` may opt in:
+    /// that is where the matching argument rewrite runs, and accepting a binding without it
+    /// would hand raw storage to a differently typed parameter slot. Compiler-injected classes
+    /// (SPL, `Exception`, reflection, …) lower several of their members through bespoke
+    /// emitters instead, so they stay on the strict path.
+    pub(crate) fn check_user_declared_call(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+        owner_class: &str,
+    ) -> Result<PhpType, CompileError> {
+        let coercive = self.class_is_user_declared(owner_class);
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            false,
+            coercive,
+        )
+    }
+
+    /// `check_user_declared_call` for a callee that also accepts spread arguments into
+    /// by-reference parameters materialized by descriptor invokers.
+    pub(crate) fn check_user_declared_call_allowing_by_ref_spread(
+        &mut self,
+        sig: &FunctionSig,
+        args: &[Expr],
+        span: crate::span::Span,
+        caller_env: &TypeEnv,
+        callee_desc: &str,
+        owner_class: &str,
+    ) -> Result<PhpType, CompileError> {
+        let coercive = self.class_is_user_declared(owner_class);
+        self.check_known_callable_call_with_options(
+            sig,
+            args,
+            span,
+            caller_env,
+            callee_desc,
+            true,
+            coercive,
+        )
+    }
+
+    /// Returns true when `class_name` is a class-like symbol declared in user source.
+    ///
+    /// Compiler-injected classes carry `Span::dummy()` as their declaration span, which is the
+    /// only marker distinguishing them from user declarations. An unknown name is treated as
+    /// not user-declared so an unresolved receiver never silently gains coercive binding.
+    fn class_is_user_declared(&self, class_name: &str) -> bool {
+        self.classes
+            .get(class_name)
+            .is_some_and(|info| info.declaration_span != crate::span::Span::dummy())
     }
 
     /// Validates a known callable call while allowing spread arguments for by-reference
@@ -334,10 +398,14 @@ impl Checker {
             caller_env,
             callee_desc,
             true,
+            false,
         )
     }
 
     /// Shared implementation for known callable call validation.
+    ///
+    /// `coercive_param_binding` opts the callee into PHP's coercive parameter binding for its
+    /// declared parameters; see `check_user_declared_call` for when that is sound.
     fn check_known_callable_call_with_options(
         &mut self,
         sig: &FunctionSig,
@@ -346,6 +414,7 @@ impl Checker {
         caller_env: &TypeEnv,
         callee_desc: &str,
         allow_by_ref_spread: bool,
+        coercive_param_binding: bool,
     ) -> Result<PhpType, CompileError> {
         let normalized_args = self.normalize_named_call_args(sig, args, span, callee_desc, caller_env)?;
         let args = normalized_args.as_slice();
@@ -436,12 +505,26 @@ impl Checker {
                             &format!("{} parameter ${}", callee_desc, param_name),
                         )?;
                     }
-                    self.require_compatible_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg.span,
-                        &format!("{} parameter ${}", callee_desc, param_name),
-                    )?;
+                    if coercive_param_binding
+                        && sig.declared_params.get(param_idx).copied().unwrap_or(false)
+                    {
+                        self.require_bound_param_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg,
+                            caller_env,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                            None,
+                            sig.ref_params.get(param_idx).copied().unwrap_or(false),
+                        )?;
+                    } else {
+                        self.require_compatible_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("{} parameter ${}", callee_desc, param_name),
+                        )?;
+                    }
                 }
             } else if let (Some(vname), Some(expected_ty)) =
                 (sig.variadic.as_ref(), variadic_elem_ty.as_ref())

@@ -2,7 +2,8 @@
 
 declare(strict_types=1);
 
-echo "elephc always uses strict typing\n";
+// elephc has one parameter-binding model, so the directive changes nothing.
+echo "strict_types is parsed and ignored\n";
 
 declare(ticks=1) {
     echo "braced declare body\n";

@@ -279,12 +279,13 @@ impl Checker {
             &format!("Method {}::{}", interface_name, method),
             env,
         )?;
-        self.check_known_callable_call(
+        self.check_user_declared_call(
             &sig,
             &normalized_args,
             expr.span,
             env,
             &format!("Method {}::{}", interface_name, method),
+            interface_name,
         )?;
         let late_static_return = self.instance_method_late_static_return(interface_name, &method_key);
         match late_static_return {
@@ -414,20 +415,22 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Method {}::{}", class_name, method),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Method {}::{}", class_name, method),
+                        class_name,
                     )?;
                 }
             } else if let Some(sig) = class_info.methods.get("__call") {
@@ -444,20 +447,22 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Method {}::__call", class_name),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Method {}::__call", class_name),
+                        class_name,
                     )?;
                 }
                 magic_return_ty = Some(effective_sig.return_type.clone());
@@ -891,20 +896,22 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Static method {}::{}", class_name, method),
+                        class_name,
                     )?;
                 }
             } else if parent_call || self_call {
@@ -958,7 +965,7 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
@@ -969,9 +976,10 @@ impl Checker {
                             class_name,
                             method
                         ),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
@@ -982,6 +990,7 @@ impl Checker {
                             class_name,
                             method
                         ),
+                        class_name,
                     )?;
                 }
             } else if class_info.methods.contains_key(&method_key) {
@@ -1007,20 +1016,22 @@ impl Checker {
                     env,
                 )?;
                 if allow_by_ref_spread {
-                    self.check_known_callable_call_allowing_by_ref_spread(
+                    self.check_user_declared_call_allowing_by_ref_spread(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Static method {}::__callStatic", class_name),
+                        class_name,
                     )?;
                 } else {
-                    self.check_known_callable_call(
+                    self.check_user_declared_call(
                         &effective_sig,
                         &normalized_args,
                         expr.span,
                         env,
                         &format!("Static method {}::__callStatic", class_name),
+                        class_name,
                     )?;
                 }
                 magic_return_ty = Some(effective_sig.return_type.clone());

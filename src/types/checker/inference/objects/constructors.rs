@@ -138,12 +138,13 @@ impl Checker {
                 } else {
                     effective_sig
                 };
-                self.check_known_callable_call(
+                self.check_user_declared_call(
                     &effective_sig,
                     &normalized_args,
                     expr.span,
                     env,
                     &format!("Constructor '{}::__construct'", class_name),
+                    class_name.as_str(),
                 )?;
                 for (i, arg) in normalized_args.iter().enumerate() {
                     let arg_ty = self.infer_type(arg, env)?;
@@ -248,12 +249,13 @@ impl Checker {
             &format!("Constructor '{}::__construct'", class_name),
             env,
         )?;
-        self.check_known_callable_call(
+        self.check_user_declared_call(
             &sig,
             &normalized_args,
             expr.span,
             env,
             &format!("Constructor '{}::__construct'", class_name),
+            class_name,
         )?;
 
         if class_name == "ReflectionParameter" {

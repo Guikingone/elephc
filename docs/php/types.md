@@ -211,7 +211,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `is_infinite()` | `is_infinite($val): bool`    | Returns true if INF or -INF    |
 | `boolval()`     | `boolval($val): bool`        | Convert to bool                |
 | `floatval()`    | `floatval($val): float`      | Convert to float               |
-| `intval()`      | `intval($val): int`          | Converts to integer            |
+| `intval()`      | `intval($value, $base = 10): int` | Converts to integer. `$base` applies only to a string `$value`; base `0` auto-detects `0x`/`0b`/a leading octal zero |
 | `strval()`      | `strval($val): string`       | Convert to string              |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
@@ -239,6 +239,61 @@ Narrowing is not tracked across a reassignment of the variable inside the branch
 
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
 
+### Parameter type coercion
+
+PHP's default (coercive) mode converts a scalar argument to a declared scalar parameter type when the call runs. elephc applies the same conversions, but only where it can reproduce PHP's result exactly. `declare(strict_types=1)` does not change any of this — elephc has one binding model, see [Control Structures → declare](./control-structures.md#declare).
+
+**Always accepted.** These conversions are total (every value converts), produce no PHP diagnostic, and use the same code as the corresponding explicit cast, so they match PHP byte for byte for both literals and runtime values:
+
+| Declared parameter | Accepts | Example |
+|---|---|---|
+| `string` | `int`, `float`, `bool` | `f(42)` → `"42"`, `f(4.5)` → `"4.5"`, `f(false)` → `""` |
+| `bool` | `int`, `float`, `string` | `f("0")` → `false`, `f(-0.5)` → `true` |
+| `float` | `int`, `bool` | `f(5)` → `5.0` |
+| `int` | `bool` | `f(true)` → `1` |
+
+**Accepted for compile-time constants.** A `float` or numeric-string *literal* binds to an `int` or `float` parameter when PHP's conversion is exact:
+
+```php
+function takesInt(int $i) { return $i; }
+function takesFloat(float $f) { return $f; }
+
+echo takesInt(5.0);      // 5
+echo takesInt("42");     // 42
+echo takesInt(" 42 ");   // 42   — PHP allows surrounding whitespace
+echo takesFloat("1e3");  // 1000
+```
+
+**Rejected at compile time.** Every remaining `float`/`string` → `int` and `string` → `float` binding is a compile error naming the PHP behaviour, because PHP decides those cases at run time with a channel elephc does not have at a parameter boundary:
+
+- A **lossy** conversion. PHP emits `Deprecated: Implicit conversion from float 5.5 to int loses precision` and passes `5`; elephc has no runtime deprecation channel (the same gap documented for `++`/`--` below), so it refuses rather than dropping the notice.
+- A **non-numeric or partially numeric** string. PHP throws `TypeError` — note this differs from the `(int)` cast, where `(int)"42abc"` is `42`.
+- A **runtime-valued** `float` or `string`. Which of the three PHP outcomes applies is only knowable at run time.
+
+Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat((float) $s)` — or `intval()`/`floatval()`.
+
+**Not covered.** Coercive binding applies to by-value declared parameters of user-declared functions, methods, static methods and constructors:
+
+- **Pass-by-reference parameters** (`function f(string &$s)`) stay strict. PHP converts the caller's variable in place and writes the converted value back; elephc would have to pass a converted temporary, silently dropping the callee's writes, so the call is rejected instead.
+- **Builtin functions** keep their own per-builtin argument rules.
+- **Classes injected by the compiler** (SPL, `Exception`, reflection) stay strict, because several of their members are lowered by dedicated emitters rather than the shared argument path.
+- **Nullable and union parameters** (`?string $s`, `int|string $v`) stay strict; only a plain declared scalar type binds coercively.
+
+### Callable strings
+
+PHP accepts a function-name string wherever a `callable` is declared and resolves it when the call runs. elephc resolves callables statically, so a callable string binds when it is a compile-time constant:
+
+```php
+function apply(callable $f, string $s) { return $f($s); }
+
+echo apply("strtoupper", "abc");        // ABC   — builtin name
+echo apply("my_helper", "abc");         //       — user function name
+echo apply("Formatter::wrap", "abc");   //       — "Class::method"
+```
+
+Names are matched case-insensitively and a leading `\` is allowed, matching PHP. A callable string that is only known at run time is rejected with `a callable string must be a compile-time constant here`; pass a first-class callable (`strtoupper(...)`), a closure, or a literal name instead. A constant string that names nothing is rejected too, where PHP throws `TypeError` when the call runs.
+
+Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are still rejected at a `callable` parameter, and because elephc maps the `Closure` type hint onto the same internal callable type, a `Closure` parameter also accepts a callable string where PHP requires an actual `Closure`.
 
 ### Known incompatibilities with PHP
 

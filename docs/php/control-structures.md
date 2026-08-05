@@ -7,19 +7,24 @@ sidebar:
 
 ## declare
 
-`declare(strict_types=1);` is accepted at the top of a file. elephc compiles a
-statically-typed subset and is **always strict**, so the directive is parsed and
-treated as a no-op rather than toggling a runtime mode. The `ticks` and `encoding`
-directives are likewise accepted and ignored. Directive values must be PHP
-literals; `strict_types` must be the first statement, use the statement form, and
-have the integer value `0` or `1`.
+`declare(strict_types=1);` is accepted at the top of a file, but it is parsed and
+discarded rather than toggling a mode: elephc uses **one** parameter-binding
+model for every file. That model follows PHP's default (coercive) binding for
+the conversions elephc can reproduce exactly, and rejects the rest at compile
+time instead of performing them silently — see
+[Types → Parameter type coercion](./types.md#parameter-type-coercion). Adding or
+removing the directive never changes how a program behaves.
+
+The `ticks` and `encoding` directives are likewise accepted and ignored.
+Directive values must be PHP literals; `strict_types` must be the first
+statement, use the statement form, and have the integer value `0` or `1`.
 
 ```php
 <?php
 
 declare(strict_types=1);
 
-echo "always strict";
+echo "same behavior either way";
 ```
 
 The block form runs its body in the enclosing scope:
