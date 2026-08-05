@@ -916,25 +916,61 @@ fn cast_feeds_string_context(function: &Function, inst: &Instruction) -> bool {
     let Some(result) = inst.result else {
         return false;
     };
+    let mut pending = vec![result];
+    let mut seen_values: HashSet<ValueId> = HashSet::new();
+    let mut seen_slots: HashSet<u32> = HashSet::new();
     let mut consumed = false;
-    for candidate in &function.instructions {
-        if !candidate.operands.contains(&result) {
+    while let Some(value) = pending.pop() {
+        if !seen_values.insert(value) {
             continue;
         }
-        // Ownership bookkeeping is not a USE: the EIR releases the cast's temporary right
-        // after the concat consumes it, and that release says nothing about the context.
-        if matches!(
-            candidate.op,
-            Op::Acquire | Op::Release | Op::Move | Op::Borrow
-        ) {
-            continue;
-        }
-        consumed = true;
-        if !matches!(
-            candidate.op,
-            Op::StrConcat | Op::EchoValue | Op::StrInterpolate | Op::WriteStrStdout | Op::StrLen
-        ) {
-            return false;
+        for candidate in &function.instructions {
+            if !candidate.operands.contains(&value) {
+                continue;
+            }
+            // Ownership bookkeeping is not a USE: the EIR releases the cast's temporary right
+            // after the concat consumes it, and that release says nothing about the context.
+            // An ACQUIRE does forward the value, though, so its result is followed rather than
+            // dismissed — `echo $x ?? "d"` stabilizes the merged value through one.
+            if matches!(candidate.op, Op::Release | Op::Move | Op::Borrow) {
+                continue;
+            }
+            if candidate.op == Op::Acquire {
+                if let Some(forwarded) = candidate.result {
+                    pending.push(forwarded);
+                }
+                continue;
+            }
+            // A `??` merge parks its value in a hidden slot and reads it back in the merge
+            // block, so the echo is two hops away from the cast. Following the slot keeps that
+            // reachable — and following EVERY load of it is what keeps the answer sound: one
+            // load reaching a non-string context still refuses the whole cast.
+            if candidate.op == Op::StoreLocal {
+                let Some(Immediate::LocalSlot(slot)) = candidate.immediate.as_ref() else {
+                    return false;
+                };
+                if seen_slots.insert(slot.as_raw()) {
+                    for load in &function.instructions {
+                        if load.op != Op::LoadLocal {
+                            continue;
+                        }
+                        if load.immediate.as_ref() != Some(&Immediate::LocalSlot(*slot)) {
+                            continue;
+                        }
+                        if let Some(loaded) = load.result {
+                            pending.push(loaded);
+                        }
+                    }
+                }
+                continue;
+            }
+            consumed = true;
+            if !matches!(
+                candidate.op,
+                Op::StrConcat | Op::EchoValue | Op::StrInterpolate | Op::WriteStrStdout | Op::StrLen
+            ) {
+                return false;
+            }
         }
     }
     consumed

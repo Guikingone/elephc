@@ -104,21 +104,22 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **47
-compile to `wasm32-wasi`**, and every one of them except `ifdef` and `enums`
-reproduces php-src's output byte for byte. Those two have no php-src output to
-match rather than a different one: `ifdef` uses an Elephc-only preprocessor form
-php-src cannot parse at all, and `enums` reaches the Elephc-only builtin
-`SortDirection` enum, which php-src answers with `Class "SortDirection" not
-found` — this target prints the rest, including the line php-src never gets to.
-So every example this target compiles, it also runs correctly.
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **48
+compile to `wasm32-wasi`**, and every one of them except `ifdef`, `union-types`
+and `enums` reproduces php-src's output byte for byte. Those three have no
+php-src output to match rather than a different one: `ifdef` and `union-types`
+use Elephc-only syntax php-src cannot parse at all — they are checked against the
+NATIVE backend instead, and agree with it — and `enums` reaches the Elephc-only
+builtin `SortDirection` enum, which php-src answers with `Class "SortDirection"
+not found` while this target prints the rest, including the line php-src never
+gets to. So every example this target compiles, it also runs correctly.
 
 When comparing against php-src yourself, pass the script path as the module's
 first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 143 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 142 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -134,7 +135,7 @@ times over:
 | Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
 | All three together | 17 |
 
-The blocker-count distribution says the same thing: of the 143 that do not
+The blocker-count distribution says the same thing: of the 142 that do not
 compile, 14 have one distinct blocker, 19 have two, 22 have three, 22 have four,
 and the tail runs past eleven. Progress is roughly one example per fix, so the
 example counter is a poor guide to correctness work — running a differential
@@ -242,6 +243,17 @@ where php-src answers true. The checker infers the read as `int` while the EIR
 produces `int|null`, and the signature is what the call site believes. Anything
 reading that type inherits the wrong answer, `gettype()` included; patching it in
 one consumer would hide it from the others.
+
+**A Mixed value rendered as a string through a `??` merge** is admitted. Such a
+cast is accepted when every consumer is a place PHP renders a string — echo,
+concat, interpolation, `strlen` — and `echo $x ?? "d"` looked like it had no
+consumer at all: the merge parks the value in a hidden slot and reads it back in
+the merge block, so the cast's only direct uses were the `acquire`/`release` pair
+the check rightly ignores, and "no string consumer" was indistinguishable from
+"no consumer". The walk now follows an `acquire` to its result and a `store_local`
+to every LOAD of that slot. Following every load is what keeps it sound: one load
+reaching a non-string context still refuses the whole cast. Unblocks
+`examples/union-types`.
 
 **`foreach ($a as &$x) { $x += n; }`** writes back through the cell. `$x + 5`
 types Mixed because the add can overflow into a float, while the cell it writes

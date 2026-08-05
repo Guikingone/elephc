@@ -14581,6 +14581,89 @@ echo count($ints), "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a Mixed-to-string cast reached through a `??` merge, two hops from its use.
+///
+/// A `Mixed` value rendered as a string is admitted when every consumer is a place PHP renders
+/// one — echo, concat, interpolation, `strlen`. `echo $x ?? "d"` looked like it had NO consumer
+/// at all: the merge parks the value in a hidden slot and reads it back in the merge block, so
+/// the cast's only direct uses were the `acquire`/`release` pair the predicate rightly ignores,
+/// and "no string consumer" and "no consumer" answered the same.
+///
+/// Following an `acquire` to its result and a `store_local` to every LOAD of that slot is what
+/// closes the gap. Following EVERY load is what keeps it sound: one load reaching a non-string
+/// context still refuses the whole cast, which is why the walk collects rather than stops at the
+/// first string use it finds.
+///
+/// Unblocks `examples/union-types`, which php-src cannot parse — so that example is checked
+/// against the native backend instead, and the shape itself is pinned here against php-src.
+#[test]
+fn test_cli_wasm_renders_a_coalesced_mixed_as_a_string() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_coalesced_string_cast");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let path = dir.join("main.php");
+    fs::write(
+        &path,
+        r#"<?php
+function maybe(string $s): ?string {
+    $t = trim($s);
+    return $t === "" ? null : $t;
+}
+echo maybe("  hi  ") ?? "none", "\n";
+echo maybe("   ") ?? "none", "\n";
+echo "[" . (maybe(" x ") ?? "none") . "]", "\n";
+echo strlen(maybe("  abc ") ?? "none"), "\n";
+"#,
+    )
+    .unwrap();
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&path)
+        .output()
+        .expect("failed to compile the coalesced string cast");
+    assert!(
+        built.status.success(),
+        "the coalesced string cast must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the coalesced string cast under Node");
+    // php-src 8.5.6's own answer, across all four string contexts the predicate admits.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "hi\nnone\n[x]\n3\n",
+        "php-src's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,
