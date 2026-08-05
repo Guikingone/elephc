@@ -18,3 +18,5 @@ docs/superpowers/
 /bundle.tar
 /bundle.tar.gz
 /bundle.tar.bz2
+.agent_memory/indexes/
+.agent_memory/reports/
