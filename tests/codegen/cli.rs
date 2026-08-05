@@ -13318,6 +13318,135 @@ echo $n, "|", $t, "\n";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies that a SUBCLASS argument may bind to a parameter that declares one of its ancestors.
+///
+/// The capability audit compares an argument's representation against the parameter's, and two
+/// object types with different class names read as two different representations — so `look(Base
+/// $x)` called with `new Kid()` was refused, even though PHP's whole inheritance story is that the
+/// call is legal. The refusal was a representation claim that is not true: an object is ONE pointer
+/// to a header naming its own runtime class, which is exactly why `instanceof` and virtual dispatch
+/// both answer off the value rather than the static type.
+///
+/// So the physical layer says two object pointers are copy-compatible, and the semantic question —
+/// may THIS class stand in for THAT one — is answered where the hierarchy is in scope, by
+/// `argument_is_a_descendant_of_the_parameter` in the capability audit. That helper walks `parent`
+/// links only, so it admits a descendant and nothing else; an INTERFACE-typed parameter stays
+/// refused (measured: `hear(Speaks $s)` given a `Dog` still reports `unknown receiver class
+/// Speaks`, an independent gap in interface dispatch).
+///
+/// Each case below pins an assumption the relaxation depends on, against php-src 8.5.6's own
+/// answers: inherited fields keep their offsets when the subclass adds its own — including fields
+/// of DIFFERENT representations ahead of them — an overridden method dispatches on the runtime
+/// class through an ancestor-typed parameter, a write through such a parameter lands on the base
+/// field and leaves the subclass's own untouched, and the same callee body serves both the base and
+/// the descendant across repeated calls. Unblocks `examples/instanceof`, whose output is now
+/// byte-identical to php-src.
+#[test]
+fn test_cli_wasm_passes_a_subclass_where_the_parameter_declares_an_ancestor() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_subclass_argument");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expected string below is php-src 8.5.6's own answer for the same program.
+    for (name, source, expected) in [
+        // An inherited field read through the ancestor-typed parameter, with the subclass adding
+        // a field of its own: the base field must still be found at the base's offset.
+        (
+            "fields.php",
+            "<?php\nclass Base { public int $a = 1; public int $b = 2; }\nclass Kid extends Base { public int $c = 3; }\nfunction look(Base $x): void { echo $x->a, \"|\", $x->b, \"\\n\"; }\nlook(new Base());\nlook(new Kid());\n",
+            "1|2\n1|2\n",
+        ),
+        // An overridden method reached through the ancestor-typed parameter must dispatch on the
+        // RUNTIME class, or the descendant would answer with the base's body.
+        (
+            "dispatch.php",
+            "<?php\nclass Base { public function who(): string { return \"base\"; } }\nclass Kid extends Base { public function who(): string { return \"kid\"; } }\nfunction look(Base $x): void { echo $x->who(), \"\\n\"; }\nlook(new Base());\nlook(new Kid());\n",
+            "base\nkid\n",
+        ),
+        // Field offset and dispatch at once, with the subclass inserting a field of a DIFFERENT
+        // representation — a string next to the base's int.
+        (
+            "both.php",
+            "<?php\nclass Base { public int $a = 1; public function who(): string { return \"base\"; } }\nclass Kid extends Base { public string $extra = \"x\"; public function who(): string { return \"kid\"; } }\nfunction look(Base $x): void { echo $x->a, \":\", $x->who(), \"\\n\"; }\nlook(new Base());\nlook(new Kid());\n",
+            "1:base\n1:kid\n",
+        ),
+        // A WRITE through the ancestor-typed parameter must land on the base field and leave the
+        // subclass's own field intact — the sharpest test that the offsets did not shift.
+        (
+            "write.php",
+            "<?php\nclass Base { public int $a = 1; }\nclass Kid extends Base { public int $c = 9; }\nfunction bump(Base $x): void { $x->a = 41; }\n$k = new Kid();\nbump($k);\necho $k->a, \"|\", $k->c, \"\\n\";\n",
+            "41|9\n",
+        ),
+        // Three levels deep: a grandchild is as much a descendant as a child.
+        (
+            "three.php",
+            "<?php\nclass A { public int $a = 1; public function who(): string { return \"A\"; } }\nclass B extends A { public int $b = 2; public function who(): string { return \"B\"; } }\nclass C extends B { public int $c = 3; public function who(): string { return \"C\"; } }\nfunction look(A $x): void { echo $x->a, \":\", $x->who(), \"\\n\"; }\nlook(new A());\nlook(new B());\nlook(new C());\n",
+            "1:A\n1:B\n1:C\n",
+        ),
+        // Four base fields of four different representations, all read through the ancestor-typed
+        // parameter after the subclass appended two more.
+        (
+            "layout.php",
+            "<?php\nclass Base { public string $name = \"n\"; public float $ratio = 0.5; public int $count = 7; public bool $on = true; }\nclass Kid extends Base { public string $extra = \"x\"; public int $more = 99; }\nfunction look(Base $x): void { echo $x->name, \"|\", $x->ratio, \"|\", $x->count, \"|\", $x->on ? \"T\" : \"F\", \"\\n\"; }\nlook(new Base());\n$k = new Kid();\n$k->name = \"kid\";\n$k->ratio = 2.25;\n$k->count = 41;\n$k->on = false;\nlook($k);\necho $k->extra, \"|\", $k->more, \"\\n\";\n",
+            "n|0.5|7|T\nkid|2.25|41|F\nx|99\n",
+        ),
+        // One callee body serving the base and the descendant across repeated calls, mutating and
+        // re-reading the base field while the subclass's own field survives.
+        (
+            "mutate.php",
+            "<?php\nclass Node { public int $v = 0; public function label(): string { return \"node\"; } }\nclass Leaf extends Node { public string $tag = \"t\"; public function label(): string { return \"leaf\"; } }\nfunction nudge(Node $n, int $add): string { $n->v = $n->v + $add; return $n->label() . \"=\" . $n->v; }\n$a = new Node();\necho nudge($a, 3), \"\\n\";\necho nudge($a, 4), \"\\n\";\n$l = new Leaf();\n$l->tag = \"keepme\";\necho nudge($l, 10), \"\\n\";\necho $l->tag, \"|\", $l->v, \"\\n\";\n",
+            "node=3\nnode=7\nleaf=10\nkeepme|10\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the subclass argument");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the subclass argument under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a typed property read in an ABSTRACT class, whose concrete descendants all initialize.
 ///
 /// `abstract class Shape { abstract public int $sides { get; set; } }` has no default of its own,

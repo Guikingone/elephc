@@ -3476,13 +3476,28 @@ fn direct_call_shape_issue(
                     parameter.php_type.codegen_repr()
                 ));
             }
-        } else if let Some(issue) = value_transfer_shape_issue(
-            value.ir_type,
-            value.php_type.codegen_repr(),
-            parameter.ir_type,
-            parameter.php_type.codegen_repr(),
-        ) {
-            return Some(format!("argument #{index}: {issue}"));
+        } else {
+            // A SUBCLASS argument is the parameter's own storage: both sides are one object
+            // pointer, and the callee was already audited against its declared class and every
+            // descendant of it. Classifying against the parameter's class is what makes that a
+            // plain copy instead of a refusal on the class NAME alone.
+            let argument_php = if argument_is_a_descendant_of_the_parameter(
+                module,
+                &value.php_type.codegen_repr(),
+                &parameter.php_type.codegen_repr(),
+            ) {
+                parameter.php_type.codegen_repr()
+            } else {
+                value.php_type.codegen_repr()
+            };
+            if let Some(issue) = value_transfer_shape_issue(
+                value.ir_type,
+                argument_php,
+                parameter.ir_type,
+                parameter.php_type.codegen_repr(),
+            ) {
+                return Some(format!("argument #{index}: {issue}"));
+            }
         }
     }
     if let Some(result) = inst.result {
@@ -3690,7 +3705,7 @@ fn method_call_shape_issue(
                 ) {
                     return Some(issue);
                 }
-                if let Some(issue) = method_body_argument_shape_issue(function, inst, body) {
+                if let Some(issue) = method_body_argument_shape_issue(module, function, inst, body) {
                     return Some(issue);
                 }
                 if let Some(issue) =
@@ -3818,7 +3833,7 @@ fn method_call_shape_issue(
                 ) {
                     return Some(format!("{class_name}: {issue}"));
                 }
-                if let Some(issue) = method_body_argument_shape_issue(function, inst, body) {
+                if let Some(issue) = method_body_argument_shape_issue(module, function, inst, body) {
                     return Some(format!("{class_name}: {issue}"));
                 }
                 if boxed_result {
@@ -5064,8 +5079,32 @@ fn method_body_signature_shape_issue(
     None
 }
 
+/// Accepts a SUBCLASS argument where the parameter declares an ancestor class.
+///
+/// `Probe::check(Widget $item)` handed a `Button` compared unequal on the class NAME alone —
+/// both sides are `IrType::Heap(IrHeapKind::Object)`, so the transfer itself is a pointer copy
+/// and always representationally exact. What the equality was standing in for is whether the
+/// callee's own instructions are valid for the object that actually arrives, and they already
+/// are: every method call is audited against its declared receiver class AND every descendant
+/// of it, precisely because PHP dispatches on the RUNTIME class. A `Button` is one of the
+/// classes `Widget` was already proven safe for, so refusing it proves nothing extra.
+///
+/// The relation is the PARENT chain, not `instanceof`: an interface names no storage, so an
+/// interface-typed parameter is a separate question and stays refused here.
+fn argument_is_a_descendant_of_the_parameter(
+    module: &Module,
+    argument: &PhpType,
+    parameter: &PhpType,
+) -> bool {
+    let (PhpType::Object(argument), PhpType::Object(parameter)) = (argument, parameter) else {
+        return false;
+    };
+    class_descends_from(module, argument, parameter)
+}
+
 /// Validates argument storage against the concrete method body's WASM signature.
 fn method_body_argument_shape_issue(
+    module: &Module,
     owner: &Function,
     inst: &Instruction,
     body: &Function,
@@ -5102,7 +5141,12 @@ fn method_body_argument_shape_issue(
             ));
         };
         if value.ir_type != parameter.ir_type
-            || value.php_type.codegen_repr() != parameter.php_type.codegen_repr()
+            || (value.php_type.codegen_repr() != parameter.php_type.codegen_repr()
+                && !argument_is_a_descendant_of_the_parameter(
+                    module,
+                    &value.php_type.codegen_repr(),
+                    &parameter.php_type.codegen_repr(),
+                ))
         {
             return Some(format!(
                 "operand #{} storage {:?}/{:?} differs from {} parameter {:?}/{:?}",

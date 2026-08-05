@@ -148,6 +148,20 @@ fn reprs_match_for_copy(
             {
                 return true;
             }
+            // Two OBJECT pointers are bit-compatible whatever their classes: an object is one
+            // pointer to a header that names its own runtime class, which is why `instanceof`
+            // and virtual dispatch both work off the value rather than the static type. Whether
+            // a given class may stand in for another is a SEMANTIC question, and it is answered
+            // where the class hierarchy is in scope — `argument_is_a_descendant_of_the_parameter`
+            // in the capability audit, which admits a subclass and nothing else. Deciding it here
+            // instead would mean refusing on the class NAME, which is not a storage fact.
+            if source_ir == dest_ir
+                && source_ir == IrType::Heap(IrHeapKind::Object)
+                && matches!(source_php, PhpType::Object(_))
+                && matches!(dest_php, PhpType::Object(_))
+            {
+                return true;
+            }
             source_ir == dest_ir && source_php == dest_php
         }
         _ => false,

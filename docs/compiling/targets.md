@@ -101,7 +101,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 190 examples under `examples/` that carry a `main.php`, **38
+claim. Of the 190 examples under `examples/` that carry a `main.php`, **39
 compile to `wasm32-wasi`**, and every one of them except `ifdef` reproduces
 php-src's output byte for byte. `ifdef` uses an Elephc-only preprocessor form
 php-src cannot parse at all, so it has no php-src output to match — meaning
@@ -112,7 +112,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 152 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 151 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 160, not 190.
 
@@ -226,6 +226,25 @@ where php-src answers true. The checker infers the read as `int` while the EIR
 produces `int|null`, and the signature is what the call site believes. Anything
 reading that type inherits the wrong answer, `gettype()` included; patching it in
 one consumer would hide it from the others.
+
+**A subclass argument** may bind to a parameter that declares one of its
+ancestors. The capability audit compares an argument's representation against the
+parameter's, and two object types with different class names read as two
+different representations — so `look(Base $x)` called with `new Kid()` was
+refused, though PHP's whole inheritance story is that the call is legal. The
+refusal made a representation claim that is not true: an object is ONE pointer to
+a header naming its own runtime class, which is exactly why `instanceof` and
+virtual dispatch both answer off the value rather than the static type. Two object
+pointers are therefore copy-compatible at the physical layer, and whether a given
+class may stand in for another is decided where the hierarchy is in scope — in
+the audit, which walks `parent` links and so admits a descendant and nothing
+else. An interface-typed parameter stays refused, on the separate ground that
+interface dispatch has no known receiver class. Verified byte-identical to
+php-src 8.5.6 for inherited field offsets under a subclass that appends fields of
+other representations, virtual dispatch of an overridden method through an
+ancestor-typed parameter, a write through such a parameter landing on the base
+field, three-level hierarchies, and one callee body serving both classes across
+repeated calls. Unblocks `examples/instanceof`.
 
 **By-reference container parameters** are supported. A by-ref argument arrives as
 a ref-cell pointer, so the callee loads it with `LoadRefCell` rather than
