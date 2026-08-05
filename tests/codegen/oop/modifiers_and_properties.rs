@@ -247,6 +247,7 @@ echo "end";
         "{err}"
     );
 }
+/// Verifies a typed static property assigned zero remains distinguishable from uninitialized.
 #[test]
 fn test_typed_static_property_initialized_to_zero_reads_normally() {
     let out = compile_and_run(

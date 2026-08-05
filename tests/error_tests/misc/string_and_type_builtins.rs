@@ -23,6 +23,30 @@ expect_builtin_arity_error!(
     "intval() takes exactly 1 argument"
 );
 
+/// Verifies the `is_integer()` alias keeps the one-argument predicate contract.
+#[test]
+fn test_error_is_integer_wrong_args() {
+    expect_error("<?php is_integer();", "is_integer() takes exactly 1 argument");
+}
+
+/// Verifies the `is_long()` alias keeps the one-argument predicate contract.
+#[test]
+fn test_error_is_long_wrong_args() {
+    expect_error("<?php is_long();", "is_long() takes exactly 1 argument");
+}
+
+/// Verifies the `is_double()` alias keeps the one-argument predicate contract.
+#[test]
+fn test_error_is_double_wrong_args() {
+    expect_error("<?php is_double();", "is_double() takes exactly 1 argument");
+}
+
+/// Verifies `strval()` requires exactly one value to convert.
+#[test]
+fn test_error_strval_wrong_args() {
+    expect_error("<?php strval();", "strval() takes exactly 1 argument");
+}
+
 // Tests strrpos() arity error when called with only one argument (needs haystack + needle).
 expect_builtin_arity_error!(
     test_error_strrpos_wrong_args,

@@ -532,11 +532,11 @@ fn emit_generator_constructor(
         }
         match target.arch {
             Arch::AArch64 => {
-                emitter.instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off))
-            } // store the owned Mixed cell into the generator start_args slot
+                emitter.instruction(&format!("str {}, [x19, #{}]", gen_reg, store_off)) // store the owned Mixed cell into the generator start_args slot
+            }
             Arch::X86_64 => {
-                emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg))
-            } // store the owned Mixed cell into the generator start_args slot
+                emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", store_off, gen_reg)) // store the owned Mixed cell into the generator start_args slot
+            }
         }
     }
 

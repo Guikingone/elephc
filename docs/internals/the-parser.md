@@ -63,7 +63,7 @@ Things that have a value:
 | `PreDecrement(String)` | `--$i` | |
 | `PostDecrement(String)` | `$i--` | |
 | `FunctionCall { name, args }` | `strlen($s)`, `Tools\fmt($s)`, `\strlen($s)` | Parsed as a structured name so later phases can resolve namespace aliases and fully-qualified names |
-| `Yield { key, value }` | `yield`, `yield $v`, `yield $k => $v` | Yield expression inside a generator body. The parser keeps optional key/value expressions; later checker/codegen turns the enclosing function or closure into a `Generator` state machine. |
+| `Yield { key, value }` | `yield`, `yield $v`, `yield $k => $v` | Yield expression inside a generator body. The parser keeps optional key/value expressions; later checker/codegen emits the enclosing function or closure as a stackful, Fiber-backed `Generator` coroutine. |
 | `YieldFrom(Expr)` | `yield from inner()` | Contextual `yield from` delegation. The lexer leaves `from` as an identifier and the parser recognizes it only immediately after `yield`. |
 | `ArrayLiteral(Vec<Expr>)` | `[1, 2, 3]`, `[...$arr, 4]` | Indexed array; elements may include `Spread` expressions |
 | `ArrayLiteralAssoc(Vec<(Expr, Expr)>)` | `["a" => 1]` | Associative array |

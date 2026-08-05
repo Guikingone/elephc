@@ -463,27 +463,35 @@ Property access is O(1) — the compiler resolves each property's final inherite
 
 Unlike arrays, objects are not resizable. The number of properties is fixed by the class declaration. Properties are stored in parent-first order, then by the child class's own declarations.
 
-## Generator frame layout
+## Generator coroutine layout
 
-`Generator` objects are heap-allocated object-kind blocks with a fixed custom header, followed by generator-specific parameter/local slots. The first word is still a class id, so ordinary `instanceof Generator` and `Iterator` checks work, but the rest of the payload is interpreted by the generated resume function and `__rt_gen_*` runtime helpers rather than by property metadata.
+`Generator` objects are heap-allocated object-kind blocks that reuse the
+232-byte Fiber payload. The first word is the built-in Generator class id, so
+ordinary `instanceof Generator` and `Iterator` checks still work. Offsets
+`8..176` retain the Fiber state, native stack ownership, saved stack pointer,
+callable/wrapper, caller, transfer and exception state, and seven boxed
+`start_args` slots. The generator-specific fields occupy the Fiber layout's
+reserved tail:
 
 ```
 Offset  Size  Field
-  0      8    class_id
-  8      8    resume_fn_ptr
- 16      4    state_idx
- 20      4    flags (bit 0 = rewound, bit 1 = terminated)
- 24      8    auto_key_counter
- 32      8    last_key boxed Mixed pointer
- 40      8    last_value boxed Mixed pointer
- 48      8    return_value boxed Mixed pointer
- 56      8    sent_value boxed Mixed pointer
- 64      8    delegated_iter pointer used by `yield from`
- 72      8    layout_id
- 80      ...  parameter and local slots, 8 bytes each
+184      8    last_key boxed Mixed pointer
+192      8    last_value boxed Mixed pointer
+200      8    return_value boxed Mixed pointer
+208      8    auto_key_counter
+216      8    delegated_iter pointer used by `yield from`
+224      8    unused reserved word
 ```
 
-The Mixed fields own boxed cells while present. When a generator frame is released, object deep-free detects `_generator_class_id` and releases `last_key`, `last_value`, `return_value`, `sent_value`, and any active delegated iterator through the same refcounted runtime paths used elsewhere.
+The constructor boxes the generator's parameters and closure captures into the
+seven `start_args` slots, then the generated coroutine wrapper unboxes them into
+the body's ordinary EIR function frame when execution starts. Locals therefore
+live on the generator's mmap-backed native stack and survive `yield` because the
+whole stack is suspended in place. The Mixed fields own boxed cells while
+present. When a generator object is released, object deep-free detects
+`_generator_class_id` and releases `last_key`, `last_value`, `return_value`, and
+any active delegated iterator through the same refcounted runtime paths used
+elsewhere; Fiber cleanup also returns the coroutine stack mapping to the OS.
 
 ## The data section
 
@@ -514,6 +522,10 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_fiber_msg_*` — Fiber state-error message strings used when constructing `FiberError`
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_resource_id_prefix` — prefix used by resource display helpers
+- `_obj_handle_index`, `_obj_handle_free`, `_obj_handle_free_top` — direct heap-granule-to-object-handle index plus the LIFO pool of reusable PHP object handles
+- `_resource_id_keys`, `_resource_id_vals` — open-addressed native-resource-to-PHP-id map; resource ids and object handles deliberately use separate numbering spaces
+- `_vd_indent`, `_vd_seen`, `_vd_seen_n` — current `var_dump()` indentation and its bounded recursion-detection stack
+- `_callable_strict_profile` — selects the strict-PHP callable builtin table when `--strict-php` is active
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` diagnostics for invalid mode arguments
 - `_filetype_*`, `_stat_key_*`, `_dirname_*`, `_pathinfo_key_*`, `_tmpfile_template` — file metadata, path, stat-array, and temporary-file lookup strings used by I/O helpers
 - `_locale_utf8_name`, `_locale_env_name` — locale selectors used by runtime helpers that need host locale fallback
@@ -533,6 +545,10 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_class_static_vtable_ptrs`, `_class_static_vtable_<id>` — per-class static-method tables used for late static binding
 - `_class_destruct_ptrs` — class_id-indexed `__destruct` method pointers (or `0`) consulted during object deep-free
 - `_classes_by_name`, `_classes_by_name_count` — case-insensitive class-name lookup table used by `new $variable()` instantiation
+- `_zlib_fwrite_fn`, `_zlib_close_fn`, `_bz2_fwrite_fn`, `_bz2_close_fn`, `_iconv_fwrite_fn`, `_iconv_close_fn` — late-bound stream compression and iconv bridge entry points
+- `_phar_zlib_inflate_init2_fn`, `_phar_zlib_inflate_fn`, `_phar_zlib_inflate_end_fn`, `_phar_bz2_decompress_fn` — late-bound PHAR decompression entry points
+- `_elephc_tls_connect_fn`, `_elephc_tls_connect_insecure_fn`, `_elephc_tls_connect_cafile_fn`, `_elephc_tls_connect_capath_fn`, `_elephc_tls_connect_peer_name_fn`, `_elephc_tls_connect_client_cert_fn`, `_elephc_tls_attach_fd_fn`, `_elephc_tls_attach_fd_client_cert_fn`, `_elephc_tls_read_fn`, `_elephc_tls_write_fn`, `_elephc_tls_close_fn` — late-bound TLS session entry points
+- `_elephc_crypto_hash_fn`, `_elephc_crypto_hmac_fn`, `_elephc_crypto_init_fn`, `_elephc_crypto_update_fn`, `_elephc_crypto_final_fn`, `_elephc_crypto_clone_fn`, `_elephc_crypto_free_fn`, `_elephc_crypto_is_finalized_fn` — late-bound one-shot and incremental crypto entry points
 - enum-case `.comm` symbols produced via `enum_case_symbol(...)` — one 8-byte singleton storage slot per declared enum case
 
 ### Global variables

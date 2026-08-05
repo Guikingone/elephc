@@ -194,7 +194,7 @@ capacity.
 `RuntimeFeatures::eval_bridge` additionally links `libelephc_magician.a`, but
 not PCRE2. `RuntimeFeatures::regex` independently resolves managed PCRE2 and
 causes eval setup to register the provider callbacks. The bridge is registered
-in `src/linker.rs` as `--with-eval` with the optional
+in `src/linker/` as `--with-eval` with the optional
 `ELEPHC_MAGICIAN_LIB_DIR` archive-directory override. Normal compilation
 derives both features independently; `--with-eval` force-loads the archive,
 while `--with-regex` force-enables the regex runtime for opaque source. Neither

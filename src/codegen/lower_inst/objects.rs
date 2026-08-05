@@ -6307,6 +6307,7 @@ fn emit_normalized_dynamic_instanceof_value(
     Ok(())
 }
 
+/// Normalizes an unboxed Mixed object pointer into the integer result register for `instanceof`.
 fn emit_mixed_instanceof_value_normalization(ctx: &mut FunctionContext<'_>) {
     let object_label = ctx.next_label("instanceof_dynamic_value_object");
     let done = ctx.next_label("instanceof_dynamic_value_done");

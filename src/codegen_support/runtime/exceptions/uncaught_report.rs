@@ -190,13 +190,13 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
 
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);
     emitter.instruction("test r8, r8");                                         // no throwable published: keep the constant message rather than dereferencing null
-    emitter.instruction("jz __rt_uncaught_fallback");
+    emitter.instruction("jz __rt_uncaught_fallback");                           // use the constant fallback when no throwable is published
 
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_prefix");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_PREFIX_LEN));          // "Fatal error: Uncaught "
     emitter.instruction("mov edi, 2");                                          // fd = stderr for fatal runtime diagnostics
     emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the fatal-error prefix to stderr
 
     emitter.instruction("mov r9, QWORD PTR [r8]");                              // runtime class id from the object header
     abi::emit_symbol_address(emitter, "r10", "_class_name_count");
@@ -210,7 +210,7 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [r10 + 8]");                        // class-name length
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the throwable class name to stderr
 
     emitter.label("__rt_uncaught_no_name");
     emitter.instruction("mov rdx, QWORD PTR [r8 + 16]");                        // Throwable message length lives at payload offset 16
@@ -220,12 +220,12 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_SEPARATOR_LEN));       // ": "
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the message separator to stderr
     emitter.instruction("mov rsi, QWORD PTR [r8 + 8]");                         // Throwable message pointer lives at payload offset 8
     emitter.instruction("mov rdx, QWORD PTR [r8 + 16]");                        // and its length at offset 16
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the throwable message to stderr
 
     emitter.label("__rt_uncaught_location");
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // re-read for symmetry with the AArch64 arm, whose x9 scratch makes this mandatory
@@ -234,26 +234,26 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
         THROWABLE_CREATION_LINE_OFFSET
     ));                                                                         // creation line stamped by the allocating `new`
     emitter.instruction("test r9, r9");                                         // line 0 means no user `new` behind this throwable: omit rather than invent
-    emitter.instruction("jz __rt_uncaught_newline");
+    emitter.instruction("jz __rt_uncaught_newline");                            // omit a location when the throwable has no creation line
     abi::emit_load_symbol_to_reg(emitter, "r10", "_script_source_file_len", 0);
     emitter.instruction("test r10, r10");                                       // a module with no source path has no filename to print
-    emitter.instruction("jz __rt_uncaught_newline");
+    emitter.instruction("jz __rt_uncaught_newline");                            // omit a location when the module has no source filename
 
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_in");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_IN_LEN));              // " in "
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the location introducer to stderr
     abi::emit_symbol_address(emitter, "rsi", "_script_source_file");
     abi::emit_load_symbol_to_reg(emitter, "rdx", "_script_source_file_len", 0);
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the source filename to stderr
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_colon");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_COLON_LEN));           // ":"
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the filename/line separator to stderr
     abi::emit_load_symbol_to_reg(emitter, "r8", "_exc_value", 0);               // reload for symmetry: SysV `syscall` spares r8/r9, but the AArch64 arm cannot
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r8 + {}]",
@@ -263,27 +263,27 @@ fn emit_report_uncaught_exception_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rax");                                        // move the digits out of rax before it becomes the syscall number
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the decimal creation line to stderr
 
     emitter.label("__rt_uncaught_newline");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_nl");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_NEWLINE_LEN));         // terminating newline
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // terminate the uncaught-exception diagnostic with a newline
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // PHP exits 255 for an uncaught exception
     emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // exit the process after reporting the throwable
 
     emitter.label("__rt_uncaught_fallback");
     abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_msg");
     emitter.instruction(&format!("mov edx, {}", UNCAUGHT_FALLBACK_LEN));        // the pre-existing constant message
     emitter.instruction("mov edi, 2");                                          // fd = stderr
     emitter.instruction("mov eax, 1");                                          // syscall 1 = write
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // write the constant fallback diagnostic to stderr
     emitter.instruction(&format!("mov edi, {}", UNCAUGHT_EXIT_STATUS));         // same status as the reporting path
     emitter.instruction("mov eax, 60");                                         // syscall 60 = exit
-    emitter.instruction("syscall");
+    emitter.instruction("syscall");                                             // exit the process after the fallback diagnostic
 }
 
 #[cfg(test)]

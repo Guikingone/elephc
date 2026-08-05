@@ -54,6 +54,13 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
+│   Preludes   │  src/{pdo,tz,list_id,var_export,opcache,image,hash,web,version}_prelude*
+│              │  Injects only the compiler-owned PHP surfaces required by
+│              │  resolved source usage, forced bridge flags, or --web.
+└─────┬────────┘
+      │
+      ▼
+┌──────────────┐
 │ NameResolver │  src/name_resolver/
 │              │  Flattens namespace/use scopes and rewrites names to
 │              │  canonical fully-qualified names before semantic passes.
@@ -67,6 +74,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│ OPcache bake │  src/opcache_prelude/
+│              │  Completes the resolved/autoloaded script manifest and
+│              │  replaces the injected placeholder bodies with baked data.
+└─────┬────────┘
+      │
+      ▼
 ┌──────────────┐
 │  Optimizer   │  src/optimize/
 │   (fold)     │  Folds scalar constants and simplifies pure expressions
@@ -210,7 +224,6 @@ src/
 ├── eval_aot.rs                Target-independent literal eval planning and fallback classification
 ├── optimize.rs                Public optimizer entry points and effect context
 ├── optimize/                  Constant folding, constant propagation, control-flow pruning, normalization, dead-code elimination
-├── builtins/                  Single-source builtin declarations and shared validation/type/effect/ownership/requirement/callable/EIR semantics
 ├── ir/                        EIR types, builder, validator, printer, effects, and tests
 ├── ir_lower/                  Active checked-AST to EIR lowering
 ├── ir_passes/                 EIR optimization pass driver, identity folding, peephole patterns, constant folding, common-subexpression elimination, loop-invariant code motion, dead-instruction elimination, dead-store elimination, branch simplification, the cross-function small-function inliner (run to a module-level fixed point), dominance analysis, loop analysis, and linear-scan register allocation
@@ -360,17 +373,17 @@ src/
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (72 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (148 files)
-│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (4 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (117 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (74 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (155 files)
+│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (118 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
+│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
 │       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (43 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
-│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (6 files)
+│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (10 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
