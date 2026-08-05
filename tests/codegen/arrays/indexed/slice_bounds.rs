@@ -14,7 +14,12 @@
 //!   function, because passing a freshly sliced array straight into a user function hits an unrelated
 //!   pre-existing ownership gap that would mask the behavior under test.
 //! - The scalar fixtures exercise `__rt_array_slice`/`__rt_array_splice`, the `[[1], ...]` fixtures
-//!   exercise the refcounted variants, and the `$m["arr"]` fixture exercises the boxed-`Mixed` path.
+//!   exercise the refcounted variants, and the `$m["arr"]` and untyped-parameter fixtures exercise
+//!   the boxed-`Mixed` path.
+//! - The untyped-parameter fixtures also pin the EIR result LAYOUT of a boxed-`Mixed` slice: the
+//!   checker specializes `function top($scores)` from its call site, EIR gives every undeclared
+//!   parameter the boxed-`Mixed` ABI contract, and the slice result must follow the operands rather
+//!   than the checker's narrower call-site type.
 //! - The `PHP_INT_MAX`/`PHP_INT_MIN` fixture derives its bounds from `$argc` so the frontend cannot
 //!   fold the extreme offsets and lengths away before they reach the runtime helpers.
 
@@ -545,6 +550,108 @@ c=2 2 3
 d=3 2 3 4
 e=4 1 2 3 4
 f=3 1 2 3
+"#
+    );
+}
+
+/// Regression: slicing an array of associative arrays received through an untyped parameter.
+///
+/// The checker specializes `top($scores)` to `array<array<string, string>>` from its only call site,
+/// but EIR gives every undeclared parameter the boxed-`Mixed` ABI contract, so the slice helper
+/// really produces an array of boxed cells. Taking the checker's narrower call-site type as the EIR
+/// result layout made the backend reject the call outright ("array_slice result element PHP type
+/// AssocArray { key: Str, value: Str } for source element PHP type Mixed"); reading each element as
+/// a raw hash pointer instead would have been the silent version of the same bug.
+#[test]
+fn test_array_slice_of_assoc_rows_through_untyped_parameter_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+function top($scores) {
+    $b = array_slice($scores, 0, 1);
+    echo count($b), ":", $b[0]["name"], "\n";
+    $c = array_slice($scores, 1);
+    echo count($c), ":", $c[0]["name"], "\n";
+    foreach (array_slice($scores, -2, 2) as $k => $row) {
+        echo $k, "=", $row["name"], "|";
+    }
+    echo "\n";
+}
+top([["name" => "Ada"], ["name" => "Bob"], ["name" => "Cy"]]);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"1:Ada
+2:Bob
+0=Bob|1=Cy|
+"#
+    );
+}
+
+/// Regression: the same boxed-`Mixed` receiver with scalar payloads, including negative lengths.
+///
+/// `int` and `string` element types hit the same checker-versus-EIR disagreement as the associative
+/// rows above, and the negative-`$length` rows keep the shared window arithmetic covered on the
+/// boxed-`Mixed` lowering rather than only on the typed helpers.
+#[test]
+fn test_array_slice_of_scalars_through_untyped_parameter_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+function ints($values) {
+    $b = array_slice($values, 1, 2);
+    echo count($b), ":", $b[0], ",", $b[1], "\n";
+    echo count(array_slice($values, 0, -3)), "\n";
+    echo count(array_slice($values, 2, -1)), "\n";
+}
+ints([10, 20, 30, 40]);
+function names($values) {
+    echo implode(",", array_slice($values, 1)), "\n";
+    echo implode(",", array_slice($values, -2, 1)), "\n";
+}
+names(["a", "b", "c"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"2:20,30
+1
+1
+b,c
+b
+"#
+    );
+}
+
+/// Regression: slicing a slice, where the intermediate result is a widened boxed-`Mixed` array.
+///
+/// A boxed-`Mixed` slice widens its elements to `Mixed` in EIR while the checker keeps typing the
+/// receiving variable with the precise element type, so the SECOND slice hits the same
+/// checker-versus-EIR disagreement as an untyped parameter does, one step removed from the
+/// parameter itself.
+#[test]
+fn test_chained_array_slice_through_untyped_parameter_matches_php() {
+    let out = compile_and_run(
+        r#"<?php
+function chained($values) {
+    $b = array_slice($values, 0, 3);
+    $c = array_slice($b, 1, 1);
+    echo count($c), ":", $c[0], "\n";
+    $d = array_slice($b, -2);
+    echo implode(",", $d), "\n";
+}
+chained([1, 2, 3, 4]);
+function chained_strings($values) {
+    $b = array_slice($values, 0, 3);
+    echo implode(",", array_slice($b, 1, 2)), "\n";
+}
+chained_strings(["a", "b", "c", "d"]);
+"#,
+    );
+    assert_eq!(
+        out,
+        r#"1:2
+2,3
+b,c
 "#
     );
 }

@@ -2282,17 +2282,28 @@ fn registry_builtin_result_type(
             // span, so the checker map cannot identify an individual call there.
             // Use the typed runtime target's representation-safe fallback instead
             // of accepting whichever synthetic call last occupied that key.
-            if span.line != 0 {
-                if let Some(checked) = ctx.builtin_call_types.get(&span) {
-                    return Some(normalize_value_php_type(checked.clone()));
-                }
-            }
+            let checked = if span.line != 0 {
+                ctx.builtin_call_types
+                    .get(&span)
+                    .map(|checked| normalize_value_php_type(checked.clone()))
+            } else {
+                None
+            };
             let crate::builtins::semantics::BuiltinLowering::Runtime(
                 crate::ir::RuntimeCallTarget::Function(target),
             ) = def.spec.semantics.lowering
             else {
-                return None;
+                return checked;
             };
+            // The checker types an untyped user-function parameter from its call sites, while EIR
+            // gives it the dynamic boxed-Mixed ABI contract, so a checked type can describe a
+            // narrower element layout than the operands actually carry. A runtime target that
+            // copies an argument's layout rejects such a type and re-derives its own.
+            if let Some(checked) = checked {
+                if target.checked_result_type_fits_operands(&arg_types, &checked) {
+                    return Some(checked);
+                }
+            }
             target.fallback_result_type(&arg_types, &def.return_type)
         }
         crate::builtins::semantics::BuiltinResultType::Declared => def.return_type.clone(),

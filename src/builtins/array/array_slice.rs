@@ -20,6 +20,11 @@
 //!   than a bare `Mixed`, which is also PHP-accurate because `array_slice()` always returns an
 //!   array. `RuntimeFnId::ArraySlice::fallback_result_type` supplies the same layout for
 //!   synthetic call sites with no checked type.
+//! - The checked type below is a CHECKER type: call-site specialization narrows an untyped
+//!   parameter (`function top($scores)`) that EIR still lowers under the boxed-`Mixed` ABI
+//!   contract, so the type recorded here can be narrower than the operand the slice helper
+//!   actually copies. `RuntimeFnId::ArraySlice::checked_result_type_fits_operands` rejects such a
+//!   type during EIR lowering so the boxed-`Mixed` layout above is used instead.
 //! - `check` is required both to reject non-array arguments and to compute that shape.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};

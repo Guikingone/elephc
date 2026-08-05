@@ -618,6 +618,51 @@ impl RuntimeFnId {
         }
     }
 
+    /// Reports whether a checked call-site result type is a valid EIR layout for these operands.
+    ///
+    /// `BuiltinResultType::Checked` replays the type the checker recorded for one call site, and the
+    /// checker knows more about a value than EIR does in two routine cases: call-site specialization
+    /// narrows an untyped parameter (`function top($scores)`) that
+    /// `eir_signature_with_php_param_contracts` still lowers under the boxed-`Mixed` ABI contract,
+    /// and a builtin whose EIR result was widened to `array<mixed>` keeps its precise checker type
+    /// in the variable that receives it. A runtime function that COPIES an argument's element layout
+    /// into its result must therefore re-derive that layout from the EIR-visible argument types.
+    /// Taking the checker's narrower type would describe an array of raw payload pointers where the
+    /// helper really produced boxed `Mixed` cells, and every later element read would misinterpret
+    /// them.
+    ///
+    /// `array_slice()` is the only such target today, because it is the only copying array helper
+    /// with a boxed-`Mixed` lowering at all; every other runtime function accepts the checked type
+    /// unchanged. The accepted shapes mirror `require_array_slice_result_type` in the backend: the
+    /// result element layout must equal the source element layout, or be the `Mixed` widening the
+    /// lowering emits explicitly. A non-array checked type is the key-preserving hash form, whose
+    /// values carry the source array's runtime value_type header rather than a copied static
+    /// element layout, and a source the lowering cannot slice at all is left to the backend so it
+    /// reports its own diagnostic. Rejecting here makes the caller fall back to
+    /// `fallback_result_type`, the representation-safe layout the boxed-`Mixed` lowering builds.
+    pub fn checked_result_type_fits_operands(
+        self,
+        arg_types: &[crate::types::PhpType],
+        checked: &crate::types::PhpType,
+    ) -> bool {
+        use crate::types::PhpType;
+        match self {
+            RuntimeFnId::ArraySlice => {
+                let PhpType::Array(result_element) = checked.codegen_repr() else {
+                    return true;
+                };
+                let source_element = match arg_types.first().map(PhpType::codegen_repr) {
+                    Some(PhpType::Mixed | PhpType::Union(_)) => PhpType::Mixed,
+                    Some(PhpType::Array(element)) => element.codegen_repr(),
+                    _ => return true,
+                };
+                let result_element = result_element.codegen_repr();
+                result_element == source_element || result_element == PhpType::Mixed
+            }
+            _ => true,
+        }
+    }
+
     /// Refines the first-class callable ABI where the direct PHP signature is broader.
     pub fn refine_first_class_callable_sig(self, sig: &mut crate::types::FunctionSig) {
         use crate::types::PhpType;
