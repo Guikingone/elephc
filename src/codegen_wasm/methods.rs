@@ -143,6 +143,11 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     // A Throwable accessor has a signature but no EIR body on either backend, so it is read off
     // the object here instead of dispatched. `throwable_intrinsic` needs every class the
     // receiver can be at run time, because an overriding subclass must keep winning.
+    // Before ANY of the paths below, including the open-coded accessor that returns without
+    // dispatching: a raw object pointer can be 0 now that a missed `array<Object>` element
+    // reads as null, and PHP names that case rather than reading through it.
+    emit_null_receiver_check(ctx, receiver, method_ptr, method_len)?;
+
     if let Some(intrinsic) = throwable_intrinsic_for_call(ctx, &class_name, &method_key, dynamic)? {
         if inst.operands.len() != 1 {
             return Err(WasmError::Unsupported(format!(
@@ -184,7 +189,7 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     } else {
         WasmRepr::val_types(inst.result_type).len()
     };
-    emit_null_receiver_guard(ctx, receiver, method_ptr, method_len)?;
+    ctx.emit_load_value(receiver)?;
     for &arg in inst.operands.iter().skip(1) {
         ctx.emit_load_value(arg)?;
     }
@@ -248,7 +253,8 @@ fn lower_interface_method_call(
         WasmRepr::val_types(inst.result_type).len()
     };
 
-    emit_null_receiver_guard(ctx, receiver, method_ptr, method_len)?;
+    emit_null_receiver_check(ctx, receiver, method_ptr, method_len)?;
+    ctx.emit_load_value(receiver)?;
     for &arg in inst.operands.iter().skip(1) {
         ctx.emit_load_value(arg)?;
     }
@@ -273,25 +279,20 @@ fn lower_interface_method_call(
     Ok(())
 }
 
-/// Loads the receiver and terminates with PHP's own message when it is null.
+/// Terminates with PHP's own message when the receiver is null, leaving the stack untouched.
 ///
-/// A raw object pointer used to be non-zero by construction, so the dispatch stub's fallthrough
-/// trap was the only thing standing behind a bad one. That stopped being true once a missed
-/// `array<Object>` element started reading as pointer 0 with the element's own class as its
-/// static type — the null the EIR drops at that boundary. php-src names this case exactly, and
-/// the NATIVE backend already answers it from the same EIR:
+/// Separate from loading the receiver because not every path loads it the same way: the
+/// open-coded `Throwable` accessor takes an address through `object_ptr_ref` rather than a stack
+/// value, and it is resolved BEFORE dispatch — so a guard fused to the dispatch load would miss
+/// it entirely, and did:
 ///
 /// ```text
-///   class A { public function hi(): int { return 42; } }
-///   $a = [new A()];  $x = $a[9];  echo $x->hi();
-///   php-src / native: Warning: Undefined array key 9
-///                     Fatal error: Uncaught Error: Call to a member function hi() on null
-///   wasm before this: Uncaught Error: Invalid callable dispatch
+///   $a = [new Exception("boom")];  $e = $a[9];  echo $e->getMessage();
+///   php-src: Warning: Undefined array key 9
+///            Fatal error: Uncaught Error: Call to a member function getMessage() on null
+///   fused guard: prints an empty message and CONTINUES — it read address 0 + offset
 /// ```
-///
-/// Tag 8 is the Mixed null tag, which is what makes the shared helper print `on null`. The
-/// receiver is left on the stack for the call that follows.
-fn emit_null_receiver_guard(
+fn emit_null_receiver_check(
     ctx: &mut FnCtx,
     receiver: ValueId,
     method_ptr: u32,
@@ -311,10 +312,9 @@ fn emit_null_receiver_guard(
         ),
         "Call to a member function X() on null",
     );
-    ctx.fb
-        .ins(&format!("local.get {}", pointer), "receiver for the call");
     Ok(())
 }
+
 
 /// Open-codes `Enum::cases()` and `Enum::tryFrom()`, which PHP synthesizes and no body backs.
 ///

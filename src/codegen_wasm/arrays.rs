@@ -1020,10 +1020,10 @@ const RT_ARRAY_PREFLIGHT_SET: &str = r#"(func $__rt_array_preflight_set (param $
 const RT_ARRAY_SET_INT: &str = r#"(func $__rt_array_set_int (param $array i32) (param $index i64) (param $value i64) (result i32)
   (local $oldlen i64)
   (local $j i64)
+  (if (i64.lt_s (local.get $index) (i64.const 0))
+    (then (return (local.get $array))))                     ;; reject negative index before allocating
   (if (i32.eqz (local.get $array))                          ;; writing into a null AUTOVIVIFIES
     (then (local.set $array (call $__rt_array_new (i64.const 8) (i64.const 8)))))  ;; php-src builds a fresh array, silently
-  (if (i64.lt_s (local.get $index) (i64.const 0))
-    (then (return (local.get $array))))                     ;; reject negative index
   (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 8))  ;; prove index+1 and all growth before COW
   (local.set $array (call $__rt_array_ensure_unique (local.get $array)))  ;; copy-on-write split
   (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as a scalar array
@@ -1065,10 +1065,16 @@ const RT_ARRAY_SET_PTR: &str = r#"(func $__rt_array_set_ptr (param $array i32) (
   (local $j i64)
   (local $slot i32)
   (local $old i32)
+  ;; The negative index is settled BEFORE anything is allocated. php-src stores a negative
+  ;; KEY here (`$a[-1] = v` makes `[-1 => v]`), which a dense array has no slot for, so the
+  ;; write is dropped — the same limitation as any sparse key. Dropping it must still release
+  ;; the child, because the caller increfed it for an array that never took it.
+  (if (i64.lt_s (local.get $index) (i64.const 0))
+    (then
+      (call $__rt_decref_any (local.get $obj))              ;; give back the caller's share
+      (return (local.get $array))))
   (if (i32.eqz (local.get $array))                          ;; writing into a null AUTOVIVIFIES
     (then (local.set $array (call $__rt_array_new (i64.const 8) (i64.const 8)))))  ;; php-src builds a fresh array, silently
-  (if (i64.lt_s (local.get $index) (i64.const 0))
-    (then (return (local.get $array))))                     ;; reject negative index
   (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 8))  ;; prove growth before COW
   (local.set $array (call $__rt_array_ensure_unique (local.get $array)))  ;; copy-on-write split
   (if (i64.eqz (i64.load (local.get $array)))               ;; empty -> shape as a pointer array
@@ -1108,10 +1114,10 @@ const RT_ARRAY_SET_STR: &str = r#"(func $__rt_array_set_str (param $array i32) (
   (local $oldp i32)
   (local $slot i32)
   (local $j i64)
+  (if (i64.lt_s (local.get $index) (i64.const 0))
+    (then (return (local.get $array))))                     ;; reject negative index before allocating
   (if (i32.eqz (local.get $array))                          ;; writing into a null AUTOVIVIFIES
     (then (local.set $array (call $__rt_array_new (i64.const 8) (i64.const 16)))))  ;; php-src builds a fresh array, silently
-  (if (i64.lt_s (local.get $index) (i64.const 0))
-    (then (return (local.get $array))))                     ;; reject negative index
   (call $__rt_array_preflight_set (local.get $array) (local.get $index) (i64.const 16))  ;; prove index+1 and all growth before COW
   (drop (call $__rt_checked_layout (local.get $len) (i64.const 1) (i64.const 0)))  ;; reject invalid/oversized string length before COW
   (local.set $array (call $__rt_array_ensure_unique (local.get $array)))  ;; copy-on-write split

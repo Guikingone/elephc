@@ -14133,6 +14133,139 @@ process.exitCode = wasi.start(instance);
         "the dispatch fallthrough must not stand in for PHP's diagnostic: {stderr}"
     );
 
+    // The open-coded `Throwable` accessor returns from the method lowering WITHOUT dispatching,
+    // so a guard fused to the dispatch load missed it: this printed an empty message and
+    // CONTINUED, having read address 0 + the property offset. The check now runs before every
+    // path, accessor included.
+    let accessor = dir.join("accessor_on_null.php");
+    fs::write(
+        &accessor,
+        "<?php\n$a = [new Exception(\"boom\")];\n$e = $a[9];\necho $e->getMessage(), \"\\n\";\necho \"survived\\n\";\n",
+    )
+    .unwrap();
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&accessor)
+        .output()
+        .expect("failed to compile the null-receiver accessor");
+    assert!(
+        built.status.success(),
+        "accessor_on_null.php must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("accessor_on_null.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the null-receiver accessor under Node");
+    assert!(
+        String::from_utf8_lossy(&run.stderr).contains("Call to a member function getMessage() on null"),
+        "the accessor path must raise php-src's own Error, got: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert!(
+        !String::from_utf8_lossy(&run.stdout).contains("survived"),
+        "php-src never reaches the next statement: {}",
+        String::from_utf8_lossy(&run.stdout)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a container write with a NEGATIVE index gives back the share it was handed.
+///
+/// The setters reject a negative index, because php-src stores a negative KEY there
+/// (`$a[-1] = v` makes `[-1 => v]`) and a dense array has no slot for one — the same limitation
+/// as any sparse key. But the pointer setter's caller increfs the child BEFORE the call, so
+/// returning without storing stranded it: measured at 24 wasm pages over 20000 such writes,
+/// against 3 for the same loop that stores. Dropping the write now releases the share, and the
+/// negative index is settled before anything is allocated so the rejected path cannot leave a
+/// freshly built array behind either.
+///
+/// Found by GLM 5.2 in the second audit round. Its accompanying claim — that php-src refuses to
+/// autovivify for a negative index — did NOT survive measurement: `$a = null; $a[-1] = 42;`
+/// answers `array(1) { [-1] => int(42) }`. Only the leak was real.
+#[test]
+fn test_cli_wasm_negative_index_container_write_does_not_leak() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_negative_index_write");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+wasi.start(instance);
+console.log(instance.exports.memory.buffer.byteLength / 65536);
+"#,
+    )
+    .unwrap();
+
+    // 20000 dropped writes must not grow the heap. The loop that STORES is the control: if
+    // neither grows, the measurement proves nothing, so both numbers are checked.
+    for (name, source, must_stay_small) in [
+        (
+            "dropped.php",
+            "<?php\n$a = [[0, 0]];\n$n = -1;\nfor ($i = 0; $i < 20000; $i++) {\n    $a[$n] = [1, 2];\n}\necho count($a), \"\\n\";\n",
+            true,
+        ),
+        (
+            "retained.php",
+            "<?php\n$keep = [];\nfor ($i = 0; $i < 20000; $i++) {\n    $row = [1, 2];\n    $keep[] = $row;\n}\necho count($keep), \"\\n\";\n",
+            false,
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the negative-index write");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the negative-index write under Node");
+        let stdout = String::from_utf8_lossy(&run.stdout);
+        let pages: usize = stdout
+            .lines()
+            .last()
+            .and_then(|line| line.trim().parse().ok())
+            .unwrap_or_else(|| panic!("{name}: no page count in {stdout:?}"));
+        if must_stay_small {
+            assert!(
+                pages <= 8,
+                "{name}: the dropped write leaked — {pages} wasm pages"
+            );
+        } else {
+            assert!(
+                pages > 8,
+                "{name}: the control did not grow, so the measurement proves nothing — {pages} pages"
+            );
+        }
+    }
+
     let _ = fs::remove_dir_all(&dir);
 }
 
