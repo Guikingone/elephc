@@ -608,8 +608,18 @@ targets, and tag-storage overwrite.
 
 ### Phase 4 — Magician
 
-- [ ] Four `eval_builtin!` homes + constants.
-- [ ] Magician tests mirroring AOT cases.
+- [x] Four `eval_builtin!` homes + constants.
+- [x] Magician tests mirroring AOT cases.
+
+Phase 4 baseline: magician declares all four PHP functions in its eval registry
+with the same names, parameters, defaults, and encrypt-only by-reference tag as
+the AOT registry. The eval glue calls the shared raw `elephc-crypto` ABI, applies
+base64 only at the PHP boundary, returns `false` for stable bridge failures, and
+writes successful GCM tags back to direct and named caller storage. Predefined
+OpenSSL option constants match AOT values. Focused interpreter tests mirror the
+AOT corpus across CBC/CTR/ECB, every GCM key size, tag lengths 1/4/12/16, raw
+and base64 modes, a 16-byte GCM IV, empty plaintext, exact method inventory,
+helpers, named arguments, callable smoke coverage, tag overwrite, and failures.
 
 ### Phase 5 — Polish
 

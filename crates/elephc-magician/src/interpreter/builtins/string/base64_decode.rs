@@ -37,9 +37,15 @@ pub(in crate::interpreter) fn eval_base64_decode_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let input = values.string_bytes(value)?;
+    let output = eval_base64_decode_bytes(&input);
+    values.string_bytes_value(&output)
+}
+
+/// Decodes raw Base64 text with PHP's permissive non-strict behavior.
+pub(in crate::interpreter) fn eval_base64_decode_bytes(input: &[u8]) -> Vec<u8> {
     let mut output = Vec::with_capacity((input.len() / 4) * 3);
     let mut quartet = Vec::with_capacity(4);
-    for byte in input {
+    for byte in input.iter().copied() {
         if byte.is_ascii_whitespace() {
             continue;
         }
@@ -61,7 +67,7 @@ pub(in crate::interpreter) fn eval_base64_decode_result(
         }
         eval_push_base64_decoded_quartet(&quartet, &mut output);
     }
-    values.string_bytes_value(&output)
+    output
 }
 
 /// Returns the six-bit Base64 value for one encoded byte.
