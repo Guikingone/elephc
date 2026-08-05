@@ -38,8 +38,8 @@ use super::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
     emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
-    emit_string_literal_default_to_result, emit_tagged_null_literal_to_result,
-    literal_default_value, LiteralDefaultValue,
+    emit_string_literal_default_to_result, emit_tagged_int_literal_to_result,
+    emit_tagged_null_literal_to_result, literal_default_value, LiteralDefaultValue,
 };
 use super::lower_inst;
 use super::lower_term;
@@ -984,6 +984,9 @@ fn emit_static_property_default_value(
         }
         LiteralDefaultValue::TaggedNull => {
             emit_tagged_null_literal_to_result(ctx);
+        }
+        LiteralDefaultValue::TaggedInt(value) => {
+            emit_tagged_int_literal_to_result(ctx, *value);
         }
         LiteralDefaultValue::BoxedNull => {
             emit_boxed_null_literal_to_result(ctx);

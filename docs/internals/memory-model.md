@@ -161,8 +161,11 @@ b.eq value_is_null
 
 A tagged null carries the sentinel as its payload word, so boxing it into a Mixed
 cell produces `{tag 8, sentinel}` words and un-audited consumers degrade
-to sentinel behavior. `?int` parameters, returns, and properties keep their boxed Mixed
-representation under both modes.
+to sentinel behavior. Declared `?int` parameters, returns, and properties are tagged
+scalars too under the default mode, so they round-trip the full 64-bit range; a `?int`
+property slot stores the payload at its slot offset and the runtime tag at `offset + 8`,
+and its literal default must be written as that same `{payload, tag}` pair rather than as
+a pointer to a boxed Mixed cell.
 
 ### Pointer values
 

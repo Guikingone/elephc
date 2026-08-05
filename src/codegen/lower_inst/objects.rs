@@ -45,8 +45,8 @@ use crate::codegen::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
     emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
-    emit_string_literal_default_to_result, emit_tagged_null_literal_to_result,
-    literal_default_value, LiteralDefaultValue,
+    emit_string_literal_default_to_result, emit_tagged_int_literal_to_result,
+    emit_tagged_null_literal_to_result, literal_default_value, LiteralDefaultValue,
 };
 use crate::codegen::{CodegenIrError, Result};
 
@@ -2379,18 +2379,11 @@ fn emit_property_default(
         }
         LiteralDefaultValue::TaggedNull => {
             emit_tagged_null_literal_to_result(ctx);
-            abi::emit_store_to_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                object_reg,
-                default.offset,
-            );
-            abi::emit_store_to_address(
-                ctx.emitter,
-                crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
-                object_reg,
-                default.offset + 8,
-            );
+            emit_tagged_scalar_property_default_store(ctx, object_reg, default.offset);
+        }
+        LiteralDefaultValue::TaggedInt(value) => {
+            emit_tagged_int_literal_to_result(ctx, *value);
+            emit_tagged_scalar_property_default_store(ctx, object_reg, default.offset);
         }
         LiteralDefaultValue::BoxedNull => {
             abi::emit_push_reg(ctx.emitter, object_reg);
@@ -2464,6 +2457,28 @@ fn emit_property_default(
         }
     }
     Ok(())
+}
+
+/// Writes the tagged scalar currently held in the result registers into a property slot: the
+/// payload word at `offset` and the runtime tag word at `offset + 8`, matching the layout the
+/// tagged-scalar property load and store helpers use.
+fn emit_tagged_scalar_property_default_store(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    offset: usize,
+) {
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        object_reg,
+        offset,
+    );
+    abi::emit_store_to_address(
+        ctx.emitter,
+        crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
+        object_reg,
+        offset + 8,
+    );
 }
 
 /// Calls the resolved `__construct` method with the newly allocated object as `$this`.
@@ -5559,8 +5574,16 @@ fn emit_property_load(
         PhpType::TaggedScalar => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
-            abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+            // Mixed-receiver dispatch hands the object pointer in the integer result register,
+            // so loading the payload first would overwrite the base before the tag word is read
+            // and the second load would dereference the payload. Same guard as the `Str` arm.
+            if base_reg == int_reg {
+                abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+                abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
+            } else {
+                abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
+                abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+            }
         }
         ty if is_pointer_sized_property_type(&ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);
