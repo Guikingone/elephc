@@ -62,29 +62,8 @@ jobs:
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
-      - name: Build optional PDO_DBLIB profile
-        run: cargo build -p elephc-pdo --features dblib
-
-      - name: Build optional PDO_FIREBIRD profile
-        run: cargo build -p elephc-pdo --features firebird
-
-      - name: Build optional PDO_ODBC profile
-        run: cargo build -p elephc-pdo --features odbc
-
-      - name: Build optional PDO_INFORMIX profile
-        run: cargo build -p elephc-pdo --features informix
-
-      - name: Build optional PDO_IBM profile
-        run: cargo build -p elephc-pdo --features ibm
-
-      - name: Build optional PDO_SQLSRV profile
-        run: cargo build -p elephc-pdo --features sqlsrv
-
-      - name: Build optional PDO_OCI profile
-        run: cargo build -p elephc-pdo --features oci
-
-      - name: Build optional PDO_CUBRID profile
-        run: cargo build -p elephc-pdo --features cubrid
+      - name: Build combined optional PDO driver profile
+        run: cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
@@ -150,29 +129,8 @@ jobs:
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
-      - name: Build optional PDO_DBLIB profile
-        run: cargo build -p elephc-pdo --features dblib
-
-      - name: Build optional PDO_FIREBIRD profile
-        run: cargo build -p elephc-pdo --features firebird
-
-      - name: Build optional PDO_ODBC profile
-        run: cargo build -p elephc-pdo --features odbc
-
-      - name: Build optional PDO_INFORMIX profile
-        run: cargo build -p elephc-pdo --features informix
-
-      - name: Build optional PDO_IBM profile
-        run: cargo build -p elephc-pdo --features ibm
-
-      - name: Build optional PDO_SQLSRV profile
-        run: cargo build -p elephc-pdo --features sqlsrv
-
-      - name: Build optional PDO_OCI profile
-        run: cargo build -p elephc-pdo --features oci
-
-      - name: Build optional PDO_CUBRID profile
-        run: cargo build -p elephc-pdo --features cubrid
+      - name: Build combined optional PDO driver profile
+        run: cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
@@ -233,29 +191,8 @@ jobs:
           cargo build 2>&1 | tee "$RUNNER_TEMP/cargo-build.log"
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
-      - name: Build optional PDO_DBLIB profile
-        run: cargo build -p elephc-pdo --features dblib
-
-      - name: Build optional PDO_FIREBIRD profile
-        run: cargo build -p elephc-pdo --features firebird
-
-      - name: Build optional PDO_ODBC profile
-        run: cargo build -p elephc-pdo --features odbc
-
-      - name: Build optional PDO_INFORMIX profile
-        run: cargo build -p elephc-pdo --features informix
-
-      - name: Build optional PDO_IBM profile
-        run: cargo build -p elephc-pdo --features ibm
-
-      - name: Build optional PDO_SQLSRV profile
-        run: cargo build -p elephc-pdo --features sqlsrv
-
-      - name: Build optional PDO_OCI profile
-        run: cargo build -p elephc-pdo --features oci
-
-      - name: Build optional PDO_CUBRID profile
-        run: cargo build -p elephc-pdo --features cubrid
+      - name: Build combined optional PDO driver profile
+        run: cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
@@ -501,7 +438,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -537,7 +474,7 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
@@ -573,10 +510,134 @@ jobs:
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
-            -E 'binary(codegen_tests) and not test(~codegen::eval)' \
+            -E 'binary(codegen_tests) and not test(~codegen::eval) and not test(~codegen::pdo)' \
             --partition hash:${{ matrix.shard }}/16 \
             --no-fail-fast --retries 1 --flaky-result pass \
             -j 1
+
+  # PDO fixtures all inject the same large standard-library prelude. Running a
+  # deterministic shard in one libtest process lets parser/runtime/bridge caches
+  # survive between cases while preserving the full three-target test surface.
+  pdo-codegen-tests-macos-aarch64:
+    name: PDO Codegen Tests (macos-aarch64 ${{ matrix.shard }}/4)
+    needs: build-archive-macos-aarch64
+    runs-on: macos-14
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+
+      - name: Install test-only native providers
+        run: brew install pcre2
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-macos-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run PDO codegen shard in one process
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+          pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$pdo_test_binary"
+          python3 scripts/ci/run_pdo_codegen_shard.py \
+            "$pdo_test_binary" "${{ matrix.shard }}" 4
+
+  pdo-codegen-tests-linux-x86_64:
+    name: PDO Codegen Tests (linux-x86_64 ${{ matrix.shard }}/4)
+    needs: build-archive-linux-x86_64
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-x86_64
+          path: ${{ runner.temp }}
+
+      - name: Run PDO codegen shard in one process
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+          pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$pdo_test_binary"
+          python3 scripts/ci/run_pdo_codegen_shard.py \
+            "$pdo_test_binary" "${{ matrix.shard }}" 4
+
+  pdo-codegen-tests-linux-aarch64:
+    name: PDO Codegen Tests (linux-aarch64 ${{ matrix.shard }}/4)
+    needs: build-archive-linux-aarch64
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 40
+    container:
+      image: ghcr.io/illegalstudio/elephc-ci:latest
+      credentials:
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download test archive
+        uses: actions/download-artifact@v4
+        with:
+          name: nextest-archive-linux-aarch64
+          path: ${{ runner.temp }}
+
+      - name: Run PDO codegen shard in one process
+        env:
+          CARGO_NET_OFFLINE: "true"
+          ELEPHC_TEST_PREBUILT_BRIDGES: "1"
+        run: |
+          cargo nextest run --profile ci \
+            --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
+            --workspace-remap . \
+            --extract-to "$RUNNER_TEMP/nextest" \
+            --extract-overwrite --no-run \
+            -E 'binary(codegen_tests)'
+          pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
+            -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
+          test -n "$pdo_test_binary"
+          python3 scripts/ci/run_pdo_codegen_shard.py \
+            "$pdo_test_binary" "${{ matrix.shard }}" 4
 
   # Eval integration tests compile, link, and run full programs while exercising
   # eval/magician paths, so keep them out of the ordinary codegen shards. Two
@@ -871,6 +932,9 @@ jobs:
       - codegen-tests-macos-aarch64
       - codegen-tests-linux-x86_64
       - codegen-tests-linux-aarch64
+      - pdo-codegen-tests-macos-aarch64
+      - pdo-codegen-tests-linux-x86_64
+      - pdo-codegen-tests-linux-aarch64
       - image-api-sync
       - builtins-docs-sync
       - managed-native-smoke
@@ -890,6 +954,9 @@ jobs:
           test "${{ needs.codegen-tests-macos-aarch64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-x86_64.result }}" = "success"
           test "${{ needs.codegen-tests-linux-aarch64.result }}" = "success"
+          test "${{ needs.pdo-codegen-tests-macos-aarch64.result }}" = "success"
+          test "${{ needs.pdo-codegen-tests-linux-x86_64.result }}" = "success"
+          test "${{ needs.pdo-codegen-tests-linux-aarch64.result }}" = "success"
           test "${{ needs.image-api-sync.result }}" = "success"
           test "${{ needs.builtins-docs-sync.result }}" = "success"
           test "${{ needs.managed-native-smoke.result }}" = "success"
