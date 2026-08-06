@@ -19,7 +19,11 @@
 //! - `recipe` decides how an extension is compiled, as an inspectable value kept
 //!   separate from running the commands.
 
+//! - `shim` carries the Zend stand-in as embedded C, following the
+//!   `pcre2_shim.c` precedent rather than the pure-Rust bridge-crate pattern.
+
 pub mod admission;
 pub mod manifest;
 pub mod recipe;
+pub mod shim;
 pub mod stub;
