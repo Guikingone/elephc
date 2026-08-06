@@ -571,6 +571,21 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**A constructor's builtin call no longer ends the initialization proof.** A typed
+property with no default may be read only once something proves the slot was
+written, and a constructor that writes it unconditionally is that proof — but the
+walk treated ANY call as a point past which `$this` might have escaped. That is
+right for a closure, which binds `$this` with no operand naming it anywhere, and
+for a call that receives `$this`; it is wrong for `array_keys($array)`. The object
+is FRESH from `new`, so nothing outside holds a reference to it yet, and user code
+can only reach it through the call's own arguments — a callback that captured it
+would be a closure above, and an array or global holding it would be a store above,
+both of which end the walk first. So a typed runtime call whose operands do not name
+`$this` is now transparent. `ArrayIterator::__construct` calls `array_keys` before
+its first property write, and treating that as an escape refused every
+`$this->position`, `$this->keys` and `$this->values` read in the SPL iterator
+family — 9, 7 and 7 examples respectively.
+
 **`===` and `!==` against a nullable int** are lowered. This target stores a `?int`
 as an inline `{payload, tag}` PAIR rather than one word, and the pair was refused
 outright — which turned away every `$x === null`, the single most common thing

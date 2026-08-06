@@ -13244,6 +13244,18 @@ fn test_cli_wasm_refuses_a_constructor_that_leaks_this_before_its_store() {
             "sibling.php",
             "<?php\nclass A {\n    public $p;\n    public $self;\n    public function __construct($v) { $this->self = $this; leak($this->self); $this->p = $v; }\n}\nfunction leak($o): void { echo $o->p; }\nnew A(1);\n",
         ),
+        // A builtin that RECEIVES `$this` runs code that can read the slot, so the argument is
+        // what decides — not the mere presence of a call.
+        (
+            "builtin_arg.php",
+            "<?php\nclass P {\n    public int $value;\n    public function __construct(int $v) { var_dump($this); $this->value = $v; }\n}\necho (new P(7))->value;\n",
+        ),
+        // And a CLOSURE binds `$this` with no operand naming it anywhere, so closure creation
+        // ends the proof whatever its arguments say.
+        (
+            "closure.php",
+            "<?php\nclass P {\n    public int $value;\n    public function __construct(int $v) { $rows = [3, 1, 2]; usort($rows, function ($a, $b) { return $this->value <=> $b; }); $this->value = $v; }\n}\necho (new P(7))->value;\n",
+        ),
     ] {
         let path = dir.join(name);
         fs::write(&path, source).unwrap();
@@ -13267,6 +13279,17 @@ fn test_cli_wasm_refuses_a_constructor_that_leaks_this_before_its_store() {
         (
             "localcopy.php",
             "<?php\nclass C { public $a; public function __construct() { $x = $this; $this->a = 1; } }\necho (new C())->a;\n",
+        ),
+        // A builtin whose arguments do NOT name `$this` cannot observe it, however much user
+        // code it runs: the object is fresh from `new`, so the only way in is this call's own
+        // arguments — a callback that captured it would be a closure above, and an array or
+        // global holding it would be a store above, both of which end the walk first. Treating
+        // every call as an escape refused `ArrayIterator::__construct`, which calls
+        // `array_keys($array)` before its first property write, and with it every
+        // `$this->position` read in the SPL iterator family.
+        (
+            "builtin_other.php",
+            "<?php\nclass C {\n    public int $n;\n    public function __construct(string $s) { $len = strlen($s); $this->n = $len; }\n}\necho (new C(\"abcd\"))->n;\n",
         ),
     ] {
         let path = dir.join(name);

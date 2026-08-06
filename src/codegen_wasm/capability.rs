@@ -4612,14 +4612,23 @@ fn constructor_initializes_property(module: &Module, class_name: &str, property:
 ///
 /// A CLOSURE is the subtle one: `usort($a, function ($x, $y) { var_dump($this->p); ... })` in a
 /// constructor binds `$this` implicitly, with no operand naming it anywhere, and php-src prints
-/// NULL at each comparison. So closure creation counts, and so does `RuntimeCall` — a builtin
-/// taking a callback runs user code from inside what looks like one instruction.
+/// NULL at each comparison. So closure creation counts whatever its operands say.
 ///
 /// Parking `$this` somewhere reachable — `$arr[] = $this;`, `$GLOBALS['x'] = $this;`,
 /// `self::$last = $this;` — escapes it too, but ONLY when `$this` is what is being stored.
 /// Listing those opcodes outright would refuse `__construct() { $a = [1,2]; $this->list = $a; }`,
 /// which builds an array before the first property write and is entirely ordinary; so the operand
 /// decides, not the opcode.
+///
+/// A typed `RuntimeCall` is decided the same way, and this is what the object being constructed
+/// makes sound: it is FRESH from `new`, so nothing outside the constructor holds a reference to
+/// it yet. User code can therefore only reach it through this call's own arguments — a callback
+/// that captured it would be an `Op::ClosureNew` above, and an array or a global holding it would
+/// be one of the stores above, both of which end the walk before this is asked. So a builtin
+/// whose operands do not name `$this` cannot observe it, however much user code it runs.
+/// `ArrayIterator::__construct` is the measured case: it calls `array_keys($array)` before its
+/// first property write, and treating that as an escape refused every `$this->position` read in
+/// the whole SPL iterator family.
 fn instruction_can_observe_this(function: &Function, inst: &Instruction) -> bool {
     if matches!(
         inst.op,
@@ -4630,7 +4639,6 @@ fn instruction_can_observe_this(function: &Function, inst: &Instruction) -> bool
             | Op::IteratorMethodCall
             | Op::MethodLookup
             | Op::Call
-            | Op::RuntimeCall
             | Op::ClosureNew
             | Op::ClosureBind
             | Op::ClosureCall
@@ -4642,6 +4650,21 @@ fn instruction_can_observe_this(function: &Function, inst: &Instruction) -> bool
             | Op::ObjectCloneShallow
     ) {
         return true;
+    }
+    // An UNTYPED runtime call carries no immediate naming what it does, so it keeps the
+    // conservative answer; only a typed one is decided by its operands.
+    if inst.op == Op::RuntimeCall
+        && !matches!(inst.immediate, Some(Immediate::RuntimeCall(_)))
+    {
+        return true;
+    }
+    // Every ARGUMENT counts for a call — a builtin's first operand is an ordinary argument, not
+    // a container the way a store's is — so this one does not skip operand 0.
+    if inst.op == Op::RuntimeCall {
+        return inst
+            .operands
+            .iter()
+            .any(|operand| value_local_origin(function, *operand) == Some(0));
     }
     matches!(
         inst.op,
