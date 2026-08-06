@@ -25,11 +25,17 @@
 //!   unused-variable warning.
 
 use std::borrow::Cow;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 use crate::parser::ast::Program;
 use crate::php_version::PhpVersion;
 
 mod detect;
+
+type PreludeCacheKey = (PhpVersion, u8);
+
+static PARSED_PRELUDE_CACHE: OnceLock<Mutex<HashMap<PreludeCacheKey, Program>>> = OnceLock::new();
 
 /// The elephc-PHP source implementing PDO over the driver-agnostic `elephc_pdo`
 /// bridge (SQLite + PostgreSQL + MySQL/MariaDB).
@@ -6804,11 +6810,52 @@ pub fn inject_if_used_for_version(
     if !force && !detect::program_uses_pdo(&program) {
         return program;
     }
-    let source = prelude_source_for_version(php_version);
-    let tokens = crate::lexer::tokenize(source.as_ref()).expect("PDO prelude must tokenize");
-    let mut combined = crate::parser::parse_internal(&tokens).expect("PDO prelude must parse");
+    let mut combined = parsed_prelude_for_version(php_version);
     combined.extend(program);
     combined
+}
+
+/// Returns an independent clone of the parsed PDO prelude for one effective profile.
+///
+/// The compiler mutates every injected AST in later passes, so the cache stores an
+/// immutable template and clones it per compilation. This avoids repeatedly tokenizing
+/// and parsing the same 7,000-line prelude while preserving compilation isolation.
+fn parsed_prelude_for_version(php_version: PhpVersion) -> Program {
+    let key = (php_version, optional_driver_mask());
+    let cache = PARSED_PRELUDE_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut cache = cache
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    cache
+        .entry(key)
+        .or_insert_with(|| {
+            let source = prelude_source_for_version(php_version);
+            let tokens = crate::lexer::tokenize(source.as_ref()).expect("PDO prelude must tokenize");
+            crate::parser::parse_internal(&tokens).expect("PDO prelude must parse")
+        })
+        .clone()
+}
+
+/// Encodes the optional-driver environment that changes the generated prelude source.
+fn optional_driver_mask() -> u8 {
+    [
+        (cfg!(feature = "pdo-cubrid"), "ELEPHC_PDO_CUBRID"),
+        (cfg!(feature = "pdo-dblib"), "ELEPHC_PDO_DBLIB"),
+        (cfg!(feature = "pdo-firebird"), "ELEPHC_PDO_FIREBIRD"),
+        (cfg!(feature = "pdo-odbc"), "ELEPHC_PDO_ODBC"),
+        (cfg!(feature = "pdo-ibm"), "ELEPHC_PDO_IBM"),
+        (cfg!(feature = "pdo-sqlsrv"), "ELEPHC_PDO_SQLSRV"),
+        (cfg!(feature = "pdo-oci"), "ELEPHC_PDO_OCI"),
+    ]
+    .iter()
+    .enumerate()
+    .fold(0, |mask, (index, (feature_enabled, env_name))| {
+        if *feature_enabled || std::env::var_os(env_name).is_some() {
+            mask | (1 << index)
+        } else {
+            mask
+        }
+    })
 }
 
 /// Returns the PDO prelude source with version-specific fetch constants and decoders.
