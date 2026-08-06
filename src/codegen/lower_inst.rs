@@ -6179,6 +6179,26 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     {
         return Ok(());
     }
+    // A static call on a class this closed-world build does not contain is exactly what PHP
+    // reports at RUNTIME (`Error: Class "X" not found`), not at compile time — and refusing to
+    // translate it rejects whole programs over code that never runs. Symfony's
+    // `AbstractUnicodeString::getLocaleTransliterator` calls `\Transliterator::create()` unguarded
+    // in a private method every caller reaches only behind
+    // `function_exists('transliterator_transliterate')`, so with ext-intl absent the method is
+    // compiled but never entered. Lowering the call to PHP's own diverging fatal keeps the rest of
+    // the program compilable and preserves the observable behaviour if it IS reached. The absent
+    // class is already reported by the checker's absent-optional-dependency warning.
+    //
+    // This runs BEFORE `resolve_static_called_class_arg`, which needs the class id and would
+    // otherwise refuse first. `self`/`parent`/`static` never reach it: they resolve to the
+    // enclosing class above.
+    if !ctx.module.class_infos.contains_key(receiver.as_str()) && !builtins::has_eval_context(ctx) {
+        objects::emit_fatal_message(
+            ctx,
+            format!("Fatal error: Uncaught Error: Class \"{receiver}\" not found\n").as_bytes(),
+        );
+        return Ok(());
+    }
     let called_class_id = resolve_static_called_class_arg(ctx, receiver_label, &receiver)?;
     if let Some(intrinsic) = runtime_backed_static_intrinsic(receiver.as_str(), method_name) {
         return lower_static_runtime_intrinsic(
@@ -6200,10 +6220,20 @@ fn lower_static_method_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
                 method_name,
             );
         }
-        return Err(CodegenIrError::unsupported(format!(
-            "static method call on unknown class {}",
-            receiver
-        )));
+        // A static call on a class this closed-world build does not contain is exactly what PHP
+        // reports at RUNTIME (`Error: Class "X" not found`), not at compile time — and refusing to
+        // translate it rejects whole programs over code that never runs. Symfony's
+        // `AbstractUnicodeString::getLocaleTransliterator` calls `\Transliterator::create()`
+        // unguarded in a private method every caller reaches only behind
+        // `function_exists('transliterator_transliterate')`, so with ext-intl absent the method is
+        // compiled but never entered. Lowering the call to PHP's own diverging fatal keeps the rest
+        // of the program compilable and preserves the observable behaviour if it IS reached.
+        // Absent classes are already reported by the checker's absent-optional-dependency warning.
+        objects::emit_fatal_message(
+            ctx,
+            format!("Fatal error: Uncaught Error: Class \"{receiver}\" not found\n").as_bytes(),
+        );
+        return Ok(());
     };
     let method_key = php_symbol_key(method_name);
     let impl_class = receiver_info

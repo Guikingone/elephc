@@ -549,6 +549,25 @@ echo t();
     assert_eq!(out, "setunsetDEF");
 }
 
+/// A static call on a class absent from the closed world is a RUNTIME error in PHP
+/// (`Error: Class "X" not found`), not a compile-time one, so compiling it must not fail the whole
+/// program: `AbstractUnicodeString::getLocaleTransliterator` calls `\Transliterator::create()`
+/// unguarded in a private method every caller reaches only behind
+/// `function_exists('transliterator_transliterate')`, so with ext-intl absent it is compiled but
+/// never entered. The method here is likewise never called, and the program runs to completion.
+#[test]
+fn test_static_call_on_an_absent_class_compiles_when_never_reached() {
+    let out = compile_and_run(
+        r#"<?php
+function never_called(): ?string {
+    return \ElephcAbsentOptionalDependency::create('x');
+}
+echo "reached";
+"#,
+    );
+    assert_eq!(out, "reached");
+}
+
 /// A FLOAT array key truncates to an integer one, as PHP does. `materialize_hash_key_*` already
 /// emitted that truncation for every other key consumer; only `array_get_mixed_key`'s gate
 /// refused it ("array_get_mixed_key key PHP type Float").
