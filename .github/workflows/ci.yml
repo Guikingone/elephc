@@ -563,7 +563,7 @@ jobs:
           pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
           test -n "$pdo_test_binary"
-          python3 scripts/ci/run_pdo_codegen_shard.py \
+          bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
 
   pdo-codegen-tests-linux-x86_64:
@@ -604,7 +604,7 @@ jobs:
           pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
           test -n "$pdo_test_binary"
-          python3 scripts/ci/run_pdo_codegen_shard.py \
+          bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
 
   pdo-codegen-tests-linux-aarch64:
@@ -645,7 +645,7 @@ jobs:
           pdo_test_binary="$(find "$RUNNER_TEMP/nextest/target/debug/deps" \
             -type f -name 'codegen_tests-*' -perm -111 -print -quit)"
           test -n "$pdo_test_binary"
-          python3 scripts/ci/run_pdo_codegen_shard.py \
+          bash scripts/ci/run_pdo_codegen_shard.sh \
             "$pdo_test_binary" "${{ matrix.shard }}" 4
 
   # Eval integration tests compile, link, and run full programs while exercising
