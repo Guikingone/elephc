@@ -924,6 +924,59 @@ pub(super) fn mixed_string_argument_coercion(
     function: &Function,
     inst: &Instruction,
 ) -> Option<(&'static str, String, usize)> {
+    mixed_argument_coercion(function, inst, PhpType::Str)
+}
+
+/// Names the function and parameter behind a BOXED operand at a builtin's declared `int`.
+///
+/// The cast-based sibling below covers the case where the frontend materialised a conversion;
+/// this one covers the commoner shape, where it did not. `substr($s, $mixed)` reaches the call
+/// with the Mixed operand intact — there is no `Op::Cast` anywhere — so the coercion has to be
+/// emitted where the argument is pushed rather than where a cast would have been.
+///
+/// Returns `(php_function_name, parameter_name, one_based_position)` under the same conditions
+/// the cast form requires: one PHP name owning the runtime target, and a parameter declared
+/// plain `int` — a `?int` would take null with no deprecation.
+pub(super) fn runtime_call_int_operand_coercion(
+    function: &Function,
+    call: &Instruction,
+    index: usize,
+) -> Option<(&'static str, String, usize)> {
+    let operand = call.operands.get(index)?;
+    let value = function.value(*operand)?;
+    if value.ir_type != IrType::Heap(IrHeapKind::Mixed)
+        || value.php_type.codegen_repr() != PhpType::Mixed
+    {
+        return None;
+    }
+    let Some(Immediate::RuntimeCall(target)) = &call.immediate else {
+        return None;
+    };
+    let (name, parameter, declared) =
+        crate::builtins::registry::runtime_call_sole_parameter(*target, index)?;
+    (declared == PhpType::Int).then_some((name, parameter, index + 1))
+}
+
+/// The same for a declared `int` parameter — `substr($s, $mixed)` most visibly.
+///
+/// Measured on php-src 8.5.6, the conversion is the one a declared `int` RETURN performs, with
+/// two differences: `null` does not raise there but converts to 0 after a `Deprecated` naming
+/// the parameter, and the failure names `Argument #N ($p)`. Everything numeric in between is
+/// identical, including both precision deprecations, which is why the runtime shares a core
+/// rather than carrying a second copy.
+pub(super) fn mixed_int_argument_coercion(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<(&'static str, String, usize)> {
+    mixed_argument_coercion(function, inst, PhpType::Int)
+}
+
+/// Names the function and parameter behind an implicit cast that feeds a builtin argument.
+fn mixed_argument_coercion(
+    function: &Function,
+    inst: &Instruction,
+    declared_type: PhpType,
+) -> Option<(&'static str, String, usize)> {
     let result = inst.result?;
     let mut consumer: Option<(&Instruction, usize)> = None;
     for candidate in &function.instructions {
@@ -951,7 +1004,7 @@ pub(super) fn mixed_string_argument_coercion(
     };
     let (name, parameter, declared) =
         crate::builtins::registry::runtime_call_sole_parameter(*target, index)?;
-    if declared != PhpType::Str {
+    if declared != declared_type {
         return None;
     }
     Some((name, parameter, index + 1))
@@ -1741,10 +1794,13 @@ fn cast_shape_issue(
     // command module the way every other diagnostic-producing rule here does.
     let string_argument_coercion = mixed_string_argument_coercion(function, inst).is_some()
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
+    let int_argument_coercion = mixed_int_argument_coercion(function, inst).is_some()
+        && module.functions.iter().any(|candidate| candidate.flags.is_main);
     let admitted_mixed_scalar = (explicit
         || widened_by_checked_arithmetic
         || return_coercion
-        || comparison_stand_in)
+        || comparison_stand_in
+        || (int_argument_coercion && target == IrType::I64))
         && matches!(target, IrType::I64 | IrType::F64)
         || ((explicit || cast_feeds_string_context(function, inst) || string_argument_coercion)
             && target == IrType::Str);

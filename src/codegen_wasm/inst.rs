@@ -1892,6 +1892,34 @@ fn emit_float_to_php_int(ctx: &mut FnCtx) {
 /// promote to float. Typed PHP contexts immediately cast that cell back to the
 /// declared scalar type; these paths call the same WASM runtime helpers used by
 /// hashes and mixed-value output.
+/// Pushes the function name, the parameter name and the one-based position a coercion's
+/// diagnostic needs, in the order both `__rt_mixed_arg_*` helpers read them.
+pub(super) fn emit_argument_coercion_names(
+    ctx: &mut FnCtx,
+    name: &str,
+    parameter: &str,
+    position: usize,
+) -> Result<()> {
+    let (fn_ptr, fn_len) = ctx.default_str_literal(name)?;
+    let (param_ptr, param_len) = ctx.default_str_literal(parameter)?;
+    ctx.fb.ins(
+        &format!("i32.const {}", fn_ptr),
+        "the PHP function's name, for the diagnostic text",
+    );
+    ctx.fb.ins(&format!("i32.const {}", fn_len), "its byte length");
+    ctx.fb.ins(
+        &format!("i32.const {}", param_ptr),
+        "the parameter's name, without its dollar",
+    );
+    ctx.fb
+        .ins(&format!("i32.const {}", param_len), "its byte length");
+    ctx.fb.ins(
+        &format!("i64.const {}", position),
+        "php-src numbers arguments from 1",
+    );
+    Ok(())
+}
+
 fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let value = operand(inst, 0)?;
     let target = match inst.immediate {
@@ -2054,6 +2082,20 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             // PHP's coercion at an internal function's declared `string` PARAMETER is a third
             // operation again: it converts a scalar the way `(string)` does, deprecates a null
             // on its way to `""`, and raises where `(string)` would have answered "Array".
+            IrType::I64
+                if inst.result_php_type.codegen_repr() != PhpType::Bool
+                    && super::capability::mixed_int_argument_coercion(ctx.function, inst)
+                        .is_some() =>
+            {
+                let (name, parameter, position) =
+                    super::capability::mixed_int_argument_coercion(ctx.function, inst)
+                        .expect("the guard above proved this resolves");
+                emit_argument_coercion_names(ctx, name, &parameter, position)?;
+                ctx.fb.ins(
+                    "call $__rt_mixed_arg_int",
+                    "PHP's implicit coercion at a declared int parameter",
+                );
+            }
             IrType::Str
                 if super::capability::mixed_string_argument_coercion(ctx.function, inst)
                     .is_some() =>
@@ -2061,23 +2103,7 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 let (name, parameter, position) =
                     super::capability::mixed_string_argument_coercion(ctx.function, inst)
                         .expect("the guard above proved this resolves");
-                let (fn_ptr, fn_len) = ctx.default_str_literal(name)?;
-                let (param_ptr, param_len) = ctx.default_str_literal(&parameter)?;
-                ctx.fb.ins(
-                    &format!("i32.const {}", fn_ptr),
-                    "the PHP function's name, for the diagnostic text",
-                );
-                ctx.fb.ins(&format!("i32.const {}", fn_len), "its byte length");
-                ctx.fb.ins(
-                    &format!("i32.const {}", param_ptr),
-                    "the parameter's name, without its dollar",
-                );
-                ctx.fb
-                    .ins(&format!("i32.const {}", param_len), "its byte length");
-                ctx.fb.ins(
-                    &format!("i64.const {}", position),
-                    "php-src numbers arguments from 1",
-                );
+                emit_argument_coercion_names(ctx, name, &parameter, position)?;
                 ctx.fb.ins(
                     "call $__rt_mixed_arg_string",
                     "PHP's implicit coercion at a declared string parameter",

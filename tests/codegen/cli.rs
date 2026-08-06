@@ -15776,6 +15776,172 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a boxed value reaching a builtin's declared `int` parameter is coerced PHP's way.
+///
+/// This is the `int` half of the argument boundary, and it arrives differently from the `string`
+/// one: `substr($s, $mixed)` reaches the call with the Mixed operand INTACT — the frontend
+/// materialises no cast for it — so the coercion is emitted where the argument is pushed rather
+/// than where a cast would have been.
+///
+/// The conversion itself is the one a declared `int` RETURN performs, and the runtime shares a
+/// core with it rather than carrying a second copy, because measured on php-src 8.5.6 they
+/// differ in exactly two places: `null` does NOT raise at a parameter — it becomes 0 after a
+/// `Deprecated` naming the parameter — and the failure says `Argument #N ($p)`. Every numeric
+/// answer in between is identical, both precision deprecations included.
+///
+/// The float arms are the ones worth spelling out: `2.7` truncates to 2 with a notice, `-2.7`
+/// truncates toward zero to -2 with the same notice naming `-2.7`, and `INF` has no conversion
+/// at all and is a `TypeError` naming `float`. A `"2.0"` string is silent because its VALUE is
+/// integral, while `"2.7"` gets the float-STRING wording, which is a different message.
+///
+/// KNOWN DIVERGENCE: php-src appends ` in <file> on line <n>`; this target reports no location
+/// tail, so each expectation below is asserted as a prefix.
+#[test]
+fn test_cli_wasm_coerces_a_boxed_value_at_a_declared_int_parameter() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_int_argument");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function arm(int $i): mixed {
+    if ($i === 0) { return 2; }
+    if ($i === 1) { return -1; }
+    if ($i === 2) { return 2.0; }
+    if ($i === 3) { return 2.7; }
+    if ($i === 4) { return -2.7; }
+    if ($i === 5) { return true; }
+    if ($i === 6) { return false; }
+    if ($i === 7) { return "2"; }
+    if ($i === 8) { return "2.0"; }
+    if ($i === 9) { return "2.7"; }
+    if ($i === 10) { return "abc"; }
+    if ($i === 11) { return null; }
+    if ($i === 12) { return [1, 2]; }
+    if ($i === 13) { return INF; }
+    return new stdClass();
+}
+$m = arm((int)($argv[1] ?? "0"));
+echo substr("abcdefgh", $m), "|\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the int-argument probe to WASM");
+    assert!(
+        output.status.success(),
+        "int-argument compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m", process.argv[3]], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expectation is php-src 8.5.6's own answer for the same arm.
+    for (arm, stdout, stderr) in [
+        ("0", "cdefgh|\n", ""),
+        ("1", "h|\n", ""),
+        ("2", "cdefgh|\n", ""),
+        (
+            "3",
+            "cdefgh|\n",
+            "Deprecated: Implicit conversion from float 2.7 to int loses precision\n",
+        ),
+        (
+            "4",
+            "gh|\n",
+            "Deprecated: Implicit conversion from float -2.7 to int loses precision\n",
+        ),
+        ("5", "bcdefgh|\n", ""),
+        ("6", "abcdefgh|\n", ""),
+        ("7", "cdefgh|\n", ""),
+        ("8", "cdefgh|\n", ""),
+        (
+            "9",
+            "cdefgh|\n",
+            "Deprecated: Implicit conversion from float-string \"2.7\" to int loses precision\n",
+        ),
+        (
+            "10",
+            "",
+            "Uncaught TypeError: substr(): Argument #2 ($offset) must be of type int, \
+             string given\n",
+        ),
+        (
+            "11",
+            "abcdefgh|\n",
+            "Deprecated: substr(): Passing null to parameter #2 ($offset) of type int \
+             is deprecated\n",
+        ),
+        (
+            "12",
+            "",
+            "Uncaught TypeError: substr(): Argument #2 ($offset) must be of type int, \
+             array given\n",
+        ),
+        (
+            "13",
+            "",
+            "Uncaught TypeError: substr(): Argument #2 ($offset) must be of type int, \
+             float given\n",
+        ),
+        (
+            "14",
+            "",
+            "Uncaught TypeError: substr(): Argument #2 ($offset) must be of type int, \
+             stdClass given\n",
+        ),
+    ] {
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join("main.wasm"))
+            .arg(arm)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the int-argument probe under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            stdout,
+            "arm {arm}: php-src's own value"
+        );
+        let observed = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            observed.contains(stderr),
+            "arm {arm}: expected php-src's own diagnostic {stderr:?}, got {observed}"
+        );
+        // A `TypeError` ends the program; a `Deprecated` does not.
+        assert_eq!(
+            run.status.code(),
+            Some(if stdout.is_empty() { 255 } else { 0 }),
+            "arm {arm}: php-src's own exit status"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `php://memory` and `php://temp`, which are streams with no host file behind them.
 ///
 /// Every other stream this target opens is a WASI fd, and WASI is capability-based: without a

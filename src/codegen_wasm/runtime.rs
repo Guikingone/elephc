@@ -1102,16 +1102,16 @@ fn emit_return_coercion_runtime(
     ));
 
     wm.add_raw_func(&format!(
-        r#"(func $__rt_mixed_return_int (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (result i64)
+        r#"(func $__rt_mixed_to_int_core (param $cell i32) (result i32) (result i64)
   (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64) (local $t f64) (local $cls i32)
   (call $__rt_mixed_unbox (local.get $cell))                      ;; unbox -> stack: tag, lo, hi
   (local.set $hi)
   (local.set $lo)
   (local.set $tag)
   (if (i64.eqz (local.get $tag))                                  ;; tag 0 = int: already PHP's answer
-    (then (return (local.get $lo))))
+    (then (return (i32.const 1) (local.get $lo))))
   (if (i64.eq (local.get $tag) (i64.const 3))                     ;; tag 3 = bool: stored normalized 0/1
-    (then (return (local.get $lo))))
+    (then (return (i32.const 1) (local.get $lo))))
   (if (i64.eq (local.get $tag) (i64.const 2))                     ;; tag 2 = float
     (then
       (local.set $f (f64.reinterpret_i64 (local.get $lo)))
@@ -1124,12 +1124,12 @@ fn emit_return_coercion_runtime(
           (local.set $t (f64.trunc (local.get $f)))
           (if (f64.ne (local.get $t) (local.get $f))               ;; a lost fraction only DEPRECATES
             (then (call $__rt_deprecate_return_float_to_int (local.get $lo))))
-          (return (i64.trunc_f64_s (local.get $t)))))))
+          (return (i32.const 1) (i64.trunc_f64_s (local.get $t)))))))
   (if (i64.eq (local.get $tag) (i64.const 1))                     ;; tag 1 = string
     (then
       (local.set $cls (call $__rt_str_numeric_class (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi))))
       (if (i32.eq (local.get $cls) (i32.const 1))                 ;; wholly integral, and it fits i64
-        (then (return (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+        (then (return (i32.const 1) (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
       (if (i32.eq (local.get $cls) (i32.const 2))                 ;; wholly float-shaped (or an i64-overflowing integer text)
         (then
           (local.set $f (f64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))
@@ -1142,9 +1142,50 @@ fn emit_return_coercion_runtime(
               (local.set $t (f64.trunc (local.get $f)))
               (if (f64.ne (local.get $t) (local.get $f))
                 (then (call $__rt_deprecate_return_str_to_int (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi)))))
-              (return (i64.trunc_f64_s (local.get $t)))))))))
+              (return (i32.const 1) (i64.trunc_f64_s (local.get $t)))))))))
+  (i32.const 0) (i64.const 0))                                    ;; no conversion exists
+"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_return_int (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (result i64)
+  (local $ok i32) (local $value i64) (local $tag i64) (local $lo i64) (local $hi i64)
+  (call $__rt_mixed_to_int_core (local.get $cell))
+  (local.set $value)
+  (local.set $ok)
+  (if (local.get $ok)
+    (then (return (local.get $value))))
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
   (call $__rt_fail_return_type (local.get $fn_ptr) (local.get $fn_len) (i32.const {int_word_ptr}) (i32.const {int_word_len}) (local.get $tag) (local.get $lo))
   unreachable)                                                    ;; elephc-trap:post-noreturn:return-coerce-int
+"#
+    ));
+    // The same conversion at a declared PARAMETER, which differs from the return in exactly two
+    // places. Measured on php-src 8.5.6 for `substr("abcdefgh", $mixed)`: `null` does NOT raise
+    // there — it converts to 0 after a `Deprecated` naming the parameter — and the failure names
+    // `Argument #N ($p)` rather than the return value. Everything numeric in between, the two
+    // precision deprecations included, is byte-for-byte the same, which is why it comes from the
+    // shared core rather than a second copy.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_arg_int (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (param $param_ptr i32) (param $param_len i32) (param $argno i64) (result i64)
+  (local $ok i32) (local $value i64) (local $tag i64) (local $lo i64) (local $hi i64)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 8))                     ;; null still converts, after a deprecation
+    (then
+      (call $__rt_deprecate_argument_null (local.get $fn_ptr) (local.get $fn_len) (local.get $param_ptr) (local.get $param_len) (local.get $argno) (i32.const {int_word_ptr}) (i32.const {int_word_len}))
+      (return (i64.const 0))))
+  (call $__rt_mixed_to_int_core (local.get $cell))
+  (local.set $value)
+  (local.set $ok)
+  (if (local.get $ok)
+    (then (return (local.get $value))))
+  (call $__rt_fail_argument_type (local.get $fn_ptr) (local.get $fn_len) (local.get $param_ptr) (local.get $param_len) (local.get $argno) (i32.const {int_word_ptr}) (i32.const {int_word_len}) (local.get $tag) (local.get $lo))
+  unreachable)                                                    ;; elephc-trap:post-noreturn:argument-coerce-int
 "#
     ));
     // A float target takes every numeric tag EXACTLY as `(float)` does — NaN and the infinities

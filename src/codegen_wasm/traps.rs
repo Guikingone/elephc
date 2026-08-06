@@ -547,6 +547,16 @@ fn target_has_registered_noreturn_proof(
         }
         // The `TypeError` at a declared PARAMETER composes its message the same way its
         // declared-return sibling does, and ends the same way.
+        // The argument-coercion helpers end in the fatal above, which is itself non-returning.
+        "$__rt_mixed_arg_int" => {
+            proc_exit
+                && has_site(
+                    "$__rt_mixed_arg_int",
+                    TrapClass::PostNoreturn,
+                    "argument-coerce-int",
+                    Some("$__rt_fail_argument_type"),
+                )
+        }
         "$__rt_fail_argument_type" => {
             proc_exit
                 && has_site(

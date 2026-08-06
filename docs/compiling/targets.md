@@ -571,6 +571,21 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**A boxed value reaching a builtin's declared `int` parameter** is coerced PHP's way,
+which completes the pair started by the `string` one. It arrives differently: `substr($s,
+$mixed)` reaches the call with the Mixed operand INTACT — the frontend materialises no
+cast for it — so the coercion is emitted where the argument is pushed rather than where
+a cast would have been.
+
+The conversion is the one a declared `int` RETURN performs, and the runtime SHARES a
+core with it rather than carrying a second copy, because measured on php-src 8.5.6 the
+two differ in exactly two places: `null` does not raise at a parameter — it becomes 0
+after a `Deprecated` naming the parameter — and the failure says `Argument #N ($p)`.
+Every numeric answer in between is identical, both precision deprecations included:
+`2.7` truncates to 2 with a notice, `-2.7` toward zero to -2, `"2.0"` is silent because
+its VALUE is integral while `"2.7"` gets the float-STRING wording, and `INF` has no
+conversion at all and is a `TypeError` naming `float`.
+
 **`php://memory` and `php://temp`** are streams with no host file behind them, and
 `feof`, `ftell` and `rewind` come with them. Every other stream this target opens is a
 WASI fd, and WASI is capability-based — without a preopened directory there is no

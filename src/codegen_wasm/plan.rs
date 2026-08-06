@@ -228,17 +228,34 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             .chain(module.closures.iter())
         {
             for inst in &function.instructions {
-                if inst.op != crate::ir::Op::Cast {
-                    continue;
+                // The coercion reaches an argument two ways: through a `Cast` the frontend
+                // materialised, and — commonly — through a boxed operand it left in place, where
+                // there is no cast anywhere to find. Both name the same two strings.
+                let mut named: Vec<(&'static str, String)> = Vec::new();
+                if inst.op == crate::ir::Op::Cast {
+                    named.extend(
+                        super::capability::mixed_string_argument_coercion(function, inst)
+                            .or_else(|| {
+                                super::capability::mixed_int_argument_coercion(function, inst)
+                            })
+                            .map(|(name, parameter, _)| (name, parameter)),
+                    );
                 }
-                let Some((name, parameter, _)) =
-                    super::capability::mixed_string_argument_coercion(function, inst)
-                else {
-                    continue;
-                };
-                for value in [name.to_string(), parameter] {
-                    if !layout_values.iter().any(|already| already == &value) {
-                        layout_values.push(value);
+                if inst.op == crate::ir::Op::RuntimeCall {
+                    for index in 0..inst.operands.len() {
+                        named.extend(
+                            super::capability::runtime_call_int_operand_coercion(
+                                function, inst, index,
+                            )
+                            .map(|(name, parameter, _)| (name, parameter)),
+                        );
+                    }
+                }
+                for (name, parameter) in named {
+                    for value in [name.to_string(), parameter] {
+                        if !layout_values.iter().any(|already| already == &value) {
+                            layout_values.push(value);
+                        }
                     }
                 }
             }

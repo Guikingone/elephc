@@ -3736,7 +3736,7 @@ pub(super) fn direct_builtin_shape_issue(
         return trim_shape_issue(function, call, target);
     }
     if target == RuntimeFnId::Substr {
-        return substr_shape_issue(function, call);
+        return substr_shape_issue(module, function, call);
     }
     if target == RuntimeFnId::Round && call.operands.len() == 2 {
         return round_places_shape_issue(function, call);
@@ -4649,9 +4649,9 @@ fn lower_gettype(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 
 fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     ctx.emit_load_value(operand(inst, 0)?)?;
-    ctx.emit_load_value(operand(inst, 1)?)?;
+    emit_int_operand(ctx, inst, 1)?;
     if inst.operands.len() == 3 {
-        ctx.emit_load_value(operand(inst, 2)?)?;
+        emit_int_operand(ctx, inst, 2)?;
         ctx.fb.ins("i32.const 1", "an explicit length was written");
     } else {
         ctx.fb.ins("i64.const 0", "unused length");
@@ -4659,6 +4659,28 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     }
     ctx.fb.ins("call $__rt_str_substr", "own the selected bytes");
     store_result(ctx, inst)
+}
+
+/// Pushes one integral builtin argument, coercing a BOXED operand PHP's way first.
+///
+/// A concrete `I64` operand is pushed as it is. A Mixed one goes through
+/// `__rt_mixed_arg_int`, which is php-src's conversion at a declared `int` parameter: it
+/// truncates a float after a `Deprecated`, converts a wholly numeric string, turns `null` into 0
+/// after a different `Deprecated` naming the parameter, and raises a `TypeError` for everything
+/// with no conversion at all.
+fn emit_int_operand(ctx: &mut FnCtx, inst: &Instruction, index: usize) -> Result<()> {
+    let Some((name, parameter, position)) =
+        super::capability::runtime_call_int_operand_coercion(ctx.function, inst, index)
+    else {
+        return ctx.emit_load_value(operand(inst, index)?);
+    };
+    ctx.emit_load_value(operand(inst, index)?)?;
+    super::inst::emit_argument_coercion_names(ctx, name, &parameter, position)?;
+    ctx.fb.ins(
+        "call $__rt_mixed_arg_int",
+        "PHP's implicit coercion at a declared int parameter",
+    );
+    Ok(())
 }
 
 /// Lowers `wordwrap` in its one- and two-argument forms.
@@ -6108,7 +6130,13 @@ fn constant_i64_operand(function: &Function, value: crate::ir::ValueId) -> Optio
 }
 
 /// Validates `substr`: a string, an integer offset, and optionally an integer length.
-fn substr_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+///
+/// An offset or length may also arrive BOXED, which is the commonest shape in real code and
+/// used to be refused: `substr($s, $mixed)` reaches the call with the Mixed intact, since the
+/// frontend materialises no cast for it. `emit_int_operand` coerces it with php-src's own
+/// per-tag answers and diagnostics, so the boxed form is admitted here — but only in a module
+/// that can raise them, since they go through WASI like every other diagnostic.
+fn substr_shape_issue(module: &Module, function: &Function, call: &Instruction) -> Option<String> {
     if !matches!(call.operands.len(), 2 | 3) {
         return Some(format!(
             "expected a subject, an offset and an optional length, got {} operands",
@@ -6124,7 +6152,13 @@ fn substr_shape_issue(function: &Function, call: &Instruction) -> Option<String>
         } else {
             (IrType::I64, PhpType::Int)
         };
-        if value.ir_type != want_ir || value.php_type.codegen_repr() != want_php {
+        let coercible = index > 0
+            && super::capability::runtime_call_int_operand_coercion(function, call, index)
+                .is_some()
+            && module.functions.iter().any(|candidate| candidate.flags.is_main);
+        if !coercible
+            && (value.ir_type != want_ir || value.php_type.codegen_repr() != want_php)
+        {
             return Some(format!(
                 "substr operand {index} is {:?}/{:?}, expected {want_ir:?}/{want_php:?}",
                 value.ir_type,
