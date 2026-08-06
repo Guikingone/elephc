@@ -4522,7 +4522,7 @@ fn lower_mixed_tag_of(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 fn iter_start_metadata(
     ctx: &FnCtx,
     inst: &Instruction,
-) -> Result<(ValueId, ValueId, PhpType, bool)> {
+) -> Result<(ValueId, ValueId, PhpType, bool, bool)> {
     let iter = inst
         .result
         .ok_or_else(|| WasmError::Unsupported("iter_start without a result".to_string()))?;
@@ -4531,15 +4531,18 @@ fn iter_start_metadata(
         .function
         .value(source)
         .map(|v| v.php_type.codegen_repr());
-    let (elem, is_hash) = match src_php {
-        Some(PhpType::Array(inner)) => (inner.codegen_repr(), false),
-        Some(PhpType::AssocArray { value, .. }) => (value.codegen_repr(), true),
+    let (elem, is_hash, dynamic) = match src_php {
+        Some(PhpType::Array(inner)) => (inner.codegen_repr(), false, false),
+        Some(PhpType::AssocArray { value, .. }) => (value.codegen_repr(), true, false),
+        // A BOXED source: only the cell's tag says whether this is an indexed array, a hash, or
+        // something PHP will not iterate at all, so the storage question is answered at runtime.
+        Some(PhpType::Mixed) => (PhpType::Mixed, false, true),
         Some(other) => {
             return Err(WasmError::Unsupported(format!("foreach over {:?}", other)))
         }
         None => return Err(WasmError::Unsupported("iter_start source has no type".to_string())),
     };
-    Ok((iter, source, elem, is_hash))
+    Ok((iter, source, elem, is_hash, dynamic))
 }
 
 /// Reserves locals for every iterator before block bodies are lowered.
@@ -4558,8 +4561,8 @@ pub(super) fn reserve_iterators(ctx: &mut FnCtx) -> Result<()> {
         .cloned()
         .collect();
     for inst in starts {
-        let (iter, _, elem, is_hash) = iter_start_metadata(ctx, &inst)?;
-        ctx.iter_reserve(iter, elem, is_hash);
+        let (iter, _, elem, is_hash, dynamic) = iter_start_metadata(ctx, &inst)?;
+        ctx.iter_reserve(iter, elem, is_hash, dynamic);
     }
     Ok(())
 }
@@ -4567,7 +4570,7 @@ pub(super) fn reserve_iterators(ctx: &mut FnCtx) -> Result<()> {
 /// Lowers `Op::IterStart` by initializing the iterator locals reserved in the
 /// function prepass.
 fn lower_iter_start(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
-    let (iter, source, _, _) = iter_start_metadata(ctx, inst)?;
+    let (iter, source, _, _, _) = iter_start_metadata(ctx, inst)?;
     ctx.iter_initialize(iter, source)
 }
 
@@ -4580,6 +4583,24 @@ fn lower_iter_next(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let iter = operand(inst, 0)?;
     let slots = ctx.iter_slots(iter)?;
     let (src, cur, is_hash) = (slots.source.clone(), slots.cursor.clone(), slots.is_hash);
+    if let Some(kind) = slots.dynamic_kind.clone() {
+        ctx.fb.ins(&format!("local.get {}", src), "container pointer");
+        ctx.fb.ins(&format!("local.get {}", cur), "current cursor");
+        ctx.fb
+            .ins(&format!("local.get {}", kind), "runtime container kind");
+        ctx.fb.ins(
+            "call $__rt_mixed_iter_next",
+            "advance whichever storage the tag chose",
+        );
+        let has_more = ctx.fresh_temp(ValType::I64);
+        ctx.fb
+            .ins(&format!("local.set {}", has_more), "captured has_more");
+        ctx.fb
+            .ins(&format!("local.set {}", cur), "store advanced cursor");
+        ctx.fb
+            .ins(&format!("local.get {}", has_more), "has_more for the loop CondBr");
+        return store_result(ctx, inst);
+    }
     if is_hash {
         ctx.fb.ins(&format!("local.get {}", src), "hash source");
         ctx.fb.ins(&format!("local.get {}", cur), "current slot cursor");
@@ -4610,6 +4631,15 @@ fn lower_iter_next(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 fn lower_iter_current_key(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let iter = operand(inst, 0)?;
     let slots = ctx.iter_slots(iter)?;
+    if let Some(kind) = slots.dynamic_kind.clone() {
+        let (src, cur) = (slots.source.clone(), slots.cursor.clone());
+        ctx.fb.ins(&format!("local.get {}", src), "container pointer");
+        ctx.fb.ins(&format!("local.get {}", cur), "current cursor");
+        ctx.fb
+            .ins(&format!("local.get {}", kind), "runtime container kind");
+        ctx.fb.ins("call $__rt_mixed_iter_key", "boxed foreach key");
+        return store_result(ctx, inst);
+    }
     if slots.is_hash {
         let (src, cur) = (slots.source.clone(), slots.cursor.clone());
         return super::inst_hash::lower_hash_iter_key(ctx, inst, &src, &cur);
@@ -4644,6 +4674,16 @@ fn lower_iter_current_key(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 fn lower_iter_current_value(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let iter = operand(inst, 0)?;
     let slots = ctx.iter_slots(iter)?;
+    if let Some(kind) = slots.dynamic_kind.clone() {
+        let (src, cur) = (slots.source.clone(), slots.cursor.clone());
+        ctx.fb.ins(&format!("local.get {}", src), "container pointer");
+        ctx.fb.ins(&format!("local.get {}", cur), "current cursor");
+        ctx.fb
+            .ins(&format!("local.get {}", kind), "runtime container kind");
+        ctx.fb
+            .ins("call $__rt_mixed_iter_value", "boxed foreach value, owned");
+        return store_result(ctx, inst);
+    }
     if slots.is_hash {
         let (src, cur) = (slots.source.clone(), slots.cursor.clone());
         return super::inst_hash::lower_hash_iter_value(ctx, inst, &src, &cur);

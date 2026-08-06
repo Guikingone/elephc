@@ -571,6 +571,18 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**`foreach` over a BOXED value** is lowered. The iterator picked indexed-versus-hash
+at compile time from the source's EIR type, so a `mixed` source — which names no
+storage until the cell is read — was refused outright. The cursor seed, the advance,
+the key and the value now all dispatch on the runtime tag, through one set of helpers
+so a dynamic iterator and a statically typed one advance identically.
+
+The non-iterable arm is the one worth measuring rather than assuming: php-src 8.5.6
+does NOT raise there. It WARNS naming the type that arrived and runs the body zero
+times, so the loop is still entered and left cleanly — which is why the dispatch
+carries a third kind rather than a fatal. Both the key and the value come back boxed,
+which is what the EIR already types them, so no element contract is needed.
+
 **A dispatch ladder ignores a subclass this module could never construct.** A
 virtual call collects every concrete class in the receiver's subtree, and the audit
 demands a body for each — so one subclass whose body was never emitted refused the

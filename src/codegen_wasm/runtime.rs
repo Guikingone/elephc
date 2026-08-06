@@ -167,6 +167,11 @@ const DEPRECATED_ARGUMENT_NULL_PREFIX: &[u8] = b"Deprecated: ";
 const DEPRECATED_ARGUMENT_NULL_MIDDLE: &[u8] = b"(): Passing null to parameter #";
 const DEPRECATED_ARGUMENT_NULL_OF_TYPE: &[u8] = b") of type ";
 const DEPRECATED_ARGUMENT_NULL_SUFFIX: &[u8] = b" is deprecated\n";
+/// `foreach` over something that is neither an array nor an object. Measured on php-src 8.5.6:
+/// it WARNS, names the type that arrived, and runs the body zero times — it does not raise.
+const WARN_FOREACH_NON_ITERABLE_PREFIX: &[u8] =
+    b"Warning: foreach() argument must be of type array|object, ";
+const WARN_FOREACH_NON_ITERABLE_SUFFIX: &[u8] = b" given\n";
 /// PHP names a closure by its CLASS in that message — measured: `Closure returned`, not
 /// `callable returned`. Every first-class closure PHP builds is a `Closure`, so the word is
 /// fixed even though this target keeps a callable as a descriptor rather than an object.
@@ -284,6 +289,8 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + DEPRECATED_ARGUMENT_NULL_MIDDLE.len() as u32
     + DEPRECATED_ARGUMENT_NULL_OF_TYPE.len() as u32
     + DEPRECATED_ARGUMENT_NULL_SUFFIX.len() as u32
+    + WARN_FOREACH_NON_ITERABLE_PREFIX.len() as u32
+    + WARN_FOREACH_NON_ITERABLE_SUFFIX.len() as u32
     + WARN_NAN_TO_STRING.len() as u32
     + WARN_NAN_TO_BOOL.len() as u32
     + PHP_VALUE_TRUE.len() as u32
@@ -577,6 +584,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         DEPRECATED_ARGUMENT_NULL_MIDDLE,
         DEPRECATED_ARGUMENT_NULL_OF_TYPE,
         DEPRECATED_ARGUMENT_NULL_SUFFIX,
+        WARN_FOREACH_NON_ITERABLE_PREFIX,
+        WARN_FOREACH_NON_ITERABLE_SUFFIX,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -637,6 +646,29 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         warning_offsets[25],
         &method_offsets[2..11],
     );
+    emit_foreach_warning_runtime(wm, &warning_offsets[53..55]);
+}
+
+/// Emits the warning `foreach` produces for a value that is neither an array nor an object.
+///
+/// Measured on php-src 8.5.6: it WARNS, names the type that arrived, and runs the body zero
+/// times rather than raising. The type word comes from the shared `__rt_type_word_for_tag`, so
+/// an object would contribute its class — unreachable here, since an object IS iterable and
+/// never reaches this arm.
+fn emit_foreach_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 2);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (suffix_ptr, suffix_len) = offsets[1];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_foreach_non_iterable (param $tag i64) (param $lo i64)
+  (local $word_ptr i32) (local $word_len i32)
+  (call $__rt_type_word_for_tag (local.get $tag) (local.get $lo))
+  (local.set $word_len)
+  (local.set $word_ptr)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len}))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $word_ptr) (local.get $word_len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))"#
+    ));
 }
 
 /// Emits the coercion php-src performs when a boxed value reaches an internal function's

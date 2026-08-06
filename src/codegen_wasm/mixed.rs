@@ -47,6 +47,14 @@ pub(super) fn emit_mixed_runtime(
     wm.add_raw_func(&mixed_cast_string(has_main));
     wm.add_raw_func(RT_MIXED_CAST_STRING_REF);
     if has_main {
+        // The `foreach` dispatch warns through WASI for a value PHP will not iterate, so it is
+        // a command-module rule like every other diagnostic-producing one.
+        wm.add_raw_func(RT_MIXED_ITER_START);
+        wm.add_raw_func(RT_MIXED_ITER_NEXT);
+        wm.add_raw_func(RT_MIXED_ITER_KEY);
+        wm.add_raw_func(RT_MIXED_ITER_VALUE);
+    }
+    if has_main {
         wm.add_raw_func(RT_MIXED_ARRAY_GET_MISSING);
         wm.add_raw_func(RT_MIXED_ARRAY_GET);
     }
@@ -1126,3 +1134,85 @@ mod tests {
         // asserting a wrong ANSWER.
     }
 }
+
+/// `__rt_mixed_iter_start`: opens a `foreach` over a BOXED value.
+///
+/// Returns `(source, cursor, kind)` where `kind` is 0 for an indexed array, 1 for a hash, and 2
+/// for a value PHP will not iterate. Measured on php-src 8.5.6, that last case WARNS naming the
+/// type and runs the body zero times rather than raising, which is why kind 2 exists at all
+/// instead of a fatal: the loop still has to be entered and left cleanly.
+///
+/// The cursor seeds match the two concrete paths exactly — `-1` for an indexed array, which
+/// pre-increments to 0, and `-2` for a hash, the before-first sentinel `__rt_hash_iter_next`
+/// expects — so a dynamic iterator and a statically typed one advance identically.
+const RT_MIXED_ITER_START: &str = r#"(func $__rt_mixed_iter_start (param $cell i32) (result i32) (result i64) (result i32)
+  (local $tag i64) (local $lo i64) (local $hi i64)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 4))                     ;; tag 4 = indexed array
+    (then (return (i32.wrap_i64 (local.get $lo)) (i64.const -1) (i32.const 0))))
+  (if (i64.eq (local.get $tag) (i64.const 5))                     ;; tag 5 = hash
+    (then (return (i32.wrap_i64 (local.get $lo)) (i64.const -2) (i32.const 1))))
+  (call $__rt_warn_foreach_non_iterable (local.get $tag) (local.get $lo))
+  (i32.const 0) (i64.const 0) (i32.const 2))                      ;; nothing to walk
+"#;
+
+/// `__rt_mixed_iter_next`: advances a dynamic `foreach` cursor, answering whether the body runs.
+///
+/// Each arm is the one the statically typed path emits inline: an indexed array pre-increments
+/// and tests against the length at `+0`, a hash delegates to `__rt_hash_iter_next`, and kind 2
+/// never runs the body at all.
+const RT_MIXED_ITER_NEXT: &str = r#"(func $__rt_mixed_iter_next (param $src i32) (param $cursor i64) (param $kind i32) (result i64) (result i64)
+  (local $next i64) (local $more i64)
+  (if (i32.eq (local.get $kind) (i32.const 2))
+    (then (return (i64.const 0) (i64.const 0))))                  ;; not iterable: zero iterations
+  (if (i32.eq (local.get $kind) (i32.const 1))
+    (then
+      (call $__rt_hash_iter_next (local.get $src) (local.get $cursor))
+      (local.set $more)
+      (local.set $next)
+      (return (local.get $next) (local.get $more))))
+  (local.set $next (i64.add (local.get $cursor) (i64.const 1)))
+  (local.get $next)
+  (i64.extend_i32_u (i64.lt_s (local.get $next) (i64.load (local.get $src)))))
+"#;
+
+/// `__rt_mixed_iter_key`: the current key of a dynamic `foreach`, boxed.
+///
+/// An indexed array's key is its cursor. A hash entry stores its key as `(key_lo, key_hi)` with
+/// `key_hi = -1` marking an INTEGER key — the same sentinel `__rt_hash_get` reads — so the tag
+/// is chosen from that rather than from the container's storage.
+const RT_MIXED_ITER_KEY: &str = r#"(func $__rt_mixed_iter_key (param $src i32) (param $cursor i64) (param $kind i32) (result i32)
+  (local $entry i32) (local $klo i64) (local $khi i64)
+  (if (i32.eq (local.get $kind) (i32.const 1))
+    (then
+      (local.set $entry (i32.add (i32.add (local.get $src) (i32.const 40))
+                                 (i32.wrap_i64 (i64.mul (local.get $cursor) (i64.const 72)))))
+      (local.set $klo (i64.load (i32.add (local.get $entry) (i32.const 8))))
+      (local.set $khi (i64.load (i32.add (local.get $entry) (i32.const 16))))
+      (if (i64.eq (local.get $khi) (i64.const -1))
+        (then (return (call $__rt_mixed_from_value (i64.const 0) (local.get $klo) (i64.const 0)))))
+      (return (call $__rt_mixed_from_value (i64.const 1) (local.get $klo) (local.get $khi)))))
+  (call $__rt_mixed_from_value (i64.const 0) (local.get $cursor) (i64.const 0)))
+"#;
+
+/// `__rt_mixed_iter_value`: the current value of a dynamic `foreach`, boxed and OWNED.
+///
+/// An indexed element goes through `__rt_array_elem_to_mixed`, which already maps every storage
+/// `value_type` to its runtime tag and hands back an owned cell. A hash entry stores its value as
+/// `(tag, lo, hi)` outright, so boxing it is one call. Both answers are owned because
+/// `iter_current_value` is `own=owned` in the EIR and the release is scheduled for it.
+const RT_MIXED_ITER_VALUE: &str = r#"(func $__rt_mixed_iter_value (param $src i32) (param $cursor i64) (param $kind i32) (result i32)
+  (local $entry i32)
+  (if (i32.eq (local.get $kind) (i32.const 1))
+    (then
+      (local.set $entry (i32.add (i32.add (local.get $src) (i32.const 40))
+                                 (i32.wrap_i64 (i64.mul (local.get $cursor) (i64.const 72)))))
+      (return (call $__rt_mixed_from_value
+        (i64.load (i32.add (local.get $entry) (i32.const 40)))
+        (i64.load (i32.add (local.get $entry) (i32.const 24)))
+        (i64.load (i32.add (local.get $entry) (i32.const 32)))))))
+  (call $__rt_array_elem_to_mixed (local.get $src) (local.get $cursor)))
+"#;

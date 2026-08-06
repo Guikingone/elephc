@@ -15776,6 +15776,105 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `foreach` over a BOXED value, whose storage only the runtime tag decides.
+///
+/// The iterator picked indexed-versus-hash at compile time from the source's EIR type, so a
+/// `mixed` source — which names no storage until the cell is read — was refused outright. The
+/// cursor seeds, the advance, the key and the value now all dispatch on the tag.
+///
+/// The non-iterable arm is the one worth measuring rather than assuming: php-src 8.5.6 does NOT
+/// raise there. It WARNS, names the type that arrived, and runs the body zero times, so the loop
+/// still has to be entered and left cleanly — which is why the dispatch carries a third kind
+/// rather than a fatal.
+///
+/// KNOWN DIVERGENCE: php-src appends ` in <file> on line <n>` to the warning. This target reports
+/// no location tail, the convention its other diagnostics already follow.
+#[test]
+fn test_cli_wasm_iterates_a_boxed_value() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_boxed_foreach");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function box(int $i): mixed {
+    if ($i === 0) { return [10, 20, 30]; }
+    if ($i === 1) { return ["a" => 1, "b" => 2]; }
+    if ($i === 2) { return []; }
+    if ($i === 3) { return 7; }
+    if ($i === 4) { return "str"; }
+    return null;
+}
+for ($i = 0; $i < 6; $i++) {
+    echo $i, ":";
+    foreach (box($i) as $k => $v) { echo " ", $k, "=", $v; }
+    echo "\n";
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the boxed-foreach probe to WASM");
+    assert!(
+        output.status.success(),
+        "boxed-foreach compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the boxed-foreach probe under Node");
+    // php-src's own values and keys: an indexed source keys from 0, a hash keeps its own keys,
+    // an empty array runs zero times, and the three non-containers run zero times as well.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "0: 0=10 1=20 2=30\n1: a=1 b=2\n2:\n3:\n4:\n5:\n",
+        "php-src's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    for expected in [
+        "Warning: foreach() argument must be of type array|object, int given\n",
+        "Warning: foreach() argument must be of type array|object, string given\n",
+        "Warning: foreach() argument must be of type array|object, null given\n",
+    ] {
+        assert!(
+            stderr.contains(expected),
+            "expected php-src's own warning {expected:?}, got {stderr}"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a dispatch ladder ignores a subclass this module could never construct.
 ///
 /// A virtual call collects every concrete class in the receiver's subtree, and the audit then

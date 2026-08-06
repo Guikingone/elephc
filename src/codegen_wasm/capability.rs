@@ -2484,6 +2484,17 @@ fn iter_start_shape_issue(
                 ))
             }
         }
+        // A BOXED source names no storage until the cell is read, so the walk dispatches on the
+        // runtime tag: indexed, hash, or — measured on php-src 8.5.6 — a warning naming the type
+        // and zero iterations for anything else. Both the key and the value come back boxed,
+        // which is what the EIR already types them, so no element contract is needed here. The
+        // warning goes through WASI, so this is a command-module rule like every other
+        // diagnostic-producing one.
+        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)
+            if module.functions.iter().any(|candidate| candidate.flags.is_main) =>
+        {
+            None
+        }
         (ir_type, php_type) => Some(format!(
             "foreach requires a concrete indexed or associative array, got {ir_type:?}/{php_type:?}"
         )),

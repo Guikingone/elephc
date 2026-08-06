@@ -49,6 +49,12 @@ pub(super) struct IterSlots {
     pub(super) elem: PhpType,
     /// Whether the source is an associative hash (vs an indexed array).
     pub(super) is_hash: bool,
+    /// `$name` of the i32 local holding the RUNTIME container kind, when the source is a boxed
+    /// value whose storage only the tag decides: 0 indexed, 1 hash, 2 not iterable.
+    ///
+    /// `None` for a source whose EIR type already settles it, which keeps every statically typed
+    /// `foreach` on exactly the code it had before.
+    pub(super) dynamic_kind: Option<String>,
 }
 
 /// Result type for the lowering modules, using the parent module's `WasmError`.
@@ -261,11 +267,19 @@ impl<'a> FnCtx<'a> {
     /// EIR block storage order does not guarantee that the block containing
     /// `IterStart` precedes the loop header containing `IterNext`. Reserving every
     /// iterator in a prepass makes lowering independent of that order.
-    pub(super) fn iter_reserve(&mut self, iter: ValueId, elem: PhpType, is_hash: bool) {
+    pub(super) fn iter_reserve(
+        &mut self,
+        iter: ValueId,
+        elem: PhpType,
+        is_hash: bool,
+        dynamic: bool,
+    ) {
         let n = self.temp_counter;
         self.temp_counter += 1;
         let source_local = self.fb.local(&format!("__iter_src{}", n), ValType::I32);
         let cursor_local = self.fb.local(&format!("__iter_cur{}", n), ValType::I64);
+        let dynamic_kind = dynamic
+            .then(|| self.fb.local(&format!("__iter_kind{}", n), ValType::I32));
         self.iter_state.insert(
             iter.as_raw(),
             IterSlots {
@@ -273,6 +287,7 @@ impl<'a> FnCtx<'a> {
                 cursor: cursor_local,
                 elem,
                 is_hash,
+                dynamic_kind,
             },
         );
     }
@@ -288,6 +303,23 @@ impl<'a> FnCtx<'a> {
         let source_local = slots.source.clone();
         let cursor_local = slots.cursor.clone();
         let is_hash = slots.is_hash;
+        // A BOXED source names no storage until the cell is read, so the container pointer, the
+        // cursor seed and the kind all come from one runtime call — which also carries PHP's
+        // warning for a value it will not iterate.
+        if let Some(kind_local) = slots.dynamic_kind.clone() {
+            self.emit_load_value(source)?;
+            self.fb.ins(
+                "call $__rt_mixed_iter_start",
+                "open a foreach over a boxed value",
+            );
+            self.fb
+                .ins(&format!("local.set {}", kind_local), "runtime container kind");
+            self.fb
+                .ins(&format!("local.set {}", cursor_local), "seeded cursor");
+            self.fb
+                .ins(&format!("local.set {}", source_local), "container pointer");
+            return Ok(());
+        }
         self.emit_load_value(source)?;
         self.fb
             .ins(&format!("local.set {}", source_local), "iterator source pointer");
