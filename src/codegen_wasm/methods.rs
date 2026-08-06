@@ -23,7 +23,10 @@
 //!   instance method forward the current `this` (slot 0) instead, which is what
 //!   makes `parent::__construct()` chaining work.
 
-use super::classes::{mixed_method_candidates, mixed_tag_for_php_type};
+use super::classes::{
+    mixed_method_arity_failures, mixed_method_candidates, mixed_tag_for_php_type,
+    MixedMethodArityFailure,
+};
 use super::context::{FnCtx, Result};
 use super::symbols::{function_symbol, method_dispatch_symbol, method_symbol};
 use super::inst::{data_immediate, operand};
@@ -559,13 +562,25 @@ pub(super) fn lower_mixed_method_call(
     method_ptr: u32,
     method_len: u32,
 ) -> Result<()> {
-    let candidates = mixed_method_candidates(ctx.module, method_key);
+    let receiver_php = ctx.value_php_type(receiver)?;
+    let candidates = mixed_method_candidates(
+        ctx.module,
+        method_key,
+        &receiver_php,
+        inst.operands.len().saturating_sub(1),
+    );
     if candidates.is_empty() {
         return Err(WasmError::Unsupported(format!(
             "mixed method {}: no candidate class (P6f)",
             method_name
         )));
     }
+    let arity_failures = mixed_method_arity_failures(
+        ctx.module,
+        method_key,
+        &receiver_php,
+        inst.operands.len().saturating_sub(1),
+    );
 
     // Unbox the receiver once; reuse (tag, lo, hi) across every candidate arm.
     let mhi = ctx.fresh_temp(ValType::I64);
@@ -601,6 +616,14 @@ pub(super) fn lower_mixed_method_call(
         ctx.fb.ins("br $mxdone", "candidate handled -> merge");
         ctx.fb.ins("end", "end candidate class id arm");
     }
+    emit_arity_failure_arms(
+        ctx,
+        &arity_failures,
+        &cid,
+        inst.operands.len().saturating_sub(1),
+        method_ptr,
+        method_len,
+    );
     ctx.fb.ins(&format!("local.get {}", cid), "unmatched receiver class id");
     ctx.fb.ins(&format!("i32.const {}", method_ptr), "method-name pointer");
     ctx.fb.ins(&format!("i32.const {}", method_len), "method-name byte length");
@@ -628,6 +651,62 @@ pub(super) fn lower_mixed_method_call(
     );
     ctx.fb.ins("end", "end receiver object test");
     Ok(())
+}
+
+/// Emits the ladder arms for classes php-src would not enter for lack of arguments.
+///
+/// These sit between the callable arms and the undefined-method fallthrough, so a class the arity
+/// filter removed still gets a decision of its own. Without them the fallthrough would answer
+/// `Call to undefined method C::m()` for a method that plainly exists — a different error class
+/// from php-src's `ArgumentCountError`, on a program php-src also ends fatally.
+///
+/// Each arm is non-returning, so nothing needs to reach the merge label and the ladder's result
+/// slot stays untouched on this path.
+fn emit_arity_failure_arms(
+    ctx: &mut FnCtx,
+    failures: &[MixedMethodArityFailure],
+    cid_local: &str,
+    passed: usize,
+    method_ptr: u32,
+    method_len: u32,
+) {
+    for failure in failures {
+        ctx.fb
+            .ins(&format!("local.get {}", cid_local), "receiver class id");
+        ctx.fb.ins(
+            &format!("i64.const {}", failure.class_id as i64),
+            &format!("{} cannot be entered with this arity", failure.class_name),
+        );
+        ctx.fb.ins("i64.eq", "matches this class?");
+        ctx.fb.ins("if", "too-few-arguments arm");
+        ctx.fb
+            .ins(&format!("local.get {}", cid_local), "receiver class id");
+        ctx.fb
+            .ins(&format!("i32.const {}", method_ptr), "method-name pointer");
+        ctx.fb.ins(
+            &format!("i32.const {}", method_len),
+            "method-name byte length",
+        );
+        ctx.fb
+            .ins(&format!("i64.const {}", passed), "arguments passed");
+        ctx.fb.ins(
+            &format!("i64.const {}", failure.required),
+            "arguments php-src requires",
+        );
+        ctx.fb.ins(
+            &format!("i32.const {}", i32::from(failure.exact)),
+            "1 = php-src words the count `exactly`",
+        );
+        ctx.fb.ins(
+            "call $__rt_fail_too_few_arguments",
+            "raise PHP ArgumentCountError",
+        );
+        ctx.fb.ins(
+            "unreachable",
+            "elephc-trap:post-noreturn:too-few-arguments fatal helper does not return",
+        );
+        ctx.fb.ins("end", "end too-few-arguments arm");
+    }
 }
 
 /// Emits one candidate arm of a mixed/union method dispatch.
@@ -698,6 +777,17 @@ fn emit_candidate_call(
     if result_is_boxed && !callee_ret_is_mixed {
         box_call_result_into_mixed(ctx, callee_ret_ir, &callee_ret_php, inst.result)?;
     } else if let Some(r) = inst.result {
+        // A `void` body pushes nothing, but PHP still gives its CALL EXPRESSION the value null —
+        // and when every candidate agrees on `void`, the checker types that expression `I64
+        // php=null` rather than boxing it. The direct and interface paths already supply the null
+        // the callee did not push; without it here the arm stored from an empty stack and the
+        // module failed WebAssembly validation outright.
+        if callee_ret_ir == IrType::Void {
+            ctx.fb.ins(
+                "i64.const 9223372036854775806",
+                "null sentinel: a void method call evaluates to null",
+            );
+        }
         ctx.emit_store_value(r)?;
     } else {
         for _ in 0..WasmRepr::val_types(callee_ret_ir).len() {
@@ -845,7 +935,12 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FnCtx, inst: &Instruction) ->
             lower_method_call(ctx, inst)
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            let candidates = mixed_method_candidates(ctx.module, &method_key);
+            let candidates = mixed_method_candidates(
+                ctx.module,
+                &method_key,
+                &receiver_ty,
+                inst.operands.len().saturating_sub(1),
+            );
             if candidates.is_empty() {
                 return Err(WasmError::Unsupported(format!(
                     "nullsafe method {}: no candidate class (P6f)",
@@ -906,6 +1001,19 @@ pub(super) fn lower_nullsafe_method_call(ctx: &mut FnCtx, inst: &Instruction) ->
                 ctx.fb.ins("br $nsdone", "candidate handled -> merge");
                 ctx.fb.ins("end", "end candidate class id arm");
             }
+            emit_arity_failure_arms(
+                ctx,
+                &mixed_method_arity_failures(
+                    ctx.module,
+                    &method_key,
+                    &receiver_ty,
+                    inst.operands.len().saturating_sub(1),
+                ),
+                &cid,
+                inst.operands.len().saturating_sub(1),
+                method_ptr,
+                method_len,
+            );
             ctx.fb.ins(&format!("local.get {}", cid), "unmatched receiver class id");
             ctx.fb.ins(&format!("i32.const {}", method_ptr), "method-name pointer");
             ctx.fb.ins(&format!("i32.const {}", method_len), "method-name byte length");

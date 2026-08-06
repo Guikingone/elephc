@@ -2350,9 +2350,13 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             )));
         }
         // An untyped call is discriminated by its operands, exactly as the native backend does
-        // it: three operands with a result is the generic `$mixed[$key]` read.
+        // it: three operands with a result is the generic `$mixed[$key]` read, and one operand
+        // narrowing a boxed value to a declared class is the unbox below.
         None if inst.operands.len() == 3 && !inst.is_void() => {
             return super::inst_hash::lower_mixed_array_get(ctx, inst);
+        }
+        None if super::capability::mixed_object_narrowing_is_supported(ctx.function, inst) => {
+            return lower_mixed_object_narrowing(ctx, inst);
         }
         _ => {
             return Err(WasmError::Unsupported(format!(
@@ -2378,6 +2382,45 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             other
         ))),
     }
+}
+
+/// Lowers the untyped one-operand runtime call that narrows a boxed value to a declared class.
+///
+/// This is what a `?Money` property looks like after `is_null()` cleared it: the EIR keeps the
+/// value boxed up to the `return`, then asks for the declared `Money` slot. The native backend
+/// answers it with `__rt_mixed_unbox` plus an incref, and this is the same two steps — the
+/// payload word is the object pointer, and the result owns a reference to it.
+///
+/// A cell that is NOT an object yields the null pointer rather than its raw payload. The EIR
+/// only emits this after a guard proved the value non-null, so the arm is unreachable in a
+/// program the checker accepted; producing null keeps an unsound one fatal at its next use
+/// instead of dereferencing an integer.
+fn lower_mixed_object_narrowing(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let cell = operand(inst, 0)?;
+    let tag = ctx.fresh_temp(ValType::I64);
+    let lo = ctx.fresh_temp(ValType::I64);
+    let object = ctx.fresh_temp(ValType::I32);
+    ctx.emit_load_value(cell)?;
+    ctx.fb
+        .ins("call $__rt_mixed_unbox", "unbox -> (tag, lo, hi)");
+    ctx.fb.ins("drop", "the high word carries nothing for an object");
+    ctx.fb.ins(&format!("local.set {}", lo), "payload word");
+    ctx.fb.ins(&format!("local.set {}", tag), "runtime tag");
+    ctx.fb.ins(&format!("local.get {}", tag), "runtime tag");
+    ctx.fb.ins("i64.const 6", "object tag");
+    ctx.fb.ins("i64.eq", "is the boxed value an object?");
+    ctx.fb.ins("if (result i32)", "object arm");
+    ctx.fb.ins(&format!("local.get {}", lo), "payload word");
+    ctx.fb.ins("i32.wrap_i64", "object pointer");
+    ctx.fb.ins("else", "not an object");
+    ctx.fb.ins("i32.const 0", "null pointer");
+    ctx.fb.ins("end", "end object arm");
+    ctx.fb
+        .ins(&format!("local.tee {}", object), "keep the pointer to incref");
+    ctx.fb.ins("call $__rt_incref", "the result owns a reference");
+    ctx.fb
+        .ins(&format!("local.get {}", object), "the narrowed object");
+    store_result(ctx, inst)
 }
 
 /// Lowers `array_map($f, $arr)` where operand 0 `$f` is a `Callable` descriptor

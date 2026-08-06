@@ -83,6 +83,21 @@ const ERR_UNDEFINED_METHOD_PREFIX: &[u8] =
     b"PHP Fatal error: Uncaught Error: Call to undefined method ";
 const ERR_UNDEFINED_METHOD_SEPARATOR: &[u8] = b"::";
 const ERR_UNDEFINED_METHOD_SUFFIX: &[u8] = b"()\n";
+/// A dynamic dispatch selecting a class php-src would not enter for lack of arguments. The class
+/// and method names come from the runtime table and the call site, the two counts are rendered by
+/// `__rt_itoa`, and the wording between them is php-src's own: `exactly` when every declared
+/// parameter is required, `at least` when a default makes the counts differ. Measured on 8.5.6 —
+/// a variadic tail does NOT soften the word.
+///
+/// KNOWN DIVERGENCE: php-src continues `, 0 passed in /path.php on line 9 and …` and closes with
+/// a stack trace. This target reports no location tail, the same convention its internal-function
+/// `TypeError`s already follow; the class, the message and the 255 exit status are PHP's.
+const ERR_TOO_FEW_ARGS_PREFIX: &[u8] =
+    b"PHP Fatal error: Uncaught ArgumentCountError: Too few arguments to function ";
+const ERR_TOO_FEW_ARGS_PASSED: &[u8] = b"(), ";
+const ERR_TOO_FEW_ARGS_EXACTLY: &[u8] = b" passed and exactly ";
+const ERR_TOO_FEW_ARGS_AT_LEAST: &[u8] = b" passed and at least ";
+const ERR_TOO_FEW_ARGS_SUFFIX: &[u8] = b" expected\n";
 const WARN_UNDEFINED_ARRAY_KEY_PREFIX: &[u8] = b"Warning: Undefined array key ";
 const WARN_QUOTE: &[u8] = b"\"";
 const WARN_SUFFIX: &[u8] = b"\n";
@@ -215,6 +230,11 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_UNDEFINED_METHOD_PREFIX.len() as u32
     + ERR_UNDEFINED_METHOD_SEPARATOR.len() as u32
     + ERR_UNDEFINED_METHOD_SUFFIX.len() as u32
+    + ERR_TOO_FEW_ARGS_PREFIX.len() as u32
+    + ERR_TOO_FEW_ARGS_PASSED.len() as u32
+    + ERR_TOO_FEW_ARGS_EXACTLY.len() as u32
+    + ERR_TOO_FEW_ARGS_AT_LEAST.len() as u32
+    + ERR_TOO_FEW_ARGS_SUFFIX.len() as u32
     + WARN_UNDEFINED_ARRAY_KEY_PREFIX.len() as u32
     + WARN_QUOTE.len() as u32
     + WARN_SUFFIX.len() as u32
@@ -468,6 +488,12 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         ERR_UNDEFINED_METHOD_PREFIX,
         ERR_UNDEFINED_METHOD_SEPARATOR,
         ERR_UNDEFINED_METHOD_SUFFIX,
+        // Appended LAST so every index the emitters above already use keeps its message.
+        ERR_TOO_FEW_ARGS_PREFIX,
+        ERR_TOO_FEW_ARGS_PASSED,
+        ERR_TOO_FEW_ARGS_EXACTLY,
+        ERR_TOO_FEW_ARGS_AT_LEAST,
+        ERR_TOO_FEW_ARGS_SUFFIX,
     ];
     let warning_messages = [
         WARN_UNDEFINED_ARRAY_KEY_PREFIX,
@@ -668,7 +694,7 @@ fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32
 /// The helper composes the PHP-visible method name with the runtime Mixed tag,
 /// writes the diagnostic to stderr, and terminates with PHP's fatal status 255.
 fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
-    debug_assert_eq!(offsets.len(), 14);
+    debug_assert_eq!(offsets.len(), 19);
     let (prefix_ptr, prefix_len) = offsets[0];
     let (suffix_ptr, suffix_len) = offsets[1];
     let type_offsets = &offsets[2..11];
@@ -697,6 +723,55 @@ fn emit_method_call_failure_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) 
     );
     wm.add_raw_func(&wat);
     emit_undefined_method_failure_runtime(wm, &offsets[11..14]);
+    emit_too_few_arguments_failure_runtime(wm, &offsets[12..13], &offsets[14..19]);
+}
+
+/// Emits the fatal a dynamic dispatch raises when php-src would not enter the selected class.
+///
+/// The runtime class-name table supplies the concrete class exactly as the undefined-method
+/// fatal does — reusing its `::` separator — and the two counts are rendered through the shared
+/// signed `__rt_itoa`. `exact` picks between php-src's two wordings; the caller knows which
+/// applies because the signature is closed-world.
+fn emit_too_few_arguments_failure_runtime(
+    wm: &mut WatModule,
+    separator: &[(u32, u32)],
+    offsets: &[(u32, u32)],
+) {
+    debug_assert_eq!(separator.len(), 1);
+    debug_assert_eq!(offsets.len(), 5);
+    let (separator_ptr, separator_len) = separator[0];
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (passed_ptr, passed_len) = offsets[1];
+    let (exactly_ptr, exactly_len) = offsets[2];
+    let (at_least_ptr, at_least_len) = offsets[3];
+    let (suffix_ptr, suffix_len) = offsets[4];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_too_few_arguments (param $cid i64) (param $method_ptr i32) (param $method_len i32) (param $passed i64) (param $expected i64) (param $exact i32)
+  (local $class_ptr i32) (local $class_len i64) (local $num_ptr i32) (local $num_len i32)
+  (call $__rt_class_name_by_cid (local.get $cid))
+  (local.set $class_len)
+  (local.set $class_ptr)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $class_ptr) (i32.wrap_i64 (local.get $class_len))))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {separator_ptr}) (i32.const {separator_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $method_ptr) (local.get $method_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {passed_ptr}) (i32.const {passed_len})))
+  (call $__rt_itoa (local.get $passed) (global.get $__float_scratch))
+  (local.set $num_len)
+  (local.set $num_ptr)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $num_ptr) (local.get $num_len)))
+  (if (local.get $exact)
+    (then (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {exactly_ptr}) (i32.const {exactly_len}))))
+    (else (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {at_least_ptr}) (i32.const {at_least_len})))))
+  (call $__rt_itoa (local.get $expected) (global.get $__float_scratch))
+  (local.set $num_len)
+  (local.set $num_ptr)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $num_ptr) (local.get $num_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:too-few-arguments-fatal-exit
+)"#
+    ));
 }
 
 /// Emits the runtime behind PHP's IMPLICIT coercion at a declared `int` return.

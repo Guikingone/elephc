@@ -15649,3 +15649,301 @@ process.exitCode = wasi.start(instance);
 
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies a dynamic dispatch survives an unrelated class that merely shares the method NAME.
+///
+/// A `mixed` receiver names no class, so the dispatch ladder is built from every class declaring
+/// the method — and the audit then demands that EVERY entry lower. That let one bystander veto a
+/// whole program: `Ledger::show(string, int)` has nothing to do with `Money`, but its presence
+/// refused `$value->show()` with `Ledger: show expects 2 arguments, got 0`. Dropping it is not a
+/// guess about the runtime class, it is a fact about PHP: reaching `Ledger::show` with no
+/// arguments is an `ArgumentCountError` on every backend, so no correct program can take that
+/// arm. The second case pins the other half — a bystander PHP *could* call at this arity stays in
+/// the ladder and still answers for its own instances, so the filter narrows the ladder without
+/// ever emptying it. That second case is also the only shape with TWO surviving `void` arms, which
+/// is what exposed the ladder storing its result from an empty stack: with every candidate
+/// agreeing on `void`, the checker types the call expression `I64 php=null` instead of boxing it,
+/// and the arm has to supply the null the callee never pushed.
+#[test]
+fn test_cli_wasm_dispatch_drops_a_namesake_php_could_not_call_at_this_arity() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_dispatch_arity");
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Both expected strings below are php-src 8.5.6's own answers for the same program.
+    for (name, source, expected) in [
+        (
+            "bystander.php",
+            r#"<?php
+class Money {
+    public function __construct(private int $cents) {}
+    public function show(): void { echo "$", $this->cents, "\n"; }
+}
+class Ledger {
+    public function show(string $prefix, int $width): void { echo $prefix, $width, "\n"; }
+}
+function render(mixed $value): void { $value->show(); }
+render(new Money(1299));
+"#,
+            "$1299\n",
+        ),
+        (
+            "kept.php",
+            r#"<?php
+class Money {
+    public function __construct(private int $cents) {}
+    public function show(): void { echo "$", $this->cents, "\n"; }
+}
+class Tally {
+    public function show(): void { echo "tally\n"; }
+}
+function render(mixed $value): void { $value->show(); }
+render(new Money(1299));
+render(new Tally());
+"#,
+            "$1299\ntally\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the namesake-dispatch probe to WASM");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the namesake-dispatch probe under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a dispatch reaching a class php-src will not enter raises PHP's own error.
+///
+/// The arity filter drops such a class from the callable arms, which is what lets an unrelated
+/// namesake stop vetoing the program — but dropping it must not mean forgetting it. Left to the
+/// ladder's fallthrough it would report `Call to undefined method Ledger::show()`, a different
+/// error class naming a method that plainly exists; the native backend does worse still and
+/// says `Call to a member function show() on null`. Each dropped class keeps an arm raising
+/// `ArgumentCountError` with php-src's counts and wording — `exactly` when every declared
+/// parameter is required, `at least` when a default makes them differ, and measured on 8.5.6, a
+/// VARIADIC tail keeps the word `exactly`.
+///
+/// KNOWN DIVERGENCE: php-src continues `, 0 passed in /path.php on line 9 and …` and prints a
+/// stack trace. This target reports no location tail, the convention its other composed fatals
+/// already follow, so each case below is asserted as a prefix.
+#[test]
+fn test_cli_wasm_dispatch_raises_php_argument_count_error_for_a_class_it_cannot_enter() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_argument_count");
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expected message below is php-src 8.5.6's own, minus the location tail.
+    for (name, bystander, expected) in [
+        (
+            "exact.php",
+            "class Other { public function show(string $prefix, int $width): void {} }",
+            "Uncaught ArgumentCountError: Too few arguments to function Other::show(), \
+             0 passed and exactly 2 expected\n",
+        ),
+        (
+            "optional.php",
+            "class Other { public function show(int $a, int $b = 2): void {} }",
+            "Uncaught ArgumentCountError: Too few arguments to function Other::show(), \
+             0 passed and at least 1 expected\n",
+        ),
+        (
+            "variadic.php",
+            "class Other { public function show(int $a, int ...$rest): void {} }",
+            "Uncaught ArgumentCountError: Too few arguments to function Other::show(), \
+             0 passed and exactly 1 expected\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(
+            &path,
+            format!(
+                "<?php\nclass Money {{ public function show(): void {{ echo \"money\\n\"; }} }}\n\
+                 {bystander}\n\
+                 function render(mixed $value): void {{ $value->show(); }}\n\
+                 render(new Money());\n\
+                 render(new Other());\n"
+            ),
+        )
+        .unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the argument-count probe to WASM");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the argument-count probe under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            "money\n",
+            "{name}: the class php-src DOES enter still answers"
+        );
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            stderr.contains(expected),
+            "{name}: expected php-src's own message, got {stderr}"
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(255),
+            "{name}: php-src's own fatal status"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a boxed value reaching a slot declared as a class is narrowed back to an object.
+///
+/// A `?Node` property is stored boxed, so `return $this->node;` from a method declared `: Node`
+/// asks the backend to move a `Heap(Mixed)` into an object slot. That call carries no runtime
+/// function id at all — the frontend leaves the conversion implicit — and the audit refused it as
+/// `missing typed runtime target, carries no immediate at all`. The lowering unboxes the cell and
+/// takes its payload, with a tag guard the native backend does without: a cell holding anything
+/// but an object yields a null pointer rather than a scalar reinterpreted as an address.
+#[test]
+fn test_cli_wasm_narrows_a_boxed_value_into_a_declared_class_slot() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_object_narrowing");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Node { public function __construct(public string $label) {} }
+class Box {
+    private ?Node $node = null;
+    public function set(Node $n): void { $this->node = $n; }
+    public function get(): Node {
+        if ($this->node === null) { throw new RuntimeException("empty"); }
+        return $this->node;
+    }
+}
+$b = new Box();
+$b->set(new Node("leaf"));
+echo $b->get()->label, "\n";
+$b->set(new Node("branch"));
+echo $b->get()->label, "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the object-narrowing probe to WASM");
+    assert!(
+        output.status.success(),
+        "object-narrowing compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the object-narrowing probe under Node");
+    assert!(
+        run.status.success(),
+        "the narrowed reads must not terminate: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "leaf\nbranch\n",
+        "php-src's own answers"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}

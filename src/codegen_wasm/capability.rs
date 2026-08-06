@@ -3844,7 +3844,12 @@ fn method_call_shape_issue(
                 ));
             }
 
-            let candidates = super::classes::mixed_method_candidates(module, &method_key);
+            let candidates = super::classes::mixed_method_candidates(
+                module,
+                &method_key,
+                &receiver_declared_php,
+                arguments.len(),
+            );
             if candidates.is_empty() {
                 return Some(format!(
                     "no closed-world candidate for dynamic mixed/union method {method_name}"
@@ -5123,7 +5128,11 @@ pub(super) fn interface_dispatch_candidates(
 /// interface its own parents' methods, so `class C extends B` where `B implements J` and
 /// `interface J extends I` makes a `C` a legitimate `I`. Reading only the class's own
 /// `interfaces` list would miss every implementor that inherits the obligation.
-fn class_implements_interface(module: &Module, class_name: &str, interface_name: &str) -> bool {
+pub(super) fn class_implements_interface(
+    module: &Module,
+    class_name: &str,
+    interface_name: &str,
+) -> bool {
     let mut current = Some(class_name.to_string());
     let mut visited = HashSet::new();
     while let Some(name) = current {
@@ -5164,7 +5173,7 @@ fn interface_extends(module: &Module, interface_name: &str, ancestor: &str) -> b
 }
 
 /// Returns whether `class_name` belongs to the class subtree rooted at `ancestor`.
-fn class_descends_from(module: &Module, class_name: &str, ancestor: &str) -> bool {
+pub(super) fn class_descends_from(module: &Module, class_name: &str, ancestor: &str) -> bool {
     let mut current = Some(class_name);
     let mut visited = HashSet::new();
     while let Some(name) = current {
@@ -5712,6 +5721,8 @@ fn check_runtime_call(
         // so the only compile-time questions are the shapes of the three operands and whether the
         // module carries the command runtime the warnings live in.
         None if mixed_array_read_is_supported(module, function, call) => {}
+        // The one-operand narrowing of a boxed value into a declared class slot.
+        None if mixed_object_narrowing_is_supported(function, call) => {}
         other => {
             let operands = call
                 .operands
@@ -5769,6 +5780,28 @@ fn mixed_array_read_is_supported(module: &Module, function: &Function, call: &In
         return false;
     }
     operand_ir(2) == Some(IrType::I64)
+}
+
+/// Returns true when an untyped `Op::RuntimeCall` narrows one boxed value to a declared class.
+///
+/// The EIR keeps a `?Money` property boxed until something demands the declared type, then asks
+/// for it with an immediate-less one-operand call — which is exactly how the native backend
+/// recognizes it too. The payload word of an object cell IS the object pointer, so the whole
+/// operation is an unbox and an incref; nothing about it depends on WHICH class is declared,
+/// only that both sides agree the result is a pointer-backed object.
+pub(super) fn mixed_object_narrowing_is_supported(function: &Function, call: &Instruction) -> bool {
+    if call.operands.len() != 1 || call.result.is_none() {
+        return false;
+    }
+    if call.result_type != IrType::Heap(IrHeapKind::Object)
+        || !matches!(call.result_php_type.codegen_repr(), PhpType::Object(_))
+    {
+        return false;
+    }
+    let Some(source) = call.operands.first().and_then(|value| function.value(*value)) else {
+        return false;
+    };
+    source.ir_type == IrType::Heap(IrHeapKind::Mixed)
 }
 
 /// Names the immediate an `Op::RuntimeCall` carries when it is not a typed runtime target.
@@ -6795,7 +6828,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Dirname
         | RuntimeFnId::DiskFreeSpace
         | RuntimeFnId::DiskTotalSpace
-        | RuntimeFnId::Fclose
         | RuntimeFnId::Fdatasync
         | RuntimeFnId::Feof
         | RuntimeFnId::Fflush
@@ -6803,9 +6835,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fgetcsv
         | RuntimeFnId::Fgets
         | RuntimeFnId::File
-        | RuntimeFnId::FileExists
-        | RuntimeFnId::FileGetContents
-        | RuntimeFnId::FilePutContents
         | RuntimeFnId::Fileatime
         | RuntimeFnId::Filectime
         | RuntimeFnId::Filegroup
@@ -6817,11 +6846,9 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Filetype
         | RuntimeFnId::Flock
         | RuntimeFnId::Fnmatch
-        | RuntimeFnId::Fopen
         | RuntimeFnId::Fpassthru
         | RuntimeFnId::Fprintf
         | RuntimeFnId::Fputcsv
-        | RuntimeFnId::Fread
         | RuntimeFnId::Fscanf
         | RuntimeFnId::Fseek
         | RuntimeFnId::Fsockopen
@@ -6829,7 +6856,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fsync
         | RuntimeFnId::Ftell
         | RuntimeFnId::Ftruncate
-        | RuntimeFnId::Fwrite
         | RuntimeFnId::Getcwd
         | RuntimeFnId::Gethostbyaddr
         | RuntimeFnId::Gethostbyname
@@ -6934,7 +6960,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Tmpfile
         | RuntimeFnId::Touch
         | RuntimeFnId::Umask
-        | RuntimeFnId::Unlink
         | RuntimeFnId::VarDump
         | RuntimeFnId::Vfprintf
         | RuntimeFnId::Acos
@@ -7650,8 +7675,14 @@ mod tests {
         )
     }
 
-    /// Rejects a dynamic call when a concrete runtime class has the requested
-    /// method but a different arity, instead of misreporting it as undefined.
+    /// Answers a concrete runtime class php-src could not enter with PHP's own
+    /// `ArgumentCountError`, instead of refusing the program or misreporting it as undefined.
+    ///
+    /// `One::run(int $value)` shares only a method NAME with the call site. It once refused the
+    /// whole program — every candidate had to fit — which let one bystander veto a dispatch it
+    /// has nothing to do with. It now leaves the callable list and reappears as an arity
+    /// FAILURE, which the ladder turns into an arm raising the error php-src raises, with the
+    /// count and the `exactly` wording php-src uses.
     #[test]
     fn mixed_method_capability_sees_concrete_arity_mismatches() {
         let method_name = "run";
@@ -7685,11 +7716,163 @@ mod tests {
             .class_methods
             .push(method_body("One", method_name, &one_signature));
 
-        let issue = mixed_method_issue(&module, method_data)
-            .expect("different concrete arity must fail the pre-emission gate");
+        let method_key = crate::names::php_symbol_key(method_name);
+        assert_eq!(
+            mixed_method_issue(&module, method_data),
+            None,
+            "a bystander php-src could not enter must not refuse the dispatch"
+        );
+        assert_eq!(
+            super::super::classes::mixed_method_candidates(
+                &module,
+                &method_key,
+                &PhpType::Mixed,
+                0
+            )
+            .iter()
+            .map(|(_, class_name, _)| class_name.as_str())
+            .collect::<Vec<_>>(),
+            vec!["Zero"],
+            "only the class php-src would enter stays callable"
+        );
+        assert_eq!(
+            super::super::classes::mixed_method_arity_failures(
+                &module,
+                &method_key,
+                &PhpType::Mixed,
+                0
+            ),
+            vec![super::super::classes::MixedMethodArityFailure {
+                class_id: 1,
+                class_name: "One".to_string(),
+                required: 1,
+                exact: true,
+            }],
+            "the dropped class still gets an arm, raising php-src's ArgumentCountError"
+        );
+    }
+
+    /// Keeps a class whose method takes FEWER parameters than the call passes.
+    ///
+    /// Measured on php-src 8.5.6: a user method accepts surplus arguments silently —
+    /// `C::m(int $a)` called with two runs, and `func_num_args()` sees both. An upper bound on
+    /// the arity filter therefore dropped a class php-src dispatches to, and the ladder answered
+    /// `Call to undefined method` for a call that should have printed. It stays a CANDIDATE, so
+    /// the shape audit downstream decides it — refusing is a coverage cost, answering wrongly is
+    /// not a trade this backend may make.
+    #[test]
+    fn a_candidate_with_fewer_parameters_than_the_call_passes_is_not_dropped() {
+        let method_name = "show";
+        let method_key = crate::names::php_symbol_key(method_name);
+        let mut module = Module::new(Target::wasm());
+
+        let mut none = minimal_class_info(1);
+        none.methods.insert(method_key.clone(), void_signature());
+        none.method_impl_classes
+            .insert(method_key.clone(), "None".to_string());
+        module.class_infos.insert("None".to_string(), none);
+
+        assert_eq!(
+            super::super::classes::mixed_method_candidates(
+                &module,
+                &method_key,
+                &PhpType::Mixed,
+                1
+            )
+            .iter()
+            .map(|(_, class_name, _)| class_name.as_str())
+            .collect::<Vec<_>>(),
+            vec!["None"],
+            "php-src ignores the surplus argument, so the class is still reachable"
+        );
         assert!(
-            issue.contains("One: run expects 1 arguments, got 0"),
-            "{issue}"
+            super::super::classes::mixed_method_arity_failures(
+                &module,
+                &method_key,
+                &PhpType::Mixed,
+                1
+            )
+            .is_empty(),
+            "a surplus argument is not an ArgumentCountError"
+        );
+    }
+
+    /// Words the expected count the way php-src does for each of its three shapes.
+    ///
+    /// Measured on 8.5.6: a parameter with a DEFAULT turns `exactly` into `at least`, but a
+    /// VARIADIC tail does not — `m(int $a, int ...$rest)` still reports `exactly 1 expected`,
+    /// even though the variadic sits in `params` carrying no default of its own.
+    #[test]
+    fn the_expected_argument_count_uses_php_src_wording_for_defaults_and_variadics() {
+        let method_name = "m";
+        let method_key = crate::names::php_symbol_key(method_name);
+        let mut module = Module::new(Target::wasm());
+
+        let mut required_only = void_signature();
+        required_only.params.push(("a".to_string(), PhpType::Int));
+        required_only.params.push(("b".to_string(), PhpType::Int));
+        required_only.defaults.push(None);
+        required_only.defaults.push(None);
+
+        let mut with_default = void_signature();
+        with_default.params.push(("a".to_string(), PhpType::Int));
+        with_default.params.push(("b".to_string(), PhpType::Int));
+        with_default.defaults.push(None);
+        with_default.defaults.push(Some(crate::parser::ast::Expr {
+            kind: crate::parser::ast::ExprKind::IntLiteral(2),
+            span: crate::span::Span::new(1, 1),
+        }));
+
+        let mut variadic = void_signature();
+        variadic.params.push(("a".to_string(), PhpType::Int));
+        variadic
+            .params
+            .push(("rest".to_string(), PhpType::Array(Box::new(PhpType::Int))));
+        variadic.defaults.push(None);
+        variadic.defaults.push(None);
+        variadic.variadic = Some("rest".to_string());
+
+        for (class_id, class_name, signature) in [
+            (1u64, "Exact", required_only),
+            (2, "Optional", with_default),
+            (3, "Variadic", variadic),
+        ] {
+            let mut class_info = minimal_class_info(class_id);
+            class_info.methods.insert(method_key.clone(), signature);
+            class_info
+                .method_impl_classes
+                .insert(method_key.clone(), class_name.to_string());
+            module.class_infos.insert(class_name.to_string(), class_info);
+        }
+
+        assert_eq!(
+            super::super::classes::mixed_method_arity_failures(
+                &module,
+                &method_key,
+                &PhpType::Mixed,
+                0
+            ),
+            vec![
+                super::super::classes::MixedMethodArityFailure {
+                    class_id: 1,
+                    class_name: "Exact".to_string(),
+                    required: 2,
+                    exact: true,
+                },
+                super::super::classes::MixedMethodArityFailure {
+                    class_id: 2,
+                    class_name: "Optional".to_string(),
+                    required: 1,
+                    exact: false,
+                },
+                super::super::classes::MixedMethodArityFailure {
+                    class_id: 3,
+                    class_name: "Variadic".to_string(),
+                    required: 1,
+                    exact: true,
+                },
+            ],
+            "php-src's own counts and wording for the three shapes"
         );
     }
 
@@ -7801,9 +7984,130 @@ mod tests {
             .class_infos
             .insert("Concrete".to_string(), concrete_class);
 
-        let candidates = super::super::classes::mixed_method_candidates(&module, &method_key);
+        let candidates = super::super::classes::mixed_method_candidates(
+            &module,
+            &method_key,
+            &PhpType::Mixed,
+            0,
+        );
         assert_eq!(candidates.len(), 1);
         assert_eq!(candidates[0].1, "Concrete");
+    }
+
+    /// A receiver that names a class keeps only that class's subtree as a dispatch candidate.
+    ///
+    /// The unrelated class here shares the method NAME and nothing else, which is exactly the
+    /// prelude collision (`DateInterval::format` against a user `Money::format`) that refused a
+    /// program whose receiver could never have been a `DateInterval`.
+    #[test]
+    fn a_union_receiver_drops_the_candidates_its_static_type_cannot_hold() {
+        let method_key = crate::names::php_symbol_key("format");
+        let mut module = Module::new(Target::wasm());
+        for (index, name) in ["Money", "Unrelated"].iter().enumerate() {
+            let mut class_info = minimal_class_info(index as u64 + 1);
+            class_info
+                .methods
+                .insert(method_key.clone(), void_signature());
+            module.class_infos.insert((*name).to_string(), class_info);
+        }
+
+        let every = super::super::classes::mixed_method_candidates(
+            &module,
+            &method_key,
+            &PhpType::Mixed,
+            0,
+        );
+        assert_eq!(every.len(), 2, "a mixed receiver names no class at all");
+
+        let narrowed = super::super::classes::mixed_method_candidates(
+            &module,
+            &method_key,
+            &PhpType::Union(vec![PhpType::Int, PhpType::Object("Money".to_string())]),
+            0,
+        );
+        assert_eq!(narrowed.len(), 1);
+        assert_eq!(narrowed[0].1, "Money");
+
+        // A receiver that admits no class at all is not evidence: the unnarrowed list stands.
+        let scalars = super::super::classes::mixed_method_candidates(
+            &module,
+            &method_key,
+            &PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+            0,
+        );
+        assert_eq!(scalars.len(), 2);
+    }
+
+    /// A class php-src could not ENTER with this many arguments is not this dispatch's arm.
+    ///
+    /// This is what a `mixed` receiver depends on: its type narrows nothing, so the only thing
+    /// separating a user `Money::format()` from a prelude `DateInterval::format(string)` is that
+    /// calling the latter with no arguments is an `ArgumentCountError` in every implementation.
+    ///
+    /// The filter runs ONE WAY. Passing an argument too many does not disqualify anything — a
+    /// user method ignores surplus arguments — so the one-argument call keeps both classes and
+    /// leaves the shape audit to decide `Money`, which is the second half of this test.
+    #[test]
+    fn a_candidate_php_could_not_call_with_this_arity_leaves_the_dispatch_ladder() {
+        let method_key = crate::names::php_symbol_key("format");
+        let mut module = Module::new(Target::wasm());
+        let mut money = minimal_class_info(1);
+        money
+            .methods
+            .insert(method_key.clone(), void_signature());
+        module.class_infos.insert("Money".to_string(), money);
+
+        let mut interval = minimal_class_info(2);
+        let mut demanding = void_signature();
+        demanding.params.push(("format".to_string(), PhpType::Str));
+        demanding.defaults.push(None);
+        demanding.ref_params.push(false);
+        demanding.declared_params.push(true);
+        demanding.param_type_exprs.push(None);
+        demanding.param_attributes.push(Vec::new());
+        interval.methods.insert(method_key.clone(), demanding);
+        module
+            .class_infos
+            .insert("DateInterval".to_string(), interval);
+
+        let no_arguments =
+            super::super::classes::mixed_method_candidates(&module, &method_key, &PhpType::Mixed, 0);
+        assert_eq!(no_arguments.len(), 1);
+        assert_eq!(no_arguments[0].1, "Money");
+        assert_eq!(
+            super::super::classes::mixed_method_arity_failures(
+                &module,
+                &method_key,
+                &PhpType::Mixed,
+                0
+            )
+            .iter()
+            .map(|failure| failure.class_name.as_str())
+            .collect::<Vec<_>>(),
+            vec!["DateInterval"],
+            "the class php-src refuses to enter keeps an arm of its own"
+        );
+
+        let one_argument =
+            super::super::classes::mixed_method_candidates(&module, &method_key, &PhpType::Mixed, 1);
+        assert_eq!(
+            one_argument
+                .iter()
+                .map(|(_, class_name, _)| class_name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["Money", "DateInterval"],
+            "a surplus argument disqualifies nothing: php-src enters Money::format() too"
+        );
+        assert!(
+            super::super::classes::mixed_method_arity_failures(
+                &module,
+                &method_key,
+                &PhpType::Mixed,
+                1
+            )
+            .is_empty(),
+            "and neither class raises ArgumentCountError at this arity"
+        );
     }
 
     /// Rejects a same-width callable parameter hidden behind an integer method

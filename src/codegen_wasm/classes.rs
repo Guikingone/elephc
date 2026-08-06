@@ -35,7 +35,7 @@ use super::wat::{DataSegment, Global, ValType, WatModule};
 use super::WasmError;
 use crate::ir::{Instruction, Module, ValueId};
 use crate::types::{ClassInfo, PhpType};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// `__rt_instanceof`: returns 1 iff the object at `obj` is an instance of the
 /// named target (`target_id`, `target_kind` where 0 = class, 1 = interface).
@@ -963,25 +963,156 @@ pub(super) fn lower_get_class(ctx: &mut FnCtx, inst: &Instruction) -> Result<()>
     }
 }
 
-/// Builds the concrete mixed-method-call candidate list for one method name.
+/// The concrete classes a dynamic receiver's STATIC type can hold, or `None` when it can hold
+/// any of them.
+///
+/// `mixed` names no class and therefore admits every one; each other form narrows. An
+/// `Object(C)` admits `C`'s subtree — and, when `C` is an interface, its implementors. A member
+/// that cannot carry an object contributes nothing at all, which is why an `int|Money` receiver
+/// resolves to exactly `Money`: the `int` arm never reaches a method call.
+pub(super) fn receiver_admitted_classes(
+    module: &Module,
+    receiver: &PhpType,
+) -> Option<HashSet<String>> {
+    let mut admitted = HashSet::new();
+    receiver_admits_only(module, receiver, &mut admitted).then_some(admitted)
+}
+
+/// Accumulates the classes `receiver` admits; returns false as soon as it admits an unnamed one.
+fn receiver_admits_only(
+    module: &Module,
+    receiver: &PhpType,
+    out: &mut HashSet<String>,
+) -> bool {
+    match receiver {
+        PhpType::Object(name) => {
+            // A name this module never declared proves nothing about the runtime class.
+            if !module.class_infos.contains_key(name) && !module.interface_infos.contains_key(name)
+            {
+                return false;
+            }
+            for class_name in module.class_infos.keys() {
+                if super::capability::class_descends_from(module, class_name, name)
+                    || super::capability::class_implements_interface(module, class_name, name)
+                {
+                    out.insert(class_name.clone());
+                }
+            }
+            true
+        }
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| receiver_admits_only(module, member, out)),
+        // Tags that cannot carry an object contribute no candidate.
+        PhpType::Int
+        | PhpType::Float
+        | PhpType::Str
+        | PhpType::Bool
+        | PhpType::False
+        | PhpType::Void
+        | PhpType::Never
+        | PhpType::Array(_)
+        | PhpType::AssocArray { .. }
+        | PhpType::Resource(_)
+        | PhpType::TaggedScalar => true,
+        // `mixed`, `iterable`, `callable` and the pointer-shaped types can each hold an object
+        // this type does not name, so they keep every candidate.
+        _ => false,
+    }
+}
+
+/// How many arguments php-src requires to enter `signature`, and how many it declares.
+///
+/// The required count stops at the first parameter carrying a default: everything from there on
+/// may be omitted. A VARIADIC tail sits in `params` with no default of its own, so it has to be
+/// excluded explicitly — php-src never requires it, and the pair is what decides its two
+/// wordings: `exactly N` when the two counts agree, `at least N` when a default makes them
+/// differ.
+///
+/// There is no upper bound in either number. Measured on php-src 8.5.6, a user method accepts
+/// SURPLUS arguments silently — `C::m(int $a)` called with two runs, and `func_num_args()` sees
+/// both — so no class is ever disqualified by being passed too many.
+fn argument_count_bounds(signature: &crate::types::FunctionSig) -> (usize, usize) {
+    let declared = match &signature.variadic {
+        Some(name) if signature.params.last().is_some_and(|(param, _)| param == name) => {
+            signature.params.len() - 1
+        }
+        _ => signature.params.len(),
+    };
+    let required = signature
+        .defaults
+        .iter()
+        .take(declared)
+        .take_while(|default| default.is_none())
+        .count();
+    (required, declared)
+}
+
+/// Whether php-src would enter `signature` when called with `argument_count` arguments.
+fn arity_admits(signature: &crate::types::FunctionSig, argument_count: usize) -> bool {
+    argument_count >= argument_count_bounds(signature).0
+}
+
+/// One class a dynamic dispatch reaches that php-src refuses to enter for lack of arguments.
+///
+/// Carries everything the fatal arm needs: the runtime `class_id` that selects it, how many
+/// arguments the method requires, and which of php-src's two wordings applies. `exactly` is used
+/// when every declared parameter is required — measured, a VARIADIC does not change that word,
+/// only a parameter with a default turns it into `at least`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct MixedMethodArityFailure {
+    /// Runtime `class_id` whose arm raises the error.
+    pub(super) class_id: u64,
+    /// The class as PHP names it in the message.
+    pub(super) class_name: String,
+    /// The count php-src reports as expected.
+    pub(super) required: usize,
+    /// Whether php-src words the count `exactly` (true) or `at least` (false).
+    pub(super) exact: bool,
+}
+
+/// Builds the concrete mixed-method-call candidate list for one method name and arity.
 ///
 /// `ClassInfo.methods` is flattened with inherited signatures, so a subclass
 /// that inherited the method is a candidate and dispatches to the inherited
 /// implementation via `method_impl_classes`. Abstract classes are excluded
-/// because PHP cannot instantiate them. Arity, visibility, and ABI checks stay
+/// because PHP cannot instantiate them. Visibility and ABI checks stay
 /// in the capability pass; filtering those shapes here would let an admitted
 /// runtime class fall through as an undefined method. Results are sorted by
 /// `class_id` for a stable if-ladder.
+///
+/// Two filters run before that, because a class reaches this list by sharing a method NAME and
+/// nothing else — and the audit then demands that EVERY candidate fit the call site, so one
+/// unrelated class refuses the whole program.
+///
+/// The receiver's static type is the first: a prelude `DateInterval::format(string $format)` is
+/// no candidate for an `int|Money` receiver. A narrowing that removes every candidate is not
+/// evidence — it means the receiver type is telling us nothing usable — so the unnarrowed list
+/// stands rather than manufacturing a refusal.
+///
+/// The call's ARITY is the second, and it is what saves a `mixed` receiver, whose type narrows
+/// nothing. A class php-src could not enter with this many arguments cannot be the right arm of
+/// this dispatch: selecting it raises `ArgumentCountError` before the body runs. Such a class
+/// leaves this list and reappears in `mixed_method_arity_failures`, which the ladder turns into
+/// an arm raising that exact error — so the class id is still handled, with php-src's own
+/// wording rather than the fallthrough's `Call to undefined method`.
 pub(super) fn mixed_method_candidates(
     module: &Module,
     method_key: &str,
+    receiver: &PhpType,
+    argument_count: usize,
 ) -> Vec<(u64, String, String)> {
+    let admitted = receiver_admitted_classes(module, receiver);
+    let mut narrowed: Vec<(u64, String, String)> = Vec::new();
     let mut out: Vec<(u64, String, String)> = Vec::new();
     for (class_name, ci) in &module.class_infos {
         if ci.is_abstract {
             continue;
         }
-        if !ci.methods.contains_key(method_key) {
+        let Some(signature) = ci.methods.get(method_key) else {
+            continue;
+        };
+        if !arity_admits(signature, argument_count) {
             continue;
         }
         let impl_class = ci
@@ -989,13 +1120,84 @@ pub(super) fn mixed_method_candidates(
             .get(method_key)
             .cloned()
             .unwrap_or_else(|| class_name.clone());
-        out.push((ci.class_id, class_name.clone(), impl_class));
+        let candidate = (ci.class_id, class_name.clone(), impl_class);
+        if admitted
+            .as_ref()
+            .is_none_or(|classes| classes.contains(class_name))
+        {
+            narrowed.push(candidate.clone());
+        }
+        out.push(candidate);
+    }
+    if !narrowed.is_empty() {
+        out = narrowed;
     }
     out.sort_by(|left, right| {
         left.0
             .cmp(&right.0)
             .then_with(|| left.1.cmp(&right.1))
             .then_with(|| left.2.cmp(&right.2))
+    });
+    out
+}
+
+/// The classes `mixed_method_candidates` dropped because php-src would not enter them.
+///
+/// Exactly the complement of that function's arity filter, over the same receiver narrowing, so
+/// the two lists together cover every class id the ladder can observe. Each entry becomes an arm
+/// raising `ArgumentCountError` — dropping a class from the callable list must not silently turn
+/// its instances into `Call to undefined method`, which is a different error class naming a
+/// method that plainly exists.
+pub(super) fn mixed_method_arity_failures(
+    module: &Module,
+    method_key: &str,
+    receiver: &PhpType,
+    argument_count: usize,
+) -> Vec<MixedMethodArityFailure> {
+    let admitted = receiver_admitted_classes(module, receiver);
+    // The callable list falls back to the UNNARROWED set when narrowing empties it, so the
+    // failures have to answer to the same set or the two would disagree on which ids exist.
+    let narrowing_applies = admitted.as_ref().is_some_and(|classes| {
+        module.class_infos.iter().any(|(class_name, ci)| {
+            !ci.is_abstract
+                && ci.methods.get(method_key).is_some_and(|signature| {
+                    arity_admits(signature, argument_count) && classes.contains(class_name)
+                })
+        })
+    });
+    let mut out: Vec<MixedMethodArityFailure> = Vec::new();
+    for (class_name, ci) in &module.class_infos {
+        if ci.is_abstract {
+            continue;
+        }
+        let Some(signature) = ci.methods.get(method_key) else {
+            continue;
+        };
+        if arity_admits(signature, argument_count) {
+            continue;
+        }
+        if narrowing_applies
+            && !admitted
+                .as_ref()
+                .is_some_and(|classes| classes.contains(class_name))
+        {
+            continue;
+        }
+        let (required, declared) = argument_count_bounds(signature);
+        out.push(MixedMethodArityFailure {
+            class_id: ci.class_id,
+            class_name: class_name.clone(),
+            required,
+            // php-src says `exactly` when no parameter may be omitted. A variadic tail does not
+            // make the count approximate — measured, `m(int $a, int ...$rest)` still reports
+            // `exactly 1 expected`.
+            exact: required == declared,
+        });
+    }
+    out.sort_by(|left, right| {
+        left.class_id
+            .cmp(&right.class_id)
+            .then_with(|| left.class_name.cmp(&right.class_name))
     });
     out
 }

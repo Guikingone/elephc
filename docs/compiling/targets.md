@@ -104,7 +104,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 191 examples under `examples/` that carry a `main.php`, **51
+claim. Of the 191 examples under `examples/` that carry a `main.php`, **52
 compile to `wasm32-wasi`**, and every one of them except `ifdef`, `union-types`
 and `enums` reproduces php-src's output byte for byte. Those three have no
 php-src output to match rather than a different one: `ifdef` and `union-types`
@@ -119,7 +119,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 140 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 139 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 161, not 191.
 
@@ -147,27 +147,33 @@ handle.
 
 The blocker-count distribution says the same thing. Counting the distinct
 refusals a single `elephc build --target wasm32-wasi` reports per example: of the
-140 that do not compile, 17 have one distinct blocker, 23 have two, 15 have
-three, 16 have four, and the tail runs well past fifty. The seventeen reachable
-by a single blocker are `array-access-exception-order`, `constructor-promotion`,
-`fsockopen`, `ftp-stream`, `hello-preg`, `json-jsonserializable`, `logical`,
-`phar-writer`, `php-wrapper`, `pipe-operator`, `print_r-return`, `sdl_audio`,
-`socket-pair`, `stream-copy`, `stream-get-contents`, `strict-php` and
-`type-ops`. Eight of those are dead ends rather than work: `sdl_audio`,
-`fsockopen` and `socket-pair` are among the thirty that never will; `ftp-stream`,
-`phar-writer` and `php-wrapper` need stream wrappers this target refuses on
-purpose; `strict-php` fails in the type checker on every target rather than
-here; and php-src itself fatals on `constructor-promotion`, so compiling it
-would match nothing.
+139 that do not compile, four never reach this backend at all — `strict-php`,
+`web-session`, `web-session-trans-sid` and `web-session-upload` stop in the type
+checker on every target — and of the remaining 135, 16 have one distinct blocker,
+16 have two, 13 have three, 28 have four, and the tail runs to 23. (Distinct
+REASONS, not refusal lines: `fibers` reports 58 lines but only eleven different
+gaps, and ranking by lines answers "how often is this hit", which is a different
+question from "what would unblock an example".)
+
+The sixteen reachable by a single blocker are `array-access-exception-order`,
+`constructor-promotion`, `fsockopen`, `ftp-stream`, `hello-preg`,
+`json-jsonserializable`, `logical`, `phar-writer`, `php-wrapper`,
+`pipe-operator`, `print_r-return`, `sdl_audio`, `socket-pair`, `stream-copy`,
+`stream-get-contents` and `type-ops`. Seven of those are dead ends rather than
+work: `sdl_audio`, `fsockopen` and `socket-pair` are among the thirty that never
+will; `ftp-stream`, `phar-writer` and `php-wrapper` need stream wrappers this
+target refuses on purpose; and php-src itself fatals on
+`constructor-promotion`, so compiling it would match nothing.
 
 Read that distribution with one caveat: a refusal counted once can stand for a
-whole subsystem. The most frequent one used to be a catch-all — 47 of the 140
+whole subsystem. The most frequent one used to be a catch-all — 47 examples
 reported `missing typed runtime target` and nothing more, because every
 `Op::RuntimeCall` without a typed immediate fell into the same arm. Naming what
-those calls actually carry split the bucket, and serving the two largest shapes
-(the generic `$mixed[$key]` read, 34 examples with a string key and 25 with an
-integer one) took it from 47 examples to 18. What is left there is the coercion
-family on a single boxed operand, and `ArrayAccess` on an object receiver.
+those calls actually carry split the bucket, and serving its shapes one at a time
+— the generic `$mixed[$key]` read (34 examples with a string key, 25 with an
+integer one), then the narrowing of a boxed value into a declared class slot —
+took it from 47 examples to **7**. What is left there is the coercion family on a
+single boxed operand, and `ArrayAccess` on an object receiver.
 
 Progress is otherwise roughly one example per fix, so the example counter is a
 poor guide to correctness work — running a differential corpus against php-src
@@ -531,6 +537,48 @@ A shared front-end bug surfaced while measuring this and is fixed: an
 `else` branch's constants, ignoring the elseifs entirely. Both backends then
 answered from the wrong branch — silently, since the branch itself was lowered
 correctly and only the propagated fact was wrong.
+
+**A dynamic dispatch is no longer vetoed by an unrelated namesake.** A `mixed`
+receiver names no class, so the ladder's arms come from every class declaring the
+method — and the audit then demands that every one of them lower, which let a
+bystander refuse a whole program. Two filters now narrow that list before the
+audit sees it. The receiver's STATIC type is the first: an `int|Money` receiver
+admits `Money` and its subtree, so a prelude `DateInterval::format(string)` is not
+an arm of `$money->format()`; a narrowing that empties the list is treated as the
+type telling us nothing and the unnarrowed list stands. The call's ARITY is the
+second, and it is what saves a plain `mixed`, whose type narrows nothing: a class
+php-src would not ENTER with this many arguments cannot be the right arm.
+
+That filter runs one way only. Measured on php-src 8.5.6, a user method accepts
+SURPLUS arguments silently — `C::m(int $a)` called with two runs, and
+`func_num_args()` sees both — so passing too many disqualifies nothing. An upper
+bound here was a miscompile, not a missed refusal: it dropped a class php-src
+dispatches to, and the ladder answered `Call to undefined method Money::show()`
+for a call that should have printed.
+
+Dropping a class does not mean forgetting it. Each one keeps an arm raising PHP's
+own `ArgumentCountError`, with php-src's count and wording — `exactly N` when
+every declared parameter is required, `at least N` when a default makes the
+counts differ, and (measured) `exactly` still when the tail is VARIADIC. Left to
+the ladder's fallthrough it would have reported `Call to undefined method` for a
+method that plainly exists; the native backend does worse and says `Call to a
+member function show() on null`. Only the location tail and stack trace are
+missing, the same convention the other composed fatals follow.
+
+Fixed alongside it: a ladder with two or more `void` arms stored its result from
+an empty stack. When every candidate returns `void` the checker types the call
+expression `I64 php=null` rather than boxing it, and the arm has to supply the
+null the callee never pushed — which the direct and interface paths already did.
+The module failed WebAssembly validation outright rather than miscompiling.
+
+**A boxed value reaching a slot declared as a class** is narrowed back to an
+object. A `?Node` property is stored boxed, so `return $this->node;` from a method
+declared `: Node` moves a `Heap(Mixed)` into an object slot through a call that
+carries no runtime function id at all — the frontend leaves the conversion
+implicit, and the audit refused it as `missing typed runtime target`. The lowering
+unboxes the cell and takes its payload, with a tag guard the native backend does
+without: a cell holding anything but an object yields a null pointer rather than a
+scalar reinterpreted as an address. Unblocks `examples/type-narrowing`.
 
 Two shared defects found the same way remain OPEN, both in the checker rather
 than in this backend:
