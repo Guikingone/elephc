@@ -211,7 +211,8 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::FilePutContents
         | RuntimeFnId::Feof
         | RuntimeFnId::Ftell
-        | RuntimeFnId::Rewind => (
+        | RuntimeFnId::Rewind
+        | RuntimeFnId::Fseek => (
             "codegen_wasm::files",
             "codegen_wasm::builtins::lower_file_builtin",
             &[

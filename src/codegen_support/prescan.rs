@@ -168,6 +168,20 @@ pub(crate) fn collect_constants(
         "STDERR".to_string(),
         (ExprKind::IntLiteral(2), PhpType::stream_resource()),
     );
+    // fseek's whence. php-src fixes these at 0/1/2, which are also the numbers WASI's
+    // `fd_seek` uses, so they need no translation at a stream call.
+    constants.insert(
+        "SEEK_SET".to_string(),
+        (ExprKind::IntLiteral(0), PhpType::Int),
+    );
+    constants.insert(
+        "SEEK_CUR".to_string(),
+        (ExprKind::IntLiteral(1), PhpType::Int),
+    );
+    constants.insert(
+        "SEEK_END".to_string(),
+        (ExprKind::IntLiteral(2), PhpType::Int),
+    );
     constants.insert(
         "LOCK_SH".to_string(),
         (ExprKind::IntLiteral(1), PhpType::Int),

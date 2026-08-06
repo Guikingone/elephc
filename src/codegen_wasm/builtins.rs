@@ -3421,6 +3421,12 @@ pub(super) struct FileBuiltin {
     pub(super) result: IrType,
     /// Whether the helper takes a trailing warn flag the call site does not carry.
     pub(super) warns: bool,
+    /// The value to push when the LAST declared operand is absent at the call site.
+    ///
+    /// `fseek($h, $off)` is legal PHP — the registry declares `whence: Int = 0` — but the call
+    /// carries only two operands, so the default is materialized at the write site rather than
+    /// requiring every caller to spell it.
+    pub(super) optional_tail: Option<i64>,
 }
 
 /// Returns the file-runtime contract for `target`, and nothing for any other builtin.
@@ -3436,12 +3442,16 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
         RuntimeFnId::Fwrite => ("$__rt_fwrite", &[STREAM, IrType::Str], IrType::I64),
         RuntimeFnId::Fread => ("$__rt_fread", &[STREAM, IrType::I64], IrType::Str),
         RuntimeFnId::Fclose => ("$__rt_fclose", &[STREAM], IrType::I64),
-        // The three position queries. Only an in-memory stream can answer `ftell` here — a WASI
-        // fd would need `fd_tell`, which is a separate capability — so it answers 0 for one,
-        // which is the position a freshly opened file really is at.
+        // The position queries. `ftell` answers both stream kinds: WASI has no `fd_tell`, but a
+        // zero-length seek from the current position is the same question.
         RuntimeFnId::Feof => ("$__rt_feof", &[STREAM], IrType::I64),
         RuntimeFnId::Ftell => ("$__rt_ftell", &[STREAM], IrType::I64),
         RuntimeFnId::Rewind => ("$__rt_rewind", &[STREAM], IrType::I64),
+        RuntimeFnId::Fseek => (
+            "$__rt_fseek",
+            &[STREAM, IrType::I64, IrType::I64],
+            IrType::I64,
+        ),
         RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
         RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
         RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
@@ -3460,6 +3470,8 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
         // `file_get_contents` and `file_put_contents`, which name themselves in their own
         // diagnostics. The flag tells it whose message to emit.
         warns: matches!(target, RuntimeFnId::Fopen),
+        // PHP's SEEK_SET. Every other file builtin here takes all of its operands.
+        optional_tail: matches!(target, RuntimeFnId::Fseek).then_some(0),
     })
 }
 
@@ -3513,7 +3525,8 @@ fn file_builtin_shape_issue(
             }
         }
     }
-    if call.operands.len() != file.operands.len() {
+    let lowest_arity = file.operands.len() - usize::from(file.optional_tail.is_some());
+    if call.operands.len() != file.operands.len() && call.operands.len() != lowest_arity {
         return Some(format!(
             "expected {} operands, got {}",
             file.operands.len(),
@@ -3521,6 +3534,10 @@ fn file_builtin_shape_issue(
         ));
     }
     for (index, expected) in file.operands.iter().enumerate() {
+        // The optional trailing operand is supplied by the lowering when the call omits it.
+        if index >= call.operands.len() {
+            break;
+        }
         let Some(value) = call.operands.get(index).and_then(|id| function.value(*id)) else {
             return Some(format!("operand #{index} is missing from the value table"));
         };
@@ -3551,6 +3568,16 @@ fn file_builtin_shape_issue(
 /// Lowers one file builtin: load every operand in order, call the helper, store the result.
 fn lower_file_builtin(ctx: &mut FnCtx, inst: &Instruction, file: FileBuiltin) -> Result<()> {
     for (index, expected) in file.operands.iter().enumerate() {
+        if index >= inst.operands.len() {
+            // The call omitted the trailing defaulted argument (`fseek($h, $off)`), so the
+            // registry's default is pushed here. Any other shortfall was already refused.
+            let default = file
+                .optional_tail
+                .ok_or_else(|| WasmError::Unsupported("file builtin is missing an operand".into()))?;
+            ctx.fb
+                .ins(&format!("i64.const {default}"), "defaulted trailing argument");
+            break;
+        }
         let value = operand(inst, index)?;
         ctx.emit_load_value(value)?;
         // The stream-taking helpers work on a raw fd, so a handle is resolved here rather than
@@ -3594,6 +3621,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Feof
             | RuntimeFnId::Ftell
             | RuntimeFnId::Rewind
+            | RuntimeFnId::Fseek
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
             | RuntimeFnId::Fclose
@@ -7777,6 +7805,16 @@ mod tests {
             (
                 RuntimeFnId::FilePutContents,
                 &[IrType::Str, IrType::Str][..],
+                IrType::I64,
+            ),
+            (RuntimeFnId::Feof, &[STREAM][..], IrType::I64),
+            (RuntimeFnId::Ftell, &[STREAM][..], IrType::I64),
+            (RuntimeFnId::Rewind, &[STREAM][..], IrType::I64),
+            // `fseek` takes the whence as a third operand; PHP's SEEK_* constants are the same
+            // 0/1/2 WASI uses, so it passes straight through for a real fd.
+            (
+                RuntimeFnId::Fseek,
+                &[STREAM, IrType::I64, IrType::I64][..],
                 IrType::I64,
             ),
         ] {

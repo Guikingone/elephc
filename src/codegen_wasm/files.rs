@@ -51,6 +51,7 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_MEMSTREAM_CLOSE);
     wm.add_raw_func(RT_FEOF);
     wm.add_raw_func(RT_FTELL);
+    wm.add_raw_func(RT_FSEEK);
     wm.add_raw_func(RT_REWIND);
 }
 
@@ -267,10 +268,58 @@ const RT_FEOF: &str = r#"(func $__rt_feof (param $h i32) (result i64)
   (i64.const 0))
 "#;
 
-/// `__rt_ftell`: PHP's `ftell`, which only an in-memory stream can answer here.
+/// `__rt_ftell`: PHP's `ftell`, for either stream kind.
+///
+/// WASI has no `fd_tell`, but a ZERO-length seek from the current position answers the same
+/// question and is what the position is defined as. Measured on php-src 8.5.6: after writing
+/// ten bytes, `ftell` is 10 — so answering a constant 0 for a real fd, as this used to, was
+/// wrong for every file that had been read or written.
 const RT_FTELL: &str = r#"(func $__rt_ftell (param $h i32) (result i64)
   (if (i32.and (local.get $h) (i32.const 1073741824))
     (then (return (call $__rt_memstream_tell (local.get $h)))))
+  (if (i32.lt_s (local.get $h) (i32.const 0))
+    (then (return (i64.const 0))))
+  (if (i32.ne (call $wasi_fd_seek (local.get $h) (i64.const 0) (i32.const 1)
+        (i32.add (global.get $__float_scratch) (i32.const 12352)))
+      (i32.const 0))
+    (then (return (i64.const 0))))
+  (i64.load (i32.add (global.get $__float_scratch) (i32.const 12352))))
+"#;
+
+/// `__rt_fseek`: PHP's `fseek`, answering 0 on success and -1 on failure.
+///
+/// PHP's `SEEK_SET`/`SEEK_CUR`/`SEEK_END` are 0/1/2, which are the same numbers WASI's
+/// `fd_seek` uses, so the whence passes straight through for a real fd.
+///
+/// Measured on php-src 8.5.6, for the two cases that are not obvious:
+///   * a NEGATIVE absolute position fails (`-1`) and leaves the position UNTOUCHED;
+///   * seeking PAST the end succeeds — `fseek($m, 50)` answers 0 and `ftell` is then 50 —
+///     and the read there yields `""`.
+/// A successful seek also CLEARS eof, which `__rt_memstream_seek` already does.
+/// The whence arrives as an `i64` because the lowering passes PHP ints as i64; `fd_seek`
+/// takes it as an i32, so it is narrowed at the call rather than in the signature.
+const RT_FSEEK: &str = r#"(func $__rt_fseek (param $h i32) (param $off i64) (param $whence i64) (result i64)
+  (local $d i32) (local $target i64)
+  (if (i32.lt_s (local.get $h) (i32.const 0))
+    (then (return (i64.const -1))))                                 ;; not a stream at all
+  (if (i32.and (local.get $h) (i32.const 1073741824))
+    (then
+      (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
+      (local.set $target
+        (if (result i64) (i64.eq (local.get $whence) (i64.const 1))
+          (then (i64.add (i64.load (i32.add (local.get $d) (i32.const 16))) (local.get $off)))
+          (else (if (result i64) (i64.eq (local.get $whence) (i64.const 2))
+            (then (i64.add (i64.load (local.get $d)) (local.get $off)))
+            (else (local.get $off))))))
+      (if (i64.lt_s (local.get $target) (i64.const 0))
+        (then (return (i64.const -1))))                             ;; position left untouched
+      (call $__rt_memstream_seek (local.get $h) (local.get $target))
+      (return (i64.const 0))))
+  (if (i32.ne (call $wasi_fd_seek (local.get $h) (local.get $off)
+        (i32.wrap_i64 (local.get $whence))
+        (i32.add (global.get $__float_scratch) (i32.const 12352)))
+      (i32.const 0))
+    (then (return (i64.const -1))))
   (i64.const 0))
 "#;
 

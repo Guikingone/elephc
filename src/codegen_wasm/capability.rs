@@ -6996,6 +6996,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Feof
         | RuntimeFnId::Ftell
         | RuntimeFnId::Rewind
+        | RuntimeFnId::Fseek
         | RuntimeFnId::FileExists
         | RuntimeFnId::Unlink
         | RuntimeFnId::FileGetContents
@@ -7166,7 +7167,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fprintf
         | RuntimeFnId::Fputcsv
         | RuntimeFnId::Fscanf
-        | RuntimeFnId::Fseek
         | RuntimeFnId::Fsockopen
         | RuntimeFnId::Fstat
         | RuntimeFnId::Fsync
