@@ -439,6 +439,88 @@ var_dump(iconv('UTF-8', 'UTF-8', ''));
     );
 }
 
+/// `iconv_mime_decode()` decodes RFC 2047 encoded words in a MIME header. It was catalog-visible
+/// with no lowering at all, and `Symfony\Polyfill\Mbstring\Mbstring::mb_decode_mimeheader` calls it
+/// directly, so the whole `--web` build died on `builtin call iconv_mime_decode`.
+///
+/// Every expectation is pinned against `php -n` (PHP 8.5). The interesting rules are the ones a
+/// naive implementation gets wrong: linear whitespace SEPARATING two encoded words is dropped while
+/// literal text between them is kept, trailing whitespace after the last encoded word is dropped
+/// too, Q-encoding maps `_` to a space on top of `=XX`, and an encoded word with no closing `?=`
+/// discards the remainder of the header.
+#[test]
+fn test_iconv_mime_decode_decodes_rfc2047_encoded_words() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [
+    "Subject: =?UTF-8?B?SGVsbG8gV29ybGQ=?=",
+    "=?UTF-8?Q?Hello_World?=",
+    "=?ISO-8859-1?Q?Caf=E9?=",
+    "plain header, no encoded words",
+    "=?UTF-8?B?SGVsbG8=?= and =?UTF-8?B?V29ybGQ=?=",
+    "=?UTF-8?B?SGVsbG8=?=	=?UTF-8?B?V29ybGQ=?=",
+    "a =?UTF-8?Q?b=20c?= d",
+    "=?UTF-8?Q?a?= =?UTF-8?Q?b?=",
+    "=?UTF-8?Q?a?=x=?UTF-8?Q?b?=",
+    "x =?UTF-8?Q?a?= ",
+    "pre =?UTF-8?Q?tail",
+    "=?utf-8?b?SGVsbG8=?=",
+    "=?UTF-8?Q?=41=42?=",
+    "=?UTF-8?Q?keep=3Dthis?=",
+    "",
+];
+foreach ($cases as $i => $c) {
+    echo $i, ":", var_export(iconv_mime_decode($c, 2, "UTF-8"), true), "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "0:'Subject: Hello World'\n\
+         1:'Hello World'\n\
+         2:'Café'\n\
+         3:'plain header, no encoded words'\n\
+         4:'Hello and World'\n\
+         5:'HelloWorld'\n\
+         6:'a b c d'\n\
+         7:'ab'\n\
+         8:'axb'\n\
+         9:'x a'\n\
+         10:'pre '\n\
+         11:'Hello'\n\
+         12:'AB'\n\
+         13:'keep=this'\n\
+         14:''\n"
+    );
+}
+
+/// An encoded word this build cannot transcode is an ERROR, not a structural parse failure: under
+/// `ICONV_MIME_DECODE_CONTINUE_ON_ERROR` (2) it is re-emitted verbatim, and under modes 0 and 1 the
+/// whole call returns `false`. An unknown charset and an unknown encoding letter are both such
+/// errors. Pinned against `php -n` (PHP 8.5).
+#[test]
+fn test_iconv_mime_decode_error_modes() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(iconv_mime_decode("=?UTF-8?X?bogus?=", 2, "UTF-8"));
+var_dump(iconv_mime_decode("=?BOGUSCS?B?SGk=?=", 2, "UTF-8"));
+var_dump(iconv_mime_decode("=? UTF-8?B?SGk=?=", 2, "UTF-8"));
+var_dump(iconv_mime_decode("=?UTF-8?X?bogus?=", 0, "UTF-8"));
+var_dump(iconv_mime_decode("=?UTF-8?X?bogus?=", 1, "UTF-8"));
+var_dump(iconv_mime_decode("=?UTF-8?B?SGk=?="));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(17) \"=?UTF-8?X?bogus?=\"\n\
+         string(18) \"=?BOGUSCS?B?SGk=?=\"\n\
+         string(17) \"=? UTF-8?B?SGk=?=\"\n\
+         bool(false)\n\
+         bool(false)\n\
+         string(2) \"Hi\"\n"
+    );
+}
+
 /// `strncasecmp()` folds ASCII case on both truncations. Pinned against `php -n` (PHP 8.5).
 #[test]
 fn test_strncasecmp_returns_php_byte_difference() {

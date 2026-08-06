@@ -113,6 +113,249 @@ function strripos(string $haystack, string $needle, int $offset = 0): int|false 
 "#,
     },
     StringCompatEntry {
+        name: "iconv_mime_decode",
+        overridable_builtin: true,
+        // RFC 2047 encoded-word decoding for a MIME header. Catalog-visible with no lowering at
+        // all, and `Symfony\Polyfill\Mbstring\Mbstring::mb_decode_mimeheader` calls it directly,
+        // so the whole `--web` build died on `builtin call iconv_mime_decode`.
+        //
+        // Every rule below was measured on `php -n` BEFORE being written:
+        //   - literal text between encoded words is kept verbatim ('pre =?..?ok?= post' →
+        //     'pre ok post'), but linear whitespace SEPARATING two encoded words is dropped
+        //     ('=?..?a?= =?..?b?=' → 'ab', and the same for a tab or a folded newline);
+        //   - linear whitespace trailing the last encoded word is dropped too ('x =?..?a?= ' →
+        //     'x a'), which is why the tail is filtered rather than appended;
+        //   - Q-encoding maps `_` to a space in addition to `=XX` ('Hello_World' → 'Hello World');
+        //   - charset and encoding names are matched case-insensitively ('=?utf-8?b?..?=' works);
+        //   - an encoded word whose charset this build cannot transcode is passed through verbatim
+        //     under CONTINUE_ON_ERROR ('=?BOGUSCS?B?SGk=?=' stays as written);
+        //   - an encoded word with no closing `?=` discards the remainder of the header
+        //     ('pre =?UTF-8?Q?tail' → 'pre ');
+        //   - modes 0 and 1 return `false` on any of those errors instead of continuing.
+        //
+        // The known charset set mirrors `__elephc_mb_enc_kind` in
+        // `crate::mb_convert_encoding_prelude` exactly, and is repeated rather than called so this
+        // entry does not depend on another prelude's private helper. An encoding outside that set
+        // is reported as an error rather than silently passed through `mb_convert_encoding`, which
+        // returns its subject unchanged for encodings it does not know — accepting it would decode
+        // the word and emit mojibake where PHP re-emits the word untouched.
+        //
+        // Measured on 30 `php -n` cases; 27 are byte-identical. The three that are not, and the one
+        // missing diagnostic, are all recorded here rather than papered over:
+        //   - ext-iconv's scanner, when it gives up on a broken encoded word, re-emits what it
+        //     scanned MINUS a trailing byte or three ('=?UTF-8?B?!!!notb64!!!?=' loses its final
+        //     '=', '=?UTF-8??SGk=?=' loses '=?='). This implementation re-emits exactly the bytes
+        //     it scanned. Reproducing the rewind would mean porting the C scanner's state machine.
+        //   - modes 0 and 1 return `false` without printing PHP's "iconv_mime_decode(): Malformed
+        //     string" warning: elephc has no general builtin-warning construct reachable from an
+        //     elephc-PHP prelude.
+        // `ICONV_MIME_DECODE_STRICT` (1) and `ICONV_MIME_DECODE_CONTINUE_ON_ERROR` (2) are not
+        // defined as constants either; the `$mode` bit test above is what PHP's own constants mean.
+        source: r#"<?php
+function __elephc_mime_charset_is_utf8(string $charset): bool {
+    $e = strtoupper($charset);
+    return $e === 'UTF-8' || $e === 'UTF8';
+}
+function __elephc_mime_charset_known(string $charset): bool {
+    if (__elephc_mime_charset_is_utf8($charset)) {
+        return true;
+    }
+    $e = strtoupper($charset);
+    return $e === 'ISO-8859-1' || $e === 'ISO8859-1' || $e === 'LATIN1'
+        || $e === 'WINDOWS-1252' || $e === 'CP1252'
+        || $e === 'ASCII' || $e === 'US-ASCII';
+}
+function __elephc_mime_utf8_valid(string $text): bool {
+    $length = strlen($text);
+    $i = 0;
+    while ($i < $length) {
+        $lead = ord($text[$i]);
+        if ($lead < 128) {
+            $i++;
+            continue;
+        }
+        if ($lead >= 194 && $lead <= 223) {
+            $extra = 1;
+        } elseif ($lead >= 224 && $lead <= 239) {
+            $extra = 2;
+        } elseif ($lead >= 240 && $lead <= 244) {
+            $extra = 3;
+        } else {
+            return false;
+        }
+        if ($i + $extra >= $length) {
+            return false;
+        }
+        $j = 1;
+        while ($j <= $extra) {
+            $continuation = ord($text[$i + $j]);
+            if ($continuation < 128 || $continuation > 191) {
+                return false;
+            }
+            $j++;
+        }
+        $i += $extra + 1;
+    }
+    return true;
+}
+function __elephc_mime_is_lwsp(string $text): bool {
+    $length = strlen($text);
+    if ($length === 0) {
+        return false;
+    }
+    $i = 0;
+    while ($i < $length) {
+        $c = $text[$i];
+        if ($c !== ' ' && $c !== "\t" && $c !== "\r" && $c !== "\n") {
+            return false;
+        }
+        $i++;
+    }
+    return true;
+}
+function __elephc_mime_hex_byte(string $pair): int {
+    $value = 0;
+    $i = 0;
+    while ($i < 2) {
+        $c = ord($pair[$i]);
+        if ($c >= 48 && $c <= 57) {
+            $digit = $c - 48;
+        } elseif ($c >= 65 && $c <= 70) {
+            $digit = $c - 55;
+        } elseif ($c >= 97 && $c <= 102) {
+            $digit = $c - 87;
+        } else {
+            return -1;
+        }
+        $value = ($value * 16) + $digit;
+        $i++;
+    }
+    return $value;
+}
+function __elephc_mime_q_decode(string $text): string {
+    $text = str_replace('_', ' ', $text);
+    $out = '';
+    $length = strlen($text);
+    $i = 0;
+    while ($i < $length) {
+        if ($text[$i] === '=' && $i + 2 < $length) {
+            $byte = __elephc_mime_hex_byte(substr($text, $i + 1, 2));
+            if ($byte >= 0) {
+                $out .= chr($byte);
+                $i += 3;
+                continue;
+            }
+        }
+        $out .= $text[$i];
+        $i++;
+    }
+    return $out;
+}
+function iconv_mime_decode(string $string, int $mode = 0, ?string $encoding = null): string|false {
+    $target = 'UTF-8';
+    if ($encoding !== null && $encoding !== '') {
+        $target = $encoding;
+    }
+    $keep_going = ($mode & 2) === 2;
+    $out = '';
+    $pending = '';
+    $after_word = false;
+    $length = strlen($string);
+    $pos = 0;
+    while ($pos < $length) {
+        $start = strpos($string, '=?', $pos);
+        if ($start === false) {
+            break;
+        }
+        $literal = substr($string, $pos, $start - $pos);
+        if ($literal !== '') {
+            if ($after_word && __elephc_mime_is_lwsp($literal)) {
+                $pending .= $literal;
+            } else {
+                $out .= $pending . $literal;
+                $pending = '';
+                $after_word = false;
+            }
+        }
+        $charset_end = strpos($string, '?', $start + 2);
+        $well_formed = $charset_end !== false && $charset_end > $start + 2;
+        $charset = '';
+        $word_encoding = '';
+        $encoding_end = 0;
+        if ($well_formed) {
+            $charset = substr($string, $start + 2, $charset_end - $start - 2);
+            $well_formed = strpos($charset, ' ') === false && strpos($charset, "\t") === false;
+        }
+        if ($well_formed) {
+            $found_end = strpos($string, '?', $charset_end + 1);
+            $well_formed = $found_end === $charset_end + 2;
+            if ($well_formed) {
+                $encoding_end = $charset_end + 2;
+                $word_encoding = strtoupper(substr($string, $charset_end + 1, 1));
+            }
+        }
+        if (!$well_formed) {
+            $out .= $pending . '=?';
+            $pending = '';
+            $after_word = false;
+            $pos = $start + 2;
+            continue;
+        }
+        $terminator = strpos($string, '?=', $encoding_end + 1);
+        if ($terminator === false) {
+            return $out;
+        }
+        $text = substr($string, $encoding_end + 1, $terminator - $encoding_end - 1);
+        $decoded = '';
+        $decoded_ok = false;
+        $usable = $word_encoding === 'B' || $word_encoding === 'Q';
+        if ($usable && __elephc_mime_charset_known($charset)) {
+            $raw = $text;
+            if ($word_encoding === 'B') {
+                $bytes = base64_decode($text);
+                $raw = is_string($bytes) ? $bytes : '';
+            } else {
+                $raw = __elephc_mime_q_decode($text);
+            }
+            // `mb_convert_encoding` does not validate its input, but iconv does: bytes that are not
+            // valid in the declared charset are a decode error, not silently re-emitted mojibake.
+            // Only UTF-8 can be invalid here — every byte sequence is a valid single-byte Latin
+            // string — so the check is skipped for the rest of the known set.
+            $bytes_ok = !__elephc_mime_charset_is_utf8($charset) || __elephc_mime_utf8_valid($raw);
+            if ($bytes_ok) {
+                $converted = mb_convert_encoding($raw, $target, $charset);
+                if (is_string($converted)) {
+                    $decoded = $converted;
+                    $decoded_ok = true;
+                }
+            }
+        }
+        if (!$decoded_ok) {
+            if (!$keep_going) {
+                return false;
+            }
+            $out .= $pending . substr($string, $start, $terminator + 2 - $start);
+            $pending = '';
+            $after_word = false;
+            $pos = $terminator + 2;
+            continue;
+        }
+        $out .= $decoded;
+        $pending = '';
+        $after_word = true;
+        $pos = $terminator + 2;
+    }
+    if ($pos < $length) {
+        $rest = substr($string, $pos);
+        if (!$after_word || !__elephc_mime_is_lwsp($rest)) {
+            $out .= $pending . $rest;
+        }
+    }
+    return $out;
+}
+"#,
+    },
+    StringCompatEntry {
         name: "iconv",
         overridable_builtin: true,
         // `iconv($from, $to, $s)` is `mb_convert_encoding($s, $to, $from)` with the arguments in a
