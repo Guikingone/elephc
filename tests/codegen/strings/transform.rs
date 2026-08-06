@@ -370,6 +370,28 @@ var_dump(strripos("HELLO", "z"));
     assert_eq!(out, "int(3)\nint(2)\nbool(false)\n");
 }
 
+/// `iconv($from, $to, $s)` is `mb_convert_encoding($s, $to, $from)` with the arguments reordered.
+/// It had no EIR lowering at all; delegating means the two builtins cannot disagree. The
+/// `//TRANSLIT` / `//IGNORE` suffixes select the unrepresentable-character policy and are stripped
+/// rather than mistaken for part of the encoding name. Pinned against `php -n` (PHP 8.5).
+#[test]
+fn test_iconv_converts_between_utf8_and_latin1() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(iconv('UTF-8', 'UTF-8', 'abc'));
+var_dump(iconv('ISO-8859-1', 'UTF-8', "caf\xe9"));
+var_dump(strlen(iconv('UTF-8', 'ISO-8859-1', "caf\u{e9}")));
+var_dump(strlen(iconv('UTF-8', 'ISO-8859-1//IGNORE', "caf\u{e9}")));
+var_dump(strlen(iconv('UTF-8', 'ISO-8859-1//TRANSLIT', "caf\u{e9}")));
+var_dump(iconv('UTF-8', 'UTF-8', ''));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(3) \"abc\"\nstring(5) \"café\"\nint(4)\nint(4)\nint(4)\nstring(0) \"\"\n"
+    );
+}
+
 /// `strncasecmp()` folds ASCII case on both truncations. Pinned against `php -n` (PHP 8.5).
 #[test]
 fn test_strncasecmp_returns_php_byte_difference() {

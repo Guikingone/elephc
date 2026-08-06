@@ -46,6 +46,23 @@ const NORMALIZER_CONSTANTS: &[(&str, i64)] = &[
     ("NFKC_CF", 48),
 ];
 
+/// Returns whether a class-constant initializer reads a constant off `Normalizer` itself.
+///
+/// That is how `symfony/polyfill-intl-normalizer`'s stub writes every constant
+/// (`public const NFKC = \Normalizer::NFKC;`), aliasing the very class it stands in for. The
+/// initializer is therefore circular and never folds to an integer, so the declared value must be
+/// replaced with the authoritative ext-intl one rather than kept.
+fn is_self_referential_normalizer_const(value: &Expr) -> bool {
+    let ExprKind::ScopedConstantAccess {
+        receiver: crate::parser::ast::StaticReceiver::Named(name),
+        ..
+    } = &value.kind
+    else {
+        return false;
+    };
+    php_symbol_key(&name.as_canonical()) == php_symbol_key("Normalizer")
+}
+
 /// Builds a public integer class constant for the synthetic `Normalizer` class.
 fn int_class_const(name: &str, value: i64) -> ClassConst {
     ClassConst {
@@ -71,15 +88,29 @@ pub(crate) fn inject_builtin_normalizer(class_map: &mut HashMap<String, Flattene
         .values_mut()
         .find(|class| php_symbol_key(&class.name) == normalizer_key)
     {
-        // A `Normalizer` already exists (the polyfill stub): add only the constants it
-        // lacks so the checker and codegen see the full ext-intl set. Do not re-inject.
+        // A `Normalizer` already exists (the polyfill stub): add the constants it lacks, and
+        // REPLACE any it declares as a self-reference, so the checker and codegen see the full
+        // ext-intl set with real integer values.
+        //
+        // `symfony/polyfill-intl-normalizer`'s stub writes each constant as
+        // `public const NFKC = \Normalizer::NFKC;` — an alias of the very class it is standing in
+        // for. Kept as-is that initializer is circular, so it does not fold to an integer, and the
+        // value reaching `normalizer_normalize(?string $string, ?int $form)`'s `?int` parameter
+        // typed as `Str` — which codegen refused with
+        // `conversion from PHP type Str to PHP type TaggedScalar`. The polyfill DEFINES these
+        // constants to be the ext-intl values, and `NORMALIZER_CONSTANTS` holds exactly those, so
+        // substituting the authoritative value is what the stub itself asks for.
         for (name, value) in NORMALIZER_CONSTANTS {
-            if !normalizer
+            match normalizer
                 .constants
-                .iter()
-                .any(|constant| constant.name == *name)
+                .iter_mut()
+                .find(|constant| constant.name == *name)
             {
-                normalizer.constants.push(int_class_const(name, *value));
+                Some(existing) if is_self_referential_normalizer_const(&existing.value) => {
+                    *existing = int_class_const(name, *value);
+                }
+                Some(_) => {}
+                None => normalizer.constants.push(int_class_const(name, *value)),
             }
         }
         return;

@@ -18631,6 +18631,15 @@ fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) 
                 fallback_expr_type(expr)
             }
         }
+        // A class constant must be typed the way `lower_scoped_constant` resolves it. The
+        // syntactic fallback answers `Str` for EVERY `Foo::BAR` (the `::class`-is-a-string
+        // default), so a branch merge over two INTEGER class constants —
+        // `$c ? Normalizer::NFKC : Normalizer::NFC` — typed the temp `Str`, and passing it to a
+        // `?int` parameter reached codegen as `conversion from PHP type Str to PHP type
+        // TaggedScalar`.
+        ExprKind::ScopedConstantAccess { receiver, name } => {
+            scoped_constant_merge_type(ctx, receiver, name, expr, 0)
+        }
         ExprKind::Ternary {
             then_expr,
             else_expr,
@@ -18664,6 +18673,48 @@ fn materialized_expr_type_for_merge(ctx: &LoweringContext<'_, '_>, expr: &Expr) 
             .unwrap_or_else(|| fallback_expr_type(expr)),
         _ => fallback_expr_type(expr),
     }
+}
+
+/// Returns the branch-merge type of a `Foo::BAR` class constant, resolved from its initializer.
+///
+/// Mirrors `scoped_constant_value_type_for_ir` (which answers the same question for a hash slot,
+/// and is array-storage-normalized), but keeps the plain value type a merge temp needs. An enum
+/// case lowers to the case object singleton, so it merges as `Mixed`.
+///
+/// A constant whose initializer is ITSELF a class constant is followed, so a stub that aliases
+/// another class's constant still resolves to the underlying type instead of falling back to the
+/// syntactic `Str`. `depth` bounds that walk so a cyclic alias terminates.
+fn scoped_constant_merge_type(
+    ctx: &LoweringContext<'_, '_>,
+    receiver: &StaticReceiver,
+    member: &str,
+    value: &Expr,
+    depth: usize,
+) -> PhpType {
+    const MAX_ALIAS_DEPTH: usize = 4;
+    let class_name = scoped_constant_receiver_name(ctx, receiver);
+    let normalized = class_name.trim_start_matches('\\');
+    if ctx
+        .enums
+        .get(normalized)
+        .is_some_and(|enum_info| enum_info.cases.iter().any(|case| case.name == member))
+    {
+        return PhpType::Mixed;
+    }
+    let Some(const_expr) = ctx.scoped_constant_value(&class_name, member) else {
+        return fallback_expr_type(value);
+    };
+    if let ExprKind::ScopedConstantAccess {
+        receiver: inner_receiver,
+        name: inner_name,
+    } = &const_expr.kind
+    {
+        if depth >= MAX_ALIAS_DEPTH {
+            return fallback_expr_type(value);
+        }
+        return scoped_constant_merge_type(ctx, inner_receiver, inner_name, &const_expr, depth + 1);
+    }
+    normalize_value_php_type(infer_expr_type_syntactic(&const_expr))
 }
 
 /// Returns the hash type yielded by the by-reference array-literal desugar, if `expr` is one.

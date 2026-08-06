@@ -111,9 +111,12 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     // register_shutdown_function prelude (usage inside PSR-4 autoloaded files is detected too).
     let resolved = elephc::resolver::hoist_conditional_function_declarations(resolved);
     let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
-    let resolved = elephc::mb_convert_encoding_prelude::inject_if_used(resolved);
     let resolved = elephc::explode_limit_prelude::inject_if_used(resolved);
     let resolved = elephc::string_compat_prelude::inject_if_used(resolved);
+    // Mirror `pipeline::compile`'s ORDER: `string_compat`'s `iconv` body calls
+    // `mb_convert_encoding`, so the mbstring prelude must be considered AFTER it or that
+    // reference is introduced too late to be seen.
+    let resolved = elephc::mb_convert_encoding_prelude::inject_if_used(resolved);
     let resolved = elephc::get_defined_constants_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_ini_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_str_prelude::inject_if_used(resolved);

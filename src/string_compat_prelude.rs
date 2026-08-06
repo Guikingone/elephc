@@ -113,6 +113,34 @@ function strripos(string $haystack, string $needle, int $offset = 0): int|false 
 "#,
     },
     StringCompatEntry {
+        name: "iconv",
+        overridable_builtin: true,
+        // `iconv($from, $to, $s)` is `mb_convert_encoding($s, $to, $from)` with the arguments in a
+        // different order: both were verified to produce byte-identical output on `php -n` for the
+        // encodings elephc converts between. Delegating means the two builtins cannot disagree, and
+        // `iconv` inherits `mb_convert_encoding`'s documented gap (an encoding outside the UTF-8 /
+        // single-byte-Latin set returns the subject unchanged rather than inventing a conversion).
+        //
+        // The `//TRANSLIT` and `//IGNORE` suffixes select what iconv does with a character the
+        // target encoding cannot represent. elephc substitutes `?` either way — which is what
+        // mbstring does without an explicit substitute character — so the suffix is stripped rather
+        // than being mistaken for part of the encoding name.
+        source: r#"<?php
+function iconv(string $from_encoding, string $to_encoding, string $string): string|false {
+    $target = $to_encoding;
+    $marker = strpos($target, '//');
+    if ($marker !== false) {
+        $target = substr($target, 0, $marker);
+    }
+    $converted = mb_convert_encoding($string, $target, $from_encoding);
+    if (is_string($converted)) {
+        return $converted;
+    }
+    return false;
+}
+"#,
+    },
+    StringCompatEntry {
         name: "strncmp",
         overridable_builtin: true,
         // Comparing at most `$length` leading bytes is exactly comparing the two strings truncated

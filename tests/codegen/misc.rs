@@ -549,6 +549,62 @@ echo t();
     assert_eq!(out, "setunsetDEF");
 }
 
+/// A branch merge over two class constants must type from the constants' VALUES.
+///
+/// The syntactic fallback answers `Str` for every `Foo::BAR` (the `::class`-is-a-string default),
+/// so `$c ? K::A : K::B` over two INTEGER constants typed its merge temp `Str`. Passing that to a
+/// `?int` parameter — whose slot is the inline tagged-scalar shape — reached codegen as
+/// `conversion from PHP type Str to PHP type TaggedScalar`, which is exactly how
+/// `Symfony\Component\String\AbstractUnicodeString::folded` failed on
+/// `$compat ? Normalizer::NFKC : Normalizer::NFC`.
+#[test]
+fn test_ternary_over_int_class_constants_into_a_nullable_int_param() {
+    let out = compile_and_run(
+        r#"<?php
+class K { public const A = 16; public const B = 32; }
+function form(?int $f): int { return $f === null ? -1 : $f; }
+function flag(bool $b): bool { return $b; }
+$c = flag(true);
+echo form($c ? K::B : K::A), "|";
+$d = flag(false);
+echo form($d ? K::B : K::A), "|";
+echo form(null);
+"#,
+    );
+    assert_eq!(out, "32|16|-1");
+}
+
+/// The same merge over two STRING class constants still types as a string.
+#[test]
+fn test_ternary_over_string_class_constants_stays_a_string() {
+    let out = compile_and_run(
+        r#"<?php
+class K { public const A = 'aa'; public const B = 'bb'; }
+function flag(bool $b): bool { return $b; }
+$c = flag(true);
+echo strtoupper($c ? K::B : K::A);
+"#,
+    );
+    assert_eq!(out, "BB");
+}
+
+/// A constant that ALIASES another class's constant resolves through the alias rather than
+/// falling back to the syntactic string default.
+#[test]
+fn test_ternary_over_aliased_int_class_constants() {
+    let out = compile_and_run(
+        r#"<?php
+class Base { public const A = 4; public const B = 8; }
+class Alias { public const A = Base::A; public const B = Base::B; }
+function form(?int $f): int { return $f === null ? -1 : $f; }
+function flag(bool $b): bool { return $b; }
+$c = flag(true);
+echo form($c ? Alias::B : Alias::A);
+"#,
+    );
+    assert_eq!(out, "8");
+}
+
 /// `in_array()` with a boxed Mixed needle against a boxed Mixed array had no lowering at all
 /// ("unsupported EIR backend feature: in_array needle PHP type Mixed for indexed-array element PHP
 /// type Mixed"). Both modes now compare cell against cell with the same helpers elephc's own
