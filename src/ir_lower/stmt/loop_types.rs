@@ -78,24 +78,39 @@ pub(super) fn prewiden_loop_carried_locals(
 /// only for scalar entry types, where boxing is cheap and the wrong-cast miscompile actually occurs;
 /// for non-scalar entries an unresolved assignment is assumed type-preserving to avoid boxing object
 /// or array locals (which would route through the slower `Mixed` dispatch paths).
+///
+/// A `null` entry is a scalar entry here, and any assignment of a non-null type widens it.
+/// `widened_local_storage_type` deliberately folds `Void`/`Never` into the `Int`/`Bool` category —
+/// they share the single-machine-word storage class — and so answers `incoming` rather than `Mixed`
+/// for `null` reassigned to an `int`. That answer is right about *storage* and wrong about *type*:
+/// PHP's `null` is not an integer, and a read placed textually before the reassignment stays typed
+/// `null` while the slot holds the previous iteration's int. That is precisely the stale-type leak
+/// this module exists to prevent, so `null` entries are tested against the storage category
+/// directly instead of through the storage-widening lattice.
 fn reassignment_widens_to_mixed(
     entry_type: &PhpType,
     entry_repr: &PhpType,
     estimates: &[Option<PhpType>],
 ) -> bool {
-    let scalar_entry = matches!(
-        entry_repr,
-        PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::TaggedScalar
-    );
+    let null_entry = is_null_category(entry_repr);
+    let scalar_entry = null_entry
+        || matches!(
+            entry_repr,
+            PhpType::Int | PhpType::Float | PhpType::Str | PhpType::Bool | PhpType::TaggedScalar
+        );
     for estimate in estimates {
         match estimate {
             Some(assigned) => {
+                let assigned_repr = assigned.codegen_repr();
                 // An indexed array literal reassigned to an assoc-array local (or vice versa) is
                 // reconciled to the local's array storage by `contextualize_array_assignment`, so
                 // it never widens the slot to Mixed even though `widened_local_storage_type` reports
                 // Mixed for the raw `Array`/`AssocArray` mismatch. Treat both as one array category.
-                if is_array_category(entry_repr) && is_array_category(&assigned.codegen_repr()) {
+                if is_array_category(entry_repr) && is_array_category(&assigned_repr) {
                     continue;
+                }
+                if null_entry && !is_null_category(&assigned_repr) {
+                    return true;
                 }
                 if matches!(widened_local_storage_type(entry_type, assigned), PhpType::Mixed) {
                     return true;
@@ -109,6 +124,11 @@ fn reassignment_widens_to_mixed(
         }
     }
     false
+}
+
+/// Returns true for the storage categories that carry no value of their own (PHP `null`).
+fn is_null_category(ty: &PhpType) -> bool {
+    matches!(ty, PhpType::Void | PhpType::Never)
 }
 
 /// Returns true for the array-shaped storage categories (`array<...>` and keyed `array<k, v>`).
@@ -212,6 +232,22 @@ fn collect_stmt(
         } => {
             collect_body(ctx, try_body, assigned);
             for catch in catches {
+                if let Some(variable) = &catch.variable {
+                    let caught = if catch.exception_types.len() == 1 {
+                        PhpType::Object(
+                            catch.exception_types[0]
+                                .as_str()
+                                .trim_start_matches('\\')
+                                .to_string(),
+                        )
+                    } else {
+                        PhpType::Object("Throwable".to_string())
+                    };
+                    assigned
+                        .entry(variable.clone())
+                        .or_default()
+                        .push(Some(caught));
+                }
                 collect_body(ctx, &catch.body, assigned);
             }
             if let Some(finally_body) = finally_body {

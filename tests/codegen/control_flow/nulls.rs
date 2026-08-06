@@ -324,3 +324,72 @@ echo f(['class' => 'kept'], 'other', true), "\n";
     );
     assert_eq!(out, "hit\nkept\n");
 }
+
+/// A `null` accumulator reassigned to an `int` inside a loop must widen for the whole loop.
+///
+/// PHP's `null` occupies one machine word just like an int, so `widened_local_storage_type`
+/// folded `Void` into the integer category and answered "no widening" — the pre-loop widening
+/// pass then left `$best` typed `null` at the read that is placed textually BEFORE the
+/// reassignment. On the second iteration that slot really holds the int written by the first,
+/// so the read carried a stale type. It surfaced loudly here, as an EIR refusal
+/// (`icmp for PHP type Void`), which is the only reason it was not silent.
+///
+/// This is `Symfony\Component\String\AbstractString::afterLast`, whose `$i = null` is compared
+/// with `$j >= $i` before being assigned from the `int $offset` parameter. php-verified
+/// against `php -n`: `7` then `-1`.
+#[test]
+fn test_null_accumulator_reassigned_to_int_widens_across_the_loop_back_edge() {
+    let out = compile_and_run(
+        r#"<?php
+function best(array $xs, int $o): int
+{
+    $best = null;
+    foreach ($xs as $x) {
+        if ($o >= $best) {
+            $best = $o;
+        }
+    }
+    if (null === $best) {
+        return -1;
+    }
+    return $best;
+}
+echo best([1, 2], 7), "\n";
+echo best([], 7), "\n";
+"#,
+    );
+    assert_eq!(out, "7\n-1\n");
+}
+
+/// The same shape assigning through a second `int` local, which is how Symfony writes it
+/// (`$i = $offset = $j`). Reassigning `$best` from a value whose type came out of another
+/// declared-`int` local must widen the null accumulator exactly as a direct assignment does.
+/// php-verified against `php -n`: `5` then `-1`.
+#[test]
+fn test_null_accumulator_reassigned_through_another_int_local_widens() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(string $n, int $offset): ?int {
+    return $n === "" ? null : strlen($n) + $offset;
+}
+function last(array $needles, int $offset = 0): int
+{
+    $i = null;
+    foreach ($needles as $n) {
+        $n = (string) $n;
+        $j = pick($n, $offset);
+        if (null !== $j && $j >= $i) {
+            $i = $offset = $j;
+        }
+    }
+    if (null === $i) {
+        return -1;
+    }
+    return $i;
+}
+echo last(["ab", "cde", ""]), "\n";
+echo last([""]), "\n";
+"#,
+    );
+    assert_eq!(out, "5\n-1\n");
+}
