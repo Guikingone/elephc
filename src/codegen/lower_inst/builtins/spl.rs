@@ -705,15 +705,43 @@ fn iterator_apply_array_items(
 }
 
 /// Loads the single object operand into the canonical integer result register.
+///
+/// Boxed gradual operands are unboxed and tag-checked at runtime. An object payload is borrowed
+/// for the duration of the builtin call; every other payload throws the PHP `TypeError` naming
+/// its concrete runtime type.
 fn load_object_operand(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
     let value = expect_operand(inst, 0)?;
-    let ty = ctx.load_value_to_result(value)?;
+    let ty = ctx.load_value_to_result(value)?.codegen_repr();
     match ty {
         PhpType::Object(_) => Ok(()),
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox"); // tag=result, payload_lo=first unbox payload register
+            let object_label = ctx.next_label("spl_object_identity_mixed_object");
+            let wrong_type_label = ctx.next_label("spl_object_identity_mixed_wrong_type");
+            super::emit_branch_on_gettype_mixed_tag(ctx, 6, &object_label); // tag 6 = object
+            abi::emit_jump(ctx.emitter, &wrong_type_label);
+            let message_for = |given: &str| {
+                format!(
+                    "{}(): Argument #1 ($object) must be of type object, {} given",
+                    name, given
+                )
+            };
+            super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+                ctx,
+                &wrong_type_label,
+                &message_for,
+            );
+            ctx.emitter.label(&object_label);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"), // borrow the unboxed object pointer
+                Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"), // borrow the unboxed object pointer
+            }
+            Ok(())
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "{} for PHP type {:?}",
             name,
@@ -775,6 +803,15 @@ fn emit_to_array_loaded_source(
         }
         PhpType::Iterable => emit_to_array_loaded_iterable(ctx, preserve_keys),
         PhpType::Object(_) => emit_to_array_loaded_traversable_object(ctx, preserve_keys),
+        // A gradual boundary: the source is a boxed Mixed cell whose payload is the array, hash or
+        // Traversable object. Unboxing it to the concrete heap pointer yields exactly the shape the
+        // `Iterable` path already dispatches on (`__rt_heap_kind`), so the two share one
+        // implementation instead of growing a parallel one. A PHP `null` payload takes the same
+        // typed-argument fatal a statically-typed `iterable` parameter would.
+        PhpType::Mixed | PhpType::Union(_) => {
+            super::super::emit_unbox_mixed_arg_to_concrete_heap(ctx);
+            emit_to_array_loaded_iterable(ctx, preserve_keys)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "iterator_to_array for PHP type {:?}",
             other
@@ -1194,6 +1231,15 @@ fn emit_to_array_loaded_iterable(
     abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     emit_clone_loaded_array(ctx);
     emit_loaded_runtime_indexed_array_as_mixed(ctx);
+    if preserve_keys {
+        // The checker types a non-array `iterable` source's preserve-keys result an assoc hash
+        // (`iterator_to_array_static_return_type`), and the hash and object branches above both
+        // produce hash storage. A runtime-INDEXED payload has to be promoted to match, or the
+        // caller reads the result through the hash path and every element answers
+        // `Warning: Undefined array key`. Keys `0..n-1` are preserved by the promotion, which is
+        // what `iterator_to_array($indexed)` returns in PHP.
+        super::super::arrays::emit_loaded_indexed_array_to_mixed_hash(ctx);
+    }
 
     ctx.emitter.label(&done);
     Ok(())

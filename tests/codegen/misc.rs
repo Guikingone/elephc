@@ -549,6 +549,47 @@ echo t();
     assert_eq!(out, "setunsetDEF");
 }
 
+/// A FLOAT array key truncates to an integer one, as PHP does. `materialize_hash_key_*` already
+/// emitted that truncation for every other key consumer; only `array_get_mixed_key`'s gate
+/// refused it ("array_get_mixed_key key PHP type Float").
+#[test]
+fn test_float_key_reads_the_truncated_integer_element() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $v): mixed { return $v; }
+$m = boxed([0 => 'zero', 1 => 'one', 2 => 'two']);
+$exact = 1.0;
+$lossy = 2.9;
+echo $m[$exact], "|", $m[$lossy];
+"#,
+    );
+    assert_eq!(out, "one|two");
+}
+
+/// `iterator_to_array()` on a boxed Mixed source had no lowering ("iterator_to_array for PHP type
+/// Mixed"). Unboxing to the concrete heap pointer yields exactly the shape the `iterable` path
+/// already dispatches on, so an indexed array, an associative hash and a Traversable object all
+/// work through one implementation. Pinned against `php -n`.
+#[test]
+fn test_iterator_to_array_of_a_boxed_mixed_source() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $v): mixed { return $v; }
+
+$indexed = iterator_to_array(boxed(['a', 'b']));
+echo count($indexed), "|", $indexed[0], $indexed[1], "|";
+
+$assoc = iterator_to_array(boxed(['x' => 1, 'y' => 2]));
+echo count($assoc), "|", $assoc['x'], $assoc['y'], "|";
+
+function gen(): \Generator { yield 'g1'; yield 'g2'; }
+$fromGen = iterator_to_array(boxed(gen()));
+echo count($fromGen), "|", $fromGen[0], $fromGen[1];
+"#,
+    );
+    assert_eq!(out, "2|ab|2|12|2|g1g2");
+}
+
 /// A branch merge over two class constants must type from the constants' VALUES.
 ///
 /// The syntactic fallback answers `Str` for every `Foo::BAR` (the `::class`-is-a-string default),

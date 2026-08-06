@@ -78,6 +78,72 @@ pub(super) fn lower_array_len(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Lowers a by-reference variadic spread element into an invoker marker.
+///
+/// Mixed variadic arrays can already contain markers from an earlier by-reference call. Those
+/// markers are retained verbatim so forwarding remains attached to the original variable. A
+/// plain Mixed element instead becomes a marker whose cell pointer addresses the source array
+/// slot, matching PHP's `callee(...$array)` write-through behavior.
+pub(super) fn lower_invoker_array_elem_ref_arg(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let index = expect_operand(inst, 1)?;
+    let array_ty = ctx.value_php_type(array)?;
+    let elem_ty = indexed_array_element_type(&array_ty, inst)?.codegen_repr();
+    if elem_ty != PhpType::Mixed {
+        return Err(CodegenIrError::unsupported(format!(
+            "invoker array-element reference for {:?}",
+            elem_ty
+        )));
+    }
+
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let array_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let slot_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let marker_tag_reg = abi::tertiary_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(index, result_reg)?;
+    ctx.load_value_to_reg(array, array_reg)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header before addressing its Mixed slots
+            ctx.emitter.instruction(&format!("add {}, {}, {}, lsl #3", slot_reg, array_reg, result_reg)); // compute the selected boxed-Mixed pointer slot address
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header before addressing its Mixed slots
+            ctx.emitter.instruction(&format!("lea {}, [{} + {} * 8]", slot_reg, array_reg, result_reg)); // compute the selected boxed-Mixed pointer slot address
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, result_reg, slot_reg, 0);
+
+    let make_marker = ctx.next_label("array_elem_ref_make_marker");
+    let existing_marker = ctx.next_label("array_elem_ref_existing_marker");
+    let done = ctx.next_label("array_elem_ref_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz {}, {}", result_reg, make_marker)); // null values have no box header and still need a reference marker
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // null values have no box header and still need a reference marker
+            ctx.emitter.instruction(&format!("jz {}", make_marker));                 // avoid reading a tag through a null Mixed pointer
+        }
+    }
+    abi::emit_load_from_address(ctx.emitter, array_reg, result_reg, 0);
+    emit_branch_if_invoker_ref_cell_tag(ctx, array_reg, &existing_marker);
+
+    ctx.emitter.label(&make_marker);
+    abi::emit_load_int_immediate(ctx.emitter, marker_tag_reg, INVOKER_ARG_REF_CELL_TAG);
+    abi::emit_load_int_immediate(ctx.emitter, array_reg, runtime_value_tag(&PhpType::Mixed) as i64);
+    emit_box_runtime_payload_as_mixed(ctx.emitter, marker_tag_reg, slot_reg, array_reg);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&existing_marker);
+    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
 /// Lowers typed indexed-array widening to boxed Mixed slots.
 ///
 /// Null and in-band null-container-sentinel inputs (missed array reads that a
@@ -253,6 +319,72 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Promotes the indexed array in the integer result register to Mixed-valued hash storage,
+/// keyed `0..n-1`, leaving the fresh hash in the same register.
+///
+/// Extracted from `lower_array_to_hash`'s convert path so the `iterator_to_array()` iterable
+/// emitter reaches the same conversion instead of growing a second one: its indexed branch
+/// produced an INDEXED array while the checker types the result an assoc hash, so every
+/// `iterator_to_array()` over a runtime-indexed `iterable` answered `Warning: Undefined array key`
+/// on each element.
+///
+/// The source array and the temporary empty hash are both released: `__rt_array_hash_union`
+/// borrows its two operands and returns a fresh result.
+pub(super) fn emit_loaded_indexed_array_to_mixed_hash(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 16);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "x1",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+            ctx.emitter.instruction("mov x1, x0");                              // pass the empty temporary hash as the right union operand
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_push_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the empty temporary hash from the stack
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            ctx.emitter.instruction("ldr x0, [sp, #32]");                       // reload the temporary source indexed array from the stack
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_pop_reg(ctx.emitter, "x1");
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // stage the source indexed array in the hash-union receiver register
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_load_int_immediate(ctx.emitter, "rdi", 16);
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                "rsi",
+                runtime_value_tag(&PhpType::Mixed) as i64,
+            );
+            abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the empty temporary hash as the right union operand
+            abi::emit_pop_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            abi::emit_push_reg(ctx.emitter, "rsi");
+            abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the empty temporary hash from the stack
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");           // reload the temporary source indexed array from the stack
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the promoted hash to the Mixed-entry conversion helper
+            abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+        }
+    }
 }
 
 /// Lowers an indexed-array element read with PHP null-sentinel fallback on misses.
@@ -497,6 +629,12 @@ pub(super) fn lower_array_get_mixed_key(
             | PhpType::Str
             | PhpType::Int
             | PhpType::Bool
+            // PHP truncates a float array key to an integer one, which
+            // `materialize_hash_key_*` already emits (`fcvtzs`) for every other key consumer —
+            // only this gate refused it. The truncation matches PHP's VALUE semantics; PHP
+            // additionally raises `Deprecated: Implicit conversion from float N to int loses
+            // precision` when the float has a fractional part, which elephc does not yet emit.
+            | PhpType::Float
             | PhpType::Void
             | PhpType::Never
     ) {

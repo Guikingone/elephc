@@ -7703,7 +7703,7 @@ fn emit_unbox_mixed_to_owned_refcounted_result(ctx: &mut FunctionContext<'_>, re
 /// register. The payload is passed *borrowed* — exactly like a statically-typed object/array
 /// argument — so the owning `Mixed` cell, not this call, releases it. This reuses the shared
 /// `__rt_mixed_unbox` machinery rather than introducing a parallel unbox path.
-fn emit_unbox_mixed_arg_to_concrete_heap(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_unbox_mixed_arg_to_concrete_heap(ctx: &mut FunctionContext<'_>) {
     let non_null = ctx.next_label("mixed_arg_unbox_non_null");
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");                      // unbox the Mixed cell: runtime tag → result reg, payload → low payload reg
     let tag_reg = abi::int_result_reg(ctx.emitter);

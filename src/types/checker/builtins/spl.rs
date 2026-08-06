@@ -44,6 +44,13 @@ fn iterator_source_supported(checker: &Checker, ty: &PhpType) -> bool {
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => true,
         PhpType::Object(name) => traversable_object_supported(checker, name),
+        // Gradual boundary: a boxed `Mixed`/union source carries its real shape at RUNTIME, and
+        // the backend now unboxes it to a concrete heap pointer and dispatches on the heap kind —
+        // the same array / hash / Traversable-object split a statically-typed `iterable` takes
+        // (`lower_inst::builtins::spl::emit_to_array_loaded_source`). Refusing it here would only
+        // reject a program the compiler can in fact translate; a payload that is neither an array
+        // nor Traversable takes the runtime typed-argument fatal, as PHP raises a TypeError.
+        PhpType::Mixed | PhpType::Union(_) => true,
         _ => false,
     }
 }
