@@ -3,6 +3,10 @@
 
 set -euo pipefail
 
+# Several PDO fixtures lower the full generated prelude recursively. Rust's default 2 MiB
+# libtest worker stack is too small when many tests share one process, especially on AArch64.
+export RUST_MIN_STACK=${RUST_MIN_STACK:-33554432}
+
 if [[ $# -ne 3 ]]; then
     echo "usage: run_pdo_codegen_shard.sh <test-binary> <shard> <shard-count>" >&2
     exit 2
