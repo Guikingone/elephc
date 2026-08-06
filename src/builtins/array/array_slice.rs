@@ -38,9 +38,28 @@ const fn array_slice_semantics() -> BuiltinSemantics {
     semantics
 }
 
-/// Returns the representation-safe indexed array type for typed and boxed source arrays.
-fn eir_result_type(_input: &BuiltinSemanticInput<'_>) -> PhpType {
-    PhpType::Array(Box::new(PhpType::Mixed))
+/// Returns the indexed array type the slice runtime actually produces.
+///
+/// This MUST agree with `check` below on the element type. It used to hard-code
+/// `array<mixed>` while `check` preserved the source element type, and the two are read by
+/// different consumers: codegen widened the result's slots to boxed cells on the EIR type, while
+/// a caller read elements back using the CHECKER's type. Reading a raw `Str`/`Int` slot out of an
+/// array that really held boxed cells loaded the box POINTER as the payload, so an
+/// `array_slice()` result crossing a function return read back empty (strings) or as a heap
+/// address (ints) — silently, with `count()` still correct.
+///
+/// A slice re-emits the very elements it was handed, so the element type is the source's; only a
+/// boxed `Mixed`/`Union` source (whose runtime layout is genuinely boxed) yields `array<mixed>`.
+fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
+    let mixed_elements = PhpType::Array(Box::new(PhpType::Mixed));
+    let Some(source) = input.arg_types.first() else {
+        return mixed_elements;
+    };
+    match source.codegen_repr() {
+        PhpType::Array(elem) => PhpType::Array(elem),
+        PhpType::AssocArray { value, .. } => PhpType::Array(value),
+        _ => mixed_elements,
+    }
 }
 
 /// Returns the slice's array type for an `array_slice` call.

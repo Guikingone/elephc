@@ -59,8 +59,8 @@ const CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS: &[&str] = &[
     "cli_set_process_title",
     "connection_aborted",
     "constant",
-    "ctype_upper",
     "current",
+    "debug_backtrace",
     "decbin",
     "dechex",
     "decoct",
@@ -69,6 +69,7 @@ const CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS: &[&str] = &[
     "error_log",
     "error_reporting",
     "escapeshellarg",
+    "extract",
     "extension_loaded",
     "filter_var",
     "flush",
@@ -96,6 +97,7 @@ const CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS: &[&str] = &[
     "header_remove",
     "headers_sent",
     "hexdec",
+    "highlight_file",
     "http_build_query",
     "iconv",
     "iconv_mime_decode",
@@ -108,27 +110,19 @@ const CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS: &[&str] = &[
     "ini_set",
     "is_countable",
     "key",
+    "next",
     "levenshtein",
     "libxml_clear_errors",
     "libxml_get_errors",
     "libxml_use_internal_errors",
-    "mb_convert_case",
+    // Only `mb_convert_encoding` is claimed: it is the one member of the family elephc actually
+    // IMPLEMENTS (`crate::mb_convert_encoding_prelude`). The rest were catalog-visible with no EIR
+    // lowering at all, which is worse than being absent: `function_exists('mb_strripos')` folded to
+    // TRUE, `symfony/polyfill-mbstring`'s own `if (!function_exists(...))` guard therefore dropped
+    // its userland definition, and codegen then answered
+    // `unsupported EIR backend feature: builtin call mb_strripos`. Leaving the names UNCLAIMED lets
+    // the vendored polyfill supply real, upstream-maintained PHP implementations.
     "mb_convert_encoding",
-    "mb_detect_encoding",
-    "mb_encode_numericentity",
-    "mb_internal_encoding",
-    "mb_ord",
-    "mb_str_split",
-    "mb_stripos",
-    "mb_stristr",
-    "mb_strpos",
-    "mb_strripos",
-    "mb_strrpos",
-    "mb_strstr",
-    "mb_strtolower",
-    "mb_strtoupper",
-    "mb_strwidth",
-    "mb_substr",
     "normalizer_is_normalized",
     "normalizer_normalize",
     "octdec",
@@ -148,6 +142,7 @@ const CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS: &[&str] = &[
     "proc_open",
     "random_bytes",
     "reset",
+    "prev",
     "restore_error_handler",
     "restore_exception_handler",
     "sapi_windows_cp_conv",
@@ -281,7 +276,14 @@ pub(crate) fn is_prelude_overridable_builtin(canonical: &str) -> bool {
     // elephc-PHP prelude (`crate::mb_convert_encoding_prelude`), because the `mb_*` family has no
     // EIR lowering at all and a call would otherwise die with
     // `unsupported EIR backend feature: builtin call mb_convert_encoding`.
-    matches!(canonical, "trigger_error" | "mb_convert_encoding")
+    // `strncmp` keeps its catalog membership — `function_exists('strncmp')` must still report a
+    // real PHP function — while its BODY ships as an elephc-PHP prelude
+    // (`crate::strncmp_prelude`), because it had no EIR lowering at all and a call would otherwise
+    // die with `unsupported EIR backend feature: builtin call strncmp`.
+    matches!(
+        canonical,
+        "trigger_error" | "mb_convert_encoding" | "strncmp"
+    )
 }
 
 /// Returns true only for PHP-visible builtin functions (non-internal builtins).
@@ -438,61 +440,42 @@ mod tests {
     mod catalog_gap_tripwires {
         use super::*;
 
-        /// `debug_backtrace()` must not become catalog-visible before elephc can attribute a
-        /// declaration to its source FILE. Every PHP frame carries `file`/`line`, and five of the
-        /// six Symfony call sites are built on those two keys; `Span` is line/col only, the
-        /// resolver inlines every include into one AST, and `scan_reflection_source_files` covers
-        /// the entry file alone.
+        /// `debug_backtrace()` stays visible with Composer file attribution and the fiber-aware
+        /// activation-record shadow stack.
         #[test]
-        fn debug_backtrace_stays_absent_until_frames_are_real() {
+        fn debug_backtrace_is_visible_with_real_frames() {
             assert!(
-                !is_supported_builtin_function("debug_backtrace"),
-                "debug_backtrace() needs a declaration->file map plus a real shadow stack before \
-                 it is registered; a catalog entry alone converts the checker diagnostic into an \
-                 invisible backend failure"
+                is_supported_builtin_function("debug_backtrace"),
+                "debug_backtrace() must stay visible with its declaration-file map and shadow stack"
             );
         }
 
-        /// `next()` must not become catalog-visible while the array representation has no
-        /// internal pointer. Its siblings `reset`/`current`/`key` are already registered and
-        /// already fail in the backend, so `next` would clear one diagnostic and re-fail the very
-        /// same function (`Filesystem\Path::getLongestCommonBasePath()`) one floor down.
+        /// The complete PHP array-cursor family must remain catalog-visible together.
         #[test]
-        fn next_stays_absent_while_internal_pointer_family_is_unlowered() {
-            assert!(
-                !is_supported_builtin_function("next"),
-                "next() needs an internal array pointer; registering it while reset()/current()/\
-                 key() still abort with 'unsupported EIR backend feature' only relocates the error"
-            );
-            for sibling in ["reset", "current", "key"] {
+        fn array_cursor_family_is_catalog_visible() {
+            for sibling in ["reset", "current", "key", "next", "prev", "end"] {
                 assert!(
                     is_supported_builtin_function(sibling),
-                    "{sibling}() is expected to still be catalog-visible-but-unlowered; if it \
-                     gained a real lowering, re-measure the family before touching next()"
+                    "{sibling}() must stay visible with the shared cursor runtime"
                 );
             }
         }
 
-        /// `highlight_file()` must not become catalog-visible before a runtime tokenizer exists.
-        /// `token_get_all` is late-bound for exactly that reason, and Symfony's
-        /// `HtmlErrorRenderer::fileExcerpt()` post-processes PHP's real `<span>` markup.
+        /// `highlight_file()` stays visible with the runtime source highlighter.
         #[test]
-        fn highlight_file_stays_absent_until_a_runtime_tokenizer_exists() {
+        fn highlight_file_is_visible_with_runtime_highlighter() {
             assert!(
-                !is_supported_builtin_function("highlight_file"),
-                "highlight_file() needs a runtime PHP tokenizer and PHP's exact colorized markup"
+                is_supported_builtin_function("highlight_file"),
+                "highlight_file() must stay visible with its runtime source highlighter"
             );
         }
 
-        /// `extract()` must not become catalog-visible: it creates locals whose names are only
-        /// known at runtime, which elephc rejects by design (`$$name` is a compile error). This
-        /// is a refusal, not deferred work.
+        /// `extract()` stays catalog-visible with the materialized dynamic-scope runtime.
         #[test]
-        fn extract_stays_absent_because_dynamic_locals_are_refused() {
+        fn extract_is_visible_with_materialized_dynamic_scope() {
             assert!(
-                !is_supported_builtin_function("extract"),
-                "extract() requires runtime-named locals, which elephc rejects by design \
-                 (variable variables are a compile error)"
+                is_supported_builtin_function("extract"),
+                "extract() must stay visible with its materialized dynamic-scope runtime"
             );
         }
 

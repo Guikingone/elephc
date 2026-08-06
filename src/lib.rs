@@ -56,7 +56,13 @@ pub mod names;
 pub mod optimize;
 /// Conditionally-injected `parse_ini_file()` standard-library prelude.
 pub mod mb_convert_encoding_prelude;
+/// Conditionally-injected three-argument `explode()` standard-library prelude.
+pub mod explode_limit_prelude;
+/// Conditionally-injected `strncmp()` standard-library prelude.
+pub mod strncmp_prelude;
 pub mod parse_ini_prelude;
+/// Conditionally-injected `parse_str()` standard-library prelude.
+pub mod parse_str_prelude;
 /// Parser for PHP syntax.
 pub mod parser;
 /// PDO (SQLite) standard-library prelude injection.

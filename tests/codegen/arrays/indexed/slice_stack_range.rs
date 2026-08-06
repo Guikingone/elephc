@@ -23,6 +23,58 @@ echo $b[0] . " " . $b[1] . " " . $b[2];
     assert_eq!(out, "20 30 40");
 }
 
+/// Verifies `array_slice()` retains string payloads while producing an independent indexed array.
+#[test]
+fn test_array_slice_refcounted_strings() {
+    let out = compile_and_run(
+        r#"<?php
+$source = ["zero", "one", "two"];
+$slice = array_slice($source, 1);
+unset($source);
+echo implode(",", $slice);
+"#,
+    );
+    assert_eq!(out, "one,two");
+}
+
+/// Pins `array_slice()`'s element type ACROSS a function return.
+///
+/// The EIR lowering used to type `array_slice`'s result `array<mixed>` (it was grouped with
+/// `array_keys`, whose result really is `int|string` keys), while the checker typed the same call
+/// `array<string>`. Codegen therefore widened the returned array's slots to boxed cells, and the
+/// caller — reading with the checker's type — loaded the box POINTER as a raw payload. The count
+/// stayed correct, so a sliced string silently read back EMPTY. `array_slice` re-emits the very
+/// elements it was handed, so it must preserve the source element type like `array_values`.
+#[test]
+fn test_array_slice_string_elements_survive_a_function_return() {
+    let out = compile_and_run(
+        r#"<?php
+function head(array $src): array {
+    return array_slice($src, 0, 2);
+}
+$r = head(["p", "q", "r"]);
+echo count($r), "|", $r[0], "|", $r[1];
+"#,
+    );
+    assert_eq!(out, "2|p|q");
+}
+
+/// The integer-element mirror of the case above: the boxed-slot mismatch surfaced there as a heap
+/// address printed where the sliced `int` belonged.
+#[test]
+fn test_array_slice_int_elements_survive_a_function_return() {
+    let out = compile_and_run(
+        r#"<?php
+function head(array $src): array {
+    return array_slice($src, 0, 2);
+}
+$r = head([7, 8, 9]);
+echo count($r), "|", $r[0], "|", $r[1];
+"#,
+    );
+    assert_eq!(out, "2|7|8");
+}
+
 /// Tests `array_shift` removes and returns the first element from a 3-element array.
 /// Verifies the popped value (10) and that remaining array length is reduced to 2.
 #[test]
@@ -287,6 +339,7 @@ function f($query): void {
     echo "|";
     echo count($b);
 }
+
 f(["host" => [1, 2, 3]]);
 "#,
     );
@@ -297,6 +350,33 @@ f(["host" => [1, 2, 3]]);
         "expected a clean heap, got: {}",
         out.stderr
     );
+}
+
+/// Verifies a generic nested property element is normalized to Mixed slots before prepending an array.
+#[test]
+fn test_array_unshift_nested_property_mixed_array_value() {
+    let out = compile_and_run(
+        r#"<?php
+class ConfigGroups {
+    private array $groups = [];
+
+    public function prepend(string $name, array $config): int {
+        if (!isset($this->groups[$name])) {
+            $this->groups[$name] = [];
+        }
+
+        array_unshift($this->groups[$name], $config);
+
+        return count($this->groups[$name]);
+    }
+}
+
+$groups = new ConfigGroups();
+echo $groups->prepend('app', ['debug' => true]), ':';
+echo $groups->prepend('app', ['debug' => false]);
+"#,
+    );
+    assert_eq!(out, "1:2");
 }
 
 /// N2 family sweep: `array_slice()`'s dynamic union-array path already handled the ACCEPTED tag

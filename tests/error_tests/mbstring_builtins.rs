@@ -89,16 +89,25 @@ echo $ok ? "y" : "n";
     );
 }
 
-/// Verifies that `mb_strlen`/`mb_strtolower` work through first-class-callable
-/// syntax, since Symfony passes these as callables (e.g. to `array_map`).
+/// Verifies that `mb_strlen` works through first-class-callable syntax, since Symfony passes it
+/// as a callable (e.g. to `array_map`). `mb_strlen` is one of the two `mb_*` names elephc backs
+/// with a real builtin implementation.
+///
+/// `mb_strtolower` is deliberately NOT covered here. First-class-callable syntax resolves through
+/// the builtin CATALOG, and `mb_strtolower` is no longer a member: claiming it made
+/// `function_exists('mb_strtolower')` fold TRUE, so `symfony/polyfill-mbstring`'s own
+/// `if (!function_exists('mb_strtolower'))` guard DROPPED its userland definition — and since
+/// elephc has no implementation either (a correct `mb_strtolower` needs the full Unicode
+/// case-mapping tables the polyfill ships), codegen then died with `unsupported EIR backend
+/// feature`. Leaving the name unclaimed is what lets the vendored polyfill supply a real,
+/// upstream-maintained implementation, which a call site then reaches as an ordinary user
+/// function. Plain-call recognition is unaffected — it lives in
+/// `types::checker::builtins::mbstring` and is covered by `test_mbstring_builtins_recognized`.
 #[test]
 fn test_mbstring_first_class_callable_recognized() {
     assert!(
-        check_source(
-            "<?php $f = mb_strlen(...); $g = mb_strtolower(...); echo is_callable($f) && is_callable($g);"
-        )
-        .is_ok(),
-        "mb_strlen(...)/mb_strtolower(...) first-class callable syntax should type-check",
+        check_source("<?php $f = mb_strlen(...); echo is_callable($f);").is_ok(),
+        "mb_strlen(...) first-class callable syntax should type-check",
     );
 }
 

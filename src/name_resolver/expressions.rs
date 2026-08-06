@@ -10,6 +10,8 @@
 
 use crate::names::php_symbol_key;
 use crate::parser::ast::{CallableTarget, Expr, ExprKind, InstanceOfTarget, StaticReceiver};
+use crate::explode_limit_prelude::EXPLODE_LIMIT_FUNCTION_NAME;
+use crate::parse_str_prelude::PARSE_STR_FUNCTION_NAME;
 
 use super::names::{
     resolve_constant_name, resolve_function_name, resolve_special_or_class_name,
@@ -89,6 +91,19 @@ pub(super) fn resolve_expr(
             if symbols.declares_function(&function_name) {
                 ExprKind::FunctionCall {
                     name: resolved_name(function_name),
+                    args: resolved_args,
+                }
+            } else if function_name.eq_ignore_ascii_case("parse_str") {
+                ExprKind::FunctionCall {
+                    name: resolved_name(PARSE_STR_FUNCTION_NAME.to_string()),
+                    args: resolved_args,
+                }
+            } else if function_name.eq_ignore_ascii_case("explode") && resolved_args.len() == 3 {
+                // Only the three-argument form is redirected: the two-argument `explode()` keeps
+                // its native `__rt_explode` splitter, and `$limit` is implemented on top of it in
+                // elephc-PHP rather than as a second hand-written splitter per architecture.
+                ExprKind::FunctionCall {
+                    name: resolved_name(EXPLODE_LIMIT_FUNCTION_NAME.to_string()),
                     args: resolved_args,
                 }
             } else if let Some(rewritten) =

@@ -21,7 +21,7 @@ use crate::{
     autoload, codegen, conditional, debug_info, errors, exports, filter_var_prelude, ir, ir_lower,
     ir_passes, lexer, linker, list_id_prelude, magic_constants, name_resolver, optimize,
     return_type_guard,
-    dom_prelude, parse_ini_prelude, parser, pdo_prelude, resolver, runtime_cache, shutdown_prelude, source_map,
+    dom_prelude, parse_ini_prelude, parse_str_prelude, parser, pdo_prelude, resolver, runtime_cache, shutdown_prelude, source_map,
     tree_shake, tz_prelude, types, var_export_prelude, web_prelude,
 };
 
@@ -43,6 +43,7 @@ pub(crate) fn compile(config: CliConfig) {
         gc_stats,
         heap_debug,
         emit_ir,
+        output_dir,
         null_repr,
         emit_asm,
         emit,
@@ -75,7 +76,39 @@ pub(crate) fn compile(config: CliConfig) {
     // Include resolution still uses `parent` (the entry dir) so relative includes in
     // the entry file resolve against its own directory, unaffected by this.
     let autoload_root = autoload::find_composer_project_root(parent);
-    let output_paths = output_paths(filename, target, emit);
+    // Resolve the optional `--output-dir DIR` into an absolute directory the
+    // pipeline can write into. Relative directories resolve from the
+    // invocation working directory (NOT the source parent) so a build
+    // invocation like `elephc --output-dir build src/app.php` always targets
+    // `./build`, regardless of how deeply nested the source is. The directory
+    // is created (with parents) here, before any artifact is produced, so an
+    // invalid or unwritable destination is a clear early error rather than a
+    // partial write beside the source. `None` preserves the legacy default
+    // (artifacts beside the source file) byte-for-byte.
+    let output_dir_resolved = match output_dir {
+        Some(raw) => {
+            let resolved = if raw.is_absolute() {
+                raw
+            } else {
+                std::env::current_dir()
+                    .map(|cwd| cwd.join(&raw))
+                    .unwrap_or_else(|_| raw.clone())
+            };
+            if let Err(err) = fs::create_dir_all(&resolved) {
+                crate::progress::clear();
+                eprintln!(
+                    "error: cannot create output directory '{}': {}",
+                    resolved.display(),
+                    err
+                );
+                process::exit(1);
+            }
+            Some(resolved)
+        }
+        None => None,
+    };
+    let output_paths = output_paths(filename, target, emit, output_dir_resolved.as_deref());
+
     let mut timings = CompileTimings::new(emit_timings);
 
     crate::progress::phase("read");
@@ -132,7 +165,7 @@ pub(crate) fn compile(config: CliConfig) {
     let canonical_main_file_path = main_file_path
         .canonicalize()
         .unwrap_or_else(|_| main_file_path.clone());
-    let (class_source_files, function_source_files) =
+    let (mut class_source_files, function_source_files) =
         resolver::scan_reflection_source_files(&parsed, &canonical_main_file_path);
     // Strict-PHP audit of the main file: after magic-constant substitution
     // (matching the include/autoload audit sites) and before
@@ -170,17 +203,9 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = autoload::collect_aliases(ast);
     timings.record_since("resolve", phase_started);
 
-    // Inject the PDO standard-library prelude (extern bridge + PDO classes,
-    // written in elephc-PHP) only when the program references PDO, so non-PDO
-    // binaries never declare the elephc_pdo externs or link the bridge.
-    // Runs after include resolution so PDO usage inside includes is detected.
-    crate::progress::phase("pdo-prelude");
-    let phase_started = Instant::now();
     // DOM is declared for every program, matching the reach the former checker-only
     // shells had; the closed-world prune drops it from non-DOM binaries.
     let ast = dom_prelude::inject(ast);
-    let ast = pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"));
-    timings.record_since("pdo-prelude", phase_started);
 
     // Inject the timezone-introspection prelude (extern block + array marshalling,
     // written in elephc-PHP) only when the program references getLocation /
@@ -264,6 +289,22 @@ pub(crate) fn compile(config: CliConfig) {
     };
     timings.record_since("autoload-run", phase_started);
 
+    // Inject PDO only after Composer PSR-4 expansion: optional PDO references commonly live in
+    // autoloaded classes that were absent from the earlier parsed/resolver program. The late
+    // injector name-resolves its self-contained prelude separately, leaving the already-resolved
+    // application AST untouched.
+    crate::progress::phase("pdo-prelude");
+    let phase_started = Instant::now();
+    let ast = match pdo_prelude::inject_resolved_if_used(ast, with_crates.contains("pdo")) {
+        Ok(ast) => ast,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("pdo-prelude", phase_started);
+
     // Hoist conditionally-declared functions (`if (!function_exists('X')) { function X(...) {...} }`
     // and other conditionally-nested declarations) to the top level so top-level function
     // collection registers them. Runs after autoload so `polyfill_prune` has already dropped its
@@ -314,6 +355,9 @@ pub(crate) fn compile(config: CliConfig) {
     // to this global via `name_resolver::PRELUDE_GLOBAL_FUNCTIONS`.
     let phase_started = Instant::now();
     let ast = parse_ini_prelude::inject_if_used(ast);
+    let ast = parse_str_prelude::inject_if_used(ast);
+    let ast = crate::explode_limit_prelude::inject_if_used(ast);
+    let ast = crate::strncmp_prelude::inject_if_used(ast);
     let ast = crate::mb_convert_encoding_prelude::inject_if_used(ast);
     timings.record_since("parse-ini-prelude", phase_started);
 
@@ -399,6 +443,25 @@ pub(crate) fn compile(config: CliConfig) {
             process::exit(1);
         }
     };
+    // Complete the declaration-to-file map for Composer-loaded class-likes. The initial scan
+    // above intentionally covers only the entry file; by this point the checker has discovered
+    // the complete autoloaded class/enum closure, so every resolvable name can be attributed
+    // without growing the per-node Span representation.
+    for class_name in check_result
+        .classes
+        .keys()
+        .chain(check_result.enums.keys())
+    {
+        let key = crate::names::php_symbol_key(class_name.trim_start_matches('\\'));
+        if class_source_files.contains_key(&key) {
+            continue;
+        }
+        let Some(path) = autoload::resolve_class_file(class_name, &autoload_registry) else {
+            continue;
+        };
+        let canonical = path.canonicalize().unwrap_or(path);
+        class_source_files.insert(key, canonical.display().to_string());
+    }
     timings.record_since("typecheck", phase_started);
     for warning in &check_result.warnings {
         errors::report_warning(warning);
@@ -744,10 +807,22 @@ pub(crate) fn compile(config: CliConfig) {
 /// Executable mode produces `<stem>` (no extension). Cdylib mode produces
 /// `lib<stem>.so` (Linux) or `lib<stem>.dylib` (macOS), matching the conventional
 /// shared-library naming that `dlopen(3)` and linker `-l` flags expect.
-fn output_paths(filename: &str, target: Target, emit: Emit) -> OutputPaths {
+fn output_paths(
+    filename: &str,
+    target: Target,
+    emit: Emit,
+    output_dir: Option<&Path>,
+) -> OutputPaths {
     let path = Path::new(filename);
     let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or("output");
-    let parent = path.parent().unwrap_or(Path::new("."));
+    // When `--output-dir` is set every compiler artifact lives beneath it
+    // (named after the source stem), so the source tree stays pristine. When
+    // it is `None` the legacy default is preserved: artifacts land beside the
+    // source file. The `.dSYM` bundle `dsymutil` emits on macOS and any other
+    // companion produced next to `bin`/`asm` therefore follows automatically.
+    let parent = output_dir
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| path.parent().unwrap_or(Path::new(".")).to_path_buf());
     let bin_name = match emit {
         Emit::Executable => stem.to_string(),
         Emit::Cdylib => match target.platform {

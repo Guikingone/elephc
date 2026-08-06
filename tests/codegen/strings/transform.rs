@@ -189,6 +189,18 @@ fn test_str_replace_array_replace_shorter() {
     assert_eq!(out, "1");
 }
 
+/// Verifies an indexed string-array subject returns an indexed string array and can be unpacked.
+#[test]
+fn test_str_replace_array_subject_preserves_each_result() {
+    let out = compile_and_run(
+        r#"<?php
+[$first, $second] = str_replace(["a", "b"], ["A", "B"], ["abc", "cab"]);
+echo $first, ":", $second;
+"#,
+    );
+    assert_eq!(out, "ABc:cAB");
+}
+
 /// Verifies str_replace applies array search elements iteratively, so a replacement introduced by an
 /// earlier element is itself matched by a later search element (matching PHP ordering).
 #[test]
@@ -235,6 +247,119 @@ echo implode(" ", $arr);
 "#,
     );
     assert_eq!(out, "Hello World");
+}
+
+/// Verifies implode accepts the `Array(Void)` layout used for statically empty arrays.
+#[test]
+fn test_implode_empty_array_void_element_layout() {
+    let out = compile_and_run(
+        r#"<?php
+echo "[", implode(",", []), "]";
+echo "[", implode(",", array_merge([], [])), "]";
+"#,
+    );
+    assert_eq!(out, "[][]");
+}
+
+/// `strncmp()` compares at most `$length` leading bytes and returns their raw byte difference —
+/// NOT a normalized -1/0/1. Expectations pinned against `php -n` (PHP 8.5).
+#[test]
+fn test_strncmp_returns_php_byte_difference() {
+    let out = compile_and_run(
+        r#"<?php
+echo strncmp("hello", "help", 3), "|";
+echo strncmp("hello", "help", 4), "|";
+echo strncmp("help", "hello", 4), "|";
+echo strncmp("abc", "abc", 10), "|";
+echo strncmp("abc", "ab", 3), "|";
+echo strncmp("abc", "abd", 0);
+"#,
+    );
+    assert_eq!(out, "0|-4|4|0|1|0");
+}
+
+/// PHP 8 rejects a negative `$length` with a `ValueError` rather than clamping it.
+#[test]
+fn test_strncmp_negative_length_throws_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+try {
+    strncmp("abc", "abd", -1);
+} catch (\ValueError $e) {
+    echo $e->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "strncmp(): Argument #3 ($length) must be greater than or equal to 0"
+    );
+}
+
+/// Verifies `explode()`'s three-argument form against PHP's `$limit` semantics: a POSITIVE limit
+/// caps the result at `$limit` elements, with the last one holding the entire unsplit remainder.
+/// Expectations pinned against `php -n`.
+#[test]
+fn test_explode_positive_limit_merges_the_remainder() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = explode(",", "a,b,c,d", 2);
+echo count($parts), "|", $parts[0], "|", $parts[1];
+"#,
+    );
+    assert_eq!(out, "2|a|b,c,d");
+}
+
+/// A limit that meets or exceeds the natural segment count leaves the split untouched.
+#[test]
+fn test_explode_limit_larger_than_segment_count_is_a_full_split() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = explode(",", "a,b", 99);
+echo count($parts), "|", implode("/", $parts);
+"#,
+    );
+    assert_eq!(out, "2|a/b");
+}
+
+/// A NEGATIVE limit drops that many trailing segments outright — it does NOT merge them into the
+/// last element the way a positive limit does.
+#[test]
+fn test_explode_negative_limit_drops_trailing_segments() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = explode(",", "a,b,c,d", -1);
+echo count($parts), "|", implode("/", $parts);
+$gone = explode(",", "a,b", -5);
+echo "|", count($gone);
+"#,
+    );
+    assert_eq!(out, "3|a/b/c|0");
+}
+
+/// PHP treats a ZERO limit as 1, so the whole subject comes back as a single element.
+#[test]
+fn test_explode_zero_limit_behaves_as_one() {
+    let out = compile_and_run(
+        r#"<?php
+$parts = explode(",", "a,b,c", 0);
+echo count($parts), "|", $parts[0];
+"#,
+    );
+    assert_eq!(out, "1|a,b,c");
+}
+
+/// The limit is an ordinary runtime value, not a literal the compiler can fold away.
+#[test]
+fn test_explode_limit_from_a_runtime_variable() {
+    let out = compile_and_run(
+        r#"<?php
+$n = 3;
+$parts = explode("-", "w-x-y-z", $n);
+echo count($parts), "|", implode("/", $parts);
+"#,
+    );
+    assert_eq!(out, "3|w/x/y-z");
 }
 
 /// Verifies explode followed by implode produces the expected string transformation.

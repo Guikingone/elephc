@@ -1993,6 +1993,11 @@ fn lower_assignment_expr(
         .and_then(|_| callable_array.as_ref().map(|assignment| assignment.value))
         .or_else(|| assigned_name.and_then(|name| lower_closure_for_assignment(ctx, name, value)))
         .unwrap_or_else(|| lower_expr(ctx, value));
+    // Constant propagation can reduce a previously well-typed RHS to `throw`. In that case the
+    // RHS has already terminated the block and the assignment store/yield is unreachable.
+    if ctx.builder.insertion_block_is_terminated() {
+        return lowered;
+    }
     let mut result = lowered;
     if let ExprKind::Variable(name) = &target.kind {
         // For static locals and ref-bound locals, keep the declared type to
@@ -2039,6 +2044,11 @@ fn lower_assignment_expr(
         }
     } else {
         lower_non_local_assignment_write(ctx, target, value, expr.span);
+    }
+    // Non-local writes can terminate by raising a statically-known access error (for example a
+    // readonly property write). The synthetic result-target read is unreachable on that path.
+    if ctx.builder.insertion_block_is_terminated() {
+        return result;
     }
     if let Some(result_target) = result_target {
         return lower_expr(ctx, result_target);
@@ -2323,6 +2333,9 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     if let Some(value) = lower_static_is_callable(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_sscanf_by_ref_outputs(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = filter::lower_static_filter_var(ctx, canonical, args, expr) {
         return value;
     }
@@ -2412,11 +2425,12 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
             .function(canonical)
             .cloned()
             .unwrap_or(ReturnArgAlias::Unknown);
-        release_owned_call_arg_temporaries(
+        release_owned_call_arg_temporaries_with_signature(
             ctx,
             &operands,
             Some(call.value),
             &return_alias,
+            sig.as_ref(),
             expr.span,
         );
         return call;
@@ -2438,6 +2452,90 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     }
     let eval_literal = eval_literal_fragment(canonical, args);
     emit_builtin_call_value(ctx, canonical, operands, php_type, expr.span, eval_literal)
+}
+
+/// Lowers `sscanf($input, $format, &$out...)` by reusing the existing capture-array runtime,
+/// converting each literal-format capture to its PHP scalar type, and writing caller variables.
+/// The expression result is the number of assigned captures, matching PHP's output-argument form.
+fn lower_sscanf_by_ref_outputs(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "sscanf"
+        || args.len() <= 2
+        || crate::types::call_args::has_named_args(args)
+        || args.iter().any(is_spread_arg)
+    {
+        return None;
+    }
+    let ExprKind::StringLiteral(format) = &args[1].kind else {
+        return None;
+    };
+    if args[2..]
+        .iter()
+        .any(|arg| !matches!(arg.kind, ExprKind::Variable(_)))
+    {
+        return None;
+    }
+
+    let input = lower_expr(ctx, &args[0]);
+    let input = coerce_to_string(ctx, input, &args[0]);
+    let pattern = lower_expr(ctx, &args[1]);
+    let pattern = coerce_to_string(ctx, pattern, &args[1]);
+    let captures_ty = PhpType::Array(Box::new(PhpType::Str));
+    let captures = emit_builtin_call_value(
+        ctx,
+        name,
+        vec![input.value, pattern.value],
+        captures_ty,
+        expr.span,
+        None,
+    );
+    let assigned = ctx.emit_value(
+        Op::ArrayLen,
+        vec![captures.value],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(expr.span),
+    );
+    let output_kinds = crate::builtins::string::sscanf::output_kinds(format);
+    for (output_index, output) in args[2..].iter().enumerate() {
+        let ExprKind::Variable(variable) = &output.kind else {
+            unreachable!("sscanf output lvalues were checked above");
+        };
+        let index = ctx.emit_value(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(output_index as i64)),
+            PhpType::Int,
+            Op::ConstI64.default_effects(),
+            Some(output.span),
+        );
+        let captured = ctx.emit_value(
+            Op::ArrayGet,
+            vec![captures.value, index.value],
+            None,
+            PhpType::Str,
+            Op::ArrayGet.default_effects(),
+            Some(output.span),
+        );
+        let output_type = crate::builtins::string::sscanf::output_type_at(format, output_index);
+        let converted = match output_kinds.get(output_index).copied() {
+            Some(b'd' | b'i' | b'u' | b'o' | b'x' | b'X') => {
+                coerce_to_int_at_span(ctx, captured, Some(output.span))
+            }
+            Some(b'e' | b'E' | b'f' | b'F' | b'g' | b'G') => {
+                coerce_to_float_at_span(ctx, captured, Some(output.span))
+            }
+            _ => captured,
+        };
+        ctx.store_local(variable, converted, output_type, Some(output.span));
+    }
+    crate::ir_lower::ownership::release_if_owned(ctx, captures, Some(expr.span));
+    Some(assigned)
 }
 
 /// Resolves a migrated registry builtin's result type from the same descriptor as the checker.
@@ -2605,9 +2703,10 @@ fn emit_builtin_call_value(
         Some(fragment) => eval_literal_needs_barrier(ctx, fragment),
         None => true,
     };
-    if php_symbol_key(name.trim_start_matches('\\')) == "eval" {
+    let dynamic_scope_builtin = php_symbol_key(name.trim_start_matches('\\'));
+    if matches!(dynamic_scope_builtin.as_str(), "eval" | "extract") {
         ctx.mark_eval_executed();
-        if eval_needs_barrier {
+        if dynamic_scope_builtin == "extract" || eval_needs_barrier {
             ctx.apply_eval_barrier();
         } else if let Some(write_names) = eval_literal
             .and_then(|fragment| eval_literal_scope_barrier_writes(ctx, fragment))
@@ -3967,7 +4066,13 @@ fn signature_for_static_callable_binding(
     target: StaticCallableBinding,
 ) -> Option<FunctionSig> {
     match target {
-        StaticCallableBinding::UserFunction(name) => ctx.functions.get(&name).cloned(),
+        StaticCallableBinding::UserFunction(name) => ctx.functions.get(&name).map(|sig| {
+            crate::ir_lower::function::eir_signature_with_php_param_contracts(
+                &name,
+                sig,
+                ctx.callable_param_sigs,
+            )
+        }),
         StaticCallableBinding::ExternFunction(name) => ctx
             .extern_functions
             .get(&name)
@@ -4223,7 +4328,14 @@ fn lower_indexed_descriptor_invoker_arg_array(
         if let ExprKind::Spread(inner) = &arg.kind {
             let source = lower_expr(ctx, inner);
             let source = lower_gradual_call_spread_source(ctx, source, arg.span);
-            lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
+            lower_indexed_array_spread_into_array(
+                ctx,
+                array,
+                source,
+                Some(&elem_ty),
+                false,
+                arg.span,
+            );
             continue;
         }
         let value = if let Some(var_name) = invoker_ref_arg_variable(ctx, sig, positional_index, arg) {
@@ -5310,6 +5422,34 @@ fn instance_callable_object_class(
     instance_callable_object_class_and_nullability(ctx, object).map(|(class_name, _)| class_name)
 }
 
+/// Resolves a `Closure::bind` `$newThis` class or returns an empty runtime-dispatch marker for a
+/// gradual object-capable expression whose concrete class is unavailable at compile time.
+///
+/// The empty marker is consumed only while lowering the immediately following closure literal;
+/// it types the captured `$this` as `Mixed`, matching the runtime closure-bind descriptor that
+/// installs the real object. Proven scalar/array/null receivers remain ineligible.
+fn bound_closure_this_class(
+    ctx: &LoweringContext<'_, '_>,
+    object: &Expr,
+) -> Option<String> {
+    if let Some(class_name) = instance_callable_object_class(ctx, object) {
+        return Some(class_name);
+    }
+    let object_type = match &object.kind {
+        ExprKind::Variable(name) => ctx.local_types.get(name).cloned(),
+        ExprKind::This => ctx.current_class.clone().map(PhpType::Object),
+        _ => Some(infer_expr_type_syntactic(object)),
+    }?;
+    let gradual_object = match &object_type {
+        PhpType::Object(_) | PhpType::Mixed => true,
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| matches!(member, PhpType::Object(_) | PhpType::Mixed)),
+        _ => false,
+    };
+    gradual_object.then(String::new)
+}
+
 /// Resolves one instance-call receiver class and whether its expression may produce `null`.
 fn instance_callable_object_class_and_nullability(
     ctx: &LoweringContext<'_, '_>,
@@ -5381,7 +5521,11 @@ fn call_signature(
     if let Some(sig) = ctx.extern_functions.get(name) {
         return Some(function_sig_from_extern_for_descriptor(sig));
     }
-    if crate::types::call_args::has_named_args(args) {
+    // Positional builtins normally use the legacy raw-operand path, but named arguments and
+    // runtime spreads both require the declared parameter contract. Without it a fixed-arity
+    // call such as `method_exists(...$callableArray)` lowers the entire spread container as one
+    // operand instead of materializing the two positional values.
+    if crate::types::call_args::has_named_args(args) || args.iter().any(is_spread_arg) {
         return builtin_call_signature(name);
     }
     None
@@ -5442,13 +5586,14 @@ fn unset_target_supported(ctx: &LoweringContext<'_, '_>, arg: &Expr) -> bool {
     }
 }
 
-/// Returns true when an array-access unset receiver is a plain array/hash local whose element the
-/// EIR backend can remove.
+/// Returns true when an array-access unset receiver is a local array/hash or gradual array whose
+/// element the EIR backend can remove.
 ///
 /// Associative arrays remove the element directly; packed indexed arrays are converted to a hash at
-/// the unset site (PHP `unset()` leaves a sparse array). By-reference locals are excluded: their
-/// storage is aliased to a caller whose static type would no longer match after a representation
-/// change.
+/// the unset site (PHP `unset()` leaves a sparse array). Boxed `Mixed`/union locals cross the same
+/// checked gradual-array boundary used by array-taking builtins, then store the sparse hash back in
+/// their boxed frame representation. By-reference locals are excluded: their storage is aliased to
+/// a caller whose static type would no longer match after a representation change.
 fn unset_array_access_has_local_array_receiver(
     ctx: &LoweringContext<'_, '_>,
     array: &Expr,
@@ -5461,7 +5606,7 @@ fn unset_array_access_has_local_array_receiver(
     }
     matches!(
         ctx.local_type(name).codegen_repr(),
-        PhpType::AssocArray { .. } | PhpType::Array(_)
+        PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Mixed | PhpType::Union(_)
     )
 }
 
@@ -5485,7 +5630,8 @@ fn unset_array_access_has_object_receiver(
 ///
 /// An associative-array local removes the element in place through `Op::HashUnset`. A packed
 /// indexed-array local is first converted to a hash (PHP keeps the surviving keys without
-/// renumbering) and then removed. An `ArrayAccess` object dispatches to its `offsetUnset($key)`
+/// renumbering) and then removed. A boxed gradual local is cloned to hash storage, mutated, and
+/// boxed back into the same local. An `ArrayAccess` object dispatches to its `offsetUnset($key)`
 /// method like before. By-reference array locals fall through to the object path.
 fn lower_unset_array_access(
     ctx: &mut LoweringContext<'_, '_>,
@@ -5509,6 +5655,10 @@ fn lower_unset_array_access(
                     lower_unset_indexed_element(ctx, name, elem_ty, array.span, index, expr);
                     return;
                 }
+                PhpType::Mixed | PhpType::Union(_) => {
+                    lower_unset_mixed_array_element(ctx, name, array.span, index, expr);
+                    return;
+                }
                 _ => {}
             }
         }
@@ -5522,6 +5672,49 @@ fn lower_unset_array_access(
         expr.span,
     );
     lower_expr(ctx, &synthetic);
+}
+
+/// Lowers `unset($mixed[$key])` for a gradual local that holds an array at runtime.
+///
+/// `MixedToHash` enforces the runtime array boundary and returns an independently owned sparse
+/// hash, so deleting a key cannot mutate aliases of the original boxed array. The mutated hash is
+/// boxed back into the local's unchanged `Mixed` storage after the previous boxed owner is
+/// released. This is the gradual counterpart of `lower_unset_indexed_element` and preserves PHP's
+/// non-renumbering `unset()` semantics for both indexed and associative runtime arrays.
+fn lower_unset_mixed_array_element(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    array_span: Span,
+    index: &Expr,
+    expr: &Expr,
+) {
+    let source = ctx.load_local(name, Some(array_span));
+    let assoc_ty = PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    };
+    let hash = ctx.emit_value(
+        Op::MixedToHash,
+        vec![source.value],
+        None,
+        assoc_ty,
+        Op::MixedToHash.default_effects(),
+        Some(array_span),
+    );
+    let key = lower_expr(ctx, index);
+    ctx.emit_void(
+        Op::HashUnset,
+        vec![hash.value, key.value],
+        None,
+        Op::HashUnset.default_effects(),
+        Some(expr.span),
+    );
+    super::stmt::release_persisted_string_operand(ctx, key, expr.span);
+    let boxed = ctx.box_value_as_mixed(hash, PhpType::Mixed, Some(expr.span));
+    let slot = ctx.declare_local(name, PhpType::Mixed);
+    ctx.release_stored_local_value(name, slot, Some(expr.span));
+    ctx.store_prepared_mutated_local(name, boxed, PhpType::Mixed, Some(expr.span));
+    ctx.set_local_type_exact(name, PhpType::Mixed);
 }
 
 /// Lowers `unset($hash[$key])` for an associative-array local as a `HashUnset` instruction.
@@ -5790,6 +5983,26 @@ fn lower_builtin_call_args(
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
+        // `array_unshift` needs the registry's by-reference marker for its first operand, but its
+        // runtime target consumes each variadic value as a separate operand. The generic signature
+        // path would pack that tail into one synthetic array, while the legacy raw path would lose
+        // the first parameter's addressability. Normalize only the fixed argument and preserve the
+        // variadic operands in source order.
+        "array_unshift"
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg)
+                && args.len() >= 2 =>
+        {
+            let builtin_sig = builtin_call_signature(name);
+            let mut operands = Vec::with_capacity(args.len());
+            if let Some(builtin_sig) = builtin_sig.as_ref() {
+                operands.push(lower_arg_with_signature(ctx, builtin_sig, 0, &args[0]));
+            } else {
+                operands.push(lower_expr(ctx, &args[0]).value);
+            }
+            operands.extend(args[1..].iter().map(|arg| lower_expr(ctx, arg).value));
+            operands
+        }
         // Gradual typing: `array_key_exists($key, $array)` and
         // `in_array($needle, $haystack, …)` accept a `Mixed`/union array argument.
         // Convert it to a concrete owned `array<mixed, mixed>` so the existing
@@ -5844,33 +6057,15 @@ fn lower_builtin_call_args(
             widen_array_merge_operands_to_mixed(ctx, &mut operands, args);
             operands
         }
-        // `end($array)` reads the last element. Box a concrete array operand into a
-        // Mixed cell so the backend's `__rt_end_boxed` helper can dispatch on the
-        // runtime array kind (indexed vs associative); an already-boxed `Mixed`/union
-        // operand is passed through unchanged. The boxed temporary (when created) is an
-        // owning temporary released by `release_owned_call_arg_temporaries`.
-        "end" if !crate::types::call_args::has_named_args(args)
+        // Array cursor operations keep the concrete container operand intact. The backend
+        // uses its PHP type to select indexed/hash storage, applies COW before pointer-moving
+        // calls, and delegates all cursor state/value boxing to one runtime family.
+        "end" | "reset" | "current" | "key" | "next" | "prev"
+            if !crate::types::call_args::has_named_args(args)
             && !args.iter().any(is_spread_arg)
             && args.len() == 1 =>
         {
-            let array = lower_expr(ctx, &args[0]);
-            let mixed = if matches!(
-                ctx.builder.value_php_type(array.value).codegen_repr(),
-                PhpType::Mixed | PhpType::Union(_)
-            ) {
-                array.value
-            } else {
-                ctx.emit_value(
-                    Op::MixedBox,
-                    vec![array.value],
-                    None,
-                    PhpType::Mixed,
-                    Op::MixedBox.default_effects(),
-                    Some(args[0].span),
-                )
-                .value
-            };
-            vec![mixed]
+            vec![lower_expr(ctx, &args[0]).value]
         }
         _ => lower_args_with_signature(ctx, sig, args),
     }
@@ -6288,7 +6483,7 @@ fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
-    if let Some(value) = lower_by_ref_mixed_scalar_arg_with_signature(ctx, sig, index, arg) {
+    if let Some(value) = lower_by_ref_mixed_local_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
     let lowered = lower_expr(ctx, arg);
@@ -6509,9 +6704,49 @@ fn coerce_operands_to_params(
             );
         }
         let value = operands[index];
-        let operand_ty = ctx.builder.value_php_type(value).codegen_repr();
-        let param_ty = param_ty.codegen_repr();
-        if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
+        let operand_php_ty = ctx.builder.value_php_type(value).clone();
+        let operand_ty = operand_php_ty.codegen_repr();
+        let declared_param_ty = param_ty.clone();
+        let param_ty = declared_param_ty.codegen_repr();
+        if nullable_int_needs_boxed_string_union_coercion(
+            &declared_param_ty,
+            &operand_php_ty,
+        ) {
+            let converted = coerce_nullable_int_to_boxed_string_union(
+                ctx,
+                LoweredValue {
+                    value,
+                    ir_type: ctx.builder.value_type(value),
+                },
+                declared_param_ty,
+                None,
+            );
+            operands[index] = converted.value;
+        } else if param_ty == PhpType::Callable
+            && matches!(
+                operand_ty,
+                PhpType::Mixed
+                    | PhpType::Union(_)
+                    | PhpType::Object(_)
+                    | PhpType::Str
+                    | PhpType::Array(_)
+            )
+        {
+            let source = LoweredValue {
+                value,
+                ir_type: ctx.builder.value_type(value),
+            };
+            let normalized = ctx.emit_value(
+                Op::RuntimeCall,
+                vec![value],
+                None,
+                PhpType::Callable,
+                Op::RuntimeCall.default_effects(),
+                None,
+            );
+            release_coerced_source_if_owned(ctx, source, None);
+            operands[index] = normalized.value;
+        } else if param_ty == PhpType::Float && matches!(operand_ty, PhpType::Int | PhpType::Bool) {
             let lowered = LoweredValue {
                 value,
                 ir_type: IrType::I64,
@@ -6538,6 +6773,87 @@ fn coerce_operands_to_params(
         }
     }
     operands
+}
+
+/// Returns whether a compact `int|null` value needs the null-preserving boxed-string conversion.
+///
+/// PHP weak-mode union selection keeps null and selects `string` for the integer only when the
+/// target has no exact integer arm. The target must itself be boxed (`string|array|null` and
+/// similar), while an exact `int` target arm keeps the tagged scalar unchanged.
+fn nullable_int_needs_boxed_string_union_coercion(
+    target: &PhpType,
+    source: &PhpType,
+) -> bool {
+    if target.codegen_repr() != PhpType::Mixed || source.codegen_repr() != PhpType::TaggedScalar {
+        return false;
+    }
+    let (PhpType::Union(target_members), PhpType::Union(source_members)) = (target, source) else {
+        return false;
+    };
+    target_members.iter().any(|member| *member == PhpType::Str)
+        && target_members.iter().any(|member| *member == PhpType::Void)
+        && !target_members.iter().any(|member| *member == PhpType::Int)
+        && source_members
+            .iter()
+            .all(|member| matches!(member, PhpType::Int | PhpType::Void | PhpType::Never))
+}
+
+/// Converts `int|null` TaggedScalar storage into a boxed union while preserving PHP's weak-mode
+/// union choice: null remains null, and a non-null integer becomes a string before boxing.
+fn coerce_nullable_int_to_boxed_string_union(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    target: PhpType,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    let concrete_span = span.unwrap_or_else(crate::span::Span::dummy);
+    let is_null = ctx.emit_value(
+        Op::IsNull,
+        vec![value.value],
+        None,
+        PhpType::Bool,
+        Op::IsNull.default_effects(),
+        span,
+    );
+    let temp_name = ctx.declare_owned_hidden_temp(target.clone());
+    let null_block = ctx
+        .builder
+        .create_named_block("arg.coerce_nullable_int.null", Vec::new());
+    let int_block = ctx
+        .builder
+        .create_named_block("arg.coerce_nullable_int.value", Vec::new());
+    let merge = ctx
+        .builder
+        .create_named_block("arg.coerce_nullable_int.merge", Vec::new());
+    ctx.builder.terminate(Terminator::CondBr {
+        cond: is_null.value,
+        then_target: null_block,
+        then_args: Vec::new(),
+        else_target: int_block,
+        else_args: Vec::new(),
+    });
+
+    ctx.builder.position_at_end(null_block);
+    let null = ctx.emit_value(
+        Op::ConstNull,
+        Vec::new(),
+        None,
+        PhpType::Void,
+        Op::ConstNull.default_effects(),
+        span,
+    );
+    let boxed_null = ctx.box_value_as_mixed(null, target.clone(), span);
+    store_value_into_temp(ctx, &temp_name, target.clone(), boxed_null, concrete_span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(int_block);
+    let string = coerce_to_string_at_span(ctx, value, span);
+    let boxed_string = ctx.box_value_as_mixed(string, target.clone(), span);
+    store_value_into_temp(ctx, &temp_name, target, boxed_string, concrete_span);
+    branch_to(ctx, merge);
+
+    ctx.builder.position_at_end(merge);
+    take_owned_temp(ctx, &temp_name, concrete_span)
 }
 
 /// Widens local indexed-array storage before passing it to an `array<mixed>` ref parameter.
@@ -6584,6 +6900,24 @@ fn lower_by_ref_array_element_arg_with_signature(
     let ExprKind::ArrayAccess { array, index: element_index } = &arg.kind else {
         return None;
     };
+    if let ExprKind::PropertyAccess { object, property } = &array.kind {
+        let parent = crate::ir_lower::stmt::lower_property_parent_fetch_for_write(
+            ctx,
+            object,
+            property,
+            element_index,
+            arg,
+        )?;
+        let marked = ctx.emit_value(
+            Op::ByRefMixedCell,
+            vec![parent.value],
+            None,
+            PhpType::Mixed,
+            Op::ByRefMixedCell.default_effects(),
+            Some(arg.span),
+        );
+        return Some(marked.value);
+    }
     let ExprKind::Variable(array_name) = &array.kind else {
         return None;
     };
@@ -6614,9 +6948,8 @@ fn lower_by_ref_array_element_arg_with_signature(
     Some(value)
 }
 
-/// Widens a NON-REFCOUNTED scalar local's frame storage to `Mixed` before it is passed to a
-/// declared `mixed &$p` by-reference parameter. A refcounted source (`string`) is deliberately
-/// left to codegen's existing loud rejection; see the exclusion list below for why.
+/// Widens a concrete local's frame storage to `Mixed` before it is passed to a `mixed &$p`
+/// by-reference parameter, including an untyped PHP parameter represented as `Mixed`.
 ///
 /// A `mixed &$p` callee may store ANY PHP type through the reference, but a caller local whose
 /// frame storage is a concrete scalar (`int`/`bool`/`float`/`string`, or the statically-null
@@ -6634,36 +6967,24 @@ fn lower_by_ref_array_element_arg_with_signature(
 /// no writeback are needed at all: `plan_ref_arg_writebacks` then sees an already-`Mixed` source
 /// and skips it, which is the path that already matches PHP exactly.
 ///
-/// The gate mirrors the checker's promotion rule: only a DECLARED parameter promotes. An
-/// undeclared `&$v` parameter carries a type elephc merely INFERRED, which the checker does not
-/// promote against, so widening there would desynchronize the layers instead of aligning them.
+/// The builder records the slot's FINAL widened type before codegen, so earlier concrete stores
+/// into the slot are boxed consistently as well. Loading the concrete payload for this promotion
+/// temporarily retains refcounted values; `release_if_owned` below balances that retain after the
+/// fresh Mixed box has acquired its own reference. This is the same ownership path already used
+/// by string sources, extended to arrays whose runtime kind cannot safely be written back into a
+/// narrow untagged slot.
 ///
-/// Deliberately NOT widened here, keeping codegen's existing loud rejection:
-/// - a `string` (or any other REFCOUNTED) source. Widening is a storeback, and `store_local`
-///   widens the slot to `Mixed` BEFORE running its own release-previous-occupant step, so that
-///   release would load the slot's raw string as a `Mixed` cell and drop it on the floor
-///   (measured: one 48-byte block leaked per widened string local). Releasing the occupant
-///   beforehand instead makes `store_local`'s own release fire on freed storage — a double free,
-///   which this platform absorbs silently. A correct fix needs a release-before-widen storeback
-///   that the current context helpers do not express, so a refcounted source keeps its existing
-///   LOUD `unsupported` error rather than gaining a silent leak. This costs nothing in
-///   correctness terms: a rejected compile was never a wrong answer, whereas every source repr
-///   widened above was previously miscompiled SILENTLY.
-/// - non-scalar storage (array/hash/object/callable/resource), for the same ownership reason;
-///   the array case additionally has its own dedicated widening in
-///   `lower_by_ref_array_arg_with_signature`.
+/// Deliberately NOT widened here:
+/// - object/callable/resource storage, whose alias and ownership contracts need dedicated tests;
 /// - a ref-bound local, where widening the slot mid-function would break earlier loads that
 ///   already read it at the narrow width (see `store_local`'s ref-bound widening carve-out).
-fn lower_by_ref_mixed_scalar_arg_with_signature(
+fn lower_by_ref_mixed_local_arg_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: &FunctionSig,
     index: usize,
     arg: &Expr,
 ) -> Option<crate::ir::ValueId> {
     if !sig.ref_params.get(index).copied().unwrap_or(false) {
-        return None;
-    }
-    if !sig.declared_params.get(index).copied().unwrap_or(false) {
         return None;
     }
     let (_, param_ty) = sig.params.get(index)?;
@@ -6678,7 +6999,14 @@ fn lower_by_ref_mixed_scalar_arg_with_signature(
     }
     if !matches!(
         ctx.local_type(name).codegen_repr(),
-        PhpType::Int | PhpType::Bool | PhpType::Float | PhpType::Void | PhpType::Never | PhpType::Str
+        PhpType::Int
+            | PhpType::Bool
+            | PhpType::Float
+            | PhpType::Void
+            | PhpType::Never
+            | PhpType::Str
+            | PhpType::Array(_)
+            | PhpType::AssocArray { .. }
     ) {
         return None;
     }
@@ -6802,11 +7130,18 @@ fn lower_args_with_signature_labeled(
     args: &[Expr],
     callee: CalleeLabel<'_>,
 ) -> Vec<crate::ir::ValueId> {
+    ctx.clear_pending_dynamic_call_argc();
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
     if crate::types::call_args::has_named_args(args) {
         let operands = lower_named_args_with_signature(ctx, sig, args);
+        return coerce_operands_to_params(ctx, sig, operands, callee);
+    }
+    if let Some(operands) = lower_trailing_spread_variadic_args_with_signature(ctx, sig, args) {
+        return coerce_operands_to_params(ctx, sig, operands, callee);
+    }
+    if let Some(operands) = lower_leading_spread_variadic_args_with_signature(ctx, sig, args) {
         return coerce_operands_to_params(ctx, sig, operands, callee);
     }
     if let Some(operands) = lower_positional_spread_args_with_signature(ctx, sig, args) {
@@ -6866,6 +7201,196 @@ fn lower_args_with_signature_labeled(
         operands.push(lower_variadic_tail_array(ctx, sig, tail).value);
     }
     coerce_operands_to_params(ctx, sig, operands, callee)
+}
+
+/// Lowers a trailing indexed spread after all regular parameters into one variadic container.
+///
+/// A direct variadic call uses one synthetic array operand for its whole tail. Passing that
+/// spread expression as a separate operand only happens to work when the spread is the entire
+/// tail; an explicit tail prefix would otherwise overrun the callee ABI. Rebuilding the array
+/// also preserves `InvokerRefArg` markers already stored in a by-reference variadic source.
+fn lower_trailing_spread_variadic_args_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Option<Vec<crate::ir::ValueId>> {
+    sig.variadic.as_ref()?;
+    let spread_idx = single_trailing_indexed_spread_arg(ctx, args)?;
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    if spread_idx < regular_param_count {
+        return None;
+    }
+    let ExprKind::Spread(inner) = &args[spread_idx].kind else {
+        return None;
+    };
+    let source_ty = indexed_spread_source_type(ctx, inner)?;
+    if !matches!(
+        source_ty.codegen_repr(),
+        PhpType::Array(elem_ty) if elem_ty.codegen_repr() == PhpType::Mixed
+    ) {
+        return None;
+    }
+
+    let mut operands = args[..regular_param_count]
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
+        .collect::<Vec<_>>();
+    let tail = lower_variadic_tail_array(ctx, sig, &args[regular_param_count..spread_idx]);
+    let source = lower_expr(ctx, inner);
+    let source = lower_gradual_call_spread_source(ctx, source, args[spread_idx].span);
+    let source_len = ctx.emit_value(
+        Op::ArrayLen,
+        vec![source.value],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(args[spread_idx].span),
+    );
+    let fixed_count = emit_i64_at_span(ctx, spread_idx as i64, args[spread_idx].span);
+    let runtime_argc = ctx.emit_value(
+        Op::IAdd,
+        vec![fixed_count.value, source_len.value],
+        None,
+        PhpType::Int,
+        Op::IAdd.default_effects(),
+        Some(args[spread_idx].span),
+    );
+    let array_ty = variadic_array_type(sig);
+    let elem_ty = indexed_array_literal_element_type(&array_ty);
+    lower_indexed_array_spread_into_array(
+        ctx,
+        tail,
+        source,
+        elem_ty.as_ref(),
+        true,
+        args[spread_idx].span,
+    );
+    operands.push(tail.value);
+    ctx.set_pending_dynamic_call_argc(runtime_argc.value);
+    Some(operands)
+}
+
+/// Lowers a single dynamic positional spread that starts before a variadic parameter boundary.
+///
+/// Regular parameters consume the spread prefix, while the remaining elements are copied into the
+/// callee's typed variadic array. The source is evaluated once and its runtime length is retained as
+/// the hidden argc operand for callees that use `func_get_args()`.
+fn lower_leading_spread_variadic_args_with_signature(
+    ctx: &mut LoweringContext<'_, '_>,
+    sig: &FunctionSig,
+    args: &[Expr],
+) -> Option<Vec<crate::ir::ValueId>> {
+    sig.variadic.as_ref()?;
+    let spread_idx = single_trailing_indexed_spread_arg(ctx, args)?;
+    let regular_param_count = crate::types::call_args::regular_param_count(sig);
+    if spread_idx >= regular_param_count {
+        return None;
+    }
+    let ExprKind::Spread(inner) = &args[spread_idx].kind else {
+        return None;
+    };
+    let required_len = required_positional_spread_len(sig, spread_idx, regular_param_count);
+    let mut operands = args[..spread_idx]
+        .iter()
+        .enumerate()
+        .map(|(index, arg)| lower_arg_with_signature(ctx, sig, index, arg))
+        .collect::<Vec<_>>();
+
+    let spread_type = indexed_spread_source_type(ctx, inner)?;
+    let spread = lower_expr(ctx, inner);
+    let spread = lower_gradual_call_spread_source(ctx, spread, args[spread_idx].span);
+    let spread_len = ctx.emit_value(
+        Op::ArrayLen,
+        vec![spread.value],
+        None,
+        PhpType::Int,
+        Op::ArrayLen.default_effects(),
+        Some(args[spread_idx].span),
+    );
+    let fixed_count = emit_i64_at_span(ctx, spread_idx as i64, args[spread_idx].span);
+    let runtime_argc = ctx.emit_value(
+        Op::IAdd,
+        vec![fixed_count.value, spread_len.value],
+        None,
+        PhpType::Int,
+        Op::IAdd.default_effects(),
+        Some(args[spread_idx].span),
+    );
+    let temp_name = ctx.declare_hidden_temp(spread_type.clone());
+    store_value_into_temp(ctx, &temp_name, spread_type, spread, args[spread_idx].span);
+    let spread_expr = Expr::new(ExprKind::Variable(temp_name), inner.span);
+    let spread_value = lower_expr(ctx, &spread_expr);
+    emit_positional_spread_min_len_guard(
+        ctx,
+        spread_value.value,
+        required_len,
+        args[spread_idx].span,
+    );
+
+    for param_idx in spread_idx..regular_param_count {
+        let element_idx = param_idx - spread_idx;
+        let default = sig.defaults.get(param_idx).and_then(|default| default.as_ref());
+        let param_expr = if let Some(default) = default {
+            if element_idx < required_len {
+                spread_element_expr_for_ir(
+                    &spread_expr,
+                    element_idx,
+                    None,
+                    false,
+                    args[spread_idx].span,
+                )
+            } else {
+                spread_element_or_default_expr_for_ir(
+                    &spread_expr,
+                    element_idx,
+                    None,
+                    false,
+                    default.clone(),
+                    args[spread_idx].span,
+                )
+            }
+        } else {
+            spread_element_expr_for_ir(
+                &spread_expr,
+                element_idx,
+                None,
+                false,
+                args[spread_idx].span,
+            )
+        };
+        operands.push(lower_expr(ctx, &param_expr).value);
+    }
+
+    let consumed_from_spread = regular_param_count - spread_idx;
+    let tail_source_expr = Expr::new(
+        ExprKind::FunctionCall {
+            name: Name::unqualified("array_slice"),
+            args: vec![
+                spread_expr,
+                Expr::new(
+                    ExprKind::IntLiteral(consumed_from_spread as i64),
+                    args[spread_idx].span,
+                ),
+            ],
+        },
+        args[spread_idx].span,
+    );
+    let tail_source = lower_expr(ctx, &tail_source_expr);
+    let tail = lower_variadic_tail_array(ctx, sig, &[]);
+    let array_ty = variadic_array_type(sig);
+    let elem_ty = indexed_array_literal_element_type(&array_ty);
+    lower_indexed_array_spread_into_array(
+        ctx,
+        tail,
+        tail_source,
+        elem_ty.as_ref(),
+        variadic_param_is_by_ref(sig),
+        args[spread_idx].span,
+    );
+    operands.push(tail.value);
+    ctx.set_pending_dynamic_call_argc(runtime_argc.value);
+    Some(operands)
 }
 
 /// Lowers one trailing indexed spread in a fixed-arity positional call.
@@ -8006,7 +8531,8 @@ fn variadic_container_element_type(ty: PhpType) -> PhpType {
     }
 }
 
-/// Boxes variadic tail values when the callee expects an `array<mixed>` slot.
+/// Coerces a variadic tail value to the declared element storage and boxes values for an
+/// `array<mixed>` slot.
 fn coerce_variadic_tail_value(
     ctx: &mut LoweringContext<'_, '_>,
     value: LoweredValue,
@@ -8016,10 +8542,21 @@ fn coerce_variadic_tail_value(
     let PhpType::Array(elem_ty) = array_ty.codegen_repr() else {
         return value;
     };
-    if elem_ty.codegen_repr() != PhpType::Mixed {
-        return value;
+    let elem_ty = elem_ty.codegen_repr();
+    let source_ty = ctx.builder.value_php_type(value.value).codegen_repr();
+    if elem_ty == PhpType::Str
+        && matches!(
+            source_ty,
+            PhpType::Union(_)
+                | PhpType::Int
+                | PhpType::Float
+                | PhpType::Bool
+                | PhpType::Object(_)
+        )
+    {
+        return coerce_to_string_at_span(ctx, value, Some(span));
     }
-    if ctx.builder.value_php_type(value.value).codegen_repr() == PhpType::Mixed {
+    if elem_ty != PhpType::Mixed || source_ty == PhpType::Mixed {
         return value;
     }
     ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span))
@@ -8474,25 +9011,34 @@ fn array_builtin_return_type(
         "array_fill_keys" => array_fill_keys_builtin_return_type(ctx, operands),
         "array_merge" => array_merge_builtin_return_type(ctx, operands),
         "array_replace" => array_replace_builtin_return_type(ctx, operands),
-        "array_splice" | "array_filter" | "array_diff" | "array_intersect" | "array_diff_key"
+        "array_splice" | "array_diff" | "array_intersect" | "array_diff_key"
         | "array_intersect_key" | "array_change_key_case" => {
             array_preserve_first_builtin_return_type(ctx, operands)
         }
         "in_array" => Some(PhpType::Bool),
         "array_is_list" => Some(PhpType::Bool),
         "array_key_first" | "array_key_last" => Some(PhpType::Mixed),
-        // `array_keys`/`array_slice` produce a fresh indexed array of boxed `Mixed`
-        // payloads (keys, or the sliced elements). These mirror the result type the
-        // first-class-callable fallback supplied before they were registered as
-        // builtins, so the EIR backend keeps receiving a concrete `Array` result
-        // type rather than the registry's `Mixed` return-type placeholder.
-        "array_keys" | "array_slice" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
+        // `array_keys` produces a fresh indexed array of boxed `Mixed` payloads, because a PHP
+        // array's keys are genuinely `int|string`. This mirrors the result type the
+        // first-class-callable fallback supplied before it was registered as a builtin, so the
+        // EIR backend keeps receiving a concrete `Array` result type rather than the registry's
+        // `Mixed` return-type placeholder.
+        "array_keys" => Some(PhpType::Array(Box::new(PhpType::Mixed))),
         "range" => Some(PhpType::Array(Box::new(PhpType::Int))),
-        "array_values" => {
+        // `array_slice` PRESERVES its source's element type — it re-emits the very elements it
+        // was given — so it belongs with `array_values`, not with `array_keys`. Typing it
+        // `array<mixed>` made codegen widen the result's slots to boxed cells while the CHECKER
+        // still typed the call `array<string>`; a caller reading an element out of the returned
+        // array then read the box pointer as a raw payload, so a sliced string read back empty
+        // and a sliced int read back as a heap address — silently, with the count still correct.
+        "array_slice" | "array_values" => {
             let array = operands.first()?;
             match ctx.builder.value_php_type(*array).codegen_repr() {
                 PhpType::Array(elem) => Some(PhpType::Array(elem)),
                 PhpType::AssocArray { value, .. } => Some(PhpType::Array(value)),
+                PhpType::Mixed | PhpType::Union(_) => {
+                    Some(PhpType::Array(Box::new(PhpType::Mixed)))
+                }
                 other => Some(other),
             }
         }
@@ -8527,7 +9073,6 @@ fn array_builtin_return_type(
         _ => None,
     }
 }
-
 
 /// Returns the hash result metadata for `array_merge_recursive(a, b)`.
 ///
@@ -9107,7 +9652,14 @@ fn lower_array_literal_as_indexed_from_lowered(
     for (item, value) in items.iter().zip(lowered.iter()) {
         match value {
             SpreadItem::Spread(source) => {
-                lower_indexed_array_spread_into_array(ctx, array, *source, elem_ty.as_ref(), item.span);
+                lower_indexed_array_spread_into_array(
+                    ctx,
+                    array,
+                    *source,
+                    elem_ty.as_ref(),
+                    false,
+                    item.span,
+                );
             }
             SpreadItem::Element(value) => {
                 ctx.emit_void(Op::ArrayPush, vec![array.value, value.value], None, Op::ArrayPush.default_effects(), Some(item.span));
@@ -9209,6 +9761,7 @@ fn lower_indexed_array_spread_into_array(
     array: LoweredValue,
     source: LoweredValue,
     container_elem_ty: Option<&PhpType>,
+    preserve_element_references: bool,
     span: crate::span::Span,
 ) {
     let source_elem_ty = match ctx.builder.value_php_type(source.value).codegen_repr() {
@@ -9249,11 +9802,23 @@ fn lower_indexed_array_spread_into_array(
 
     ctx.builder.position_at_end(body);
     let value = ctx.emit_value(
-        Op::ArrayGet,
+        if preserve_element_references {
+            Op::InvokerArrayElemRefArg
+        } else {
+            Op::ArrayGet
+        },
         vec![source.value, index],
         None,
-        source_elem_ty,
-        Op::ArrayGet.default_effects(),
+        if preserve_element_references {
+            PhpType::Mixed
+        } else {
+            source_elem_ty
+        },
+        if preserve_element_references {
+            Op::InvokerArrayElemRefArg.default_effects()
+        } else {
+            Op::ArrayGet.default_effects()
+        },
         Some(span),
     );
     ctx.emit_void(
@@ -10806,13 +11371,31 @@ fn lower_closure_with_context(
             } else if by_ref && body_contains_eval {
                 ctx.set_local_type(capture, PhpType::Mixed);
                 Some(PhpType::Mixed)
+            } else if by_ref
+                && matches!(
+                    ctx.local_type(capture).codegen_repr(),
+                    PhpType::Void | PhpType::Never
+                )
+            {
+                // PHP auto-vivifies an undefined/null by-reference capture, and the closure may
+                // replace that cell with any PHP value. Mirror the checker's capture-effect
+                // promotion so the outer slot and the closure's hidden capture parameter share
+                // one boxed-Mixed ABI instead of freezing the cell as a null/void word.
+                ctx.set_local_type(capture, PhpType::Mixed);
+                Some(PhpType::Mixed)
             } else if capture == "this" {
                 // A `Closure::bind(fn () => $this->prop, $newThis, Scope::class)` rebind types the
                 // closure body's `$this` as the bound receiver's class (set in
                 // `build_bound_closure_binding`), so `$this->prop` resolves its property offset
                 // against `$newThis`'s layout instead of the lexical class. `None` for every other
                 // `$this` capture, leaving the lexical-class typing below unchanged.
-                ctx.take_bound_closure_this_class().map(PhpType::Object)
+                ctx.take_bound_closure_this_class().map(|class_name| {
+                    if class_name.is_empty() {
+                        PhpType::Mixed
+                    } else {
+                        PhpType::Object(class_name)
+                    }
+                })
             } else {
                 None
             };
@@ -11506,7 +12089,14 @@ fn lower_untyped_descriptor_invoker_indexed_container(
         if let ExprKind::Spread(inner) = &arg.kind {
             let source = lower_expr(ctx, inner);
             let source = lower_gradual_call_spread_source(ctx, source, arg.span);
-            lower_indexed_array_spread_into_array(ctx, array, source, Some(&elem_ty), arg.span);
+            lower_indexed_array_spread_into_array(
+                ctx,
+                array,
+                source,
+                Some(&elem_ty),
+                false,
+                arg.span,
+            );
             continue;
         }
         let value = lower_untyped_descriptor_invoker_arg_value(ctx, arg);
@@ -12504,7 +13094,25 @@ pub(crate) fn lower_ref_assign_array_elem(
             Some(span),
         );
         let writeback = match &array.kind {
-            ExprKind::Variable(name) => Some((name.clone(), assoc_ty)),
+            ExprKind::Variable(name) => Some((name.clone(), assoc_ty, false)),
+            _ => None,
+        };
+        (hash, writeback)
+    } else if let IrType::Heap(IrHeapKind::Mixed) = array_value.ir_type {
+        let assoc_ty = PhpType::AssocArray {
+            key: Box::new(PhpType::Mixed),
+            value: Box::new(PhpType::Mixed),
+        };
+        let hash = ctx.emit_value(
+            Op::MixedToHash,
+            vec![array_value.value],
+            None,
+            assoc_ty.clone(),
+            Op::MixedToHash.default_effects(),
+            Some(span),
+        );
+        let writeback = match &array.kind {
+            ExprKind::Variable(name) => Some((name.clone(), assoc_ty, true)),
             _ => None,
         };
         (hash, writeback)
@@ -12520,14 +13128,15 @@ pub(crate) fn lower_ref_assign_array_elem(
         Op::HashRefElement.default_effects(),
         Some(span),
     );
-    if let Some((array_name, assoc_ty)) = promotion {
-        ctx.store_prepared_mutated_local(
+    if let Some((array_name, assoc_ty, mixed_storage)) = promotion {
+        super::stmt::store_promoted_reference_hash(
+            ctx,
             &array_name,
             hash_value,
-            assoc_ty.clone(),
-            Some(span),
+            assoc_ty,
+            mixed_storage,
+            span,
         );
-        ctx.set_local_type_exact(&array_name, assoc_ty);
     }
     ctx.adopt_ref_cell(target, cell_ptr, target_ty, Some(span));
 }
@@ -13002,7 +13611,7 @@ fn static_property_result_type(
     else {
         return PhpType::Mixed;
     };
-    normalize_value_php_type(property_ty.codegen_repr())
+    normalize_value_php_type(property_ty.clone())
 }
 
 /// Lowers an object method call.
@@ -13082,6 +13691,9 @@ fn lower_method_call(
         && is_reflection_class_new_instance_without_constructor_call(ctx, object.value, method)
     {
         return lower_reflection_class_new_instance_without_constructor(ctx, object, args, expr);
+    }
+    if op == Op::MethodCall && is_reflection_class_new_lazy_ghost_call(ctx, object.value, method) {
+        return lower_reflection_class_new_lazy_ghost(ctx, object, args, expr);
     }
     if op == Op::MethodCall {
         if let Some(value) = lower_reflection_class_static_property_value_call(
@@ -13403,6 +14015,45 @@ fn lower_reflection_class_new_instance_without_constructor(
         Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
         Some(expr.span),
     )
+}
+
+/// Lowers `ReflectionClass::newLazyGhost()` to constructorless allocation plus initialization.
+///
+/// The initializer receives the exact constructorless instance. The object access layer can later
+/// defer this call transparently; this lowering preserves the allocation and initializer contract.
+fn lower_reflection_class_new_lazy_ghost(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: LoweredValue,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    if args.is_empty() || args.len() > 2 || args.iter().any(is_spread_arg) {
+        return lower_reflection_class_new_instance_without_constructor_unsupported(ctx, expr);
+    }
+    let initializer = args[0].clone();
+    if let Some(options) = args.get(1) {
+        let options = lower_expr(ctx, options);
+        if ctx.value_is_owning_temporary(options) {
+            crate::ir_lower::ownership::release_if_owned(ctx, options, Some(expr.span));
+        }
+    }
+    let class_name = lower_property_get_from_value(ctx, object, "__name", Op::PropGet, expr);
+    let ghost = ctx.emit_value(
+        Op::DynamicObjectNewWithoutConstructorMixed,
+        vec![class_name.value],
+        None,
+        PhpType::Mixed,
+        Op::DynamicObjectNewWithoutConstructorMixed.default_effects(),
+        Some(expr.span),
+    );
+    let temp_name = ctx.declare_owned_hidden_temp(PhpType::Mixed);
+    store_value_into_temp(ctx, &temp_name, PhpType::Mixed, ghost, expr.span);
+    let ghost_arg = Expr::new(ExprKind::Variable(temp_name.clone()), expr.span);
+    let initialized = lower_expr_call(ctx, &initializer, &[ghost_arg], expr);
+    if ctx.value_is_owning_temporary(initialized) {
+        crate::ir_lower::ownership::release_if_owned(ctx, initialized, Some(expr.span));
+    }
+    take_owned_temp(ctx, &temp_name, expr.span)
 }
 
 /// Lowers live static-property value access for statically-known `ReflectionClass` calls.
@@ -15674,6 +16325,16 @@ fn is_reflection_class_new_instance_without_constructor_call(
     is_reflection_class_construction_receiver(ctx, object)
 }
 
+/// Returns true when a call targets PHP 8.4 `ReflectionClass::newLazyGhost()`.
+fn is_reflection_class_new_lazy_ghost_call(
+    ctx: &LoweringContext<'_, '_>,
+    object: ValueId,
+    method: &str,
+) -> bool {
+    php_symbol_key(method) == "newlazyghost"
+        && is_reflection_class_construction_receiver(ctx, object)
+}
+
 /// Returns true when a receiver can use ReflectionClass construction helper lowering.
 fn is_reflection_class_construction_receiver(
     ctx: &LoweringContext<'_, '_>,
@@ -16443,7 +17104,7 @@ fn lower_static_method_call(
             // A top-level closure has no enclosing `$this` and already captures a null receiver
             // typed `Mixed`, so it keeps dispatching against the bound object at runtime.
             if let Some(new_this_class) =
-                args.get(1).and_then(|arg| instance_callable_object_class(ctx, arg))
+                args.get(1).and_then(|arg| bound_closure_this_class(ctx, arg))
             {
                 ctx.set_bound_closure_this_class(new_this_class);
             }
@@ -17764,7 +18425,7 @@ fn coerce_to_float_at_span(
 }
 
 /// Coerces a value to string when possible.
-fn coerce_to_string(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
+pub(crate) fn coerce_to_string(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, expr: &Expr) -> LoweredValue {
     coerce_to_string_at_span(ctx, value, Some(expr.span))
 }
 
