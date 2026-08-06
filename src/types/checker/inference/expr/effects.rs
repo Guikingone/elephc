@@ -14,8 +14,7 @@ use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
-use super::merge_null_coalesce_result_type;
-use super::super::syntactic::wider_type_syntactic;
+use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
 
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -161,7 +160,7 @@ impl Checker {
                 merge_array_storage_effects(&mut else_env, &then_env);
                 let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
                 merge_array_storage_effects(env, &else_env);
-                Ok(wider_type_syntactic(&then_ty, &else_ty))
+                Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {

@@ -3795,6 +3795,27 @@ run();
     assert_eq!(out, "row:1:a|2:b");
 }
 
+/// Verifies PDOStatement subclasses preserve bindColumn's durable by-reference destination.
+#[test]
+fn test_pdo_statement_subclass_bind_column_updates_durable_reference() {
+    let out = compile_and_run(
+        r#"<?php
+class BoundStatement extends PDOStatement {
+    protected function __construct() {}
+}
+
+$db = new PDO("sqlite::memory:");
+$db->setAttribute(PDO::ATTR_STATEMENT_CLASS, [BoundStatement::class]);
+$stmt = $db->query("SELECT 7");
+mixed $value = null;
+$stmt->bindColumn(1, $value, PDO::PARAM_INT);
+$stmt->fetch(PDO::FETCH_BOUND);
+echo get_class($stmt) . ":" . $value;
+"#,
+    );
+    assert_eq!(out, "BoundStatement:7");
+}
+
 /// Verifies rebinding one output column replaces its previous destination like php-src's hash.
 #[test]
 fn test_pdo_bind_column_replaces_existing_destination() {

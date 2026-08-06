@@ -5730,16 +5730,6 @@ fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
-    if sig.ref_params.get(index).copied().unwrap_or(false)
-        && sig
-            .params
-            .get(index)
-            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
-    {
-        if let ExprKind::Variable(name) = &arg.kind {
-            ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
-        }
-    }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
@@ -5840,7 +5830,7 @@ fn lower_by_ref_array_arg_with_signature(
         Op::ArrayToMixed.default_effects(),
         Some(arg.span),
     );
-    ctx.store_mutated_local(name, converted, array_ty, Some(arg.span));
+    ctx.store_call_normalized_local(name, converted, array_ty, Some(arg.span));
     Some(ctx.load_local(name, Some(arg.span)).value)
 }
 
@@ -10660,6 +10650,7 @@ fn lower_method_call(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
+    promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
@@ -13275,6 +13266,7 @@ fn lower_method_call_with_receiver(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
+    promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
@@ -13519,6 +13511,52 @@ fn method_signature(
         return common_dynamic_method_signature(ctx, &key);
     }
     None
+}
+
+/// Promotes the writable destination used by PDOStatement binding methods to a durable Mixed cell.
+fn promote_pdo_binding_ref_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+    args: &[Expr],
+) {
+    if !type_may_be_pdo_statement(ctx, &ctx.builder.value_php_type(object)) {
+        return;
+    }
+    let parameter_name = match php_symbol_key(method).as_str() {
+        "bindparam" => "variable",
+        "bindcolumn" => "var",
+        _ => return,
+    };
+    let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+    let argument = expanded_args
+        .iter()
+        .enumerate()
+        .find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if name == parameter_name => Some(value.as_ref()),
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 1 => Some(arg),
+            _ => None,
+        });
+    let Some(Expr {
+        kind: ExprKind::Variable(name),
+        span,
+    }) = argument
+    else {
+        return;
+    };
+    ctx.promote_local_mixed_ref_cell(name, Some(*span));
+}
+
+/// Returns whether a receiver type can dispatch to PDOStatement binding methods.
+fn type_may_be_pdo_statement(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class) => class_extends_class(ctx, class, "PDOStatement"),
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| type_may_be_pdo_statement(ctx, member)),
+        _ => false,
+    }
 }
 
 /// Returns the conservative return-to-argument alias summary for a method dispatch.

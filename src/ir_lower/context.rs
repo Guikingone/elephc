@@ -575,17 +575,24 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Updates the current known PHP type for a local.
     pub(crate) fn set_local_type(&mut self, name: &str, ty: PhpType) {
+        self.set_local_type_impl(name, ty, true);
+    }
+
+    /// Updates a local type and optionally records a runtime array-layout conversion.
+    fn set_local_type_impl(&mut self, name: &str, ty: PhpType, track_array_conversion: bool) {
         if let Some(slot) = self.local_slots.get(name).copied() {
             self.builder.widen_local_storage_type(slot, ty.clone());
         }
-        if let Some(target) = array_storage_conversion(self.local_types.get(name), &ty) {
-            let joined = self
-                .array_conversions
-                .get(name)
-                .map_or(target.clone(), |previous| {
-                    join_array_storage_conversion(previous, &target)
-                });
-            self.array_conversions.insert(name.to_string(), joined);
+        if track_array_conversion {
+            if let Some(target) = array_storage_conversion(self.local_types.get(name), &ty) {
+                let joined = self
+                    .array_conversions
+                    .get(name)
+                    .map_or(target.clone(), |previous| {
+                        join_array_storage_conversion(previous, &target)
+                    });
+                self.array_conversions.insert(name.to_string(), joined);
+            }
         }
         self.local_types.insert(name.to_string(), ty);
     }
@@ -1600,7 +1607,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_mutated_local_impl(name, value, php_type, span, true)
+        self.store_mutated_local_impl(name, value, php_type, span, true, true)
+    }
+
+    /// Stores a by-reference call's internal array normalization without hoisting it.
+    ///
+    /// Call lowering deliberately captures the operand's concrete representation before adapting
+    /// an `array<mixed>` by-reference argument. Treating that adaptation as a statement-level
+    /// conversion makes the fixed-point pass pre-widen the operand and breaks concrete builtin
+    /// dispatch such as `sort()` and `array_pop()`.
+    pub(crate) fn store_call_normalized_local(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_mutated_local_impl(name, value, php_type, span, true, false)
     }
 
     /// Stores a mutation result whose previous boxed local owner was released beforehand.
@@ -1611,7 +1634,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_mutated_local_impl(name, value, php_type, span, false)
+        self.store_mutated_local_impl(name, value, php_type, span, false, true)
     }
 
     /// Implements consuming local storeback with caller-selected cleanup timing.
@@ -1622,6 +1645,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
         release_previous: bool,
+        track_array_conversion: bool,
     ) -> LoweredValue {
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
@@ -1639,12 +1663,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let slot = self.declare_local(name, php_type.clone());
         if uses_global {
             self.store_global_name(name, slot, value, span);
-            self.set_local_type(name, php_type);
+            self.set_local_type_impl(name, php_type, track_array_conversion);
             return value;
         }
         let is_ref_bound = self.is_ref_bound_local(name) && previous_kind == LocalKind::PhpLocal;
         let value_type = self.builder.value_php_type(value.value).codegen_repr();
-        self.set_local_type(name, php_type.clone());
+        self.set_local_type_impl(name, php_type.clone(), track_array_conversion);
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
         if release_previous
             && !is_ref_bound
