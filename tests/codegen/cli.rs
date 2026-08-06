@@ -989,6 +989,218 @@ $a[] = 2;
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the standard streams reach the process fds, by constant and by `php://` name.
+///
+/// `STDOUT` and `STDERR` are not boxed handles: the EIR gives them as raw integers already typed
+/// `resource<stream>`, and their value IS the fd. `php://stdout`, `php://stderr` and
+/// `php://output` name the same three fds, which is why they work here while `php://memory` and
+/// `php://temp` — real stream implementations — stay refused.
+///
+/// Needs no preopen at all: none of these touches the filesystem.
+#[test]
+fn test_cli_wasm_standard_streams_reach_the_process_fds() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_std_streams");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+fwrite(STDOUT, "const-out\n");
+fwrite(STDERR, "const-err\n");
+$o = fopen("php://stdout", "w");
+fwrite($o, "wrapper-out\n");
+fclose($o);
+$e = fopen("php://stderr", "w");
+fwrite($e, "wrapper-err\n");
+fclose($e);
+$b = fopen("php://output", "w");
+fwrite($b, "buffer-out\n");
+fclose($b);
+"#,
+    )
+    .unwrap();
+
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the standard streams to WASM");
+    assert!(
+        built.status.success(),
+        "the standard streams must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the standard streams under Node");
+    // php-src's own answers for the same program.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "const-out\nwrapper-out\nbuffer-out\n"
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr),
+        "const-err\nwrapper-err\n"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the file family round-trips real files under a preopened directory.
+///
+/// WASI Preview 1 is capability-based: a module reaches no path at all unless the host
+/// preopens a directory for it, so the runner below passes `preopens` and the runtime resolves
+/// every path against the first preopened fd. Without one, each of these answers PHP's failure
+/// value, which is also what a host that grants no filesystem should produce.
+///
+/// A stream handle is a boxed Mixed cell carrying the WASI fd as a resource payload, which is
+/// what lets it live in a local and be passed to `fwrite`/`fread`/`fclose` like any other value.
+///
+/// Every expected byte is php-src 8.5.6's own answer for the same program, with one documented
+/// exception: php-src's open-failure warnings name the path and the errno
+/// (`fopen(nope.txt): Failed to open stream: No such file or directory`) and it warns for a
+/// failed `unlink` too. These are the NATIVE backend's shorter wording, so the two Elephc
+/// targets agree; the VALUES are php-src's exactly.
+#[test]
+fn test_cli_wasm_file_round_trip_matches_php() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_files");
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({
+  version: "preview1",
+  args: ["m"],
+  env: {},
+  preopens: { ".": "." },
+  returnOnExit: true,
+});
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+$f = fopen("out.txt", "w");
+echo "w:", fwrite($f, "hello\n"), ",", fwrite($f, "world\n"), "\n";
+fclose($f);
+
+$g = fopen("out.txt", "r");
+echo "r:[", fread($g, 6), "][", fread($g, 99), "][", fread($g, 4), "]\n";
+echo "close:", fclose($g) ? "1" : "0", "\n";
+
+$a = fopen("out.txt", "a");
+fwrite($a, "again\n");
+fclose($a);
+echo "appended:[", file_get_contents("out.txt"), "]\n";
+
+echo "put:", file_put_contents("two.txt", "abc"), "\n";
+echo "get:[", file_get_contents("two.txt"), "]\n";
+echo "exists:", file_exists("two.txt") ? "1" : "0", "\n";
+echo "unlink:", unlink("two.txt") ? "1" : "0", "\n";
+echo "gone:", file_exists("two.txt") ? "1" : "0", "\n";
+
+echo "missing-open:", fopen("nope.txt", "r") === false ? "false" : "handle", "\n";
+echo "missing-get:", file_get_contents("nope.txt") === false ? "false" : "value", "\n";
+echo "missing-unlink:", unlink("nope.txt") ? "1" : "0", "\n";
+unlink("out.txt");
+"#,
+    )
+    .unwrap();
+
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the file round trip to WASM");
+    assert!(
+        built.status.success(),
+        "the file round trip must compile: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the file round trip under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        concat!(
+            "w:6,6\n",
+            "r:[hello\n][world\n][]\n",
+            "close:1\n",
+            "appended:[hello\nworld\nagain\n]\n",
+            "put:3\n",
+            "get:[abc]\n",
+            "exists:1\n",
+            "unlink:1\n",
+            "gone:0\n",
+            "missing-open:false\n",
+            "missing-get:false\n",
+            "missing-unlink:0\n",
+        ),
+        "php-src's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    // The two open failures warn; the wording is the native backend's, not php-src's richer one.
+    assert_eq!(
+        String::from_utf8_lossy(&run.stderr),
+        concat!(
+            "Warning: fopen(): Failed to open stream\n",
+            "Warning: file_get_contents(): Failed to open stream\n",
+        ),
+    );
+    // Every file the program made must be gone: `unlink` has to reach the real directory.
+    assert!(!dir.join("out.txt").exists(), "out.txt must be unlinked");
+    assert!(!dir.join("two.txt").exists(), "two.txt must be unlinked");
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `(float) $string` parses the leading numeric prefix exactly as php-src does.
 ///
 /// The runtime parser was already there — `(int) $string` routes float-form prefixes through

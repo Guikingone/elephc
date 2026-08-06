@@ -198,6 +198,24 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         return None;
     }
     let (backend, lowerer, tests) = match id {
+        // The file family shares one contract table and one lowering, so it shares its
+        // evidence: the round-trip test writes, reads back, and removes real files under a
+        // preopened directory, which is the only way any of these can be exercised at all.
+        RuntimeFnId::Fopen
+        | RuntimeFnId::Fwrite
+        | RuntimeFnId::Fread
+        | RuntimeFnId::Fclose
+        | RuntimeFnId::FileExists
+        | RuntimeFnId::Unlink
+        | RuntimeFnId::FileGetContents
+        | RuntimeFnId::FilePutContents => (
+            "codegen_wasm::files",
+            "codegen_wasm::builtins::lower_file_builtin",
+            &[
+                "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+                "codegen::cli::test_cli_wasm_file_round_trip_matches_php",
+            ][..],
+        ),
         RuntimeFnId::Readline => (
             "codegen_wasm::runtime",
             "codegen_wasm::builtins::lower_direct_builtin",

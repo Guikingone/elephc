@@ -6798,7 +6798,7 @@
           "name": "fclose",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "fclose(...)"
           ],
@@ -6806,7 +6806,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::files",
+            "lowerer": "codegen_wasm::builtins::lower_file_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+              "codegen::cli::test_cli_wasm_file_round_trip_matches_php"
+            ]
+          }
         },
         {
           "name": "fdatasync",
@@ -6910,7 +6917,7 @@
           "name": "file_exists",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "file_exists(...)"
           ],
@@ -6918,13 +6925,20 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::files",
+            "lowerer": "codegen_wasm::builtins::lower_file_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+              "codegen::cli::test_cli_wasm_file_round_trip_matches_php"
+            ]
+          }
         },
         {
           "name": "file_get_contents",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "file_get_contents(...)"
           ],
@@ -6932,13 +6946,20 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::files",
+            "lowerer": "codegen_wasm::builtins::lower_file_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+              "codegen::cli::test_cli_wasm_file_round_trip_matches_php"
+            ]
+          }
         },
         {
           "name": "file_put_contents",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "file_put_contents(...)"
           ],
@@ -6946,7 +6967,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::files",
+            "lowerer": "codegen_wasm::builtins::lower_file_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+              "codegen::cli::test_cli_wasm_file_round_trip_matches_php"
+            ]
+          }
         },
         {
           "name": "fileatime",
@@ -7106,7 +7134,7 @@
           "name": "fopen",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "fopen(...)"
           ],
@@ -7114,7 +7142,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::files",
+            "lowerer": "codegen_wasm::builtins::lower_file_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+              "codegen::cli::test_cli_wasm_file_round_trip_matches_php"
+            ]
+          }
         },
         {
           "name": "fpassthru",
@@ -7162,7 +7197,7 @@
           "name": "fread",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "fread(...)"
           ],
@@ -7170,7 +7205,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::files",
+            "lowerer": "codegen_wasm::builtins::lower_file_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+              "codegen::cli::test_cli_wasm_file_round_trip_matches_php"
+            ]
+          }
         },
         {
           "name": "fscanf",
@@ -7274,7 +7316,7 @@
           "name": "fwrite",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "fwrite(...)"
           ],
@@ -7282,7 +7324,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::files",
+            "lowerer": "codegen_wasm::builtins::lower_file_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+              "codegen::cli::test_cli_wasm_file_round_trip_matches_php"
+            ]
+          }
         },
         {
           "name": "getcwd",
@@ -8765,7 +8814,7 @@
           "name": "unlink",
           "family": "runtime_fn",
           "enum_name": "RuntimeFnId",
-          "disposition": "missing",
+          "disposition": "supported",
           "producers": [
             "unlink(...)"
           ],
@@ -8773,7 +8822,14 @@
             "command",
             "npm"
           ],
-          "missing": "ordinary PHP builtin reachable from the public frontend; WASM lowerer absent"
+          "supported": {
+            "backend": "codegen_wasm::files",
+            "lowerer": "codegen_wasm::builtins::lower_file_builtin",
+            "tests": [
+              "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
+              "codegen::cli::test_cli_wasm_file_round_trip_matches_php"
+            ]
+          }
         },
         {
           "name": "var_dump",
@@ -9248,7 +9304,7 @@
               "codegen_wasm::builtins::tests::direct_builtins_admit_only_the_storage_they_lower",
               "codegen::cli::test_cli_wasm_round_and_radix_conversions_match_php"
             ],
-            "notes": "Precision-0 form. Half away from ZERO, compared against trunc(x) rather than floor(|x|+0.5) — the addition is inexact at 0.49999999999999994 and above 2^52. Verified on 104 values."
+            "notes": "Precision-0 form. Half away from ZERO, compared against trunc(x) rather than floor(|x|+0.5) \u2014 the addition is inexact at 0.49999999999999994 and above 2^52. Verified on 104 values."
           }
         },
         {

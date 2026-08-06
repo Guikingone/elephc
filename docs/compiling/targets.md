@@ -135,17 +135,30 @@ times over:
 | Mixed containers (`array_get`/`array_set`/`iter_start`/`strict_eq`) | 2 |
 | All three together | 17 |
 
+Those figures are an upper bound, and the first row has since been measured
+against reality: the eight core file functions removed `fopen`, `fread`,
+`fwrite`, `fclose`, `unlink`, `file_exists`, `file_get_contents` and
+`file_put_contents` from between 14 and 29 examples each, and unblocked **none**
+of them outright. What it did do is move seven examples down to a single
+remaining blocker. Two examples did start compiling and were then deliberately
+refused again: both opened a `scheme://` stream wrapper, which this target does
+not implement, so compiling them meant answering `false` where PHP answers a
+handle.
+
 The blocker-count distribution says the same thing. Counting the distinct
 refusals a single `elephc build --target wasm32-wasi` reports per example: of the
-140 that do not compile, 10 have one distinct blocker, 16 have two, 11 have
-three, 21 have four, and the tail runs well past fifty. The ten reachable by a
-single blocker are `array-access-exception-order`, `constructor-promotion`,
-`hello-preg`, `json-jsonserializable`, `logical`, `pipe-operator`,
-`print_r-return`, `sdl_audio`, `strict-php` and `type-ops` — and three of those
-are dead ends rather than work: `sdl_audio` is one of the thirty that never
-will, `strict-php` fails in the type checker on every target rather than here,
-and php-src itself fatals on `constructor-promotion`, so compiling it would
-match nothing.
+140 that do not compile, 17 have one distinct blocker, 23 have two, 15 have
+three, 16 have four, and the tail runs well past fifty. The seventeen reachable
+by a single blocker are `array-access-exception-order`, `constructor-promotion`,
+`fsockopen`, `ftp-stream`, `hello-preg`, `json-jsonserializable`, `logical`,
+`phar-writer`, `php-wrapper`, `pipe-operator`, `print_r-return`, `sdl_audio`,
+`socket-pair`, `stream-copy`, `stream-get-contents`, `strict-php` and
+`type-ops`. Eight of those are dead ends rather than work: `sdl_audio`,
+`fsockopen` and `socket-pair` are among the thirty that never will; `ftp-stream`,
+`phar-writer` and `php-wrapper` need stream wrappers this target refuses on
+purpose; `strict-php` fails in the type checker on every target rather than
+here; and php-src itself fatals on `constructor-promotion`, so compiling it
+would match nothing.
 
 Read that distribution with one caveat: a refusal counted once can stand for a
 whole subsystem. The most frequent one used to be a catch-all — 47 of the 140
@@ -174,6 +187,22 @@ Cairo), or a service that is not running (the PDO driver examples).
 Behaviour that a naive lowering gets wrong, and that this backend implements
 against measured php-src 8.5.6 output rather than by analogy:
 
+- **File I/O, against a preopened directory.** `fopen`, `fread`, `fwrite`,
+  `fclose`, `file_get_contents`, `file_put_contents`, `file_exists` and `unlink`
+  reach the real filesystem. WASI Preview 1 is capability-based, so a module has
+  no filesystem at all unless the host preopens a directory for it — `node`'s
+  `preopens`, `wasmer --dir .` — and every path resolves against the first
+  preopen. Without one, each answers PHP's failure value, which is also the right
+  answer for a host that grants nothing. A stream handle is a boxed value
+  carrying the WASI fd, so it lives in locals and arrays like any other. The mode
+  string is PHP's: `r`/`w`/`a`/`x`/`c` with an optional `+`, and `b`/`t` read and
+  ignored. `STDOUT`, `STDERR`, `STDIN` and the `php://stdout`, `php://stderr`,
+  `php://stdin`, `php://output` names reach the process fds directly and need no
+  preopen; `fclose` on one of them answers true without closing the fd, which is
+  what php-src does for a `php://stdout` handle. Any OTHER `scheme://` path is a
+  stream wrapper — `http://`, `ftp://`, `phar://`, `php://memory` — and a literal
+  one is refused at compile time rather than opened as a filename, which would
+  answer `false` where PHP answers a handle.
 - **`$mixed[$key]` on a receiver whose type is only known at runtime.** Reading
   one element out of another (`$deep["db"]["host"]`) makes the inner read answer
   `mixed`, so the outer one dispatches on the cell's tag. An array or hash reads

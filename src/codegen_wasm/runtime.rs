@@ -169,6 +169,13 @@ const WARN_OFFSET_ON_TYPE_INT: &[u8] =
     b"Warning: Trying to access array offset on value of type int\n";
 const WARN_OFFSET_ON_TYPE_FLOAT: &[u8] =
     b"Warning: Trying to access array offset on value of type float\n";
+/// A path that cannot be opened warns before answering `false`. php-src names the path and the
+/// errno — `fopen(nope.txt): Failed to open stream: No such file or directory` — which needs a
+/// strerror table this backend has no data for; these are the NATIVE backend's own wording, so
+/// the two Elephc targets agree and both stop short of php-src's detail.
+const WARN_FOPEN_FAILED: &[u8] = b"Warning: fopen(): Failed to open stream\n";
+const WARN_FILE_GET_CONTENTS_FAILED: &[u8] =
+    b"Warning: file_get_contents(): Failed to open stream\n";
 const WARN_UNINIT_STRING_OFFSET: &[u8] = b"Warning: Uninitialized string offset ";
 /// The newline closing that warning, in this emitter's own data group.
 const WARN_OFFSET_NEWLINE: &[u8] = b"\n";
@@ -250,7 +257,9 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_OFFSET_ON_FLOAT.len() as u32
     + WARN_OFFSET_ON_TYPE_BOOL.len() as u32
     + WARN_OFFSET_ON_TYPE_INT.len() as u32
-    + WARN_OFFSET_ON_TYPE_FLOAT.len() as u32;
+    + WARN_OFFSET_ON_TYPE_FLOAT.len() as u32
+    + WARN_FOPEN_FAILED.len() as u32
+    + WARN_FILE_GET_CONTENTS_FAILED.len() as u32;
 
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
@@ -293,6 +302,64 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
         params: vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
         results: vec![ValType::I32],
     });
+    // The path family. WASI Preview 1 is capability-based: every one of these takes the fd of a
+    // directory the host preopened, which `__rt_wasi_dirfd` finds by probing from fd 3.
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "fd_prestat_get".to_string(),
+        internal: "wasi_fd_prestat_get".to_string(),
+        // fd, prestat_buf -> errno
+        params: vec![ValType::I32, ValType::I32],
+        results: vec![ValType::I32],
+    });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "fd_close".to_string(),
+        internal: "wasi_fd_close".to_string(),
+        params: vec![ValType::I32],
+        results: vec![ValType::I32],
+    });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "path_open".to_string(),
+        internal: "wasi_path_open".to_string(),
+        // dirfd, dirflags, path, path_len, oflags, rights_base, rights_inheriting,
+        // fdflags, opened_fd_out -> errno
+        params: vec![
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I64,
+            ValType::I64,
+            ValType::I32,
+            ValType::I32,
+        ],
+        results: vec![ValType::I32],
+    });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "path_filestat_get".to_string(),
+        internal: "wasi_path_filestat_get".to_string(),
+        // dirfd, flags, path, path_len, filestat_buf -> errno
+        params: vec![
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+            ValType::I32,
+        ],
+        results: vec![ValType::I32],
+    });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "path_unlink_file".to_string(),
+        internal: "wasi_path_unlink_file".to_string(),
+        // dirfd, path, path_len -> errno
+        params: vec![ValType::I32, ValType::I32, ValType::I32],
+        results: vec![ValType::I32],
+    });
     wm.import_func(FuncImport {
         module: "wasi_snapshot_preview1".to_string(),
         field: "args_sizes_get".to_string(),
@@ -321,6 +388,7 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARGV);
     wm.add_raw_func(RT_MIXED_WRITE_STDOUT);
     wm.add_raw_func(RT_READLINE);
+    super::files::emit_file_runtime(wm);
 }
 
 /// `__rt_readline`: reads one line from stdin, WITHOUT its terminating newline.
@@ -449,6 +517,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_OFFSET_ON_TYPE_BOOL,
         WARN_OFFSET_ON_TYPE_INT,
         WARN_OFFSET_ON_TYPE_FLOAT,
+        WARN_FOPEN_FAILED,
+        WARN_FILE_GET_CONTENTS_FAILED,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -501,6 +571,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     emit_property_on_null_warning_runtime(wm, &warning_offsets[34..36]);
     emit_offset_on_scalar_warning_runtime(wm, &warning_offsets[36..43]);
     emit_uninit_string_offset_warning_runtime(wm, &warning_offsets[32..34]);
+    emit_open_failure_warning_runtime(wm, &warning_offsets[43..45]);
 }
 
 /// Emits php-src's warning for a property read whose receiver is null.
@@ -550,6 +621,25 @@ fn emit_offset_on_scalar_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u3
       (if (i64.eqz (local.get $lo))
         (then (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {false_ptr}) (i32.const {false_len})))
         (else (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {true_ptr}) (i32.const {true_len})))))))"#
+    ));
+}
+
+/// Emits the warnings `fopen` and `file_get_contents` produce for a path they cannot open.
+///
+/// Both answer `false` afterwards, so the value is right either way and this is purely the
+/// diagnostic. The wording is the native backend's, which stops short of php-src's path and
+/// errno detail; matching native keeps the two Elephc targets in agreement.
+fn emit_open_failure_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 2);
+    let (fopen_ptr, fopen_len) = offsets[0];
+    let (get_ptr, get_len) = offsets[1];
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_fopen_failed
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {fopen_ptr}) (i32.const {fopen_len})))"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_file_get_contents_failed
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {get_ptr}) (i32.const {get_len})))"#
     ));
 }
 

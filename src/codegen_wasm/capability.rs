@@ -6638,6 +6638,14 @@ fn callable_return_is_boxable(function: &Function) -> bool {
 pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
     match target {
         RuntimeFnId::Readline
+        | RuntimeFnId::Fopen
+        | RuntimeFnId::Fwrite
+        | RuntimeFnId::Fread
+        | RuntimeFnId::Fclose
+        | RuntimeFnId::FileExists
+        | RuntimeFnId::Unlink
+        | RuntimeFnId::FileGetContents
+        | RuntimeFnId::FilePutContents
         | RuntimeFnId::GetClass
         | RuntimeFnId::ArrayMap
         | RuntimeFnId::Usort

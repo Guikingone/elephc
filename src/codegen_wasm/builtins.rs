@@ -3302,6 +3302,168 @@ fn direct_builtin(target: RuntimeFnId, operand_php: &PhpType) -> Option<(DirectS
     }
 }
 
+/// One file builtin: the runtime helper serving it, and the storage its call site must have.
+///
+/// The whole family is a straight forwarding of operands to a WASI-backed helper, so the only
+/// per-builtin facts are the symbol and the shape. `operands` and `result` are IR types, checked
+/// by the capability audit before this module emits anything, so the emitter can load and call
+/// without re-deciding what each position holds.
+pub(super) struct FileBuiltin {
+    /// The `__rt_*` helper the call lowers to.
+    pub(super) helper: &'static str,
+    /// The IR type each operand must have, in order.
+    pub(super) operands: &'static [IrType],
+    /// The IR type the result must have.
+    pub(super) result: IrType,
+    /// Whether the helper takes a trailing warn flag the call site does not carry.
+    pub(super) warns: bool,
+}
+
+/// Returns the file-runtime contract for `target`, and nothing for any other builtin.
+///
+/// A stream handle is a boxed Mixed cell carrying the WASI fd as a resource payload, which is
+/// why `fopen` answers `Heap(Mixed)` and the three that take a handle read one. `fopen` and
+/// `file_get_contents` also answer `false` through that same cell when the path cannot be
+/// opened, which is exactly what PHP answers.
+pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
+    const STREAM: IrType = IrType::Heap(IrHeapKind::Mixed);
+    let (helper, operands, result): (_, &'static [IrType], _) = match target {
+        RuntimeFnId::Fopen => ("$__rt_fopen", &[IrType::Str, IrType::Str], STREAM),
+        RuntimeFnId::Fwrite => ("$__rt_fwrite", &[STREAM, IrType::Str], IrType::I64),
+        RuntimeFnId::Fread => ("$__rt_fread", &[STREAM, IrType::I64], IrType::Str),
+        RuntimeFnId::Fclose => ("$__rt_fclose", &[STREAM], IrType::I64),
+        RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
+        RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
+        RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
+        RuntimeFnId::FilePutContents => (
+            "$__rt_file_put_contents",
+            &[IrType::Str, IrType::Str],
+            IrType::I64,
+        ),
+        _ => return None,
+    };
+    Some(FileBuiltin {
+        helper,
+        operands,
+        result,
+        // `fopen` is the only one whose helper is also called internally, by
+        // `file_get_contents` and `file_put_contents`, which name themselves in their own
+        // diagnostics. The flag tells it whose message to emit.
+        warns: matches!(target, RuntimeFnId::Fopen),
+    })
+}
+
+/// Validates one file-builtin call against the exact storage its helper reads and answers.
+///
+/// The helpers take raw representations — a string is a pointer and a length, a stream handle is
+/// a boxed cell, a count is an i64 — so a call site holding anything else would have its bytes
+/// reinterpreted rather than converted. Every position is therefore pinned, and the module must
+/// carry the command runtime, which is where the WASI imports these call live.
+fn file_builtin_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+    file: &FileBuiltin,
+) -> Option<String> {
+    if !module.functions.iter().any(|candidate| candidate.flags.is_main) {
+        return Some("the file runtime is part of the command runtime".to_string());
+    }
+    // PHP dispatches a path carrying a `scheme://` prefix to a STREAM WRAPPER — `ftp://` opens a
+    // network connection, `phar://` reads inside an archive, `php://memory` is not a file at all
+    // — and this runtime resolves paths against a preopened directory and nothing else. Treating
+    // a wrapper URL as a filename answers `false` where PHP answers a handle, so a literal one is
+    // refused here rather than compiled into a wrong answer. A computed path cannot be inspected;
+    // there the runtime's `false` is what PHP itself answers for a wrapper it has not registered.
+    if let Some(path) = call
+        .operands
+        .first()
+        .and_then(|id| sprintf_literal_format(function, module, *id))
+    {
+        // The exception is the part of `php://` that is not a stream implementation at all:
+        // `stdout`, `stderr`, `stdin` and `output` name fds the process already holds, which the
+        // runtime answers without touching the filesystem.
+        let names_a_standard_stream = matches!(
+            path.as_slice(),
+            b"php://stdout" | b"php://stderr" | b"php://stdin" | b"php://output"
+        );
+        if let Some(scheme_end) = path.windows(3).position(|window| window == b"://") {
+            if scheme_end > 0
+                && !names_a_standard_stream
+                && path[..scheme_end].iter().all(|byte| byte.is_ascii_alphanumeric())
+            {
+                return Some(format!(
+                    "path \"{}://\" names a stream wrapper, not a file",
+                    String::from_utf8_lossy(&path[..scheme_end])
+                ));
+            }
+        }
+    }
+    if call.operands.len() != file.operands.len() {
+        return Some(format!(
+            "expected {} operands, got {}",
+            file.operands.len(),
+            call.operands.len()
+        ));
+    }
+    for (index, expected) in file.operands.iter().enumerate() {
+        let Some(value) = call.operands.get(index).and_then(|id| function.value(*id)) else {
+            return Some(format!("operand #{index} is missing from the value table"));
+        };
+        // A stream reaches these two ways. `fopen` answers a boxed cell carrying the fd as a
+        // resource payload, but the predefined `STDOUT`/`STDERR`/`STDIN` are raw integers the
+        // EIR already types `resource<stream>`. Both name an fd; the lowering resolves which.
+        // Matched on the DECLARED type, not `codegen_repr()`, which folds every resource to
+        // `Int` — the whole point here is to tell a stream from an ordinary integer.
+        let stream_constant = *expected == IrType::Heap(IrHeapKind::Mixed)
+            && value.ir_type == IrType::I64
+            && matches!(value.php_type, PhpType::Resource(_));
+        if value.ir_type != *expected && !stream_constant {
+            return Some(format!(
+                "operand #{index} storage {:?} is not the expected {expected:?}",
+                value.ir_type
+            ));
+        }
+    }
+    if call.result_type != file.result {
+        return Some(format!(
+            "result storage {:?} is not the expected {:?}",
+            call.result_type, file.result
+        ));
+    }
+    None
+}
+
+/// Lowers one file builtin: load every operand in order, call the helper, store the result.
+fn lower_file_builtin(ctx: &mut FnCtx, inst: &Instruction, file: FileBuiltin) -> Result<()> {
+    for (index, expected) in file.operands.iter().enumerate() {
+        let value = operand(inst, index)?;
+        ctx.emit_load_value(value)?;
+        // The stream-taking helpers work on a raw fd, so a handle is resolved here rather than
+        // inside each of them: a boxed cell yields its resource payload, and a predefined
+        // `STDOUT`/`STDERR`/`STDIN` already IS that fd, one word too wide.
+        if *expected == IrType::Heap(IrHeapKind::Mixed) {
+            let boxed = ctx
+                .function
+                .value(value)
+                .is_some_and(|value| value.ir_type == IrType::Heap(IrHeapKind::Mixed));
+            if boxed {
+                ctx.fb
+                    .ins("call $__rt_stream_fd", "the fd inside a stream handle");
+            } else {
+                ctx.fb
+                    .ins("i32.wrap_i64", "a predefined stream is already its fd");
+            }
+        }
+    }
+    if file.warns {
+        ctx.fb
+            .ins("i32.const 1", "a PHP-level open warns when it fails");
+    }
+    ctx.fb
+        .ins(&format!("call {}", file.helper), "WASI-backed file builtin");
+    store_result(ctx, inst)
+}
+
 /// Returns whether `target` is lowered inline by this module.
 pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
     matches!(
@@ -3313,6 +3475,14 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Ceil
             | RuntimeFnId::Sqrt
             | RuntimeFnId::Readline
+            | RuntimeFnId::Fopen
+            | RuntimeFnId::Fwrite
+            | RuntimeFnId::Fread
+            | RuntimeFnId::Fclose
+            | RuntimeFnId::FileExists
+            | RuntimeFnId::Unlink
+            | RuntimeFnId::FileGetContents
+            | RuntimeFnId::FilePutContents
             | RuntimeFnId::Count
             | RuntimeFnId::ArrayIsList
             | RuntimeFnId::ArrayKeys
@@ -3389,6 +3559,9 @@ pub(super) fn direct_builtin_shape_issue(
     call: &Instruction,
     target: RuntimeFnId,
 ) -> Option<String> {
+    if let Some(file) = file_builtin_helper(target) {
+        return file_builtin_shape_issue(module, function, call, &file);
+    }
     if target == RuntimeFnId::Count {
         return count_shape_issue(module, function, call);
     }
@@ -3612,6 +3785,9 @@ pub(super) fn lower_direct_builtin(
     inst: &Instruction,
     target: RuntimeFnId,
 ) -> Result<()> {
+    if let Some(helper) = file_builtin_helper(target) {
+        return lower_file_builtin(ctx, inst, helper);
+    }
     if target == RuntimeFnId::Count {
         return lower_count(ctx, inst);
     }
@@ -7382,6 +7558,55 @@ mod tests {
                 "{needle:?} against elements of {element:?} still needs its measured table"
             );
         }
+    }
+
+    /// Verifies every file builtin pins the exact storage its runtime helper reads.
+    ///
+    /// The helpers take raw representations — a string is a pointer and a length, a stream
+    /// handle is a boxed cell carrying the WASI fd, a count is an i64 — and perform no
+    /// conversion, so a call site holding anything else would have its bytes reinterpreted.
+    /// Each is checked in its declared shape and then with one position moved.
+    #[test]
+    fn file_builtins_pin_the_storage_their_helpers_read() {
+        const STREAM: IrType = IrType::Heap(IrHeapKind::Mixed);
+        for (target, operands, result) in [
+            (
+                RuntimeFnId::Fopen,
+                &[IrType::Str, IrType::Str][..],
+                STREAM,
+            ),
+            (RuntimeFnId::Fwrite, &[STREAM, IrType::Str][..], IrType::I64),
+            (RuntimeFnId::Fread, &[STREAM, IrType::I64][..], IrType::Str),
+            (RuntimeFnId::Fclose, &[STREAM][..], IrType::I64),
+            (RuntimeFnId::FileExists, &[IrType::Str][..], IrType::I64),
+            (RuntimeFnId::Unlink, &[IrType::Str][..], IrType::I64),
+            (RuntimeFnId::FileGetContents, &[IrType::Str][..], STREAM),
+            (
+                RuntimeFnId::FilePutContents,
+                &[IrType::Str, IrType::Str][..],
+                IrType::I64,
+            ),
+        ] {
+            let file = file_builtin_helper(target).expect("a file builtin has a contract");
+            assert_eq!(file.operands, operands, "{target:?} operands");
+            assert_eq!(file.result, result, "{target:?} result");
+            assert!(
+                is_direct_builtin(target),
+                "{target:?} must reach the inline lowering"
+            );
+            assert!(
+                super::super::capability::runtime_function_is_supported(target),
+                "{target:?} must be admitted by the audit"
+            );
+        }
+        assert!(
+            file_builtin_helper(RuntimeFnId::Sqrt).is_none(),
+            "only the file family carries a file contract"
+        );
+        // `fopen` is the one whose helper is also called internally, so it is the one that
+        // needs a flag saying whose diagnostic to emit.
+        assert!(file_builtin_helper(RuntimeFnId::Fopen).is_some_and(|file| file.warns));
+        assert!(file_builtin_helper(RuntimeFnId::Fread).is_some_and(|file| !file.warns));
     }
 
     /// Verifies `RuntimeFnId::Readline` reads a string and answers one.

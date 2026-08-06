@@ -27,6 +27,7 @@ mod calls;
 mod classes;
 mod capability;
 mod closures;
+mod files;
 mod context;
 mod float;
 mod function;
