@@ -18,6 +18,7 @@ mod lockfile;
 mod manifest;
 mod materialize;
 mod orchestration;
+mod php_headers_list;
 mod prune;
 mod project;
 mod receipt;
