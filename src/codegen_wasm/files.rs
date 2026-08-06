@@ -52,6 +52,7 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_FEOF);
     wm.add_raw_func(RT_FTELL);
     wm.add_raw_func(RT_FSEEK);
+    wm.add_raw_func(&rt_stream_get_contents());
     wm.add_raw_func(RT_REWIND);
 }
 
@@ -597,6 +598,83 @@ fn rt_fread() -> String {
   (call $__rt_heap_free (local.get $buf))                         ;; the bytes are copied now
   (local.get $out)
   (local.get $out_len))
+"#,
+        iov = IO_SCRATCH,
+        iov_len = IO_SCRATCH + 4,
+        nread = IO_SCRATCH + 8,
+        flag = MEMSTREAM_FLAG
+    )
+}
+
+/// `__rt_stream_get_contents`: the remainder of a stream, boxed as PHP's `string|false`.
+///
+/// The bytes are gathered into ONE raw block and boxed once. Reusing `__rt_fread` would be
+/// shorter but would persist the string twice — once in the read and once in the boxing — and
+/// leak the first copy on every call.
+///
+/// The length is resolved BEFORE reading rather than by concatenating in a loop: an in-memory
+/// stream knows its own remaining count, and a real fd answers it with a seek to the end and
+/// back. Measured on php-src 8.5.6 against `examples/stream-get-contents`: a whole-file read,
+/// a read that resumes from the current position after a partial `fread`, a capped read, and a
+/// read from an explicit offset all agree.
+fn rt_stream_get_contents() -> String {
+    format!(
+        r#"(func $__rt_stream_get_contents (param $h i32) (param $maxlen i64) (param $offset i64) (result i32)
+  (local $d i32) (local $pos i64) (local $avail i64) (local $count i64)
+  (local $cur i64) (local $end i64) (local $buf i32) (local $filled i32) (local $chunk i32)
+  (local $out i32)
+  (if (i32.lt_s (local.get $h) (i32.const 0))
+    (then (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (if (i64.ge_s (local.get $offset) (i64.const 0))                ;; -1 means "read from here"
+    (then (drop (call $__rt_fseek (local.get $h) (local.get $offset) (i64.const 0)))))
+  (if (i32.and (local.get $h) (i32.const {flag}))
+    (then
+      (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
+      (local.set $pos (i64.load (i32.add (local.get $d) (i32.const 16))))
+      (local.set $avail (i64.sub (i64.load (local.get $d)) (local.get $pos))))
+    (else
+      (local.set $cur (call $__rt_ftell (local.get $h)))
+      (drop (call $__rt_fseek (local.get $h) (i64.const 0) (i64.const 2)))
+      (local.set $end (call $__rt_ftell (local.get $h)))
+      (drop (call $__rt_fseek (local.get $h) (local.get $cur) (i64.const 0)))
+      (local.set $avail (i64.sub (local.get $end) (local.get $cur)))))
+  (if (i64.lt_s (local.get $avail) (i64.const 0))                 ;; seeked past the end
+    (then (local.set $avail (i64.const 0))))
+  (local.set $count (local.get $avail))
+  (if (i32.and (i64.ge_s (local.get $maxlen) (i64.const 0))
+               (i64.lt_s (local.get $maxlen) (local.get $avail)))
+    (then (local.set $count (local.get $maxlen))))
+  (if (i64.le_s (local.get $count) (i64.const 0))
+    (then (return (call $__rt_mixed_from_value (i64.const 1) (i64.const 0) (i64.const 0)))))
+  (if (i32.and (local.get $h) (i32.const {flag}))
+    (then
+      (local.set $buf (i32.add (i32.load (i32.add (local.get $d) (i32.const 32)))
+                               (i32.wrap_i64 (local.get $pos))))
+      (local.set $out (call $__rt_mixed_from_value (i64.const 1)
+        (i64.extend_i32_u (local.get $buf)) (local.get $count)))
+      (i64.store (i32.add (local.get $d) (i32.const 16))          ;; the read advances the stream
+        (i64.add (local.get $pos) (local.get $count)))
+      (return (local.get $out))))
+  (local.set $buf (call $__rt_heap_alloc (i32.wrap_i64 (local.get $count))))
+  (block $done (loop $more
+    (br_if $done (i32.ge_u (local.get $filled) (i32.wrap_i64 (local.get $count))))
+    (i32.store (i32.add (global.get $__float_scratch) (i32.const {iov}))
+      (i32.add (local.get $buf) (local.get $filled)))
+    (i32.store (i32.add (global.get $__float_scratch) (i32.const {iov_len}))
+      (i32.sub (i32.wrap_i64 (local.get $count)) (local.get $filled)))
+    (br_if $done (i32.ne (call $wasi_fd_read
+      (local.get $h)
+      (i32.add (global.get $__float_scratch) (i32.const {iov}))
+      (i32.const 1)
+      (i32.add (global.get $__float_scratch) (i32.const {nread}))) (i32.const 0)))
+    (local.set $chunk (i32.load (i32.add (global.get $__float_scratch) (i32.const {nread}))))
+    (br_if $done (i32.eqz (local.get $chunk)))                    ;; a short read means the end
+    (local.set $filled (i32.add (local.get $filled) (local.get $chunk)))
+    (br $more)))
+  (local.set $out (call $__rt_mixed_from_value (i64.const 1)
+    (i64.extend_i32_u (local.get $buf)) (i64.extend_i32_u (local.get $filled))))
+  (call $__rt_heap_free (local.get $buf))                         ;; the bytes are copied now
+  (local.get $out))
 "#,
         iov = IO_SCRATCH,
         iov_len = IO_SCRATCH + 4,

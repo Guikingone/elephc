@@ -3421,12 +3421,13 @@ pub(super) struct FileBuiltin {
     pub(super) result: IrType,
     /// Whether the helper takes a trailing warn flag the call site does not carry.
     pub(super) warns: bool,
-    /// The value to push when the LAST declared operand is absent at the call site.
+    /// Defaults for the trailing operands a call site may omit, in declaration order.
     ///
-    /// `fseek($h, $off)` is legal PHP — the registry declares `whence: Int = 0` — but the call
-    /// carries only two operands, so the default is materialized at the write site rather than
-    /// requiring every caller to spell it.
-    pub(super) optional_tail: Option<i64>,
+    /// `fseek($h, $off)` and `stream_get_contents($h)` are both legal PHP — the registry
+    /// declares the missing arguments with defaults — but the call carries fewer operands than
+    /// the helper takes, so the defaults are materialized at the call rather than requiring
+    /// every caller to spell them.
+    pub(super) optional_tail: &'static [i64],
 }
 
 /// Returns the file-runtime contract for `target`, and nothing for any other builtin.
@@ -3452,6 +3453,12 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
             &[STREAM, IrType::I64, IrType::I64],
             IrType::I64,
         ),
+        // Answers `string|false`, so the result is a boxed cell like `file_get_contents`.
+        RuntimeFnId::StreamGetContents => (
+            "$__rt_stream_get_contents",
+            &[STREAM, IrType::I64, IrType::I64],
+            STREAM,
+        ),
         RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
         RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
         RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
@@ -3470,8 +3477,15 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
         // `file_get_contents` and `file_put_contents`, which name themselves in their own
         // diagnostics. The flag tells it whose message to emit.
         warns: matches!(target, RuntimeFnId::Fopen),
-        // PHP's SEEK_SET. Every other file builtin here takes all of its operands.
-        optional_tail: matches!(target, RuntimeFnId::Fseek).then_some(0),
+        optional_tail: match target {
+            // PHP's SEEK_SET.
+            RuntimeFnId::Fseek => &[0][..],
+            // `length` is declared `Int = Null` and `offset` `Int = -1`; the helper reads
+            // "everything remaining" for a negative length and "do not seek" for a negative
+            // offset, so -1 carries both defaults.
+            RuntimeFnId::StreamGetContents => &[-1, -1][..],
+            _ => &[][..],
+        },
     })
 }
 
@@ -3525,8 +3539,8 @@ fn file_builtin_shape_issue(
             }
         }
     }
-    let lowest_arity = file.operands.len() - usize::from(file.optional_tail.is_some());
-    if call.operands.len() != file.operands.len() && call.operands.len() != lowest_arity {
+    let lowest_arity = file.operands.len() - file.optional_tail.len();
+    if call.operands.len() > file.operands.len() || call.operands.len() < lowest_arity {
         return Some(format!(
             "expected {} operands, got {}",
             file.operands.len(),
@@ -3569,13 +3583,13 @@ fn file_builtin_shape_issue(
 fn lower_file_builtin(ctx: &mut FnCtx, inst: &Instruction, file: FileBuiltin) -> Result<()> {
     for (index, expected) in file.operands.iter().enumerate() {
         if index >= inst.operands.len() {
-            // The call omitted the trailing defaulted argument (`fseek($h, $off)`), so the
-            // registry's default is pushed here. Any other shortfall was already refused.
-            let default = file
-                .optional_tail
-                .ok_or_else(|| WasmError::Unsupported("file builtin is missing an operand".into()))?;
-            ctx.fb
-                .ins(&format!("i64.const {default}"), "defaulted trailing argument");
+            // The call omitted trailing defaulted arguments, so the registry's defaults are
+            // pushed here, in order. Any other shortfall was already refused by the audit.
+            let first_default = file.operands.len() - file.optional_tail.len();
+            for default in &file.optional_tail[index - first_default..] {
+                ctx.fb
+                    .ins(&format!("i64.const {default}"), "defaulted trailing argument");
+            }
             break;
         }
         let value = operand(inst, index)?;
@@ -3622,6 +3636,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Ftell
             | RuntimeFnId::Rewind
             | RuntimeFnId::Fseek
+            | RuntimeFnId::StreamGetContents
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
             | RuntimeFnId::Fclose
