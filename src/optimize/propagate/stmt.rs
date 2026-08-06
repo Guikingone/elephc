@@ -201,8 +201,21 @@ fn propagate_stmt_in_source_mode(stmt: Stmt, env: ConstantEnv) -> (Stmt, Constan
             index,
             value,
         } => {
-            let index = propagate_expr(index, &env);
-            let value = propagate_expr(value, &env);
+            // php-src dereferences a CV index operand when the write opcode runs, which is
+            // AFTER the right-hand side: `$i = 0; $a[$i] = ($i = 1);` writes at index 1.
+            // Folding a plain variable index against the pre-RHS environment bakes in the
+            // wrong key whenever the RHS assigns to that variable. An index EXPRESSION keeps
+            // the current order, because its side effects genuinely do run first — the same
+            // measurement shows `$a[t("I")] = t("R")` printing `IR`.
+            let (index, value) = if matches!(index.kind, ExprKind::Variable(_)) {
+                let value = propagate_expr(value, &env);
+                let after_value = env_after_expr_side_effects(env.clone(), &[&value]);
+                (propagate_expr(index, &after_value), value)
+            } else {
+                let index = propagate_expr(index, &env);
+                let value = propagate_expr(value, &env);
+                (index, value)
+            };
             let mut next_env = env_after_expr_side_effects(env, &[&index, &value]);
             next_env.remove(&array);
             (

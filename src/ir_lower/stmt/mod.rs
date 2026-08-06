@@ -913,6 +913,19 @@ fn lower_array_assign(
     let array_value = ctx.load_local(array, Some(span));
     let mut index_value = lower_expr(ctx, index);
     let mut value_value = lower_expr(ctx, value);
+    // php-src reads a SIMPLE VARIABLE index at the moment of the write, not before the value.
+    // `ZEND_ASSIGN_DIM` takes the dim as op2, and a CV operand is dereferenced when that opcode
+    // runs — which is after the right-hand side. Measured on 8.5.6:
+    //
+    //     $i = 0; $a[$i] = ($i = 1);   // writes at index 1
+    //
+    // An index EXPRESSION is different and must NOT be re-evaluated: its side effects run
+    // FIRST, which the same measurement shows — `$a[t("I")] = t("R")` prints `IR`. So the
+    // expression is lowered once above for its effects, and only a plain variable is re-read
+    // here, which costs one load and cannot re-run anything.
+    if let ExprKind::Variable(name) = &index.kind {
+        index_value = ctx.load_local(name, Some(span));
+    }
     let op = array_set_op(array_value.ir_type);
     // A literal string index always means a hash key, so promote the destination
     // to associative storage like PHP. A boxed Mixed/Union index may hold either
