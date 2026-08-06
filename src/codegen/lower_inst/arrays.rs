@@ -2269,6 +2269,9 @@ pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let key = expect_operand(inst, 1)?;
     let container_ty = ctx.value_php_type(container)?.codegen_repr();
     let source_local = source_load_local_slot(ctx, container)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, container)?;
+    }
     match container_ty {
         PhpType::AssocArray { .. } => match ctx.emitter.target.arch {
             Arch::AArch64 => lower_slot_detach_hash_aarch64(ctx, container, key)?,

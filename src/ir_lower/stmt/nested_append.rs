@@ -228,6 +228,10 @@ pub(super) fn lower(ctx: &mut LoweringContext<'_, '_>, group: &NestedAppendGroup
         isset_op.default_effects(),
         Some(span),
     );
+    if matches!(group.base, BaseKind::Local(_)) {
+        crate::ir_lower::ownership::release_if_owned(ctx, container, Some(span));
+    }
+    crate::ir_lower::ownership::release_if_owned(ctx, key, Some(span));
 
     // Snapshot the definitely-initialized locals before the split and restore them at the head of
     // the arm, exactly as `lower_if_chain` does; the vivify arm initializes nothing new, so the
