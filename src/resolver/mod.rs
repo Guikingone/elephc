@@ -23,6 +23,7 @@ mod hoist_conditional_functions;
 mod hoist_includes;
 mod include_once;
 mod include_path;
+mod include_returns;
 mod reflection_source_files;
 pub(crate) mod path_eval;
 mod state;

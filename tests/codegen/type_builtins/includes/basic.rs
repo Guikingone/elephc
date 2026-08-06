@@ -528,3 +528,101 @@ fn test_value_include_direct_assignment_fast_path_regression() {
     );
     assert_eq!(out, "41");
 }
+
+/// A `return` nested inside an included file's top-level control flow returns from the INCLUDE,
+/// not from the includer: PHP yields that value as the `require` expression's result and keeps
+/// executing the caller afterwards. Guard for the shape where the taken branch returns.
+#[test]
+fn test_include_return_inside_if_yields_include_value_and_caller_continues() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $v = require 'boot.php'; echo $v; echo ':'; echo 'after';",
+            ),
+            ("boot.php", "<?php if (true) { return 7; } return 9;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "7:after");
+}
+
+/// The mirror case: the guarded `return` is skipped, so the included file falls through to its
+/// trailing top-level `return`, and the caller still runs to completion.
+#[test]
+fn test_include_return_inside_untaken_if_falls_through_to_trailing_return() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $v = require 'boot.php'; echo $v; echo ':'; echo 'after';",
+            ),
+            ("boot.php", "<?php if (false) { return 7; } return 9;"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "9:after");
+}
+
+/// A nested `return` must also STOP the included file: statements following the guarded return
+/// in the include's top-level scope are dead once it fires, exactly as in PHP.
+#[test]
+fn test_include_return_inside_if_stops_the_included_file() {
+    let out = compile_and_run_files(
+        &[
+            ("main.php", "<?php $v = require 'boot.php'; echo $v;"),
+            (
+                "boot.php",
+                "<?php if (true) { echo 'in'; return 7; } echo 'tail'; return 9;",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "in7");
+}
+
+/// The Symfony polyfill bootstrap idiom: a dispatch file whose two mutually exclusive branches
+/// each `return require` a DIFFERENT target declaring the SAME function. Only the live branch may
+/// be flattened, so the declaration must not collide, and the caller must still run.
+#[test]
+fn test_include_conditional_return_require_dispatch_picks_one_target() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $v = require 'boot.php'; echo $v; echo ':'; echo poly(); echo ':done';",
+            ),
+            (
+                "boot.php",
+                "<?php if (\\PHP_VERSION_ID >= 80000) { return require __DIR__ . '/b80.php'; }\nreturn require __DIR__ . '/b72.php';",
+            ),
+            (
+                "b80.php",
+                "<?php function poly(): string { return 'new'; } return 80;",
+            ),
+            (
+                "b72.php",
+                "<?php function poly(): string { return 'old'; } return 72;",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "80:new:done");
+}
+
+/// A bare `return;` nested in the included file's control flow ends the include with PHP's
+/// no-value default of `1`, and must not return from the caller.
+#[test]
+fn test_include_bare_return_inside_if_yields_one_and_caller_continues() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "main.php",
+                "<?php $v = require 'boot.php'; echo $v; echo ':'; echo 'after';",
+            ),
+            ("boot.php", "<?php if (true) { return; } echo 'unreached';"),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "1:after");
+}

@@ -23,6 +23,7 @@ use super::engine::resolve_stmts;
 use super::files::{parse_file, resolve_path};
 use super::include_once::include_once_label;
 use super::include_path::{fold_include_path, runtime_dynamic_include_path_detail};
+use super::include_returns::{assign_flag, rewrite_scope_returns, IncludeReturnRewrite};
 use super::state::ResolveState;
 
 /// Process-global counter producing unique hidden temporary names for value-position includes.
@@ -331,14 +332,22 @@ pub(super) fn expand_value_include(
             ));
         }
         Some(mut wrapped) => {
-            let captured_return = rewrite_first_include_return(&mut wrapped, &tmp);
+            let flag = format!("{tmp}_returned");
+            let rewrite = rewrite_first_include_return(&mut wrapped, &tmp, &flag);
             // Pre-seed the default include value of `1` when the included body cannot set the
-            // temporary itself: either it has no top-level `return`, or it is an `_once` include
-            // whose guarded body may be skipped on a repeat include. For a degraded runtime-fatal
-            // dynamic include the seed is typed `mixed` instead (see `degraded_dynamic` above): the
-            // unresolvable file's value is unknown, and the diverging stub means it is never read.
-            if !captured_return || once {
+            // temporary itself: it has no top-level `return`, its `return` is conditional, or it is
+            // an `_once` include whose guarded body may be skipped on a repeat include. For a
+            // degraded runtime-fatal dynamic include the seed is typed `mixed` instead (see
+            // `degraded_dynamic` above): the unresolvable file's value is unknown, and the diverging
+            // stub means it is never read.
+            if rewrite != IncludeReturnRewrite::Unconditional || once {
                 out.push(seed_include_temp(&tmp, degraded_dynamic, span));
+            }
+            // A conditionally-returning body branches on the flag, so it must be defined before the
+            // body runs — and OUTSIDE any include-once guard, whose body a repeat include skips
+            // entirely while the guarded statements' flag reads remain.
+            if rewrite == IncludeReturnRewrite::Conditional {
+                out.push(assign_flag(&flag, false, span));
             }
             out.extend(wrapped);
         }
@@ -519,49 +528,28 @@ fn assign_temp(temp: &str, value: Expr, span: Span) -> Stmt {
     )
 }
 
-/// Rewrites the first top-level `return` inside the wrapped include body to assign the include
-/// temporary, dropping any statements after it (they are unreachable once the include returns).
+/// Rewrites the include body's top-level `return`s to assign the include temporary.
 ///
 /// Recurses through the `IncludeOnceGuard`/`NamespaceBlock` wrappers produced by
-/// `resolve_include_stmt`. Returns `true` if a top-level `return` was found and rewritten.
-fn rewrite_first_include_return(wrapped: &mut [Stmt], temp: &str) -> bool {
+/// `resolve_include_stmt` and delegates the actual rewrite to
+/// `include_returns::rewrite_scope_returns`, whose outcome says whether the temporary is assigned
+/// on every path (no seed needed) and whether the body reads the `flag` variable.
+fn rewrite_first_include_return(
+    wrapped: &mut [Stmt],
+    temp: &str,
+    flag: &str,
+) -> IncludeReturnRewrite {
     for stmt in wrapped.iter_mut() {
-        match &mut stmt.kind {
-            StmtKind::NamespaceBlock { body, .. } => {
-                if rewrite_top_level_return(body, temp) {
-                    return true;
-                }
-            }
+        let rewrite = match &mut stmt.kind {
+            StmtKind::NamespaceBlock { body, .. } => rewrite_scope_returns(body, temp, flag),
             StmtKind::IncludeOnceGuard { body, .. } => {
-                if rewrite_first_include_return(body, temp) {
-                    return true;
-                }
+                rewrite_first_include_return(body, temp, flag)
             }
-            _ => {}
+            _ => continue,
+        };
+        if rewrite != IncludeReturnRewrite::Absent {
+            return rewrite;
         }
     }
-    false
-}
-
-/// Replaces the first top-level `return E;` in `body` with `<temp> = E;` (or drops a bare
-/// `return;`, leaving the temporary at its default) and truncates the now-unreachable tail.
-/// Returns `true` if a top-level `return` was rewritten.
-fn rewrite_top_level_return(body: &mut Vec<Stmt>, temp: &str) -> bool {
-    for i in 0..body.len() {
-        if matches!(body[i].kind, StmtKind::Return(_)) {
-            let span = body[i].span;
-            let placeholder = Stmt::new(StmtKind::Return(None), span);
-            let original = std::mem::replace(&mut body[i], placeholder);
-            if let StmtKind::Return(Some(value)) = original.kind {
-                body[i] = assign_temp(temp, value, span);
-            } else {
-                // Bare `return;` carries no value; leave the temporary at its default and drop the
-                // statement by replacing it with an empty sequence.
-                body[i] = Stmt::new(StmtKind::Synthetic(Vec::new()), span);
-            }
-            body.truncate(i + 1);
-            return true;
-        }
-    }
-    false
+    IncludeReturnRewrite::Absent
 }

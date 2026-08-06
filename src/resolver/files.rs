@@ -33,6 +33,11 @@ pub(super) fn resolve_path(path: &str, base_dir: &Path) -> PathBuf {
 ///
 /// Reads the file contents from disk, tokenizes, and parses to a `Vec<Stmt>`.
 /// Errors include the original `include_span` for diagnostics tracing.
+///
+/// The parsed statements are normalized so an `else`-less `if` whose branches all return adopts the
+/// statements following it as its `else` body (see `include_returns::normalize_early_returns`).
+/// Both declaration discovery and include expansion parse through here, so both observe the same
+/// mutually exclusive shape for a file that dispatches with an early `return`.
 pub(super) fn parse_file(path: &Path, include_span: Span) -> Result<Vec<Stmt>, CompileError> {
     let source = std::fs::read_to_string(path).map_err(|e| {
         CompileError::new(
@@ -45,5 +50,7 @@ pub(super) fn parse_file(path: &Path, include_span: Span) -> Result<Vec<Stmt>, C
 
     let tokens = lexer::tokenize(&source).map_err(|e| e.with_file(file.clone()))?;
 
-    parser::parse(&tokens).map_err(|e| e.with_file(file))
+    let stmts = parser::parse(&tokens).map_err(|e| e.with_file(file))?;
+
+    Ok(super::include_returns::normalize_early_returns(stmts))
 }
