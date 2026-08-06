@@ -361,7 +361,7 @@ fn emit_str_word_count_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r9, 1");                                           // is the caller collecting the plain list of words?
     emitter.instruction("jne __rt_str_word_count_record_map_linux_x86_64");     // format 2 stores the word under its byte offset
     emitter.instruction("mov rdi, QWORD PTR [rbp - 72]");                       // reload the result array pointer
-    emitter.instruction("mov rax, QWORD PTR [rbp - 80]");                       // pass the word start to the append helper
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 80]");                       // pass the word start in the append helper's SysV string-pointer register
     emitter.instruction("mov rdx, QWORD PTR [rbp - 88]");                       // pass the word length to the append helper
     emitter.instruction("call __rt_array_push_str");                            // append a persisted copy of the word
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // republish the array pointer after possible growth

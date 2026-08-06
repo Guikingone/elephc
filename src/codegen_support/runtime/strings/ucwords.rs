@@ -117,6 +117,8 @@ fn emit_ucwords_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the separator set and the copied string
     emitter.instruction("mov QWORD PTR [rsp], rdx");                            // preserve the separator pointer across the copy
     emitter.instruction("mov QWORD PTR [rsp + 8], rcx");                        // preserve the separator length across the copy
+    emitter.instruction("mov rax, rdi");                                        // __rt_strcopy reads its source pointer from rax, not from the SysV first argument register
+    emitter.instruction("mov rdx, rsi");                                        // __rt_strcopy reads its source length from rdx, not from the SysV second argument register
     emitter.instruction("call __rt_strcopy");                                   // copy the source string into concat storage so ucwords() can mutate bytes in place without touching borrowed input
     emitter.instruction("mov QWORD PTR [rsp + 16], rax");                       // spill the copied string pointer that must be returned
     emitter.instruction("mov QWORD PTR [rsp + 24], rdx");                       // spill the copied string length that must be returned

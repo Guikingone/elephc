@@ -375,10 +375,10 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
 
     // -- bool coercion of both operands --
     emitter.label("__rt_mle_bool");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_bool"); // PHP truthiness of the left operand
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save the left truthiness result
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_bool"); // PHP truthiness of the right operand
     emitter.instruction("cmp QWORD PTR [rbp - 80], rax");                       // compare the two truthiness values
     emitter.instruction("sete al");                                             // materialize the bool-coerced equality
@@ -397,7 +397,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the result register
     emitter.instruction("jmp __rt_mle_done");                                   // return the null-versus-string result
     emitter.label("__rt_mle_null_vs_right_bool");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_bool"); // PHP truthiness of the right operand
     emitter.instruction("xor rax, 1");                                          // null equals exactly the falsy values
     emitter.instruction("jmp __rt_mle_done");                                   // return the null-coerced result
@@ -412,7 +412,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("movzx rax, al");                                       // widen the boolean byte into the result register
     emitter.instruction("jmp __rt_mle_done");                                   // return the string-versus-null result
     emitter.label("__rt_mle_null_vs_left_bool");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_bool"); // PHP truthiness of the left operand
     emitter.instruction("xor rax, 1");                                          // null equals exactly the falsy values
     emitter.instruction("jmp __rt_mle_done");                                   // return the null-coerced result
@@ -442,7 +442,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r11, 2");                                          // is the right operand a float?
     emitter.instruction("jne __rt_mle_false");                                  // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_right");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the right operand
     emitter.instruction("jmp __rt_mle_compare_one");                            // compare the number against the converted object
 
@@ -453,7 +453,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 2");                                          // is the left operand a float?
     emitter.instruction("jne __rt_mle_false");                                  // an object never equals a string or resource
     emitter.label("__rt_mle_object_one_left");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the left operand
 
     emitter.label("__rt_mle_compare_one");
@@ -488,7 +488,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the left string parse as fully numeric?
     emitter.instruction("jz __rt_mle_false");                                   // a non-numeric string never equals a number
     emitter.instruction("movsd QWORD PTR [rbp - 80], xmm0");                    // save the parsed left numeric value
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the right operand
     emitter.instruction("movsd xmm1, QWORD PTR [rbp - 80]");                    // reload the parsed left numeric value
     emitter.instruction("jmp __rt_mle_compare_doubles");                        // compare the parsed string against the number
@@ -506,7 +506,7 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did the right string parse as fully numeric?
     emitter.instruction("jz __rt_mle_false");                                   // a non-numeric string never equals a number
     emitter.instruction("movsd QWORD PTR [rbp - 80], xmm0");                    // save the parsed right numeric value
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the left operand
     emitter.instruction("movsd xmm1, QWORD PTR [rbp - 80]");                    // reload the parsed right numeric value
     emitter.instruction("jmp __rt_mle_compare_doubles");                        // compare the number against the parsed string
@@ -526,10 +526,10 @@ fn emit_mixed_loose_eq_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mle_done");                                   // return the exact payload comparison
 
     emitter.label("__rt_mle_numeric_float");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the left boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the left operand
     emitter.instruction("movsd QWORD PTR [rbp - 80], xmm0");                    // save the left numeric operand
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand
     abi::emit_call_label(emitter, "__rt_mixed_cast_float"); // read the numeric value of the right operand
     emitter.instruction("movsd xmm1, QWORD PTR [rbp - 80]");                    // reload the left numeric operand
 
