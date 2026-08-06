@@ -2029,6 +2029,27 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         );
         return store_result(ctx, inst);
     }
+    // A cast that exists only to feed integer arithmetic is not a conversion either: PHP coerces
+    // the operand under its own contract, which diagnoses differently from every other boundary.
+    if super::capability::cast_feeds_integer_arithmetic(ctx.function, inst).is_some() {
+        let (op_ptr, op_len) = ctx.default_str_literal("%")?;
+        let (right_ptr, right_len) = ctx.default_str_literal("int")?;
+        ctx.emit_load_value(value)?;
+        ctx.fb
+            .ins(&format!("i32.const {}", op_ptr), "the operator PHP names");
+        ctx.fb.ins(&format!("i32.const {}", op_len), "its byte length");
+        ctx.fb.ins(
+            &format!("i32.const {}", right_ptr),
+            "the right operand's type word",
+        );
+        ctx.fb
+            .ins(&format!("i32.const {}", right_len), "its byte length");
+        ctx.fb.ins(
+            "call $__rt_mixed_arith_int",
+            "PHP's coercion of an arithmetic operand",
+        );
+        return store_result(ctx, inst);
+    }
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed) {
         ctx.emit_load_value(value)?;
         match target {

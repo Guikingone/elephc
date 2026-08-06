@@ -557,6 +557,26 @@ fn target_has_registered_noreturn_proof(
                     Some("$__rt_fail_argument_type"),
                 )
         }
+        // The operand-typed TypeError composes its message and exits, like every other
+        // message-composing fatal here.
+        "$__rt_fail_operand_types" => {
+            proc_exit
+                && has_site(
+                    "$__rt_fail_operand_types",
+                    TrapClass::PostNoreturn,
+                    "operand-types-fatal-exit",
+                    Some("$wasi_proc_exit"),
+                )
+        }
+        "$__rt_mixed_arith_int" => {
+            proc_exit
+                && has_site(
+                    "$__rt_mixed_arith_int",
+                    TrapClass::PostNoreturn,
+                    "arith-coerce-int",
+                    Some("$__rt_fail_operand_types"),
+                )
+        }
         "$__rt_fail_argument_type" => {
             proc_exit
                 && has_site(
@@ -585,6 +605,7 @@ fn has_noreturn_predecessor(
         "$__rt_fail_method_call_non_object",
         "$__rt_fail_undefined_method",
         "$__rt_fail_too_few_arguments",
+        "$__rt_fail_operand_types",
         "$__rt_fail_object_to_string",
         "$__rt_fail_return_type",
         "$__rt_fail_argument_type",

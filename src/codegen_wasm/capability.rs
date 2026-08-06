@@ -1518,6 +1518,76 @@ pub(super) fn cast_stands_in_for_mixed_comparison(
     Some((*source, other, mixed_on_left))
 }
 
+/// Returns the boxed source when a `cast Mixed -> I64` exists only to feed integer ARITHMETIC.
+///
+/// PHP does not cast there either, but it does not compare either — it coerces, under a THIRD
+/// contract distinct from both the declared-return and the declared-parameter ones. Measured on
+/// php-src 8.5.6 with `$mixed % 3`: `null` is silently 0 where a parameter deprecates and a
+/// return raises; a non-numeric string is `Unsupported operand types: string % int` rather than
+/// `must be of type int`; and `INF` warns that it is not representable and yields 0 rather than
+/// raising at all.
+///
+/// Only `%` is admitted so far, and only with the box on the LEFT and a concrete integer on the
+/// right — the shape `$n % 2` takes. Two boxed operands need php-src's full cross-type table,
+/// which is a different problem.
+pub(super) fn cast_feeds_integer_arithmetic(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<ValueId> {
+    if !matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64))) {
+        return None; // an EXPLICIT `(int)` really is a conversion
+    }
+    if inst.result_type != IrType::I64 || inst.result_php_type.codegen_repr() != PhpType::Int {
+        return None;
+    }
+    let [source] = inst.operands.as_slice() else {
+        return None;
+    };
+    let value = function.value(*source)?;
+    if value.ir_type != IrType::Heap(IrHeapKind::Mixed)
+        || value.php_type.codegen_repr() != PhpType::Mixed
+    {
+        return None;
+    }
+    let result = inst.result?;
+    // The integer must be wanted by exactly one modulo and by nothing else: any other reader
+    // would be handed a value produced under a contract it did not ask for.
+    let mut arithmetic = None;
+    for candidate in &function.instructions {
+        if !candidate.operands.contains(&result) {
+            continue;
+        }
+        if candidate.op != Op::ISMod || arithmetic.is_some() {
+            return None;
+        }
+        arithmetic = Some(candidate);
+    }
+    // A terminator use is invisible to that scan, and would read the same value.
+    if function
+        .blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .any(|terminator| terminator_reads(terminator, result))
+    {
+        return None;
+    }
+    let arithmetic = arithmetic?;
+    let [left, right] = arithmetic.operands.as_slice() else {
+        return None;
+    };
+    if *left != result {
+        return None; // the box has to be the LEFT operand
+    }
+    let right_value = function.value(*right)?;
+    if right_value.ir_type != IrType::I64
+        || right_value.php_type.codegen_repr() != PhpType::Int
+        || value_is_a_boxed_mixed_cast(function, *right)
+    {
+        return None; // the right side must be a genuine integer, not another conversion
+    }
+    Some(*source)
+}
+
 /// Whether a terminator reads `value`, as a condition, a scrutinee, or a branch argument.
 fn terminator_reads(terminator: &Terminator, value: ValueId) -> bool {
     match terminator {
@@ -1790,6 +1860,9 @@ fn cast_shape_issue(
     // runtime traps on an object, a resource or a callable, and that diagnostic goes through WASI.
     let comparison_stand_in = cast_stands_in_for_mixed_comparison(function, inst).is_some()
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
+    // The arithmetic coercion diagnoses through WASI, so it is a command-module rule too.
+    let arithmetic_coercion = cast_feeds_integer_arithmetic(function, inst).is_some()
+        && module.functions.iter().any(|candidate| candidate.flags.is_main);
     // The coercion at a builtin's declared `string` parameter raises through WASI, so it needs a
     // command module the way every other diagnostic-producing rule here does.
     let string_argument_coercion = mixed_string_argument_coercion(function, inst).is_some()
@@ -1800,6 +1873,7 @@ fn cast_shape_issue(
         || widened_by_checked_arithmetic
         || return_coercion
         || comparison_stand_in
+        || arithmetic_coercion
         || (int_argument_coercion && target == IrType::I64))
         && matches!(target, IrType::I64 | IrType::F64)
         || ((explicit || cast_feeds_string_context(function, inst) || string_argument_coercion)

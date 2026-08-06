@@ -571,6 +571,19 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**A boxed operand of `%`** is coerced under PHP's ARITHMETIC contract, which is a THIRD
+one — distinct from both the declared-parameter and declared-return coercions, and the
+reason it needs its own path. Measured on php-src 8.5.6 with `$mixed % 3`: `null` is
+SILENTLY 0, where a parameter deprecates and a return raises; a non-numeric string is
+`Unsupported operand types: string % int`, naming the operand types and the operator
+rather than `must be of type int`; and `INF` does not raise at all — it warns that it is
+not representable and yields 0. The numeric middle IS shared, so a lost fraction
+deprecates identically from a float and from a float-shaped string.
+
+Only `%` is admitted so far, and only with the box on the LEFT and a concrete integer on
+the right — the shape `$n % 2` takes. Two boxed operands need php-src's full cross-type
+table, which is a different problem.
+
 **A boxed value reaching a builtin's declared `int` parameter** is coerced PHP's way,
 which completes the pair started by the `string` one. It arrives differently: `substr($s,
 $mixed)` reaches the call with the Mixed operand INTACT — the frontend materialises no

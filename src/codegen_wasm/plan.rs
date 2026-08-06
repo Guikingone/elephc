@@ -241,6 +241,18 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
                             .map(|(name, parameter, _)| (name, parameter)),
                     );
                 }
+                if inst.op == crate::ir::Op::Cast
+                    && super::capability::cast_feeds_integer_arithmetic(function, inst).is_some()
+                {
+                    // The operator and the right operand's type word are backend constants no
+                    // PHP literal need mention, so they are laid out here like every other
+                    // diagnostic fragment composed at runtime.
+                    for value in ["%", "int"] {
+                        if !layout_values.iter().any(|already| already == value) {
+                            layout_values.push(value.to_string());
+                        }
+                    }
+                }
                 if inst.op == crate::ir::Op::RuntimeCall {
                     for index in 0..inst.operands.len() {
                         named.extend(

@@ -172,6 +172,13 @@ const DEPRECATED_ARGUMENT_NULL_SUFFIX: &[u8] = b" is deprecated\n";
 const WARN_FOREACH_NON_ITERABLE_PREFIX: &[u8] =
     b"Warning: foreach() argument must be of type array|object, ";
 const WARN_FOREACH_NON_ITERABLE_SUFFIX: &[u8] = b" given\n";
+/// Arithmetic on an operand with no numeric meaning. php-src names BOTH operand types and the
+/// operator — `Unsupported operand types: string % int` — where this target's older fixed
+/// message named neither. The left word comes from `__rt_type_word_for_tag`; the operator and
+/// the right word travel from the call site, which knows them statically.
+const ERR_OPERAND_TYPES_PREFIX: &[u8] =
+    b"PHP Fatal error: Uncaught TypeError: Unsupported operand types: ";
+const ERR_OPERAND_TYPES_SPACE: &[u8] = b" ";
 /// PHP names a closure by its CLASS in that message — measured: `Closure returned`, not
 /// `callable returned`. Every first-class closure PHP builds is a `Closure`, so the word is
 /// fixed even though this target keeps a callable as a descriptor rather than an object.
@@ -291,6 +298,8 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + DEPRECATED_ARGUMENT_NULL_SUFFIX.len() as u32
     + WARN_FOREACH_NON_ITERABLE_PREFIX.len() as u32
     + WARN_FOREACH_NON_ITERABLE_SUFFIX.len() as u32
+    + ERR_OPERAND_TYPES_PREFIX.len() as u32
+    + ERR_OPERAND_TYPES_SPACE.len() as u32
     + WARN_NAN_TO_STRING.len() as u32
     + WARN_NAN_TO_BOOL.len() as u32
     + PHP_VALUE_TRUE.len() as u32
@@ -594,6 +603,8 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         DEPRECATED_ARGUMENT_NULL_SUFFIX,
         WARN_FOREACH_NON_ITERABLE_PREFIX,
         WARN_FOREACH_NON_ITERABLE_SUFFIX,
+        ERR_OPERAND_TYPES_PREFIX,
+        ERR_OPERAND_TYPES_SPACE,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -655,6 +666,12 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         &method_offsets[2..11],
     );
     emit_foreach_warning_runtime(wm, &warning_offsets[53..55]);
+    emit_arithmetic_coercion_runtime(
+        wm,
+        &warning_offsets[55..57],
+        &warning_offsets[5..7],
+        warning_offsets[33],
+    );
 }
 
 /// Emits the warning `foreach` produces for a value that is neither an array nor an object.
@@ -789,6 +806,105 @@ fn emit_argument_coercion_runtime(
           (return (local.get $pptr) (i32.wrap_i64 (local.get $plen)))))))
   (call $__rt_fail_argument_type (local.get $fn_ptr) (local.get $fn_len) (local.get $param_ptr) (local.get $param_len) (local.get $argno) (i32.const {string_word_ptr}) (i32.const {string_word_len}) (local.get $tag) (local.get $lo))
   unreachable)                                                    ;; elephc-trap:post-noreturn:argument-coerce-tostring
+"#
+    ));
+}
+
+/// Emits the coercion PHP performs on a BOXED operand of an integer arithmetic operator.
+///
+/// This is a THIRD contract, distinct from both the declared-return and the declared-parameter
+/// ones, and every difference was measured on php-src 8.5.6 with `$mixed % 3`:
+///
+/// - `null` is silently 0 — a parameter deprecates there and a return raises;
+/// - a non-numeric string is `Unsupported operand types: string % int`, naming the operand types
+///   rather than `must be of type int`;
+/// - `INF`/`NAN` do NOT raise: they warn `The float INF is not representable as an int, cast
+///   occurred` and yield 0, where a parameter raises a `TypeError`.
+///
+/// What IS shared is the numeric middle: a lost fraction deprecates identically, from a float
+/// and from a float-shaped string alike, so those two notices come from the same helpers the
+/// other boundaries call.
+fn emit_arithmetic_coercion_runtime(
+    wm: &mut WatModule,
+    offsets: &[(u32, u32)],
+    float_warning: &[(u32, u32)],
+    newline: (u32, u32),
+) {
+    debug_assert_eq!(offsets.len(), 2);
+    debug_assert_eq!(float_warning.len(), 2);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let (space_ptr, space_len) = offsets[1];
+    let (not_repr_prefix_ptr, not_repr_prefix_len) = float_warning[0];
+    let (not_repr_suffix_ptr, not_repr_suffix_len) = float_warning[1];
+    let (newline_ptr, newline_len) = newline;
+    let value_offset = super::mixed_numeric::CLASS_VALUE_OFFSET;
+
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_operand_types (param $tag i64) (param $lo i64) (param $op_ptr i32) (param $op_len i32) (param $right_ptr i32) (param $right_len i32)
+  (local $word_ptr i32) (local $word_len i32)
+  (call $__rt_type_word_for_tag (local.get $tag) (local.get $lo))
+  (local.set $word_len)
+  (local.set $word_ptr)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $word_ptr) (local.get $word_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {space_ptr}) (i32.const {space_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $op_ptr) (local.get $op_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {space_ptr}) (i32.const {space_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $right_ptr) (local.get $right_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {newline_ptr}) (i32.const {newline_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:operand-types-fatal-exit
+)"#
+    ));
+
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_arith_int (param $cell i32) (param $op_ptr i32) (param $op_len i32) (param $right_ptr i32) (param $right_len i32) (result i64)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64) (local $t f64) (local $cls i32) (local $fptr i32) (local $flen i32)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eqz (local.get $tag))                                  ;; int
+    (then (return (local.get $lo))))
+  (if (i64.eq (local.get $tag) (i64.const 3))                     ;; bool: stored normalized 0/1
+    (then (return (local.get $lo))))
+  (if (i64.eq (local.get $tag) (i64.const 8))                     ;; null is SILENTLY zero here
+    (then (return (i64.const 0))))
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; float
+    (then
+      (local.set $f (f64.reinterpret_i64 (local.get $lo)))
+      (if (i32.and
+            (f64.eq (local.get $f) (local.get $f))
+            (i32.and
+              (f64.ge (local.get $f) (f64.const -9223372036854775808))
+              (f64.lt (local.get $f) (f64.const 9223372036854775808))))
+        (then
+          (local.set $t (f64.trunc (local.get $f)))
+          (if (f64.ne (local.get $t) (local.get $f))
+            (then (call $__rt_deprecate_return_float_to_int (local.get $lo))))
+          (return (i64.trunc_f64_s (local.get $t)))))
+      ;; Out of range or not a number: php-src WARNS and uses 0 rather than raising.
+      (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {not_repr_prefix_ptr}) (i32.const {not_repr_prefix_len}))
+      (call $__rt_ftoa (local.get $lo) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096)))
+      (local.set $flen)                                           ;; ftoa returns (ptr, len), len on top
+      (local.set $fptr)
+      (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $fptr) (local.get $flen))
+      (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {not_repr_suffix_ptr}) (i32.const {not_repr_suffix_len}))
+      (return (i64.const 0))))
+  (if (i64.eq (local.get $tag) (i64.const 1))                     ;; string
+    (then
+      (local.set $cls (call $__rt_str_numeric_class (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi))))
+      (if (i32.eq (local.get $cls) (i32.const 1))
+        (then (return (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))))
+      (if (i32.eq (local.get $cls) (i32.const 2))
+        (then
+          (local.set $f (f64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))
+          (local.set $t (f64.trunc (local.get $f)))
+          (if (f64.ne (local.get $t) (local.get $f))
+            (then (call $__rt_deprecate_return_str_to_int (i32.wrap_i64 (local.get $lo)) (i32.wrap_i64 (local.get $hi)))))
+          (return (i64.trunc_f64_s (local.get $t)))))))
+  (call $__rt_fail_operand_types (local.get $tag) (local.get $lo) (local.get $op_ptr) (local.get $op_len) (local.get $right_ptr) (local.get $right_len))
+  unreachable)                                                    ;; elephc-trap:post-noreturn:arith-coerce-int
 "#
     ));
 }

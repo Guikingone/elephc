@@ -15776,6 +15776,152 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a boxed operand of `%` is coerced under PHP's ARITHMETIC contract.
+///
+/// This is a THIRD contract, and its differences from the declared-parameter and declared-return
+/// ones are the whole reason it needs its own path. Measured on php-src 8.5.6 with `$mixed % 3`:
+///
+/// - `null` is SILENTLY 0 — a parameter deprecates there, and a return raises;
+/// - a non-numeric string is `Unsupported operand types: string % int`, which names the operand
+///   TYPES and the operator rather than saying `must be of type int`;
+/// - `INF` does not raise at all: it warns `The float INF is not representable as an int, cast
+///   occurred` and yields 0, where a parameter raises a `TypeError`.
+///
+/// What IS shared is the numeric middle — a lost fraction deprecates identically from a float
+/// and from a float-shaped string — so those two notices come from the same helpers.
+///
+/// KNOWN DIVERGENCE: php-src appends ` in <file> on line <n>` and a stack trace; this target
+/// reports no location tail, so the fatal arms are asserted as a prefix.
+#[test]
+fn test_cli_wasm_coerces_a_boxed_arithmetic_operand() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_arith_operand");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function arm(int $i): mixed {
+    if ($i === 0) { return 7; }
+    if ($i === 1) { return -7; }
+    if ($i === 2) { return 7.0; }
+    if ($i === 3) { return 7.9; }
+    if ($i === 4) { return true; }
+    if ($i === 5) { return false; }
+    if ($i === 6) { return "7"; }
+    if ($i === 7) { return "7.9"; }
+    if ($i === 8) { return "abc"; }
+    if ($i === 9) { return null; }
+    if ($i === 10) { return [1, 2]; }
+    if ($i === 11) { return INF; }
+    return new stdClass();
+}
+$m = arm((int)($argv[1] ?? "0"));
+echo $m % 3, "|\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the arithmetic-operand probe to WASM");
+    assert!(
+        output.status.success(),
+        "arithmetic-operand compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m", process.argv[3]], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Every expectation is php-src 8.5.6's own answer for the same arm.
+    for (arm, stdout, stderr) in [
+        ("0", "1|\n", ""),
+        ("1", "-1|\n", ""),
+        ("2", "1|\n", ""),
+        (
+            "3",
+            "1|\n",
+            "Deprecated: Implicit conversion from float 7.9 to int loses precision\n",
+        ),
+        ("4", "1|\n", ""),
+        ("5", "0|\n", ""),
+        ("6", "1|\n", ""),
+        (
+            "7",
+            "1|\n",
+            "Deprecated: Implicit conversion from float-string \"7.9\" to int loses precision\n",
+        ),
+        (
+            "8",
+            "",
+            "Uncaught TypeError: Unsupported operand types: string % int\n",
+        ),
+        // The arm that separates this contract from the parameter one: silent, no deprecation.
+        ("9", "0|\n", ""),
+        (
+            "10",
+            "",
+            "Uncaught TypeError: Unsupported operand types: array % int\n",
+        ),
+        // And the arm that separates it from a raise: a warning, then zero.
+        (
+            "11",
+            "0|\n",
+            "Warning: The float INF is not representable as an int, cast occurred\n",
+        ),
+        (
+            "12",
+            "",
+            "Uncaught TypeError: Unsupported operand types: stdClass % int\n",
+        ),
+    ] {
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join("main.wasm"))
+            .arg(arm)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the arithmetic-operand probe under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            stdout,
+            "arm {arm}: php-src's own value"
+        );
+        let observed = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            observed.contains(stderr),
+            "arm {arm}: expected php-src's own diagnostic {stderr:?}, got {observed}"
+        );
+        assert_eq!(
+            run.status.code(),
+            Some(if stdout.is_empty() { 255 } else { 0 }),
+            "arm {arm}: php-src's own exit status"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a boxed value reaching a builtin's declared `int` parameter is coerced PHP's way.
 ///
 /// This is the `int` half of the argument boundary, and it arrives differently from the `string`
