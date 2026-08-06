@@ -9,6 +9,113 @@
 
 use crate::support::*;
 
+/// Verifies PHP integer binary unpacking for named network/little-endian fields and offsets.
+#[test]
+fn test_unpack_named_integer_fields_and_offset() {
+    let out = compile_and_run(
+        r#"<?php
+$network = unpack('Nlen', "xx\x00\x00\x00\x05", 2);
+$cache = unpack('Vexpiry/Nctime', "\x05\x00\x00\x00\x00\x00\x00\x06");
+echo $network['len'], ':', $cache['expiry'], ':', $cache['ctime'];
+"#,
+    );
+    assert_eq!(out, "5:5:6");
+}
+
+/// Verifies unnamed star repetition uses one-based integer keys and ignores partial tail bytes.
+#[test]
+fn test_unpack_repeated_integer_sequences() {
+    let out = compile_and_run(
+        r#"<?php
+$bytes = unpack('C*', "ABC");
+$words = unpack('n*', "\x00\x01\x00\x02x");
+echo $bytes[1], ':', $bytes[3], ':', $words[1], ':', $words[2], ':', count($words);
+"#,
+    );
+    assert_eq!(out, "65:67:1:2:2");
+}
+
+/// Verifies namespace fallback and case-insensitive lookup preserve `unpack()` behavior.
+#[test]
+fn test_unpack_namespaced_case_insensitive_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+$value = UnPaCk('C*', "Z");
+echo $value[1];
+"#,
+    );
+    assert_eq!(out, "90");
+}
+
+/// Verifies `mb_internal_encoding()` defaults to UTF-8 and persists canonical setter state.
+#[test]
+fn test_mb_internal_encoding_getter_and_setter_state() {
+    let out = compile_and_run(
+        r#"<?php
+echo mb_internal_encoding(), ':';
+echo mb_internal_encoding('8bit') ? '1:' : '0:';
+echo mb_internal_encoding(), ':';
+echo mb_internal_encoding('utf8') ? '1:' : '0:';
+echo mb_internal_encoding();
+"#,
+    );
+    assert_eq!(out, "UTF-8:1:8bit:1:UTF-8");
+}
+
+/// Verifies namespace fallback and case-insensitive lookup for the stateful mbstring builtin.
+#[test]
+fn test_mb_internal_encoding_namespaced_case_insensitive_fallback() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Demo;
+echo MB_Internal_Encoding('ASCII') ? '1:' : '0:';
+echo mb_internal_encoding();
+"#,
+    );
+    assert_eq!(out, "1:ASCII");
+}
+
+/// Verifies error-handler stacking returns invocable previous callbacks and restore pops owners.
+#[test]
+fn test_error_handler_stack_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+function first_error_handler() { echo "A"; }
+function second_error_handler() { echo "B"; }
+$none = set_error_handler(first_error_handler(...));
+echo $none === null ? "N:" : "X:";
+$previous = set_error_handler(second_error_handler(...), 1024);
+$previous();
+echo restore_error_handler() ? ":1:" : ":0:";
+$restored = set_error_handler(null);
+$restored();
+echo restore_error_handler() ? ":1" : ":0";
+"#,
+    );
+    assert_eq!(out, "N:A:1:A:1");
+}
+
+/// Verifies the exception-handler stack is independent and returns prior callables as Mixed.
+#[test]
+fn test_exception_handler_stack_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+function first_exception_handler() { echo "E"; }
+function second_exception_handler() { echo "F"; }
+$none = set_exception_handler(first_exception_handler(...));
+echo $none === null ? "N:" : "X:";
+$previous = set_exception_handler(second_exception_handler(...));
+$previous();
+echo restore_exception_handler() ? ":1:" : ":0:";
+$restored = set_exception_handler(null);
+$restored();
+echo restore_exception_handler() ? ":1" : ":0";
+"#,
+    );
+    assert_eq!(out, "N:E:1:E:1");
+}
+
 /// Verifies `memory_get_usage` exposes live and committed heap accounting through namespace and case-insensitive builtin fallback.
 #[test]
 fn test_memory_get_usage_reports_runtime_heap_counters() {
@@ -1752,6 +1859,24 @@ fn test_preg_match_simple() {
     assert_eq!(out, "1");
 }
 
+/// Verifies `preg_quote()` escapes PHP's complete fixed PCRE metacharacter set.
+#[test]
+fn test_preg_quote_all_fixed_metacharacters() {
+    let out = compile_and_run(
+        r#"<?php echo preg_quote('.\\+*?[^]$(){}=!<>|:-# /', '/');"#,
+    );
+    assert_eq!(out, r#"\.\\\+\*\?\[\^\]\$\(\)\{\}\=\!\<\>\|\:\-\# \/"#);
+}
+
+/// Verifies delimiter quoting, unchanged text, and the empty-string result.
+#[test]
+fn test_preg_quote_delimiter_default_and_empty_string() {
+    let out = compile_and_run(
+        r#"<?php echo preg_quote('a~b', '~'), '|', preg_quote('plain'), '|', strlen(preg_quote('', '/'));"#,
+    );
+    assert_eq!(out, r#"a\~b|plain|0"#);
+}
+
 /// Verifies literal `call_user_func()` dispatch to `preg_match()` includes regex runtime helpers.
 #[test]
 fn test_preg_match_call_user_func_literal() {
@@ -2577,6 +2702,34 @@ foreach ($parts as $part) {
 "#,
     );
     assert_eq!(out, "3|a@0;,@1;b,c@2;");
+}
+
+/// Verifies a `?int` limit and a `?int` flags argument reach `preg_split` and behave as
+/// PHP does when they are null.
+///
+/// PHP declares both parameters `int`, so passing null coerces (with a deprecation) and
+/// yields exactly the omitted-argument behaviour: no limit and no flags. The EIR backend
+/// used to refuse the nullable-int representation outright
+/// (`preg_split limit for PHP type TaggedScalar`), which is how
+/// `Symfony\Component\String\AbstractString::split(string $delimiter, ?int $limit = null,
+/// ?int $flags = null)` blocked the whole `--web` build. php-verified against `php -n`:
+/// a null limit splits into all three parts, and a limit of 2 still stops at two.
+#[test]
+fn test_preg_split_accepts_nullable_int_limit_and_flags() {
+    let out = compile_and_run(
+        r#"<?php
+function split_with(string $s, ?int $limit, ?int $flags): array {
+    return preg_split("/,/", $s, $limit, $flags);
+}
+$all = split_with("a,b,c", null, null);
+echo count($all), "|", implode("/", $all), "\n";
+$two = split_with("a,b,c", 2, 0);
+echo count($two), "|", implode("/", $two), "\n";
+$none = split_with("a,,c", null, PREG_SPLIT_NO_EMPTY);
+echo count($none), "|", implode("/", $none), "\n";
+"#,
+    );
+    assert_eq!(out, "3|a/b/c\n2|a/b,c\n2|a/c\n");
 }
 
 /// Verifies `preg_split` delimiter capture materializes capture groups beyond the old

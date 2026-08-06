@@ -27,6 +27,40 @@ use super::super::callables;
 
 const PREG_SPLIT_FORCE_MIXED_RESULT: i64 = 1 << 30;
 
+/// Lowers `preg_quote(string, delimiter?): string` through the shared byte-string helper.
+pub(crate) fn lower_preg_quote(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count_between(inst, "preg_quote", 1, 2)?;
+    let source = super::expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_string_arg(ctx, source, "x1", "x2", "preg_quote string")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            load_optional_string_arg(
+                ctx,
+                inst.operands.get(1).copied(),
+                "x3",
+                "x4",
+                "preg_quote delimiter",
+            )?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+        }
+        Arch::X86_64 => {
+            load_string_arg(ctx, source, "rax", "rdx", "preg_quote string")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_optional_string_arg(
+                ctx,
+                inst.operands.get(1).copied(),
+                "rdi",
+                "rsi",
+                "preg_quote delimiter",
+            )?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_preg_quote");
+    super::store_if_result(ctx, inst)
+}
+
 /// Lowers `preg_match(pattern, subject, &matches?, flags?, offset?)` via the regex runtime.
 ///
 /// The optional `$matches` out-parameter is populated through
@@ -829,20 +863,90 @@ fn load_optional_string_arg(
 
 /// Loads the optional `preg_split()` limit, using PHP's default `-1`.
 fn load_limit_arg(ctx: &mut FunctionContext<'_>, limit: Option<ValueId>, reg: &str) -> Result<()> {
-    let Some(limit) = limit else {
-        abi::emit_load_int_immediate(ctx.emitter, reg, -1);
-        return Ok(());
-    };
-    require_integer_like(ctx.load_value_to_reg(limit, reg)?, "preg_split limit")
+    load_optional_int_option(ctx, limit, reg, -1, "preg_split limit")
 }
 
 /// Loads the optional `preg_split()` flags, using PHP's default `0`.
 fn load_flags_arg(ctx: &mut FunctionContext<'_>, flags: Option<ValueId>, reg: &str) -> Result<()> {
-    let Some(flags) = flags else {
-        abi::emit_load_int_immediate(ctx.emitter, reg, 0);
+    load_optional_int_option(ctx, flags, reg, 0, "preg_split flags")
+}
+
+/// Loads an optional integer regex option into `reg`, substituting `default_value` for PHP null.
+///
+/// PHP declares `preg_split()`'s `$limit` and `$flags` as plain `int`, so a null argument is
+/// coerced (with a deprecation notice) and behaves exactly like the omitted argument: no limit,
+/// no flags. Callers routinely pass a nullable option straight through —
+/// `Symfony\Component\String\AbstractString::split(string $delimiter, ?int $limit = null,
+/// ?int $flags = null)` forwards both — so the nullable-int representations must be accepted
+/// rather than refused at compile time.
+///
+/// A statically-null operand folds to the default immediate. A `TaggedScalar` is the runtime
+/// case: its payload and tag words are read straight from the value's stack slot and the
+/// default is selected when the tag says null. The tag is deliberately NOT read through the
+/// canonical result registers — `emit_tagged_scalar_to_int_null_as_zero` uses `x1`/`rdx`, which
+/// at this point already hold the staged pattern and subject arguments.
+///
+/// Note: elephc does not emit the PHP 8.1 "passing null to parameter of type int is deprecated"
+/// notice here; that diagnostic family is unimplemented across builtins, not specific to regex.
+fn load_optional_int_option(
+    ctx: &mut FunctionContext<'_>,
+    value: Option<ValueId>,
+    reg: &str,
+    default_value: i64,
+    context: &str,
+) -> Result<()> {
+    let Some(value) = value else {
+        abi::emit_load_int_immediate(ctx.emitter, reg, default_value);
         return Ok(());
     };
-    require_integer_like(ctx.load_value_to_reg(flags, reg)?, "preg_split flags")
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, reg, default_value);
+            Ok(())
+        }
+        PhpType::TaggedScalar => {
+            emit_tagged_scalar_option_to_reg(ctx, value, reg, default_value)
+        }
+        _ => require_integer_like(ctx.load_value_to_reg(value, reg)?, context),
+    }
+}
+
+/// Materializes a nullable-int regex option in `reg`, substituting `default_value` for null.
+fn emit_tagged_scalar_option_to_reg(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    reg: &str,
+    default_value: i64,
+) -> Result<()> {
+    let (tag_reg, default_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x9", "x10"),
+        Arch::X86_64 => ("r10", "r11"),
+    };
+    ctx.load_tagged_scalar_value_to_regs(value, reg, tag_reg)?;
+    abi::emit_load_int_immediate(ctx.emitter, default_reg, default_value);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!(
+                "cmp {}, #{}",
+                tag_reg,
+                crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL
+            )); // does the option carry the runtime null tag?
+            ctx.emitter
+                .instruction(&format!("csel {}, {}, {}, eq", reg, default_reg, reg));
+            // substitute PHP's default for a null option
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!(
+                "cmp {}, {}",
+                tag_reg,
+                crate::codegen_support::sentinels::TAGGED_SCALAR_TAG_NULL
+            )); // does the option carry the runtime null tag?
+            ctx.emitter
+                .instruction(&format!("cmove {}, {}", reg, default_reg));
+            // substitute PHP's default for a null option
+        }
+    }
+    Ok(())
 }
 
 /// Verifies that a regex string operand is statically string-shaped.

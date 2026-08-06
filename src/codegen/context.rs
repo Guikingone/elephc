@@ -59,6 +59,7 @@ pub(crate) struct FunctionContext<'a> {
     try_handler_offsets: HashMap<i64, usize>,
     pub(super) frame_size: usize,
     pub(super) concat_base_offset: usize,
+    pub(super) debug_call_frame_offset: usize,
     pub(super) epilogue_emitted: bool,
     pub(super) is_main: bool,
     pub(super) web: bool,
@@ -103,6 +104,7 @@ impl<'a> FunctionContext<'a> {
             try_handler_offsets: layout.try_handler_offsets,
             frame_size: layout.frame_size,
             concat_base_offset: layout.concat_base_offset,
+            debug_call_frame_offset: layout.debug_call_frame_offset,
             epilogue_emitted: false,
             is_main,
             web: false,
@@ -492,6 +494,31 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
+    /// Loads a tagged-scalar SSA value into a caller-selected register pair.
+    ///
+    /// The sibling of `load_string_value_to_regs` for the other two-word representation, and
+    /// the way to read a nullable int without going through the canonical result registers —
+    /// `x1`/`rdx` carry the tag there, and a caller that has already staged arguments in them
+    /// cannot afford the clobber.
+    pub(super) fn load_tagged_scalar_value_to_regs(
+        &mut self,
+        value: ValueId,
+        payload_reg: &str,
+        tag_reg: &str,
+    ) -> Result<()> {
+        let ty = self.value_php_type(value)?;
+        if ty.codegen_repr() != PhpType::TaggedScalar {
+            return Err(CodegenIrError::unsupported(format!(
+                "tagged scalar register materialization for PHP type {:?}",
+                ty
+            )));
+        }
+        let offset = self.value_offset(value)?;
+        abi::load_at_offset(self.emitter, payload_reg, offset);
+        abi::load_at_offset(self.emitter, tag_reg, offset - 8);
+        Ok(())
+    }
+
     /// Loads a local slot into the target's canonical result register(s).
     pub(super) fn load_local_to_result(&mut self, slot: LocalSlotId) -> Result<PhpType> {
         let ty = self.local_php_type(slot)?;
@@ -539,6 +566,10 @@ impl<'a> FunctionContext<'a> {
         let offset = self.local_offset(slot)?;
         let pointer_reg = abi::symbol_scratch_reg(self.emitter);
         abi::load_at_offset(self.emitter, pointer_reg, offset);
+        if ty.codegen_repr() == PhpType::Mixed && self.is_adopted_ref_cell_local(slot) {
+            self.load_tagged_ref_cell_as_owned_mixed(pointer_reg);
+            return Ok(ty);
+        }
         match ty.codegen_repr() {
             PhpType::Str => {
                 let (ptr_reg, len_reg) = abi::string_result_regs(self.emitter);
@@ -562,6 +593,46 @@ impl<'a> FunctionContext<'a> {
             }
         }
         Ok(ty)
+    }
+
+    /// Materializes an adopted reference cell's runtime-tagged inner value as owned `Mixed`.
+    ///
+    /// Shared hash/property cells can change their inner representation after binding. A tag-7
+    /// inner already points at a Mixed box and is retained directly; every other tag is boxed from
+    /// the cell's `(value, tag)` pair so Mixed consumers never mistake a scalar payload for a heap
+    /// pointer.
+    pub(super) fn load_tagged_ref_cell_as_owned_mixed(&mut self, pointer_reg: &str) {
+        let already_mixed = self.next_label("load_ref_cell_inner_mixed");
+        let done = self.next_label("load_ref_cell_mixed_done");
+        match self.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_load_from_address(self.emitter, "x1", pointer_reg, 0);
+                abi::emit_load_from_address(self.emitter, "x9", pointer_reg, 8);
+                self.emitter.instruction("cmp x9, #7");                         // reuse an inner Mixed box without adding another nesting layer
+                self.emitter.instruction(&format!("b.eq {already_mixed}"));
+                self.emitter.instruction("mov x0, x9");                         // pass the runtime inner tag to Mixed boxing
+                self.emitter.instruction("mov x2, xzr");                        // tagged reference cells carry one payload word
+                abi::emit_call_label(self.emitter, "__rt_mixed_from_value");
+                abi::emit_jump(self.emitter, &done);
+                self.emitter.label(&already_mixed);
+                self.emitter.instruction("mov x0, x1");                         // return the existing Mixed child as an owned read result
+                abi::emit_call_label(self.emitter, "__rt_incref");
+            }
+            Arch::X86_64 => {
+                abi::emit_load_from_address(self.emitter, "rdi", pointer_reg, 0);
+                abi::emit_load_from_address(self.emitter, "r10", pointer_reg, 8);
+                self.emitter.instruction("cmp r10, 7");                         // reuse an inner Mixed box without adding another nesting layer
+                self.emitter.instruction(&format!("je {already_mixed}"));
+                self.emitter.instruction("mov rax, r10");                       // pass the runtime inner tag to Mixed boxing
+                self.emitter.instruction("xor rsi, rsi");                       // tagged reference cells carry one payload word
+                abi::emit_call_label(self.emitter, "__rt_mixed_from_value");
+                abi::emit_jump(self.emitter, &done);
+                self.emitter.label(&already_mixed);
+                self.emitter.instruction("mov rax, rdi");                       // return the existing Mixed child as an owned read result
+                abi::emit_call_label(self.emitter, "__rt_incref");
+            }
+        }
+        self.emitter.label(&done);
     }
 
     /// Stores the current result register(s) into the SSA value's home.
@@ -772,8 +843,20 @@ impl<'a> FunctionContext<'a> {
         let name = self.global_name_data(data)?.to_string();
         let symbol = crate::names::ir_global_symbol(&name);
         let ty = self.value_php_type(value)?;
-        self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
         self.load_value_to_result(value)?;
+        if self.module.ref_global_names.contains(&name) {
+            self.data.add_comm(symbol.clone(), 8);
+            let cell = abi::symbol_scratch_reg(self.emitter);
+            abi::emit_load_symbol_to_reg(self.emitter, cell, &symbol, 0);
+            abi::emit_store_to_address(
+                self.emitter,
+                abi::int_result_reg(self.emitter),
+                cell,
+                0,
+            );
+            return Ok(());
+        }
+        self.data.add_comm(symbol.clone(), ty.codegen_repr().stack_size().max(8));
         abi::emit_store_result_to_symbol(self.emitter, &symbol, &ty, false);
         Ok(())
     }
