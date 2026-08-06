@@ -63,7 +63,9 @@ jobs:
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
       - name: Build combined optional PDO driver profile
-        run: cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
@@ -130,7 +132,9 @@ jobs:
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
       - name: Build combined optional PDO driver profile
-        run: cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
@@ -192,7 +196,9 @@ jobs:
           ! grep -i warning "$RUNNER_TEMP/cargo-build.log"
 
       - name: Build combined optional PDO driver profile
-        run: cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+        run: |
+          cargo build -p elephc-pdo --features dblib,firebird,odbc,informix,ibm,sqlsrv,oci,cubrid
+          cargo clean -p elephc-pdo
 
       - name: Build bridge/native support crates
         # The codegen test runner links compiled programs against bridge
