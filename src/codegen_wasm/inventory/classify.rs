@@ -208,12 +208,16 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::FileExists
         | RuntimeFnId::Unlink
         | RuntimeFnId::FileGetContents
-        | RuntimeFnId::FilePutContents => (
+        | RuntimeFnId::FilePutContents
+        | RuntimeFnId::Feof
+        | RuntimeFnId::Ftell
+        | RuntimeFnId::Rewind => (
             "codegen_wasm::files",
             "codegen_wasm::builtins::lower_file_builtin",
             &[
                 "codegen_wasm::builtins::tests::file_builtins_pin_the_storage_their_helpers_read",
                 "codegen::cli::test_cli_wasm_file_round_trip_matches_php",
+                "codegen::cli::test_cli_wasm_reads_and_writes_an_in_memory_stream",
             ][..],
         ),
         // The four namespace questions share one closed-world answer and one lowering: the

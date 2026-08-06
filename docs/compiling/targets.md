@@ -571,6 +571,25 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**`php://memory` and `php://temp`** are streams with no host file behind them, and
+`feof`, `ftell` and `rewind` come with them. Every other stream this target opens is a
+WASI fd, and WASI is capability-based — without a preopened directory there is no
+filesystem at all — but an in-memory stream needs none of that, so it is opened before
+the preopen probe and works under a host that granted nothing. The descriptor's ADDRESS
+is the handle with a high bit set, which keeps it disjoint from the fd space without a
+side table, and the bytes live in a separate block so a write can grow the stream
+without invalidating the handle the script holds.
+
+Two behaviours were measured rather than assumed, and both would have been wrong by
+intuition. `feof` is set by a read that ASKED for more than was there, not by one that
+merely finished at the end: requesting 5 of 5 leaves it false, requesting 100 of 6 sets
+it true even though 6 bytes came back. And a mid-stream write OVERWRITES rather than
+inserting, so `"abcdef"` rewound and written `"XY"` reads back `"XYcdef"`.
+
+`php://temp/maxmemory:N` is accepted under the same arm: that suffix only chooses when
+php-src spills the buffer to a real file, which this implementation never does. The
+other `scheme://` wrappers stay refused.
+
 **`class_exists`, `interface_exists`, `trait_exists` and `enum_exists`** answer from
 the module's own declarations. They are closed-world questions: the checker already
 requires a literal name in AOT mode, and this module IS the whole program, so each

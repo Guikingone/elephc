@@ -3436,6 +3436,12 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
         RuntimeFnId::Fwrite => ("$__rt_fwrite", &[STREAM, IrType::Str], IrType::I64),
         RuntimeFnId::Fread => ("$__rt_fread", &[STREAM, IrType::I64], IrType::Str),
         RuntimeFnId::Fclose => ("$__rt_fclose", &[STREAM], IrType::I64),
+        // The three position queries. Only an in-memory stream can answer `ftell` here — a WASI
+        // fd would need `fd_tell`, which is a separate capability — so it answers 0 for one,
+        // which is the position a freshly opened file really is at.
+        RuntimeFnId::Feof => ("$__rt_feof", &[STREAM], IrType::I64),
+        RuntimeFnId::Ftell => ("$__rt_ftell", &[STREAM], IrType::I64),
+        RuntimeFnId::Rewind => ("$__rt_rewind", &[STREAM], IrType::I64),
         RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
         RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
         RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
@@ -3483,13 +3489,18 @@ fn file_builtin_shape_issue(
         .first()
         .and_then(|id| sprintf_literal_format(function, module, *id))
     {
-        // The exception is the part of `php://` that is not a stream implementation at all:
-        // `stdout`, `stderr`, `stdin` and `output` name fds the process already holds, which the
-        // runtime answers without touching the filesystem.
+        // Two parts of `php://` are exceptions. `stdout`, `stderr`, `stdin` and `output` name
+        // fds the process already holds, which the runtime answers without touching the
+        // filesystem. And `memory`/`temp` are not files either — they are an in-memory buffer
+        // this runtime implements outright, so they need no preopen and cannot fail.
+        //
+        // `php://temp/maxmemory:N` is accepted under the same arm: that suffix only chooses when
+        // php-src spills the buffer to a real file, which this implementation never does.
         let names_a_standard_stream = matches!(
             path.as_slice(),
             b"php://stdout" | b"php://stderr" | b"php://stdin" | b"php://output"
-        );
+        ) || path == b"php://memory"
+            || path.starts_with(b"php://temp");
         if let Some(scheme_end) = path.windows(3).position(|window| window == b"://") {
             if scheme_end > 0
                 && !names_a_standard_stream
@@ -3580,6 +3591,9 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Sqrt
             | RuntimeFnId::Readline
             | RuntimeFnId::Fopen
+            | RuntimeFnId::Feof
+            | RuntimeFnId::Ftell
+            | RuntimeFnId::Rewind
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
             | RuntimeFnId::Fclose

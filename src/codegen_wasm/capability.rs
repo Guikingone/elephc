@@ -5992,7 +5992,9 @@ fn runtime_function_shape_issue(
     call: &Instruction,
     target: RuntimeFnId,
 ) -> Option<String> {
-    if super::builtins::is_direct_builtin(target) {
+    if super::builtins::is_direct_builtin(target)
+        || super::builtins::file_builtin_helper(target).is_some()
+    {
         return super::builtins::direct_builtin_shape_issue(module, function, call, target);
     }
     match target {
@@ -6841,6 +6843,9 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fwrite
         | RuntimeFnId::Fread
         | RuntimeFnId::Fclose
+        | RuntimeFnId::Feof
+        | RuntimeFnId::Ftell
+        | RuntimeFnId::Rewind
         | RuntimeFnId::FileExists
         | RuntimeFnId::Unlink
         | RuntimeFnId::FileGetContents
@@ -6991,7 +6996,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::DiskFreeSpace
         | RuntimeFnId::DiskTotalSpace
         | RuntimeFnId::Fdatasync
-        | RuntimeFnId::Feof
         | RuntimeFnId::Fflush
         | RuntimeFnId::Fgetc
         | RuntimeFnId::Fgetcsv
@@ -7016,7 +7020,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fsockopen
         | RuntimeFnId::Fstat
         | RuntimeFnId::Fsync
-        | RuntimeFnId::Ftell
         | RuntimeFnId::Ftruncate
         | RuntimeFnId::Getcwd
         | RuntimeFnId::Gethostbyaddr
@@ -7067,7 +7070,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::RealpathCacheGet
         | RuntimeFnId::RealpathCacheSize
         | RuntimeFnId::Rename
-        | RuntimeFnId::Rewind
         | RuntimeFnId::Rewinddir
         | RuntimeFnId::Rmdir
         | RuntimeFnId::Scandir

@@ -352,6 +352,14 @@ pub(super) fn emit_command_runtime(wm: &mut WatModule) {
         params: vec![ValType::I32, ValType::I32, ValType::I32, ValType::I32],
         results: vec![ValType::I32],
     });
+    wm.import_func(FuncImport {
+        module: "wasi_snapshot_preview1".to_string(),
+        field: "fd_seek".to_string(),
+        internal: "wasi_fd_seek".to_string(),
+        // fd, offset, whence, newoffset_ptr -> errno
+        params: vec![ValType::I32, ValType::I64, ValType::I32, ValType::I32],
+        results: vec![ValType::I32],
+    });
     // The path family. WASI Preview 1 is capability-based: every one of these takes the fd of a
     // directory the host preopened, which `__rt_wasi_dirfd` finds by probing from fd 3.
     wm.import_func(FuncImport {

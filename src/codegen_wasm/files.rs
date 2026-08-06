@@ -40,7 +40,254 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(&rt_file_size());
     wm.add_raw_func(&rt_file_get_contents());
     wm.add_raw_func(&rt_file_put_contents());
+    wm.add_raw_func(RT_IS_MEMSTREAM_PATH);
+    wm.add_raw_func(&rt_memstream_new());
+    wm.add_raw_func(RT_MEMSTREAM_GROW);
+    wm.add_raw_func(&rt_memstream_write());
+    wm.add_raw_func(&rt_memstream_read());
+    wm.add_raw_func(RT_MEMSTREAM_TELL);
+    wm.add_raw_func(RT_MEMSTREAM_SEEK);
+    wm.add_raw_func(RT_MEMSTREAM_EOF);
+    wm.add_raw_func(RT_MEMSTREAM_CLOSE);
+    wm.add_raw_func(RT_FEOF);
+    wm.add_raw_func(RT_FTELL);
+    wm.add_raw_func(RT_REWIND);
 }
+
+
+/// `__rt_is_memstream_path`: whether a path names an in-memory stream.
+///
+/// `php://memory` is 13 bytes and `php://temp` 12. php-src also accepts a `php://temp/maxmemory:N`
+/// suffix, which only chooses when the stream spills to a real file — something this
+/// implementation never does — so the prefix decides and the suffix is ignored.
+const RT_IS_MEMSTREAM_PATH: &str = r#"(func $__rt_is_memstream_path (param $p i32) (param $len i64) (result i32)
+  (if (i64.lt_u (local.get $len) (i64.const 10))
+    (then (return (i32.const 0))))
+  (if (i32.eqz (i32.and (i32.and
+        (i32.and (i32.eq (i32.load8_u (local.get $p)) (i32.const 112))
+                 (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 1))) (i32.const 104)))
+        (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 2))) (i32.const 112))
+                 (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 3))) (i32.const 58))))
+        (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 4))) (i32.const 47))
+                 (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 5))) (i32.const 47)))))
+    (then (return (i32.const 0))))
+  (if (i32.and                                                    ;; "temp"
+        (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 6))) (i32.const 116))
+                 (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 7))) (i32.const 101)))
+        (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 8))) (i32.const 109))
+                 (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 9))) (i32.const 112))))
+    (then (return (i32.const 1))))
+  (if (i64.ne (local.get $len) (i64.const 12))                    ;; "memory" is exactly 12 bytes
+    (then (return (i32.const 0))))
+  (i32.and
+    (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 6))) (i32.const 109))
+             (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 7))) (i32.const 101)))
+    (i32.and
+      (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 8))) (i32.const 109))
+               (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 9))) (i32.const 111)))
+      (i32.and (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 10))) (i32.const 114))
+               (i32.eq (i32.load8_u (i32.add (local.get $p) (i32.const 11))) (i32.const 121))))))
+"#;
+
+/// `__rt_memstream_write`: writes at the current position, OVERWRITING what is there.
+///
+/// Measured on php-src 8.5.6: a write mid-stream replaces bytes rather than inserting, and only
+/// a write that runs past the end extends the length. `"abcdef"` rewound and written `"XY"`
+/// reads back `"XYcdef"`, which is what the length update below preserves.
+fn rt_memstream_write() -> String {
+    r#"(func $__rt_memstream_write (param $h i32) (param $ptr i32) (param $len i64) (result i64)
+  (local $d i32) (local $pos i64) (local $end i64) (local $buf i32) (local $i i64)
+  (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
+  (if (i64.le_s (local.get $len) (i64.const 0))
+    (then (return (i64.const 0))))
+  (local.set $pos (i64.load (i32.add (local.get $d) (i32.const 16))))
+  (local.set $end (i64.add (local.get $pos) (local.get $len)))
+  (call $__rt_memstream_grow (local.get $d) (local.get $end))
+  (local.set $buf (i32.load (i32.add (local.get $d) (i32.const 32))))
+  (local.set $i (i64.const 0))
+  (block $done (loop $copy
+    (br_if $done (i64.ge_u (local.get $i) (local.get $len)))
+    (i32.store8
+      (i32.add (local.get $buf) (i32.wrap_i64 (i64.add (local.get $pos) (local.get $i))))
+      (i32.load8_u (i32.add (local.get $ptr) (i32.wrap_i64 (local.get $i)))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $copy)))
+  (i64.store (i32.add (local.get $d) (i32.const 16)) (local.get $end))
+  ;; Only a write PAST the end extends the stream; one inside it leaves the length alone.
+  (if (i64.gt_u (local.get $end) (i64.load (local.get $d)))
+    (then (i64.store (local.get $d) (local.get $end))))
+  (local.get $len))
+"#
+    .to_string()
+}
+
+/// `__rt_memstream_read`: reads at most `count` bytes from the current position.
+///
+/// What sets the end-of-file flag is a read that ASKED for more than was there, not one that
+/// merely finished at the end. Measured on php-src 8.5.6 across four cases: requesting 5 of 5
+/// leaves `feof` FALSE, requesting 100 of 6 sets it TRUE even though 6 bytes came back, and
+/// requesting anything at all of 0 sets it. So the test is `count > available`, and the flag is
+/// stored rather than derived from the position, which could not tell those cases apart.
+fn rt_memstream_read() -> String {
+    r#"(func $__rt_memstream_read (param $h i32) (param $count i64) (result i32 i64)
+  (local $d i32) (local $pos i64) (local $len i64) (local $avail i64) (local $take i64)
+  (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
+  (local.set $pos (i64.load (i32.add (local.get $d) (i32.const 16))))
+  (local.set $len (i64.load (local.get $d)))
+  (local.set $avail (select
+    (i64.sub (local.get $len) (local.get $pos))
+    (i64.const 0)
+    (i64.lt_u (local.get $pos) (local.get $len))))
+  (local.set $take (select (local.get $count) (local.get $avail)
+    (i64.lt_u (local.get $count) (local.get $avail))))
+  (if (i64.le_s (local.get $count) (i64.const 0))
+    (then (local.set $take (i64.const 0))))
+  (if (i64.gt_u (local.get $count) (local.get $avail))             ;; asked past the end
+    (then (i64.store (i32.add (local.get $d) (i32.const 24)) (i64.const 1))))
+  (if (i64.eqz (local.get $take))
+    (then (return (call $__rt_str_persist (i32.const 0) (i64.const 0)))))
+  (i64.store (i32.add (local.get $d) (i32.const 16)) (i64.add (local.get $pos) (local.get $take)))
+  (call $__rt_str_persist
+    (i32.add (i32.load (i32.add (local.get $d) (i32.const 32))) (i32.wrap_i64 (local.get $pos)))
+    (local.get $take)))
+"#
+    .to_string()
+}
+
+/// The bit that marks a stream handle as an IN-MEMORY stream rather than a WASI fd.
+///
+/// `php://memory` and `php://temp` have no host file behind them, so their handles cannot be
+/// fds — but they flow through the same resource-tagged cell every other stream does, and the
+/// same `fread`/`fwrite`/`fclose` call sites. Encoding the descriptor's ADDRESS with this bit
+/// set makes the two spaces disjoint without a side table: a WASI fd is a small non-negative
+/// integer, and a linear-memory address never reaches 2^30 in a module this size.
+const MEMSTREAM_FLAG: u32 = 0x4000_0000;
+
+/// `__rt_memstream_new`: opens an empty in-memory stream and answers its handle.
+///
+/// The descriptor is a fixed 40-byte block whose ADDRESS is the handle, so it never moves; the
+/// bytes live in a separate block it points at, which is what lets a write grow the stream
+/// without invalidating the handle the script is holding.
+///
+/// Layout: +0 length, +8 capacity, +16 position, +24 eof, +32 buffer pointer.
+fn rt_memstream_new() -> String {
+    format!(
+        r#"(func $__rt_memstream_new (result i32)
+  (local $d i32)
+  (local.set $d (call $__rt_heap_alloc (i32.const 40)))
+  (i64.store (local.get $d) (i64.const 0))                        ;; length
+  (i64.store (i32.add (local.get $d) (i32.const 8)) (i64.const 0)) ;; capacity
+  (i64.store (i32.add (local.get $d) (i32.const 16)) (i64.const 0)) ;; position
+  (i64.store (i32.add (local.get $d) (i32.const 24)) (i64.const 0)) ;; eof
+  (i32.store (i32.add (local.get $d) (i32.const 32)) (i32.const 0)) ;; no buffer yet
+  (i32.or (local.get $d) (i32.const {flag})))
+"#,
+        flag = MEMSTREAM_FLAG
+    )
+}
+
+/// `__rt_memstream_grow`: ensures the stream's buffer holds at least `want` bytes.
+///
+/// Capacity doubles from a 32-byte floor, so a write loop costs a logarithmic number of copies
+/// rather than one per call. The old bytes are copied and the old block freed; only the buffer
+/// pointer in the descriptor changes, which is why the handle stays valid.
+const RT_MEMSTREAM_GROW: &str = r#"(func $__rt_memstream_grow (param $d i32) (param $want i64)
+  (local $cap i64) (local $old i32) (local $new i32) (local $i i64)
+  (local.set $cap (i64.load (i32.add (local.get $d) (i32.const 8))))
+  (if (i64.le_u (local.get $want) (local.get $cap))
+    (then (return)))
+  (if (i64.lt_u (local.get $cap) (i64.const 32))
+    (then (local.set $cap (i64.const 32))))
+  (block $sized (loop $double
+    (br_if $sized (i64.ge_u (local.get $cap) (local.get $want)))
+    (local.set $cap (i64.shl (local.get $cap) (i64.const 1)))
+    (br $double)))
+  (local.set $old (i32.load (i32.add (local.get $d) (i32.const 32))))
+  (local.set $new (call $__rt_heap_alloc (i32.wrap_i64 (local.get $cap))))
+  (local.set $i (i64.const 0))
+  (block $copied (loop $copy
+    (br_if $copied (i64.ge_u (local.get $i) (i64.load (local.get $d))))  ;; only the LIVE bytes
+    (i32.store8
+      (i32.add (local.get $new) (i32.wrap_i64 (local.get $i)))
+      (i32.load8_u (i32.add (local.get $old) (i32.wrap_i64 (local.get $i)))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $copy)))
+  (if (local.get $old)
+    (then (call $__rt_heap_free (local.get $old))))
+  (i32.store (i32.add (local.get $d) (i32.const 32)) (local.get $new))
+  (i64.store (i32.add (local.get $d) (i32.const 8)) (local.get $cap)))
+"#;
+
+/// `__rt_memstream_tell`: the stream's current position.
+const RT_MEMSTREAM_TELL: &str = r#"(func $__rt_memstream_tell (param $h i32) (result i64)
+  (i64.load (i32.add (i32.and (local.get $h) (i32.const 1073741823)) (i32.const 16))))
+"#;
+
+/// `__rt_memstream_seek`: moves the position and clears the end-of-file flag.
+///
+/// `rewind` is this with offset 0. Clearing `eof` is what php-src does: after `rewind`, `feof`
+/// answers false again even though a read had previously hit the end.
+const RT_MEMSTREAM_SEEK: &str = r#"(func $__rt_memstream_seek (param $h i32) (param $off i64)
+  (local $d i32)
+  (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
+  (i64.store (i32.add (local.get $d) (i32.const 16)) (local.get $off))
+  (i64.store (i32.add (local.get $d) (i32.const 24)) (i64.const 0)))
+"#;
+
+/// `__rt_memstream_eof`: whether a read has already found nothing.
+///
+/// Measured on php-src 8.5.6, this is NOT "the position is at the end": reading exactly the last
+/// byte leaves `feof` FALSE, and only the next read — the one that finds nothing — sets it. So
+/// the flag is written by the read, never derived from the position here.
+const RT_MEMSTREAM_EOF: &str = r#"(func $__rt_memstream_eof (param $h i32) (result i64)
+  (i64.load (i32.add (i32.and (local.get $h) (i32.const 1073741823)) (i32.const 24))))
+"#;
+
+/// `__rt_memstream_close`: frees the buffer and the descriptor, answering PHP's true.
+const RT_MEMSTREAM_CLOSE: &str = r#"(func $__rt_memstream_close (param $h i32) (result i64)
+  (local $d i32) (local $buf i32)
+  (local.set $d (i32.and (local.get $h) (i32.const 1073741823)))
+  (local.set $buf (i32.load (i32.add (local.get $d) (i32.const 32))))
+  (if (local.get $buf)
+    (then (call $__rt_heap_free (local.get $buf))))
+  (call $__rt_heap_free (local.get $d))
+  (i64.const 1))
+"#;
+
+/// `__rt_feof`: PHP's `feof` for either kind of stream.
+///
+/// A WASI fd has no cheap "have we read past the end" bit, so it answers false — which is what
+/// the native backend does for a stream it cannot ask. An in-memory stream carries the flag its
+/// own reads set.
+const RT_FEOF: &str = r#"(func $__rt_feof (param $h i32) (result i64)
+  (if (i32.lt_s (local.get $h) (i32.const 0))
+    (then (return (i64.const 1))))                                ;; not a stream at all
+  (if (i32.and (local.get $h) (i32.const 1073741824))
+    (then (return (call $__rt_memstream_eof (local.get $h)))))
+  (i64.const 0))
+"#;
+
+/// `__rt_ftell`: PHP's `ftell`, which only an in-memory stream can answer here.
+const RT_FTELL: &str = r#"(func $__rt_ftell (param $h i32) (result i64)
+  (if (i32.and (local.get $h) (i32.const 1073741824))
+    (then (return (call $__rt_memstream_tell (local.get $h)))))
+  (i64.const 0))
+"#;
+
+/// `__rt_rewind`: PHP's `rewind`, seeking either kind of stream back to the start.
+const RT_REWIND: &str = r#"(func $__rt_rewind (param $h i32) (result i64)
+  (if (i32.lt_s (local.get $h) (i32.const 0))
+    (then (return (i64.const 0))))
+  (if (i32.and (local.get $h) (i32.const 1073741824))
+    (then
+      (call $__rt_memstream_seek (local.get $h) (i64.const 0))
+      (return (i64.const 1))))
+  (if (i32.ne (call $wasi_fd_seek (local.get $h) (i64.const 0) (i32.const 0)
+        (i32.add (global.get $__float_scratch) (i32.const 12352)))
+      (i32.const 0))
+    (then (return (i64.const 0))))
+  (i64.const 1))
+"#;
 
 /// `__rt_fopen_failed`: the boxed `false` every unopenable path answers, warning first.
 ///
@@ -158,6 +405,11 @@ fn rt_fopen() -> String {
   (if (i32.ge_s (local.get $first) (i32.const 0))                ;; a standard stream needs no path
     (then (return (call $__rt_mixed_from_value (i64.const 9)
       (i64.extend_i32_u (local.get $first)) (i64.const 0)))))
+  ;; `php://memory` and `php://temp` have no host file behind them at all, so they are opened
+  ;; before the preopen probe: they work with no filesystem authority whatsoever.
+  (if (call $__rt_is_memstream_path (local.get $path) (local.get $path_len))
+    (then (return (call $__rt_mixed_from_value (i64.const 9)
+      (i64.extend_i32_u (call $__rt_memstream_new)) (i64.const 0)))))
   (local.set $first (i32.const 0))
   (local.set $dirfd (call $__rt_wasi_dirfd))
   (if (i32.lt_s (local.get $dirfd) (i32.const 0))                ;; no preopen -> no filesystem
@@ -243,6 +495,8 @@ fn rt_fwrite() -> String {
         r#"(func $__rt_fwrite (param $fd i32) (param $ptr i32) (param $len i64) (result i64)
   (if (i32.lt_s (local.get $fd) (i32.const 0))
     (then (return (i64.const 0))))
+  (if (i32.and (local.get $fd) (i32.const {flag}))
+    (then (return (call $__rt_memstream_write (local.get $fd) (local.get $ptr) (local.get $len)))))
   (i32.store (i32.add (global.get $__float_scratch) (i32.const {iov})) (local.get $ptr))
   (i32.store (i32.add (global.get $__float_scratch) (i32.const {iov_len})) (i32.wrap_i64 (local.get $len)))
   (if (i32.ne (call $wasi_fd_write
@@ -256,7 +510,8 @@ fn rt_fwrite() -> String {
 "#,
         iov = IO_SCRATCH,
         iov_len = IO_SCRATCH + 4,
-        written = IO_SCRATCH + 8
+        written = IO_SCRATCH + 8,
+        flag = MEMSTREAM_FLAG
     )
 }
 
@@ -276,6 +531,8 @@ fn rt_fread() -> String {
   (local $out_len i64)
   (if (i32.or (i32.lt_s (local.get $fd) (i32.const 0)) (i64.le_s (local.get $count) (i64.const 0)))
     (then (return (call $__rt_str_persist (i32.const 0) (i64.const 0)))))
+  (if (i32.and (local.get $fd) (i32.const {flag}))
+    (then (return (call $__rt_memstream_read (local.get $fd) (local.get $count)))))
   (local.set $buf (call $__rt_heap_alloc (i32.wrap_i64 (local.get $count))))
   (i32.store (i32.add (global.get $__float_scratch) (i32.const {iov})) (local.get $buf))
   (i32.store (i32.add (global.get $__float_scratch) (i32.const {iov_len})) (i32.wrap_i64 (local.get $count)))
@@ -294,7 +551,8 @@ fn rt_fread() -> String {
 "#,
         iov = IO_SCRATCH,
         iov_len = IO_SCRATCH + 4,
-        nread = IO_SCRATCH + 8
+        nread = IO_SCRATCH + 8,
+        flag = MEMSTREAM_FLAG
     )
 }
 
@@ -312,6 +570,8 @@ fn rt_fclose() -> String {
     r#"(func $__rt_fclose (param $fd i32) (result i64)
   (if (i32.lt_s (local.get $fd) (i32.const 0))
     (then (return (i64.const 0))))
+  (if (i32.and (local.get $fd) (i32.const 1073741824))
+    (then (return (call $__rt_memstream_close (local.get $fd)))))
   (if (i32.lt_s (local.get $fd) (i32.const 3))                    ;; stdin/stdout/stderr survive
     (then (return (i64.const 1))))
   (if (i32.ne (call $wasi_fd_close (local.get $fd)) (i32.const 0))

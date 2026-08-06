@@ -15776,6 +15776,118 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `php://memory` and `php://temp`, which are streams with no host file behind them.
+///
+/// Every other stream this target opens is a WASI fd, and WASI is capability-based: without a
+/// preopened directory there is no filesystem at all. An in-memory stream needs none of that, so
+/// it is opened before the preopen probe and works under a host that granted nothing. The
+/// descriptor's ADDRESS is the handle, with a high bit set so the two spaces cannot collide, and
+/// the bytes live in a separate block — which is what lets a write grow the stream without
+/// invalidating the handle the script is holding.
+///
+/// Two behaviours were measured rather than assumed, and both would have been wrong by
+/// intuition. `feof` is set by a read that ASKED for more than was there, not by one that merely
+/// finished at the end: requesting 5 of 5 leaves it FALSE, requesting 100 of 6 sets it TRUE even
+/// though 6 bytes came back. And a mid-stream write OVERWRITES rather than inserting, so
+/// `"abcdef"` rewound and written `"XY"` reads back `"XYcdef"` at length 6.
+#[test]
+fn test_cli_wasm_reads_and_writes_an_in_memory_stream() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_memory_stream");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function yn(bool $b): string { return $b ? "T" : "F"; }
+$h = fopen("php://memory", "r+");
+echo yn($h !== false), "|";
+echo fwrite($h, "hello "), "|", fwrite($h, "world"), "|", ftell($h), "\n";
+rewind($h);
+echo ftell($h), "|", fread($h, 5), "|", yn(feof($h)), "|";
+echo fread($h, 100), "|", yn(feof($h)), "|", yn(fclose($h)), "\n";
+$e = fopen("php://memory", "r+");
+fwrite($e, "abcde");
+rewind($e);
+echo fread($e, 5), "|", yn(feof($e)), "|[", fread($e, 1), "]|", yn(feof($e)), "\n";
+fclose($e);
+$g = fopen("php://memory", "r+");
+fwrite($g, "abcdef");
+rewind($g);
+fwrite($g, "XY");
+rewind($g);
+echo fread($g, 10), "|", ftell($g), "\n";
+fclose($g);
+$t = fopen("php://temp", "w+");
+fwrite($t, "abc");
+rewind($t);
+echo fread($t, 10), "|", yn(fclose($t)), "\n";
+$z = fopen("php://memory", "r+");
+echo "[", fread($z, 4), "]|", yn(feof($z)), "\n";
+fclose($z);
+$b = fopen("php://memory", "r+");
+for ($i = 0; $i < 200; $i++) { fwrite($b, "xy"); }
+rewind($b);
+echo strlen(fread($b, 1000)), "\n";
+fclose($b);
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the memory-stream probe to WASM");
+    assert!(
+        output.status.success(),
+        "memory-stream compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    // No `preopens`: an in-memory stream must work with no filesystem authority at all.
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the memory-stream probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "T|6|5|11\n\
+         0|hello|F| world|T|T\n\
+         abcde|F|[]|T\n\
+         XYcdef|6\n\
+         abc|T\n\
+         []|T\n\
+         400\n",
+        "php-src 8.5.6's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `class_exists` and its three siblings answer from the module's own declarations.
 ///
 /// `RuntimeFnId::ClassExists`, `RuntimeFnId::InterfaceExists`, `RuntimeFnId::TraitExists` and
