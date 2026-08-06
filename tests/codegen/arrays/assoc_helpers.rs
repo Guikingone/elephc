@@ -204,6 +204,53 @@ echo $keys[0] . "|" . $keys[1];
     assert_eq!(out, "1|02");
 }
 
+/// Verifies array_keys() on a gradually-typed `array` whose runtime payload is a
+/// string-keyed hash yields those string keys, not integer positions.
+///
+/// A bare `array` type hint is `array<mixed>`, which says nothing about the key
+/// shape: the backend already resolves it at runtime through `__rt_heap_kind`.
+/// The checker used to answer `array<int>` for the same call, so the two layers
+/// disagreed and the build failed outright ("associative key PHP type Mixed into
+/// result PHP type Int"). php-verified against `php -n`: `2|a,b`.
+#[test]
+fn test_array_keys_of_gradual_array_holding_a_string_keyed_hash() {
+    let out = compile_and_run(
+        r#"<?php
+function hashy(): array {
+    $o = [];
+    foreach (["a" => 1, "b" => 2] as $k => $v) {
+        $o[$k] = $v;
+    }
+    return $o;
+}
+$h = array_keys(hashy());
+echo count($h), "|", $h[0], ",", $h[1];
+"#,
+    );
+    assert_eq!(out, "2|a,b");
+}
+
+/// Verifies the same gradually-typed `array` still yields positional integer keys
+/// when its runtime payload is a list, i.e. widening the key type to `mixed` did
+/// not cost the indexed answer. php-verified against `php -n`: `3|0,1,2`.
+#[test]
+fn test_array_keys_of_gradual_array_holding_a_list() {
+    let out = compile_and_run(
+        r#"<?php
+function listy(): array {
+    $o = [];
+    foreach ([10, 20, 30] as $v) {
+        $o[] = $v;
+    }
+    return $o;
+}
+$l = array_keys(listy());
+echo count($l), "|", $l[0], ",", $l[1], ",", $l[2];
+"#,
+    );
+    assert_eq!(out, "3|0,1,2");
+}
+
 /// Verifies array_search() returns the first-matching key in insertion order, not the last.
 /// Fixture: three-element assoc array where "same" maps to two keys; confirms only first is returned and array size is unchanged.
 #[test]
