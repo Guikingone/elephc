@@ -1447,7 +1447,13 @@ fn collect_concrete_subtree(
             Some(c) => c,
             None => continue,
         };
-        if !ci.is_abstract && ci.vtable_slots.contains_key(method_key) {
+        // A class this module cannot construct is not a possible receiver, so it gets no arm —
+        // the emitter has to agree with the audit here or the stub would call a body the audit
+        // never checked, or omit an arm the audit expected.
+        if !ci.is_abstract
+            && ci.vtable_slots.contains_key(method_key)
+            && super::capability::class_is_constructible(module, &name)
+        {
             out.push(name.clone());
         }
         if let Some(kids) = children.get(&name) {

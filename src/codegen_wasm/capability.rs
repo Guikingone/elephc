@@ -5272,6 +5272,41 @@ pub(super) fn class_descends_from(module: &Module, class_name: &str, ancestor: &
 }
 
 /// Enumerates every concrete implementation required by one generated virtual stub.
+/// Whether this module could ever hold an instance of `class_name`.
+///
+/// A class that DECLARES `__construct` but whose resolved implementation has no body here cannot
+/// be instantiated: `object_new_shape_issue` refuses `new C` for exactly that reason, so a module
+/// that compiles contains no such object, and no dynamic dispatch can select it. A class that
+/// declares no constructor at all is constructible with no body needed, so it stays a candidate.
+///
+/// This is what the SPL prelude needs. `__ElephcAppendIteratorArrayIterator` extends
+/// `ArrayIterator` and declares `append`, but the module carries NONE of its bodies — so
+/// `$this->append(...)` inside `ArrayIterator::offsetSet` collected it as a dispatch candidate
+/// and refused for a body that will never exist, taking `ArrayIterator` itself down with it. The
+/// same audit that would refuse constructing it is what licenses dropping it.
+pub(super) fn class_is_constructible(module: &Module, class_name: &str) -> bool {
+    let key = crate::names::php_symbol_key("__construct");
+    let Some(class_info) = module.class_infos.get(class_name) else {
+        return false;
+    };
+    if !class_info.methods.contains_key(&key) {
+        return true; // no declared constructor: `new C` needs no body
+    }
+    // A THROWABLE does not need one: the runtime raises `ValueError` and its siblings directly,
+    // without ever reaching `new`, and the `Throwable` accessors are open-coded against bodyless
+    // classes on purpose. Dropping them left `catch (ValueError $e) { $e->getMessage(); }` with
+    // no dispatch candidate at all.
+    if super::objects::is_throwable_class(module, class_name) {
+        return true;
+    }
+    let implementation = class_info
+        .method_impl_classes
+        .get(&key)
+        .cloned()
+        .unwrap_or_else(|| class_name.to_string());
+    find_method_function(module, &implementation, &key).is_some()
+}
+
 pub(super) fn dynamic_method_candidates(
     module: &Module,
     receiver_class: &str,
@@ -5303,6 +5338,7 @@ pub(super) fn dynamic_method_candidates(
             !class_info.is_abstract
                 && class_info.vtable_slots.contains_key(method_key)
                 && class_descends_from(module, class_name, &introducer)
+                && class_is_constructible(module, class_name)
         })
         .map(|(class_name, class_info)| {
             (

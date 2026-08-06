@@ -301,7 +301,7 @@ pub(super) fn emit_throwable_intrinsic(
 ///
 /// The walk is depth-bounded rather than trusting the hierarchy to be acyclic: this runs inside
 /// a backend audit, where a malformed module must produce a rejection, not a hang.
-fn is_throwable_class(module: &Module, class_name: &str) -> bool {
+pub(super) fn is_throwable_class(module: &Module, class_name: &str) -> bool {
     let mut current = Some(class_name.to_string());
     for _ in 0..64 {
         let Some(name) = current else {

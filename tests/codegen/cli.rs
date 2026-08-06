@@ -15776,6 +15776,90 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a dispatch ladder ignores a subclass this module could never construct.
+///
+/// A virtual call collects every concrete class in the receiver's subtree, and the audit then
+/// demands a body for each — so one subclass whose body was never emitted refused the call, and
+/// with it the base class's own method. The SPL prelude does exactly that:
+/// `__ElephcAppendIteratorArrayIterator` extends `ArrayIterator` and declares `append` with no
+/// body in the module, which refused `$this->append(...)` inside `ArrayIterator::offsetSet`.
+///
+/// Dropping it is licensed by the same audit that would refuse creating it: a class DECLARING
+/// `__construct` with no body cannot be instantiated here, so no instance can exist to dispatch
+/// to. A THROWABLE is exempt — the runtime raises `ValueError` and its siblings directly, never
+/// through `new`, and their accessors are open-coded against bodyless classes on purpose.
+/// Dropping those left `catch (ValueError $e) { $e->getMessage(); }` with no candidate at all,
+/// which is what the second case here pins.
+#[test]
+fn test_cli_wasm_dispatch_ignores_a_subclass_it_cannot_construct() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_unconstructible");
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // Both expected strings are php-src 8.5.6's own answers.
+    for (name, source, expected) in [
+        // A Throwable the RUNTIME raises: it has no constructor body here, and must still be a
+        // dispatch candidate for its own accessor.
+        (
+            "throwable.php",
+            "<?php\ntry { str_repeat(\"x\", -1); } catch (ValueError $e) { echo \"caught: \", $e->getMessage(), \"\\n\"; }\n",
+            "caught: str_repeat(): Argument #2 ($times) must be greater than or equal to 0\n",
+        ),
+        // An ordinary hierarchy: every class here is constructible, so every arm stays.
+        (
+            "subclasses.php",
+            "<?php\nclass Base { public function label(): string { return \"base\"; } }\nclass Kid extends Base { public function label(): string { return \"kid\"; } }\nfunction show(Base $b): void { echo $b->label(), \"\\n\"; }\nshow(new Base());\nshow(new Kid());\n",
+            "base\nkid\n",
+        ),
+    ] {
+        let path = dir.join(name);
+        fs::write(&path, source).unwrap();
+        let built = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg("wasm32-wasi")
+            .arg(&path)
+            .output()
+            .expect("failed to compile the unconstructible-candidate probe");
+        assert!(
+            built.status.success(),
+            "{name} must compile: {}",
+            String::from_utf8_lossy(&built.stderr)
+        );
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join(name.replace(".php", ".wasm")))
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the unconstructible-candidate probe under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            expected,
+            "{name}: php-src's own answer ({})",
+            String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `===` between two boxed values, including PHP's deep array identity.
 ///
 /// The pair was refused outright because either cell could hold an array, and array identity in

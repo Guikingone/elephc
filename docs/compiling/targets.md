@@ -571,6 +571,21 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**A dispatch ladder ignores a subclass this module could never construct.** A
+virtual call collects every concrete class in the receiver's subtree, and the audit
+demands a body for each — so one subclass whose body was never emitted refused the
+call and took the base class's own method down with it. The SPL prelude does exactly
+that: `__ElephcAppendIteratorArrayIterator` extends `ArrayIterator` and declares
+`append` with no body here, which refused `$this->append(...)` inside
+`ArrayIterator::offsetSet` and blocked 7 examples.
+
+Dropping it is licensed by the same audit that would refuse creating it: a class
+DECLARING `__construct` with no body cannot be instantiated, so no instance exists to
+dispatch to. A class declaring no constructor at all needs no body and stays. A
+THROWABLE is exempt for a different reason — the runtime raises `ValueError` and its
+siblings directly, never through `new`, and their accessors are open-coded against
+bodyless classes on purpose.
+
 **`===` between two BOXED values** is answered, deep array identity included. Either
 cell can hold an array, and PHP's array identity is a DEEP, ORDER-SENSITIVE
 element-wise comparison rather than the tag-plus-payload test a cell against a
