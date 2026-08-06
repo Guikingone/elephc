@@ -1642,6 +1642,20 @@ fn value_is_a_boxed_mixed_cast(function: &Function, mut value: ValueId) -> bool 
         match defining.op {
             Op::Cast => {
                 return defining.operands.first().is_some_and(|source| {
+                    // A cast of a WIDENING ARTEFACT is not "the conversion of a box": `$i * $i`
+                    // on two ints is typed Mixed only because an overflow would promote it to a
+                    // float, and narrowing it back is exact for every value that did not. The
+                    // same reasoning already admits that cast on its own; refusing it as another
+                    // side's operand contradicted it, and left `$i * $i <= $n` and
+                    // `$n % ($i + 2)` refused for having a perfectly good integer on the far
+                    // side.
+                    if value_is_widened_integer_arithmetic(
+                        function,
+                        *source,
+                        &mut HashSet::new(),
+                    ) {
+                        return false;
+                    }
                     function.value(*source).is_some_and(|operand| {
                         operand.ir_type == IrType::Heap(IrHeapKind::Mixed)
                             && operand.php_type.codegen_repr() == PhpType::Mixed

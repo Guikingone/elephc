@@ -104,7 +104,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 191 examples under `examples/` that carry a `main.php`, **53
+claim. Of the 191 examples under `examples/` that carry a `main.php`, **54
 compile to `wasm32-wasi`**, and every one of them except `ifdef`, `union-types`
 and `enums` reproduces php-src's output byte for byte. Those three have no
 php-src output to match rather than a different one: `ifdef` and `union-types`
@@ -119,7 +119,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 138 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 137 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 161, not 191.
 
@@ -570,6 +570,14 @@ an empty stack. When every candidate returns `void` the checker types the call
 expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
+
+**A WIDENED integer arithmetic result counts as an integer** on the far side of a
+comparison or a `%`. `$i * $i` on two ints is typed Mixed only because an overflow would
+promote it to a float, and narrowing it back is already admitted as exact for every value
+that did not overflow — but the predicates deciding the OTHER operand rejected it as
+"another conversion of a box", which contradicted that. `$i * $i <= $n` and
+`$n % ($i + 2)` were refused for having a perfectly good integer opposite them. Unblocks
+`examples/primes`.
 
 **Truthiness of a BOXED value or a float** is lowered. The per-tag ANSWERS were always
 exact — `"0.0"` is TRUE because only the single character `"0"` is false, and `-0.0` is

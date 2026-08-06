@@ -15776,6 +15776,94 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a WIDENED integer arithmetic result counts as an integer on the far side of a
+/// comparison and of `%`.
+///
+/// `$i * $i` on two ints is typed Mixed only because an overflow would promote it to a float,
+/// and the backend already admits narrowing it back — exact for every value that did not
+/// overflow. But the predicates that decide the OTHER side of a comparison or a modulo rejected
+/// it as "another conversion of a box", which contradicted that: `$i * $i <= $n` and
+/// `$n % ($i + 2)` were refused for having a perfectly good integer opposite them.
+///
+/// This is `examples/primes` in miniature — a sieve whose loop condition is exactly that
+/// comparison — and it is the shape any `while ($i * $i <= $n)` takes.
+#[test]
+fn test_cli_wasm_compares_widened_arithmetic_against_a_boxed_value() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_widened_compare");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function is_prime($n) {
+    if ($n <= 1) { return false; }
+    if ($n <= 3) { return true; }
+    if ($n % 2 == 0 || $n % 3 == 0) { return false; }
+    $i = 5;
+    while ($i * $i <= $n) {
+        if ($n % $i == 0 || $n % ($i + 2) == 0) { return false; }
+        $i += 6;
+    }
+    return true;
+}
+$found = "";
+$count = 0;
+for ($n = 2; $n <= 50; $n++) {
+    if (is_prime($n)) { $found .= $n . " "; $count++; }
+}
+echo $found, "\n", $count, "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the widened-comparison probe to WASM");
+    assert!(
+        output.status.success(),
+        "widened-comparison compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the widened-comparison probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "2 3 5 7 11 13 17 19 23 29 31 37 41 43 47 \n15\n",
+        "php-src's own answer ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies PHP's truthiness of a BOXED value and of a float, warning on a NaN.
 ///
 /// The per-tag ANSWERS were always exact — the refusal was only ever about the one diagnostic
