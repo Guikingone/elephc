@@ -10,6 +10,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::codegen_support::data_section::comm_directive;
+use crate::codegen_support::platform::Target;
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
@@ -63,27 +65,28 @@ pub(crate) fn emit_runtime_data_user(
     allowed_class_names: Option<&HashSet<String>>,
     emit_eval_reflection_metadata: bool,
     source_path: Option<&str>,
+    target: Target,
 ) -> String {
     let mut out = String::new();
 
     let mut sorted_globals: Vec<&String> = global_var_names.iter().collect();
     sorted_globals.sort();
     for name in sorted_globals {
-        out.push_str(&format!(".comm _gvar_{}, 16, 3\n", name));
+        out.push_str(&comm_directive(&format!("_gvar_{}", name), 16, target));
     }
 
     let mut sorted_statics: Vec<&(String, String)> = static_vars.keys().collect();
     sorted_statics.sort();
     for (func_name, var_name) in sorted_statics {
-        out.push_str(&format!(
-            ".comm _static_{}_{}, 16, 3\n",
-            mangle_fqn(func_name),
-            var_name
+        out.push_str(&comm_directive(
+            &format!("_static_{}_{}", mangle_fqn(func_name), var_name),
+            16,
+            target,
         ));
-        out.push_str(&format!(
-            ".comm _static_{}_{}_init, 8, 3\n",
-            mangle_fqn(func_name),
-            var_name
+        out.push_str(&comm_directive(
+            &format!("_static_{}_{}_init", mangle_fqn(func_name), var_name),
+            8,
+            target,
         ));
     }
 
@@ -104,7 +107,7 @@ pub(crate) fn emit_runtime_data_user(
     let mut static_property_symbols: Vec<String> = static_property_symbols.into_iter().collect();
     static_property_symbols.sort();
     for symbol in static_property_symbols {
-        out.push_str(&format!(".comm {}, 16, 3\n", symbol));
+        out.push_str(&comm_directive(&symbol, 16, target));
     }
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
@@ -114,9 +117,10 @@ pub(crate) fn emit_runtime_data_user(
             continue;
         };
         for case in &enum_info.cases {
-            out.push_str(&format!(
-                ".comm {}, 8, 3\n",
-                enum_case_symbol(*enum_name, &case.name)
+            out.push_str(&comm_directive(
+                &enum_case_symbol(*enum_name, &case.name),
+                8,
+                target,
             ));
         }
     }
@@ -2812,6 +2816,8 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
 mod tests {
     use std::collections::{HashMap, HashSet};
 
+    use crate::codegen_support::platform::{Arch, Platform, Target};
+
     use crate::parser::ast::Visibility;
     use crate::types::{ClassInfo, PhpType};
 
@@ -2924,6 +2930,10 @@ mod tests {
             Some(&allowed_class_names),
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_vtable_1"));
@@ -2955,6 +2965,10 @@ mod tests {
             None,
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
@@ -2993,6 +3007,10 @@ mod tests {
             None,
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));

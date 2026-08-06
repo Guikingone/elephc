@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed every common symbol being declared with an alignment operand that only one object format reads correctly: `.comm`'s third operand is a power-of-two exponent on Mach-O and a byte count on ELF, and elephc emitted the Mach-O spelling everywhere. Linux builds therefore declared 3-byte alignment for 8-byte slots, which assembles cleanly and then fails to link with `relocation truncated to fit: R_AARCH64_LDST64_ABS_LO12_NC` as soon as any of them is reached by a 64-bit load — the stack-exhaustion guard's `_stack_limit` is the first symbol to do so, which took out linux-aarch64 entirely. All 172 emission sites now render the directive through one target-aware helper.
 - Fixed `base64_decode()` returning wrong bytes with no diagnostic: embedded whitespace produced garbage, unpadded input was truncated, and an invalid character was folded into the output. It now follows php-src's decoder and gains the `$strict` parameter.
 - Added `stripos()`, `strripos()`, `quoted_printable_encode()`, the key-preserving forms of `array_slice()` and `array_chunk()`, and `file($filename, $flags)`.
 - Fixed a segfault when a shape-changing array builtin was called through a callable string (`$f = 'array_reverse'; $f([1,2,3,4]);`): the result was typed from the builtin's broad declared return instead of its real layout.
