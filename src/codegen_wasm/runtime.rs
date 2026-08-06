@@ -320,6 +320,19 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_FOPEN_FAILED.len() as u32
     + WARN_FILE_GET_CONTENTS_FAILED.len() as u32;
 
+/// Name of the mutable global holding the `@` suppression DEPTH.
+pub(super) const DIAG_SUPPRESS_GLOBAL: &str = "__diag_suppress";
+
+/// The guard every `__rt_warn_*` helper opens with.
+///
+/// Placed at the TOP of each warning helper rather than around the individual
+/// `fd_write` calls: a warning is emitted as several writes (prefix, value,
+/// suffix), and gating them one by one would risk printing a half-formed
+/// diagnostic if a single write were missed. All-or-nothing per warning.
+#[cfg(test)]
+pub(super) const DIAG_SUPPRESS_GUARD: &str =
+    "  (if (global.get $__diag_suppress) (then (return)))";
+
 /// Adds the import-free runtime every module needs: the compatibility concat
 /// cursor global and the heap-backed `__rt_concat` helper.
 pub(super) fn emit_common_runtime(wm: &mut WatModule) {
@@ -330,6 +343,36 @@ pub(super) fn emit_common_runtime(wm: &mut WatModule) {
         init: CONCAT_BASE as i64,
     });
     wm.add_raw_func(RT_CONCAT);
+    emit_diag_suppression_runtime(wm);
+}
+
+/// Emits the `@` operator's suppression state.
+///
+/// A DEPTH, not a flag: `@foo(@bar())` nests, and popping to a boolean would
+/// un-suppress the outer expression as soon as the inner one finished. This
+/// mirrors the native backend, where `Op::ErrorSuppressBegin` and
+/// `Op::ErrorSuppressEnd` call `__rt_diag_push_suppression` / `__rt_diag_pop_suppression`.
+///
+/// Only WARNINGS consult it. PHP 8 no longer lets `@` swallow a fatal error, so
+/// the `__rt_fail_*` helpers deliberately keep writing and exiting.
+fn emit_diag_suppression_runtime(wm: &mut WatModule) {
+    wm.add_global(Global {
+        name: DIAG_SUPPRESS_GLOBAL.to_string(),
+        ty: ValType::I32,
+        mutable: true,
+        init: 0,
+    });
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_diag_push_suppression
+  (global.set ${DIAG_SUPPRESS_GLOBAL} (i32.add (global.get ${DIAG_SUPPRESS_GLOBAL}) (i32.const 1))))"#
+    ));
+    // Saturating at zero: an unbalanced pop must not wrap the depth to ~4e9 and
+    // silence every later warning in the program.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_diag_pop_suppression
+  (if (i32.gt_u (global.get ${DIAG_SUPPRESS_GLOBAL}) (i32.const 0))
+    (then (global.set ${DIAG_SUPPRESS_GLOBAL} (i32.sub (global.get ${DIAG_SUPPRESS_GLOBAL}) (i32.const 1))))))"#
+    ));
 }
 
 /// Adds the WASI imports and `__rt_*` helpers a command (main-bearing) module needs.
@@ -687,6 +730,7 @@ fn emit_foreach_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u32)]) {
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_foreach_non_iterable (param $tag i64) (param $lo i64)
   (local $word_ptr i32) (local $word_len i32)
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_type_word_for_tag (local.get $tag) (local.get $lo))
   (local.set $word_len)
   (local.set $word_ptr)
@@ -921,6 +965,7 @@ fn emit_property_on_null_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u3
     let (suffix_ptr, suffix_len) = offsets[1];
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_property_on_null (param $name_ptr i32) (param $name_len i32)
+  (if (global.get $__diag_suppress) (then (return)))
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len})))
   (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $name_ptr) (local.get $name_len)))
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len}))))"#
@@ -947,6 +992,7 @@ fn emit_offset_on_scalar_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u3
     let (float_ptr, float_len) = if php83_or_later { offsets[3] } else { offsets[6] };
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_array_offset_on_scalar (param $tag i64) (param $lo i64)
+  (if (global.get $__diag_suppress) (then (return)))
   (if (i64.eq (local.get $tag) (i64.const 0))                     ;; int receiver
     (then (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {int_ptr}) (i32.const {int_len})) (return)))
   (if (i64.eq (local.get $tag) (i64.const 2))                     ;; float receiver
@@ -970,10 +1016,12 @@ fn emit_open_failure_warning_runtime(wm: &mut WatModule, offsets: &[(u32, u32)])
     let (get_ptr, get_len) = offsets[1];
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_fopen_failed
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {fopen_ptr}) (i32.const {fopen_len})))"#
     ));
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_file_get_contents_failed
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {get_ptr}) (i32.const {get_len})))"#
     ));
 }
@@ -989,6 +1037,7 @@ fn emit_uninit_string_offset_warning_runtime(wm: &mut WatModule, offsets: &[(u32
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_uninit_string_offset (param $index i64)
   (local $ptr i32) (local $len i32)
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len}))
   (call $__rt_itoa (local.get $index) (global.get $__float_scratch))
   (local.set $len)
@@ -1496,6 +1545,7 @@ fn emit_undefined_array_key_warning_runtime(
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_undefined_array_key_int (param $key i64)
   (local $key_ptr i32) (local $key_len i32)
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len}))
   (call $__rt_itoa (local.get $key) (global.get $__float_scratch))
   (local.set $key_len)
@@ -1505,6 +1555,7 @@ fn emit_undefined_array_key_warning_runtime(
     ));
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_undefined_array_key_str (param $key_ptr i32) (param $key_len i32)
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len}))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {quote_ptr}) (i32.const {quote_len}))
   (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $key_ptr) (local.get $key_len))
@@ -1537,15 +1588,18 @@ fn emit_undefined_array_key_warning_runtime(
     );
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_array_to_string
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {array_to_string_ptr}) (i32.const {array_to_string_len})))"#
     ));
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_array_offset_on_null
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {offset_on_null_ptr}) (i32.const {offset_on_null_len})))"#
     ));
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_float_not_representable (param $bits i64)
   (local $ptr i32) (local $len i32)
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {float_prefix_ptr}) (i32.const {float_prefix_len}))  ;; "Warning: The float "
   (call $__rt_ftoa (local.get $bits) (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80) (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792) (i32.add (global.get $__float_scratch) (i32.const 4096)))  ;; render the offending float exactly as PHP prints it
   (local.set $len)                                                ;; ftoa returns (ptr, len): pop the length first
@@ -1558,6 +1612,7 @@ fn emit_undefined_array_key_warning_runtime(
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_object_to_int (param $cid i64)
   (local $ptr i32) (local $len i64)
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {object_prefix_ptr}) (i32.const {object_prefix_len}))  ;; "Warning: Object of class "
   (call $__rt_class_name_by_cid (local.get $cid))                 ;; resolve the class name -> (ptr, len)
   (local.set $len)                                                ;; pop the name length
@@ -1568,6 +1623,7 @@ fn emit_undefined_array_key_warning_runtime(
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_object_to_float (param $cid i64)
   (local $ptr i32) (local $len i64)
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {object_prefix_ptr}) (i32.const {object_prefix_len}))  ;; "Warning: Object of class "
   (call $__rt_class_name_by_cid (local.get $cid))                 ;; resolve the class name -> (ptr, len)
   (local.set $len)                                                ;; pop the name length
@@ -1577,6 +1633,7 @@ fn emit_undefined_array_key_warning_runtime(
     ));
     wm.add_raw_func(&format!(
         r#"(func $__rt_warn_non_numeric_value
+  (if (global.get $__diag_suppress) (then (return)))
   (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {non_numeric_ptr}) (i32.const {non_numeric_len})))"#
     ));
     wm.add_raw_func(&format!(

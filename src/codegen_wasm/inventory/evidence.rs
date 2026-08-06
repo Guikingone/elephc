@@ -88,6 +88,8 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::StrLen => &["`strlen()`"],
         Op::StrPersist => &["returning a string from a function", "storing a computed string"],
         Op::ConcatReset => &["reset of a compiler-managed concatenation chain"],
+        Op::ErrorSuppressBegin => &["entering the `@` error-suppression operator"],
+        Op::ErrorSuppressEnd => &["leaving the `@` error-suppression operator"],
         Op::ArrayNew => &["indexed array literal"],
         Op::ArrayLen => &["`count()` on an indexed array"],
         Op::ArrayGet => &["indexed array offset read"],
@@ -317,6 +319,9 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::StrConcat => "codegen_wasm::inst::lower_str_concat",
         Op::Nop => "codegen_wasm::inst::lower_nop",
         Op::ConcatReset => "codegen_wasm::inst::lower_concat_reset",
+        Op::ErrorSuppressBegin | Op::ErrorSuppressEnd => {
+            "codegen_wasm::inst::lower_error_suppress"
+        }
         Op::LoadLocal => "codegen_wasm::inst::lower_load_local",
         Op::StoreLocal => "codegen_wasm::inst::lower_store_local",
         Op::UnsetLocal => "codegen_wasm::inst::lower_unset_local",
@@ -510,7 +515,9 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::FirstClassCallableNew
         | Op::CallableDescriptorInvoke => "closure",
         Op::EchoValue | Op::PrintValue | Op::WriteStrStdout => "echo",
-        Op::Warn => "warn",
+        // `@` decides whether a warning reaches stderr at all, so it is audited
+        // with the warning it gates rather than as its own capability.
+        Op::Warn | Op::ErrorSuppressBegin | Op::ErrorSuppressEnd => "warn",
         Op::ThrowError => "throw_error",
         Op::Acquire | Op::Release | Op::Move | Op::Borrow | Op::Nop | Op::GcCollect => "ownership",
         Op::LoadStaticProperty | Op::StoreStaticProperty | Op::ScopedConstantGet => "object",

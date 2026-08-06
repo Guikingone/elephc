@@ -7495,6 +7495,9 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::AliasLocalRefCell
         | Op::ReleaseLocalRefCell
         | Op::LoadGlobal
+        // The `@` operator: a suppression depth the `__rt_warn_*` helpers consult.
+        | Op::ErrorSuppressBegin
+        | Op::ErrorSuppressEnd
         | Op::IAdd
         | Op::ISub
         | Op::IMul
@@ -7707,8 +7710,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::WriteStdout
         | Op::VarDump
         | Op::PrintR
-        | Op::ErrorSuppressBegin
-        | Op::ErrorSuppressEnd
         | Op::FinallyEnter
         | Op::FinallyExit
         | Op::FiberRuntimeCall
@@ -7730,6 +7731,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use super::super::runtime::DIAG_SUPPRESS_GUARD;
     use super::{loose_eq_shape_issue, validate_module as validate_and_plan, LoweredWasmPlan, WasmError};
     use crate::codegen::platform::Target;
     use crate::codegen::Emit;
@@ -10081,6 +10083,75 @@ mod tests {
                 .count(),
             2,
             "only the two normal reads should call the warning helper: {wat}"
+        );
+    }
+
+    /// Every `__rt_warn_*` helper must open with the `@` suppression guard.
+    ///
+    /// Enumerated from the emitted WAT rather than from a hand-kept list: a new
+    /// warning helper added without the guard would otherwise print through `@`,
+    /// and nothing else in the suite would notice. The guard is asserted to come
+    /// before the helper's first write, since a guard placed after one would
+    /// leak a partial diagnostic.
+    #[test]
+    fn every_warning_helper_opens_with_the_suppression_guard() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("_entry".to_string(), IrType::Void, PhpType::Void);
+        // A warning-producing read is only admitted in a main-bearing command
+        // module, which is also what pulls the warning helpers into the WAT.
+        function.flags.is_main = true;
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let index = builder.emit_const_i64(0);
+            let array = builder
+                .emit(
+                    Op::ArrayNew,
+                    Vec::new(),
+                    Some(Immediate::Capacity(1)),
+                    IrType::Heap(IrHeapKind::Array),
+                    PhpType::Array(Box::new(PhpType::Int)),
+                    Ownership::Owned,
+                )
+                .expect("array value");
+            let _ = builder.emit(
+                Op::ArrayGet,
+                vec![array, index],
+                None,
+                IrType::TaggedScalar,
+                PhpType::TaggedScalar,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let wat = validate_module(&module)
+            .expect("a warning-emitting read must remain supported")
+            .into_wat();
+
+        let mut checked = 0usize;
+        for chunk in wat.split("(func $").skip(1) {
+            let name = chunk.split(|c: char| c.is_whitespace() || c == '(').next().unwrap_or("");
+            if !name.starts_with("__rt_warn_") {
+                continue;
+            }
+            checked += 1;
+            let guard = chunk
+                .find(DIAG_SUPPRESS_GUARD.trim())
+                .unwrap_or_else(|| panic!("`{name}` is missing the @ suppression guard: {chunk}"));
+            if let Some(write) = chunk.find("$__rt_wasi_write") {
+                assert!(
+                    guard < write,
+                    "`{name}` guards after its first write, which would print a partial diagnostic"
+                );
+            }
+        }
+        assert!(
+            checked >= 2,
+            "fixture emitted {checked} warning helper(s); it must exercise the real ones: {wat}"
         );
     }
 

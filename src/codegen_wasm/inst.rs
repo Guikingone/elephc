@@ -54,6 +54,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::StrConcat => lower_str_concat(ctx, &inst),
         Op::Nop => lower_nop(ctx),
         Op::ConcatReset => lower_concat_reset(ctx),
+        Op::ErrorSuppressBegin | Op::ErrorSuppressEnd => lower_error_suppress(ctx, inst.op),
         Op::LoadLocal => lower_load_local(ctx, &inst),
         Op::StoreLocal => lower_store_local(ctx, &inst),
         Op::UnsetLocal => lower_unset_local(ctx, &inst),
@@ -1375,6 +1376,21 @@ fn lower_concat_reset(ctx: &mut FnCtx) -> Result<()> {
         .ins(&format!("local.get {}", ctx.concat_base_local), "frame concat baseline");
     ctx.fb
         .ins("global.set $__concat_off", "reset concat cursor to baseline");
+    Ok(())
+}
+
+/// Lowers the `@` operator's bracket instructions.
+///
+/// Both are a bare call to the matching depth helper; the suppression state
+/// lives in the `$__diag_suppress` global that every `__rt_warn_*` helper reads
+/// on entry. Nothing is pushed or popped on the value stack — `@expr` yields the
+/// expression's own value, which the surrounding instructions already produce.
+fn lower_error_suppress(ctx: &mut FnCtx, op: Op) -> Result<()> {
+    let (callee, why) = match op {
+        Op::ErrorSuppressBegin => ("$__rt_diag_push_suppression", "enter @ suppression"),
+        _ => ("$__rt_diag_pop_suppression", "leave @ suppression"),
+    };
+    ctx.fb.ins(&format!("call {callee}"), why);
     Ok(())
 }
 
