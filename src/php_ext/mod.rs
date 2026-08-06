@@ -16,6 +16,10 @@
 //! - `manifest` owns the `[php-ext]` section, mirroring `native_deps::manifest`
 //!   so declaring an extension never disturbs `[native]` or hand-written TOML.
 
+//! - `recipe` decides how an extension is compiled, as an inspectable value kept
+//!   separate from running the commands.
+
 pub mod admission;
 pub mod manifest;
+pub mod recipe;
 pub mod stub;
