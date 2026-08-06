@@ -2042,6 +2042,49 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                     ctx.fb.ins("i64.extend_i32_u", "widen coerced string length");
                 }
             }
+            // PHP's coercion at an internal function's declared `string` PARAMETER is a third
+            // operation again: it converts a scalar the way `(string)` does, deprecates a null
+            // on its way to `""`, and raises where `(string)` would have answered "Array".
+            IrType::Str
+                if super::capability::mixed_string_argument_coercion(ctx.function, inst)
+                    .is_some() =>
+            {
+                let (name, parameter, position) =
+                    super::capability::mixed_string_argument_coercion(ctx.function, inst)
+                        .expect("the guard above proved this resolves");
+                let (fn_ptr, fn_len) = ctx.default_str_literal(name)?;
+                let (param_ptr, param_len) = ctx.default_str_literal(&parameter)?;
+                ctx.fb.ins(
+                    &format!("i32.const {}", fn_ptr),
+                    "the PHP function's name, for the diagnostic text",
+                );
+                ctx.fb.ins(&format!("i32.const {}", fn_len), "its byte length");
+                ctx.fb.ins(
+                    &format!("i32.const {}", param_ptr),
+                    "the parameter's name, without its dollar",
+                );
+                ctx.fb
+                    .ins(&format!("i32.const {}", param_len), "its byte length");
+                ctx.fb.ins(
+                    &format!("i64.const {}", position),
+                    "php-src numbers arguments from 1",
+                );
+                ctx.fb.ins(
+                    "call $__rt_mixed_arg_string",
+                    "PHP's implicit coercion at a declared string parameter",
+                );
+                let len = ctx.fresh_temp(ValType::I32);
+                let ptr = ctx.fresh_temp(ValType::I32);
+                ctx.fb
+                    .ins(&format!("local.set {}", len), "capture coerced string length");
+                ctx.fb
+                    .ins(&format!("local.set {}", ptr), "capture coerced string pointer");
+                ctx.fb
+                    .ins(&format!("local.get {}", ptr), "coerced string pointer");
+                ctx.fb
+                    .ins(&format!("local.get {}", len), "coerced string length");
+                ctx.fb.ins("i64.extend_i32_u", "widen coerced string length");
+            }
             IrType::I64 => {
                 ctx.fb
                     .ins("call $__rt_mixed_cast_int", "cast boxed Mixed to int");

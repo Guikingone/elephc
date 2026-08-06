@@ -104,7 +104,7 @@ shape, ownership, argument/environment/preopen, and process-status coverage.
 ### Measured parity against the example suite
 
 Parity is tracked against the repository's own examples rather than a prose
-claim. Of the 191 examples under `examples/` that carry a `main.php`, **52
+claim. Of the 191 examples under `examples/` that carry a `main.php`, **53
 compile to `wasm32-wasi`**, and every one of them except `ifdef`, `union-types`
 and `enums` reproduces php-src's output byte for byte. Those three have no
 php-src output to match rather than a different one: `ifdef` and `union-types`
@@ -119,7 +119,7 @@ first WASI argument. php-src puts it in `$argv[0]` and counts it in `$argc`; a
 host that starts the module with an empty argument vector makes both differ for
 reasons that have nothing to do with the backend.
 
-**30 of the 139 remaining examples will never compile here.** `stream_socket_*`,
+**30 of the 138 remaining examples will never compile here.** `stream_socket_*`,
 sockets, FFI/`extern` calls, SDL, PDO drivers and the image extensions have no
 WASI Preview 1 equivalent, so the realistic ceiling is about 161, not 191.
 
@@ -147,18 +147,18 @@ handle.
 
 The blocker-count distribution says the same thing. Counting the distinct
 refusals a single `elephc build --target wasm32-wasi` reports per example: of the
-139 that do not compile, four never reach this backend at all — `strict-php`,
+138 that do not compile, four never reach this backend at all — `strict-php`,
 `web-session`, `web-session-trans-sid` and `web-session-upload` stop in the type
-checker on every target — and of the remaining 135, 16 have one distinct blocker,
+checker on every target — and of the remaining 134, 15 have one distinct blocker,
 16 have two, 13 have three, 28 have four, and the tail runs to 23. (Distinct
 REASONS, not refusal lines: `fibers` reports 58 lines but only eleven different
 gaps, and ranking by lines answers "how often is this hit", which is a different
 question from "what would unblock an example".)
 
-The sixteen reachable by a single blocker are `array-access-exception-order`,
+The fifteen reachable by a single blocker are `array-access-exception-order`,
 `constructor-promotion`, `fsockopen`, `ftp-stream`, `hello-preg`,
 `json-jsonserializable`, `logical`, `phar-writer`, `php-wrapper`,
-`pipe-operator`, `print_r-return`, `sdl_audio`, `socket-pair`, `stream-copy`,
+`print_r-return`, `sdl_audio`, `socket-pair`, `stream-copy`,
 `stream-get-contents` and `type-ops`. Seven of those are dead ends rather than
 work: `sdl_audio`, `fsockopen` and `socket-pair` are among the thirty that never
 will; `ftp-stream`, `phar-writer` and `php-wrapper` need stream wrappers this
@@ -570,6 +570,41 @@ an empty stack. When every candidate returns `void` the checker types the call
 expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
+
+**A boxed object reaches `__toString`** instead of being refused outright. The
+object arm of every string conversion raised `Error: Object of class C could not
+be converted to string` for EVERY class, which is php-src's answer only for a
+class that does not define the method — measured, `(string)$tag` prints `<em>`
+there and fatally raised here, a wrong ANSWER in shipped code rather than a
+refusal. The conversion now goes through a runtime class-id dispatch, so a class
+defining `__toString` converts and one that does not still raises. All three
+ownership shapes are covered: a literal returns a data-segment pointer that must
+not be released, a property read returns storage the object still owns, and a
+concat returns a fresh heap string.
+
+That dispatch only carries classes whose `__toString` has a BODY in the module,
+which is what excludes most of the prelude: `Exception`, `SplFileInfo` and the
+`Reflection*` family all declare the method with no body this target can call, so
+they still reach the fatal. That is unchanged from before rather than new, and it
+is the same set the `Throwable` accessors already approximate.
+
+**A boxed value reaching a builtin's declared `string` parameter** is coerced
+PHP's way. This is a THIRD implicit `Str` conversion, distinct from both the
+explicit `(string)` cast and the one an echo performs, and the difference is not
+cosmetic. Measured on php-src 8.5.6 for `strtoupper($mixed)`: a string, int,
+float or bool converts exactly as `(string)` does; `null` converts to `""` but
+raises `Deprecated: strtoupper(): Passing null to parameter #1 ($string) of type
+string is deprecated`; and an array — which `(string)` would have turned into
+`"Array"` with a warning — does not convert at all, it is `TypeError:
+strtoupper(): Argument #1 ($string) must be of type string, array given`. An
+object contributes its CLASS name to that message, and a closure the word
+`Closure`.
+
+Both names in those messages come from the builtin registry, which the EIR
+reaches through the call's runtime target. A target several PHP names share is
+refused rather than guessed — `count` and `sizeof` reach the same one, and
+php-src reports the name AS WRITTEN, which the target cannot recover. Unblocks
+`examples/pipe-operator`.
 
 **A boxed value reaching a slot declared as a class** is narrowed back to an
 object. A `?Node` property is stored boxed, so `return $this->node;` from a method

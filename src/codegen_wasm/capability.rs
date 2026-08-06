@@ -904,6 +904,59 @@ fn value_transfer_shape_issue(
     }
 }
 
+/// Names the function and parameter behind an implicit `Str` cast that feeds a builtin argument.
+///
+/// This is the OTHER implicit `Str` coercion, and it is a different operation from the one
+/// `cast_feeds_string_context` admits. Measured on php-src 8.5.6 for `strtoupper($mixed)`: a
+/// string, int, float or bool converts exactly as `(string)` does; `null` converts to `""` but
+/// raises `Deprecated: F(): Passing null to parameter #N ($p) of type string is deprecated`; and
+/// an array, object or resource does NOT convert at all — it is a `TypeError` naming the type
+/// that arrived, where `(string)` of the same array would have produced `"Array"` with a warning.
+///
+/// Returns `(php_function_name, parameter_name, one_based_position)` when every one of those
+/// answers is knowable at compile time, which needs all of:
+///
+/// - the cast's result reaching exactly ONE consumer, a typed runtime call, at one position;
+/// - that runtime id belonging to exactly one PHP name (`count`/`sizeof` share one, and php-src
+///   reports the name as written, so an alias is refused rather than guessed);
+/// - the parameter being declared plain `string` — a `?string` takes null with no deprecation.
+pub(super) fn mixed_string_argument_coercion(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<(&'static str, String, usize)> {
+    let result = inst.result?;
+    let mut consumer: Option<(&Instruction, usize)> = None;
+    for candidate in &function.instructions {
+        // Ownership bookkeeping is not a use; it says nothing about the context.
+        if matches!(candidate.op, Op::Release | Op::Move | Op::Borrow) {
+            continue;
+        }
+        for (index, operand) in candidate.operands.iter().enumerate() {
+            if *operand != result {
+                continue;
+            }
+            // A second use means a second context, which may not share this one's contract.
+            if consumer.is_some() {
+                return None;
+            }
+            consumer = Some((candidate, index));
+        }
+    }
+    let (call, index) = consumer?;
+    if call.op != Op::RuntimeCall {
+        return None;
+    }
+    let Some(Immediate::RuntimeCall(target)) = &call.immediate else {
+        return None;
+    };
+    let (name, parameter, declared) =
+        crate::builtins::registry::runtime_call_sole_parameter(*target, index)?;
+    if declared != PhpType::Str {
+        return None;
+    }
+    Some((name, parameter, index + 1))
+}
+
 /// Returns whether a cast's result is used ONLY where PHP renders a value as a string.
 ///
 /// `"v=" . $mixed` and `echo $mixed` reach an implicit `Str` cast, and PHP's conversion there
@@ -1684,12 +1737,16 @@ fn cast_shape_issue(
     // runtime traps on an object, a resource or a callable, and that diagnostic goes through WASI.
     let comparison_stand_in = cast_stands_in_for_mixed_comparison(function, inst).is_some()
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
+    // The coercion at a builtin's declared `string` parameter raises through WASI, so it needs a
+    // command module the way every other diagnostic-producing rule here does.
+    let string_argument_coercion = mixed_string_argument_coercion(function, inst).is_some()
+        && module.functions.iter().any(|candidate| candidate.flags.is_main);
     let admitted_mixed_scalar = (explicit
         || widened_by_checked_arithmetic
         || return_coercion
         || comparison_stand_in)
         && matches!(target, IrType::I64 | IrType::F64)
-        || ((explicit || cast_feeds_string_context(function, inst))
+        || ((explicit || cast_feeds_string_context(function, inst) || string_argument_coercion)
             && target == IrType::Str);
     if source.ir_type == IrType::Heap(IrHeapKind::Mixed)
         && source_php == PhpType::Mixed

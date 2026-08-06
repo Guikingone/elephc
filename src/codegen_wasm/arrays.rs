@@ -1445,7 +1445,7 @@ mod tests {
         emit_refcount_runtime(&mut wm);
         emit_closure_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -1492,7 +1492,7 @@ mod tests {
         emit_refcount_runtime(&mut wm);
         emit_closure_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);

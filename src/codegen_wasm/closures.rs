@@ -2189,7 +2189,7 @@ mod tests {
         // `__rt_decref_any` dispatches to the array/hash/mixed/object/closure runtimes,
         // so all of them must be present to validate (generate() emits all of them).
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -2370,7 +2370,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -2530,7 +2530,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -2927,7 +2927,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -3085,7 +3085,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -3292,7 +3292,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -3563,7 +3563,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -3832,7 +3832,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -4141,7 +4141,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -4438,7 +4438,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -4793,7 +4793,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -4916,7 +4916,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);
@@ -5155,7 +5155,7 @@ mod tests {
         emit_heap_runtime(&mut wm, 1024, 3 * 65536);
         emit_refcount_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);

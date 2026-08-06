@@ -15753,6 +15753,244 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a boxed object reaches `__toString` instead of being refused outright.
+///
+/// The object arm of every string conversion raised `Error: Object of class C could not be
+/// converted to string` for EVERY class, which is php-src's answer only for a class that does
+/// NOT define the method. Measured against php-src 8.5.6, `(string)$tag` prints `<em>` there and
+/// fatally raised here — a wrong answer in shipped code, not a refusal. The conversion now goes
+/// through a runtime class-id dispatch, so a class defining `__toString` converts and one that
+/// does not still raises.
+///
+/// The three bodies are the three ownership shapes: a LITERAL returns a data-segment pointer that
+/// must not be released, a PROPERTY read returns storage the object still owns, and a CONCAT
+/// returns a fresh heap string. All three have to survive the same persist-and-release path.
+#[test]
+fn test_cli_wasm_string_conversion_dispatches_to_to_string() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_to_string");
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+class Lit { public function __toString(): string { return "lit"; } }
+class Prop { public function __construct(private string $t) {} public function __toString(): string { return $this->t; } }
+class Cat { public function __construct(private string $t) {} public function __toString(): string { return "<" . $this->t . ">"; } }
+function boxit(int $i): mixed { return $i === 0 ? new Lit() : ($i === 1 ? new Prop("prp") : new Cat("em")); }
+for ($i = 0; $i < 3; $i++) { echo (string)boxit($i), "|", strlen((string)boxit($i)), "\n"; }
+"#,
+    )
+    .unwrap();
+
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the __toString probe to WASM");
+    assert!(
+        built.status.success(),
+        "__toString compilation failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the __toString probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "lit|3\nprp|3\n<em>|4\n",
+        "php-src's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    // A class with no `__toString` keeps php-src's fatal, which is what the old arm gave
+    // every object indiscriminately.
+    let plain = dir.join("plain.php");
+    fs::write(
+        &plain,
+        r#"<?php
+class Tag { public function __toString(): string { return "t"; } }
+class Plain { public function __construct(public int $n) {} }
+function boxit(int $i): mixed { return $i === 0 ? new Tag() : new Plain(3); }
+echo (string)boxit(0), "\n";
+echo (string)boxit(1), "\n";
+"#,
+    )
+    .unwrap();
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&plain)
+        .output()
+        .expect("failed to compile the non-stringable probe to WASM");
+    assert!(
+        built.status.success(),
+        "non-stringable compilation failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("plain.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the non-stringable probe under Node");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "t\n");
+    assert!(
+        String::from_utf8_lossy(&run.stderr)
+            .contains("Object of class Plain could not be converted to string"),
+        "php-src's own fatal: {}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a boxed value reaching a builtin's declared `string` parameter is coerced PHP's way.
+///
+/// This is a THIRD implicit `Str` conversion, distinct from both the explicit `(string)` cast and
+/// the one an echo performs, and the difference is not cosmetic. Measured on php-src 8.5.6 for
+/// `strtoupper($mixed)`: a scalar converts exactly as `(string)` does, `null` converts to `""`
+/// but raises a `Deprecated` naming the parameter, and an array — which `(string)` would have
+/// turned into `"Array"` with a warning — does not convert at all, it is a `TypeError`. Refusing
+/// the whole shape was correct but cost every such call; each arm below is php-src's own answer.
+///
+/// KNOWN DIVERGENCE: php-src appends ` in <file> on line <n>` and a stack trace to the fatal.
+/// This target reports no location tail, so the fatal arms are asserted as a prefix.
+#[test]
+fn test_cli_wasm_coerces_a_boxed_value_at_a_declared_string_parameter() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_string_argument");
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m", process.argv[3]], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function arm(int $i): mixed {
+    if ($i === 0) { return "abc"; }
+    if ($i === 1) { return 42; }
+    if ($i === 2) { return 2.5; }
+    if ($i === 3) { return true; }
+    if ($i === 4) { return false; }
+    if ($i === 5) { return null; }
+    if ($i === 6) { return [1, 2]; }
+    return new stdClass();
+}
+$m = arm((int)($argv[1] ?? "0"));
+echo strtoupper($m), "|\n";
+"#,
+    )
+    .unwrap();
+
+    let built = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the string-argument probe to WASM");
+    assert!(
+        built.status.success(),
+        "string-argument compilation failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+
+    // Every expectation below is php-src 8.5.6's own answer for the same arm.
+    for (arm, stdout, stderr) in [
+        ("0", "ABC|\n", ""),
+        ("1", "42|\n", ""),
+        ("2", "2.5|\n", ""),
+        ("3", "1|\n", ""),
+        ("4", "|\n", ""),
+        (
+            "5",
+            "|\n",
+            "Deprecated: strtoupper(): Passing null to parameter #1 ($string) of type string \
+             is deprecated\n",
+        ),
+        (
+            "6",
+            "",
+            "Uncaught TypeError: strtoupper(): Argument #1 ($string) must be of type string, \
+             array given\n",
+        ),
+        (
+            "7",
+            "",
+            "Uncaught TypeError: strtoupper(): Argument #1 ($string) must be of type string, \
+             stdClass given\n",
+        ),
+    ] {
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join("main.wasm"))
+            .arg(arm)
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the string-argument probe under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            stdout,
+            "arm {arm}: php-src's own value"
+        );
+        let observed = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            observed.contains(stderr),
+            "arm {arm}: expected php-src's own diagnostic {stderr:?}, got {observed}"
+        );
+        // A `TypeError` ends the program; a `Deprecated` does not.
+        let expected_code = if stdout.is_empty() { 255 } else { 0 };
+        assert_eq!(
+            run.status.code(),
+            Some(expected_code),
+            "arm {arm}: php-src's own exit status"
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a dispatch reaching a class php-src will not enter raises PHP's own error.
 ///
 /// The arity filter drops such a class from the callable arms, which is what lets an unrelated

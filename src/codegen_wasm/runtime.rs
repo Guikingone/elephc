@@ -152,6 +152,21 @@ const ERR_RETURN_TYPE_PREFIX: &[u8] = b"PHP Fatal error: Uncaught TypeError: ";
 const ERR_RETURN_TYPE_MIDDLE: &[u8] = b"(): Return value must be of type ";
 const ERR_RETURN_TYPE_SEPARATOR: &[u8] = b", ";
 const ERR_RETURN_TYPE_SUFFIX: &[u8] = b" returned\n";
+/// The same `TypeError` at an internal function's declared PARAMETER, which php-src words
+/// differently and positions by argument number: `strtoupper(): Argument #1 ($string) must be of
+/// type string, array given`. The function and parameter names travel from the call site, and the
+/// word after the comma comes from `__rt_type_word_for_tag`, exactly as the return one does.
+const ERR_ARGUMENT_TYPE_MIDDLE: &[u8] = b"(): Argument #";
+const ERR_ARGUMENT_NAME_PREFIX: &[u8] = b" ($";
+const ERR_ARGUMENT_TYPE_MUST_BE: &[u8] = b") must be of type ";
+const ERR_ARGUMENT_TYPE_SUFFIX: &[u8] = b" given\n";
+/// `null` at that same boundary is NOT a `TypeError`: measured on php-src 8.5.6, it still
+/// converts — to `""` for a `string` parameter — after this deprecation. Only a value with no
+/// conversion at all (array, object, resource) raises.
+const DEPRECATED_ARGUMENT_NULL_PREFIX: &[u8] = b"Deprecated: ";
+const DEPRECATED_ARGUMENT_NULL_MIDDLE: &[u8] = b"(): Passing null to parameter #";
+const DEPRECATED_ARGUMENT_NULL_OF_TYPE: &[u8] = b") of type ";
+const DEPRECATED_ARGUMENT_NULL_SUFFIX: &[u8] = b" is deprecated\n";
 /// PHP names a closure by its CLASS in that message — measured: `Closure returned`, not
 /// `callable returned`. Every first-class closure PHP builds is a `Closure`, so the word is
 /// fixed even though this target keeps a callable as a descriptor rather than an object.
@@ -261,6 +276,14 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + ERR_RETURN_TYPE_SUFFIX.len() as u32
     + PHP_CLASS_CLOSURE.len() as u32
     + ERR_RETURN_TYPE_SEPARATOR.len() as u32
+    + ERR_ARGUMENT_TYPE_MIDDLE.len() as u32
+    + ERR_ARGUMENT_NAME_PREFIX.len() as u32
+    + ERR_ARGUMENT_TYPE_MUST_BE.len() as u32
+    + ERR_ARGUMENT_TYPE_SUFFIX.len() as u32
+    + DEPRECATED_ARGUMENT_NULL_PREFIX.len() as u32
+    + DEPRECATED_ARGUMENT_NULL_MIDDLE.len() as u32
+    + DEPRECATED_ARGUMENT_NULL_OF_TYPE.len() as u32
+    + DEPRECATED_ARGUMENT_NULL_SUFFIX.len() as u32
     + WARN_NAN_TO_STRING.len() as u32
     + WARN_NAN_TO_BOOL.len() as u32
     + PHP_VALUE_TRUE.len() as u32
@@ -545,6 +568,15 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_OFFSET_ON_TYPE_FLOAT,
         WARN_FOPEN_FAILED,
         WARN_FILE_GET_CONTENTS_FAILED,
+        // Appended LAST for the same reason as every group above it.
+        ERR_ARGUMENT_TYPE_MIDDLE,
+        ERR_ARGUMENT_NAME_PREFIX,
+        ERR_ARGUMENT_TYPE_MUST_BE,
+        ERR_ARGUMENT_TYPE_SUFFIX,
+        DEPRECATED_ARGUMENT_NULL_PREFIX,
+        DEPRECATED_ARGUMENT_NULL_MIDDLE,
+        DEPRECATED_ARGUMENT_NULL_OF_TYPE,
+        DEPRECATED_ARGUMENT_NULL_SUFFIX,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -598,6 +630,127 @@ fn emit_failure_runtime(wm: &mut WatModule) {
     emit_offset_on_scalar_warning_runtime(wm, &warning_offsets[36..43]);
     emit_uninit_string_offset_warning_runtime(wm, &warning_offsets[32..34]);
     emit_open_failure_warning_runtime(wm, &warning_offsets[43..45]);
+    emit_argument_coercion_runtime(
+        wm,
+        &warning_offsets[45..53],
+        warning_offsets[21],
+        warning_offsets[25],
+        &method_offsets[2..11],
+    );
+}
+
+/// Emits the coercion php-src performs when a boxed value reaches an internal function's
+/// declared `string` parameter.
+///
+/// Measured on php-src 8.5.6 for `strtoupper($mixed)`, one arm per runtime tag: a string, int,
+/// float or bool converts EXACTLY as `(string)` does, which is why the scalar arms delegate to
+/// `__rt_mixed_cast_string` rather than restating it; `null` converts to `""` but raises a
+/// `Deprecated` first; and an array, object, resource or closure does not convert at all — it is
+/// a `TypeError` naming what arrived, where `(string)` of the same array would have produced
+/// `"Array"` with a warning. NaN warns on the way through, exactly as the declared-RETURN
+/// coercion already does.
+///
+/// The function and parameter names travel from the call site as `(ptr, len)` pairs, the same
+/// way `__rt_fail_return_type` carries its function name, so no per-call-site data layout is
+/// needed beyond the two interned strings.
+fn emit_argument_coercion_runtime(
+    wm: &mut WatModule,
+    offsets: &[(u32, u32)],
+    error_prefix: (u32, u32),
+    separator: (u32, u32),
+    type_offsets: &[(u32, u32)],
+) {
+    debug_assert_eq!(offsets.len(), 8);
+    debug_assert_eq!(type_offsets.len(), 9);
+    let (argument_ptr, argument_len) = offsets[0];
+    let (name_ptr, name_len) = offsets[1];
+    let (must_be_ptr, must_be_len) = offsets[2];
+    let (given_ptr, given_len) = offsets[3];
+    let (deprecated_ptr, deprecated_len) = offsets[4];
+    let (passing_ptr, passing_len) = offsets[5];
+    let (of_type_ptr, of_type_len) = offsets[6];
+    let (is_deprecated_ptr, is_deprecated_len) = offsets[7];
+    // The word sits mid-sentence here, so its trailing newline is dropped from the length —
+    // the same adjustment the declared-return fatal makes.
+    let (string_word_ptr, string_word_len) = (type_offsets[1].0, type_offsets[1].1 - 1);
+    let (error_prefix_ptr, error_prefix_len) = error_prefix;
+    let (separator_ptr, separator_len) = separator;
+
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_argument_type (param $fn_ptr i32) (param $fn_len i32) (param $param_ptr i32) (param $param_len i32) (param $argno i64) (param $target_ptr i32) (param $target_len i32) (param $tag i64) (param $lo i64)
+  (local $word_ptr i32) (local $word_len i32) (local $num_ptr i32) (local $num_len i32)
+  (call $__rt_type_word_for_tag (local.get $tag) (local.get $lo))
+  (local.set $word_len)
+  (local.set $word_ptr)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {error_prefix_ptr}) (i32.const {error_prefix_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $fn_ptr) (local.get $fn_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {argument_ptr}) (i32.const {argument_len})))
+  (call $__rt_itoa (local.get $argno) (global.get $__float_scratch))
+  (local.set $num_len)
+  (local.set $num_ptr)
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $num_ptr) (local.get $num_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {name_ptr}) (i32.const {name_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $param_ptr) (local.get $param_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {must_be_ptr}) (i32.const {must_be_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $target_ptr) (local.get $target_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {separator_ptr}) (i32.const {separator_len})))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $word_ptr) (local.get $word_len)))
+  (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {given_ptr}) (i32.const {given_len})))
+  (call $wasi_proc_exit (i32.const 255))
+  unreachable ;; elephc-trap:post-noreturn:argument-type-fatal-exit
+)"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_deprecate_argument_null (param $fn_ptr i32) (param $fn_len i32) (param $param_ptr i32) (param $param_len i32) (param $argno i64) (param $target_ptr i32) (param $target_len i32)
+  (local $num_ptr i32) (local $num_len i32)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {deprecated_ptr}) (i32.const {deprecated_len}))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $fn_ptr) (local.get $fn_len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {passing_ptr}) (i32.const {passing_len}))
+  (call $__rt_itoa (local.get $argno) (global.get $__float_scratch))
+  (local.set $num_len)
+  (local.set $num_ptr)
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $num_ptr) (local.get $num_len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {name_ptr}) (i32.const {name_len}))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $param_ptr) (local.get $param_len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {of_type_ptr}) (i32.const {of_type_len}))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $target_ptr) (local.get $target_len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {is_deprecated_ptr}) (i32.const {is_deprecated_len})))"#
+    ));
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_mixed_arg_string (param $cell i32) (param $fn_ptr i32) (param $fn_len i32) (param $param_ptr i32) (param $param_len i32) (param $argno i64) (result i32) (result i32)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64) (local $ok i32) (local $sptr i32) (local $slen i32) (local $pptr i32) (local $plen i64)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; NaN warns on the way through
+    (then
+      (local.set $f (f64.reinterpret_i64 (local.get $lo)))
+      (if (f64.ne (local.get $f) (local.get $f))
+        (then (call $__rt_deprecate_nan_to_string)))))
+  (if (i64.le_u (local.get $tag) (i64.const 3))                   ;; int/string/float/bool convert as `(string)` does
+    (then (return (call $__rt_mixed_cast_string (local.get $cell)))))
+  (if (i64.eq (local.get $tag) (i64.const 8))                     ;; null still converts, after a deprecation
+    (then
+      (call $__rt_deprecate_argument_null (local.get $fn_ptr) (local.get $fn_len) (local.get $param_ptr) (local.get $param_len) (local.get $argno) (i32.const {string_word_ptr}) (i32.const {string_word_len}))
+      (return (i32.const 0) (i32.const 0))))
+  (if (i64.eq (local.get $tag) (i64.const 6))                     ;; an object with `__toString` CONVERTS
+    (then
+      (call $__rt_object_to_string (i32.wrap_i64 (local.get $lo)))
+      (local.set $ok)
+      (local.set $slen)
+      (local.set $sptr)
+      (if (local.get $ok)
+        (then
+          (call $__rt_str_persist (local.get $sptr) (i64.extend_i32_u (local.get $slen)))  ;; own an independent copy
+          (local.set $plen)
+          (local.set $pptr)
+          (call $__rt_decref_any (local.get $sptr))               ;; a callee's Str return is OWNED
+          (return (local.get $pptr) (i32.wrap_i64 (local.get $plen)))))))
+  (call $__rt_fail_argument_type (local.get $fn_ptr) (local.get $fn_len) (local.get $param_ptr) (local.get $param_len) (local.get $argno) (i32.const {string_word_ptr}) (i32.const {string_word_len}) (local.get $tag) (local.get $lo))
+  unreachable)                                                    ;; elephc-trap:post-noreturn:argument-coerce-tostring
+"#
+    ));
 }
 
 /// Emits php-src's warning for a property read whose receiver is null.
@@ -832,10 +985,12 @@ fn emit_return_coercion_runtime(
     let (resource_word_ptr, resource_word_len) = word(6);
     let value_offset = super::mixed_numeric::CLASS_VALUE_OFFSET;
 
-    // One fatal serves all four targets. Measured: the word a tag contributes is the SAME
-    // whatever the declared type — only the target word and the set of ACCEPTED tags differ.
+    // The word a runtime tag contributes to a diagnostic is the SAME wherever the value arrived
+    // from — a declared return, a declared parameter — so it is resolved once here and every
+    // fatal reads it. An object is why this cannot be a static table: it contributes its CLASS
+    // name, which only the runtime class-name table knows.
     wm.add_raw_func(&format!(
-        r#"(func $__rt_fail_return_type (param $fn_ptr i32) (param $fn_len i32) (param $target_ptr i32) (param $target_len i32) (param $tag i64) (param $lo i64)
+        r#"(func $__rt_type_word_for_tag (param $tag i64) (param $lo i64) (result i32) (result i32)
   (local $word_ptr i32) (local $word_len i32) (local $cls_len i64)
   (local.set $word_ptr (i32.const {null_word_ptr}))               ;; tag 8 = null, the default
   (local.set $word_len (i32.const {null_word_len}))
@@ -859,6 +1014,17 @@ fn emit_return_coercion_runtime(
       (local.set $cls_len)
       (local.set $word_ptr)
       (local.set $word_len (i32.wrap_i64 (local.get $cls_len)))))
+  (local.get $word_ptr) (local.get $word_len))"#
+    ));
+
+    // One fatal serves all four targets. Measured: the word a tag contributes is the SAME
+    // whatever the declared type — only the target word and the set of ACCEPTED tags differ.
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_fail_return_type (param $fn_ptr i32) (param $fn_len i32) (param $target_ptr i32) (param $target_len i32) (param $tag i64) (param $lo i64)
+  (local $word_ptr i32) (local $word_len i32)
+  (call $__rt_type_word_for_tag (local.get $tag) (local.get $lo))
+  (local.set $word_len)
+  (local.set $word_ptr)
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_prefix_ptr}) (i32.const {err_prefix_len})))
   (drop (call $__rt_wasi_write_all (i32.const 2) (local.get $fn_ptr) (local.get $fn_len)))    ;; "f" or "C::m"
   (drop (call $__rt_wasi_write_all (i32.const 2) (i32.const {err_middle_ptr}) (i32.const {err_middle_len})))

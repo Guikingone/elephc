@@ -28,7 +28,14 @@ use super::wat::WatModule;
 /// Adds the boxed-Mixed runtime routines to `wm`. Emitted after the heap, refcount,
 /// and array runtimes, whose `__rt_heap_alloc`/`__rt_heap_free`/`__rt_heap_free_safe`
 /// /`__rt_incref`/`__rt_decref_any`/`__rt_str_persist` and heap globals it references.
-pub(super) fn emit_mixed_runtime(wm: &mut WatModule, has_main: bool) {
+pub(super) fn emit_mixed_runtime(
+    wm: &mut WatModule,
+    has_main: bool,
+    module: Option<&crate::ir::Module>,
+) {
+    // The string cast calls into this, so the two are emitted together rather than left to
+    // every caller to pair up: a harness that emitted one without the other failed to assemble.
+    super::objects::emit_object_to_string_dispatch(wm, module);
     wm.add_raw_func(RT_MIXED_FROM_VALUE);
     wm.add_raw_func(RT_MIXED_UNBOX);
     wm.add_raw_func(RT_MIXED_FREE_DEEP);
@@ -451,7 +458,7 @@ const RT_MIXED_CAST_FLOAT_TEMPLATE: &str = r#"(func $__rt_mixed_cast_float (para
 /// bool true renders "1" via `__rt_itoa` and is persisted, while false yields an empty
 /// `(0, 0)`; arrays/hashes/objects/resources/null/other yield an empty `(0, 0)`. Borrows
 /// the source cell (never frees it).
-const RT_MIXED_CAST_STRING_TEMPLATE: &str = r#"(func $__rt_mixed_cast_string (param $ptr i32) (result i32) (result i32) (local $tag i64) (local $lo i64) (local $hi i64) (local $iptr i32) (local $ilen i32) (local $pptr i32) (local $plen i64) ;; cast a boxed Mixed cell to a PHP string (ptr,len), always persisting so callers own the result
+const RT_MIXED_CAST_STRING_TEMPLATE: &str = r#"(func $__rt_mixed_cast_string (param $ptr i32) (result i32) (result i32) (local $tag i64) (local $lo i64) (local $hi i64) (local $iptr i32) (local $ilen i32) (local $pptr i32) (local $plen i64) (local $slen i32) ;; cast a boxed Mixed cell to a PHP string (ptr,len), always persisting so callers own the result
   (call $__rt_mixed_unbox (local.get $ptr))                             ;; unbox -> stack: tag, lo, hi
   (local.set $hi)                                                       ;; pop value high word
   (local.set $lo)                                                       ;; pop value low word
@@ -510,8 +517,21 @@ const RT_MIXED_CAST_STRING_TEMPLATE: &str = r#"(func $__rt_mixed_cast_string (pa
       (return (local.get $pptr) (i32.wrap_i64 (local.get $plen)))))
   (if (i64.eq (local.get $tag) (i64.const 6))                           ;; tag 6 = object
     (then
-      ;; `(string)` of an object without `__toString` is where this family stops at a
-      ;; diagnostic and TERMINATES, unlike the numeric casts which warn and answer 1.
+      ;; An object whose class defines `__toString` CONVERTS through it — measured, php-src
+      ;; prints `<em>` for a `(string)$tag` this arm used to raise on. The dispatch answers
+      ;; whether the runtime class has one; only when it does not does PHP stop at a
+      ;; diagnostic and TERMINATE, unlike the numeric casts which warn and answer 1.
+      (call $__rt_object_to_string (i32.wrap_i64 (local.get $lo)))
+      (local.set $slen)                                                 ;; pop the stringable flag
+      (local.set $ilen)                                                 ;; pop the length
+      (local.set $iptr)                                                 ;; pop the pointer
+      (if (local.get $slen)
+        (then
+          (call $__rt_str_persist (local.get $iptr) (i64.extend_i32_u (local.get $ilen))) ;; own an independent copy
+          (local.set $plen)
+          (local.set $pptr)
+          (call $__rt_decref_any (local.get $iptr))                     ;; a callee's Str return is OWNED (no-op on a literal)
+          (return (local.get $pptr) (i32.wrap_i64 (local.get $plen)))))
       {object_fatal}
   (i32.const 0) (i32.const 0))                                          ;; resource/null/other -> empty string
 "#;
@@ -609,7 +629,7 @@ mod tests {
         emit_refcount_runtime(&mut wm);
         emit_closure_runtime(&mut wm);
         emit_array_runtime(&mut wm);
-        emit_mixed_runtime(&mut wm, false);
+        emit_mixed_runtime(&mut wm, false, None);
         super::super::float::emit_float_runtime(&mut wm, 0x20000);
         super::super::hashes::emit_hash_runtime(&mut wm);
         emit_object_runtime(&mut wm);

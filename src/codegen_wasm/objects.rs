@@ -750,6 +750,94 @@ pub(super) fn emit_destructor_dispatch(
     Ok(())
 }
 
+/// The classes whose `__toString` this target can call, paired with their runtime class id.
+///
+/// A class qualifies when its hierarchy declares `__toString` AND the resolved implementation
+/// has a real body in this module. That last condition is what excludes most of the prelude:
+/// `Exception`, `SplFileInfo` and the `Reflection*` family all DECLARE the method, and treating
+/// a declaration as evidence would emit a call to a function that was never defined.
+pub(super) fn stringable_classes(module: &Module) -> Vec<(u64, String)> {
+    let to_string_key = php_symbol_key("__toString");
+    let mut arms: Vec<(u64, String)> = Vec::new();
+    for (class_name, class_info) in &module.class_infos {
+        if class_info.is_abstract {
+            continue;
+        }
+        let Some(impl_class) = class_info
+            .method_impl_classes
+            .get(&to_string_key)
+            .cloned()
+            .or_else(|| {
+                class_info
+                    .methods
+                    .contains_key(&to_string_key)
+                    .then(|| class_name.clone())
+            })
+        else {
+            continue;
+        };
+        let has_body = module.class_methods.iter().any(|body| {
+            body.name
+                .rsplit_once("::")
+                .is_some_and(|(owner, method)| {
+                    owner == impl_class && php_symbol_key(method) == to_string_key
+                })
+        });
+        if !has_body {
+            continue;
+        }
+        arms.push((
+            class_info.class_id,
+            method_symbol(&format!("{impl_class}::__toString")),
+        ));
+    }
+    arms.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    arms
+}
+
+/// Emits `__rt_object_to_string`: PHP's `__toString` dispatch behind every string conversion.
+///
+/// Returns `(ptr, len, stringable)`. A runtime class with no callable `__toString` answers
+/// `(0, 0, 0)` and leaves the diagnostic to the caller, because the two callers raise DIFFERENT
+/// errors for it: `(string)$o` is `Error: Object of class C could not be converted to string`,
+/// while the same object at a declared `string` parameter is a `TypeError` naming the parameter.
+///
+/// Without this dispatch the object arm of a boxed string conversion fatally refused EVERY
+/// object, including one whose class defines the method — measured against php-src 8.5.6,
+/// `(string)$tag` printed `<em>` there and raised here.
+pub(super) fn emit_object_to_string_dispatch(wm: &mut WatModule, module: Option<&Module>) {
+    let arms = module.map(stringable_classes).unwrap_or_default();
+    let mut wat = String::new();
+    wat.push_str(
+        "(func $__rt_object_to_string (param $obj i32) (result i32) (result i32) (result i32)\n",
+    );
+    wat.push_str("  (local $cid i64) (local $ptr i32) (local $len i64)\n");
+    wat.push_str("  ;; a null receiver is not stringable\n");
+    wat.push_str(
+        "  (if (i32.eqz (local.get $obj)) (then (return (i32.const 0) (i32.const 0) (i32.const 0))))\n",
+    );
+    wat.push_str("  (local.set $cid (i64.load (local.get $obj)))\n");
+    for (class_id, fn_symbol) in &arms {
+        wat.push_str(&format!(
+            "  ;; class id {} -> {}\n",
+            *class_id, fn_symbol
+        ));
+        wat.push_str(&format!(
+            "  (if (i64.eq (local.get $cid) (i64.const {})) (then\n",
+            *class_id as i64
+        ));
+        wat.push_str(&format!("    (call ${} (local.get $obj))\n", fn_symbol));
+        wat.push_str("    (local.set $len)\n");
+        wat.push_str("    (local.set $ptr)\n");
+        wat.push_str(
+            "    (return (local.get $ptr) (i32.wrap_i64 (local.get $len)) (i32.const 1))))\n",
+        );
+    }
+    wat.push_str("  ;; no callable __toString for this runtime class\n");
+    wat.push_str("  (i32.const 0) (i32.const 0) (i32.const 0))\n");
+    wm.add_raw_func(&wat);
+}
+
 /// Declares an empty `__rt_call_object_destructor` (no arms) for unit-test harnesses that
 /// register no classes with a destructor.
 ///

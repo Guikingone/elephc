@@ -545,6 +545,17 @@ fn target_has_registered_noreturn_proof(
                     Some("$wasi_proc_exit"),
                 )
         }
+        // The `TypeError` at a declared PARAMETER composes its message the same way its
+        // declared-return sibling does, and ends the same way.
+        "$__rt_fail_argument_type" => {
+            proc_exit
+                && has_site(
+                    "$__rt_fail_argument_type",
+                    TrapClass::PostNoreturn,
+                    "argument-type-fatal-exit",
+                    Some("$wasi_proc_exit"),
+                )
+        }
         _ => false,
     }
 }
@@ -566,6 +577,7 @@ fn has_noreturn_predecessor(
         "$__rt_fail_too_few_arguments",
         "$__rt_fail_object_to_string",
         "$__rt_fail_return_type",
+        "$__rt_fail_argument_type",
     ]
     .iter()
     .any(|target| {

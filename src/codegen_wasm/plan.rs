@@ -216,6 +216,34 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // The coercion at a builtin's declared `string` parameter composes its diagnostic from the
+    // PHP FUNCTION's name and the PARAMETER's, neither of which any PHP literal need mention.
+    // Closures are walked here too — `fn($s) => strtoupper($s)` reaches it inside one, and the
+    // return-coercion pass above has no such site to find.
+    if has_main {
+        for function in module
+            .functions
+            .iter()
+            .chain(module.class_methods.iter())
+            .chain(module.closures.iter())
+        {
+            for inst in &function.instructions {
+                if inst.op != crate::ir::Op::Cast {
+                    continue;
+                }
+                let Some((name, parameter, _)) =
+                    super::capability::mixed_string_argument_coercion(function, inst)
+                else {
+                    continue;
+                };
+                for value in [name.to_string(), parameter] {
+                    if !layout_values.iter().any(|already| already == &value) {
+                        layout_values.push(value);
+                    }
+                }
+            }
+        }
+    }
     for value in layout_values {
         if let Some(&placed) = interned_by_content.get(value.as_str()) {
             default_strings.insert(value, placed);
@@ -317,7 +345,7 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // `__gc_desc_count == 0` (no classes).
     classes::emit_class_runtime(&mut wm);
     arrays::emit_array_runtime(&mut wm);
-    mixed::emit_mixed_runtime(&mut wm, has_main);
+    mixed::emit_mixed_runtime(&mut wm, has_main, Some(module));
     hashes::emit_hash_runtime(&mut wm);
     // Float<->string runtime (ftoa + strtod). Published with the `$__float_scratch`
     // global set to `FLOAT_SCRATCH_BASE` so cast/echo/mixed-stdout callers pass
