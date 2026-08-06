@@ -13,5 +13,9 @@
 //! - `admission` refuses, at declaration time, extensions that would link
 //!   cleanly and then silently do nothing — the failure static linking misses.
 
+//! - `manifest` owns the `[php-ext]` section, mirroring `native_deps::manifest`
+//!   so declaring an extension never disturbs `[native]` or hand-written TOML.
+
 pub mod admission;
+pub mod manifest;
 pub mod stub;
