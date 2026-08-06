@@ -22,7 +22,11 @@
 //! - `shim` carries the Zend stand-in as embedded C, following the
 //!   `pcre2_shim.c` precedent rather than the pure-Rust bridge-crate pattern.
 
+//! - `call` describes the ABI-level call sequence for a hosted function, kept
+//!   separate from emitting it.
+
 pub mod admission;
+pub mod call;
 pub mod manifest;
 pub mod recipe;
 pub mod shim;
