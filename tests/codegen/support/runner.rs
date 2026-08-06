@@ -519,8 +519,8 @@ fn source_tree_newer_than(dir: &Path, archive_mtime: std::time::SystemTime) -> b
 
 /// Links a user object file and a runtime object into a final native binary.
 /// On macOS uses `ld` with SDK/platform_version flags; on Linux uses `gcc` with
-/// static linking when no extra libs are needed. Adds `-lm -lpthread` on Linux
-/// and links libpq when the PDO archive uses its php-src-compatible backend.
+/// static linking when no extra libs are needed. Linux links each selected PDO
+/// system client after the bridge archive, followed by the common runtime libs.
 pub(crate) fn link_binary(
     obj_path: &Path,
     runtime_obj: &Path,
@@ -622,6 +622,12 @@ pub(crate) fn link_binary(
             append_test_link_inputs(&mut ld_cmd, &plan, Platform::Linux);
             if needs_libpq {
                 ld_cmd.arg("-lpq");
+            }
+            if needs_dblib {
+                ld_cmd.arg("-lsybdb");
+            }
+            if needs_odbc {
+                ld_cmd.arg("-lodbc");
             }
             if !actual_link_libs.is_empty() {
                 ld_cmd.arg("-Wl,--as-needed");

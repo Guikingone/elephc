@@ -553,6 +553,7 @@ jobs:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
@@ -593,6 +594,7 @@ jobs:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
@@ -633,6 +635,7 @@ jobs:
           CARGO_NET_OFFLINE: "true"
           ELEPHC_TEST_PREBUILT_BRIDGES: "1"
         run: |
+          mkdir -p "$RUNNER_TEMP/nextest"
           cargo nextest run --profile ci \
             --archive-file "$RUNNER_TEMP/nextest-archive.tar.zst" \
             --workspace-remap . \
