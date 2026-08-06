@@ -4342,17 +4342,35 @@ fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // is boxed at the write site and its single reference handed over — the same contract
     // `array_push` uses for the same value shape.
     //
-    // An ALREADY-boxed cell is deliberately NOT routed here. Its ownership is the other
-    // contract (the EIR releases the operand, so the array must take a share), and taking that
-    // share then releasing the replaced cell corrupts a slot when an earlier write went through
-    // this same setter — measured, bisected, and not yet explained, so it stays refused rather
-    // than shipped. `array<mixed>` writes of a raw scalar are safe on their own: two consecutive
-    // ones and a write over a widened literal both answer php-src exactly.
+    // An ALREADY-boxed cell is NOT routed here — but NOT for the reason previously recorded.
+    //
+    // The old note blamed `__rt_array_set_mixed` ("corrupts a slot when an earlier write went
+    // through this same setter — bisected and not yet explained"). RE-MEASURED: the setter is
+    // SOUND. Admitting this path and increfing (the contract `array_push` uses for the same
+    // shape) answers php-src exactly on a plain overwrite, a double overwrite of one slot, a
+    // COW split, both references to a shared array, and nested arrays.
+    //
+    // The real blocker is an ownership ASYMMETRY one level down. `lower_load_local` emits a
+    // plain transfer: loading an owned Mixed local BORROWS, taking no reference. The EIR
+    // nevertheless emits `release` on that handle when the value is consumed directly rather
+    // than stored, e.g. `echo "" . ($a[$k] ??= $v)`:
+    //
+    //     v64 = load_local slot[6]   ;; owned Mixed, no incref emitted
+    //     v65 = cast v64 Str
+    //     release v64                ;; no matching acquire — eats the ARRAY's share
+    //
+    // Assigning the same result to a local instead emits `acquire` before the release, which
+    // balances, which is why only the concatenated form is wrong. So admitting the write would
+    // hand the array a share that the consumer then frees, and `$a[0]` reads back as null —
+    // a WRONG ANSWER where the refusal is merely missing coverage. Minimal repro and the R/S
+    // pair are in the campaign notes; the fix belongs in load_local/release, not here.
     let value_is_boxed_cell = matches!(
         ctx.function.value(value).map(|v| v.ir_type),
         Some(IrType::Heap(IrHeapKind::Mixed))
     );
     if array_stores_mixed_cells(ctx, array) && !value_is_boxed_cell {
+        // A RAW scalar is boxed at the write site and its single reference handed over — the
+        // same contract `array_push` uses for the same value shape.
         let cell = box_value_into_mixed_cell(ctx, value, &value_repr)?;
         ctx.emit_load_value(array)?;
         ctx.emit_load_value(index)?;
