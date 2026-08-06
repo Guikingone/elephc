@@ -2247,23 +2247,63 @@ fn emit_builtin_call_value(
 /// representation-safe layout instead of the broad declared `returns` type. Without this, a
 /// container-returning builtin invoked as `$f = 'array_slice'; $f($a, 1, 2)` reached the backend
 /// typed `mixed` while a direct `array_slice($a, 1, 2)` call reached it typed `array<mixed>`.
+///
+/// The checker's per-span result map is deliberately NOT consulted here. On this path `span`
+/// identifies the DISPATCHING expression — `call_user_func(...)` or `$f(...)` — not this builtin,
+/// so the type recorded there is the dispatcher's own result. When the checker cannot resolve the
+/// callback statically (a variable holding the name, which constant propagation only turns into a
+/// literal after checking) that entry is `call_user_func()`'s runtime-opaque `mixed`, and adopting
+/// it labels a raw scalar/array return as a boxed Mixed cell: `$g = 'array_reverse';
+/// call_user_func($g, [1, 2, 3])` printed `bool(true)`, and the same shape over a `bool`-returning
+/// builtin crashed on the boxed-cell dereference.
 fn static_callable_builtin_result_type(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     operands: &[crate::ir::ValueId],
     span: Span,
 ) -> PhpType {
-    registry_builtin_result_type(ctx, name, &[], operands, span)
+    resolve_registry_builtin_result_type(ctx, name, &[], operands, span, None)
         .unwrap_or_else(|| call_return_type(ctx, name, operands))
 }
 
 /// Resolves a migrated registry builtin's result type from the same descriptor as the checker.
+///
+/// Used for a builtin lowered at its own call site, so the checker's per-span result type is
+/// authoritative and is passed through to the resolver.
 fn registry_builtin_result_type(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     args: &[Expr],
     operands: &[crate::ir::ValueId],
     span: Span,
+) -> Option<PhpType> {
+    // Synthetic builtin-class and prelude AST nodes share the dummy 0:0
+    // span, so the checker map cannot identify an individual call there.
+    // Use the typed runtime target's representation-safe fallback instead
+    // of accepting whichever synthetic call last occupied that key.
+    let checked = if span.line != 0 {
+        ctx.builtin_call_types
+            .get(&span)
+            .map(|checked| normalize_value_php_type(checked.clone()))
+    } else {
+        None
+    };
+    resolve_registry_builtin_result_type(ctx, name, args, operands, span, checked)
+}
+
+/// Resolves a registry builtin's result type from its descriptor, its lowered operands, and the
+/// checker's result type for this very call when one is available.
+///
+/// `checked` must be `None` whenever the caller cannot prove the checker examined *this* builtin
+/// at `span`; the resolver then derives a representation-safe type from the typed runtime target
+/// instead of trusting a type that may describe a different call.
+fn resolve_registry_builtin_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    operands: &[crate::ir::ValueId],
+    span: Span,
+    checked: Option<PhpType>,
 ) -> Option<PhpType> {
     let def = crate::builtins::registry::lookup(name)?;
     let arg_types = operands
@@ -2278,17 +2318,6 @@ fn registry_builtin_result_type(
     };
     let resolved = match def.spec.semantics.result_type {
         crate::builtins::semantics::BuiltinResultType::Checked => {
-            // Synthetic builtin-class and prelude AST nodes share the dummy 0:0
-            // span, so the checker map cannot identify an individual call there.
-            // Use the typed runtime target's representation-safe fallback instead
-            // of accepting whichever synthetic call last occupied that key.
-            let checked = if span.line != 0 {
-                ctx.builtin_call_types
-                    .get(&span)
-                    .map(|checked| normalize_value_php_type(checked.clone()))
-            } else {
-                None
-            };
             let crate::builtins::semantics::BuiltinLowering::Runtime(
                 crate::ir::RuntimeCallTarget::Function(target),
             ) = def.spec.semantics.lowering
