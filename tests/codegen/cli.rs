@@ -15776,6 +15776,90 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `class_exists` and its three siblings answer from the module's own declarations.
+///
+/// `RuntimeFnId::ClassExists`, `RuntimeFnId::InterfaceExists`, `RuntimeFnId::TraitExists` and
+/// `RuntimeFnId::EnumExists` are closed-world questions: the checker already requires a literal
+/// name in AOT mode, and this module IS the whole program, so each folds to a constant with no
+/// runtime table consulted. PHP's `$autoload` argument cannot change that — a name this module
+/// never declared has nothing to load.
+///
+/// The four namespaces are DISTINCT, which is the half worth measuring rather than assuming:
+/// php-src 8.5.6 answers `class_exists("Shape")` FALSE for an interface and
+/// `interface_exists("Circle")` FALSE for a class. The one crossover is an ENUM —
+/// `class_exists("Suit")` is TRUE — because an enum IS a class in PHP.
+#[test]
+fn test_cli_wasm_answers_the_exists_family_from_its_own_declarations() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_exists_family");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+interface Shape {}
+trait Greets {}
+enum Suit: string { case Hearts = "H"; }
+class Circle implements Shape { use Greets; }
+
+function yn(bool $b): string { return $b ? "T" : "F"; }
+echo yn(class_exists("Circle")), yn(class_exists("Nope")), "\n";
+echo yn(interface_exists("Shape")), yn(interface_exists("Nope")), "\n";
+echo yn(trait_exists("Greets")), yn(trait_exists("Nope")), "\n";
+echo yn(enum_exists("Suit")), yn(enum_exists("Nope")), "\n";
+echo yn(class_exists("Shape")), yn(interface_exists("Circle")), yn(class_exists("Suit")), "\n";
+echo yn(class_exists("circle")), yn(class_exists("\Circle")), "\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the exists-family probe to WASM");
+    assert!(
+        output.status.success(),
+        "exists-family compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the exists-family probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "TF\nTF\nTF\nTF\nFFT\nTT\n",
+        "php-src 8.5.6's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `foreach` over a BOXED value, whose storage only the runtime tag decides.
 ///
 /// The iterator picked indexed-versus-hash at compile time from the source's EIR type, so a

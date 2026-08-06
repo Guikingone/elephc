@@ -216,6 +216,20 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
                 "codegen::cli::test_cli_wasm_file_round_trip_matches_php",
             ][..],
         ),
+        // The four namespace questions share one closed-world answer and one lowering: the
+        // checker requires a literal name in AOT mode, so this module — the whole program —
+        // settles them at compile time.
+        RuntimeFnId::ClassExists
+        | RuntimeFnId::InterfaceExists
+        | RuntimeFnId::TraitExists
+        | RuntimeFnId::EnumExists => (
+            "codegen_wasm::builtins",
+            "codegen_wasm::builtins::lower_class_exists",
+            &[
+                "codegen_wasm::builtins::tests::the_exists_family_answers_from_the_modules_own_declarations",
+                "codegen::cli::test_cli_wasm_answers_the_exists_family_from_its_own_declarations",
+            ][..],
+        ),
         RuntimeFnId::Readline => (
             "codegen_wasm::runtime",
             "codegen_wasm::builtins::lower_direct_builtin",

@@ -6830,7 +6830,13 @@ fn callable_return_is_boxable(function: &Function) -> bool {
 /// contract is implemented and differentially tested.
 pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
     match target {
-        RuntimeFnId::Readline
+        // `class_exists` and its three siblings are answered from the module's own declarations:
+        // the checker requires a literal name in AOT mode, and this module IS the whole program.
+        RuntimeFnId::ClassExists
+        | RuntimeFnId::InterfaceExists
+        | RuntimeFnId::TraitExists
+        | RuntimeFnId::EnumExists
+        | RuntimeFnId::Readline
         | RuntimeFnId::Fopen
         | RuntimeFnId::Fwrite
         | RuntimeFnId::Fread
@@ -6943,24 +6949,20 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::CallUserFunc
         | RuntimeFnId::CallUserFuncArray
         | RuntimeFnId::ClassAlias
-        | RuntimeFnId::ClassExists
         | RuntimeFnId::ClassImplements
         | RuntimeFnId::ClassParents
         | RuntimeFnId::ClassUses
-        | RuntimeFnId::EnumExists
         | RuntimeFnId::FunctionExists
         | RuntimeFnId::GetDeclaredClasses
         | RuntimeFnId::GetDeclaredInterfaces
         | RuntimeFnId::GetDeclaredTraits
         | RuntimeFnId::GetLoadedExtensions
         | RuntimeFnId::GetParentClass
-        | RuntimeFnId::InterfaceExists
         | RuntimeFnId::IsA
         | RuntimeFnId::IsSubclassOf
         | RuntimeFnId::MethodExists
         | RuntimeFnId::PregReplaceCallback
         | RuntimeFnId::PropertyExists
-        | RuntimeFnId::TraitExists
         | RuntimeFnId::ElephcPharBzip2Archive
         | RuntimeFnId::ElephcPharDecompressArchive
         | RuntimeFnId::ElephcPharGetFileMetadata

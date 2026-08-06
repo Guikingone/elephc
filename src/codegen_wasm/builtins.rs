@@ -2492,6 +2492,110 @@ const RT_FMT_STR: &str = r#"(func $__rt_fmt_str (param $ptr i32) (param $len i64
     (local.get $width) (local.get $pad) (local.get $left)))
 "#;
 
+
+/// Answers `class_exists` and its three siblings from the module's own declarations.
+///
+/// The checker already requires a STRING LITERAL here in AOT mode, so the question is closed:
+/// this module is the whole program, and whether it declares a name is settled at compile time.
+/// The answer folds to a constant and no runtime table is consulted.
+///
+/// The four namespaces are distinct, which is the part worth pinning: measured on php-src 8.5.6,
+/// `class_exists("Shape")` is FALSE for an interface and `interface_exists("Circle")` is FALSE
+/// for a class. An ENUM is the one crossover — `class_exists("Suit")` is TRUE — because an enum
+/// IS a class in PHP, and it is registered in `class_infos` here for that reason.
+///
+/// Names are matched case-insensitively and with any leading `\` stripped, which is how PHP
+/// resolves a class name written as a string.
+fn class_exists_answer(module: &Module, target: RuntimeFnId, name: &str) -> Option<bool> {
+    let declared: Vec<&String> = match target {
+        RuntimeFnId::ClassExists => module.class_infos.keys().collect(),
+        RuntimeFnId::InterfaceExists => module.interface_infos.keys().collect(),
+        RuntimeFnId::EnumExists => module.enum_infos.keys().collect(),
+        RuntimeFnId::TraitExists => module.declared_trait_names.iter().collect(),
+        _ => return None,
+    };
+    Some(name_is_declared(&declared, name))
+}
+
+/// Whether `name` matches one of `declared`, the way PHP resolves a class name written as a
+/// string: case-insensitively, and with any leading `\` stripped from either side.
+fn name_is_declared(declared: &[&String], name: &str) -> bool {
+    let wanted = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    declared.iter().any(|candidate| {
+        crate::names::php_symbol_key(candidate.trim_start_matches('\\')) == wanted
+    })
+}
+
+/// Whether this `*_exists` call is one the closed-world answer covers.
+fn class_exists_shape_issue(
+    module: &Module,
+    function: &Function,
+    call: &Instruction,
+    target: RuntimeFnId,
+) -> Option<String> {
+    // PHP's second argument is `$autoload`, which cannot change a closed-world answer: a name
+    // this module never declared has nothing to load. It is accepted and ignored.
+    if call.operands.is_empty() || call.operands.len() > 2 {
+        return Some(format!(
+            "expected one or two operands, got {}",
+            call.operands.len()
+        ));
+    }
+    if call.result.is_none()
+        || call.result_type != IrType::I64
+        || call.result_php_type.codegen_repr() != PhpType::Bool
+    {
+        return Some(format!(
+            "{target:?} answers a bool, got {:?}/{:?}",
+            call.result_type,
+            call.result_php_type.codegen_repr()
+        ));
+    }
+    let Some(name) = literal_string_operand(function, module, call.operands[0]) else {
+        return Some(format!("{target:?} needs a literal name to answer statically"));
+    };
+    if class_exists_answer(module, target, &name).is_none() {
+        return Some(format!("{target:?} has no closed-world answer"));
+    }
+    None
+}
+
+/// Lowers a `*_exists` call to the constant its declarations imply.
+///
+/// The name operand is still evaluated and dropped: it is a literal here, so nothing observable
+/// happens, but discarding the expression rather than the value is the wrong shape to establish.
+fn lower_class_exists(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) -> Result<()> {
+    let name = literal_string_operand(ctx.function, ctx.module, operand(inst, 0)?)
+        .ok_or_else(|| WasmError::Unsupported(format!("{target:?} name is not a literal")))?;
+    let answer = class_exists_answer(ctx.module, target, &name)
+        .ok_or_else(|| WasmError::Unsupported(format!("{target:?} has no answer")))?;
+    ctx.fb.ins(
+        &format!("i64.const {}", i64::from(answer)),
+        "this module is the whole program, so the answer is settled",
+    );
+    store_result(ctx, inst)
+}
+
+/// Recovers a literal string operand's text, or `None` when it is not a literal.
+fn literal_string_operand(
+    function: &Function,
+    module: &Module,
+    value: crate::ir::ValueId,
+) -> Option<String> {
+    let defined = function.value(value)?;
+    let crate::ir::ValueDef::Instruction { inst, .. } = defined.def else {
+        return None;
+    };
+    let defining = function.instruction(inst)?;
+    if defining.op != Op::ConstStr {
+        return None;
+    }
+    let Some(Immediate::Data(id)) = defining.immediate else {
+        return None;
+    };
+    module.data.strings.get(id.as_raw() as usize).cloned()
+}
+
 /// Recovers a `sprintf` format's literal bytes, or `None` when it is not a literal.
 ///
 /// The whole design rests on this: a known format is parsed once at compile time, so the module
@@ -3487,6 +3591,10 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::ArrayIsList
             | RuntimeFnId::ArrayKeys
             | RuntimeFnId::ArrayValues
+            | RuntimeFnId::ClassExists
+            | RuntimeFnId::InterfaceExists
+            | RuntimeFnId::TraitExists
+            | RuntimeFnId::EnumExists
             | RuntimeFnId::InArray
             | RuntimeFnId::ArrayReverse
             | RuntimeFnId::ArraySum
@@ -3567,6 +3675,15 @@ pub(super) fn direct_builtin_shape_issue(
     }
     if target == RuntimeFnId::ArrayIsList {
         return array_is_list_shape_issue(function, call);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::ClassExists
+            | RuntimeFnId::InterfaceExists
+            | RuntimeFnId::TraitExists
+            | RuntimeFnId::EnumExists
+    ) {
+        return class_exists_shape_issue(module, function, call, target);
     }
     if matches!(
         target,
@@ -3793,6 +3910,15 @@ pub(super) fn lower_direct_builtin(
     }
     if target == RuntimeFnId::ArrayIsList {
         return lower_array_is_list(ctx, inst);
+    }
+    if matches!(
+        target,
+        RuntimeFnId::ClassExists
+            | RuntimeFnId::InterfaceExists
+            | RuntimeFnId::TraitExists
+            | RuntimeFnId::EnumExists
+    ) {
+        return lower_class_exists(ctx, inst, target);
     }
     if target == RuntimeFnId::ArrayKeys {
         return lower_array_keys(ctx, inst);
@@ -7626,6 +7752,62 @@ mod tests {
         // needs a flag saying whose diagnostic to emit.
         assert!(file_builtin_helper(RuntimeFnId::Fopen).is_some_and(|file| file.warns));
         assert!(file_builtin_helper(RuntimeFnId::Fread).is_some_and(|file| !file.warns));
+    }
+
+    /// Verifies the four namespace questions answer from the module's own declarations.
+    ///
+    /// `RuntimeFnId::ClassExists`, `RuntimeFnId::InterfaceExists`, `RuntimeFnId::TraitExists`
+    /// and `RuntimeFnId::EnumExists` are closed-world: the checker requires a literal name in
+    /// AOT mode, and this module is the whole program, so each folds to a constant.
+    ///
+    /// Name matching is PHP's own — case-insensitive, and a leading `\\` on either side is not
+    /// part of the name. Both directions matter: missing a match answers false for a class that
+    /// exists, and matching too eagerly answers true for one that does not.
+    #[test]
+    fn the_exists_family_answers_from_the_modules_own_declarations() {
+        let circle = "Circle".to_string();
+        let namespaced = "\\App\\Model".to_string();
+        let declared = vec![&circle, &namespaced];
+        for (name, expected) in [
+            ("Circle", true),
+            ("circle", true),
+            ("CIRCLE", true),
+            ("\\Circle", true),
+            ("App\\Model", true),
+            ("\\App\\Model", true),
+            ("Circl", false),
+            ("Circles", false),
+            ("Model", false),
+            ("", false),
+        ] {
+            assert_eq!(
+                name_is_declared(&declared, name),
+                expected,
+                "{name:?} against {declared:?}"
+            );
+        }
+        assert!(!name_is_declared(&[], "Circle"), "nothing is declared");
+
+        // A target outside the family has no closed-world answer, so it stays refused rather
+        // than folding to a constant that would mean nothing.
+        let module = Module::new(crate::codegen_support::platform::Target::wasm());
+        for target in [
+            RuntimeFnId::ClassExists,
+            RuntimeFnId::InterfaceExists,
+            RuntimeFnId::TraitExists,
+            RuntimeFnId::EnumExists,
+        ] {
+            assert_eq!(
+                class_exists_answer(&module, target, "Circle"),
+                Some(false),
+                "{target:?} over an empty module"
+            );
+        }
+        assert_eq!(
+            class_exists_answer(&module, RuntimeFnId::Count, "Circle"),
+            None,
+            "count() is not a namespace question"
+        );
     }
 
     /// Verifies `RuntimeFnId::Readline` reads a string and answers one.

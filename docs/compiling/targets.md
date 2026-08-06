@@ -571,6 +571,18 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**`class_exists`, `interface_exists`, `trait_exists` and `enum_exists`** answer from
+the module's own declarations. They are closed-world questions: the checker already
+requires a literal name in AOT mode, and this module IS the whole program, so each
+folds to a constant with no runtime table consulted. PHP's `$autoload` argument
+cannot change that — a name this module never declared has nothing to load.
+
+The four namespaces are distinct, which is the half worth measuring rather than
+assuming: php-src answers `class_exists("Shape")` FALSE for an interface and
+`interface_exists("Circle")` FALSE for a class. The one crossover is an ENUM —
+`class_exists("Suit")` is TRUE — because an enum IS a class in PHP. Names match PHP's
+own way: case-insensitively, with a leading `\` on either side not part of the name.
+
 **`array_keys` and `array_values` over an indexed array of ANY element type** are
 admitted. The gate demanded `array<int>`, which was stricter than the code it guards:
 `__rt_array_index_keys` builds `[0..n-1]` from the LENGTH alone and never reads an
