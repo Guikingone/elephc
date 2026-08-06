@@ -2211,7 +2211,10 @@ fn emit_dynamic_new_without_constructor_mixed_candidate(
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(candidate.class_name.clone()));
+    emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::Object(candidate.class_name.clone()),
+    );
     ctx.store_result_value(result)
 }
 
@@ -6450,11 +6453,11 @@ fn load_property_store_value_to_result(
     }
     if can_store_boxed_value_for_mixed_property(&value_ty, slot_ty) {
         ctx.load_value_to_result(value)?;
-        // Declared property stores retain their source uniformly. EIR releases an
-        // owning temporary after PropSet, while borrowed SSA values keep their
-        // existing owner; transferring only selected producers made the two paths
-        // disagree and either leaked assignments or freed iterator rows early.
-        abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+        // Transfer an unreleased owning box into the property; retain borrowed values and
+        // temporaries whose explicit EIR cleanup still owns the source reference.
+        if !ctx.value_can_own_mixed_box_source(value)? {
+            abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
+        }
         return Ok(());
     }
     if can_convert_indexed_array_to_mixed_property(&value_ty, slot_ty) {

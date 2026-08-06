@@ -34,20 +34,22 @@ use crate::parser::ast::{
     is_compound_assignment_self_read, CatchClause, Expr, ExprKind, StaticReceiver, Stmt, StmtKind,
 };
 use crate::span::Span;
-use crate::types::{PhpType, ThrowAccessKind};
+use crate::types::{PhpType, ThrowAccessKind, TypeEnv};
+
+mod nested_append;
+mod repr_fixpoint;
 
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     crate::strict_php::with_source_mode(stmt.source_mode, || {
-        lower_stmt_in_current_source_mode(ctx, stmt);
+        if !ctx.builder.insertion_block_is_terminated() {
+            repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);
+        }
     });
 }
 
-/// Lowers one statement after installing its physical source visibility profile.
-fn lower_stmt_in_current_source_mode(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
-    if ctx.builder.insertion_block_is_terminated() {
-        return;
-    }
+/// Lowers one statement exactly once against the current local representations.
+fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     lower_statement_concat_reset(ctx, stmt.span);
     match &stmt.kind {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
@@ -134,7 +136,13 @@ fn lower_stmt_in_current_source_mode(ctx: &mut LoweringContext<'_, '_>, stmt: &S
             lower_include_once_guard(ctx, label, body, stmt.span);
         }
         StmtKind::Throw(expr) => lower_throw(ctx, expr),
-        StmtKind::Synthetic(body) => lower_block(ctx, body),
+        // Nested appends are parser-generated read/push/write-back groups. Fuse the recognized
+        // shape so a missing inner bucket is auto-vivified and a local bucket can be detached
+        // before mutation; every other synthetic group keeps ordinary block lowering.
+        StmtKind::Synthetic(body) => match nested_append::recognize(ctx, body) {
+            Some(group) => nested_append::lower(ctx, &group, stmt.span),
+            None => lower_block(ctx, body),
+        },
         StmtKind::Try {
             try_body,
             catches,
@@ -202,6 +210,15 @@ fn lower_stmt_in_current_source_mode(ctx: &mut LoweringContext<'_, '_>, stmt: &S
             value,
         } => lower_property_array_assign(ctx, object, property, index, value, stmt.span),
     }
+}
+
+/// Returns whether a local array slot can be converted at the current program point.
+fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    repr_fixpoint::local_slot_kind_is_convertible(ctx, name)
+        && ctx
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| ctx.slot_is_initialized(*slot))
 }
 
 /// Releases a discarded expression-statement result when it may own temporary storage.
@@ -493,7 +510,17 @@ fn lower_ref_assign(ctx: &mut LoweringContext<'_, '_>, target: &str, source: &Ex
     }
 }
 
-/// Lowers an `if` / `elseif` / `else` chain and terminates unreachable merge blocks explicitly.
+/// One reachable arm of an `if` chain together with its deferred merge edge.
+struct IfArmExit {
+    /// Empty block filled after every sibling arm has been lowered.
+    tail: BlockId,
+    /// Flow-sensitive local types at the end of this arm.
+    types: TypeEnv,
+    /// Definitely-initialized slots at the end of this arm.
+    initialized: HashSet<LocalSlotId>,
+}
+
+/// Lowers an `if` / `elseif` / `else` chain and joins all reachable arm types once.
 fn lower_if(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
@@ -503,6 +530,7 @@ fn lower_if(
     span: Span,
 ) {
     let merge = ctx.builder.create_named_block("if.merge", Vec::new());
+    let mut arms = Vec::new();
     let merge_reachable = lower_if_chain(
         ctx,
         condition,
@@ -510,8 +538,10 @@ fn lower_if(
         elseif_clauses,
         else_body,
         merge,
+        &mut arms,
         span,
     );
+    finish_if_type_join(ctx, arms, merge, span);
     ctx.builder.position_at_end(merge);
     if !merge_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
@@ -519,7 +549,8 @@ fn lower_if(
     ctx.clear_static_callable_locals();
 }
 
-/// Recursively emits one condition node in an `if` chain and reports whether the merge is reachable.
+/// Recursively emits one condition node and records every reachable arm against one shared merge.
+#[allow(clippy::too_many_arguments)]
 fn lower_if_chain(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
@@ -527,11 +558,13 @@ fn lower_if_chain(
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: Option<&[Stmt]>,
     merge: BlockId,
+    arms: &mut Vec<IfArmExit>,
     span: Span,
 ) -> bool {
     let cond_value = lower_expr(ctx, condition);
     let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
+    let split_types = ctx.local_types_snapshot();
     let then_block = ctx.builder.create_named_block("if.then", Vec::new());
     let else_block = ctx.builder.create_named_block("if.else", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -544,25 +577,36 @@ fn lower_if_chain(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types.clone());
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
     let mut merge_reachable = false;
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     if then_reachable {
         merge_reachable = true;
-        branch_to(ctx, merge);
+        record_if_arm_exit(ctx, arms);
     }
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
-            lower_if_chain(ctx, next_condition, next_body, rest, else_body, merge, span)
+            lower_if_chain(
+                ctx,
+                next_condition,
+                next_body,
+                rest,
+                else_body,
+                merge,
+                arms,
+                span,
+            )
         } else if let Some(else_body) = else_body {
             lower_block(ctx, else_body);
             if !ctx.builder.insertion_block_is_terminated() {
-                branch_to(ctx, merge);
+                record_if_arm_exit(ctx, arms);
                 true
             } else {
                 false
@@ -570,7 +614,7 @@ fn lower_if_chain(
         } else {
             lower_noop(ctx, span);
             if !ctx.builder.insertion_block_is_terminated() {
-                branch_to(ctx, merge);
+                record_if_arm_exit(ctx, arms);
                 true
             } else {
                 false
@@ -586,6 +630,146 @@ fn lower_if_chain(
         else_reachable,
     ));
     merge_reachable
+}
+
+/// Defers one reachable arm's merge edge so representation conversions can be inserted later.
+fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExit>) {
+    let tail = ctx.builder.create_named_block("if.arm", Vec::new());
+    ctx.builder.terminate(Terminator::Br {
+        target: tail,
+        args: Vec::new(),
+    });
+    arms.push(IfArmExit {
+        tail,
+        types: ctx.local_types_snapshot(),
+        initialized: ctx.initialized_slots_snapshot(),
+    });
+}
+
+/// Reconciles flow-sensitive types and indexed-array layouts on all incoming merge edges.
+fn finish_if_type_join(
+    ctx: &mut LoweringContext<'_, '_>,
+    arms: Vec<IfArmExit>,
+    merge: BlockId,
+    span: Span,
+) {
+    if arms.len() < 2 {
+        if let Some(arm) = arms.first() {
+            ctx.restore_local_types(arm.types.clone());
+        }
+        for arm in &arms {
+            ctx.builder.position_at_end(arm.tail);
+            ctx.builder.terminate(Terminator::Br {
+                target: merge,
+                args: Vec::new(),
+            });
+        }
+        return;
+    }
+
+    let joined = join_arm_types(ctx, &arms);
+    let saved_types = ctx.local_types_snapshot();
+    for arm in &arms {
+        ctx.restore_local_types(arm.types.clone());
+        let conversions = arm_conversions(arm, &joined);
+        ctx.builder.position_at_end(arm.tail);
+        widen_indexed_arrays_to_mixed(ctx, &conversions, span);
+        ctx.builder.terminate(Terminator::Br {
+            target: merge,
+            args: Vec::new(),
+        });
+    }
+    ctx.restore_local_types(saved_types);
+    for (name, ty) in joined {
+        ctx.set_local_type(&name, ty);
+    }
+}
+
+/// Computes the common post-merge type facts that every reachable arm can represent safely.
+fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv {
+    let Some(first) = arms.first() else {
+        return TypeEnv::new();
+    };
+    let mut names = first.types.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+
+    let mut joined = TypeEnv::new();
+    'names: for name in names {
+        let mut arm_types = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let Some(arm_type) = arm.types.get(&name) else {
+                continue 'names;
+            };
+            arm_types.push(arm_type.codegen_repr());
+        }
+        if arm_types.windows(2).all(|pair| pair[0] == pair[1]) {
+            continue;
+        }
+        if arm_types.iter().any(|ty| *ty == PhpType::Mixed) {
+            joined.insert(name, PhpType::Mixed);
+            continue;
+        }
+
+        for arm_type in arm_types {
+            let PhpType::Array(_) = arm_type else {
+                continue 'names;
+            };
+        }
+        if !arms
+            .iter()
+            .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
+        {
+            continue;
+        }
+        joined.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+    joined
+}
+
+/// Returns indexed-array locals whose current arm needs boxing before entering the merge.
+fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
+    let mut names = joined
+        .keys()
+        .filter(|name| {
+            matches!(
+                arm.types.get(name.as_str()).map(PhpType::codegen_repr),
+                Some(PhpType::Array(element)) if element.codegen_repr() != PhpType::Mixed
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+/// Returns whether one arm can safely convert the named local's array storage in place.
+fn local_slot_is_convertible(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    initialized: &HashSet<LocalSlotId>,
+) -> bool {
+    repr_fixpoint::local_slot_kind_is_convertible(ctx, name)
+        && ctx
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| initialized.contains(slot))
+}
+
+/// Boxes indexed-array elements on an arm edge so all paths agree at the merge.
+fn widen_indexed_arrays_to_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[String], span: Span) {
+    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    for name in names {
+        let array = ctx.load_local(name, Some(span));
+        let converted = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![array.value],
+            None,
+            mixed_array_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            Some(span),
+        );
+        ctx.store_mutated_local(name, converted, mixed_array_ty.clone(), Some(span));
+    }
 }
 
 /// Merges definitely-initialized locals from the reachable branches of an `if`.
@@ -783,7 +967,11 @@ fn lower_do_while(
     ctx.clear_static_callable_locals();
 }
 
-/// Lowers a `for` loop.
+/// Lowers a `for` loop after establishing its loop-carried storage representation.
+///
+/// The fixed-point region starts below the initializer because an array created by the initializer
+/// does not exist at the statement entry and therefore cannot be discovered by the outer
+/// statement-level representation scan.
 fn lower_for(
     ctx: &mut LoweringContext<'_, '_>,
     init: Option<&Stmt>,
@@ -803,6 +991,23 @@ fn lower_for(
         .or_else(|| body.first().map(|s| s.span));
     apply_loop_storage_contracts(ctx, loop_span, contract_span);
 
+    repr_fixpoint::lower_for_body_at_type_fixpoint(
+        ctx,
+        loop_span,
+        condition,
+        update,
+        body,
+        |ctx| lower_for_once(ctx, condition, update, body),
+    );
+}
+
+/// Emits the control-flow graph, body, and update of a `for` loop exactly once.
+fn lower_for_once(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: Option<&Expr>,
+    update: Option<&Stmt>,
+    body: &[Stmt],
+) {
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
     let update_block = ctx.builder.create_named_block("for.update", Vec::new());
@@ -1230,11 +1435,11 @@ fn lower_local_parent_fetch_for_write(
                     // The element now exists: the in-bounds read returns the
                     // STORED cell (retained) without an undefined-key warning.
                     let cell = ctx.emit_value(
-                        Op::ArrayGet,
+                        Op::ArrayGetForWrite,
                         vec![ensured.value, key.value],
                         None,
                         PhpType::Mixed,
-                        Op::ArrayGet.default_effects(),
+                        Op::ArrayGetForWrite.default_effects(),
                         Some(span),
                     );
                     Some(cell)
@@ -1275,7 +1480,7 @@ fn lower_local_parent_fetch_for_write(
 /// Ensures a hash element exists for a nested write parent, stores the
 /// possibly reallocated hash back into the local (the previous owner was
 /// already released by `prepare_mutated_local_owner`), and re-reads the
-/// stored cell (retained by `Op::HashGet`) as the parent of the leaf write.
+/// stored cell (retained by `Op::HashGetForWrite`) as the parent of the leaf write.
 fn lower_hash_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -1295,11 +1500,11 @@ fn lower_hash_parent_fetch_for_write(
     );
     ctx.store_prepared_mutated_local(name, ensured, assoc_ty, Some(span));
     ctx.emit_value(
-        Op::HashGet,
+        Op::HashGetForWrite,
         vec![ensured.value, key.value],
         None,
         PhpType::Mixed,
-        Op::HashGet.default_effects(),
+        Op::HashGetForWrite.default_effects(),
         Some(span),
     )
 }
@@ -1575,6 +1780,16 @@ fn coerce_typed_assign_value(
     }
     match target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
+        target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
+            ctx.emit_value(
+                Op::MixedUnbox,
+                vec![value.value],
+                None,
+                target,
+                Op::MixedUnbox.default_effects(),
+                Some(span),
+            )
+        }
         _ => value,
     }
 }
@@ -2921,6 +3136,13 @@ fn lower_property_assign(
         value_expr,
         span,
     );
+    // Property slots use their declared/inferred storage representation. In particular, an
+    // untyped property widened to Mixed needs a boxed cell even when this assignment is scalar.
+    let property_ty = object_property_type(ctx, object.value, property);
+    let value = match property_ty {
+        Some(ty) => coerce_typed_assign_value(ctx, value, &ty, span),
+        None => value,
+    };
     if magic_set_receiver_has_method(ctx, object.value, property) {
         lower_magic_property_set(ctx, object.value, property, value, span);
         return;

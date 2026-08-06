@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn an_unsupported_id_is_ignored() {
         let _guard = scoped_profile(80200);
-        set_eval_php_version_id(80600);
+        set_eval_php_version_id(90000);
         assert_eq!(eval_php_version_id(), 80200);
         assert_eq!(eval_php_version_string(), "8.2.0");
     }

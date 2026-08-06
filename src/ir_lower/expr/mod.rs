@@ -2861,7 +2861,7 @@ fn lower_native_isset_offset_probe_from_value(
     match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let mut index_value = lower_expr(ctx, index);
-            let index_ty = index_expr_key_type(ctx, index);
+            let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
             if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
                 ctx.emit_value(
@@ -2873,14 +2873,13 @@ fn lower_native_isset_offset_probe_from_value(
                     Some(expr.span),
                 )
             } else {
-                // String or mixed key on indexed storage: read through the
-                // mixed-key runtime path and check if the result is null.
+                // `isset()` is a silent probe even when the key is absent.
                 let read_value = ctx.emit_value(
-                    Op::ArrayGetMixedKey,
+                    Op::ArrayGetMixedKeySilent,
                     vec![array_value.value, index_value.value],
                     None,
                     PhpType::Mixed,
-                    Op::ArrayGetMixedKey.default_effects(),
+                    Op::ArrayGetMixedKeySilent.default_effects(),
                     Some(expr.span),
                 );
                 let is_null = ctx.emit_value(
@@ -2889,6 +2888,11 @@ fn lower_native_isset_offset_probe_from_value(
                     None,
                     PhpType::Bool,
                     Op::IsNull.default_effects(),
+                    Some(expr.span),
+                );
+                crate::ir_lower::ownership::release_if_owned(
+                    ctx,
+                    read_value,
                     Some(expr.span),
                 );
                 let zero = ctx.emit_value(
@@ -5726,6 +5730,16 @@ fn lower_arg_with_signature(
     if let Some(value) = lower_by_ref_array_arg_with_signature(ctx, sig, index, arg) {
         return value;
     }
+    if sig.ref_params.get(index).copied().unwrap_or(false)
+        && sig
+            .params
+            .get(index)
+            .is_some_and(|(_, ty)| ty.codegen_repr() == PhpType::Mixed)
+    {
+        if let ExprKind::Variable(name) = &arg.kind {
+            ctx.promote_local_mixed_ref_cell(name, Some(arg.span));
+        }
+    }
     let lowered = lower_expr(ctx, arg);
     coerce_scalar_arg_to_param_storage(ctx, sig, index, lowered, arg).value
 }
@@ -8063,8 +8077,18 @@ fn lower_array_access_from_value(
     let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
-            let index_ty = index_expr_key_type(ctx, index);
-            if index_ty == PhpType::Int {
+            let index_ty = lowered_index_expr_key_type(ctx, index, index_value.value);
+            // A genuinely boxed Mixed key is materialized by array codegen. Do not coerce it here:
+            // string keys would become integer zero, while checked integer loop counters use I64
+            // and therefore still take the ordinary coercion path below.
+            let index_is_mixed = matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed));
+            if index_is_mixed {
+                if warn_on_missing {
+                    Op::ArrayGet
+                } else {
+                    Op::ArrayGetSilent
+                }
+            } else if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
                 if warn_on_missing {
                     Op::ArrayGet
@@ -8196,6 +8220,41 @@ pub(crate) fn lower_array_access_from_lowered_receiver(
 pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
     let ty = infer_expr_type_syntactic(index);
     normalized_array_key_type(index, ty)
+}
+
+/// Refines a read key's syntactic type from its lowered SSA value when it is definitely a string.
+fn lowered_index_expr_key_type(
+    ctx: &LoweringContext<'_, '_>,
+    index: &Expr,
+    index_value: ValueId,
+) -> PhpType {
+    let syntactic = index_expr_key_type(ctx, index);
+    if syntactic == PhpType::Int && ctx.builder.value_php_type(index_value) == PhpType::Str {
+        return normalized_array_key_type(index, PhpType::Str);
+    }
+    syntactic
+}
+
+/// Refines an `isset` key from its lowered value, including boxed Mixed keys.
+fn isset_index_expr_key_type(
+    ctx: &LoweringContext<'_, '_>,
+    index: &Expr,
+    index_value: ValueId,
+) -> PhpType {
+    let syntactic = index_expr_key_type(ctx, index);
+    if syntactic != PhpType::Int {
+        return syntactic;
+    }
+    let lowered = ctx.builder.value_php_type(index_value);
+    if matches!(lowered.codegen_repr(), PhpType::TaggedScalar) {
+        return syntactic;
+    }
+    match lowered {
+        ty @ (PhpType::Str | PhpType::Mixed | PhpType::Union(_)) => {
+            normalized_array_key_type(index, ty)
+        }
+        _ => syntactic,
+    }
 }
 
 /// Returns the best PHP result type for a lowered array/string/hash access.
@@ -9949,11 +10008,19 @@ fn lower_new_dynamic(
     expr: &Expr,
 ) -> LoweredValue {
     let mut operands = vec![lower_expr(ctx, name_expr).value];
-    operands.extend(lower_args(ctx, args));
+    let uses_runtime_arg_container = args.iter().any(is_spread_arg)
+        || crate::types::call_args::has_named_args(args);
+    if uses_runtime_arg_container {
+        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+            .expect("dynamic constructor arguments always have a runtime container form");
+        operands.push(arg_container.value);
+    } else {
+        operands.extend(lower_args(ctx, args));
+    }
     ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
-        None,
+        uses_runtime_arg_container.then_some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),

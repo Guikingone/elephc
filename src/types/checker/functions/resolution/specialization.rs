@@ -268,8 +268,12 @@ impl Checker {
                     // its own declaration. The seen set marks the discard, so every LATER call
                     // widens instead of re-adopting — which is the whole point.
                     self.param_specialization_seen.insert(key);
-                    if param_types[seen_idx].1 != actual_ty {
-                        param_types[seen_idx].1 = actual_ty.clone();
+                    let specialized = Self::specialize_generic_array_param_hint(
+                        &param_types[seen_idx].1,
+                        &actual_ty,
+                    );
+                    if param_types[seen_idx].1 != specialized {
+                        param_types[seen_idx].1 = specialized;
                         changed = true;
                     }
                 } else if param_types[seen_idx].1 == PhpType::Int && !seen {

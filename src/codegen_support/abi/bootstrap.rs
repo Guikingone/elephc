@@ -75,7 +75,7 @@ pub fn emit_exit(emitter: &mut Emitter, code: u32) {
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
             emitter.instruction(&format!("mov edi, {}", code));                 // load the requested process exit code into the SysV first-argument register
-            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process through the Linux x86_64 syscall ABI
         }
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {
@@ -116,7 +116,7 @@ pub fn emit_exit_with_result_reg(emitter: &mut Emitter) {
             emitter.instruction("and rsp, -16");                                // realign the stack for the flush call (this path never returns)
             emitter.instruction("call __rt_ob_flush_all");                      // drain still-active output buffers to stdout before terminating
             emitter.instruction("mov edi, ebx");                                // move the stashed return value into the SysV exit argument register
-            emitter.instruction("mov eax, 60");                                 // Linux x86_64 syscall 60 = exit
+            emitter.instruction("mov eax, 231");                                // Linux x86_64 syscall 231 = exit_group
             emitter.instruction("syscall");                                     // terminate the process with the bridge return code
         }
         (super::super::platform::Platform::MacOS, Arch::X86_64) => {

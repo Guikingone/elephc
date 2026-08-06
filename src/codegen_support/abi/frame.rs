@@ -73,21 +73,14 @@ pub fn emit_frame_restore(emitter: &mut Emitter, frame_size: usize) {
     );
     match emitter.target.arch {
         Arch::AArch64 => {
-            let footer_offset = frame_size - 16;
-            if footer_offset <= 504 {
-                emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", footer_offset)); // restore frame pointer and return address from the fixed frame footer
-            } else {
-                emit_sp_address(emitter, "x9", footer_offset);
-                emitter.instruction("ldp x29, x30, [x9]");                      // restore frame pointer and return address through the computed footer pointer
-            }
-            emit_adjust_sp(emitter, frame_size, false);
+            // x29 == entry_sp - 16, and [x29] is the saved frame footer regardless
+            // of any temporary-stack drift in the function body.
+            emitter.instruction("mov x9, x29");                                // preserve the footer address before restoring the caller frame pointer
+            emitter.instruction("add sp, x9, #16");                            // restore the entry stack pointer from the stable frame anchor
+            emitter.instruction("ldp x29, x30, [x9]");                         // reload the caller frame pointer and return address
         }
         Arch::X86_64 => {
-            let local_bytes = frame_size.saturating_sub(16);
-            if local_bytes > 0 {
-                emitter.instruction(&format!("add rsp, {}", local_bytes));      // release the aligned local-slot area below rbp
-            }
-            emitter.instruction("pop rbp");                                     // restore the caller frame pointer from the stack
+            emitter.instruction("leave");                                     // restore rsp from rbp and pop the caller frame pointer
         }
     }
 }

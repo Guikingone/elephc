@@ -627,20 +627,6 @@ pub(crate) fn compile(config: CliConfig) {
     }
     codegen::set_linked_extensions(linked_extensions);
 
-    crate::progress::phase("runtime-cache");
-    let phase_started = Instant::now();
-    let runtime_pic = matches!(emit, Emit::Cdylib);
-    let runtime_object = match runtime_cache::prepare_runtime_object(heap_size, target, runtime_features, runtime_pic) {
-        Ok(runtime_object) => runtime_object,
-        Err(err) => {
-            crate::progress::clear();
-            eprintln!("Runtime cache error: {}", err);
-            process::exit(1);
-        }
-    };
-    timings.record_since("runtime-cache", phase_started);
-    timings.note(format!("Runtime cache: {}", runtime_object.status.as_str()));
-
     crate::progress::phase("codegen");
     let phase_started = Instant::now();
     let user_asm = match codegen::generate_user_asm_from_ir_with_options(
@@ -707,6 +693,25 @@ pub(crate) fn compile(config: CliConfig) {
         );
         return;
     }
+
+    crate::progress::phase("runtime-cache");
+    let phase_started = Instant::now();
+    let runtime_pic = matches!(emit, Emit::Cdylib);
+    let runtime_object = match runtime_cache::prepare_runtime_object(
+        heap_size,
+        target,
+        runtime_features,
+        runtime_pic,
+    ) {
+        Ok(runtime_object) => runtime_object,
+        Err(err) => {
+            crate::progress::clear();
+            eprintln!("Runtime cache error: {}", err);
+            process::exit(1);
+        }
+    };
+    timings.record_since("runtime-cache", phase_started);
+    timings.note(format!("Runtime cache: {}", runtime_object.status.as_str()));
 
     let native_requirements: Vec<NativeRequirement> = runtime_link_requirements
         .iter()
