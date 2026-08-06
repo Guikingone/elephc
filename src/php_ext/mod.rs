@@ -10,5 +10,8 @@
 //! Key details:
 //! - `stub` reads an extension's own `*.stub.php` rather than a hand-maintained
 //!   catalogue, so signatures cannot drift from the extension they describe.
+//! - `admission` refuses, at declaration time, extensions that would link
+//!   cleanly and then silently do nothing — the failure static linking misses.
 
+pub mod admission;
 pub mod stub;
