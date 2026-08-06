@@ -21,7 +21,7 @@
 
 use super::context::{FnCtx, Result};
 use super::inst::{operand, store_result};
-use super::wat::WatModule;
+use super::wat::{ValType, WatModule};
 use super::WasmError;
 use crate::ir::{Instruction, IrHeapKind, IrType, Op, Ownership};
 use crate::types::PhpType;
@@ -41,7 +41,22 @@ pub(super) enum StrictValueKind {
     /// these, and the whole point of the idiom `strpos($h, $n) === false` is that it separates a
     /// match at offset 0 from a miss. Answering it needs the cell's runtime tag, not its storage.
     MixedCell,
+    /// An inline `{payload, tag}` pair — this target's `?int`, the ONLY union `codegen_repr`
+    /// folds to `TaggedScalar` (`nullable_int_union_members` admits `int` and `null` and nothing
+    /// else). Its tag is therefore 0 or 8, which is what makes every pair below decidable: it can
+    /// never hold a string, an object, a float or a bool, so those comparisons are constant
+    /// FALSE rather than unknown.
+    Tagged,
 }
+
+/// The runtime tag an inline `{payload, tag}` pair carries when it holds null.
+///
+/// Shared with `TransferKind::TaggedNull` and with the Mixed cell tags — a divergence would make
+/// `$x === null` answer from a tag nothing writes.
+const TAGGED_NULL: i32 = 8;
+
+/// The runtime tag that pair carries when it holds an int.
+const TAGGED_INT: i32 = 0;
 
 /// Returns the runtime Mixed tag a concrete strict kind boxes under.
 ///
@@ -55,7 +70,7 @@ fn mixed_tag_for(kind: StrictValueKind) -> Option<i64> {
         StrictValueKind::Bool => 3,
         StrictValueKind::Object => 6,
         StrictValueKind::Null => 8,
-        StrictValueKind::MixedCell => return None,
+        StrictValueKind::MixedCell | StrictValueKind::Tagged => return None,
     })
 }
 
@@ -65,8 +80,31 @@ fn mixed_tag_for(kind: StrictValueKind) -> Option<i64> {
 /// answer and the concrete side is never an array — so this never needs PHP's deep element-wise
 /// array identity. Two Mixed cells are NOT admitted for exactly that reason: both could be
 /// arrays, and answering that correctly is a different problem.
+/// A `?int` pair is comparable against anything EXCEPT a runtime-tagged cell: the cell could
+/// hold an array, and while a `?int` never can — which settles the answer to false — reaching
+/// that conclusion needs the cell's tag at runtime, which is the mixed/concrete path rather than
+/// this one. Refused rather than routed there, since the tagged side's own tag is dynamic too.
 pub(super) fn strict_pair_is_supported(lhs: StrictValueKind, rhs: StrictValueKind) -> bool {
-    !(lhs == StrictValueKind::MixedCell && rhs == StrictValueKind::MixedCell)
+    if lhs == StrictValueKind::MixedCell && rhs == StrictValueKind::MixedCell {
+        return false;
+    }
+    !((lhs == StrictValueKind::Tagged && rhs == StrictValueKind::MixedCell)
+        || (lhs == StrictValueKind::MixedCell && rhs == StrictValueKind::Tagged))
+}
+
+/// Whether a PHP type is exactly the `int|null` an inline tagged pair carries.
+///
+/// `codegen_repr` folds only that union to `TaggedScalar`, but reading the repr alone would also
+/// admit whatever else ever folds there. Checking the members keeps the identity exact — the same
+/// reason this module never classifies by `codegen_repr()` elsewhere.
+fn is_nullable_int(php_type: &PhpType) -> bool {
+    match php_type {
+        PhpType::TaggedScalar => true,
+        PhpType::Union(members) => members
+            .iter()
+            .all(|member| matches!(member, PhpType::Int | PhpType::Void | PhpType::Never)),
+        _ => false,
+    }
 }
 
 /// Classifies one exact EIR/PHP/ownership shape for strict comparison.
@@ -108,6 +146,9 @@ pub(super) fn classify_strict_value(
             | Ownership::MaybeOwned
             | Ownership::Persistent,
         ) => Some(StrictValueKind::MixedCell),
+        (IrType::TaggedScalar, php_type, Ownership::NonHeap) if is_nullable_int(php_type) => {
+            Some(StrictValueKind::Tagged)
+        }
         _ => None,
     }
 }
@@ -201,6 +242,15 @@ pub(super) fn lower_strict_compare(ctx: &mut FnCtx, inst: &Instruction) -> Resul
         return finish_i32_boolean(ctx, inst, negated);
     }
 
+    // An inline `?int` pair. Its tag is 0 or 8 and nothing else, so every comparison here is
+    // decided by that tag plus at most one payload test — and a side this pair can never hold
+    // (a string, an object, a float, a bool) makes the answer a compile-time false.
+    if lhs_kind == StrictValueKind::Tagged || rhs_kind == StrictValueKind::Tagged {
+        return lower_tagged_strict_compare(
+            ctx, inst, lhs, lhs_kind, rhs, rhs_kind, negated,
+        );
+    }
+
     if lhs_kind != rhs_kind {
         ctx.fb.ins(
             if negated {
@@ -255,7 +305,120 @@ pub(super) fn lower_strict_compare(ctx: &mut FnCtx, inst: &Instruction) -> Resul
         StrictValueKind::MixedCell => Err(WasmError::Unsupported(
             "strict comparison of two Mixed cells".to_string(),
         )),
+        // Handled above too: a tagged pair on EITHER side returns before this match.
+        StrictValueKind::Tagged => Err(WasmError::Unsupported(
+            "strict comparison of two nullable ints".to_string(),
+        )),
     }
+}
+
+/// Lowers a strict comparison where at least one side is an inline `?int` pair.
+///
+/// The pair is `(payload i64, tag i32)` with tag 0 for an int and 8 for null, so:
+///
+/// - against `null`, only the TAG matters;
+/// - against an `int`, the tag must be 0 AND the payloads must match — `$x === 0` must not
+///   answer true for a null whose payload word also happens to be zero, which is exactly what
+///   testing the payload alone would do;
+/// - against a string, object, float or bool, the answer is a compile-time FALSE, because a
+///   `?int` holds neither of those and PHP's `===` compares type first;
+/// - against another pair, equal tags plus — when they are ints — equal payloads.
+fn lower_tagged_strict_compare(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    lhs: crate::ir::ValueId,
+    lhs_kind: StrictValueKind,
+    rhs: crate::ir::ValueId,
+    rhs_kind: StrictValueKind,
+    negated: bool,
+) -> Result<()> {
+    // Both sides tagged: compare the tags, then the payloads only when both are ints.
+    if lhs_kind == StrictValueKind::Tagged && rhs_kind == StrictValueKind::Tagged {
+        let lhs_tag = ctx.fresh_temp(ValType::I32);
+        let lhs_payload = ctx.fresh_temp(ValType::I64);
+        let rhs_tag = ctx.fresh_temp(ValType::I32);
+        let rhs_payload = ctx.fresh_temp(ValType::I64);
+        ctx.emit_load_value(lhs)?;
+        ctx.fb
+            .ins(&format!("local.set {}", lhs_tag), "left runtime tag");
+        ctx.fb
+            .ins(&format!("local.set {}", lhs_payload), "left payload word");
+        ctx.emit_load_value(rhs)?;
+        ctx.fb
+            .ins(&format!("local.set {}", rhs_tag), "right runtime tag");
+        ctx.fb
+            .ins(&format!("local.set {}", rhs_payload), "right payload word");
+        ctx.fb.ins(&format!("local.get {}", lhs_tag), "left tag");
+        ctx.fb.ins(&format!("local.get {}", rhs_tag), "right tag");
+        ctx.fb.ins("i32.eq", "same PHP type?");
+        ctx.fb.ins("if (result i32)", "tags agree");
+        ctx.fb
+            .ins(&format!("local.get {}", lhs_tag), "left tag");
+        ctx.fb
+            .ins(&format!("i32.const {}", TAGGED_NULL), "the null tag");
+        ctx.fb.ins("i32.eq", "both null?");
+        ctx.fb.ins("if (result i32)", "both null");
+        ctx.fb
+            .ins("i32.const 1", "null is identical to null whatever the payload word holds");
+        ctx.fb.ins("else", "both int");
+        ctx.fb
+            .ins(&format!("local.get {}", lhs_payload), "left payload");
+        ctx.fb
+            .ins(&format!("local.get {}", rhs_payload), "right payload");
+        ctx.fb.ins("i64.eq", "same integer");
+        ctx.fb.ins("end", "end null test");
+        ctx.fb.ins("else", "different tags");
+        ctx.fb.ins("i32.const 0", "an int is never identical to null");
+        ctx.fb.ins("end", "end tag test");
+        return finish_i32_boolean(ctx, inst, negated);
+    }
+
+    let (tagged, concrete, concrete_kind) = if lhs_kind == StrictValueKind::Tagged {
+        (lhs, rhs, rhs_kind)
+    } else {
+        (rhs, lhs, lhs_kind)
+    };
+    // A `?int` is never a string, an object, a float or a bool, and `===` compares the type
+    // first — so the answer is settled here without reading either side.
+    if !matches!(concrete_kind, StrictValueKind::Int | StrictValueKind::Null) {
+        ctx.fb.ins(
+            if negated {
+                "i64.const 1"
+            } else {
+                "i64.const 0"
+            },
+            "a nullable int is never identical to this type",
+        );
+        return store_result(ctx, inst);
+    }
+
+    let tag = ctx.fresh_temp(ValType::I32);
+    let payload = ctx.fresh_temp(ValType::I64);
+    ctx.emit_load_value(tagged)?;
+    ctx.fb.ins(&format!("local.set {}", tag), "runtime tag");
+    ctx.fb
+        .ins(&format!("local.set {}", payload), "payload word");
+    ctx.fb.ins(&format!("local.get {}", tag), "runtime tag");
+    match concrete_kind {
+        StrictValueKind::Null => {
+            ctx.fb
+                .ins(&format!("i32.const {}", TAGGED_NULL), "the null tag");
+            ctx.fb.ins("i32.eq", "holding null is the whole question");
+        }
+        _ => {
+            ctx.fb
+                .ins(&format!("i32.const {}", TAGGED_INT), "the int tag");
+            ctx.fb.ins("i32.eq", "does it hold an int at all?");
+            ctx.fb.ins("if (result i32)", "it holds an int");
+            ctx.fb.ins(&format!("local.get {}", payload), "payload word");
+            ctx.emit_load_value(concrete)?;
+            ctx.fb.ins("i64.eq", "same integer");
+            ctx.fb.ins("else", "it holds null");
+            ctx.fb.ins("i32.const 0", "null is never identical to an int");
+            ctx.fb.ins("end", "end int test");
+        }
+    }
+    finish_i32_boolean(ctx, inst, negated)
 }
 
 /// Converts an i32 comparison result into the EIR i64 boolean representation.

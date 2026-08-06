@@ -5780,6 +5780,8 @@ fn check_runtime_call(
         None if mixed_array_read_is_supported(module, function, call) => {}
         // The one-operand narrowing of a boxed value into a declared class slot.
         None if mixed_object_narrowing_is_supported(function, call) => {}
+        // The widening of a concrete scalar into a `?int` slot.
+        None if tagged_scalar_widening_is_supported(function, call) => {}
         other => {
             let operands = call
                 .operands
@@ -5859,6 +5861,37 @@ pub(super) fn mixed_object_narrowing_is_supported(function: &Function, call: &In
         return false;
     };
     source.ir_type == IrType::Heap(IrHeapKind::Mixed)
+}
+
+/// Returns true when an untyped `Op::RuntimeCall` widens a concrete scalar into a `?int` slot.
+///
+/// `function f(int $i): ?int { return 10; }` reaches the nullable slot through the same
+/// immediate-less one-operand call the object narrowing uses, and this target stores a `?int` as
+/// an inline `{payload, tag}` pair — so the operation is "keep the word, attach a tag".
+///
+/// This is a WIDENING, which is what makes it exact without any diagnostic: every `int` and
+/// every `null` has a representation in the pair, so nothing can be lost and nothing can raise.
+/// A narrowing is the opposite question — PHP may coerce or raise there — and stays refused
+/// until it carries its own per-tag answers, which is why this does not simply defer to
+/// `transfer::classify_transfer` for any pair it happens to accept.
+pub(super) fn tagged_scalar_widening_is_supported(function: &Function, call: &Instruction) -> bool {
+    if call.operands.len() != 1 || call.result.is_none() {
+        return false;
+    }
+    if call.result_type != IrType::TaggedScalar
+        || call.result_php_type.codegen_repr() != PhpType::TaggedScalar
+    {
+        return false;
+    }
+    let Some(source) = call.operands.first().and_then(|value| function.value(*value)) else {
+        return false;
+    };
+    matches!(
+        (source.ir_type, source.php_type.codegen_repr()),
+        (IrType::I64, PhpType::Int | PhpType::Bool | PhpType::Void)
+            | (IrType::F64, PhpType::Float)
+            | (IrType::Void, PhpType::Void)
+    )
 }
 
 /// Names the immediate an `Op::RuntimeCall` carries when it is not a typed runtime target.
@@ -10766,12 +10799,77 @@ mod tests {
                 "two Mixed cells could both be arrays"
             );
 
-            for invalid in [
+            // An inline `?int` pair is comparable against a concrete side and against another
+            // pair: its tag is 0 or 8 and nothing else, so every such comparison is decidable.
+            // What it may NOT meet is a runtime-tagged cell, whose own tag is dynamic too.
+            for concrete in [
+                (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                (IrType::I64, PhpType::Void, Ownership::NonHeap),
+                (IrType::I64, PhpType::Bool, Ownership::NonHeap),
+                (IrType::F64, PhpType::Float, Ownership::NonHeap),
+                (IrType::Str, PhpType::Str, Ownership::Borrowed),
                 (
                     IrType::TaggedScalar,
                     PhpType::TaggedScalar,
                     Ownership::NonHeap,
                 ),
+            ] {
+                assert!(
+                    shape_issue(
+                        op,
+                        vec![
+                            (
+                                IrType::TaggedScalar,
+                                PhpType::Union(vec![PhpType::Int, PhpType::Void]),
+                                Ownership::NonHeap
+                            ),
+                            concrete.clone()
+                        ],
+                        None,
+                        (IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                    )
+                    .is_none(),
+                    "a nullable int compares against {concrete:?}"
+                );
+            }
+            assert!(
+                shape_issue(
+                    op,
+                    vec![
+                        (
+                            IrType::TaggedScalar,
+                            PhpType::TaggedScalar,
+                            Ownership::NonHeap
+                        ),
+                        (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, Ownership::Owned),
+                    ],
+                    None,
+                    (IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                )
+                .is_some(),
+                "a runtime-tagged cell needs the mixed/concrete path, not this one"
+            );
+            // A union that is NOT `int|null` never reaches the pair representation, so admitting
+            // it here would compare two different storages.
+            assert!(
+                shape_issue(
+                    op,
+                    vec![
+                        (
+                            IrType::TaggedScalar,
+                            PhpType::Union(vec![PhpType::Int, PhpType::Str]),
+                            Ownership::NonHeap
+                        ),
+                        (IrType::I64, PhpType::Int, Ownership::NonHeap),
+                    ],
+                    None,
+                    (IrType::I64, PhpType::Bool, Ownership::NonHeap)
+                )
+                .is_some(),
+                "only int|null folds to the tagged pair"
+            );
+
+            for invalid in [
                 (
                     IrType::Heap(IrHeapKind::Union),
                     PhpType::Union(vec![PhpType::Int, PhpType::Str]),

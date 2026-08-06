@@ -157,11 +157,29 @@ impl std::error::Error for WasmPublishError {}
 /// and type-invalid WebAssembly (validation failure) before any artifact is
 /// written. It touches no filesystem state.
 pub fn assemble_and_validate(wat: &str) -> Result<Vec<u8>, WasmPublishError> {
-    let bytes = wat::parse_str(wat).map_err(WasmPublishError::Assemble)?;
+    let bytes = wat::parse_str(wat).map_err(|error| {
+        dump_rejected_wat(wat);
+        WasmPublishError::Assemble(error)
+    })?;
     wasmparser::Validator::new_with_features(wasmparser::WasmFeatures::WASM3)
         .validate_all(&bytes)
-        .map_err(WasmPublishError::Validate)?;
+        .map_err(|error| {
+            dump_rejected_wat(wat);
+            WasmPublishError::Validate(error)
+        })?;
     Ok(bytes)
+}
+
+/// Writes the rejected text to `$ELEPHC_WAT_DUMP` so a stack-shape bug can be READ.
+///
+/// A failure here publishes nothing, so the `.wat` that would explain it never reaches the
+/// filesystem — which leaves a byte offset from the validator and no way to see the instruction
+/// it names. Off unless the variable is set, and a write failure is ignored: this is a debugging
+/// aid, never part of the contract.
+fn dump_rejected_wat(wat: &str) {
+    if let Some(path) = std::env::var_os("ELEPHC_WAT_DUMP") {
+        let _ = fs::write(path, wat);
+    }
 }
 
 /// A complete file written beside its destination but not yet published.

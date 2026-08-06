@@ -1308,6 +1308,15 @@ fn lower_const_bool(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 
 /// Lowers `ConstNull`: pushes the i64 null sentinel (0x7fff_ffff_ffff_fffe).
 fn lower_const_null(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    // A `?int` destination is an inline `{payload, tag}` PAIR, not one word, so the sentinel
+    // that stands for null in a single-word slot would leave the second component unwritten and
+    // the module would fail validation. Tag 8 is what every other tagged producer writes, and
+    // what `is_null` and the strict comparison read back.
+    if inst.result_type == IrType::TaggedScalar {
+        ctx.fb.ins("i64.const 0", "tagged null carries no payload");
+        ctx.fb.ins("i32.const 8", "Mixed null tag");
+        return store_result(ctx, inst);
+    }
     ctx.fb.ins(
         "i64.const 9223372036854775806",
         "null sentinel (0x7fff_ffff_ffff_fffe)",
@@ -2397,6 +2406,15 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         // narrowing a boxed value to a declared class is the unbox below.
         None if inst.operands.len() == 3 && !inst.is_void() => {
             return super::inst_hash::lower_mixed_array_get(ctx, inst);
+        }
+        None if super::capability::tagged_scalar_widening_is_supported(ctx.function, inst) => {
+            // The transfer layer already knows how to attach the tag; it is the same conversion
+            // an argument or a block parameter performs into the same slot shape.
+            let source = operand(inst, 0)?;
+            let result = inst
+                .result
+                .ok_or_else(|| WasmError::Unsupported("tagged widening has no result".into()))?;
+            return super::transfer::emit_transfer_value(ctx, source, result);
         }
         None if super::capability::mixed_object_narrowing_is_supported(ctx.function, inst) => {
             return lower_mixed_object_narrowing(ctx, inst);

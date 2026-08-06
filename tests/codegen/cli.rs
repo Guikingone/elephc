@@ -15753,6 +15753,97 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `===` and `!==` against a nullable int, which this target stores as a `{payload,
+/// tag}` PAIR rather than one word.
+///
+/// The pair was refused outright, which turned away every `$x === null` on a `?int` — the single
+/// most common thing anyone writes with one, and the largest strict-comparison gap in the
+/// example suite. Its tag is 0 or 8 and nothing else (`codegen_repr` folds only `int|null` to
+/// this representation), which is what makes each arm below decidable rather than approximate:
+/// against a string, a bool or a float the answer is a compile-time FALSE, because a `?int`
+/// holds none of those and `===` compares the type first.
+///
+/// The `=== 10` arm is the one a naive lowering gets wrong. Testing the payload alone would
+/// answer true for a null whose payload word also happens to hold that value, so the tag has to
+/// be checked first — which is why the third column below is `F` on the null row.
+///
+/// The producer deliberately avoids arithmetic: a widened `int * int` reaches the slot as a
+/// `Heap(Mixed)`, which is a separate narrowing both backends still refuse.
+#[test]
+fn test_cli_wasm_compares_a_nullable_int_strictly() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_nullable_strict");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function pick(int $i): ?int {
+    if ($i === 0) { return null; }
+    if ($i === 1) { return 10; }
+    return 20;
+}
+function yn(bool $b): string { return $b ? "T" : "F"; }
+foreach ([0, 1, 2] as $i) {
+    $x = pick($i);
+    $y = pick($i);
+    $z = pick(2);
+    echo $i, ": ";
+    echo yn($x === null), yn($x !== null), yn($x === 10), yn($x === 20);
+    echo yn($x === "10"), yn($x === true), yn($x === 10.0);
+    echo yn($x === $y), yn($x === $z), yn(null === $x), yn(10 === $x), "\n";
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the nullable-strict probe to WASM");
+    assert!(
+        output.status.success(),
+        "nullable-strict compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the nullable-strict probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "0: TFFFFFFTFTF\n1: FTTFFFFTFFT\n2: FTFTFFFTTFF\n",
+        "php-src 8.5.6's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a boxed object reaches `__toString` instead of being refused outright.
 ///
 /// The object arm of every string conversion raised `Error: Object of class C could not be

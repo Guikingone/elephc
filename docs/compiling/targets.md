@@ -571,6 +571,25 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**`===` and `!==` against a nullable int** are lowered. This target stores a `?int`
+as an inline `{payload, tag}` PAIR rather than one word, and the pair was refused
+outright — which turned away every `$x === null`, the single most common thing
+anyone writes with one and the largest strict-comparison gap in the suite. Its tag
+is 0 or 8 and nothing else (`codegen_repr` folds only `int|null` to this
+representation), which is what makes each case decidable rather than approximate:
+against a string, a bool or a float the answer is a compile-time FALSE, because a
+`?int` holds none of those and `===` compares the type first. Against a concrete
+int the TAG is checked before the payload, so `$x === 0` does not answer true for a
+null whose payload word also happens to be zero.
+
+What the pair may not meet is a runtime-tagged `Mixed` cell — that cell's own tag is
+dynamic too, and the existing mixed/concrete path assumes exactly one side is —
+so that pair stays refused. Producing the slot needed two more pieces: an untyped
+runtime call WIDENING a concrete scalar into it (a widening cannot lose information
+or raise, unlike the narrowing in the other direction, which stays refused), and
+`const_null` writing both components instead of the one-word sentinel. The latter
+was a latent invalid-module bug, reachable only once the widening was admitted.
+
 **A boxed object reaches `__toString`** instead of being refused outright. The
 object arm of every string conversion raised `Error: Object of class C could not
 be converted to string` for EVERY class, which is php-src's answer only for a
