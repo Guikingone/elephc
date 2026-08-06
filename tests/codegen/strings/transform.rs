@@ -439,6 +439,52 @@ var_dump(iconv('UTF-8', 'UTF-8', ''));
     );
 }
 
+/// `strtr()`'s two forms are different algorithms and both were catalog-visible with no lowering.
+///
+/// Three arguments translate BYTES pairwise over `min(strlen($from), strlen($to))` pairs, and a
+/// byte repeated in `$from` takes its LAST pairing — `strtr("aaa", "aa", "bc")` is 'ccc'. Two
+/// arguments replace SUBSTRINGS, choosing the LONGEST key matching at each position and never
+/// re-scanning what was just written — `strtr("ab", ["a" => "b", "b" => "a"])` is 'ba' and
+/// `strtr("aaa", ["a" => "aa"])` is 'aaaaaa'. Pinned against `php -n` (PHP 8.5).
+#[test]
+fn test_strtr_byte_translation_and_longest_key_replacement() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strtr("hello", "el", "ip"));
+var_dump(strtr("hello", "el", "i"));
+var_dump(strtr("hello", "e", "ip"));
+var_dump(strtr("aaa", "aa", "bc"));
+var_dump(strtr("", "ab", "cd"));
+var_dump(strtr("abc", "", ""));
+var_dump(strtr("Hi all", ["Hi" => "Hello", "all" => "world"]));
+var_dump(strtr("ab", ["a" => "b", "b" => "a"]));
+var_dump(strtr("aab", ["a" => "x", "aa" => "y"]));
+var_dump(strtr("abc", []));
+var_dump(strtr("test", ["t" => "", "e" => "E"]));
+var_dump(strtr("12345", [1 => "one", 23 => "two"]));
+var_dump(strtr("aaa", ["a" => "aa"]));
+var_dump(strtr("xyz", ["x" => "1", "xy" => "2", "xyz" => "3"]));
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"hippo\"\n\
+         string(5) \"hillo\"\n\
+         string(5) \"hillo\"\n\
+         string(3) \"ccc\"\n\
+         string(0) \"\"\n\
+         string(3) \"abc\"\n\
+         string(11) \"Hello world\"\n\
+         string(2) \"ba\"\n\
+         string(2) \"yb\"\n\
+         string(3) \"abc\"\n\
+         string(2) \"Es\"\n\
+         string(8) \"onetwo45\"\n\
+         string(6) \"aaaaaa\"\n\
+         string(1) \"3\"\n"
+    );
+}
+
 /// `iconv_mime_decode()` decodes RFC 2047 encoded words in a MIME header. It was catalog-visible
 /// with no lowering at all, and `Symfony\Polyfill\Mbstring\Mbstring::mb_decode_mimeheader` calls it
 /// directly, so the whole `--web` build died on `builtin call iconv_mime_decode`.

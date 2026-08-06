@@ -113,6 +113,106 @@ function strripos(string $haystack, string $needle, int $offset = 0): int|false 
 "#,
     },
     StringCompatEntry {
+        name: "strtr",
+        overridable_builtin: true,
+        // Catalog-visible with no lowering: `builtin call strtr`. Composer's own `ClassLoader`
+        // uses the three-argument form on every autoload, so nothing that autoloads could compile.
+        //
+        // The two forms are different algorithms, and both were pinned on `php -n` first:
+        //   - three arguments translate BYTES pairwise over `min(strlen($from), strlen($to))`
+        //     pairs, and a byte repeated in `$from` takes its LAST pairing
+        //     (`strtr("aaa", "aa", "bc")` is 'ccc', not 'bbb'). The truncation is why the search
+        //     runs over `substr($from, 0, $n)` rather than `$from`: a pair beyond the common
+        //     length contributes nothing to PHP's table and must not be found here either.
+        //   - two arguments replace SUBSTRINGS, choosing the LONGEST key that matches at each
+        //     position, scanning left to right, and never re-scanning what was just written
+        //     (`strtr("ab", ["a" => "b", "b" => "a"])` is 'ba', and `strtr("aaa", ["a" => "aa"])`
+        //     is 'aaaaaa'). Keys are array keys, so an integer key arrives already stringified.
+        //
+        // A byte map is built by searching `$from` rather than by indexing an array, because a
+        // 256-entry sparse integer-keyed table is exactly the shape elephc still miscompiles.
+        //
+        // Divergence: PHP prints `Warning: strtr(): Ignoring replacement of empty string` for an
+        // empty key and then ignores it; this skips the key silently, because elephc has no
+        // builtin-warning construct reachable from an elephc-PHP prelude.
+        source: r#"<?php
+function __elephc_strtr_bytes(string $string, string $from, string $to): string {
+    $pairs = strlen($from);
+    $available = strlen($to);
+    if ($available < $pairs) {
+        $pairs = $available;
+    }
+    if ($pairs === 0) {
+        return $string;
+    }
+    $source = substr($from, 0, $pairs);
+    $out = '';
+    $length = strlen($string);
+    $i = 0;
+    while ($i < $length) {
+        $at = strrpos($source, $string[$i]);
+        if ($at === false) {
+            $out .= $string[$i];
+        } else {
+            $out .= $to[$at];
+        }
+        $i++;
+    }
+    return $out;
+}
+function __elephc_strtr_pairs(string $string, array $replace_pairs): string {
+    $keys = [];
+    $values = [];
+    foreach ($replace_pairs as $key => $value) {
+        $needle = (string) $key;
+        if ($needle === '') {
+            continue;
+        }
+        $keys[] = $needle;
+        $values[] = (string) $value;
+    }
+    $count = count($keys);
+    if ($count === 0) {
+        return $string;
+    }
+    $out = '';
+    $length = strlen($string);
+    $i = 0;
+    while ($i < $length) {
+        $best = 0;
+        $matched = -1;
+        $j = 0;
+        while ($j < $count) {
+            $needle_length = strlen($keys[$j]);
+            if ($needle_length > $best && $i + $needle_length <= $length
+                && substr($string, $i, $needle_length) === $keys[$j]) {
+                $best = $needle_length;
+                $matched = $j;
+            }
+            $j++;
+        }
+        if ($matched < 0) {
+            $out .= $string[$i];
+            $i++;
+            continue;
+        }
+        $out .= $values[$matched];
+        $i += $best;
+    }
+    return $out;
+}
+function strtr(string $string, mixed $from, ?string $to = null): string {
+    if (is_array($from)) {
+        return __elephc_strtr_pairs($string, $from);
+    }
+    if ($to === null) {
+        throw new \TypeError('strtr(): Argument #2 ($from) must be of type array, string given');
+    }
+    return __elephc_strtr_bytes($string, (string) $from, $to);
+}
+"#,
+    },
+    StringCompatEntry {
         name: "iconv_mime_decode",
         overridable_builtin: true,
         // RFC 2047 encoded-word decoding for a MIME header. Catalog-visible with no lowering at
