@@ -2276,10 +2276,14 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
             }
         }
         WasmRepr::F64(_) => {
+            // Not `f64.ne 0.0`: that answers FALSE for a NaN, which PHP calls true, and it says
+            // nothing where PHP warns.
             ctx.emit_load_value(op0)?;
-            ctx.fb.ins("f64.const 0.0", "zero");
-            ctx.fb.ins("f64.ne", "truthy = x != 0.0");
-            ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
+            ctx.fb.ins("i64.reinterpret_f64", "read the float as bits");
+            ctx.fb.ins(
+                "call $__rt_float_truthy",
+                "PHP's truthiness, warning on a NaN",
+            );
         }
         WasmRepr::Str { ptr, len } => {
             ctx.fb
@@ -2320,9 +2324,11 @@ fn lower_is_truthy(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 ctx.fb.ins("i64.extend_i32_u", "bool i32 -> i64");
             }
             IrType::Heap(IrHeapKind::Mixed) | IrType::Heap(IrHeapKind::Union) => {
+                // The warning wrapper rather than the bare cast: a boxed NaN is TRUE in PHP and
+                // says so first, which the silent cast cannot.
                 ctx.fb.ins(&format!("local.get {}", local), "boxed value");
                 ctx.fb
-                    .ins("call $__rt_mixed_cast_bool", "PHP Mixed truthiness");
+                    .ins("call $__rt_mixed_truthy", "PHP Mixed truthiness, warning on a NaN");
             }
             IrType::Heap(IrHeapKind::Object) => {
                 ctx.fb.ins("i64.const 1", "objects are always truthy");

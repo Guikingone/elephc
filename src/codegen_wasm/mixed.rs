@@ -47,6 +47,10 @@ pub(super) fn emit_mixed_runtime(
     wm.add_raw_func(&mixed_cast_string(has_main));
     wm.add_raw_func(RT_MIXED_CAST_STRING_REF);
     if has_main {
+        // Truthiness warns for a NaN, so it needs WASI like the other diagnostic-producing
+        // rules; a reactor keeps the silent cast.
+        wm.add_raw_func(RT_MIXED_TRUTHY);
+        wm.add_raw_func(RT_FLOAT_TRUTHY);
         // The `foreach` dispatch warns through WASI for a value PHP will not iterate, so it is
         // a command-module rule like every other diagnostic-producing one.
         wm.add_raw_func(RT_MIXED_ITER_START);
@@ -288,6 +292,42 @@ const RT_MIXED_NARROW_INT: &str = r#"(func $__rt_mixed_narrow_int (param $ptr i3
 /// its stored 0/1; an array/hash is truthy when non-null and its count (i64 at
 /// offset 0) is non-zero; an object or resource is always truthy; null, callable,
 /// and any other tag are falsy. Borrows the cell (never frees/mutates it).
+
+/// `__rt_mixed_truthy`: PHP's truthiness of a BOXED value, with the one diagnostic it carries.
+///
+/// Every per-tag ANSWER already lives in `__rt_mixed_cast_bool` and is exact — measured on
+/// php-src 8.5.6 across seventeen arms, including the two that trip people up: `"0.0"` is TRUE
+/// (only the single character `"0"` is false) and `-0.0` is FALSE like `+0.0`. What was missing
+/// is that a NaN WARNS on the way, and is then TRUE. So this wraps rather than restates.
+const RT_MIXED_TRUTHY: &str = r#"(func $__rt_mixed_truthy (param $cell i32) (result i64)
+  (local $tag i64) (local $lo i64) (local $hi i64) (local $f f64)
+  (call $__rt_mixed_unbox (local.get $cell))
+  (local.set $hi)
+  (local.set $lo)
+  (local.set $tag)
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; tag 2 = float
+    (then
+      (local.set $f (f64.reinterpret_i64 (local.get $lo)))
+      (if (f64.ne (local.get $f) (local.get $f))                  ;; NaN is the only value unequal to itself
+        (then (call $__rt_deprecate_nan_to_bool)))))
+  (call $__rt_mixed_cast_bool (local.get $cell)))
+"#;
+
+/// `__rt_float_truthy`: the same for a CONCRETE float, which carries the same NaN warning.
+///
+/// `0.0` and `-0.0` are both false and everything else — the infinities and NaN included — is
+/// true, so the answer is a bit test rather than a float comparison.
+const RT_FLOAT_TRUTHY: &str = r#"(func $__rt_float_truthy (param $bits i64) (result i64)
+  (local $f f64)
+  (local.set $f (f64.reinterpret_i64 (local.get $bits)))
+  (if (f64.ne (local.get $f) (local.get $f))
+    (then (call $__rt_deprecate_nan_to_bool)))
+  (i64.extend_i32_u
+    (i32.and
+      (i64.ne (local.get $bits) (i64.const 0))
+      (i64.ne (local.get $bits) (i64.const 0x8000000000000000)))))
+"#;
+
 const RT_MIXED_CAST_BOOL: &str = r#"(func $__rt_mixed_cast_bool (param $ptr i32) (result i64)
   (local $tag i64)
   (local $lo i64)

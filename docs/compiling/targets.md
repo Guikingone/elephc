@@ -571,6 +571,17 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**Truthiness of a BOXED value or a float** is lowered. The per-tag ANSWERS were always
+exact — `"0.0"` is TRUE because only the single character `"0"` is false, and `-0.0` is
+FALSE like `+0.0` — so the refusal was only ever about the one diagnostic PHP raises
+here: a NaN is TRUE, and warns `unexpected NAN value was coerced to bool` on the way. A
+bare `f64.ne 0.0` would have answered FALSE for it and said nothing, which is why the
+float path tests the BITS rather than comparing.
+
+That warning goes through WASI, so a REACTOR module keeps the refusal: answering
+silently where php-src speaks is a divergence, not a partial implementation, so the rule
+follows the module kind rather than the value.
+
 **A boxed operand of `%`** is coerced under PHP's ARITHMETIC contract, which is a THIRD
 one — distinct from both the declared-parameter and declared-return coercions, and the
 reason it needs its own path. Measured on php-src 8.5.6 with `$mixed % 3`: `null` is

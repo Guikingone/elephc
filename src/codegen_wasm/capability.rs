@@ -456,7 +456,7 @@ fn check_instruction_shape(
         Op::Cast => cast_shape_issue(module, function, inst),
         Op::IToStr => int_like_to_string_shape_issue(function, inst),
         Op::StrictEq | Op::StrictNotEq => strict_compare_shape_issue(function, inst),
-        Op::IsTruthy => truthiness_shape_issue(function, inst),
+        Op::IsTruthy => truthiness_shape_issue(module, function, inst),
         Op::ArraySet => array_store_shape_issue(function, inst, 2, false),
         Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
         Op::ArrayToMixed => array_to_mixed_shape_issue(function, inst),
@@ -2084,19 +2084,29 @@ fn exact_scalar_cast_pair(
             ))
 }
 
-/// Rejects float and dynamic-Mixed truthiness until warning behavior is exact.
-fn truthiness_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+/// Admits float and boxed truthiness once the module can carry its one diagnostic.
+///
+/// The per-tag ANSWERS were always exact — `__rt_mixed_cast_bool` gets all seventeen right,
+/// `"0.0"` being TRUE and `-0.0` FALSE included. What was missing is the warning a NaN raises on
+/// the way to `true`, and that goes through WASI: a reactor module has no stderr to write it to,
+/// so it keeps the refusal rather than answering silently where php-src speaks.
+fn truthiness_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
     let [operand] = inst.operands.as_slice() else {
         return None;
     };
     let value = function.value(*operand)?;
-    if value.ir_type == IrType::F64
+    let needs_nan_diagnostic = value.ir_type == IrType::F64
         || value.ir_type == IrType::Heap(IrHeapKind::Mixed)
-        || matches!(value.php_type.codegen_repr(), PhpType::Float | PhpType::Mixed)
+        || matches!(value.php_type.codegen_repr(), PhpType::Float | PhpType::Mixed);
+    if needs_nan_diagnostic
+        && !module.functions.iter().any(|candidate| candidate.flags.is_main)
     {
         return Some(
-            "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
-                .to_string(),
+            "float or Mixed truthiness needs a command module for its NaN diagnostic".to_string(),
         );
     }
     None
@@ -11265,13 +11275,50 @@ mod tests {
             ),
             "{message}"
         );
-        assert_eq!(
-            message
-                .matches(
-                    "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
-                )
-                .count(),
-            2,
+        // Truthiness is no longer among them. Its per-tag ANSWERS were always exact — the
+        // seventeen arms are verified against php-src in
+        // `codegen::cli::test_cli_wasm_coerces_a_boxed_arithmetic_operand`'s sibling probe —
+        // and the only thing that was missing, the warning a NaN raises on its way to `true`,
+        // is now emitted. This module bears a `main`, so it can carry that warning.
+        assert!(
+            !message.contains("truthiness"),
+            "a command module carries the NaN warning and needs no truthiness refusal: {message}"
+        );
+    }
+
+    /// A REACTOR keeps the truthiness refusal, because it has no stderr for the NaN warning.
+    ///
+    /// The answers would be right without it, which is exactly the trap: answering silently
+    /// where php-src speaks is a divergence, not a partial implementation. So the rule follows
+    /// the module kind rather than the value.
+    #[test]
+    fn float_truthiness_still_needs_a_command_module_for_its_warning() {
+        let mut module = Module::new(Target::wasm());
+        let mut function = Function::new("truthy".to_string(), IrType::I64, PhpType::Bool);
+        // Deliberately NOT `flags.is_main`: this is a reactor.
+        {
+            let mut builder = Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let float = builder.emit_const_f64(1.5);
+            let truthy = builder.emit(
+                Op::IsTruthy,
+                vec![float],
+                None,
+                IrType::I64,
+                PhpType::Bool,
+                Ownership::NonHeap,
+            );
+            builder.terminate(Terminator::Return { value: truthy });
+        }
+        module.add_function(function);
+
+        let message = validate_module(&module)
+            .expect_err("a reactor cannot warn, so it must refuse")
+            .to_string();
+        assert!(
+            message.contains("needs a command module for its NaN diagnostic"),
             "{message}"
         );
     }

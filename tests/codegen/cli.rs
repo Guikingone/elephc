@@ -1985,26 +1985,26 @@ unset($values[$key]);
             "PHP {version} must reject diagnostic-sensitive float conversions"
         );
         let stderr = String::from_utf8_lossy(&output.stderr);
-        // The explicit `(int)` cast now carries its exact PHP 8.5 diagnostic and is
-        // admitted, so this fixture no longer produces a float-to-int issue. The implicit
-        // Mixed-to-scalar TRANSFER is lowered too — through `__rt_mixed_narrow_int`, which
-        // narrows silently the way the native backend does rather than borrowing the explicit
-        // cast's warning — so its refusal message is gone as well. What still refuses here is
-        // NAN truthiness and the explicit Mixed-to-scalar CAST.
+        // Three of this fixture's refusals have since been implemented and are deliberately
+        // gone. The explicit `(int)` cast carries its exact PHP 8.5 diagnostic; the implicit
+        // Mixed-to-scalar TRANSFER narrows through `__rt_mixed_narrow_int` the way the native
+        // backend does; and TRUTHINESS now emits the NaN warning it was refused for, so a
+        // command module like this one no longer turns it away.
+        //
+        // What still refuses is the FLOAT ASSOCIATIVE KEY, whose implicit-conversion
+        // diagnostics are profile-specific, and the explicit Mixed-to-scalar cast.
         assert!(
-            stderr.contains(
-                "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
-            ),
-            "PHP {version}: {stderr}"
+            !stderr.contains("truthiness"),
+            "PHP {version}: truthiness carries its NaN warning now: {stderr}"
         );
         assert!(
             stderr
                 .matches(
-                    "float or Mixed truthiness requires exact profile-specific NAN diagnostics"
+                    "float associative keys require exact profile-specific implicit-conversion diagnostics"
                 )
                 .count()
-                >= 6,
-            "PHP {version}: constant NAN truthiness was optimized away: {stderr}"
+                >= 3,
+            "PHP {version}: the float-key refusals were optimized away: {stderr}"
         );
         assert!(
             stderr.contains(
@@ -15770,6 +15770,111 @@ render(new Tally());
             expected,
             "{name}: php-src's own answer ({})",
             String::from_utf8_lossy(&run.stderr)
+        );
+    }
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies PHP's truthiness of a BOXED value and of a float, warning on a NaN.
+///
+/// The per-tag ANSWERS were always exact — the refusal was only ever about the one diagnostic
+/// PHP raises here — so the seventeen arms below are as much a check that nothing regressed as
+/// that the warning appeared. Two of them are the ones intuition gets wrong: `"0.0"` is TRUE,
+/// because only the single character `"0"` is false, and `-0.0` is FALSE like `+0.0`.
+///
+/// A NaN is TRUE, and says so first: `Warning: unexpected NAN value was coerced to bool`. A bare
+/// `f64.ne 0.0` would have answered FALSE for it and said nothing, which is why the float arm
+/// tests the BITS rather than comparing.
+#[test]
+fn test_cli_wasm_answers_php_truthiness_including_a_nan_warning() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_truthiness");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function arm(int $i): mixed {
+    if ($i === 0) { return 0; }
+    if ($i === 1) { return 1; }
+    if ($i === 2) { return 0.0; }
+    if ($i === 3) { return -0.0; }
+    if ($i === 4) { return 0.5; }
+    if ($i === 5) { return NAN; }
+    if ($i === 6) { return INF; }
+    if ($i === 7) { return ""; }
+    if ($i === 8) { return "0"; }
+    if ($i === 9) { return "0.0"; }
+    if ($i === 10) { return "a"; }
+    if ($i === 11) { return null; }
+    if ($i === 12) { return []; }
+    if ($i === 13) { return [0]; }
+    if ($i === 14) { return true; }
+    if ($i === 15) { return false; }
+    return new stdClass();
+}
+$m = arm((int)($argv[1] ?? "0"));
+echo ($m ? "T" : "F"), "|\n";
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the truthiness probe to WASM");
+    assert!(
+        output.status.success(),
+        "truthiness compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m", process.argv[3]], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    // php-src 8.5.6's own answer for each arm, in order.
+    let expected = [
+        "F", "T", "F", "F", "T", "T", "T", "F", "F", "T", "T", "F", "F", "T", "T", "F", "T",
+    ];
+    for (arm, want) in expected.iter().enumerate() {
+        let run = Command::new("node")
+            .arg("--no-warnings")
+            .arg(&runner)
+            .arg(dir.join("main.wasm"))
+            .arg(arm.to_string())
+            .current_dir(&dir)
+            .output()
+            .expect("failed to run the truthiness probe under Node");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            format!("{want}|\n"),
+            "arm {arm}: php-src's own answer"
+        );
+        // Only the NaN arm speaks, and it still answers true.
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        let warned = stderr.contains("Warning: unexpected NAN value was coerced to bool");
+        assert_eq!(
+            warned,
+            arm == 5,
+            "arm {arm}: only a NaN warns, and it does: {stderr}"
         );
     }
 
