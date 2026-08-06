@@ -497,11 +497,12 @@ pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         )));
     }
     let array = expect_operand(inst, 1)?;
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::Mixed | PhpType::Union(_)
-    ) {
+    let array_repr = ctx.value_php_type(array)?.codegen_repr();
+    if matches!(array_repr, PhpType::Mixed | PhpType::Union(_)) {
         return lower_implode_dynamic(ctx, inst);
+    }
+    if let PhpType::AssocArray { value, .. } = &array_repr {
+        return lower_implode_assoc(ctx, inst, array, &value.codegen_repr());
     }
     let runtime_label = implode_runtime_label(ctx, inst)?;
     match ctx.emitter.target.arch {
@@ -4062,21 +4063,83 @@ fn materialize_str_split_length_x86_64(
 fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<&'static str> {
     let array = expect_operand(inst, 1)?;
     match ctx.value_php_type(array)? {
-        PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
-            PhpType::Int | PhpType::Bool => Ok("__rt_implode_int"),
-            PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => {
-                Ok("__rt_implode")
-            }
-            other => Err(CodegenIrError::unsupported(format!(
-                "implode array element PHP type {:?}",
-                other
-            ))),
-        },
+        PhpType::Array(elem_ty) => implode_element_runtime_label(&elem_ty.codegen_repr()),
         other => Err(CodegenIrError::unsupported(format!(
             "implode array PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Returns the runtime helper label matching one indexed-array element layout.
+///
+/// Raw 8-byte int/bool slots need the dedicated integer joiner; 16-byte `{ptr,len}` string slots
+/// and boxed-Mixed slots are both handled by the generic one. This is the element rule shared by
+/// the indexed and associative paths — the associative path materializes an indexed values array
+/// with the very same layouts, so its helper choice must follow the same table.
+fn implode_element_runtime_label(elem_ty: &PhpType) -> Result<&'static str> {
+    match elem_ty {
+        PhpType::Int | PhpType::Bool => Ok("__rt_implode_int"),
+        PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => Ok("__rt_implode"),
+        other => Err(CodegenIrError::unsupported(format!(
+            "implode array element PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Lowers `implode(glue, $assoc)` by materializing the hash's values in insertion order first.
+///
+/// PHP's `implode()` never looks at keys, so an associative array reduces exactly to the indexed
+/// case. `emit_loaded_assoc_array_values` is the routine `array_values()` already uses for this,
+/// and it leaves each element owned the way the result array's stamped value type requires —
+/// strings persisted, Mixed boxed or increfed, other refcounted payloads increfed. Its exact
+/// inverse is `__rt_decref_array`, which walks the same stamp, so the temporary cannot leak and
+/// cannot over-release.
+///
+/// The joined string lands in the string result registers, which on both targets overlap the
+/// registers the release needs, so it is saved across the release and restored afterwards.
+fn lower_implode_assoc(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    value_ty: &PhpType,
+) -> Result<()> {
+    let runtime_label = implode_element_runtime_label(value_ty)?;
+    let glue = expect_string_operand(ctx, inst, 0, "implode")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_string_value_to_regs(glue, "x1", "x2")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // preserve the glue string across hash-value materialization
+            ctx.load_value_to_result(array)?;
+            super::arrays::values::emit_loaded_assoc_array_values(ctx, value_ty)?;
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                    // restore the glue string into the primary implode argument registers
+            abi::emit_push_reg(ctx.emitter, "x0");                              // keep the temporary values array reachable for its release
+            ctx.emitter.instruction("mov x3, x0");                              // pass the materialized values array as the third implode argument
+            abi::emit_call_label(ctx.emitter, runtime_label);
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // preserve the joined string across the temporary's release
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                    // restore the joined string result registers
+            abi::emit_pop_reg(ctx.emitter, "x9");                               // drop the temporary values array stack slot
+        }
+        Arch::X86_64 => {
+            ctx.load_string_value_to_regs(glue, "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // preserve the glue string across hash-value materialization
+            ctx.load_value_to_result(array)?;
+            super::arrays::values::emit_loaded_assoc_array_values(ctx, value_ty)?;
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // restore the glue string into the primary implode argument registers
+            abi::emit_push_reg(ctx.emitter, "rax");                             // keep the temporary values array reachable for its release
+            ctx.emitter.instruction("mov rdx, rax");                            // pass the materialized values array as the third implode argument
+            abi::emit_call_label(ctx.emitter, runtime_label);
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // preserve the joined string across the temporary's release
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");                  // restore the joined string result registers
+            abi::emit_pop_reg(ctx.emitter, "r10");                              // drop the temporary values array stack slot
+        }
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Materializes AArch64 glue and array arguments for `implode()`.

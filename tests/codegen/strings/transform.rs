@@ -261,6 +261,53 @@ echo "[", implode(",", array_merge([], [])), "]";
     assert_eq!(out, "[][]");
 }
 
+/// Verifies implode joins an ASSOCIATIVE array's values in insertion order, ignoring its keys.
+///
+/// PHP's `implode()` never looks at keys, so hash storage reduces to the indexed case — but the
+/// EIR backend accepted only `PhpType::Array` and refused every associative array outright
+/// (`implode array PHP type AssocArray { key: Int, value: Mixed }`), which is what blocked the
+/// Symfony `--web` build. Covers all three value layouts the hash can carry: boxed `Mixed`,
+/// 16-byte string pairs, and raw 8-byte ints. php-verified against `php -n`.
+#[test]
+fn test_implode_associative_array_joins_values_in_insertion_order() {
+    let out = compile_and_run(
+        r#"<?php
+$sparse = [1 => "a", 5 => 2, 9 => "c"];
+echo implode(",", $sparse), "\n";
+$named = ["x" => "a", "y" => 2, "z" => true];
+echo implode("|", $named), "\n";
+$ints = [2 => 10, 7 => 20];
+echo implode("-", $ints), "\n";
+$grown = [];
+$grown[3] = "only";
+echo implode("+", $grown), "\n";
+"#,
+    );
+    assert_eq!(out, "a,2,c\na|2|1\n10-20\nonly\n");
+}
+
+/// The associative `implode()` path materializes a temporary values array, so it must release it.
+/// A leak here would be invisible in the joined string and would accumulate once per call.
+#[test]
+fn test_implode_associative_array_releases_its_temporary_values_array() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$m = ["x" => "alpha", "y" => "beta", "z" => "gamma"];
+$total = 0;
+for ($i = 0; $i < 20; $i++) {
+    $total = $total + strlen(implode(",", $m));
+}
+echo $total;
+"#,
+    );
+    assert_eq!(out.stdout, "320");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected clean heap summary, got: {}",
+        out.stderr
+    );
+}
+
 /// `strncmp()` compares at most `$length` leading bytes and returns their raw byte difference —
 /// NOT a normalized -1/0/1. Expectations pinned against `php -n` (PHP 8.5).
 #[test]
