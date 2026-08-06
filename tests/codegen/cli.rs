@@ -15776,6 +15776,113 @@ render(new Tally());
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `===` between two boxed values, including PHP's deep array identity.
+///
+/// The pair was refused outright because either cell could hold an array, and array identity in
+/// PHP is a DEEP, ORDER-SENSITIVE element-wise comparison rather than the tag-plus-payload test
+/// a cell against a concrete value needs. The 196 combinations below are php-src 8.5.6's own
+/// answers, and three of them are what make the walk non-trivial:
+///
+/// - `["a" => 1, "b" => 2] === ["b" => 2, "a" => 1]` is FALSE, so comparing key SETS is wrong;
+/// - `[0 => 1, 1 => 2] === [1 => 2, 0 => 1]` is FALSE for the same reason with integer keys;
+/// - `[[1], [2]] === [[1], [3]]` is FALSE, so the walk has to recurse.
+///
+/// The NATIVE backend answers `false` for two structurally equal arrays here — it compares them
+/// by heap pointer — so this target is the one that matches php-src.
+#[test]
+fn test_cli_wasm_compares_two_boxed_values_including_deep_arrays() {
+    if Command::new("node").arg("--version").output().is_err() {
+        return;
+    }
+
+    let dir = make_cli_test_dir("elephc_cli_wasm_boxed_strict");
+    let php_path = dir.join("main.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function box(int $i): mixed {
+    if ($i === 0) { return [1, 2]; }
+    if ($i === 1) { return [1, 2, 3]; }
+    if ($i === 2) { return ["a" => 1, "b" => 2]; }
+    if ($i === 3) { return ["b" => 2, "a" => 1]; }
+    if ($i === 4) { return ["a" => 1, "b" => 2]; }
+    if ($i === 5) { return [[1], [2]]; }
+    if ($i === 6) { return [[1], [2]]; }
+    if ($i === 7) { return [[1], [3]]; }
+    if ($i === 8) { return []; }
+    if ($i === 9) { return []; }
+    if ($i === 10) { return [1, "2"]; }
+    if ($i === 11) { return 5; }
+    if ($i === 12) { return "5"; }
+    return null;
+}
+function yn(bool $b): string { return $b ? "T" : "F"; }
+for ($i = 0; $i < 14; $i++) {
+    for ($j = 0; $j < 14; $j++) { echo yn(box($i) === box($j)); }
+    echo "\n";
+}
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg("wasm32-wasi")
+        .arg(&php_path)
+        .output()
+        .expect("failed to compile the boxed-strict probe to WASM");
+    assert!(
+        output.status.success(),
+        "boxed-strict compilation failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let runner = dir.join("run.mjs");
+    fs::write(
+        &runner,
+        r#"import { readFileSync } from "node:fs";
+import { WASI } from "node:wasi";
+const wasi = new WASI({ version: "preview1", args: ["m"], env: {}, returnOnExit: true });
+const bytes = readFileSync(process.argv[2]);
+const instance = await WebAssembly.instantiate(
+  await WebAssembly.compile(bytes),
+  wasi.getImportObject(),
+);
+process.exitCode = wasi.start(instance);
+"#,
+    )
+    .unwrap();
+
+    let run = Command::new("node")
+        .arg("--no-warnings")
+        .arg(&runner)
+        .arg(dir.join("main.wasm"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run the boxed-strict probe under Node");
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "TFFFFFFFFFFFFF\n\
+         FTFFFFFFFFFFFF\n\
+         FFTFTFFFFFFFFF\n\
+         FFFTFFFFFFFFFF\n\
+         FFTFTFFFFFFFFF\n\
+         FFFFFTTFFFFFFF\n\
+         FFFFFTTFFFFFFF\n\
+         FFFFFFFTFFFFFF\n\
+         FFFFFFFFTTFFFF\n\
+         FFFFFFFFTTFFFF\n\
+         FFFFFFFFFFTFFF\n\
+         FFFFFFFFFFFTFF\n\
+         FFFFFFFFFFFFTF\n\
+         FFFFFFFFFFFFFT\n",
+        "php-src 8.5.6's own answers ({})",
+        String::from_utf8_lossy(&run.stderr)
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `===` and `!==` against a nullable int, which this target stores as a `{payload,
 /// tag}` PAIR rather than one word.
 ///

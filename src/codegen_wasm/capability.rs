@@ -10818,8 +10818,8 @@ mod tests {
                     None,
                     (IrType::I64, PhpType::Bool, Ownership::NonHeap)
                 )
-                .is_some(),
-                "two Mixed cells could both be arrays"
+                .is_none(),
+                "two Mixed cells are answered by the deep, order-sensitive array walk"
             );
 
             // An inline `?int` pair is comparable against a concrete side and against another

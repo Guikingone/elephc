@@ -571,6 +571,24 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**`===` between two BOXED values** is answered, deep array identity included. Either
+cell can hold an array, and PHP's array identity is a DEEP, ORDER-SENSITIVE
+element-wise comparison rather than the tag-plus-payload test a cell against a
+concrete value needs — so the pair was refused outright. Measured on php-src 8.5.6,
+three cases are what make the walk non-trivial: `["a" => 1, "b" => 2] === ["b" => 2,
+"a" => 1]` is FALSE, so comparing key SETS answers the wrong thing; `[0 => 1, 1 => 2]
+=== [1 => 2, 0 => 1]` is FALSE for the same reason with integer keys; and `[[1], [2]]
+=== [[1], [3]]` is FALSE, so it has to recurse.
+
+One logical cursor serves both storages, which makes an indexed array comparable
+against a hash for free: an indexed array's keys are `0..count-1` and its cursor is
+the index, while a hash walks its insertion-order list. Nothing is boxed on the way —
+a hash entry already stores its value as `(tag, lo, hi)` and an indexed element is
+read in place — so the comparison allocates nothing, verified as a flat page count
+against a varying number of comparisons. The NATIVE backend answers `false` for two
+structurally equal arrays here, comparing them by heap pointer, so this target is the
+one that matches php-src.
+
 **A constructor's builtin call no longer ends the initialization proof.** A typed
 property with no default may be read only once something proves the slot was
 written, and a constructor that writes it unconditionally is that proof — but the

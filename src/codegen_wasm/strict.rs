@@ -85,9 +85,6 @@ fn mixed_tag_for(kind: StrictValueKind) -> Option<i64> {
 /// that conclusion needs the cell's tag at runtime, which is the mixed/concrete path rather than
 /// this one. Refused rather than routed there, since the tagged side's own tag is dynamic too.
 pub(super) fn strict_pair_is_supported(lhs: StrictValueKind, rhs: StrictValueKind) -> bool {
-    if lhs == StrictValueKind::MixedCell && rhs == StrictValueKind::MixedCell {
-        return false;
-    }
     !((lhs == StrictValueKind::Tagged && rhs == StrictValueKind::MixedCell)
         || (lhs == StrictValueKind::MixedCell && rhs == StrictValueKind::Tagged))
 }
@@ -193,10 +190,16 @@ pub(super) fn lower_strict_compare(ctx: &mut FnCtx, inst: &Instruction) -> Resul
     // cannot take the "different kinds are unequal" shortcut below — a Mixed holding an int is
     // strictly equal to an int.
     if lhs_kind == StrictValueKind::MixedCell || rhs_kind == StrictValueKind::MixedCell {
+        // Two cells: either could hold an array, so the answer needs PHP's deep, ORDER-sensitive
+        // array identity rather than the tag-plus-payload test the concrete path uses.
         if lhs_kind == rhs_kind {
-            return Err(WasmError::Unsupported(
-                "strict comparison of two Mixed cells".to_string(),
-            ));
+            ctx.emit_load_value(lhs)?;
+            ctx.emit_load_value(rhs)?;
+            ctx.fb.ins(
+                "call $__rt_strict_mixed_mixed",
+                "compare two tagged cells, deeply for arrays",
+            );
+            return finish_i32_boolean(ctx, inst, negated);
         }
         let (cell, concrete, concrete_kind) = if lhs_kind == StrictValueKind::MixedCell {
             (lhs, rhs, rhs_kind)
@@ -302,6 +305,7 @@ pub(super) fn lower_strict_compare(ctx: &mut FnCtx, inst: &Instruction) -> Resul
         }
         // Handled above: a Mixed cell never reaches the same-kind path, because a pair of them
         // is refused and a mixed/concrete pair returns before this match.
+        // Handled above: a pair of cells returns before this match.
         StrictValueKind::MixedCell => Err(WasmError::Unsupported(
             "strict comparison of two Mixed cells".to_string(),
         )),
@@ -508,10 +512,217 @@ const RT_STRICT_MIXED_SCALAR: &str = r#"(func $__rt_strict_mixed_scalar (param $
   (i64.eq (local.get $clo) (local.get $lo)))                      ;; int, bool, object identity
 "#;
 
+/// `__rt_strict_unbox`: reads a Mixed cell's `(tag, lo, hi)`, walking forwarding cells.
+///
+/// The same inline walk `__rt_strict_mixed_scalar` performs, factored out now that three helpers
+/// need it. It stays in this module rather than calling `__rt_mixed_unbox` for the reason that
+/// one documents: the strict runtime ships with modules that do not carry the Mixed runtime.
+const RT_STRICT_UNBOX: &str = r#"(func $__rt_strict_unbox (param $cell i32) (result i64 i64 i64)
+  (local $tag i64) (local $lo i64) (local $hi i64)
+  (if (i32.eqz (local.get $cell))
+    (then (return (i64.const 8) (i64.const 0) (i64.const 0))))    ;; an absent cell is PHP's null
+  (block $found (loop $walk
+    (local.set $tag (i64.load (local.get $cell)))
+    (br_if $found (i64.ne (local.get $tag) (i64.const 7)))        ;; not a forwarding cell
+    (local.set $cell (i32.wrap_i64 (i64.load (i32.add (local.get $cell) (i32.const 8)))))
+    (if (i32.eqz (local.get $cell))
+      (then (return (i64.const 8) (i64.const 0) (i64.const 0))))  ;; a nested null is still null
+    (br $walk)))
+  (local.set $lo (i64.load (i32.add (local.get $cell) (i32.const 8))))
+  (local.set $hi (i64.load (i32.add (local.get $cell) (i32.const 16))))
+  (local.get $tag) (local.get $lo) (local.get $hi))
+"#;
+
+/// `__rt_strict_packed_parts`: reads one INDEXED array element as `(tag, lo, hi)`, borrowed.
+///
+/// The element's type is the array's own `value_type` — an indexed array is homogeneous — read
+/// from the kind word exactly as `__rt_array_elem_to_mixed` reads it. That helper BOXES what it
+/// finds; a comparison only needs to look, so this one allocates nothing and the mapping from
+/// storage `value_type` to runtime tag is the only thing they share.
+const RT_STRICT_PACKED_PARTS: &str = r#"(func $__rt_strict_packed_parts (param $array i32) (param $index i64) (result i64 i64 i64)
+  (local $vt i64) (local $slot i32)
+  (local.set $vt (i64.and
+    (i64.shr_u (i64.load (i32.sub (local.get $array) (i32.const 8))) (i64.const 8))
+    (i64.const 127)))                                             ;; value_type = kind word bits 8..14
+  (local.set $slot (i32.add
+    (i32.add (local.get $array) (i32.const 24))                   ;; slots follow the 24-byte header
+    (i32.wrap_i64 (i64.mul (local.get $index) (select
+      (i64.const 16) (i64.const 8)
+      (i32.or (i64.eq (local.get $vt) (i64.const 1))              ;; string slots are 16 bytes,
+              (i64.eq (local.get $vt) (i64.const 7))))))))        ;; and so are Mixed-cell slots
+  (if (i64.eq (local.get $vt) (i64.const 7))                      ;; a stored cell: read through it
+    (then (return (call $__rt_strict_unbox (i32.wrap_i64 (i64.load (local.get $slot)))))))
+  (if (i64.eq (local.get $vt) (i64.const 1))                      ;; string: (pointer, length)
+    (then (return (i64.const 1) (i64.load (local.get $slot))
+                  (i64.load (i32.add (local.get $slot) (i32.const 8))))))
+  (if (i64.eq (local.get $vt) (i64.const 2))
+    (then (return (i64.const 2) (i64.load (local.get $slot)) (i64.const 0))))   ;; float bits
+  (if (i64.eq (local.get $vt) (i64.const 3))
+    (then (return (i64.const 3) (i64.load (local.get $slot)) (i64.const 0))))   ;; bool
+  (if (i64.eq (local.get $vt) (i64.const 4))
+    (then (return (i64.const 6) (i64.load (local.get $slot)) (i64.const 0))))   ;; object
+  (if (i64.eq (local.get $vt) (i64.const 5))
+    (then (return (i64.const 4) (i64.load (local.get $slot)) (i64.const 0))))   ;; nested indexed
+  (if (i64.eq (local.get $vt) (i64.const 6))
+    (then (return (i64.const 5) (i64.load (local.get $slot)) (i64.const 0))))   ;; nested hash
+  (i64.const 0) (i64.load (local.get $slot)) (i64.const 0))                     ;; int
+"#;
+
+/// `__rt_strict_container_eq`: PHP's `===` between two arrays, whatever their storage.
+///
+/// Measured on php-src 8.5.6, array identity is DEEP and ORDER-SENSITIVE: the counts must match,
+/// and walking both in INSERTION order the keys must be identical pairwise and the values
+/// strictly equal. `[1 => "a", 2 => "b"] === [2 => "b", 1 => "a"]` is false, so comparing key
+/// SETS would answer the wrong thing.
+///
+/// One logical cursor serves both representations, which is what makes a packed array comparable
+/// against a hash for free: an indexed array's keys are `0..count-1` and its cursor is the index,
+/// while a hash walks its insertion-order list from `head` through each entry's `next`. `kind` is
+/// 0 for indexed and 1 for a hash — the caller derives it from the runtime tag, 4 or 5.
+///
+/// Nothing here allocates or takes a reference: both containers are borrowed for the duration.
+const RT_STRICT_CONTAINER_EQ: &str = r#"(func $__rt_strict_container_eq (param $a i32) (param $ak i32) (param $b i32) (param $bk i32) (result i32)
+  (local $ac i64) (local $bc i64) (local $ai i64) (local $bi i64) (local $ae i32) (local $be i32)
+  (local $akl i64) (local $akh i64) (local $bkl i64) (local $bkh i64)
+  (local $atag i64) (local $alo i64) (local $ahi i64)
+  (local $btag i64) (local $blo i64) (local $bhi i64)
+  ;; A null container pointer is an empty array; two of them are identical.
+  (if (i32.or (i32.eqz (local.get $a)) (i32.eqz (local.get $b)))
+    (then (return (i32.and (i32.eqz (local.get $a)) (i32.eqz (local.get $b))))))
+  (local.set $ac (i64.load (local.get $a)))                       ;; count sits at +0 in both layouts
+  (local.set $bc (i64.load (local.get $b)))
+  (if (i64.ne (local.get $ac) (local.get $bc))
+    (then (return (i32.const 0))))                                ;; different lengths, different arrays
+  ;; The starting cursor: a hash begins at its list head, an indexed array at 0.
+  (local.set $ai (select (i64.load (i32.add (local.get $a) (i32.const 24))) (i64.const 0) (local.get $ak)))
+  (local.set $bi (select (i64.load (i32.add (local.get $b) (i32.const 24))) (i64.const 0) (local.get $bk)))
+  (block $done (loop $step
+    ;; End of the walk. The counts already agree, so one ending ends both.
+    (br_if $done (select
+      (i64.eq (local.get $ai) (i64.const -1))
+      (i64.ge_u (local.get $ai) (local.get $ac))
+      (local.get $ak)))
+    ;; Read this position's key and value from each side.
+    (if (local.get $ak)
+      (then
+        (local.set $ae (i32.add (i32.add (local.get $a) (i32.const 40))
+                                (i32.wrap_i64 (i64.mul (local.get $ai) (i64.const 72)))))
+        (local.set $akl (i64.load (i32.add (local.get $ae) (i32.const 8))))
+        (local.set $akh (i64.load (i32.add (local.get $ae) (i32.const 16))))
+        (local.set $atag (i64.load (i32.add (local.get $ae) (i32.const 40))))
+        (local.set $alo (i64.load (i32.add (local.get $ae) (i32.const 24))))
+        (local.set $ahi (i64.load (i32.add (local.get $ae) (i32.const 32)))))
+      (else
+        (local.set $akl (local.get $ai))
+        (local.set $akh (i64.const -1))                           ;; -1 marks an integer key
+        (call $__rt_strict_packed_parts (local.get $a) (local.get $ai))
+        (local.set $ahi) (local.set $alo) (local.set $atag)))
+    (if (local.get $bk)
+      (then
+        (local.set $be (i32.add (i32.add (local.get $b) (i32.const 40))
+                                (i32.wrap_i64 (i64.mul (local.get $bi) (i64.const 72)))))
+        (local.set $bkl (i64.load (i32.add (local.get $be) (i32.const 8))))
+        (local.set $bkh (i64.load (i32.add (local.get $be) (i32.const 16))))
+        (local.set $btag (i64.load (i32.add (local.get $be) (i32.const 40))))
+        (local.set $blo (i64.load (i32.add (local.get $be) (i32.const 24))))
+        (local.set $bhi (i64.load (i32.add (local.get $be) (i32.const 32)))))
+      (else
+        (local.set $bkl (local.get $bi))
+        (local.set $bkh (i64.const -1))
+        (call $__rt_strict_packed_parts (local.get $b) (local.get $bi))
+        (local.set $bhi) (local.set $blo) (local.set $btag)))
+    ;; An integer key (hi = -1) is never identical to a string key.
+    (if (i32.ne (i64.eq (local.get $akh) (i64.const -1)) (i64.eq (local.get $bkh) (i64.const -1)))
+      (then (return (i32.const 0))))
+    (if (i64.eq (local.get $akh) (i64.const -1))
+      (then
+        (if (i64.ne (local.get $akl) (local.get $bkl))
+          (then (return (i32.const 0)))))
+      (else
+        (if (i32.eqz (call $__rt_strict_str_eq
+              (i32.wrap_i64 (local.get $akl)) (local.get $akh)
+              (i32.wrap_i64 (local.get $bkl)) (local.get $bkh)))
+          (then (return (i32.const 0))))))
+    (if (i32.eqz (call $__rt_strict_parts
+          (local.get $atag) (local.get $alo) (local.get $ahi)
+          (local.get $btag) (local.get $blo) (local.get $bhi)))
+      (then (return (i32.const 0))))
+    ;; Advance both cursors.
+    (local.set $ai (select
+      (i64.load (i32.add (local.get $ae) (i32.const 56)))
+      (i64.add (local.get $ai) (i64.const 1))
+      (local.get $ak)))
+    (local.set $bi (select
+      (i64.load (i32.add (local.get $be) (i32.const 56)))
+      (i64.add (local.get $bi) (i64.const 1))
+      (local.get $bk)))
+    (br $step)))
+  (i32.const 1))
+"#;
+
+/// `__rt_strict_parts`: PHP's `===` between two already-unboxed `(tag, lo, hi)` triples.
+///
+/// The type-directed half of strict identity, shared by the cell-to-cell entry point and by the
+/// element comparison inside a container walk — which is why it takes triples rather than cells:
+/// a hash entry stores its value that way, so boxing one just to compare it would allocate for
+/// nothing.
+///
+/// The tags an ARRAY can carry are two (4 indexed, 5 hash) for one PHP type, so they are folded
+/// before the mismatch test; everything else identifies its type exactly. Floats compare as
+/// floats (`NAN === NAN` is false, `0.0 === -0.0` is true), objects by pointer identity, and null
+/// on its tag alone.
+const RT_STRICT_PARTS: &str = r#"(func $__rt_strict_parts (param $atag i64) (param $alo i64) (param $ahi i64) (param $btag i64) (param $blo i64) (param $bhi i64) (result i32)
+  (local $acont i32) (local $bcont i32)
+  (local.set $acont (i32.or (i64.eq (local.get $atag) (i64.const 4)) (i64.eq (local.get $atag) (i64.const 5))))
+  (local.set $bcont (i32.or (i64.eq (local.get $btag) (i64.const 4)) (i64.eq (local.get $btag) (i64.const 5))))
+  (if (i32.and (local.get $acont) (local.get $bcont))             ;; both arrays: deep and ordered
+    (then (return (call $__rt_strict_container_eq
+      (i32.wrap_i64 (local.get $alo)) (i64.eq (local.get $atag) (i64.const 5))
+      (i32.wrap_i64 (local.get $blo)) (i64.eq (local.get $btag) (i64.const 5))))))
+  (if (i32.or (local.get $acont) (local.get $bcont))
+    (then (return (i32.const 0))))                                ;; an array is never anything else
+  (if (i64.ne (local.get $atag) (local.get $btag))
+    (then (return (i32.const 0))))                                ;; a different type is never identical
+  (if (i64.eq (local.get $atag) (i64.const 8))
+    (then (return (i32.const 1))))                                ;; PHP has exactly one null
+  (if (i64.eq (local.get $atag) (i64.const 1))                    ;; string: compare the bytes
+    (then (return (call $__rt_strict_str_eq
+      (i32.wrap_i64 (local.get $alo)) (local.get $ahi)
+      (i32.wrap_i64 (local.get $blo)) (local.get $bhi)))))
+  (if (i64.eq (local.get $atag) (i64.const 2))                    ;; float: compare as a float
+    (then (return (f64.eq (f64.reinterpret_i64 (local.get $alo))
+                          (f64.reinterpret_i64 (local.get $blo))))))
+  (i64.eq (local.get $alo) (local.get $blo)))                     ;; int, bool, object identity
+"#;
+
+/// `__rt_strict_mixed_mixed`: PHP's `===` between two runtime-tagged cells.
+///
+/// Both sides are unboxed and handed to the shared type-directed comparison. This pair used to be
+/// refused outright because either cell could hold an array, whose identity is PHP's deep
+/// element-wise comparison; that comparison now exists, so the pair is answered rather than
+/// turned away. Measured: the NATIVE backend answers `false` for two structurally equal arrays
+/// here, comparing them by heap pointer.
+const RT_STRICT_MIXED_MIXED: &str = r#"(func $__rt_strict_mixed_mixed (param $a i32) (param $b i32) (result i32)
+  (local $atag i64) (local $alo i64) (local $ahi i64)
+  (local $btag i64) (local $blo i64) (local $bhi i64)
+  (call $__rt_strict_unbox (local.get $a))
+  (local.set $ahi) (local.set $alo) (local.set $atag)
+  (call $__rt_strict_unbox (local.get $b))
+  (local.set $bhi) (local.set $blo) (local.set $btag)
+  (call $__rt_strict_parts
+    (local.get $atag) (local.get $alo) (local.get $ahi)
+    (local.get $btag) (local.get $blo) (local.get $bhi)))
+"#;
+
 pub(super) fn emit_strict_runtime(module: &mut WatModule) {
     module.add_raw_func(RT_STRICT_STR_EQ);
     module.add_raw_func(RT_STR_PAIR_TO_MIXED_ARGS);
     module.add_raw_func(RT_STRICT_MIXED_SCALAR);
+    module.add_raw_func(RT_STRICT_UNBOX);
+    module.add_raw_func(RT_STRICT_PACKED_PARTS);
+    module.add_raw_func(RT_STRICT_CONTAINER_EQ);
+    module.add_raw_func(RT_STRICT_PARTS);
+    module.add_raw_func(RT_STRICT_MIXED_MIXED);
 }
 
 #[cfg(test)]
@@ -576,14 +787,15 @@ mod tests {
         }
     }
 
-    /// Verifies a pair of Mixed cells is refused while a Mixed/concrete pair is admitted.
+    /// Verifies a pair of Mixed cells is admitted now that deep array identity exists.
     ///
-    /// Two cells could both hold arrays, whose PHP identity is a deep element-wise comparison
-    /// this does not implement. One cell against a concrete value never can, because the
-    /// concrete side is never an array — a tag mismatch settles it.
+    /// Two cells could both hold arrays, whose PHP identity is a deep, ORDER-sensitive
+    /// element-wise comparison — which is why the pair used to be refused. That walk exists, so
+    /// the pair is answered. What stays refused is a cell against an inline `?int` PAIR: that
+    /// side's tag is dynamic too, and the mixed/concrete path assumes exactly one side is.
     #[test]
-    fn two_mixed_cells_are_refused_but_a_concrete_side_is_not() {
-        assert!(!strict_pair_is_supported(
+    fn two_mixed_cells_are_admitted_and_a_tagged_pair_is_not() {
+        assert!(strict_pair_is_supported(
             StrictValueKind::MixedCell,
             StrictValueKind::MixedCell
         ));
@@ -597,6 +809,37 @@ mod tests {
         ] {
             assert!(strict_pair_is_supported(StrictValueKind::MixedCell, concrete));
             assert!(strict_pair_is_supported(concrete, StrictValueKind::MixedCell));
+        }
+        assert!(!strict_pair_is_supported(
+            StrictValueKind::MixedCell,
+            StrictValueKind::Tagged
+        ));
+        assert!(!strict_pair_is_supported(
+            StrictValueKind::Tagged,
+            StrictValueKind::MixedCell
+        ));
+    }
+
+    /// Verifies the deep array walk is ORDER-sensitive and allocates nothing.
+    ///
+    /// Measured on php-src 8.5.6: `["a" => 1, "b" => 2] === ["b" => 2, "a" => 1]` is FALSE, so
+    /// comparing key SETS would answer the wrong thing — the walk has to advance both cursors in
+    /// insertion order and compare pairwise. And a comparison that boxed each element to compare
+    /// it would allocate on a read-only operation, so the helpers read `(tag, lo, hi)` in place.
+    #[test]
+    fn the_deep_array_walk_advances_both_cursors_and_never_boxes() {
+        assert!(
+            RT_STRICT_CONTAINER_EQ.contains("(i64.load (i32.add (local.get $ae) (i32.const 56)))")
+                && RT_STRICT_CONTAINER_EQ
+                    .contains("(i64.load (i32.add (local.get $be) (i32.const 56)))"),
+            "both sides must advance through their own insertion-order list"
+        );
+        for boxing in ["__rt_mixed_from_value", "__rt_heap_alloc", "__rt_incref"] {
+            assert!(
+                !RT_STRICT_CONTAINER_EQ.contains(boxing)
+                    && !RT_STRICT_PACKED_PARTS.contains(boxing),
+                "a read-only comparison must not call {boxing}"
+            );
         }
     }
 
