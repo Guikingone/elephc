@@ -4099,18 +4099,37 @@ fn indexed_array_result_shape_issue(
             call.result_php_type.codegen_repr(),
             PhpType::Array(element) if matches!(*element, PhpType::Int | PhpType::Str)
         );
-    if !indexed_int_array(value) && !hash_projection {
+    // An INDEXED operand of ANY element type is admitted, which the `array<int>`-only gate used
+    // to turn away. Neither helper reads an element: `__rt_array_index_keys` builds `[0..n-1]`
+    // from the LENGTH alone, and `__rt_array_clone_shallow` copies the payload bytes and then
+    // increfs every refcounted child — value_type 7, the Mixed cell, included. The gate was
+    // therefore stricter than the code it guards, and `ArrayIterator::__construct` calls
+    // `array_keys($array)` on an `array<mixed>`, so it refused the whole SPL iterator family.
+    let indexed_source = value.ir_type == IrType::Heap(IrHeapKind::Array)
+        && matches!(value.php_type.codegen_repr(), PhpType::Array(_));
+    if !indexed_source && !hash_projection {
         return Some(format!(
-            "expected a statically typed array<int> or an associative array, got {:?}/{:?}",
+            "expected a statically typed indexed array or an associative array, got {:?}/{:?}",
             value.ir_type,
             value.php_type.codegen_repr()
         ));
     }
+    // What the result may be follows from WHICH projection this is. `array_keys` of a list
+    // answers its positions, so `array<int>` whatever the elements were; `array_values` of a
+    // list is the list itself, so the element type has to survive unchanged — claiming anything
+    // else would hand the caller a contract the clone does not produce.
+    let source_element = match value.php_type.codegen_repr() {
+        PhpType::Array(element) => Some(*element),
+        _ => None,
+    };
     let result_element_ok = matches!(
         call.result_php_type.codegen_repr(),
         PhpType::Array(element)
             if matches!(*element, PhpType::Int | PhpType::Never)
                 || (hash_projection && matches!(*element, PhpType::Str))
+                || (indexed_source
+                    && target == RuntimeFnId::ArrayValues
+                    && source_element.as_ref() == Some(&*element))
     );
     if call.result.is_none()
         || call.result_type != IrType::Heap(IrHeapKind::Array)
@@ -7728,8 +7747,8 @@ mod tests {
             "a hash needs a real scan, not an answer from the representation"
         );
 
-        // The array family reads raw i64 slots, so it accepts `array<int>` and the empty
-        // `array<never>`, and nothing else.
+        // All three answer an `array<int>` built from an `array<int>`; the empty `array<never>`
+        // rides along on the same contract.
         for target in [
             RuntimeFnId::ArrayKeys,
             RuntimeFnId::ArrayValues,
@@ -7743,17 +7762,66 @@ mod tests {
                 PhpType::Array(Box::new(PhpType::Int)),
             );
             assert_eq!(verdict(&ok, target), None, "{target:?} over array<int>");
+        }
 
-            let stringly = call_with(
-                target,
+        // `array_reverse` walks raw i64 slots at the integer stride, so a wider element is a
+        // misread rather than a projection.
+        let reversed_strings = call_with(
+            RuntimeFnId::ArrayReverse,
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+            IrType::Heap(IrHeapKind::Array),
+            PhpType::Array(Box::new(PhpType::Str)),
+        );
+        assert!(
+            verdict(&reversed_strings, RuntimeFnId::ArrayReverse).is_some(),
+            "array_reverse must not read string slots at the integer stride"
+        );
+
+        // `array_values` is the OPPOSITE case, and grouping it with the walk above was stricter
+        // than the code it guards: it is `__rt_array_clone_shallow`, which reads the array's own
+        // `elem_size` from the header and re-persists or increfs each child by its value_type.
+        // So any element type survives — verified against php-src for strings and for the
+        // `array<mixed>` that `ArrayIterator::__construct` hands it.
+        for element in [PhpType::Str, PhpType::Mixed, PhpType::Float] {
+            let widened = call_with(
+                RuntimeFnId::ArrayValues,
                 IrType::Heap(IrHeapKind::Array),
-                PhpType::Array(Box::new(PhpType::Str)),
+                PhpType::Array(Box::new(element.clone())),
                 IrType::Heap(IrHeapKind::Array),
-                PhpType::Array(Box::new(PhpType::Str)),
+                PhpType::Array(Box::new(element.clone())),
+            );
+            assert_eq!(
+                verdict(&widened, RuntimeFnId::ArrayValues),
+                None,
+                "array_values must preserve an array<{element:?}>"
+            );
+            // Its keys are POSITIONS whatever the elements were, so the same source with an
+            // `array<int>` result is the projection `array_keys` answers...
+            let keys = call_with(
+                RuntimeFnId::ArrayKeys,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(element.clone())),
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(PhpType::Int)),
+            );
+            assert_eq!(
+                verdict(&keys, RuntimeFnId::ArrayKeys),
+                None,
+                "array_keys over an array<{element:?}> answers its positions"
+            );
+            // ...and claiming the ELEMENT type for those keys is not.
+            let mistyped = call_with(
+                RuntimeFnId::ArrayKeys,
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(element.clone())),
+                IrType::Heap(IrHeapKind::Array),
+                PhpType::Array(Box::new(element.clone())),
             );
             assert!(
-                verdict(&stringly, target).is_some(),
-                "{target:?} must not read string slots at the integer stride"
+                element == PhpType::Int
+                    || verdict(&mistyped, RuntimeFnId::ArrayKeys).is_some(),
+                "array_keys never answers an array<{element:?}>"
             );
         }
 

@@ -571,6 +571,16 @@ expression `I64 php=null` rather than boxing it, and the arm has to supply the
 null the callee never pushed — which the direct and interface paths already did.
 The module failed WebAssembly validation outright rather than miscompiling.
 
+**`array_keys` and `array_values` over an indexed array of ANY element type** are
+admitted. The gate demanded `array<int>`, which was stricter than the code it guards:
+`__rt_array_index_keys` builds `[0..n-1]` from the LENGTH alone and never reads an
+element, and `__rt_array_clone_shallow` reads the array's own `elem_size` from the
+header and then re-persists or increfs each child by its value_type — Mixed cells
+included. What the result may be follows from which projection it is: `array_keys`
+answers `array<int>` whatever the elements were, while `array_values` has to preserve
+the element type unchanged. `ArrayIterator::__construct` calls `array_keys` on an
+`array<mixed>`, so the old gate refused the whole SPL iterator family.
+
 **`foreach` over a BOXED value** is lowered. The iterator picked indexed-versus-hash
 at compile time from the source's EIR type, so a `mixed` source — which names no
 storage until the cell is read — was refused outright. The cursor seed, the advance,
