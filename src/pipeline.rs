@@ -358,6 +358,7 @@ pub(crate) fn compile(config: CliConfig) {
     let ast = parse_str_prelude::inject_if_used(ast);
     let ast = crate::explode_limit_prelude::inject_if_used(ast);
     let ast = crate::string_compat_prelude::inject_if_used(ast);
+    let ast = crate::get_defined_constants_prelude::inject_if_used(ast);
     let ast = crate::mb_convert_encoding_prelude::inject_if_used(ast);
     timings.record_since("parse-ini-prelude", phase_started);
 

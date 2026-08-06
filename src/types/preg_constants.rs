@@ -23,6 +23,18 @@ pub(crate) const PREG_INT_CONSTANTS: &[(&str, i64)] = &[
     ("PREG_SPLIT_NO_EMPTY", 1),
     ("PREG_SPLIT_DELIM_CAPTURE", 2),
     ("PREG_SPLIT_OFFSET_CAPTURE", 4),
+    ("PREG_GREP_INVERT", 1),
+    // `preg_last_error()`'s result codes. They were absent entirely, so
+    // `symfony/string`'s `ByteString::replaceMatches()` — which scans
+    // `get_defined_constants(true)['pcre']` for the `*_ERROR` name matching
+    // `preg_last_error()` — could never name the failure.
+    ("PREG_NO_ERROR", 0),
+    ("PREG_INTERNAL_ERROR", 1),
+    ("PREG_BACKTRACK_LIMIT_ERROR", 2),
+    ("PREG_RECURSION_LIMIT_ERROR", 3),
+    ("PREG_BAD_UTF8_ERROR", 4),
+    ("PREG_BAD_UTF8_OFFSET_ERROR", 5),
+    ("PREG_JIT_STACKLIMIT_ERROR", 6),
     ("PCRE_VERSION_MAJOR", 10),
     ("PCRE_VERSION_MINOR", 42),
 ];

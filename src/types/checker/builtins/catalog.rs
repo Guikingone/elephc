@@ -279,8 +279,10 @@ pub(crate) fn is_prelude_overridable_builtin(canonical: &str) -> bool {
     // `function_exists('strncmp')` must still report a real PHP function — while their BODIES ship
     // as elephc-PHP preludes, because they had no EIR lowering at all and a call would otherwise
     // die with `unsupported EIR backend feature: builtin call <name>`.
-    matches!(canonical, "trigger_error" | "mb_convert_encoding")
-        || crate::string_compat_prelude::supplies(canonical)
+    matches!(
+        canonical,
+        "trigger_error" | "mb_convert_encoding" | "get_defined_constants"
+    ) || crate::string_compat_prelude::supplies(canonical)
 }
 
 /// Returns true only for PHP-visible builtin functions (non-internal builtins).

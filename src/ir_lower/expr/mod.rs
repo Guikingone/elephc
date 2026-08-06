@@ -3444,14 +3444,21 @@ fn lower_native_isset_offset_probe_from_value(
                     Some(expr.span),
                 )
             } else {
-                // String or mixed key on indexed storage: read through the
-                // mixed-key runtime path and check if the result is null.
+                // String or mixed key on indexed storage: read through the mixed-key runtime
+                // path and check if the result is null.
+                //
+                // The read MUST be the SILENT variant. `isset()` never emits PHP's
+                // undefined-key warning, but the warning-emitting `ArrayGetMixedKey` was used
+                // here, so `isset($a['nope'])` printed `Warning: Undefined array key "nope"`
+                // before answering (correctly) false — for any array whose element type had
+                // widened to `mixed`, which is what a variable-key write inside a `foreach`
+                // produces. The verdict was right; only the diagnostic leaked.
                 let read_value = ctx.emit_value(
-                    Op::ArrayGetMixedKey,
+                    Op::ArrayGetMixedKeySilent,
                     vec![array_value.value, index_value.value],
                     None,
                     PhpType::Mixed,
-                    Op::ArrayGetMixedKey.default_effects(),
+                    Op::ArrayGetMixedKeySilent.default_effects(),
                     Some(expr.span),
                 );
                 let is_null = ctx.emit_value(

@@ -642,14 +642,35 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
     let mode = inst.operands.get(2).copied();
-    let elem_ty = array_filter_source_element_type(ctx.value_php_type(array)?)?;
-    require_array_filter_result_type(&elem_ty, &inst.result_php_type.codegen_repr())?;
-    let runtime_label = if array_filter_uses_refcounted_runtime(&elem_ty) {
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    let boxed_dynamic_source = matches!(source_ty, PhpType::Mixed | PhpType::Union(_));
+    let dynamic_source = boxed_dynamic_source
+        || matches!(&source_ty, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed)
+        || matches!(source_ty, PhpType::AssocArray { .. });
+    let elem_ty = if dynamic_source {
+        require_mixed_array_filter_result_type(&inst.result_php_type.codegen_repr())?;
+        if boxed_dynamic_source {
+            emit_array_filter_mixed_source_guard(ctx, array)?;
+        }
+        PhpType::Mixed
+    } else {
+        let elem_ty = array_filter_source_element_type(source_ty)?;
+        require_array_filter_result_type(&elem_ty, &inst.result_php_type.codegen_repr())?;
+        elem_ty
+    };
+    let runtime_label = if dynamic_source {
+        if boxed_dynamic_source {
+            "__rt_array_filter_mixed"
+        } else {
+            "__rt_array_filter_mixed_raw"
+        }
+    } else if array_filter_uses_refcounted_runtime(&elem_ty) {
         "__rt_array_filter_refcounted"
     } else {
         "__rt_array_filter"
     };
-    let callback_arg_types = array_filter_callback_arg_types(ctx, mode, &elem_ty)?;
+    let callback_arg_types =
+        array_filter_callback_arg_types(ctx, mode, &elem_ty, dynamic_source)?;
     if let Some(visible_arg_types) = callback_arg_types.clone() {
         match ctx.value_php_type(callback)?.codegen_repr() {
             PhpType::Callable => {
@@ -739,6 +760,41 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
     store_if_result(ctx, inst)
+}
+
+/// Validates a boxed gradual `array_filter()` source before callback environments are reserved.
+fn emit_array_filter_mixed_source_guard(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let ok_label = ctx.next_label("array_filter_mixed_array");
+    let wrong_label = ctx.next_label("array_filter_mixed_wrong_type");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                            // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));
+            ctx.emitter.instruction("cmp x0, #5");                            // runtime tag 5 = associative array
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                            // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("je {}", ok_label));
+            ctx.emitter.instruction("cmp rax, 5");                            // runtime tag 5 = associative array
+            ctx.emitter.instruction(&format!("je {}", ok_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));
+        }
+    }
+    union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(ctx, &wrong_label, &|given| {
+        format!(
+            "array_filter(): Argument #1 ($array) must be of type array, {} given",
+            given
+        )
+    });
+    ctx.emitter.label(&ok_label);
+    Ok(())
 }
 
 /// Lowers `array_map()` through the callback runtime helper matching the callback result type.
@@ -1599,16 +1655,27 @@ fn lower_array_pop_dynamic(
     unshift::emit_mixed_array_mutate_wrong_tag_dispatch(ctx, &wrong_tag_label, "array_pop");
 
     ctx.emitter.label(&indexed_label);
-    emit_array_pop_dyn_kind(ctx, "__rt_indexed_pop", 4, &finish_label);
+    emit_array_pop_dyn_kind(
+        ctx,
+        "__rt_indexed_pop",
+        4,
+        &finish_label,
+        source_local.is_some(),
+    );
     ctx.emitter.label(&hash_label);
-    emit_array_pop_dyn_kind(ctx, "__rt_hash_pop", 5, &finish_label);
+    emit_array_pop_dyn_kind(
+        ctx,
+        "__rt_hash_pop",
+        5,
+        &finish_label,
+        source_local.is_some(),
+    );
 
     ctx.emitter.label(&finish_label);
     // Publish the bound Mixed cell (the reused borrowed cell for the in-place case, or the fresh
     // diverged cell for the shared-cell case) into the SSA value's home and the by-ref local slot.
-    // NOTE: the OLD Mixed cell is never released here — a Mixed / union parameter is a BORROW, so
-    // the CALLER owns the boxed argument cell and decrefs it after the call returns; releasing it
-    // here would double-free the caller's argument.
+    // A replaced raw local releases its own old-cell share inside the kind branch. Addressable
+    // by-ref cells remain borrowed and are never released here.
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 32);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
@@ -1640,6 +1707,7 @@ fn emit_array_pop_dyn_kind(
     container_helper: &str,
     rebox_tag: i64,
     finish_label: &str,
+    release_replaced_local_owner: bool,
 ) {
     let inplace_label = ctx.next_label("array_pop_dyn_inplace");
     match ctx.emitter.target.arch {
@@ -1661,6 +1729,10 @@ fn emit_array_pop_dyn_kind(
             abi::emit_store_to_sp(ctx.emitter, "x0", 32);                    // publish the fresh diverged cell
             abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);       // reload the container for the synthetic release
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");           // drop the synthetic owner; the fresh cell now owns the container
+            if release_replaced_local_owner {
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);  // raw local's old boxed-cell owner
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");      // release the share replaced by the fresh cell
+            }
             ctx.emitter.instruction(&format!("b {}", finish_label));
             // -- unshared cell: mutate the container and rebind the borrowed cell's payload in place --
             ctx.emitter.label(&inplace_label);
@@ -1694,6 +1766,10 @@ fn emit_array_pop_dyn_kind(
             abi::emit_store_to_sp(ctx.emitter, "rax", 32);                   // publish the fresh diverged cell
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);      // reload the container for the synthetic release
             abi::emit_call_label(ctx.emitter, "__rt_decref_any");           // drop the synthetic owner; the fresh cell now owns the container
+            if release_replaced_local_owner {
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16); // raw local's old boxed-cell owner
+                abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");      // release the share replaced by the fresh cell
+            }
             ctx.emitter.instruction(&format!("jmp {}", finish_label));
             // -- unshared cell: mutate the container and rebind the borrowed cell's payload in place --
             ctx.emitter.label(&inplace_label);
@@ -1758,14 +1834,27 @@ fn lower_array_shift_dynamic(
     unshift::emit_mixed_array_mutate_wrong_tag_dispatch(ctx, &wrong_tag_label, "array_shift");
 
     ctx.emitter.label(&indexed_label);
-    emit_array_pop_dyn_kind(ctx, "__rt_indexed_shift", 4, &finish_label);
+    emit_array_pop_dyn_kind(
+        ctx,
+        "__rt_indexed_shift",
+        4,
+        &finish_label,
+        source_local.is_some(),
+    );
     ctx.emitter.label(&hash_label);
-    emit_array_pop_dyn_kind(ctx, "__rt_hash_shift", 5, &finish_label);
+    emit_array_pop_dyn_kind(
+        ctx,
+        "__rt_hash_shift",
+        5,
+        &finish_label,
+        source_local.is_some(),
+    );
 
     ctx.emitter.label(&finish_label);
     // Publish the bound Mixed cell (reused borrowed cell in place, or fresh diverged cell) into
     // the SSA value's home and the by-ref local slot. The OLD Mixed cell is a BORROW — the caller
-    // owns and frees it — so it is never released here.
+    // owns and frees it — except for the raw local's own share, released when that local is
+    // replaced by a fresh diverged cell.
     abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 32);
     ctx.store_result_value(array)?;
     if let Some(slot) = source_local {
@@ -2490,11 +2579,11 @@ pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let needle_ty = ctx.value_php_type(needle)?;
-    let array_ty = ctx.value_php_type(array)?;
+    let array_ty = ctx.raw_value_php_type(array)?;
 
-    if inst.operands.len() == 3 {
+    let strict = if inst.operands.len() == 3 {
         let strict_val = expect_operand(inst, 2)?;
-        let strict = match static_const_bool(ctx, strict_val)? {
+        match static_const_bool(ctx, strict_val)? {
             Some(v) => v,
             None => {
                 return Err(CodegenIrError::unsupported(
@@ -2502,20 +2591,27 @@ pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instructi
                         .to_string(),
                 ))
             }
+        }
+    } else {
+        false
+    };
+    if strict {
+        let elem_ty: Option<PhpType> = match &array_ty {
+            PhpType::Array(inner) => Some(inner.as_ref().clone()),
+            PhpType::AssocArray { value, .. } => Some(value.as_ref().clone()),
+            _ => None,
         };
-        if strict {
-            let elem_ty: Option<PhpType> = match &array_ty {
-                PhpType::Array(inner) => Some(inner.as_ref().clone()),
-                PhpType::AssocArray { value, .. } => Some(value.as_ref().clone()),
-                _ => None,
-            };
-            if let Some(elem) = elem_ty {
-                if elem != needle_ty {
-                    box_array_search_miss(ctx);
-                    return store_if_result(ctx, inst);
-                }
+        if let Some(elem) = elem_ty {
+            if elem != needle_ty {
+                box_array_search_miss(ctx);
+                return store_if_result(ctx, inst);
             }
         }
+    }
+
+    if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        lower_array_search_dynamic_indexed(ctx, needle, array, &needle_ty, strict)?;
+        return store_if_result(ctx, inst);
     }
 
     if search::try_lower_assoc_array_search(ctx, needle, array, needle_ty.clone(), array_ty.clone())? {
@@ -2613,6 +2709,12 @@ fn lower_in_array_with_mode(
         }
         InArrayCase::MixedStringLoose => {
             lower_in_array_mixed_string(ctx, needle, array, "__rt_str_loose_eq")?
+        }
+        InArrayCase::MixedMixedExact => {
+            lower_in_array_mixed_mixed(ctx, needle, array, "__rt_mixed_strict_eq", false)?
+        }
+        InArrayCase::MixedMixedLoose => {
+            lower_in_array_mixed_mixed(ctx, needle, array, "__rt_php_compare", true)?
         }
         InArrayCase::StrArrayMixedNeedleStrict => {
             lower_in_array_string_mixed_needle(ctx, needle, array, "__rt_mixed_strict_eq", false)?
@@ -2733,8 +2835,19 @@ fn lower_indexed_array_sort(
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 1, 2)?;
     let array = expect_operand(inst, 0)?;
+    let array_ty = ctx.value_php_type(array)?;
+    if matches!(array_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return lower_indexed_array_sort_dynamic(
+            ctx,
+            inst,
+            array,
+            name,
+            int_helper,
+            str_helper,
+        );
+    }
     let elem_ty =
-        indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
+        indexed_sort_element_type(array_ty, name, str_helper.is_some())?;
     let source_local = source_load_local_slot(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     if let Some(slot) = source_local {
@@ -2760,6 +2873,128 @@ fn lower_indexed_array_sort(
         0x7fff_ffff_ffff_fffe,
     );
     store_if_result(ctx, inst)
+}
+
+/// Sorts an indexed array carried by a boxed gradual union and writes the fresh cell back by ref.
+fn lower_indexed_array_sort_dynamic(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    name: &str,
+    int_helper: &str,
+    str_helper: Option<&str>,
+) -> Result<()> {
+    let source_local = source_load_local_slot(ctx, array)?;
+    ctx.load_value_to_result(array)?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 48);                         // working array, old cell, and new cell spill slots
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);    // preserve the original boxed union cell
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let ok_l = ctx.next_label("sort_union_array");
+    let wrong_l = ctx.next_label("sort_union_wrong_tag");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", ok_l));
+            ctx.emitter.instruction(&format!("b {}", wrong_l));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("je {}", ok_l));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_l));
+        }
+    }
+    union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(ctx, &wrong_l, &|given| {
+        format!(
+            "{}(): Argument #1 ($array) must be of type array, {} given",
+            name, given
+        )
+    });
+    ctx.emitter.label(&ok_l);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("mov x0, x1"),                 // move the unboxed array pointer into the refcount ABI
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, rdi"),                // move the unboxed array pointer into the refcount ABI
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_incref");                          // force a COW split away from the old boxed cell
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the retained array to the SysV ensure-unique helper
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_ensure_unique");
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);     // save the independent working array
+    emit_dynamic_indexed_sort_call(ctx, int_helper, str_helper);                // select the helper from the runtime element stride
+
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            ctx.emitter.instruction("mov x2, xzr");                             // indexed-array Mixed payload uses only the low word
+            ctx.emitter.instruction("mov x0, #4");                              // runtime tag 4 = indexed array
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            ctx.emitter.instruction("xor rsi, rsi");                            // indexed-array Mixed payload uses only the low word
+            ctx.emitter.instruction("mov rax, 4");                              // runtime tag 4 = indexed array
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");                // retain the sorted array in a fresh boxed cell
+    abi::emit_store_to_sp(ctx.emitter, abi::int_result_reg(ctx.emitter), 32);    // save the replacement Mixed cell
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_array");                    // drop the synthetic working-array reference
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 16);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");                    // release the local's old boxed cell
+    abi::emit_load_temporary_stack_slot(ctx.emitter, abi::int_result_reg(ctx.emitter), 32);
+    ctx.store_result_value(array)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, array)?;
+    }
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        0x7fff_ffff_ffff_fffe,
+    );
+    store_if_result(ctx, inst)
+}
+
+/// Selects the indexed-array sort helper from the runtime element stride.
+fn emit_dynamic_indexed_sort_call(
+    ctx: &mut FunctionContext<'_>,
+    int_helper: &str,
+    str_helper: Option<&str>,
+) {
+    let Some(str_helper) = str_helper else {
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0),
+            Arch::X86_64 => abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0),
+        }
+        abi::emit_call_label(ctx.emitter, int_helper);
+        return;
+    };
+
+    let string_l = ctx.next_label("sort_union_string_slots");
+    let done_l = ctx.next_label("sort_union_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            ctx.emitter.instruction("ldr x9, [x0, #16]");                      // indexed-array header element stride
+            ctx.emitter.instruction("cmp x9, #16");                           // strings occupy pointer/length pairs
+            ctx.emitter.instruction(&format!("b.eq {}", string_l));
+            abi::emit_call_label(ctx.emitter, int_helper);
+            ctx.emitter.instruction(&format!("b {}", done_l));
+            ctx.emitter.label(&string_l);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            abi::emit_call_label(ctx.emitter, str_helper);
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            ctx.emitter.instruction("cmp QWORD PTR [rdi + 16], 16");           // strings occupy pointer/length pairs
+            ctx.emitter.instruction(&format!("je {}", string_l));
+            abi::emit_call_label(ctx.emitter, int_helper);
+            ctx.emitter.instruction(&format!("jmp {}", done_l));
+            ctx.emitter.label(&string_l);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_call_label(ctx.emitter, str_helper);
+        }
+    }
+    ctx.emitter.label(&done_l);
 }
 
 /// Calls the mutating shuffle helper for indexed arrays whose payload slots are pointer-sized.
@@ -3150,6 +3385,17 @@ fn require_array_filter_result_type(source_elem_ty: &PhpType, result_ty: &PhpTyp
     }
 }
 
+/// Verifies gradual `array_filter()` keeps its runtime-dispatched result boxed as `Mixed`.
+fn require_mixed_array_filter_result_type(result_ty: &PhpType) -> Result<()> {
+    if matches!(result_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return Ok(());
+    }
+    Err(CodegenIrError::unsupported(format!(
+        "array_filter gradual result PHP type {:?}",
+        result_ty
+    )))
+}
+
 /// Returns true when filtering should preserve/copy refcounted payload slots.
 fn array_filter_uses_refcounted_runtime(elem_ty: &PhpType) -> bool {
     elem_ty.is_refcounted() || matches!(elem_ty.codegen_repr(), PhpType::Str)
@@ -3174,10 +3420,16 @@ fn array_filter_callback_arg_types(
     ctx: &FunctionContext<'_>,
     mode: Option<ValueId>,
     elem_ty: &PhpType,
+    dynamic_keys: bool,
 ) -> Result<Option<Vec<PhpType>>> {
+    let key_ty = if dynamic_keys {
+        PhpType::Mixed
+    } else {
+        PhpType::Int
+    };
     match static_array_filter_mode(ctx, mode)? {
-        Some(1) => Ok(Some(vec![elem_ty.codegen_repr(), PhpType::Int])),
-        Some(2) => Ok(Some(vec![PhpType::Int])),
+        Some(1) => Ok(Some(vec![elem_ty.codegen_repr(), key_ty])),
+        Some(2) => Ok(Some(vec![key_ty])),
         Some(_) => Ok(Some(vec![elem_ty.codegen_repr()])),
         None => Ok(None),
     }
@@ -5682,12 +5934,12 @@ fn require_array_slice_element_layout(elem: &PhpType) -> Result<()> {
         PhpType::Int
             | PhpType::Bool
             | PhpType::Float
+            | PhpType::Str
+            | PhpType::Callable
             | PhpType::Void
             | PhpType::Mixed
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Object(_)
-    ) {
+    ) || elem.is_refcounted()
+    {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(
@@ -6168,7 +6420,11 @@ fn array_pad_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
 
 /// Returns the helper that matches the source element ownership representation.
 fn array_slice_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
-    if source_elem_ty.is_refcounted() {
+    if matches!(source_elem_ty.codegen_repr(), PhpType::Str) {
+        "__rt_array_slice_str"
+    } else if matches!(source_elem_ty.codegen_repr(), PhpType::Callable)
+        || source_elem_ty.is_refcounted()
+    {
         "__rt_array_slice_refcounted"
     } else {
         "__rt_array_slice"
@@ -6515,6 +6771,93 @@ fn lower_array_search_string(
     }
 }
 
+/// Searches a boxed gradual indexed array after validating its runtime tag and slot layout.
+fn lower_array_search_dynamic_indexed(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    needle_ty: &PhpType,
+    strict: bool,
+) -> Result<()> {
+    if needle_ty.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_search gradual indexed array with needle PHP type {:?}",
+            needle_ty.codegen_repr()
+        )));
+    }
+
+    ctx.load_value_to_result(array)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let array_l = ctx.next_label("array_search_union_array");
+    let wrong_l = ctx.next_label("array_search_union_wrong_tag");
+    let string_l = ctx.next_label("array_search_union_string_slots");
+    let done_l = ctx.next_label("array_search_union_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", array_l));
+            ctx.emitter.instruction(&format!("b {}", wrong_l));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                             // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("je {}", array_l));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_l));
+        }
+    }
+    union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(ctx, &wrong_l, &|given| {
+        format!(
+            "array_search(): Argument #2 ($haystack) must be of type array, {} given",
+            given
+        )
+    });
+    ctx.emitter.label(&array_l);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);                         // preserve the unboxed array across needle conversion and comparisons
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_store_to_sp(ctx.emitter, "x1", 0);
+            ctx.emitter.instruction("ldr x9, [x1, #16]");                     // indexed-array element stride
+            ctx.emitter.instruction("cmp x9, #16");                           // string slots carry pointer and length
+            ctx.emitter.instruction(&format!("b.eq {}", string_l));
+            if strict {
+                box_array_search_miss(ctx);
+            } else {
+                ctx.load_string_value_to_regs(needle, "x1", "x2")?;
+                abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+                ctx.emitter.instruction("mov x1, x0");                         // converted loose-comparison needle
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+                abi::emit_call_label(ctx.emitter, "__rt_array_search");
+                box_array_search_result(ctx);
+            }
+            ctx.emitter.instruction(&format!("b {}", done_l));
+            ctx.emitter.label(&string_l);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x10", 0);
+            emit_array_search_string_pointer_aarch64(ctx, needle)?;
+        }
+        Arch::X86_64 => {
+            abi::emit_store_to_sp(ctx.emitter, "rdi", 0);
+            ctx.emitter.instruction("cmp QWORD PTR [rdi + 16], 16");           // string slots carry pointer and length
+            ctx.emitter.instruction(&format!("je {}", string_l));
+            if strict {
+                box_array_search_miss(ctx);
+            } else {
+                ctx.load_string_value_to_regs(needle, "rax", "rdx")?;
+                abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+                ctx.emitter.instruction("mov rsi, rax");                       // converted loose-comparison needle
+                abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+                abi::emit_call_label(ctx.emitter, "__rt_array_search");
+                box_array_search_result(ctx);
+            }
+            ctx.emitter.instruction(&format!("jmp {}", done_l));
+            ctx.emitter.label(&string_l);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "r10", 0);
+            emit_array_search_string_pointer_x86_64(ctx, needle)?;
+        }
+    }
+    ctx.emitter.label(&done_l);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
 /// Lowers `array_search(string_needle, int_array)` with PHP loose comparison.
 ///
 /// Converts the string needle to an integer via `__rt_str_to_int` then delegates to the
@@ -6552,12 +6895,20 @@ fn lower_array_search_string_aarch64(
     needle: ValueId,
     array: ValueId,
 ) -> Result<()> {
+    ctx.load_value_to_reg(array, "x10")?;
+    emit_array_search_string_pointer_aarch64(ctx, needle)
+}
+
+/// Emits the AArch64 string-array search loop for an array pointer already loaded in `x10`.
+fn emit_array_search_string_pointer_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+) -> Result<()> {
     let loop_label = ctx.next_label("array_search_str_loop");
     let found_label = ctx.next_label("array_search_str_found");
     let miss_label = ctx.next_label("array_search_str_miss");
     let done_label = ctx.next_label("array_search_str_done");
 
-    ctx.load_value_to_reg(array, "x10")?;
     ctx.emitter.instruction("ldr x9, [x10]");                                   // load indexed string-array length before scanning payload slots
     ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string-array payload slot
     ctx.emitter.instruction("mov x12, #0");                                     // start the string search at index zero
@@ -6596,12 +6947,20 @@ fn lower_array_search_string_x86_64(
     needle: ValueId,
     array: ValueId,
 ) -> Result<()> {
+    ctx.load_value_to_reg(array, "r10")?;
+    emit_array_search_string_pointer_x86_64(ctx, needle)
+}
+
+/// Emits the x86_64 string-array search loop for an array pointer already loaded in `r10`.
+fn emit_array_search_string_pointer_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+) -> Result<()> {
     let loop_label = ctx.next_label("array_search_str_loop");
     let found_label = ctx.next_label("array_search_str_found");
     let miss_label = ctx.next_label("array_search_str_miss");
     let done_label = ctx.next_label("array_search_str_done");
 
-    ctx.load_value_to_reg(array, "r10")?;
     ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load indexed string-array length before scanning payload slots
     ctx.emitter.instruction("lea r12, [r10 + 24]");                             // point at the first indexed string-array payload slot
     ctx.emitter.instruction("xor r13d, r13d");                                  // start the string search at index zero
@@ -6708,6 +7067,8 @@ enum InArrayCase {
     MixedIntLoose,
     MixedStringExact,
     MixedStringLoose,
+    MixedMixedExact,
+    MixedMixedLoose,
     StrArrayMixedNeedleStrict,
     StrArrayMixedNeedleLoose,
 }
@@ -6737,6 +7098,14 @@ fn supported_in_array_case(
             PhpType::Mixed if needle_ty == PhpType::Int => match mode {
                 InArrayMode::Loose => Ok(InArrayCase::MixedIntLoose),
                 InArrayMode::Strict => Ok(InArrayCase::MixedIntExact),
+            },
+            // A boxed Mixed needle against boxed Mixed cells: compare cell against cell with the
+            // SAME helpers elephc's own `===`/`==` operators use on two Mixed values, so
+            // `in_array($n, $a)` agrees with `$n == $e` by construction rather than by a second
+            // approximation of PHP's comparison rules.
+            PhpType::Mixed if needle_ty == PhpType::Mixed => match mode {
+                InArrayMode::Loose => Ok(InArrayCase::MixedMixedLoose),
+                InArrayMode::Strict => Ok(InArrayCase::MixedMixedExact),
             },
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "in_array needle PHP type {:?} for indexed-array element PHP type {:?}",
@@ -7620,6 +7989,140 @@ fn lower_in_array_string_mixed_needle(
             lower_in_array_string_mixed_needle_x86_64(ctx, needle, array, eq_helper, match_on_zero)
         }
     }
+}
+
+/// Emits the boxed-Mixed-array membership loop for a boxed Mixed needle.
+///
+/// `eq_helper` takes two boxed Mixed cells in the first two argument registers and returns in the
+/// integer result register: `__rt_mixed_strict_eq` yields a boolean (match on non-zero), and
+/// `__rt_php_compare` yields the `-1`/`0`/`+1` sign (match on zero) — the same two helpers
+/// `lower_inst::comparisons` uses for `===` and `==` on two Mixed operands, so membership agrees
+/// with the operators by construction. `match_on_zero` selects which convention applies.
+///
+/// Unlike the concrete-string-array variant below, the elements are ALREADY boxed cells, so no
+/// per-element boxing (and therefore no matching decref) is needed.
+fn lower_in_array_mixed_mixed(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_in_array_mixed_mixed_aarch64(ctx, needle, array, eq_helper, match_on_zero),
+        Arch::X86_64 => lower_in_array_mixed_mixed_x86_64(ctx, needle, array, eq_helper, match_on_zero),
+    }
+}
+
+/// Emits the AArch64 boxed-Mixed-array membership loop for a boxed Mixed needle.
+///
+/// State (index, length, payload base, needle cell) lives in a 32-byte SP-relative frame so it
+/// survives the comparison call.
+fn lower_in_array_mixed_mixed_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_mm_loop");
+    let found_label = ctx.next_label("in_array_mm_found");
+    let end_label = ctx.next_label("in_array_mm_end");
+    let done_label = ctx.next_label("in_array_mm_done");
+
+    ctx.load_value_to_reg(array, "x10")?;
+    ctx.emitter.instruction("ldr x11, [x10]");                                  // load the array<Mixed> length before scanning boxed cell slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first boxed Mixed cell slot
+    ctx.load_value_to_reg(needle, "x0")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, "x0", 24); // stash the boxed Mixed needle cell pointer in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "x11", 8); // stash the array length in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "x10", 16); // stash the cell base pointer in the state frame
+    ctx.emitter.instruction("mov x12, #0");                                     // start the membership scan at index zero
+    abi::emit_store_to_sp(ctx.emitter, "x12", 0);
+    ctx.emitter.label(&loop_label);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x12", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x13", 8);
+    ctx.emitter.instruction("cmp x12, x13");                                    // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false once every cell is scanned
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x13", 16);
+    ctx.emitter.instruction("ldr x1, [x13, x12, lsl #3]");                      // load the current boxed Mixed cell as the second comparison argument
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 24); // reload the needle cell as the first comparison argument
+    abi::emit_call_label(ctx.emitter, eq_helper);
+    if match_on_zero {
+        ctx.emitter.instruction(&format!("cbz x0, {}", found_label));           // a zero PHP compare sign is a loose match
+    } else {
+        ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));          // a non-zero strict-eq result is a match
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x12", 0);
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next boxed Mixed cell
+    abi::emit_store_to_sp(ctx.emitter, "x12", 0);
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning the remaining cells
+    ctx.emitter.label(&found_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("b {}", done_label));
+    ctx.emitter.label(&end_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no cell matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the x86_64 boxed-Mixed-array membership loop for a boxed Mixed needle.
+///
+/// State (index, length, payload base, needle cell) lives in a 32-byte SP-relative frame so it
+/// survives the comparison call.
+fn lower_in_array_mixed_mixed_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_mm_loop");
+    let found_label = ctx.next_label("in_array_mm_found");
+    let end_label = ctx.next_label("in_array_mm_end");
+    let done_label = ctx.next_label("in_array_mm_done");
+
+    ctx.load_value_to_reg(array, "r10")?;
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the array<Mixed> length before scanning boxed cell slots
+    ctx.emitter.instruction("lea r10, [r10 + 24]");                             // point at the first boxed Mixed cell slot
+    ctx.load_value_to_reg(needle, "rax")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, "rax", 24); // stash the boxed Mixed needle cell pointer in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "r11", 8); // stash the array length in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "r10", 16); // stash the cell base pointer in the state frame
+    ctx.emitter.instruction("xor ecx, ecx");                                    // start the membership scan at index zero
+    abi::emit_store_to_sp(ctx.emitter, "rcx", 0);
+    ctx.emitter.label(&loop_label);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 8);
+    ctx.emitter.instruction("cmp rax, rcx");                                    // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false once every cell is scanned
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 16);
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rcx + rax*8]");                // load the current boxed Mixed cell as the second comparison argument
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 24); // reload the needle cell as the first comparison argument
+    abi::emit_call_label(ctx.emitter, eq_helper);
+    ctx.emitter.instruction("test rax, rax");                                   // inspect the comparison outcome for this cell
+    if match_on_zero {
+        ctx.emitter.instruction(&format!("je {}", found_label));                // a zero PHP compare sign is a loose match
+    } else {
+        ctx.emitter.instruction(&format!("jne {}", found_label));               // a non-zero strict-eq result is a match
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+    ctx.emitter.instruction("add rax, 1");                                      // advance to the next boxed Mixed cell
+    abi::emit_store_to_sp(ctx.emitter, "rax", 0);
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning the remaining cells
+    ctx.emitter.label(&found_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("jmp {}", done_label));
+    ctx.emitter.label(&end_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no cell matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
 }
 
 /// Emits the AArch64 concrete-string-array membership loop for a boxed Mixed needle.

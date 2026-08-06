@@ -548,3 +548,151 @@ echo t();
     );
     assert_eq!(out, "setunsetDEF");
 }
+
+/// `in_array()` with a boxed Mixed needle against a boxed Mixed array had no lowering at all
+/// ("unsupported EIR backend feature: in_array needle PHP type Mixed for indexed-array element PHP
+/// type Mixed"). Both modes now compare cell against cell with the same helpers elephc's own
+/// `==`/`===` operators use, so membership agrees with the operators by construction.
+/// Expectations pinned against `php -n`.
+#[test]
+fn test_in_array_mixed_needle_in_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(mixed $v): mixed { return $v; }
+function bag(): array {
+    $o = [];
+    foreach ([0 => 'abc', 1 => 7, 2 => null] as $k => $v) {
+        $o[$k] = $v;
+    }
+    return $o;
+}
+$a = bag();
+var_dump(in_array(pick('abc'), $a));
+var_dump(in_array(pick(7), $a));
+var_dump(in_array(pick('zzz'), $a));
+var_dump(in_array(pick(null), $a));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(true)\nbool(false)\nbool(true)\n");
+}
+
+/// Strict mode must not accept a loose match: `'7'` is `== 7` but never `=== 7`.
+#[test]
+fn test_in_array_strict_mixed_needle_rejects_loose_matches() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(mixed $v): mixed { return $v; }
+function bag(): array {
+    $o = [];
+    foreach ([0 => 7] as $k => $v) {
+        $o[$k] = $v;
+    }
+    return $o;
+}
+$a = bag();
+var_dump(in_array(pick('7'), $a));
+var_dump(in_array(pick('7'), $a, true));
+var_dump(in_array(pick(7), $a, true));
+"#,
+    );
+    assert_eq!(out, "bool(true)\nbool(false)\nbool(true)\n");
+}
+
+/// `isset()` must never emit PHP's undefined-key warning, whatever the array's element type.
+///
+/// A variable-key write inside a `foreach` widens the array's element type to `mixed`, and the
+/// `isset` probe for that shape read through the WARNING-emitting mixed-key path before testing
+/// the result for null. The verdict was right; the diagnostic leaked.
+#[test]
+fn test_isset_on_a_widened_array_emits_no_undefined_key_warning() {
+    let out = compile_and_run(
+        r#"<?php
+$b = [];
+foreach (['p' => 10] as $k => $v) {
+    $b[$k] = $v;
+}
+echo isset($b['nope']) ? 'set' : 'unset', "|";
+echo isset($b['p']) ? 'set' : 'unset', "|";
+echo $b['p'];
+"#,
+    );
+    assert_eq!(out, "unset|set|10");
+}
+
+/// The same probe across a function return, which is how the shape reaches most call sites.
+#[test]
+fn test_isset_on_a_returned_widened_array_emits_no_warning() {
+    let out = compile_and_run(
+        r#"<?php
+function build(): array {
+    $o = [];
+    foreach (['p' => 10, 'q' => 20] as $k => $v) {
+        $o[$k] = $v;
+    }
+    return $o;
+}
+$c = build();
+echo isset($c['nope']) ? 'set' : 'unset', "|", $c['q'];
+"#,
+    );
+    assert_eq!(out, "unset|20");
+}
+
+/// `get_defined_constants(true)` returns the constants grouped by extension category.
+///
+/// It had no EIR lowering ("unsupported EIR backend feature"), which blocked `symfony/string`'s
+/// `ByteString::replaceMatches()` and `framework-bundle`'s signal configuration. The prelude's body
+/// is GENERATED from the compiler's own `preg`/`pcntl` constant tables and emits `'NAME' => NAME`,
+/// so the reported values are whatever the program actually sees — including the pcntl signals
+/// whose numbers differ per target.
+#[test]
+fn test_get_defined_constants_categorized_reports_pcre_and_pcntl() {
+    let out = compile_and_run(
+        r#"<?php
+$all = get_defined_constants(true);
+echo isset($all['pcre']) ? 'pcre' : 'no-pcre', "|";
+echo $all['pcre']['PREG_SPLIT_NO_EMPTY'], "|";
+echo $all['pcre']['PREG_BACKTRACK_LIMIT_ERROR'], "|";
+echo $all['pcntl']['SIGTERM'], "|";
+echo $all['sockets'] ?? 'absent';
+"#,
+    );
+    assert_eq!(out, "pcre|1|2|15|absent");
+}
+
+/// `symfony/string` scans the `pcre` category for the `*_ERROR` name whose value matches
+/// `preg_last_error()`. Those `PREG_*_ERROR` constants were missing from elephc entirely, so the
+/// scan could never name a failure.
+#[test]
+fn test_get_defined_constants_exposes_the_preg_error_names() {
+    let out = compile_and_run(
+        r#"<?php
+$found = [];
+foreach (get_defined_constants(true)['pcre'] as $name => $value) {
+    if (str_ends_with($name, '_ERROR')) {
+        $found[] = $name . '=' . $value;
+    }
+}
+echo implode(",", $found);
+"#,
+    );
+    assert_eq!(
+        out,
+        "PREG_NO_ERROR=0,PREG_INTERNAL_ERROR=1,PREG_BACKTRACK_LIMIT_ERROR=2,\
+         PREG_RECURSION_LIMIT_ERROR=3,PREG_BAD_UTF8_ERROR=4,PREG_BAD_UTF8_OFFSET_ERROR=5,\
+         PREG_JIT_STACKLIMIT_ERROR=6"
+    );
+}
+
+/// Without the flag, the constants come back as one flat name-to-value map.
+#[test]
+fn test_get_defined_constants_flat_form_merges_the_categories() {
+    let out = compile_and_run(
+        r#"<?php
+$flat = get_defined_constants();
+echo $flat['PREG_OFFSET_CAPTURE'], "|", $flat['SIGKILL'], "|";
+echo isset($flat['pcre']) ? 'nested' : 'flat';
+"#,
+    );
+    assert_eq!(out, "256|9|flat");
+}
