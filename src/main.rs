@@ -37,7 +37,7 @@ mod names;
 mod optimize;
 mod mb_convert_encoding_prelude;
 mod explode_limit_prelude;
-mod strncmp_prelude;
+mod string_compat_prelude;
 mod parse_ini_prelude;
 mod parse_str_prelude;
 mod parser;

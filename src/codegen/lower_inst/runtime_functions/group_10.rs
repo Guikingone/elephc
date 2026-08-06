@@ -150,12 +150,7 @@ pub(super) fn lower(
             crate::codegen::lower_inst::builtins::strings::lower_ucfirst(ctx, inst)
         }),
         RuntimeFnId::Ucwords => Some({
-            crate::codegen::lower_inst::builtins::strings::lower_unary_string_runtime(
-                    ctx,
-                    inst,
-                    "ucwords",
-                    "__rt_ucwords",
-                )
+            crate::codegen::lower_inst::builtins::strings::lower_ucwords(ctx, inst)
         }),
         RuntimeFnId::Vprintf => Some({
             crate::codegen::lower_inst::builtins::strings::lower_vprintf(ctx, inst)

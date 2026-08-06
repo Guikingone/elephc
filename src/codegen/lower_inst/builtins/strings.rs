@@ -10,7 +10,7 @@
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::codegen::{CodegenIrError, Result};
+use crate::codegen::{emit_box_current_value_as_mixed, CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
@@ -161,6 +161,35 @@ pub(crate) fn lower_trim_like(
     // owns fresh storage (the registry's Fresh result-ownership), so the copy stays balanced (no
     // leak/double-free).
     abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `ucwords(string $string, string $separators = " \t\r\n\f\v")`.
+///
+/// The `$separators` argument was silently DROPPED: `ucwords` lowered through
+/// `lower_unary_string_runtime`, which passes operand 0 only, so `ucwords("a-b c", "-")` returned
+/// `"A-b C"` (the default whitespace split) instead of PHP's `"A-B c"`. The separator-aware runtime
+/// helper `__rt_ucwords_sep` already existed and takes the same register contract the trim-mask
+/// loader produces — only this lowering never reached it.
+///
+/// Unlike `lower_trim_like`, no `__rt_str_persist` follows: both `ucwords` helpers already return a
+/// heap copy made by `__rt_strcopy`, so the result owns its storage.
+pub(crate) fn lower_ucwords(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "ucwords expected 1 or 2 args, got {}",
+            inst.operands.len()
+        )));
+    }
+    let ptr_reg = string_ptr_reg(ctx);
+    let len_reg = string_len_reg(ctx);
+    load_string_arg_to_regs(ctx, inst, 0, "ucwords", ptr_reg, len_reg)?;
+    if inst.operands.len() == 1 {
+        abi::emit_call_label(ctx.emitter, "__rt_ucwords");
+    } else {
+        lower_trim_mask_arg(ctx, inst, "ucwords")?;
+        abi::emit_call_label(ctx.emitter, "__rt_ucwords_sep");
+    }
     store_if_result(ctx, inst)
 }
 
@@ -778,6 +807,917 @@ pub(crate) fn lower_mb_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Lowers the stateful `mb_internal_encoding()` getter/setter.
+///
+/// The zero-initialized process-global state defaults to UTF-8. Setter calls accept the canonical
+/// encodings needed by the mbstring surface (`UTF-8`/`UTF8`, `8bit`, `ASCII`, `ISO-8859-1`), store
+/// a compact canonical id, and return boxed `true`; getter calls return the canonical name as a
+/// boxed string. The state is shared by every compiled call site just like PHP's mbstring global.
+pub(crate) fn lower_mb_internal_encoding(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "mb_internal_encoding", 0, 1)?;
+    let state_symbol = ctx
+        .data
+        .add_comm("_mb_internal_encoding_state".to_string(), 8);
+    let Some(encoding) = inst.operands.first().copied() else {
+        emit_mb_internal_encoding_get(ctx, &state_symbol);
+        return store_if_result(ctx, inst);
+    };
+    if matches!(ctx.value_php_type(encoding)?, PhpType::Void | PhpType::Never) {
+        emit_mb_internal_encoding_get(ctx, &state_symbol);
+        return store_if_result(ctx, inst);
+    }
+    emit_mb_internal_encoding_set(ctx, encoding, &state_symbol)?;
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `mb_ord(string, encoding?): int|false` with validated first-codepoint decoding.
+pub(crate) fn lower_mb_ord(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count_between(inst, "mb_ord", 1, 2)?;
+    let state_symbol = ctx
+        .data
+        .add_comm("_mb_internal_encoding_state".to_string(), 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_mb_ord_aarch64(ctx, inst, &state_symbol)?,
+        Arch::X86_64 => lower_mb_ord_x86_64(ctx, inst, &state_symbol)?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers forward `mb_strpos()` and `mb_stripos()` searches to character-index runtime results.
+pub(crate) fn lower_mb_string_position(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    case_insensitive: bool,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, name, 2, 4)?;
+    let state_symbol = ctx
+        .data
+        .add_comm("_mb_internal_encoding_state".to_string(), 8);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_mb_string_position_aarch64(
+            ctx,
+            inst,
+            name,
+            case_insensitive,
+            &state_symbol,
+        )?,
+        Arch::X86_64 => lower_mb_string_position_x86_64(
+            ctx,
+            inst,
+            name,
+            case_insensitive,
+            &state_symbol,
+        )?,
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mb_strpos");
+    emit_mb_string_position_offset_error(ctx, name);
+    box_search_result(ctx, name);
+    store_if_result(ctx, inst)
+}
+
+/// Materializes AArch64 multibyte-search arguments and the selected encoding mode.
+fn lower_mb_string_position_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    case_insensitive: bool,
+    state_symbol: &str,
+) -> Result<()> {
+    load_string_arg_to_regs(ctx, inst, 0, name, "x1", "x2")?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    load_string_arg_to_regs(ctx, inst, 1, name, "x1", "x2")?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    if let Some(offset) = inst.operands.get(2).copied() {
+        load_as_int(ctx, offset, &format!("{name} offset"))?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+    }
+    abi::emit_push_reg(ctx.emitter, "x0");
+    resolve_mb_search_encoding_aarch64(
+        ctx,
+        inst.operands.get(3).copied(),
+        state_symbol,
+        name,
+    )?;
+    abi::emit_load_int_immediate(ctx.emitter, "x6", case_insensitive as i64);
+    abi::emit_pop_reg(ctx.emitter, "x5");
+    abi::emit_pop_reg_pair(ctx.emitter, "x3", "x4");
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    Ok(())
+}
+
+/// Materializes x86_64 multibyte-search arguments and the selected encoding mode.
+fn lower_mb_string_position_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    case_insensitive: bool,
+    state_symbol: &str,
+) -> Result<()> {
+    load_string_arg_to_regs(ctx, inst, 0, name, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    load_string_arg_to_regs(ctx, inst, 1, name, "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    if let Some(offset) = inst.operands.get(2).copied() {
+        load_as_int(ctx, offset, &format!("{name} offset"))?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+    }
+    abi::emit_push_reg(ctx.emitter, "rax");
+    resolve_mb_search_encoding_x86_64(
+        ctx,
+        inst.operands.get(3).copied(),
+        state_symbol,
+        name,
+    )?;
+    abi::emit_load_int_immediate(ctx.emitter, "r9", case_insensitive as i64);
+    abi::emit_pop_reg(ctx.emitter, "r8");
+    abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+    Ok(())
+}
+
+/// Resolves an omitted, null, or explicit AArch64 mbstring search encoding into `x7`.
+fn resolve_mb_search_encoding_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    encoding: Option<ValueId>,
+    state_symbol: &str,
+    name: &str,
+) -> Result<()> {
+    let Some(encoding) = encoding else {
+        abi::emit_load_symbol_to_reg(ctx.emitter, "x7", state_symbol, 0);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(encoding)?, PhpType::Void | PhpType::Never) {
+        abi::emit_load_symbol_to_reg(ctx.emitter, "x7", state_symbol, 0);
+        return Ok(());
+    }
+    let utf8 = ctx.next_label("mb_search_encoding_utf8");
+    let byte = ctx.next_label("mb_search_encoding_byte");
+    let ascii = ctx.next_label("mb_search_encoding_ascii");
+    let latin1 = ctx.next_label("mb_search_encoding_latin1");
+    let ready = ctx.next_label("mb_search_encoding_ready");
+    load_value_as_string_to_regs(ctx, encoding, &format!("{name} encoding"), "x1", "x2")?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    for alias in [b"UTF-8".as_slice(), b"UTF8"] {
+        emit_mb_encoding_compare_aarch64(ctx, alias, &utf8);
+    }
+    for alias in [b"8bit".as_slice(), b"binary"] {
+        emit_mb_encoding_compare_aarch64(ctx, alias, &byte);
+    }
+    for alias in [b"ASCII".as_slice(), b"7bit"] {
+        emit_mb_encoding_compare_aarch64(ctx, alias, &ascii);
+    }
+    for alias in [b"ISO-8859-1".as_slice(), b"ISO8859-1", b"latin1"] {
+        emit_mb_encoding_compare_aarch64(ctx, alias, &latin1);
+    }
+    ctx.emitter.instruction("add sp, sp, #16");
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!("{name}(): Argument #4 ($encoding) must be a valid encoding"),
+    );
+    abi::emit_load_int_immediate(ctx.emitter, "x7", 0);
+    abi::emit_jump(ctx.emitter, &ready);
+    emit_mb_search_encoding_case_aarch64(ctx, &utf8, 0, &ready);
+    emit_mb_search_encoding_case_aarch64(ctx, &byte, 1, &ready);
+    emit_mb_search_encoding_case_aarch64(ctx, &ascii, 2, &ready);
+    emit_mb_search_encoding_case_aarch64(ctx, &latin1, 3, &ready);
+    ctx.emitter.label(&ready);
+    Ok(())
+}
+
+/// Selects one accepted AArch64 mbstring search encoding mode.
+fn emit_mb_search_encoding_case_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    mode: i64,
+    ready: &str,
+) {
+    ctx.emitter.label(label);
+    ctx.emitter.instruction("add sp, sp, #16");
+    abi::emit_load_int_immediate(ctx.emitter, "x7", mode);
+    abi::emit_jump(ctx.emitter, ready);
+}
+
+/// Resolves an omitted, null, or explicit x86_64 mbstring search encoding into `r10`.
+fn resolve_mb_search_encoding_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    encoding: Option<ValueId>,
+    state_symbol: &str,
+    name: &str,
+) -> Result<()> {
+    let Some(encoding) = encoding else {
+        abi::emit_load_symbol_to_reg(ctx.emitter, "r10", state_symbol, 0);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(encoding)?, PhpType::Void | PhpType::Never) {
+        abi::emit_load_symbol_to_reg(ctx.emitter, "r10", state_symbol, 0);
+        return Ok(());
+    }
+    let utf8 = ctx.next_label("mb_search_encoding_utf8");
+    let byte = ctx.next_label("mb_search_encoding_byte");
+    let ascii = ctx.next_label("mb_search_encoding_ascii");
+    let latin1 = ctx.next_label("mb_search_encoding_latin1");
+    let ready = ctx.next_label("mb_search_encoding_ready");
+    load_value_as_string_to_regs(ctx, encoding, &format!("{name} encoding"), "rdi", "rsi")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");
+    for alias in [b"UTF-8".as_slice(), b"UTF8"] {
+        emit_mb_encoding_compare_x86_64(ctx, alias, &utf8);
+    }
+    for alias in [b"8bit".as_slice(), b"binary"] {
+        emit_mb_encoding_compare_x86_64(ctx, alias, &byte);
+    }
+    for alias in [b"ASCII".as_slice(), b"7bit"] {
+        emit_mb_encoding_compare_x86_64(ctx, alias, &ascii);
+    }
+    for alias in [b"ISO-8859-1".as_slice(), b"ISO8859-1", b"latin1"] {
+        emit_mb_encoding_compare_x86_64(ctx, alias, &latin1);
+    }
+    ctx.emitter.instruction("add rsp, 16");
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!("{name}(): Argument #4 ($encoding) must be a valid encoding"),
+    );
+    abi::emit_load_int_immediate(ctx.emitter, "r10", 0);
+    abi::emit_jump(ctx.emitter, &ready);
+    emit_mb_search_encoding_case_x86_64(ctx, &utf8, 0, &ready);
+    emit_mb_search_encoding_case_x86_64(ctx, &byte, 1, &ready);
+    emit_mb_search_encoding_case_x86_64(ctx, &ascii, 2, &ready);
+    emit_mb_search_encoding_case_x86_64(ctx, &latin1, 3, &ready);
+    ctx.emitter.label(&ready);
+    Ok(())
+}
+
+/// Selects one accepted x86_64 mbstring search encoding mode.
+fn emit_mb_search_encoding_case_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    mode: i64,
+    ready: &str,
+) {
+    ctx.emitter.label(label);
+    ctx.emitter.instruction("add rsp, 16");
+    abi::emit_load_int_immediate(ctx.emitter, "r10", mode);
+    abi::emit_jump(ctx.emitter, ready);
+}
+
+/// Converts an invalid multibyte-search offset sentinel into PHP's catchable `ValueError`.
+fn emit_mb_string_position_offset_error(ctx: &mut FunctionContext<'_>, name: &str) {
+    let invalid = ctx.next_label("mb_string_position_invalid_offset");
+    let done = ctx.next_label("mb_string_position_offset_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        scratch_reg,
+        crate::codegen_support::runtime::MB_STRPOS_INVALID_OFFSET,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, {scratch_reg}"));
+            ctx.emitter.instruction(&format!("b.eq {invalid}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, {scratch_reg}"));
+            ctx.emitter.instruction(&format!("je {invalid}"));
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        &format!(
+            "{name}(): Argument #3 ($offset) must be contained in argument #1 ($haystack)"
+        ),
+    );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), -1);
+    ctx.emitter.label(&done);
+}
+
+/// Resolves the requested encoding and decodes the first scalar on AArch64.
+fn lower_mb_ord_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    state_symbol: &str,
+) -> Result<()> {
+    load_string_arg_to_regs(ctx, inst, 0, "mb_ord", "x1", "x2")?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    resolve_mb_ord_encoding_aarch64(ctx, inst, state_symbol)?;
+    abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    emit_mb_ord_decode_aarch64(ctx);
+    Ok(())
+}
+
+/// Selects UTF-8 (0), byte/Latin-1 (1 or 3), or ASCII (2) into `x3`.
+fn resolve_mb_ord_encoding_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    state_symbol: &str,
+) -> Result<()> {
+    let Some(encoding) = inst.operands.get(1).copied() else {
+        abi::emit_load_symbol_to_reg(ctx.emitter, "x3", state_symbol, 0);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(encoding)?, PhpType::Void | PhpType::Never) {
+        abi::emit_load_symbol_to_reg(ctx.emitter, "x3", state_symbol, 0);
+        return Ok(());
+    }
+    let utf8 = ctx.next_label("mb_ord_encoding_utf8");
+    let byte = ctx.next_label("mb_ord_encoding_byte");
+    let ascii = ctx.next_label("mb_ord_encoding_ascii");
+    let latin1 = ctx.next_label("mb_ord_encoding_latin1");
+    let ready = ctx.next_label("mb_ord_encoding_ready");
+    load_value_as_string_to_regs(ctx, encoding, "mb_ord encoding", "x1", "x2")?;
+    abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+    emit_mb_encoding_compare_aarch64(ctx, b"UTF-8", &utf8);
+    emit_mb_encoding_compare_aarch64(ctx, b"UTF8", &utf8);
+    emit_mb_encoding_compare_aarch64(ctx, b"8bit", &byte);
+    emit_mb_encoding_compare_aarch64(ctx, b"binary", &byte);
+    emit_mb_encoding_compare_aarch64(ctx, b"ASCII", &ascii);
+    emit_mb_encoding_compare_aarch64(ctx, b"7bit", &ascii);
+    emit_mb_encoding_compare_aarch64(ctx, b"ISO-8859-1", &latin1);
+    emit_mb_encoding_compare_aarch64(ctx, b"ISO8859-1", &latin1);
+    emit_mb_encoding_compare_aarch64(ctx, b"latin1", &latin1);
+    ctx.emitter.instruction("add sp, sp, #16");                               // discard the rejected encoding pair
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "mb_ord(): Argument #2 ($encoding) must be a valid encoding",
+    );
+    abi::emit_load_int_immediate(ctx.emitter, "x3", 0);
+    abi::emit_jump(ctx.emitter, &ready);
+    emit_mb_ord_encoding_case_aarch64(ctx, &utf8, 0, &ready);
+    emit_mb_ord_encoding_case_aarch64(ctx, &byte, 1, &ready);
+    emit_mb_ord_encoding_case_aarch64(ctx, &ascii, 2, &ready);
+    emit_mb_ord_encoding_case_aarch64(ctx, &latin1, 3, &ready);
+    ctx.emitter.label(&ready);
+    Ok(())
+}
+
+/// Discards the explicit encoding pair, selects one AArch64 mode, and rejoins decoding.
+fn emit_mb_ord_encoding_case_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    mode: i64,
+    ready: &str,
+) {
+    ctx.emitter.label(label);
+    ctx.emitter.instruction("add sp, sp, #16");                               // discard the accepted encoding pair
+    abi::emit_load_int_immediate(ctx.emitter, "x3", mode);
+    abi::emit_jump(ctx.emitter, ready);
+}
+
+/// Decodes and boxes one AArch64 UTF-8/byte/ASCII code point.
+fn emit_mb_ord_decode_aarch64(ctx: &mut FunctionContext<'_>) {
+    let empty = ctx.next_label("mb_ord_empty");
+    let utf8 = ctx.next_label("mb_ord_utf8");
+    let byte = ctx.next_label("mb_ord_byte");
+    let ascii = ctx.next_label("mb_ord_ascii");
+    let utf8_ascii = ctx.next_label("mb_ord_utf8_ascii");
+    let two = ctx.next_label("mb_ord_utf8_two");
+    let three = ctx.next_label("mb_ord_utf8_three");
+    let four = ctx.next_label("mb_ord_utf8_four");
+    let invalid = ctx.next_label("mb_ord_invalid");
+    let success = ctx.next_label("mb_ord_success");
+    let done = ctx.next_label("mb_ord_done");
+    ctx.emitter.instruction(&format!("cbz x2, {empty}"));                      // empty input raises PHP's ValueError
+    ctx.emitter.instruction("cmp x3, #0");                                    // state/mode 0 selects UTF-8
+    ctx.emitter.instruction(&format!("b.eq {utf8}"));
+    ctx.emitter.instruction("cmp x3, #2");                                    // state/mode 2 selects strict ASCII
+    ctx.emitter.instruction(&format!("b.eq {ascii}"));
+    abi::emit_jump(ctx.emitter, &byte);                                        // 8bit and Latin-1 return the first byte
+
+    ctx.emitter.label(&byte);
+    ctx.emitter.instruction("ldrb w0, [x1]");                                 // byte-oriented encodings expose the leading byte value
+    abi::emit_jump(ctx.emitter, &success);
+    ctx.emitter.label(&ascii);
+    ctx.emitter.instruction("ldrb w0, [x1]");                                 // ASCII accepts only the 7-bit range
+    ctx.emitter.instruction("cmp w0, #0x80");
+    ctx.emitter.instruction(&format!("b.hs {invalid}"));
+    abi::emit_jump(ctx.emitter, &success);
+
+    ctx.emitter.label(&utf8);
+    ctx.emitter.instruction("ldrb w9, [x1]");                                 // classify the UTF-8 leading byte
+    ctx.emitter.instruction("cmp w9, #0x80");
+    ctx.emitter.instruction(&format!("b.lo {utf8_ascii}"));
+    ctx.emitter.instruction("cmp w9, #0xc2");
+    ctx.emitter.instruction(&format!("b.lo {invalid}"));
+    ctx.emitter.instruction("cmp w9, #0xe0");
+    ctx.emitter.instruction(&format!("b.lo {two}"));
+    ctx.emitter.instruction("cmp w9, #0xf0");
+    ctx.emitter.instruction(&format!("b.lo {three}"));
+    ctx.emitter.instruction("cmp w9, #0xf5");
+    ctx.emitter.instruction(&format!("b.lo {four}"));
+    abi::emit_jump(ctx.emitter, &invalid);
+
+    ctx.emitter.label(&utf8_ascii);
+    ctx.emitter.instruction("mov w0, w9");                                    // ASCII UTF-8 code points equal their leading byte
+    abi::emit_jump(ctx.emitter, &success);
+
+    ctx.emitter.label(&two);
+    ctx.emitter.instruction("cmp x2, #2");
+    ctx.emitter.instruction(&format!("b.lo {invalid}"));
+    ctx.emitter.instruction("ldrb w10, [x1, #1]");
+    emit_mb_ord_continuation_check_aarch64(ctx, "w10", &invalid);
+    ctx.emitter.instruction("and w0, w9, #0x1f");
+    ctx.emitter.instruction("lsl w0, w0, #6");
+    ctx.emitter.instruction("and w10, w10, #0x3f");
+    ctx.emitter.instruction("orr w0, w0, w10");
+    abi::emit_jump(ctx.emitter, &success);
+
+    ctx.emitter.label(&three);
+    ctx.emitter.instruction("cmp x2, #3");
+    ctx.emitter.instruction(&format!("b.lo {invalid}"));
+    ctx.emitter.instruction("ldrb w10, [x1, #1]");
+    ctx.emitter.instruction("ldrb w11, [x1, #2]");
+    emit_mb_ord_continuation_check_aarch64(ctx, "w10", &invalid);
+    emit_mb_ord_continuation_check_aarch64(ctx, "w11", &invalid);
+    ctx.emitter.instruction("cmp w9, #0xe0");
+    let three_not_e0 = ctx.next_label("mb_ord_three_not_e0");
+    ctx.emitter.instruction(&format!("b.ne {three_not_e0}"));
+    ctx.emitter.instruction("cmp w10, #0xa0");
+    ctx.emitter.instruction(&format!("b.lo {invalid}"));
+    ctx.emitter.label(&three_not_e0);
+    ctx.emitter.instruction("cmp w9, #0xed");
+    let three_bounds_done = ctx.next_label("mb_ord_three_bounds_done");
+    ctx.emitter.instruction(&format!("b.ne {three_bounds_done}"));
+    ctx.emitter.instruction("cmp w10, #0xa0");
+    ctx.emitter.instruction(&format!("b.hs {invalid}"));
+    ctx.emitter.label(&three_bounds_done);
+    ctx.emitter.instruction("and w0, w9, #0x0f");
+    ctx.emitter.instruction("lsl w0, w0, #12");
+    ctx.emitter.instruction("and w12, w10, #0x3f");
+    ctx.emitter.instruction("orr w0, w0, w12, lsl #6");
+    ctx.emitter.instruction("and w11, w11, #0x3f");
+    ctx.emitter.instruction("orr w0, w0, w11");
+    abi::emit_jump(ctx.emitter, &success);
+
+    ctx.emitter.label(&four);
+    ctx.emitter.instruction("cmp x2, #4");
+    ctx.emitter.instruction(&format!("b.lo {invalid}"));
+    ctx.emitter.instruction("ldrb w10, [x1, #1]");
+    ctx.emitter.instruction("ldrb w11, [x1, #2]");
+    ctx.emitter.instruction("ldrb w12, [x1, #3]");
+    emit_mb_ord_continuation_check_aarch64(ctx, "w10", &invalid);
+    emit_mb_ord_continuation_check_aarch64(ctx, "w11", &invalid);
+    emit_mb_ord_continuation_check_aarch64(ctx, "w12", &invalid);
+    ctx.emitter.instruction("cmp w9, #0xf0");
+    let four_not_f0 = ctx.next_label("mb_ord_four_not_f0");
+    ctx.emitter.instruction(&format!("b.ne {four_not_f0}"));
+    ctx.emitter.instruction("cmp w10, #0x90");
+    ctx.emitter.instruction(&format!("b.lo {invalid}"));
+    ctx.emitter.label(&four_not_f0);
+    ctx.emitter.instruction("cmp w9, #0xf4");
+    let four_bounds_done = ctx.next_label("mb_ord_four_bounds_done");
+    ctx.emitter.instruction(&format!("b.ne {four_bounds_done}"));
+    ctx.emitter.instruction("cmp w10, #0x90");
+    ctx.emitter.instruction(&format!("b.hs {invalid}"));
+    ctx.emitter.label(&four_bounds_done);
+    ctx.emitter.instruction("and w0, w9, #0x07");
+    ctx.emitter.instruction("lsl w0, w0, #18");
+    ctx.emitter.instruction("and w13, w10, #0x3f");
+    ctx.emitter.instruction("orr w0, w0, w13, lsl #12");
+    ctx.emitter.instruction("and w11, w11, #0x3f");
+    ctx.emitter.instruction("orr w0, w0, w11, lsl #6");
+    ctx.emitter.instruction("and w12, w12, #0x3f");
+    ctx.emitter.instruction("orr w0, w0, w12");
+    abi::emit_jump(ctx.emitter, &success);
+
+    ctx.emitter.label(&empty);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "mb_ord(): Argument #1 ($string) must not be empty",
+    );
+    abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&success);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    ctx.emitter.label(&done);
+}
+
+/// Emits one AArch64 UTF-8 continuation-byte validation branch.
+fn emit_mb_ord_continuation_check_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    byte_reg: &str,
+    invalid: &str,
+) {
+    ctx.emitter.instruction(&format!("and w14, {byte_reg}, #0xc0"));
+    ctx.emitter.instruction("cmp w14, #0x80");
+    ctx.emitter.instruction(&format!("b.ne {invalid}"));
+}
+
+/// Resolves the requested encoding and decodes the first scalar on x86_64.
+fn lower_mb_ord_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    state_symbol: &str,
+) -> Result<()> {
+    load_string_arg_to_regs(ctx, inst, 0, "mb_ord", "rax", "rdx")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+    resolve_mb_ord_encoding_x86_64(ctx, inst, state_symbol)?;
+    abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    emit_mb_ord_decode_x86_64(ctx);
+    Ok(())
+}
+
+/// Selects UTF-8 (0), byte/Latin-1 (1 or 3), or ASCII (2) into `r8`.
+fn resolve_mb_ord_encoding_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    state_symbol: &str,
+) -> Result<()> {
+    let Some(encoding) = inst.operands.get(1).copied() else {
+        abi::emit_load_symbol_to_reg(ctx.emitter, "r8", state_symbol, 0);
+        return Ok(());
+    };
+    if matches!(ctx.value_php_type(encoding)?, PhpType::Void | PhpType::Never) {
+        abi::emit_load_symbol_to_reg(ctx.emitter, "r8", state_symbol, 0);
+        return Ok(());
+    }
+    let utf8 = ctx.next_label("mb_ord_encoding_utf8");
+    let byte = ctx.next_label("mb_ord_encoding_byte");
+    let ascii = ctx.next_label("mb_ord_encoding_ascii");
+    let latin1 = ctx.next_label("mb_ord_encoding_latin1");
+    let ready = ctx.next_label("mb_ord_encoding_ready");
+    load_value_as_string_to_regs(ctx, encoding, "mb_ord encoding", "rdi", "rsi")?;
+    abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");
+    emit_mb_encoding_compare_x86_64(ctx, b"UTF-8", &utf8);
+    emit_mb_encoding_compare_x86_64(ctx, b"UTF8", &utf8);
+    emit_mb_encoding_compare_x86_64(ctx, b"8bit", &byte);
+    emit_mb_encoding_compare_x86_64(ctx, b"binary", &byte);
+    emit_mb_encoding_compare_x86_64(ctx, b"ASCII", &ascii);
+    emit_mb_encoding_compare_x86_64(ctx, b"7bit", &ascii);
+    emit_mb_encoding_compare_x86_64(ctx, b"ISO-8859-1", &latin1);
+    emit_mb_encoding_compare_x86_64(ctx, b"ISO8859-1", &latin1);
+    emit_mb_encoding_compare_x86_64(ctx, b"latin1", &latin1);
+    ctx.emitter.instruction("add rsp, 16");                                   // discard the rejected encoding pair
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "mb_ord(): Argument #2 ($encoding) must be a valid encoding",
+    );
+    abi::emit_load_int_immediate(ctx.emitter, "r8", 0);
+    abi::emit_jump(ctx.emitter, &ready);
+    emit_mb_ord_encoding_case_x86_64(ctx, &utf8, 0, &ready);
+    emit_mb_ord_encoding_case_x86_64(ctx, &byte, 1, &ready);
+    emit_mb_ord_encoding_case_x86_64(ctx, &ascii, 2, &ready);
+    emit_mb_ord_encoding_case_x86_64(ctx, &latin1, 3, &ready);
+    ctx.emitter.label(&ready);
+    Ok(())
+}
+
+/// Discards the explicit encoding pair, selects one x86_64 mode, and rejoins decoding.
+fn emit_mb_ord_encoding_case_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    label: &str,
+    mode: i64,
+    ready: &str,
+) {
+    ctx.emitter.label(label);
+    ctx.emitter.instruction("add rsp, 16");                                   // discard the accepted encoding pair
+    abi::emit_load_int_immediate(ctx.emitter, "r8", mode);
+    abi::emit_jump(ctx.emitter, ready);
+}
+
+/// Decodes and boxes one x86_64 UTF-8/byte/ASCII code point.
+fn emit_mb_ord_decode_x86_64(ctx: &mut FunctionContext<'_>) {
+    let empty = ctx.next_label("mb_ord_empty");
+    let utf8 = ctx.next_label("mb_ord_utf8");
+    let byte = ctx.next_label("mb_ord_byte");
+    let ascii = ctx.next_label("mb_ord_ascii");
+    let utf8_ascii = ctx.next_label("mb_ord_utf8_ascii");
+    let two = ctx.next_label("mb_ord_utf8_two");
+    let three = ctx.next_label("mb_ord_utf8_three");
+    let four = ctx.next_label("mb_ord_utf8_four");
+    let invalid = ctx.next_label("mb_ord_invalid");
+    let success = ctx.next_label("mb_ord_success");
+    let done = ctx.next_label("mb_ord_done");
+    ctx.emitter.instruction("test rdx, rdx");
+    ctx.emitter.instruction(&format!("jz {empty}"));
+    ctx.emitter.instruction("cmp r8, 0");
+    ctx.emitter.instruction(&format!("je {utf8}"));
+    ctx.emitter.instruction("cmp r8, 2");
+    ctx.emitter.instruction(&format!("je {ascii}"));
+    abi::emit_jump(ctx.emitter, &byte);
+    ctx.emitter.label(&byte);
+    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");
+    abi::emit_jump(ctx.emitter, &success);
+    ctx.emitter.label(&ascii);
+    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");
+    ctx.emitter.instruction("cmp eax, 0x80");
+    ctx.emitter.instruction(&format!("jae {invalid}"));
+    abi::emit_jump(ctx.emitter, &success);
+    ctx.emitter.label(&utf8);
+    ctx.emitter.instruction("movzx r9d, BYTE PTR [rax]");
+    ctx.emitter.instruction("cmp r9d, 0x80");
+    ctx.emitter.instruction(&format!("jb {utf8_ascii}"));
+    ctx.emitter.instruction("cmp r9d, 0xc2");
+    ctx.emitter.instruction(&format!("jb {invalid}"));
+    ctx.emitter.instruction("cmp r9d, 0xe0");
+    ctx.emitter.instruction(&format!("jb {two}"));
+    ctx.emitter.instruction("cmp r9d, 0xf0");
+    ctx.emitter.instruction(&format!("jb {three}"));
+    ctx.emitter.instruction("cmp r9d, 0xf5");
+    ctx.emitter.instruction(&format!("jb {four}"));
+    abi::emit_jump(ctx.emitter, &invalid);
+    ctx.emitter.label(&utf8_ascii);
+    ctx.emitter.instruction("mov eax, r9d");                                  // ASCII UTF-8 code points equal their leading byte
+    abi::emit_jump(ctx.emitter, &success);
+    ctx.emitter.label(&two);
+    ctx.emitter.instruction("cmp rdx, 2");
+    ctx.emitter.instruction(&format!("jb {invalid}"));
+    ctx.emitter.instruction("movzx r10d, BYTE PTR [rax + 1]");
+    emit_mb_ord_continuation_check_x86_64(ctx, "r10d", &invalid);
+    ctx.emitter.instruction("mov eax, r9d");
+    ctx.emitter.instruction("and eax, 0x1f");
+    ctx.emitter.instruction("shl eax, 6");
+    ctx.emitter.instruction("and r10d, 0x3f");
+    ctx.emitter.instruction("or eax, r10d");
+    abi::emit_jump(ctx.emitter, &success);
+    ctx.emitter.label(&three);
+    ctx.emitter.instruction("cmp rdx, 3");
+    ctx.emitter.instruction(&format!("jb {invalid}"));
+    ctx.emitter.instruction("movzx r10d, BYTE PTR [rax + 1]");
+    ctx.emitter.instruction("movzx r11d, BYTE PTR [rax + 2]");
+    emit_mb_ord_continuation_check_x86_64(ctx, "r10d", &invalid);
+    emit_mb_ord_continuation_check_x86_64(ctx, "r11d", &invalid);
+    let three_not_e0 = ctx.next_label("mb_ord_three_not_e0");
+    ctx.emitter.instruction("cmp r9d, 0xe0");
+    ctx.emitter.instruction(&format!("jne {three_not_e0}"));
+    ctx.emitter.instruction("cmp r10d, 0xa0");
+    ctx.emitter.instruction(&format!("jb {invalid}"));
+    ctx.emitter.label(&three_not_e0);
+    let three_bounds_done = ctx.next_label("mb_ord_three_bounds_done");
+    ctx.emitter.instruction("cmp r9d, 0xed");
+    ctx.emitter.instruction(&format!("jne {three_bounds_done}"));
+    ctx.emitter.instruction("cmp r10d, 0xa0");
+    ctx.emitter.instruction(&format!("jae {invalid}"));
+    ctx.emitter.label(&three_bounds_done);
+    ctx.emitter.instruction("mov eax, r9d");
+    ctx.emitter.instruction("and eax, 0x0f");
+    ctx.emitter.instruction("shl eax, 12");
+    ctx.emitter.instruction("and r10d, 0x3f");
+    ctx.emitter.instruction("shl r10d, 6");
+    ctx.emitter.instruction("or eax, r10d");
+    ctx.emitter.instruction("and r11d, 0x3f");
+    ctx.emitter.instruction("or eax, r11d");
+    abi::emit_jump(ctx.emitter, &success);
+    ctx.emitter.label(&four);
+    ctx.emitter.instruction("cmp rdx, 4");
+    ctx.emitter.instruction(&format!("jb {invalid}"));
+    ctx.emitter.instruction("movzx r10d, BYTE PTR [rax + 1]");
+    ctx.emitter.instruction("movzx r11d, BYTE PTR [rax + 2]");
+    ctx.emitter.instruction("movzx ecx, BYTE PTR [rax + 3]");
+    emit_mb_ord_continuation_check_x86_64(ctx, "r10d", &invalid);
+    emit_mb_ord_continuation_check_x86_64(ctx, "r11d", &invalid);
+    emit_mb_ord_continuation_check_x86_64(ctx, "ecx", &invalid);
+    let four_not_f0 = ctx.next_label("mb_ord_four_not_f0");
+    ctx.emitter.instruction("cmp r9d, 0xf0");
+    ctx.emitter.instruction(&format!("jne {four_not_f0}"));
+    ctx.emitter.instruction("cmp r10d, 0x90");
+    ctx.emitter.instruction(&format!("jb {invalid}"));
+    ctx.emitter.label(&four_not_f0);
+    let four_bounds_done = ctx.next_label("mb_ord_four_bounds_done");
+    ctx.emitter.instruction("cmp r9d, 0xf4");
+    ctx.emitter.instruction(&format!("jne {four_bounds_done}"));
+    ctx.emitter.instruction("cmp r10d, 0x90");
+    ctx.emitter.instruction(&format!("jae {invalid}"));
+    ctx.emitter.label(&four_bounds_done);
+    ctx.emitter.instruction("mov eax, r9d");
+    ctx.emitter.instruction("and eax, 0x07");
+    ctx.emitter.instruction("shl eax, 18");
+    ctx.emitter.instruction("and r10d, 0x3f");
+    ctx.emitter.instruction("shl r10d, 12");
+    ctx.emitter.instruction("or eax, r10d");
+    ctx.emitter.instruction("and r11d, 0x3f");
+    ctx.emitter.instruction("shl r11d, 6");
+    ctx.emitter.instruction("or eax, r11d");
+    ctx.emitter.instruction("and ecx, 0x3f");
+    ctx.emitter.instruction("or eax, ecx");
+    abi::emit_jump(ctx.emitter, &success);
+    ctx.emitter.label(&empty);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "mb_ord(): Argument #1 ($string) must not be empty",
+    );
+    abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid);
+    abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&success);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    ctx.emitter.label(&done);
+}
+
+/// Emits one x86_64 UTF-8 continuation-byte validation branch.
+fn emit_mb_ord_continuation_check_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    byte_reg: &str,
+    invalid: &str,
+) {
+    ctx.emitter.instruction(&format!("mov r8d, {byte_reg}"));
+    ctx.emitter.instruction("and r8d, 0xc0");
+    ctx.emitter.instruction("cmp r8d, 0x80");
+    ctx.emitter.instruction(&format!("jne {invalid}"));
+}
+
+/// Emits the canonical string selected by the current internal-encoding id.
+fn emit_mb_internal_encoding_get(ctx: &mut FunctionContext<'_>, state_symbol: &str) {
+    let done = ctx.next_label("mb_internal_encoding_get_done");
+    let eight_bit = ctx.next_label("mb_internal_encoding_get_8bit");
+    let ascii = ctx.next_label("mb_internal_encoding_get_ascii");
+    let latin1 = ctx.next_label("mb_internal_encoding_get_latin1");
+    let (utf8_label, utf8_len) = ctx.data.add_string(b"UTF-8");
+    let (eight_label, eight_len) = ctx.data.add_string(b"8bit");
+    let (ascii_label, ascii_len) = ctx.data.add_string(b"ASCII");
+    let (latin1_label, latin1_len) = ctx.data.add_string(b"ISO-8859-1");
+    let state_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_symbol_to_reg(ctx.emitter, state_reg, state_symbol, 0);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {state_reg}, #1"));           // select canonical 8bit name
+            ctx.emitter.instruction(&format!("b.eq {eight_bit}"));
+            ctx.emitter.instruction(&format!("cmp {state_reg}, #2"));           // select canonical ASCII name
+            ctx.emitter.instruction(&format!("b.eq {ascii}"));
+            ctx.emitter.instruction(&format!("cmp {state_reg}, #3"));           // select canonical ISO-8859-1 name
+            ctx.emitter.instruction(&format!("b.eq {latin1}"));
+            abi::emit_symbol_address(ctx.emitter, "x1", &utf8_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", utf8_len as i64);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&eight_bit);
+            abi::emit_symbol_address(ctx.emitter, "x1", &eight_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", eight_len as i64);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&ascii);
+            abi::emit_symbol_address(ctx.emitter, "x1", &ascii_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", ascii_len as i64);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&latin1);
+            abi::emit_symbol_address(ctx.emitter, "x1", &latin1_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", latin1_len as i64);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {state_reg}, 1"));            // select canonical 8bit name
+            ctx.emitter.instruction(&format!("je {eight_bit}"));
+            ctx.emitter.instruction(&format!("cmp {state_reg}, 2"));            // select canonical ASCII name
+            ctx.emitter.instruction(&format!("je {ascii}"));
+            ctx.emitter.instruction(&format!("cmp {state_reg}, 3"));            // select canonical ISO-8859-1 name
+            ctx.emitter.instruction(&format!("je {latin1}"));
+            abi::emit_symbol_address(ctx.emitter, "rax", &utf8_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", utf8_len as i64);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&eight_bit);
+            abi::emit_symbol_address(ctx.emitter, "rax", &eight_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", eight_len as i64);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&ascii);
+            abi::emit_symbol_address(ctx.emitter, "rax", &ascii_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", ascii_len as i64);
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&latin1);
+            abi::emit_symbol_address(ctx.emitter, "rax", &latin1_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", latin1_len as i64);
+        }
+    }
+    ctx.emitter.label(&done);
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+}
+
+/// Validates and stores one explicit internal-encoding name.
+fn emit_mb_internal_encoding_set(
+    ctx: &mut FunctionContext<'_>,
+    encoding: ValueId,
+    state_symbol: &str,
+) -> Result<()> {
+    let set_utf8 = ctx.next_label("mb_internal_encoding_set_utf8");
+    let set_eight = ctx.next_label("mb_internal_encoding_set_8bit");
+    let set_ascii = ctx.next_label("mb_internal_encoding_set_ascii");
+    let set_latin1 = ctx.next_label("mb_internal_encoding_set_latin1");
+    let finish = ctx.next_label("mb_internal_encoding_set_finish");
+    let invalid = ctx.next_label("mb_internal_encoding_set_invalid");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_value_as_string_to_regs(ctx, encoding, "mb_internal_encoding encoding", "x1", "x2")?;
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
+            emit_mb_encoding_compare_aarch64(ctx, b"UTF-8", &set_utf8);
+            emit_mb_encoding_compare_aarch64(ctx, b"UTF8", &set_utf8);
+            emit_mb_encoding_compare_aarch64(ctx, b"8bit", &set_eight);
+            emit_mb_encoding_compare_aarch64(ctx, b"ASCII", &set_ascii);
+            emit_mb_encoding_compare_aarch64(ctx, b"ISO-8859-1", &set_latin1);
+            abi::emit_jump(ctx.emitter, &invalid);
+            emit_mb_encoding_state_store_aarch64(ctx, state_symbol, &set_utf8, 0, &finish);
+            emit_mb_encoding_state_store_aarch64(ctx, state_symbol, &set_eight, 1, &finish);
+            emit_mb_encoding_state_store_aarch64(ctx, state_symbol, &set_ascii, 2, &finish);
+            emit_mb_encoding_state_store_aarch64(ctx, state_symbol, &set_latin1, 3, &finish);
+            ctx.emitter.label(&invalid);
+            ctx.emitter.instruction("add sp, sp, #16");                        // discard the preserved invalid encoding name
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 0);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            let done = ctx.next_label("mb_internal_encoding_set_done");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&finish);
+            ctx.emitter.instruction("add sp, sp, #16");                        // discard the preserved accepted encoding name
+            abi::emit_load_int_immediate(ctx.emitter, "x0", 1);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            load_value_as_string_to_regs(ctx, encoding, "mb_internal_encoding encoding", "rdi", "rsi")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");
+            emit_mb_encoding_compare_x86_64(ctx, b"UTF-8", &set_utf8);
+            emit_mb_encoding_compare_x86_64(ctx, b"UTF8", &set_utf8);
+            emit_mb_encoding_compare_x86_64(ctx, b"8bit", &set_eight);
+            emit_mb_encoding_compare_x86_64(ctx, b"ASCII", &set_ascii);
+            emit_mb_encoding_compare_x86_64(ctx, b"ISO-8859-1", &set_latin1);
+            abi::emit_jump(ctx.emitter, &invalid);
+            emit_mb_encoding_state_store_x86_64(ctx, state_symbol, &set_utf8, 0, &finish);
+            emit_mb_encoding_state_store_x86_64(ctx, state_symbol, &set_eight, 1, &finish);
+            emit_mb_encoding_state_store_x86_64(ctx, state_symbol, &set_ascii, 2, &finish);
+            emit_mb_encoding_state_store_x86_64(ctx, state_symbol, &set_latin1, 3, &finish);
+            ctx.emitter.label(&invalid);
+            ctx.emitter.instruction("add rsp, 16");                            // discard the preserved invalid encoding name
+            abi::emit_load_int_immediate(ctx.emitter, "rax", 0);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            let done = ctx.next_label("mb_internal_encoding_set_done");
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&finish);
+            ctx.emitter.instruction("add rsp, 16");                            // discard the preserved accepted encoding name
+            abi::emit_load_int_immediate(ctx.emitter, "rax", 1);
+            emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+            ctx.emitter.label(&done);
+        }
+    }
+    Ok(())
+}
+
+/// Compares the preserved AArch64 setter name with one canonical alias.
+fn emit_mb_encoding_compare_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &[u8],
+    match_label: &str,
+) {
+    let (label, len) = ctx.data.add_string(candidate);
+    ctx.emitter.instruction("ldp x1, x2, [sp]");                              // reload the requested name
+    abi::emit_symbol_address(ctx.emitter, "x3", &label);
+    abi::emit_load_int_immediate(ctx.emitter, "x4", len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+    ctx.emitter.instruction(&format!("cbz x0, {match_label}"));
+}
+
+/// Compares the preserved x86_64 setter name with one canonical alias.
+fn emit_mb_encoding_compare_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &[u8],
+    match_label: &str,
+) {
+    let (label, len) = ctx.data.add_string(candidate);
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                       // reload the requested name pointer
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                   // reload the requested name length
+    abi::emit_symbol_address(ctx.emitter, "rdx", &label);
+    abi::emit_load_int_immediate(ctx.emitter, "rcx", len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
+    ctx.emitter.instruction("test rax, rax");
+    ctx.emitter.instruction(&format!("jz {match_label}"));
+}
+
+/// Stores one accepted AArch64 encoding id and joins the success path.
+fn emit_mb_encoding_state_store_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    state_symbol: &str,
+    label: &str,
+    id: i64,
+    finish: &str,
+) {
+    ctx.emitter.label(label);
+    abi::emit_load_int_immediate(ctx.emitter, "x10", id);
+    abi::emit_store_reg_to_symbol(ctx.emitter, "x10", state_symbol, 0);
+    abi::emit_jump(ctx.emitter, finish);
+}
+
+/// Stores one accepted x86_64 encoding id and joins the success path.
+fn emit_mb_encoding_state_store_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    state_symbol: &str,
+    label: &str,
+    id: i64,
+    finish: &str,
+) {
+    ctx.emitter.label(label);
+    abi::emit_load_int_immediate(ctx.emitter, "r10", id);
+    abi::emit_store_reg_to_symbol(ctx.emitter, "r10", state_symbol, 0);
+    abi::emit_jump(ctx.emitter, finish);
+}
+
 /// Loads the nullable optional `mb_strlen()` encoding into a pointer/length pair.
 fn load_optional_mb_strlen_encoding(
     ctx: &mut FunctionContext<'_>,
@@ -1284,6 +2224,136 @@ pub(crate) fn lower_substr_count(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
 }
 
+/// Lowers PHP's bounded, optionally case-insensitive `substr_compare()` operation.
+pub(crate) fn lower_substr_compare(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "substr_compare", 3, 5)?;
+    let length = inst.operands.get(3).copied();
+    let length_present = match length {
+        Some(value) => !matches!(ctx.value_php_type(value)?, PhpType::Void | PhpType::Never),
+        None => false,
+    };
+    load_substr_compare_args(ctx, inst, length, length_present)?;
+    abi::emit_call_label(ctx.emitter, "__rt_substr_compare");
+    emit_substr_compare_errors(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Materializes all `substr_compare()` operands while preserving PHP source evaluation results.
+fn load_substr_compare_args(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    length: Option<ValueId>,
+    length_present: bool,
+) -> Result<()> {
+    let offset = expect_operand(inst, 2)?;
+    let source_ptr = string_ptr_reg(ctx);
+    let source_len = string_len_reg(ctx);
+    load_string_arg_to_regs(
+        ctx,
+        inst,
+        0,
+        "substr_compare haystack",
+        source_ptr,
+        source_len,
+    )?;
+    abi::emit_push_reg_pair(ctx.emitter, source_ptr, source_len);
+    let (needle_ptr, needle_len) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x1", "x2"),
+        Arch::X86_64 => ("rax", "rdx"),
+    };
+    load_string_arg_to_regs(ctx, inst, 1, "substr_compare needle", needle_ptr, needle_len)?;
+    abi::emit_push_reg_pair(ctx.emitter, needle_ptr, needle_len);
+    load_as_int(ctx, offset, "substr_compare offset")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if let Some(length) = length.filter(|_| length_present) {
+        load_as_int(ctx, length, "substr_compare length")?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if let Some(case_insensitive) = inst.operands.get(4).copied() {
+        load_as_int(ctx, case_insensitive, "substr_compare case_insensitive")?;
+    } else {
+        abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x7, x0");                              // case-insensitive flag
+            abi::emit_pop_reg(ctx.emitter, "x6");                              // explicit comparison length or zero placeholder
+            abi::emit_pop_reg(ctx.emitter, "x5");                              // substring offset
+            abi::emit_pop_reg_pair(ctx.emitter, "x3", "x4");                 // needle pointer and length
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                 // haystack pointer and length
+            abi::emit_load_int_immediate(ctx.emitter, "x0", length_present as i64);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, rax");                           // case-insensitive flag
+            abi::emit_pop_reg(ctx.emitter, "r9");                              // explicit comparison length or zero placeholder
+            abi::emit_pop_reg(ctx.emitter, "r8");                              // substring offset
+            abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");               // needle pointer and length
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");               // haystack pointer and length
+            abi::emit_load_int_immediate(ctx.emitter, "rax", length_present as i64);
+        }
+    }
+    Ok(())
+}
+
+/// Converts runtime range sentinels into PHP-compatible catchable `ValueError` objects.
+fn emit_substr_compare_errors(ctx: &mut FunctionContext<'_>) {
+    let invalid_offset = ctx.next_label("substr_compare_invalid_offset");
+    let invalid_length = ctx.next_label("substr_compare_invalid_length");
+    let done = ctx.next_label("substr_compare_done");
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let scratch_reg = abi::symbol_scratch_reg(ctx.emitter);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        scratch_reg,
+        crate::codegen_support::runtime::SUBSTR_COMPARE_INVALID_OFFSET,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, {scratch_reg}"));
+            ctx.emitter.instruction(&format!("b.eq {invalid_offset}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, {scratch_reg}"));
+            ctx.emitter.instruction(&format!("je {invalid_offset}"));
+        }
+    }
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        scratch_reg,
+        crate::codegen_support::runtime::SUBSTR_COMPARE_INVALID_LENGTH,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, {scratch_reg}"));
+            ctx.emitter.instruction(&format!("b.eq {invalid_length}"));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("cmp {result_reg}, {scratch_reg}"));
+            ctx.emitter.instruction(&format!("je {invalid_length}"));
+        }
+    }
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid_offset);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "substr_compare(): Argument #3 ($offset) must be contained in argument #1 ($haystack)",
+    );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&invalid_length);
+    super::super::exceptions::emit_value_error(
+        ctx,
+        "substr_compare(): Argument #4 ($length) must be greater than or equal to 0",
+    );
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    ctx.emitter.label(&done);
+}
+
 /// Lowers `str_replace()`/`str_ireplace()` with three operands.
 ///
 /// Handles the common all-string form directly, and the PHP array-`$search` form (with an array or
@@ -1304,6 +2374,34 @@ pub(crate) fn lower_string_replace(
         )));
     }
     let search = expect_operand(inst, 0)?;
+    let subject = expect_operand(inst, 2)?;
+    if matches!(
+        ctx.value_php_type(subject)?.codegen_repr(),
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str
+    ) {
+        let search_is_string_array = matches!(
+            ctx.value_php_type(search)?.codegen_repr(),
+            PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str
+        );
+        let replace = expect_operand(inst, 1)?;
+        let replace_is_string_array = matches!(
+            ctx.value_php_type(replace)?.codegen_repr(),
+            PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str
+        );
+        if !search_is_string_array || !replace_is_string_array {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} with an indexed-array subject currently requires indexed string-array search and replacement arguments",
+                name
+            )));
+        }
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_string_replace_array_subject_aarch64(ctx, inst)?,
+            Arch::X86_64 => lower_string_replace_array_subject_x86_64(ctx, inst)?,
+        }
+        let subject_label = format!("{}_array_subject_arrays", runtime_label);
+        abi::emit_call_label(ctx.emitter, &subject_label);
+        return store_if_result(ctx, inst);
+    }
     match ctx.value_php_type(search)?.codegen_repr() {
         PhpType::Array(elem) if elem.codegen_repr() == PhpType::Str => {
             let replace_is_array = string_replace_array_replacement(ctx, inst, name)?;
@@ -1332,6 +2430,42 @@ pub(crate) fn lower_string_replace(
             store_if_result(ctx, inst)
         }
     }
+}
+
+/// Materializes array search, replacement, and subject pointers for the AArch64 array-subject helper.
+fn lower_string_replace_array_subject_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    let subject = expect_operand(inst, 2)?;
+    ctx.load_value_to_reg(search, "x1")?;
+    ctx.emitter.instruction("stp x1, xzr, [sp, #-16]!");                        // preserve the search array while loading the remaining operands
+    ctx.load_value_to_reg(replace, "x2")?;
+    ctx.emitter.instruction("stp x2, xzr, [sp, #-16]!");                        // preserve the replacement array while loading the subject array
+    ctx.load_value_to_reg(subject, "x3")?;
+    ctx.emitter.instruction("ldp x2, xzr, [sp], #16");                          // restore the replacement array pointer
+    ctx.emitter.instruction("ldp x1, xzr, [sp], #16");                          // restore the search array pointer
+    Ok(())
+}
+
+/// Materializes array search, replacement, and subject pointers for the x86_64 array-subject helper.
+fn lower_string_replace_array_subject_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let search = expect_operand(inst, 0)?;
+    let replace = expect_operand(inst, 1)?;
+    let subject = expect_operand(inst, 2)?;
+    ctx.load_value_to_reg(search, "rdi")?;
+    ctx.emitter.instruction("push rdi");                                        // preserve the search array while loading the remaining operands
+    ctx.load_value_to_reg(replace, "rsi")?;
+    ctx.emitter.instruction("push rsi");                                        // preserve the replacement array while loading the subject array
+    ctx.load_value_to_reg(subject, "rdx")?;
+    ctx.emitter.instruction("pop rsi");                                         // restore the replacement array pointer
+    ctx.emitter.instruction("pop rdi");                                         // restore the search array pointer
+    Ok(())
 }
 
 /// Reports whether the `$replace` operand of an array-search `str_replace` is itself an array.
@@ -2930,7 +4064,9 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
     match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
             PhpType::Int | PhpType::Bool => Ok("__rt_implode_int"),
-            PhpType::Str | PhpType::Mixed | PhpType::Never => Ok("__rt_implode"),
+            PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => {
+                Ok("__rt_implode")
+            }
             other => Err(CodegenIrError::unsupported(format!(
                 "implode array element PHP type {:?}",
                 other

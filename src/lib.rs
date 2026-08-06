@@ -58,8 +58,8 @@ pub mod optimize;
 pub mod mb_convert_encoding_prelude;
 /// Conditionally-injected three-argument `explode()` standard-library prelude.
 pub mod explode_limit_prelude;
-/// Conditionally-injected `strncmp()` standard-library prelude.
-pub mod strncmp_prelude;
+/// Conditionally-injected elephc-PHP preludes for unlowered string builtins.
+pub mod string_compat_prelude;
 pub mod parse_ini_prelude;
 /// Conditionally-injected `parse_str()` standard-library prelude.
 pub mod parse_str_prelude;

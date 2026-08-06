@@ -86,14 +86,12 @@ const CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS: &[&str] = &[
     "get_debug_type",
     "get_defined_constants",
     "getmypid",
-    "grapheme_extract",
-    "grapheme_str_split",
-    "grapheme_stripos",
-    "grapheme_strlen",
-    "grapheme_strpos",
-    "grapheme_strripos",
-    "grapheme_strrpos",
-    "grapheme_substr",
+    // The `grapheme_*` family is deliberately UNCLAIMED, for the same reason as the `mb_*` names
+    // above: elephc has no implementation (correct grapheme clustering needs Unicode tables it
+    // does not ship), and claiming the names made `function_exists('grapheme_strlen')` fold TRUE
+    // so `symfony/polyfill-intl-grapheme`'s own guard DROPPED its userland definition — leaving
+    // codegen to answer `unsupported EIR backend feature`. Unclaimed, the vendored polyfill
+    // supplies real, upstream-maintained implementations.
     "header_remove",
     "headers_sent",
     "hexdec",
@@ -123,8 +121,9 @@ const CAMPAIGN_LEGACY_BUILTIN_FUNCTIONS: &[&str] = &[
     // `unsupported EIR backend feature: builtin call mb_strripos`. Leaving the names UNCLAIMED lets
     // the vendored polyfill supply real, upstream-maintained PHP implementations.
     "mb_convert_encoding",
-    "normalizer_is_normalized",
-    "normalizer_normalize",
+    // `normalizer_*` is unclaimed for the same reason as `grapheme_*`:
+    // `symfony/polyfill-intl-normalizer` ships the real implementation and its
+    // `if (!function_exists(...))` guard must see the name as ABSENT to install it.
     "octdec",
     "pack",
     "parse_str",
@@ -276,14 +275,12 @@ pub(crate) fn is_prelude_overridable_builtin(canonical: &str) -> bool {
     // elephc-PHP prelude (`crate::mb_convert_encoding_prelude`), because the `mb_*` family has no
     // EIR lowering at all and a call would otherwise die with
     // `unsupported EIR backend feature: builtin call mb_convert_encoding`.
-    // `strncmp` keeps its catalog membership — `function_exists('strncmp')` must still report a
-    // real PHP function — while its BODY ships as an elephc-PHP prelude
-    // (`crate::strncmp_prelude`), because it had no EIR lowering at all and a call would otherwise
-    // die with `unsupported EIR backend feature: builtin call strncmp`.
-    matches!(
-        canonical,
-        "trigger_error" | "mb_convert_encoding" | "strncmp"
-    )
+    // The `crate::string_compat_prelude` names keep their catalog membership —
+    // `function_exists('strncmp')` must still report a real PHP function — while their BODIES ship
+    // as elephc-PHP preludes, because they had no EIR lowering at all and a call would otherwise
+    // die with `unsupported EIR backend feature: builtin call <name>`.
+    matches!(canonical, "trigger_error" | "mb_convert_encoding")
+        || crate::string_compat_prelude::supplies(canonical)
 }
 
 /// Returns true only for PHP-visible builtin functions (non-internal builtins).

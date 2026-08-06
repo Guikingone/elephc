@@ -113,7 +113,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
     let resolved = elephc::mb_convert_encoding_prelude::inject_if_used(resolved);
     let resolved = elephc::explode_limit_prelude::inject_if_used(resolved);
-    let resolved = elephc::strncmp_prelude::inject_if_used(resolved);
+    let resolved = elephc::string_compat_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_ini_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_str_prelude::inject_if_used(resolved);
     let resolved = elephc::filter_var_prelude::inject_if_used(resolved);
@@ -598,7 +598,7 @@ pub(crate) fn compile_expect_check_error(source: &str) -> String {
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
     let resolved = elephc::shutdown_prelude::inject_if_used(resolved);
     let resolved = elephc::explode_limit_prelude::inject_if_used(resolved);
-    let resolved = elephc::strncmp_prelude::inject_if_used(resolved);
+    let resolved = elephc::string_compat_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_ini_prelude::inject_if_used(resolved);
     let resolved = elephc::parse_str_prelude::inject_if_used(resolved);
     let resolved = elephc::filter_var_prelude::inject_if_used(resolved);

@@ -278,6 +278,131 @@ echo strncmp("abc", "abd", 0);
     assert_eq!(out, "0|-4|4|0|1|0");
 }
 
+/// A NEGATIVE `$offset` makes `strpos()` start `abs($offset)` bytes from the END of the haystack.
+///
+/// The native lowering applied the offset as `ptr += offset; len -= offset`, which for a negative
+/// offset walked the haystack pointer BEFORE the string and answered as though the offset were
+/// relative to the start — silently: `strpos("abcabc", "a", -3)` returned 0 where PHP returns 3,
+/// and `strpos("hello", "l", -1)` returned 2 where PHP returns false. Pinned against `php -n`.
+#[test]
+fn test_strpos_negative_offset_counts_from_the_end() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strpos("hello", "l", -2));
+var_dump(strpos("hello", "l", -3));
+var_dump(strpos("hello", "l", -1));
+var_dump(strpos("hello", "h", -5));
+var_dump(strpos("abcabc", "a", -3));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(3)\nint(2)\nbool(false)\nint(0)\nint(3)\n"
+    );
+}
+
+/// An offset outside the haystack raises a `ValueError` in PHP 8; it used to return `false`.
+#[test]
+fn test_strpos_offset_outside_the_haystack_throws_value_error() {
+    let out = compile_and_run(
+        r#"<?php
+foreach ([-6, 6] as $offset) {
+    try {
+        strpos("hello", "l", $offset);
+    } catch (\ValueError $e) {
+        echo $e->getMessage(), "\n";
+    }
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n\
+         strpos(): Argument #3 ($offset) must be contained in argument #1 ($haystack)\n"
+    );
+}
+
+/// A positive offset keeps working through the same path.
+#[test]
+fn test_strpos_positive_offset_still_searches_forward() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strpos("hello", "l", 0));
+var_dump(strpos("hello", "l", 3));
+var_dump(strpos("hello", "", 5));
+"#,
+    );
+    assert_eq!(out, "int(2)\nint(3)\nint(5)\n");
+}
+
+/// `strrpos()`'s offset means something DIFFERENT from `strpos()`'s: a NEGATIVE offset requires the
+/// match to START at or before `strlen + offset`, so the search window ends `strlen($needle)`
+/// bytes further along. The native lowering shared `strpos`'s haystack adjustment and got this
+/// wrong the same silent way. Pinned against `php -n`.
+#[test]
+fn test_strrpos_negative_offset_bounds_the_match_start() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strrpos("hello", "l", -1));
+var_dump(strrpos("hello", "l", -2));
+var_dump(strrpos("hello", "l", -3));
+var_dump(strrpos("hello", "l", -5));
+var_dump(strrpos("hello", "l", 3));
+var_dump(strrpos("hello", "l", 4));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(3)\nint(3)\nint(2)\nbool(false)\nint(3)\nbool(false)\n"
+    );
+}
+
+/// `strripos()` is the case-insensitive form and inherits the same offset contract.
+#[test]
+fn test_strripos_folds_case_and_honours_the_offset() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(strripos("HELLO", "l"));
+var_dump(strripos("HELLO", "L", -3));
+var_dump(strripos("HELLO", "z"));
+"#,
+    );
+    assert_eq!(out, "int(3)\nint(2)\nbool(false)\n");
+}
+
+/// `strncasecmp()` folds ASCII case on both truncations. Pinned against `php -n` (PHP 8.5).
+#[test]
+fn test_strncasecmp_returns_php_byte_difference() {
+    let out = compile_and_run(
+        r#"<?php
+echo strncasecmp("Hello", "HELP", 3), "|";
+echo strncasecmp("Hello", "HELP", 4), "|";
+echo strncasecmp("HELP", "Hello", 4);
+"#,
+    );
+    assert_eq!(out, "0|-4|4");
+}
+
+/// `stripos()` is case-insensitive `strpos()`: ASCII folding preserves byte length, so positions
+/// map 1:1 onto the original haystack. Covers the `false` miss, the empty needle and a NEGATIVE
+/// offset — all pinned against `php -n`.
+#[test]
+fn test_stripos_matches_php_including_false_and_negative_offset() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(stripos("Hello World", "o"));
+var_dump(stripos("Hello World", "O", 5));
+var_dump(stripos("Hello", "z"));
+var_dump(stripos("Hello", ""));
+var_dump(stripos("Hello", "L", -2));
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(4)\nint(7)\nbool(false)\nint(0)\nint(3)\n"
+    );
+}
+
 /// PHP 8 rejects a negative `$length` with a `ValueError` rather than clamping it.
 #[test]
 fn test_strncmp_negative_length_throws_value_error() {
