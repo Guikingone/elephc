@@ -21,9 +21,8 @@ use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_m
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
-    array_storage_conversion, join_array_storage_conversion, ClassInfo, EnumInfo, ExternFunctionSig,
-    FunctionSig, InterfaceInfo, PackedClassInfo, PhpType, ReturnAliasSummaries, ThrowAccessInfo,
-    TypeEnv,
+    ClassInfo, EnumInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    ReturnAliasSummaries, ThrowAccessInfo, TypeEnv,
 };
 
 /// Value returned by expression lowering with its PHP metadata.
@@ -89,92 +88,6 @@ pub(crate) struct ClosureCapture {
     pub value: ValueId,
 }
 
-/// Complete rollback point for a speculative lowering.
-///
-/// A region must be lowered ONCE against a local-type environment nothing inside it can
-/// invalidate, so `stmt::repr_fixpoint` first lowers it speculatively to discover which locals it
-/// converts, then throws that lowering away and re-lowers against the converted environment.
-/// Everything the discovery pass could have mutated is captured here; a field that is captured but
-/// not restored is a silent miscompile, so `LoweringContext::snapshot` destructures the context
-/// exhaustively to make a forgotten field a compile error.
-pub(crate) struct LoweringSnapshot {
-    function: Function,
-    insertion_block: Option<BlockId>,
-    data: DataPoolLengths,
-    local_slots: HashMap<String, LocalSlotId>,
-    local_kinds: HashMap<String, LocalKind>,
-    local_types: TypeEnv,
-    initialized_slots: HashSet<LocalSlotId>,
-    constants: HashMap<String, (ExprKind, PhpType)>,
-    loop_stack: Vec<LoopFrame>,
-    finally_stack: Vec<FinallyFrame>,
-    static_callable_locals: HashMap<String, StaticCallableBinding>,
-    reflection_class_locals: HashMap<String, String>,
-    reflection_function_locals: HashMap<String, String>,
-    reflection_property_locals: HashMap<String, (String, String)>,
-    reflection_method_locals: HashMap<String, (String, String)>,
-    reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
-    fiber_start_sigs: HashMap<String, FunctionSig>,
-    ref_bound_locals: HashSet<String>,
-    ref_cell_owner_locals: HashMap<String, LocalSlotId>,
-    foreach_int_key_locals: HashSet<String>,
-    array_conversions: HashMap<String, PhpType>,
-    speculating: bool,
-    closure_count: usize,
-    pending_static_callable_result: Option<StaticCallableBinding>,
-    closure_counter: usize,
-    hidden_temp_counter: usize,
-    eval_barrier_active: bool,
-    eval_executed: bool,
-    eval_scope_read_param: Option<String>,
-    eval_scope_read_names: HashSet<String>,
-    eval_scope_write_names: HashSet<String>,
-    eval_scope_flush_names: BTreeSet<String>,
-}
-
-/// Interned-pool lengths captured before a speculative lowering.
-///
-/// The pools are append-only and content-addressed (`intern_string_vec` returns the index of an
-/// existing entry), so entries that predate the snapshot keep their `DataId` and a rolled-back
-/// pass re-interns to exactly the same ids. Truncating back to these lengths therefore removes
-/// precisely the entries a discarded lowering added, and nothing outside the discarded `Function`
-/// (or the discarded closure functions) can hold a `DataId` past them.
-struct DataPoolLengths {
-    strings: usize,
-    float_literals: usize,
-    global_names: usize,
-    function_names: usize,
-    class_names: usize,
-    method_names: usize,
-    property_names: usize,
-}
-
-impl DataPoolLengths {
-    /// Records the current length of every interned pool.
-    fn capture(data: &DataPool) -> Self {
-        Self {
-            strings: data.strings.len(),
-            float_literals: data.float_literals.len(),
-            global_names: data.global_names.len(),
-            function_names: data.function_names.len(),
-            class_names: data.class_names.len(),
-            method_names: data.method_names.len(),
-            property_names: data.property_names.len(),
-        }
-    }
-
-    /// Drops every pool entry interned after the snapshot.
-    fn truncate(&self, data: &mut DataPool) {
-        data.strings.truncate(self.strings);
-        data.float_literals.truncate(self.float_literals);
-        data.global_names.truncate(self.global_names);
-        data.function_names.truncate(self.function_names);
-        data.class_names.truncate(self.class_names);
-        data.method_names.truncate(self.method_names);
-        data.property_names.truncate(self.property_names);
-    }
-}
-
 const EVAL_CONTEXT_LOCAL_NAME: &str = "__eir_eval_context";
 const EVAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_scope";
 const EVAL_GLOBAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_global_scope";
@@ -202,6 +115,12 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// Statically-decided access violations lowered to runtime `Error` throws,
     /// keyed by the source span of the offending call/assignment.
     pub throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+    /// Authoritative checker result types for builtin calls in this source module.
+    pub builtin_call_types: &'m HashMap<Span, PhpType>,
+    /// Checker-computed fixed-point storage contracts for loop-carried array locals.
+    pub loop_storage_types: &'m crate::types::LoopStorageTypes,
+    /// Function-like scope key paired with loop spans for storage-contract lookup.
+    pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
     pub top_level_env: TypeEnv,
     pub current_class: Option<String>,
@@ -224,29 +143,6 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// still promoting for keys that may be strings (generic `Array(Mixed)`,
     /// `AssocArray`, `Mixed`, `Union` sources).
     foreach_int_key_locals: HashSet<String>,
-    /// Storage representation an already-lowered op has CONVERTED a local array to, for every
-    /// local converted at ANY point in the body lowered so far.
-    ///
-    /// The record has to be sticky because the conversion's only other trace — the local's current
-    /// type fact — is rolled back at every `if` arm split, and a converting arm that `continue`s or
-    /// `break`s contributes no edge to the arm join either. A region that only converts on such a
-    /// path would then look, from its exit environment, as if it never converted at all, and its
-    /// entry would skip the canonicalization the region's body was already lowered against.
-    ///
-    /// The recorded value is the JOIN of every conversion of that local (`join_array_conversion`),
-    /// not the last one: a region whose arms convert the same local along DIFFERENT axes — one arm
-    /// to `Array(Mixed)`, another to a hash — must be entered with the array in the one
-    /// representation that satisfies both, or the arm lowered against the other axis writes through
-    /// the wrong storage.
-    array_conversions: HashMap<String, PhpType>,
-    /// `true` while a region is being lowered speculatively, only to discover which locals it
-    /// converts (`stmt::repr_fixpoint`).
-    ///
-    /// Nested regions do not run their own discovery while this is set: the discovery pass needs
-    /// nothing from them but the conversion records, which a plain lowering already leaves behind,
-    /// and re-entering the fixpoint per nesting level would make the lowering cost exponential in
-    /// nesting depth instead of linear.
-    speculating: bool,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -292,6 +188,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         interfaces: &'m HashMap<String, InterfaceInfo>,
         packed_classes: &'m HashMap<String, PackedClassInfo>,
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
+        builtin_call_types: &'m HashMap<Span, PhpType>,
+        loop_storage_types: &'m crate::types::LoopStorageTypes,
+        loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
         current_class: Option<String>,
@@ -321,6 +220,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             interfaces,
             packed_classes,
             throw_access_sites,
+            builtin_call_types,
+            loop_storage_types,
+            loop_storage_scope,
             constants: constants.clone(),
             top_level_env,
             current_class,
@@ -336,8 +238,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
-            array_conversions: HashMap::new(),
-            speculating: false,
             return_type,
             return_php_type,
             by_ref_return: false,
@@ -357,180 +257,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_flush_names: BTreeSet::new(),
             source_path,
         }
-    }
-
-    /// Captures every piece of state a speculative lowering can mutate.
-    ///
-    /// The `Self { .. }` pattern is written out field by field ON PURPOSE, with no `..` rest
-    /// pattern: a field added to `LoweringContext` later must not silently escape the rollback,
-    /// so it has to fail to compile here until someone decides how it is restored.
-    pub(crate) fn snapshot(&self) -> LoweringSnapshot {
-        let Self {
-            builder,
-            data,
-            local_slots,
-            local_kinds,
-            local_types,
-            initialized_slots,
-            // Shared, read-only lookup tables for the whole module: lowering never writes them.
-            functions: _,
-            extern_functions: _,
-            extern_globals: _,
-            callable_param_sigs: _,
-            return_alias_summaries: _,
-            fiber_return_sigs: _,
-            classes: _,
-            enums: _,
-            interfaces: _,
-            packed_classes: _,
-            throw_access_sites: _,
-            constants,
-            // Fixed for the whole body being lowered (set once by `ir_lower::function`).
-            top_level_env: _,
-            current_class: _,
-            loop_stack,
-            finally_stack,
-            static_callable_locals,
-            reflection_class_locals,
-            reflection_function_locals,
-            reflection_property_locals,
-            reflection_method_locals,
-            reflection_arg_array_locals,
-            fiber_start_sigs,
-            ref_bound_locals,
-            ref_cell_owner_locals,
-            foreach_int_key_locals,
-            array_conversions,
-            speculating,
-            return_type: _,
-            return_php_type: _,
-            by_ref_return: _,
-            in_main: _,
-            all_global_var_names: _,
-            web: _,
-            owner_name: _,
-            closures,
-            pending_static_callable_result,
-            closure_counter,
-            hidden_temp_counter,
-            eval_barrier_active,
-            eval_executed,
-            eval_scope_read_param,
-            eval_scope_read_names,
-            eval_scope_write_names,
-            eval_scope_flush_names,
-            source_path: _,
-        } = self;
-        LoweringSnapshot {
-            function: builder.snapshot_function(),
-            insertion_block: builder.insertion_block(),
-            data: DataPoolLengths::capture(data),
-            local_slots: local_slots.clone(),
-            local_kinds: local_kinds.clone(),
-            local_types: local_types.clone(),
-            initialized_slots: initialized_slots.clone(),
-            constants: constants.clone(),
-            loop_stack: loop_stack.clone(),
-            finally_stack: finally_stack.clone(),
-            static_callable_locals: static_callable_locals.clone(),
-            reflection_class_locals: reflection_class_locals.clone(),
-            reflection_function_locals: reflection_function_locals.clone(),
-            reflection_property_locals: reflection_property_locals.clone(),
-            reflection_method_locals: reflection_method_locals.clone(),
-            reflection_arg_array_locals: reflection_arg_array_locals.clone(),
-            fiber_start_sigs: fiber_start_sigs.clone(),
-            ref_bound_locals: ref_bound_locals.clone(),
-            ref_cell_owner_locals: ref_cell_owner_locals.clone(),
-            foreach_int_key_locals: foreach_int_key_locals.clone(),
-            array_conversions: array_conversions.clone(),
-            speculating: *speculating,
-            closure_count: closures.len(),
-            pending_static_callable_result: pending_static_callable_result.clone(),
-            closure_counter: *closure_counter,
-            hidden_temp_counter: *hidden_temp_counter,
-            eval_barrier_active: *eval_barrier_active,
-            eval_executed: *eval_executed,
-            eval_scope_read_param: eval_scope_read_param.clone(),
-            eval_scope_read_names: eval_scope_read_names.clone(),
-            eval_scope_write_names: eval_scope_write_names.clone(),
-            eval_scope_flush_names: eval_scope_flush_names.clone(),
-        }
-    }
-
-    /// Undoes every effect of a speculative lowering, back to the snapshot point.
-    ///
-    /// Closure literals are the one sink that lives OUTSIDE the function being built:
-    /// `function::lower_closure_function_with_signature` pushes each lowered closure body into
-    /// `self.closures` (and the module later drains it). Truncating that vector to its recorded
-    /// length, together with restoring `closure_counter`, means a re-lowering re-creates the same
-    /// closure functions under the same generated names instead of duplicating them.
-    pub(crate) fn restore(&mut self, snapshot: LoweringSnapshot) {
-        let LoweringSnapshot {
-            function,
-            insertion_block,
-            data,
-            local_slots,
-            local_kinds,
-            local_types,
-            initialized_slots,
-            constants,
-            loop_stack,
-            finally_stack,
-            static_callable_locals,
-            reflection_class_locals,
-            reflection_function_locals,
-            reflection_property_locals,
-            reflection_method_locals,
-            reflection_arg_array_locals,
-            fiber_start_sigs,
-            ref_bound_locals,
-            ref_cell_owner_locals,
-            foreach_int_key_locals,
-            array_conversions,
-            speculating,
-            closure_count,
-            pending_static_callable_result,
-            closure_counter,
-            hidden_temp_counter,
-            eval_barrier_active,
-            eval_executed,
-            eval_scope_read_param,
-            eval_scope_read_names,
-            eval_scope_write_names,
-            eval_scope_flush_names,
-        } = snapshot;
-        self.builder.restore_function(function);
-        self.builder.restore_insertion_cursor(insertion_block);
-        data.truncate(self.data);
-        self.local_slots = local_slots;
-        self.local_kinds = local_kinds;
-        self.local_types = local_types;
-        self.initialized_slots = initialized_slots;
-        self.constants = constants;
-        self.loop_stack = loop_stack;
-        self.finally_stack = finally_stack;
-        self.static_callable_locals = static_callable_locals;
-        self.reflection_class_locals = reflection_class_locals;
-        self.reflection_function_locals = reflection_function_locals;
-        self.reflection_property_locals = reflection_property_locals;
-        self.reflection_method_locals = reflection_method_locals;
-        self.reflection_arg_array_locals = reflection_arg_array_locals;
-        self.fiber_start_sigs = fiber_start_sigs;
-        self.ref_bound_locals = ref_bound_locals;
-        self.ref_cell_owner_locals = ref_cell_owner_locals;
-        self.foreach_int_key_locals = foreach_int_key_locals;
-        self.array_conversions = array_conversions;
-        self.speculating = speculating;
-        self.closures.truncate(closure_count);
-        self.pending_static_callable_result = pending_static_callable_result;
-        self.closure_counter = closure_counter;
-        self.hidden_temp_counter = hidden_temp_counter;
-        self.eval_barrier_active = eval_barrier_active;
-        self.eval_executed = eval_executed;
-        self.eval_scope_read_param = eval_scope_read_param;
-        self.eval_scope_read_names = eval_scope_read_names;
-        self.eval_scope_write_names = eval_scope_write_names;
-        self.eval_scope_flush_names = eval_scope_flush_names;
     }
 
     /// Returns the canonical PHP source path associated with this lowered body, if known.
@@ -698,45 +424,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(slot) = self.local_slots.get(name).copied() {
             self.builder.widen_local_storage_type(slot, ty.clone());
         }
-        // This is the single funnel every array storage conversion flows through, so it is the only
-        // place the fact can be recorded before the type env that carries it is rolled back at an
-        // `if` arm split (see `array_conversions`).
-        if let Some(target) = array_storage_conversion(self.local_types.get(name), &ty) {
-            let joined = match self.array_conversions.get(name) {
-                Some(previous) => join_array_storage_conversion(previous, &target),
-                None => target,
-            };
-            self.array_conversions.insert(name.to_string(), joined);
-        }
         self.local_types.insert(name.to_string(), ty);
-    }
-
-    /// Returns the representation a region has already converted `name`'s array storage to.
-    pub(crate) fn array_conversion(&self, name: &str) -> Option<&PhpType> {
-        self.array_conversions.get(name)
-    }
-
-    /// Drops the conversion records for `names`, so what a region records from here on is exactly
-    /// what THAT region converts.
-    ///
-    /// The records are function-scoped and nothing else removes from them, so a region entered
-    /// after an earlier one already converted the same local would otherwise re-read the earlier
-    /// region's record and hoist a conversion of its own that nothing in it performs. Called only
-    /// under a `snapshot`, whose `restore` puts the dropped records back.
-    pub(crate) fn forget_array_conversions(&mut self, names: &[String]) {
-        for name in names {
-            self.array_conversions.remove(name);
-        }
-    }
-
-    /// Returns true while a region is being lowered only to discover the conversions it performs.
-    pub(crate) fn is_speculating(&self) -> bool {
-        self.speculating
-    }
-
-    /// Marks the lowering as speculative; the caller must restore the previous value.
-    pub(crate) fn set_speculating(&mut self, speculating: bool) -> bool {
-        std::mem::replace(&mut self.speculating, speculating)
     }
 
     /// Updates only the flow-sensitive PHP type fact for a local.
@@ -774,35 +462,17 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         slot
     }
 
-    /// Re-binds a by-value container parameter to a fresh OWNING shadow slot.
+    /// Rebinds a by-value array/hash parameter to an owning copy-on-write shadow slot.
     ///
-    /// PHP passes arrays by value. elephc implements that with refcount + copy-on-write, but the
-    /// call site hands the callee a `+0` BORROW: the parameter slot holds the caller's pointer
-    /// without ever incrementing its refcount. `__rt_array_ensure_unique` only splits at refcount
-    /// >= 2, so it stayed inert and every write in the callee landed straight in the CALLER's
-    /// storage — `function f(array $a) { $a[] = 1; }` mutated the caller's array.
-    ///
-    /// The fix is to give the PHP name a slot that genuinely owns a reference. This emits, at
-    /// function entry, exactly what `$shadow = $param;` already emits for any user assignment —
-    /// `LoadLocal` + `Acquire` + `StoreLocal` — and then re-points the name at the shadow. The
-    /// callee's refcount is now 2, so the first write really copy-on-write splits, and the
-    /// existing epilogue cleanup releases the shadow (skipping it when its value is returned).
-    /// No new op, no new assembly: the mechanism is the one every `$b = $a;` in every compiled
-    /// program already exercises.
-    ///
-    /// The `#` in the shadow's name makes it uninhabitable by a PHP identifier, so it can never
-    /// collide with a user local or with a host parameter after inlining.
+    /// Call sites pass container pointers as borrows. Acquiring the value into a fresh local makes
+    /// the first callee mutation observe refcount two and split instead of modifying caller storage.
     pub(crate) fn privatize_container_param(
         &mut self,
         name: &str,
         php_type: &PhpType,
         span: Option<Span>,
     ) {
-        // Read the incoming borrow while the name still resolves to the parameter slot.
         let borrowed = self.load_local(name, span);
-
-        // Allocate the shadow directly: `declare_local_with_kind` early-returns the existing slot
-        // when the name is already mapped, which is exactly the case here.
         let shadow = self.builder.add_local(
             Some(format!("{}#cow", name)),
             value_ir_type(php_type),
@@ -810,11 +480,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             LocalKind::PhpLocal,
         );
         self.local_slots.insert(name.to_string(), shadow);
-        self.local_kinds.insert(name.to_string(), LocalKind::PhpLocal);
-
-        // The shadow is deliberately NOT marked initialized yet: `store_local` must not treat it
-        // as holding a previous occupant to release. Its own store marks it initialized, so a
-        // later `$a = [...]` in the body does correctly release what the shadow held.
+        self.local_kinds
+            .insert(name.to_string(), LocalKind::PhpLocal);
         self.store_local(name, borrowed, php_type.clone(), span);
     }
 
@@ -826,39 +493,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Captures the definitely-initialized local slots at a control-flow split.
-    ///
-    /// A local can be TYPED `Array` while its slot still holds the prologue's zero on another path,
-    /// so any lowering that would DEREFERENCE a slot's current value unconditionally — the indexed
-    /// array conversions in `stmt` — must gate on this set rather than on the type fact alone.
     pub(crate) fn initialized_slots_snapshot(&self) -> HashSet<LocalSlotId> {
         self.initialized_slots.clone()
-    }
-
-    /// Returns true when `slot` is definitely initialized at the current program point.
-    ///
-    /// The borrowing accessor exists so the per-statement candidate scan in `stmt::repr_fixpoint`
-    /// does not have to clone the whole set once per statement just to test a handful of locals.
-    pub(crate) fn slot_is_initialized(&self, slot: LocalSlotId) -> bool {
-        self.initialized_slots.contains(&slot)
     }
 
     /// Replaces the definitely-initialized local set after branch lowering or merge analysis.
     pub(crate) fn restore_initialized_slots(&mut self, initialized_slots: HashSet<LocalSlotId>) {
         self.initialized_slots = initialized_slots;
-    }
-
-    /// Captures the flow-sensitive local-type facts at a control-flow split.
-    pub(crate) fn local_types_snapshot(&self) -> TypeEnv {
-        self.local_types.clone()
-    }
-
-    /// Restores only the flow-sensitive type facts at a branch split.
-    ///
-    /// Deliberately NOT `set_local_type`: that also widens the slot's FRAME storage
-    /// (`Builder::widen_local_storage_type`), and the storage must stay widened even when the
-    /// per-arm type fact is rolled back — the arms share one frame.
-    pub(crate) fn restore_local_types(&mut self, types: TypeEnv) {
-        self.local_types = types;
     }
 
     /// Records that a local currently aliases by-reference storage.
@@ -874,17 +515,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// Returns true when a local is currently modeled as a by-reference alias.
     pub(crate) fn is_ref_bound_local(&self, name: &str) -> bool {
         self.ref_bound_locals.contains(name)
-    }
-
-    /// Returns true when a local's reads and writes go through program-global storage instead of
-    /// its own frame slot.
-    ///
-    /// Such a local is a boxed Mixed cell (or, for a superglobal, a hash) whatever `local_types`
-    /// says about it, so a lowering that converts a local's ARRAY REPRESENTATION in place must skip
-    /// it: the value it would load is the cell, not the array.
-    pub(crate) fn local_uses_global_storage(&self, name: &str) -> bool {
-        let kind = self.local_kinds.get(name).copied().unwrap_or(LocalKind::PhpLocal);
-        self.uses_global_storage(name, kind)
     }
 
     /// Declares a fresh hidden temporary slot and returns its synthetic name.
@@ -1012,13 +642,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         }
     }
 
-    /// Applies only the materialized local-scope part needed by EIR eval AOT.
-    pub(crate) fn apply_eval_scope_barrier(&mut self) {
+    /// Applies the materialized local scope and widens caller slots written by EIR eval AOT.
+    pub(crate) fn apply_eval_scope_barrier(&mut self, write_names: &BTreeSet<String>) {
         self.eval_barrier_active = true;
         self.declare_eval_scope_local();
         // Scope-sync codegen paths flush program globals into the local scope,
         // so the global-scope handle slot must exist alongside the scope slot.
         self.declare_eval_global_scope_local();
+        let widen_names = write_names
+            .iter()
+            .filter(|name| {
+                self.local_kinds.get(*name).copied() == Some(LocalKind::PhpLocal)
+                    && self
+                        .local_slots
+                        .get(*name)
+                        .is_some_and(|slot| eval_barrier_can_widen(&self.builder.local_php_type(*slot)))
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        for name in widen_names {
+            self.set_local_type(&name, PhpType::Mixed);
+        }
     }
 
     /// Ensures top-level eval fragments can see `$argc` and `$argv` by name.
@@ -1428,20 +1072,46 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.builder.widen_local_storage_type(slot, widen_type);
         let source = value;
         let source_is_owning_temporary = self.value_is_owning_temporary(value);
+        let transfer_catch_source_to_store = matches!(
+            self.builder.value_defining_op(value.value),
+            Some(Op::CatchBind)
+        ) && previous_kind != LocalKind::StaticLocal;
         let release_source_after_store =
             self.value_needs_release_after_retaining_store(value)
-                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp);
+                && !matches!(previous_kind, LocalKind::HiddenTemp | LocalKind::OwnedTemp)
+                && !transfer_catch_source_to_store;
         let transfer_callable_source_to_store = source_is_owning_temporary
             && matches!(php_type.codegen_repr(), PhpType::Callable);
+        let transfer_source_to_store =
+            transfer_callable_source_to_store || transfer_catch_source_to_store;
+        // A `static` local outlives the frame, so a store into one must take its OWN
+        // reference. The backend's `lower_store_static_local` already does that via
+        // `emit_incref_if_refcounted`, but `PhpType::is_refcounted()` does NOT list
+        // `PhpType::Str` — so that incref is a silent no-op for STRINGS specifically, while
+        // `release_source_after_store` below still fires. `static $s = ""; $s = f($x);`
+        // therefore stored the callee's buffer and then freed it, leaving the static
+        // pointing at freed memory that rendered as whatever the allocator handed out next.
+        //
+        // Retain here for the string case ONLY. Widening this to every static would
+        // DOUBLE-count Mixed/Array/Object statics, which the backend already increfs
+        // (`static $n = 0; $n = $n + 1;` widens to Mixed through `ichecked_add` and
+        // regressed `test_http_response_path_leaves_no_live_heap_blocks` that way).
+        // The paired release of the PREVIOUS occupant is emitted below.
+        let static_local_store_needs_string_retain = previous_kind == LocalKind::StaticLocal
+            && matches!(
+                self.builder.value_php_type(value.value).codegen_repr(),
+                PhpType::Str
+            );
+        let store_retains_value = uses_global
+            || previous_kind == LocalKind::PhpLocal
+            || static_local_store_needs_string_retain;
         // Retain before cleanup because a borrowed result can alias the old slot.
-        let value = if (uses_global || previous_kind == LocalKind::PhpLocal)
-            && !transfer_callable_source_to_store
+        let value = if store_retains_value
+            && !transfer_source_to_store
             && !self.is_ref_bound_local(name)
         {
             crate::ir_lower::ownership::acquire_if_refcounted(self, value, span)
-        } else if (uses_global || previous_kind == LocalKind::PhpLocal)
-            && !transfer_callable_source_to_store
-        {
+        } else if store_retains_value && !transfer_source_to_store {
             // For ref-bound locals, acquire only when NOT narrowing Mixed→Int.
             // When the source is Mixed and the ref cell's previous type is Int,
             // the ref cell store narrows via __rt_mixed_cast_int, consuming the
@@ -1489,10 +1159,21 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         {
             self.release_stored_local_value_before_overwrite(name, slot, span);
         }
+        // NO release of the previous occupant is emitted here for the string case: the
+        // BACKEND already does it. `lower_store_static_local` calls
+        // `emit_store_result_to_symbol(.., release_previous = true)`, whose `PhpType::Str`
+        // arm loads the symbol's current payload and calls `__rt_heap_free_safe` before
+        // overwriting it. Emitting a second release here is a DOUBLE FREE — it survived
+        // macOS/aarch64 (where the redundant free was absorbed) and was caught by the
+        // heap-debug double-free guard on linux-x86_64.
+        //
+        // So the two layers split cleanly for a static string store: this layer owns the
+        // RETAIN (the backend's `emit_incref_if_refcounted` skips `Str`), the backend owns
+        // the RELEASE of what it overwrites.
         if uses_global {
             self.store_global_name(name, slot, value, span);
             self.set_local_type(name, php_type);
-            if release_source_after_store && !transfer_callable_source_to_store {
+            if release_source_after_store && !transfer_source_to_store {
                 crate::ir_lower::ownership::release_if_owned(self, source, span);
             }
             return value;
@@ -1521,7 +1202,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if !is_ref_bound {
             self.set_local_type(name, php_type);
         }
-        if release_source_after_store && !transfer_callable_source_to_store && !ref_cell_narrowed_mixed_to_int {
+        if release_source_after_store
+            && !transfer_source_to_store
+            && !ref_cell_narrowed_mixed_to_int
+        {
             crate::ir_lower::ownership::release_if_owned(self, source, span);
         }
         value
@@ -1840,29 +1524,6 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.insert(owner_slot);
     }
 
-    /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
-    /// durable heap reference cell suitable for an escaping by-reference parameter.
-    pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
-        if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed {
-            return;
-        }
-        if self.local_type(name).codegen_repr() != PhpType::Mixed {
-            let source = self.load_local(name, span);
-            let boxed = self.emit_value(
-                Op::MixedBox,
-                vec![source.value],
-                None,
-                PhpType::Mixed,
-                Op::MixedBox.default_effects(),
-                span,
-            );
-            self.store_local(name, boxed, PhpType::Mixed, span);
-        }
-        if !self.is_ref_bound_local(name) {
-            self.promote_local_ref_cell(name, span);
-        }
-    }
-
     /// Binds one local name to the same ref-cell pointer as another local.
     pub(crate) fn alias_local_ref_cell(&mut self, target: &str, source: &str, span: Option<Span>) {
         if target == source {
@@ -1995,6 +1656,9 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.value_is_owned_index_read_temp(value) {
             return true;
         }
+        if self.value_is_borrowed_user_call_result(value.value) {
+            return false;
+        }
         if matches!(
             self.builder.value_defining_op(value.value),
             Some(Op::PropGet | Op::DynamicPropGet | Op::NullsafePropGet)
@@ -2017,21 +1681,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_op(value.value),
                 Some(
                     Op::Acquire
-                    // `__rt_array_set_mixed_key` returns a `+1` the caller owns: the in-place paths
-                    // hand back the reference the lowering acquired, the promote paths release the
-                    // abandoned source and return a freshly built hash. Either way the result must
-                    // be released once it has been stored, or every mixed-key write leaks.
-                    | Op::ArraySetMixedKey
-                    | Op::ArrayGetForWrite
-                    | Op::HashGetForWrite
-                    | Op::MixedArrayGetForWrite
                     | Op::IToStr
                     | Op::FToStr
                     | Op::BoolToStr
                     | Op::ResourceToStr
                     | Op::MixedBox
-                    | Op::MixedClone
-                    | Op::MixedUnbox
                     | Op::ArrayToMixed
                     | Op::HashToMixed
                     | Op::InvokerRefArg
@@ -2063,6 +1717,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::CallableArrayNew
                     | Op::BufferNew
                     | Op::GeneratorNew
+                    | Op::CatchBind
                     // `yield`/`yield from` return owned Mixed cells (the sent
                     // value from `__rt_gen_suspend`, the delegated return from
                     // `__rt_gen_delegate`); a discarded result must be released.
@@ -2091,6 +1746,143 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         )
     }
 
+    /// Publishes lowering's owning-temporary proof into final EIR ownership metadata.
+    ///
+    /// Ordinary local loads stay conservative because their provisional ownership is
+    /// repaired separately after final slot widening. One-shot `OwnedTemp` loads are
+    /// exact and can be promoted along with non-load producers. String results stay
+    /// conservative because `Owned` cannot distinguish heap strings from concat scratch
+    /// storage; their Mixed-box transfer remains classified by the string-specific path.
+    pub(crate) fn finalize_value_ownership_metadata(&mut self) {
+        let owned_values = (0..self.builder.value_count())
+            .filter_map(|raw| {
+                let value = ValueId::from_raw(raw as u32);
+                if self.builder.value_ownership(value) != Ownership::MaybeOwned {
+                    return None;
+                }
+                if self.builder.value_php_type(value).codegen_repr() == PhpType::Str {
+                    return None;
+                }
+                let op = self.builder.value_defining_op(value);
+                if matches!(op, Some(Op::LoadLocal | Op::LoadStaticLocal))
+                    && !self.value_is_owned_temp_load(value)
+                {
+                    return None;
+                }
+                let lowered = LoweredValue {
+                    value,
+                    ir_type: self.builder.value_type(value),
+                };
+                self.value_is_owning_temporary(lowered).then_some(value)
+            })
+            .collect::<Vec<_>>();
+        for value in owned_values {
+            self.builder.set_value_ownership(value, Ownership::Owned);
+        }
+    }
+
+    /// Returns whether a user-call result can alias a borrowed visible argument.
+    ///
+    /// User functions currently return refcounted parameter storage without
+    /// acquiring it for the caller. Such a result is borrowed when the matching
+    /// argument is borrowed, but remains an owning temporary when an owning
+    /// argument temporary transfers through the call.
+    fn value_is_borrowed_user_call_result(&self, result: ValueId) -> bool {
+        let Some(inst) = self.builder.value_defining_instruction(result) else {
+            return false;
+        };
+        if inst.op != Op::Call {
+            return false;
+        }
+        let Some(Immediate::Data(function_id)) = inst.immediate else {
+            return false;
+        };
+        let Some(function_name) = self.data.function_names.get(function_id.as_raw() as usize)
+        else {
+            return false;
+        };
+        let Some(return_alias) = self.return_alias_summaries.function(function_name) else {
+            return false;
+        };
+        inst.operands
+            .iter()
+            .enumerate()
+            .any(|(parameter_index, argument)| {
+                if !return_alias.proven_aliases_parameter(parameter_index)
+                    || !self.call_result_may_alias_arg(*argument, result)
+                {
+                    return false;
+                }
+                let argument = LoweredValue {
+                    value: *argument,
+                    ir_type: self.builder.value_type(*argument),
+                };
+                !self.value_is_owning_temporary(argument)
+            })
+    }
+
+    /// Returns whether a call result can legally reuse one argument's refcounted payload.
+    ///
+    /// This is the conservative check used on the *may-alias* path (a callee whose
+    /// summary is `Unknown` or only possibly returns the parameter). A freshly boxed
+    /// checked-arithmetic operand is excluded here: without a proof that the callee
+    /// hands it back, the caller must still release that owning temporary after the
+    /// call, or it leaks once per call (issue #486). When the callee is *proven* to
+    /// return the parameter, callers use [`Self::arg_and_result_types_can_alias`]
+    /// instead, which admits those fresh boxes (issue #604).
+    pub(crate) fn call_result_may_alias_arg(&self, argument: ValueId, result: ValueId) -> bool {
+        if matches!(
+            self.builder.value_defining_op(argument),
+            Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+        ) {
+            return false;
+        }
+        self.arg_and_result_types_can_alias(argument, result)
+    }
+
+    /// Returns whether the argument and result runtime types permit a shared payload.
+    ///
+    /// This is the pure type-compatibility half of [`Self::call_result_may_alias_arg`],
+    /// without the fresh-arithmetic-box exclusion. It is consulted on the proven-return
+    /// path: a callee proven to return this parameter (`return $x;`) genuinely hands the
+    /// same box straight back even when the argument was a freshly boxed `$i + 1`, so the
+    /// caller must not also release it as an argument temporary (issue #604).
+    pub(crate) fn arg_and_result_types_can_alias(
+        &self,
+        argument: ValueId,
+        result: ValueId,
+    ) -> bool {
+        let argument_type = self.builder.value_php_type(argument).codegen_repr();
+        let result_type = self.builder.value_php_type(result).codegen_repr();
+        if !Ownership::php_type_needs_lifetime_tracking(&argument_type)
+            || !Ownership::php_type_needs_lifetime_tracking(&result_type)
+        {
+            return false;
+        }
+        match (&argument_type, &result_type) {
+            (PhpType::Mixed | PhpType::Union(_), _)
+            | (_, PhpType::Mixed | PhpType::Union(_)) => true,
+            (PhpType::Object(_), PhpType::Object(_)) => true,
+            (PhpType::Array(_), PhpType::Array(_)) => true,
+            (
+                PhpType::AssocArray { .. },
+                PhpType::AssocArray { .. } | PhpType::Array(_) | PhpType::Iterable,
+            ) => true,
+            (
+                PhpType::Iterable,
+                PhpType::Iterable
+                | PhpType::Array(_)
+                | PhpType::AssocArray { .. }
+                | PhpType::Object(_),
+            ) => true,
+            (PhpType::Array(_) | PhpType::Object(_), PhpType::Iterable) => true,
+            (PhpType::Str, PhpType::Str) => true,
+            (PhpType::Callable, PhpType::Callable) => true,
+            (PhpType::Buffer(_), PhpType::Buffer(_)) => true,
+            _ => argument_type == result_type,
+        }
+    }
+
     /// Returns whether the value is a read from a one-shot hidden expression temp.
     pub(crate) fn value_is_owned_temp_load(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
@@ -2112,7 +1904,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     /// provisional owners; builder finalization removes their emitted releases if the
     /// slot stays concrete. Callable loads use the eager answer because assignment has
     /// a separate move-vs-retain decision that cannot be repaired by pruning a release.
-    fn value_is_owned_unboxed_local_load(&self, value: ValueId) -> bool {
+    ///
+    /// Callers that *publish* the pointer without consuming the local's ownership
+    /// (notably `throw $e`) must still retain: the slot remains an owner after the load.
+    pub(crate) fn value_is_owned_unboxed_local_load(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
@@ -2166,36 +1961,13 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     }
 
     /// Returns whether a container read now owns a caller reference.
-    ///
-    /// The silent variants must be listed alongside the warning ones: they share
-    /// the very same codegen (`Op::ArrayGetSilent` lowers through
-    /// `arrays::lower_array_get` with warnings off, and
-    /// `Op::ArrayGetMixedKeySilent` through `__rt_array_get_mixed_key` with the
-    /// warn flag cleared), so they hand back an equally owned reference. The
-    /// mixed-key reads own theirs unconditionally — `__rt_array_get_mixed_key`
-    /// either boxes the element into a fresh `Mixed` cell or increfs the stored
-    /// one before returning it (hence its `ALLOC_HEAP` effect) — so omitting them
-    /// here leaked one cell per `$arr[$key]` read on a mixed key.
     fn value_is_owning_container_read(&self, value: ValueId) -> bool {
         let php_type = self.builder.value_php_type(value);
         let php_type = php_type.codegen_repr();
         let op = self.builder.value_defining_op(value);
         (matches!(php_type, PhpType::Mixed | PhpType::Union(_))
             || (php_type.is_refcounted() && php_type != PhpType::Str))
-            && matches!(
-                op,
-                Some(
-                    Op::ArrayGet
-                        | Op::ArrayGetSilent
-                        | Op::ArrayGetForWrite
-                        | Op::HashGet
-                        | Op::HashGetSilent
-                        | Op::HashGetForWrite
-                        | Op::ArrayGetMixedKey
-                        | Op::ArrayGetMixedKeySilent
-                        | Op::MixedArrayGetForWrite
-                )
-            )
+            && matches!(op, Some(Op::ArrayGet | Op::HashGet | Op::HashGetSilent))
     }
 
     /// Returns whether an index-read receiver is itself an owned intermediate
@@ -2221,32 +1993,43 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Some(
                 Op::ArrayGet
                     | Op::ArrayGetSilent
-                    | Op::ArrayGetForWrite
                     | Op::HashGet
                     | Op::HashGetSilent
-                    | Op::HashGetForWrite
                     | Op::ArrayGetMixedKey
                     | Op::ArrayGetMixedKeySilent
-                    | Op::MixedArrayGetForWrite
             )
         )
     }
 
-    /// Returns true for builtin calls whose return value is newly allocated for the caller.
+    /// Returns true for typed builtin calls whose result is newly allocated for the caller.
     fn value_is_owning_builtin_temporary(&self, value: ValueId) -> bool {
         let Some(inst) = self.builder.value_defining_instruction(value) else {
             return false;
         };
-        if inst.op != Op::BuiltinCall {
-            return false;
+        match inst.immediate {
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
+            )) => false,
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
+                matches!(
+                    target.result_ownership(),
+                    crate::builtins::semantics::BuiltinResultOwnership::Fresh
+                )
+            }
+            Some(Immediate::RuntimeCall(
+                crate::ir::RuntimeCallTarget::ProfiledFunction { target, .. },
+            )) => matches!(
+                target.result_ownership(),
+                crate::builtins::semantics::BuiltinResultOwnership::Fresh
+            ),
+            Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::UnaryString(_))) => true,
+            Some(Immediate::Data(name_id)) if inst.op == Op::LanguageConstructCall => self
+                .data
+                .function_names
+                .get(name_id.as_raw() as usize)
+                .is_some_and(|name| php_symbol_key(name.trim_start_matches('\\')) == "eval"),
+            _ => false,
         }
-        let Some(Immediate::Data(name_id)) = inst.immediate else {
-            return false;
-        };
-        let Some(name) = self.data.function_names.get(name_id.as_raw() as usize) else {
-            return false;
-        };
-        builtin_call_result_owns_storage_as_temporary(name)
     }
 
     /// Returns true when straight-line callable binding metadata is safe for a local.
@@ -2563,6 +2346,36 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         LoweredValue { value, ir_type }
     }
 
+    /// Emits a value-producing opcode whose result is an unconditional owned reference.
+    ///
+    /// This is reserved for runtime transfers such as `CatchBind`, where the opcode clears
+    /// the source runtime cell and hands its sole reference to the returned SSA value.
+    pub(crate) fn emit_owned_value(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let ir_type = value_ir_type(&php_type);
+        let value = self
+            .builder
+            .emit_with_effects(
+                op,
+                operands,
+                immediate,
+                ir_type,
+                php_type,
+                Ownership::Owned,
+                effects,
+                span,
+            )
+            .expect("owned value opcode produces a value");
+        LoweredValue { value, ir_type }
+    }
+
     /// Emits an `is_truthy` conversion when a value is not already I64.
     pub(crate) fn truthy(&mut self, input: LoweredValue, span: Option<Span>) -> LoweredValue {
         if input.ir_type == IrType::I64 {
@@ -2577,6 +2390,100 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             span,
         )
     }
+
+    /// Computes truthiness and releases `input` when this path owns it.
+    ///
+    /// `IsTruthy` reads its operand and yields a fresh, non-aliasing boolean, so
+    /// a branch condition that consumes an owned temporary — e.g. the boxed
+    /// `Mixed` result of `$x[0] ?? default` fed into an `if`/ternary/`&&`/`!` —
+    /// must release that temporary here or it leaks on the truthiness path
+    /// (issue #586). Use this at condition sites that discard the original
+    /// value; callers that also forward it (short ternary `?:`) must keep using
+    /// [`Self::truthy`], which never releases.
+    pub(crate) fn truthy_consuming(
+        &mut self,
+        input: LoweredValue,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        let owns_input = self.value_is_owning_temporary(input);
+        let result = self.truthy(input, span);
+        // Only release when a distinct boolean was produced; the `I64` fast path
+        // in `truthy` returns `input` itself (and non-heap values never own).
+        if owns_input && result.value != input.value {
+            crate::ir_lower::ownership::release_if_owned(self, input, span);
+        }
+        result
+    }
+}
+
+impl crate::builtins::semantics::BuiltinLoweringContext for LoweringContext<'_, '_> {
+    /// Returns PHP metadata already attached to an EIR operand.
+    fn value_php_type(&self, value: ValueId) -> PhpType {
+        self.builder.value_php_type(value)
+    }
+
+    /// Emits a backend-neutral builtin operation through the ordinary EIR builder path.
+    fn emit_value(
+        &mut self,
+        op: Op,
+        operands: Vec<ValueId>,
+        immediate: Option<Immediate>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let lowered = LoweringContext::emit_value(
+            self,
+            op,
+            operands,
+            immediate,
+            php_type,
+            effects,
+            span,
+        );
+        crate::builtins::semantics::LoweredBuiltinValue {
+            value: lowered.value,
+        }
+    }
+
+    /// Emits a typed runtime call whose helper symbol and physical ABI remain backend-owned.
+    fn emit_runtime_call(
+        &mut self,
+        target: crate::ir::RuntimeCallTarget,
+        operands: Vec<ValueId>,
+        php_type: PhpType,
+        effects: Effects,
+        span: Option<Span>,
+    ) -> crate::builtins::semantics::LoweredBuiltinValue {
+        let target = match target {
+            crate::ir::RuntimeCallTarget::Function(target)
+                if matches!(
+                    target,
+                    crate::ir::RuntimeFnId::FunctionExists
+                        | crate::ir::RuntimeFnId::IsCallable
+                        | crate::ir::RuntimeFnId::ObStart
+                ) || target.string_callback_operand_index().is_some() =>
+            {
+                crate::ir::RuntimeCallTarget::ProfiledFunction {
+                    target,
+                    strict_php: crate::strict_php::is_enabled(),
+                }
+            }
+            target => target,
+        };
+        let lowered = LoweringContext::emit_value(
+            self,
+            Op::RuntimeCall,
+            operands,
+            Some(Immediate::RuntimeCall(target)),
+            php_type,
+            effects,
+            span,
+        );
+        crate::builtins::semantics::LoweredBuiltinValue {
+            value: lowered.value,
+        }
+    }
 }
 
 /// Returns true for addressable local kinds whose `StoreLocal` overwrites owned storage.
@@ -2587,61 +2494,6 @@ fn local_kind_uses_plain_store_cleanup(kind: LocalKind) -> bool {
             | LocalKind::HiddenTemp
             | LocalKind::OwnedTemp
             | LocalKind::NamedArgTemp
-    )
-}
-
-/// Returns true when a builtin result must be released after a retaining consumer.
-///
-/// The result of a `BuiltinCall` is only released as a temporary when the callee OWNS its
-/// storage — i.e. it returns a freshly allocated refcounted value (array/string) whose
-/// lifetime is independent of its arguments. Adding a builtin here must not include any
-/// BORROWING builtin (current/end/reset/next/prev/key/each and similar element-access
-/// helpers return a pointer into a live argument array); releasing such a result would
-/// free storage still owned by the caller and corrupt the heap.
-fn builtin_call_result_owns_storage_as_temporary(name: &str) -> bool {
-    let name = php_symbol_key(name.trim_start_matches('\\'));
-    if crate::builtins::registry::returns_fresh_storage(&name) {
-        return true;
-    }
-    matches!(
-        name.as_str(),
-        // Legacy classifications that have not yet migrated into BuiltinSpec metadata.
-        // Array/mixed-returning builtins that allocate fresh result storage.
-        "__elephc_new_without_constructor"
-            | "array_chunk"
-            | "array_column"
-            | "array_combine"
-            | "array_diff"
-            | "eval"
-            | "array_fill"
-            | "array_fill_keys"
-            | "array_intersect"
-            | "array_keys"
-            | "array_map"
-            | "array_merge"
-            | "array_pad"
-            | "array_pop"
-            | "array_replace"
-            | "array_replace_recursive"
-            | "array_reverse"
-            | "array_shift"
-            | "array_slice"
-            | "array_unique"
-            | "array_values"
-            | "explode"
-            | "iterator_to_array"
-            | "preg_split"
-            | "range"
-            | "str_split"
-            // String-returning builtins that allocate fresh owned string storage.
-            | "ptr_read_string"
-            | "strpos"
-            | "strrpos"
-            // zval bridge: `zval_unpack` rebuilds a fresh owned value (scalars box a
-            // new Mixed cell; strings persist an owned copy; arrays own-transfer the
-            // freshly rebuilt array into the cell with refcount 1), so its Mixed result
-            // is an owning temporary that must be released after a retaining insert.
-            | "zval_unpack"
     )
 }
 
@@ -2715,6 +2567,7 @@ fn named_type_expr_to_php_type(name: &str) -> PhpType {
     match name.trim_start_matches('\\').to_ascii_lowercase().as_str() {
         "array" => PhpType::Array(Box::new(PhpType::Mixed)),
         "callable" => PhpType::Callable,
+        "closure" => PhpType::Callable,
         "mixed" => PhpType::Mixed,
         "object" => PhpType::Object(String::new()),
         _ => PhpType::Object(name.to_string()),
@@ -2734,7 +2587,6 @@ fn ref_cell_needs_mixed_array_conversion(cell_ty: &PhpType, value_ty: &PhpType) 
         && ref_cell_array_element_type(value_ty)
             .is_some_and(|elem| !matches!(elem, PhpType::Mixed | PhpType::Never))
 }
-
 
 /// Returns the element type of an array-shaped PHP type (indexed or associative), if any.
 fn ref_cell_array_element_type(ty: &PhpType) -> Option<PhpType> {

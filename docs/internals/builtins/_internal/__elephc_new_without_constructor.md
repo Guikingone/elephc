@@ -2,7 +2,7 @@
 title: "__elephc_new_without_constructor() — internals"
 description: "Compiler internals for __elephc_new_without_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 444
+  order: 470
 ---
 
 ## `__elephc_new_without_constructor()` — internals
@@ -10,17 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_new_without_constructor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_new_without_constructor.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:553](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L553) (`lower_elephc_new_without_constructor`)
-- **Function symbol**: `lower_elephc_new_without_constructor()`
+- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Allocates a dynamically named object while deliberately skipping its constructor.
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `fresh`
+- **Effects**: `static (3 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

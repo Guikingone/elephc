@@ -410,6 +410,12 @@ pub trait RuntimeValueOps {
     /// Returns the unboxed object payload pointer used for PHP object identity.
     fn object_identity(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
 
+    /// Returns the PHP OBJECT HANDLE — the small dense integer `spl_object_id()`
+    /// reports and `var_dump()` prints as `object(C)#N`. This is deliberately not
+    /// `object_identity`: that one is the storage address, which destructor
+    /// bookkeeping keys on, while this one must match the AOT engine's pool.
+    fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus>;
+
     /// Returns the object identity that would be freed by releasing this owned cell, if any.
     fn final_object_identity_for_release(
         &mut self,
@@ -436,6 +442,24 @@ pub trait RuntimeValueOps {
 
     /// Creates a runtime resource cell with a zero-based native resource payload.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
+
+    /// Creates a runtime cell for an eval-owned incremental hash context.
+    ///
+    /// SEPARATE FROM `resource()` ON PURPOSE. PHP 8's `hash_init()` returns a
+    /// `HashContext` OBJECT, which draws from the object-handle space and consumes
+    /// nothing from the per-request RESOURCE counter that `get_resource_id()` and
+    /// `var_dump()` report. Routing hash contexts through `resource()` made
+    /// `eval('hash_init("md5"); $x = fopen(...);')` report an id one higher than PHP
+    /// for `$x`, and shifted the host program's later `fopen()`s too, because eval and
+    /// the compiled program share one id counter.
+    ///
+    /// The cell still carries runtime tag 9, because that is the shape
+    /// `eval_resource_payload` reads the table key back out of; what changes is the
+    /// resource KIND word, which becomes 5 = eval-owned inert handle: no PHP id is
+    /// bound and no destructor runs. `value` is a key into `EvalStreamResources`, which
+    /// owns the real `elephc_crypto` handle and frees it in its own `Drop` — this cell
+    /// must never free anything.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus>;
 
     /// Creates a runtime float cell.
     fn float(&mut self, value: f64) -> Result<RuntimeCellHandle, EvalStatus>;
@@ -577,6 +601,54 @@ pub trait RuntimeValueOps {
 
     /// Converts one runtime cell to PHP boolean truthiness.
     fn truthy(&mut self, value: RuntimeCellHandle) -> Result<bool, EvalStatus>;
+
+    /// Pushes a new output buffer with handler metadata; false when refused.
+    /// `handler_id` is a magician ob-handler registry id (None = default handler),
+    /// `name` the PHP-visible display name, `chunk_size`/`flags` PHP's ob_start
+    /// parameters.
+    fn ob_start_ex(
+        &mut self,
+        handler_id: Option<u64>,
+        name: &str,
+        chunk_size: i64,
+        flags: i64,
+    ) -> Result<bool, EvalStatus>;
+
+    /// Pops the top output buffer and returns its raw bytes (handler applied and
+    /// contents flushed to the parent sink when `flush`); None when refused.
+    fn ob_get_end(&mut self, flush: bool) -> Result<Option<Vec<u8>>, EvalStatus>;
+
+    /// Returns `(chunk_size, stored_flags, is_user_handler, started)` for the
+    /// 0-based buffer index, if it exists.
+    fn ob_slot_meta(&mut self, index: i64)
+        -> Result<Option<(i64, i64, bool, bool)>, EvalStatus>;
+
+    /// Returns a copy of one buffer's handler display name, if the slot exists.
+    fn ob_slot_name(&mut self, index: i64) -> Result<Option<Vec<u8>>, EvalStatus>;
+
+    /// Returns the current output-buffer nesting depth (0 = no buffering).
+    fn ob_level(&mut self) -> Result<i64, EvalStatus>;
+
+    /// Returns the top output buffer's byte count, or None when no buffer is active.
+    fn ob_length(&mut self) -> Result<Option<i64>, EvalStatus>;
+
+    /// Returns a copy of the top output buffer's bytes, or None when no buffer is active.
+    fn ob_contents(&mut self) -> Result<Option<Vec<u8>>, EvalStatus>;
+
+    /// Truncates the top output buffer in place; false when no buffer is active.
+    fn ob_clean(&mut self) -> Result<bool, EvalStatus>;
+
+    /// Flushes the top output buffer to the parent sink without popping it.
+    fn ob_flush(&mut self) -> Result<bool, EvalStatus>;
+
+    /// Pops the top output buffer, flushing it to the parent sink when `flush` is true.
+    fn ob_end(&mut self, flush: bool) -> Result<bool, EvalStatus>;
+
+    /// Returns `(buffer_used, buffer_size)` for the 0-based buffer index, if it exists.
+    fn ob_stats(&mut self, index: i64) -> Result<Option<(i64, i64)>, EvalStatus>;
+
+    /// Stores the (semantically inert) implicit-flush flag.
+    fn ob_implicit_flush(&mut self, enable: bool) -> Result<(), EvalStatus>;
 }
 
 pub(super) const EVAL_TAG_INT: u64 = 0;

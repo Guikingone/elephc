@@ -1,6 +1,6 @@
 [package]
 name = "elephc"
-version = "0.26.1"
+version = "0.26.3"
 edition = "2021"
 default-run = "elephc"
 description = "A PHP-to-native AOT compiler"
@@ -43,6 +43,13 @@ inventory = "0.3"
 stacker = "0.1"
 bitflags = "2"
 serde_json = "1"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+toml = "0.9"
+toml_edit = "0.25"
+tar = "0.4"
+fs2 = "0.4"
+ureq = { version = "3", default-features = false, features = ["rustls"] }
 # flate2 (default miniz_oxide backend = pure Rust, no system zlib) is used by the
 # compiler to inflate raw-DEFLATE phar:// entries at compile time. Decompress-only.
 flate2 = "1"
@@ -50,6 +57,13 @@ flate2 = "1"
 # the compiler to decompress bzip2 phar:// entries at compile time. Decompress-only.
 bzip2-rs = "0.1"
 elephc-phar = { path = "crates/elephc-phar" }
+# indicatif drives the live per-phase spinner and cargo-style "Linking" event
+# lines shown while compiling; console (indicatif's own transitive color/TTY
+# crate) is added directly too since errors/report.rs and timings.rs style text
+# with it independently of the spinner. Both are pure Rust, no C toolchain
+# dependency, consistent with flate2/bzip2-rs above.
+indicatif = "0.17"
+console = "0.15"
 
 # Bridge crates are runtime staticlibs, not used by the Rust compiler itself,
 # but codegen tests link their libelephc_*.a artifacts into compiled PHP

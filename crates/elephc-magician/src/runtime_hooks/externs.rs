@@ -298,11 +298,15 @@ unsafe extern "C" {
     pub(super) fn __elephc_eval_value_release_raw_heap_word(word: u64);
     /// Returns the unboxed object payload pointer for object-tagged eval values.
     pub(super) fn __elephc_eval_value_object_identity(value: *mut RuntimeCell) -> u64;
+    /// Returns the PHP object handle (`spl_object_id`) for object-tagged eval values.
+    pub(super) fn __elephc_eval_value_object_handle(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_warning(message_ptr: *const u8, message_len: u64);
     pub(super) fn __elephc_eval_value_null() -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_bool(value: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_int(value: i64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_resource(value: i64) -> *mut RuntimeCell;
+    /// Boxes an eval hash-context table key as an inert (id-less, destructor-less) resource.
+    pub(super) fn __elephc_eval_value_hash_context(value: i64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_float(value: f64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_string(ptr: *const u8, len: u64) -> *mut RuntimeCell;
     pub(super) fn __elephc_eval_value_cast_int(value: *mut RuntimeCell) -> *mut RuntimeCell;
@@ -377,9 +381,55 @@ unsafe extern "C" {
         out_len: *mut u64,
     ) -> u64;
     pub(super) fn __elephc_eval_value_truthy(value: *mut RuntimeCell) -> u64;
+    pub(super) fn __elephc_eval_ob_start() -> i64;
+    pub(super) fn __elephc_eval_ob_level() -> i64;
+    pub(super) fn __elephc_eval_ob_length() -> i64;
+    pub(super) fn __elephc_eval_ob_clean() -> i64;
+    pub(super) fn __elephc_eval_ob_flush() -> i64;
+    pub(super) fn __elephc_eval_ob_end(flush: i64) -> i64;
+    pub(super) fn __elephc_eval_ob_contents(out_ptr: *mut *const u8, out_len: *mut i64) -> i64;
+    pub(super) fn __elephc_eval_ob_stats(index: i64, out_used: *mut i64, out_size: *mut i64)
+        -> i64;
+    pub(super) fn __elephc_eval_ob_implicit_flush(enable: i64);
+    pub(super) fn __elephc_eval_ob_start_ex(
+        has_handler: i64,
+        handler_id: i64,
+        chunk_size: i64,
+        flags: i64,
+        name_ptr: *const u8,
+        name_len: i64,
+    ) -> i64;
+    pub(super) fn __elephc_eval_ob_get_clean_pop(out_ptr: *mut *const u8, out_len: *mut i64)
+        -> i64;
+    pub(super) fn __elephc_eval_ob_get_flush_pop(out_ptr: *mut *const u8, out_len: *mut i64)
+        -> i64;
+    pub(super) fn __elephc_eval_ob_release_string(ptr: *const u8);
+    pub(super) fn __elephc_eval_ob_slot_meta(
+        index: i64,
+        out_chunk: *mut i64,
+        out_flags: *mut i64,
+        out_user_started: *mut i64,
+    ) -> i64;
+    pub(super) fn __elephc_eval_ob_slot_name(
+        index: i64,
+        out_ptr: *mut *const u8,
+        out_len: *mut i64,
+    ) -> i64;
+    pub(super) fn __elephc_eval_install_ob_handler_hook(callback: usize);
     pub(super) fn __elephc_eval_value_final_object_identity(value: *mut RuntimeCell) -> u64;
     pub(super) fn __elephc_eval_value_release(value: *mut RuntimeCell);
     pub(super) fn __elephc_eval_value_retain(value: *mut RuntimeCell) -> *mut RuntimeCell;
     /// Installs the optional eval dynamic object destructor callback.
     pub(super) fn __elephc_eval_install_dynamic_object_destructor_hook(callback: usize);
+}
+
+/// Forwards one installed eval ob-handler callback address to the generated runtime.
+///
+/// # Safety
+/// `callback` must follow the eval ob-handler ABI; see
+/// `crate::runtime_hooks::install_ob_handler_hook`.
+pub(super) unsafe fn install_ob_handler_hook_raw(callback: usize) {
+    unsafe {
+        __elephc_eval_install_ob_handler_hook(callback);
+    }
 }

@@ -9,21 +9,33 @@
 //!   concrete valid classes, and abstract valid classes from the AOT class table.
 //! - `internal: true` keeps this compiler primitive out of PHP-visible builtin catalogs.
 
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
-use crate::ir::Instruction;
+use crate::builtins::semantics::{
+    internal_eir_semantics, BuiltinLoweringContext, BuiltinResultOwnership,
+    LoweredBuiltinValue, NormalizedBuiltinCall,
+};
+use crate::ir::{Effects, Op};
 
 builtin! {
     name: "__elephc_pdo_statement_class_status",
-    area: Internal,
+    area: System,
     params: [class: Str],
     returns: Int,
-    lower: lower,
+    semantics: internal_eir_semantics(lower, Effects::PURE, BuiltinResultOwnership::NonHeap),
     summary: "Classifies a dynamically named class for PDO statement construction.",
     internal: true
 }
 
-/// Lowers PDO statement-class validation through the AOT class metadata table.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::system::lower_elephc_pdo_statement_class_status(ctx, inst)
+/// Lowers PDO statement-class validation to the dedicated AOT metadata EIR primitive.
+fn lower(
+    ctx: &mut dyn BuiltinLoweringContext,
+    call: &NormalizedBuiltinCall<'_>,
+) -> Result<LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+    Ok(ctx.emit_value(
+        Op::DynamicPdoStatementClassStatus,
+        vec![call.operand(0)?],
+        None,
+        call.result_type.clone(),
+        Op::DynamicPdoStatementClassStatus.default_effects(),
+        Some(call.span),
+    ))
 }

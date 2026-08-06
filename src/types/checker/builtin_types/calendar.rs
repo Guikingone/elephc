@@ -32,7 +32,7 @@ fn cal_method(
 ) -> ClassMethod {
     let tokens = crate::lexer::tokenize(src)
         .unwrap_or_else(|e| panic!("calendar helper {name} must tokenize: {e:?}"));
-    let body = crate::parser::parse(&tokens)
+    let body = crate::parser::parse_internal(&tokens)
         .unwrap_or_else(|e| panic!("calendar helper {name} must parse: {e:?}"));
     ClassMethod {
         name: name.to_string(),

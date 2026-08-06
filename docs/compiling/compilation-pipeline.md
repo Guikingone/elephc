@@ -1,6 +1,6 @@
 ---
 title: "The compilation pipeline"
-description: "Every phase a PHP file passes through on the way to a native binary, in order, with the timing label each phase reports."
+description: "Every phase a PHP or LFC source file passes through on the way to a native binary, in order, with the timing label each phase reports."
 sidebar:
   order: 2
 ---
@@ -13,8 +13,9 @@ directly back to a stage here.
 ## Phase order
 
 ```text
-PHP source
+Physical source (.php or .lfc)
   -> read              read the source file from disk
+  -> classify          select tagged PHP or tagless LFC mode from its path
   -> tokenize          Lexer: text -> tokens
   -> parse             Parser: tokens -> AST (Pratt expression parsing)
   -> magic-constants   lower __FILE__, __DIR__, __LINE__, __FUNCTION__, ...
@@ -26,10 +27,14 @@ PHP source
   -> tz-prelude         inject the timezone-introspection prelude when used
   -> list-id-prelude    inject the DateTimeZone identifier-list prelude when used
   -> var-export-prelude inject the var_export prelude when used
+  -> opcache-prelude    inject the OPcache API prelude when used
   -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
+  -> hash-prelude       inject the incremental-hashing prelude when used
   -> web-prelude        inject the web runtime prelude with --web
+  -> version-prelude    inject referenced PHP version-surface helpers
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
+  -> opcache-manifest-bake complete the OPcache script manifest after autoloading
   -> opt-fold           AST constant folding
   -> typecheck          Type checker / warnings
   -> exports-scan       collect #[Export] functions (cdylib)
@@ -41,7 +46,7 @@ PHP source
   -> ir-opt             EIR optimization passes (fixed-point driver)
   -> ir-print           print EIR and stop (with --emit-ir)
   -> runtime-cache      build/reuse the prebuilt runtime object
-  -> codegen-ir         EIR -> target assembly
+  -> codegen            EIR -> target assembly
   -> write-asm          write the generated assembly
   -> source-map         write the .map sidecar (with --source-map)
   -> assemble           assembler: assembly -> object file
@@ -50,25 +55,28 @@ PHP source
 
 ## Front end: source to checked AST
 
-- **read / tokenize / parse** — the [Lexer](../internals/the-lexer.md) turns
-  source text into tokens and the [Parser](../internals/the-parser.md) builds the
-  abstract syntax tree.
+- **read / classify / tokenize / parse** — every physical file is classified
+  independently. `.lfc` starts in code mode with no tags; every other suffix
+  retains tagged-PHP behavior. The [Lexer](../internals/the-lexer.md) turns the
+  source into tokens and the [Parser](../internals/the-parser.md) builds the AST.
 - **magic-constants** — magic constants such as `__DIR__` and `__LINE__` are
   substituted before any later pass sees them.
 - **strict-PHP audit** — with [`--strict-php`](cli-reference.md#strict-php-mode),
-  the freshly parsed AST is audited and every elephc-only construct is reported
-  before any later pass runs. Included and autoloaded user files get the same
-  audit where they are parsed (inside resolve / autoload-run), while
-  compiler-injected preludes are exempt.
+  each freshly parsed PHP-mode AST is audited and every elephc-only construct is
+  reported before any later pass runs. Included and autoloaded files are
+  classified where they are parsed (inside resolve / autoload-run); LFC and
+  compiler-injected source are exempt.
 - **conditional compilation** — `ifdef` branches are resolved using the symbols
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
-  resolved, declarations are discovered, demand-loaded PHP preludes for PDO,
+  resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  and image processing are injected only when referenced, the web runtime
-  prelude is injected with `--web`, and namespace/`use` rules rewrite
-  references to fully-qualified names. Autoloading is wired in around these
-  steps.
+  OPcache, image processing, incremental hashing, and PHP version helpers are
+  injected only when referenced. The web runtime prelude is injected with
+  `--web`, and namespace/`use` rules rewrite references to fully-qualified
+  names. Autoloading is wired in around these steps; after autoload insertion,
+  **opcache-manifest-bake** replaces the preliminary OPcache script manifest
+  with the complete entry/include/autoload file set before constant folding.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
   validates types and emits warnings.
 
@@ -100,14 +108,20 @@ behind a flag.
 - **runtime-cache** — the hand-written runtime is assembled once and cached in
   `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).
-- **codegen-ir** — EIR is lowered to target assembly through the default backend.
+- **codegen** — EIR is lowered to target assembly through the default backend.
   See [The Code Generator](../internals/the-codegen.md).
 
 ## Tail: assemble and link
 
-The generated assembly is written out, assembled into an object file, and linked
-together with the cached runtime object (and any
-[extra libraries](linking-and-conditional-compilation.md)) into the final binary.
+The generated assembly is written out and assembled into an object file. Only
+on a final-link path, logical [managed native
+requirements](native-dependencies.md) are resolved read-only from the project
+lock and verified cache receipts. Those exact archives, the cached runtime
+object, bridge inputs, and any [extra
+libraries](linking-and-conditional-compilation.md) become one typed ordered link
+plan for the final binary. This resolution does not install or repair packages
+and is folded into the untimed setup immediately before the `assemble`/`link`
+timing labels.
 
 ## Inspecting intermediate stages
 

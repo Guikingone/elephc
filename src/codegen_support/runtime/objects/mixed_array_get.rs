@@ -7,16 +7,17 @@
 //!
 //! Key details:
 //! - The key tuple matches `emit_normalized_hash_key`: int keys use `key_hi = -1`.
-//! - Unsupported payloads and missing keys return boxed `Mixed(null)` for PHP-like quiet access.
-//! - Ordinary reads clone stored boxed cells to preserve zval value semantics. Fetch-for-write
-//!   calls first COW-normalize typed array/hash storage and then retain the owning cell identity.
-//! - The eval bridge has a distinct shared-cell read mode so its runtime variable handles remain
-//!   valid writeback targets while the caller receives an owned reference.
-//! - Every successful return is an owned `Mixed*`.
+//! - Callers pass an explicit warning flag so normal reads diagnose missing/null
+//!   offsets while `isset()`/`??` keep the same helper quiet.
+//! - A container payload that is null or the in-band null-container sentinel
+//!   (`NULL_SENTINEL`, materialized by a missed read forwarded through a ternary merge)
+//!   is treated as an absent container and also returns `Mixed(null)` (issue #585).
+//! - Every successful return is an owned `Mixed*`; borrowed array/hash slots are retained first.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Dispatches to the target-specific `__rt_mixed_array_get` emitter.
 ///
@@ -34,7 +35,8 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
 
 /// Emits `__rt_mixed_array_get` for ARM64 (AAPCS64 ABI).
 ///
-/// Inputs arrive in `x0` = mixed_ptr, `x1` = key_lo, `x2` = key_hi.
+/// Inputs arrive in `x0` = mixed_ptr, `x1` = key_lo, `x2` = key_hi,
+/// `x3` = nonzero when missing/null-offset warnings are enabled.
 /// Returns an owned pointer to a boxed `Mixed` cell in `x0`.
 ///
 /// The function dispatches on the mixed value's tag:
@@ -51,17 +53,7 @@ pub fn emit_mixed_array_get(emitter: &mut Emitter) {
 fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_get ---");
-    emitter.label_global("__rt_mixed_array_get_shared");
-    emitter.instruction("mov x3, #2");                                          // retain the stored cell identity for eval writeback
-    emitter.instruction("b __rt_mixed_array_get_entry");                        // share the lookup implementation with PHP reads
-    emitter.label_global("__rt_mixed_array_get_for_write");
-    emitter.instruction("mov x3, #1");                                          // select COW-normalizing fetch-for-write behavior
-    emitter.instruction("b __rt_mixed_array_get_entry");                        // share the lookup implementation with ordinary reads
     emitter.label_global("__rt_mixed_array_get");
-    emitter.instruction("mov x3, xzr");                                         // ordinary reads do not rewrite the receiver storage
-    // The read/write/eval entry wrappers live in distinct Mach-O atoms. Keep the
-    // shared implementation addressable when the runtime object is dead-stripped.
-    emitter.label_shared("__rt_mixed_array_get_entry");
 
     // Stack:
     //   [sp, #0]  = mixed_ptr
@@ -69,15 +61,16 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     //   [sp, #16] = key_hi
     //   [sp, #24] = saved x29
     //   [sp, #32] = saved x30
+    //   [sp, #40] = warn_on_missing
     emitter.instruction("sub sp, sp, #48");                                     // reserve frame: 3 inputs + saved fp/lr (16-byte aligned)
     emitter.instruction("stp x29, x30, [sp, #24]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #24");                                    // set new frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save mixed_ptr
     emitter.instruction("str x1, [sp, #8]");                                    // save key_lo
     emitter.instruction("str x2, [sp, #16]");                                   // save key_hi
-    emitter.instruction("str x3, [sp, #40]");                                   // save whether this lookup feeds a nested write
+    emitter.instruction("str x3, [sp, #40]");                                   // save whether this read should emit PHP offset warnings
 
-    emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // null Mixed → Mixed(null)
+    emitter.instruction("cbz x0, __rt_mixed_array_get_null_container");         // null Mixed pointers behave as PHP null receivers
     emitter.instruction("ldr x9, [x0]");                                        // load tag from mixed[0]
     emitter.instruction("cmp x9, #4");                                          // tag = 4 (indexed array)?
     emitter.instruction("b.eq __rt_mixed_array_get_indexed");                   // branch on the current JSON decoder condition
@@ -85,15 +78,23 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.eq __rt_mixed_array_get_assoc");                     // branch on the current JSON decoder condition
     emitter.instruction("cmp x9, #6");                                          // tag = 6 (object)?
     emitter.instruction("b.eq __rt_mixed_array_get_object");                    // branch on the current JSON decoder condition
+    emitter.instruction("cmp x9, #8");                                          // tag = 8 (canonical PHP null)?
+    emitter.instruction("b.eq __rt_mixed_array_get_null_container");            // null receivers warn only for ordinary reads
     emitter.instruction("b __rt_mixed_array_get_null");                         // any other payload → null
 
     // Indexed array: integer key only. key_hi == -1 marks int keys.
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = array pointer
-    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(
+        emitter,
+        "x10",
+        "x9",
+        "__rt_mixed_array_get_null_container",
+    );
     emitter.instruction("ldr x11, [sp, #16]");                                  // load key_hi
     emitter.instruction("cmn x11, #1");                                         // compare with -1 (int-key sentinel)
-    emitter.instruction("b.ne __rt_mixed_array_get_null");                      // string keys on indexed arrays → null
+    emitter.instruction("b.ne __rt_mixed_array_get_indexed_missing_string");    // missing string keys use PHP's string-key warning
     emitter.instruction("ldr x12, [sp, #8]");                                   // x12 = key_lo (int index)
     emitter.instruction("ldr x9, [x10]");                                       // x9 = array length (header offset 0)
     emitter.instruction("cmp x12, #0");                                         // negative index → null
@@ -102,18 +103,6 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ge __rt_mixed_array_get_indexed_missing");           // warn and return null for an out-of-bounds indexed-array key
     emitter.instruction("ldr x13, [x10, #-8]");                                 // load packed indexed-array kind metadata
     emitter.instruction("ubfx x13, x13, #8, #7");                               // extract the runtime element value_type tag
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the ordinary/write lookup mode
-    emitter.instruction("cmp x9, #1");                                          // only nested writes COW-normalize the receiver storage
-    emitter.instruction("b.ne __rt_mixed_array_get_indexed_storage_ready");     // ordinary and eval-shared reads leave typed storage unchanged
-    emitter.instruction("mov x0, x10");                                         // pass the indexed storage to its COW conversion helper
-    emitter.instruction("mov x1, x13");                                         // pass the current homogeneous slot tag
-    emitter.instruction("bl __rt_array_to_mixed");                              // make storage unique and box every slot for stable write aliases
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning Mixed cell
-    emitter.instruction("str x0, [x9, #8]");                                    // publish a possibly cloned array back into that owner
-    emitter.instruction("mov x10, x0");                                         // continue the lookup through normalized storage
-    emitter.instruction("mov x13, #7");                                         // normalized indexed slots hold boxed Mixed cells
-    emitter.instruction("ldr x12, [sp, #8]");                                   // restore the requested index after conversion calls
-    emitter.label("__rt_mixed_array_get_indexed_storage_ready");
     emitter.instruction("add x10, x10, #24");                                   // skip the 24-byte array header to reach the contiguous payload
     emitter.instruction("cmp x13, #7");                                         // are indexed slots already boxed Mixed pointers?
     emitter.instruction("b.eq __rt_mixed_array_get_indexed_boxed");             // boxed slots must be retained before returning
@@ -130,31 +119,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_indexed_boxed");
     emitter.instruction("ldr x0, [x10, x12, lsl #3]");                          // load the boxed Mixed pointer from the indexed slot
-    emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // empty slot → null Mixed
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether the caller requested a write alias
-    emitter.instruction("cmp x9, #2");                                          // does the eval bridge require the stored cell identity?
-    emitter.instruction("b.eq __rt_mixed_array_get_indexed_boxed_shared");      // retain the exact stored cell for interpreter writeback
-    emitter.instruction("cbnz x9, __rt_mixed_array_get_indexed_boxed_detach");  // nested writes detach the selected zval after outer COW
-    emitter.instruction("bl __rt_mixed_clone");                                 // detach values while preserving shared PHP resource identity
-    emitter.instruction("b __rt_mixed_array_get_indexed_boxed_done");           // skip the write-only retain path
-    emitter.label("__rt_mixed_array_get_indexed_boxed_shared");
-    emitter.instruction("bl __rt_incref");                                      // return one owned reference to the stored eval cell
-    emitter.instruction("b __rt_mixed_array_get_indexed_boxed_done");           // skip PHP value detachment for eval runtime handles
-    emitter.label("__rt_mixed_array_get_indexed_boxed_detach");
-    abi::emit_push_reg(emitter, "x0");
-    emitter.instruction("bl __rt_mixed_clone");                                 // detach the selected zval while resources retain shared identity
-    abi::emit_push_reg(emitter, "x0");
-    emitter.instruction("ldr x9, [x29, #-24]");                                 // reload the owning Mixed cell through the stable frame pointer
-    emitter.instruction("ldr x9, [x9, #8]");                                    // load its COW-normalized indexed-array payload
-    emitter.instruction("ldr x10, [x29, #-16]");                                // reload the selected integer index
-    emitter.instruction("add x9, x9, #24");                                     // address the boxed Mixed payload base
-    emitter.instruction("str x0, [x9, x10, lsl #3]");                           // publish the detached zval in the unique outer array
-    emitter.instruction("ldr x0, [sp, #16]");                                   // drop the replaced array-owner reference to the shared cell
-    emitter.instruction("bl __rt_decref_mixed");                                // preserve aliases that still own the old cell
-    emitter.instruction("ldr x0, [sp]");                                        // reload the detached cell now owned by the array
-    emitter.instruction("bl __rt_incref");                                      // add the caller-owned reference for the nested writer
-    emitter.instruction("add sp, sp, #32");                                     // release the old/new cell spill slots
-    emitter.label("__rt_mixed_array_get_indexed_boxed_done");
+    emitter.instruction("cbz x0, __rt_mixed_array_get_indexed_missing");        // zero-filled gaps are undefined keys, not present null values
+    emitter.instruction("bl __rt_incref");                                      // retain the stored Mixed cell so the caller owns the returned result
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
@@ -177,28 +143,34 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
     emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key for the PHP warning
     emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit or suppress the undefined-array-key warning
+    emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
+    emitter.label("__rt_mixed_array_get_indexed_missing_string");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the missing string key length
+    emitter.instruction("bl __rt_warn_undefined_array_key_str");                // emit the PHP warning for a missing string key
     emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
 
     // Associative array: hash_get with normalized key.
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = hash pointer
-    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload the ordinary/write lookup mode
-    emitter.instruction("cmp x9, #1");                                          // only nested writes COW-normalize associative storage
-    emitter.instruction("b.ne __rt_mixed_array_get_assoc_storage_ready");       // ordinary and eval-shared reads leave the hash unchanged
-    emitter.instruction("mov x0, x10");                                         // pass associative storage to the COW conversion helper
-    emitter.instruction("bl __rt_hash_to_mixed");                               // make the table unique and box entries for stable write aliases
-    emitter.instruction("ldr x9, [sp, #0]");                                    // reload the owning Mixed cell
-    emitter.instruction("str x0, [x9, #8]");                                    // publish a possibly cloned hash back into that owner
-    emitter.instruction("mov x10, x0");                                         // continue the lookup through normalized storage
-    emitter.label("__rt_mixed_array_get_assoc_storage_ready");
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(
+        emitter,
+        "x10",
+        "x9",
+        "__rt_mixed_array_get_null_container",
+    );
     emitter.instruction("mov x0, x10");                                         // x0 = hash pointer for hash_get
     emitter.instruction("ldr x1, [sp, #8]");                                    // x1 = key_lo
     emitter.instruction("ldr x2, [sp, #16]");                                   // x2 = key_hi
     emitter.instruction("bl __rt_hash_get");                                    // x0=found, x1=value_lo, x2=value_hi, x3=value_tag
-    emitter.instruction("cbz x0, __rt_mixed_array_get_null");                   // miss → null
+    emitter.instruction("cbz x0, __rt_mixed_array_get_assoc_missing");          // diagnose an absent hash key for ordinary reads
     // For value_tag == 7 the entry already holds a boxed Mixed pointer
     // (json_decode and stdClass populate hashes this way). Anything else
     // (typed string/int/array entries from non-Mixed assoc arrays passing
@@ -207,35 +179,25 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x3, #7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("b.ne __rt_mixed_array_get_assoc_box");                 // no → box (lo, hi, tag) into a fresh Mixed cell
     emitter.instruction("mov x0, x1");                                          // yes → move the stored Mixed cell into the return register
-    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether the caller requested a write alias
-    emitter.instruction("cmp x9, #2");                                          // does the eval bridge require the stored cell identity?
-    emitter.instruction("b.eq __rt_mixed_array_get_assoc_shared");              // retain the exact stored cell for interpreter writeback
-    emitter.instruction("cbnz x9, __rt_mixed_array_get_assoc_detach");          // nested writes detach the selected zval after outer COW
-    emitter.instruction("bl __rt_mixed_clone");                                 // detach values while preserving shared PHP resource identity
-    emitter.instruction("b __rt_mixed_array_get_assoc_done");                   // skip the write-only retain path
-    emitter.label("__rt_mixed_array_get_assoc_shared");
-    emitter.instruction("bl __rt_incref");                                      // return one owned reference to the stored eval cell
-    emitter.instruction("b __rt_mixed_array_get_assoc_done");                   // skip PHP value detachment for eval runtime handles
-    emitter.label("__rt_mixed_array_get_assoc_detach");
-    emitter.instruction("bl __rt_mixed_clone");                                 // detach the selected zval while resources retain shared identity
-    abi::emit_push_reg(emitter, "x0");
-    emitter.instruction("ldr x9, [x29, #-24]");                                 // reload the owning Mixed cell through the stable frame pointer
-    emitter.instruction("ldr x0, [x9, #8]");                                    // pass its COW-normalized associative payload to hash_set
-    emitter.instruction("ldr x1, [x29, #-16]");                                 // reload the normalized key low word
-    emitter.instruction("ldr x2, [x29, #-8]");                                  // reload the normalized key high word
-    emitter.instruction("ldr x3, [sp]");                                        // pass the detached boxed Mixed cell as the replacement value
-    emitter.instruction("mov x4, xzr");                                         // boxed Mixed entries do not use a high payload word
-    emitter.instruction("mov x5, #7");                                          // runtime tag 7 stores a boxed Mixed cell
-    emitter.instruction("bl __rt_hash_set");                                    // replace the shared selected cell in the unique outer hash
-    emitter.instruction("ldr x9, [x29, #-24]");                                 // reload the owning Mixed cell after hash mutation
-    emitter.instruction("str x0, [x9, #8]");                                    // publish the returned hash pointer defensively
-    emitter.instruction("ldr x0, [sp]");                                        // reload the detached cell now owned by the hash
-    emitter.instruction("bl __rt_incref");                                      // add the caller-owned reference for the nested writer
-    emitter.instruction("add sp, sp, #16");                                     // release the detached-cell spill slot
-    emitter.label("__rt_mixed_array_get_assoc_done");
+    emitter.instruction("bl __rt_incref");                                      // retain the stored Mixed cell so the caller owns the returned result
     emitter.instruction("ldp x29, x30, [sp, #24]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
+
+    emitter.label("__rt_mixed_array_get_assoc_missing");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the normalized key high word
+    emitter.instruction("cmn x9, #1");                                          // does the missing key use the integer-key sentinel?
+    emitter.instruction("b.eq __rt_mixed_array_get_assoc_missing_int");         // integer keys use the decimal warning formatter
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the missing string key pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the missing string key length
+    emitter.instruction("bl __rt_warn_undefined_array_key_str");                // emit the PHP warning for a missing string key
+    emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
+    emitter.label("__rt_mixed_array_get_assoc_missing_int");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // reload the missing integer key
+    emitter.instruction("bl __rt_warn_undefined_array_key_int");                // emit the PHP warning for a missing integer key
+    emitter.instruction("b __rt_mixed_array_get_null");                         // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_assoc_box");
     // mixed_from_value(tag, lo, hi). Move (x1, x2, x3) into (x1, x2, x0).
     emitter.instruction("mov x0, x3");                                          // x0 = value_tag (mixed_from_value first arg)
@@ -248,7 +210,13 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     // Object: SPL ArrayAccess containers or stdClass with string key.
     emitter.label("__rt_mixed_array_get_object");
     emitter.instruction("ldr x10, [x0, #8]");                                   // x10 = obj pointer
-    emitter.instruction("cbz x10, __rt_mixed_array_get_null");                  // defensive null guard
+    // treat a null or in-band null-container sentinel payload as an absent container (issue #585)
+    emit_branch_if_null_container(
+        emitter,
+        "x10",
+        "x9",
+        "__rt_mixed_array_get_null_container",
+    );
     emitter.instruction("ldr x11, [x10]");                                      // x11 = class_id
     abi::emit_symbol_address(emitter, "x12", "_spl_fixed_array_class_id");
     emitter.instruction("ldr x12, [x12]");                                      // x12 = compile-time SplFixedArray class_id
@@ -323,6 +291,10 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #48");                                     // release the local frame
     emitter.instruction("ret");                                                 // return Mixed* in x0
 
+    emitter.label("__rt_mixed_array_get_null_container");
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload whether ordinary read warnings are enabled
+    emitter.instruction("cbz x9, __rt_mixed_array_get_null");                   // quiet read contexts suppress the null-offset warning
+    emitter.instruction("bl __rt_warn_array_offset_on_null");                   // emit PHP's warning for indexing a null receiver
     emitter.label("__rt_mixed_array_get_null");
     emitter.instruction("mov x0, #8");                                          // tag = 8 (null)
     emitter.instruction("mov x1, #0");                                          // value_lo = 0
@@ -335,7 +307,8 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 
 /// Emits `__rt_mixed_array_get` for x86_64 (SysV ABI).
 ///
-/// Inputs arrive in `rdi` = mixed_ptr, `rsi` = key_lo, `rdx` = key_hi.
+/// Inputs arrive in `rdi` = mixed_ptr, `rsi` = key_lo, `rdx` = key_hi,
+/// `rcx` = nonzero when missing/null-offset warnings are enabled.
 /// Returns an owned pointer to a boxed `Mixed` cell in `rax`.
 ///
 /// Same dispatch and return semantics as `emit_mixed_array_get_aarch64`:
@@ -348,29 +321,19 @@ fn emit_mixed_array_get_aarch64(emitter: &mut Emitter) {
 fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_array_get ---");
-    emitter.label_global("__rt_mixed_array_get_shared");
-    emitter.instruction("mov rcx, 2");                                          // retain the stored cell identity for eval writeback
-    emitter.instruction("jmp __rt_mixed_array_get_entry");                      // share the lookup implementation with PHP reads
-    emitter.label_global("__rt_mixed_array_get_for_write");
-    emitter.instruction("mov rcx, 1");                                          // select COW-normalizing fetch-for-write behavior
-    emitter.instruction("jmp __rt_mixed_array_get_entry");                      // share the lookup implementation with ordinary reads
     emitter.label_global("__rt_mixed_array_get");
-    emitter.instruction("xor ecx, ecx");                                        // ordinary reads do not rewrite the receiver storage
-    // The read/write/eval entry wrappers live in distinct Mach-O atoms. Keep the
-    // shared implementation addressable when the runtime object is dead-stripped.
-    emitter.label_shared("__rt_mixed_array_get_entry");
 
-    // Inputs (SysV): rdi = mixed_ptr, rsi = key_lo, rdx = key_hi.
+    // Inputs (SysV): rdi = mixed_ptr, rsi = key_lo, rdx = key_hi, rcx = warn_on_missing.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 48");                                         // reserve inputs, mode flag, and write-detach spill slots
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for the 3 saved inputs (16-byte aligned)
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save mixed_ptr
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save key_lo
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save key_hi
-    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save whether this lookup feeds a nested write
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save whether this read should emit PHP offset warnings
 
     emitter.instruction("test rdi, rdi");                                       // null Mixed → null
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("je __rt_mixed_array_get_null_container");              // null Mixed pointers behave as PHP null receivers
     emitter.instruction("mov r10, QWORD PTR [rdi]");                            // load tag from mixed[0]
     emitter.instruction("cmp r10, 4");                                          // tag = 4 (indexed array)?
     emitter.instruction("je __rt_mixed_array_get_indexed");                     // branch on the current JSON decoder condition
@@ -378,15 +341,21 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_mixed_array_get_assoc");                       // branch on the current JSON decoder condition
     emitter.instruction("cmp r10, 6");                                          // tag = 6 (object)?
     emitter.instruction("je __rt_mixed_array_get_object");                      // branch on the current JSON decoder condition
+    emitter.instruction("cmp r10, 8");                                          // tag = 8 (canonical PHP null)?
+    emitter.instruction("je __rt_mixed_array_get_null_container");              // null receivers warn only for ordinary reads
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // any other payload → null
 
     emitter.label("__rt_mixed_array_get_indexed");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = array pointer
-    emitter.instruction("test r10, r10");                                       // defensive null guard
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__rt_mixed_array_get_null_container",
+    );
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // load key_hi
     emitter.instruction("cmp r11, -1");                                         // int-key sentinel?
-    emitter.instruction("jne __rt_mixed_array_get_null");                       // string key on indexed array → null
+    emitter.instruction("jne __rt_mixed_array_get_indexed_missing_string");     // missing string keys use PHP's string-key warning
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // r8 = key_lo (int index)
     emitter.instruction("mov r9, QWORD PTR [r10]");                             // r9 = array length
     emitter.instruction("cmp r8, 0");                                           // negative index → null
@@ -396,17 +365,6 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [r10 - 8]");                         // load packed indexed-array kind metadata
     emitter.instruction("shr r9, 8");                                           // shift the runtime element value_type tag into the low bits
     emitter.instruction("and r9, 0x7f");                                        // remove the persistent COW flag from the extracted tag
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 1");                         // only nested writes COW-normalize the receiver storage
-    emitter.instruction("jne __rt_mixed_array_get_indexed_storage_ready");      // ordinary and eval-shared reads leave typed storage unchanged
-    emitter.instruction("mov rdi, r10");                                        // pass the indexed storage to its COW conversion helper
-    emitter.instruction("mov rsi, r9");                                         // pass the current homogeneous slot tag
-    emitter.instruction("call __rt_array_to_mixed");                            // make storage unique and box every slot for stable write aliases
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish a possibly cloned array back into that owner
-    emitter.instruction("mov r10, rax");                                        // continue the lookup through normalized storage
-    emitter.instruction("mov r9, 7");                                           // normalized indexed slots hold boxed Mixed cells
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // restore the requested index after conversion calls
-    emitter.label("__rt_mixed_array_get_indexed_storage_ready");
     emitter.instruction("lea r10, [r10 + 24]");                                 // skip the 24-byte array header to reach the contiguous payload
     emitter.instruction("cmp r9, 7");                                           // are indexed slots already boxed Mixed pointers?
     emitter.instruction("je __rt_mixed_array_get_indexed_boxed");               // boxed slots must be retained before returning
@@ -424,31 +382,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_mixed_array_get_indexed_boxed");
     emitter.instruction("mov rax, QWORD PTR [r10 + r8 * 8]");                   // load the boxed Mixed pointer from the indexed slot
     emitter.instruction("test rax, rax");                                       // empty slot → null
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 2");                         // does the eval bridge require the stored cell identity?
-    emitter.instruction("je __rt_mixed_array_get_indexed_boxed_shared");        // retain the exact stored cell for interpreter writeback
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // did the caller request a write alias?
-    emitter.instruction("jne __rt_mixed_array_get_indexed_boxed_detach");       // nested writes detach the selected zval after outer COW
-    emitter.instruction("call __rt_mixed_clone");                               // detach values while preserving shared PHP resource identity
-    emitter.instruction("jmp __rt_mixed_array_get_indexed_boxed_done");         // skip the write-only retain path
-    emitter.label("__rt_mixed_array_get_indexed_boxed_shared");
-    emitter.instruction("call __rt_incref");                                    // return one owned reference to the stored eval cell
-    emitter.instruction("jmp __rt_mixed_array_get_indexed_boxed_done");         // skip PHP value detachment for eval runtime handles
-    emitter.label("__rt_mixed_array_get_indexed_boxed_detach");
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the shared cell whose array-owner reference is replaced
-    emitter.instruction("call __rt_mixed_clone");                               // detach the selected zval while resources retain shared identity
-    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // preserve the detached cell across old-cell cleanup
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
-    emitter.instruction("mov r10, QWORD PTR [r10 + 8]");                        // load its COW-normalized indexed-array payload
-    emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // reload the selected integer index
-    emitter.instruction("mov QWORD PTR [r10 + 24 + r8 * 8], rax");              // publish the detached zval in the unique outer array
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // drop the replaced array-owner reference to the shared cell
-    emitter.instruction("call __rt_decref_mixed");                              // preserve aliases that still own the old cell
-    emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the detached cell now owned by the array
+    emitter.instruction("je __rt_mixed_array_get_indexed_missing");             // zero-filled gaps are undefined keys, not present null values
     abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // add the caller-owned reference for the nested writer
+    emitter.instruction("call __rt_incref");                                    // retain the stored Mixed cell so the caller owns the returned result
     abi::emit_pop_reg(emitter, "rax");
-    emitter.label("__rt_mixed_array_get_indexed_boxed_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
@@ -471,28 +408,33 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
     emitter.label("__rt_mixed_array_get_indexed_missing");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key for the PHP warning
     emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit or suppress the undefined-array-key warning
+    emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
+    emitter.label("__rt_mixed_array_get_indexed_missing_string");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the missing string key length
+    emitter.instruction("call __rt_warn_undefined_array_key_str");              // emit the PHP warning for a missing string key
     emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
 
     emitter.label("__rt_mixed_array_get_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = hash pointer
-    emitter.instruction("test r10, r10");                                       // defensive null guard
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 1");                         // only nested writes COW-normalize associative storage
-    emitter.instruction("jne __rt_mixed_array_get_assoc_storage_ready");        // ordinary and eval-shared reads leave the hash unchanged
-    emitter.instruction("mov rdi, r10");                                        // pass associative storage to the COW conversion helper
-    emitter.instruction("call __rt_hash_to_mixed");                             // make the table unique and box entries for stable write aliases
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish a possibly cloned hash back into that owner
-    emitter.instruction("mov r10, rax");                                        // continue the lookup through normalized storage
-    emitter.label("__rt_mixed_array_get_assoc_storage_ready");
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__rt_mixed_array_get_null_container",
+    );
     emitter.instruction("mov rdi, r10");                                        // rdi = hash pointer for hash_get
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // rsi = key_lo
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // rdx = key_hi
     emitter.instruction("call __rt_hash_get");                                  // rax=found, rdi=value_lo, rsi=value_hi, rcx=value_tag
     emitter.instruction("test rax, rax");                                       // miss → null
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emitter.instruction("je __rt_mixed_array_get_assoc_missing");               // diagnose an absent hash key for ordinary reads
     // For value_tag == 7 the entry is already a boxed Mixed pointer; for
     // any other tag (typed string/int/array entries from non-Mixed assoc
     // arrays passing through a Mixed receiver) re-box (lo, hi, tag) so
@@ -500,36 +442,26 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rcx, 7");                                          // is the hash entry already a boxed Mixed?
     emitter.instruction("jne __rt_mixed_array_get_assoc_box");                  // no → box (lo, hi, tag) into a fresh Mixed cell
     emitter.instruction("mov rax, rdi");                                        // yes → move the stored Mixed cell into the return register
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 2");                         // does the eval bridge require the stored cell identity?
-    emitter.instruction("je __rt_mixed_array_get_assoc_shared");                // retain the exact stored cell for interpreter writeback
-    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // did the caller request a write alias?
-    emitter.instruction("jne __rt_mixed_array_get_assoc_detach");               // nested writes detach the selected zval after outer COW
-    emitter.instruction("call __rt_mixed_clone");                               // detach values while preserving shared PHP resource identity
-    emitter.instruction("jmp __rt_mixed_array_get_assoc_done");                 // skip the write-only retain path
-    emitter.label("__rt_mixed_array_get_assoc_shared");
-    emitter.instruction("call __rt_incref");                                    // return one owned reference to the stored eval cell
-    emitter.instruction("jmp __rt_mixed_array_get_assoc_done");                 // skip PHP value detachment for eval runtime handles
-    emitter.label("__rt_mixed_array_get_assoc_detach");
-    emitter.instruction("call __rt_mixed_clone");                               // detach the selected zval while resources retain shared identity
-    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the detached cell across hash replacement
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell
-    emitter.instruction("mov rdi, QWORD PTR [r10 + 8]");                        // pass its COW-normalized associative payload to hash_set
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the normalized key low word
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the normalized key high word
-    emitter.instruction("mov rcx, rax");                                        // pass the detached boxed Mixed cell as the replacement value
-    emitter.instruction("xor r8, r8");                                          // boxed Mixed entries do not use a high payload word
-    emitter.instruction("mov r9, 7");                                           // runtime tag 7 stores a boxed Mixed cell
-    emitter.instruction("call __rt_hash_set");                                  // replace the shared selected cell in the unique outer hash
-    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the owning Mixed cell after hash mutation
-    emitter.instruction("mov QWORD PTR [r10 + 8], rax");                        // publish the returned hash pointer defensively
-    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the detached cell now owned by the hash
     abi::emit_push_reg(emitter, "rax");
-    emitter.instruction("call __rt_incref");                                    // add the caller-owned reference for the nested writer
+    emitter.instruction("call __rt_incref");                                    // retain the stored Mixed cell so the caller owns the returned result
     abi::emit_pop_reg(emitter, "rax");
-    emitter.label("__rt_mixed_array_get_assoc_done");
     emitter.instruction("mov rsp, rbp");                                        // restore stack pointer
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
+
+    emitter.label("__rt_mixed_array_get_assoc_missing");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // `isset()`/`??` suppress undefined-key warnings
+    emitter.instruction("cmp QWORD PTR [rbp - 24], -1");                        // does the missing key use the integer-key sentinel?
+    emitter.instruction("je __rt_mixed_array_get_assoc_missing_int");           // integer keys use the decimal warning formatter
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the missing string key pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // reload the missing string key length
+    emitter.instruction("call __rt_warn_undefined_array_key_str");              // emit the PHP warning for a missing string key
+    emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
+    emitter.label("__rt_mixed_array_get_assoc_missing_int");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the missing integer key
+    emitter.instruction("call __rt_warn_undefined_array_key_int");              // emit the PHP warning for a missing integer key
+    emitter.instruction("jmp __rt_mixed_array_get_null");                       // return boxed Mixed(null) after the warning
     emitter.label("__rt_mixed_array_get_assoc_box");
     // mixed_from_value(tag, lo, hi). Helper expects rax=tag, rdi=lo, rsi=hi.
     emitter.instruction("mov rax, rcx");                                        // rax = value_tag
@@ -541,8 +473,12 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_array_get_object");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // r10 = obj pointer
-    emitter.instruction("test r10, r10");                                       // defensive null guard
-    emitter.instruction("je __rt_mixed_array_get_null");                        // branch on the current JSON decoder condition
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__rt_mixed_array_get_null_container",
+    );
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // r11 = class_id
     abi::emit_load_symbol_to_reg(emitter, "r12", "_spl_fixed_array_class_id", 0);
     emitter.instruction("cmp r11, r12");                                        // is the receiver a SplFixedArray instance?
@@ -612,6 +548,10 @@ fn emit_mixed_array_get_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return Mixed* in rax
 
+    emitter.label("__rt_mixed_array_get_null_container");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 0");                         // are ordinary read warnings enabled?
+    emitter.instruction("je __rt_mixed_array_get_null");                        // quiet read contexts suppress the null-offset warning
+    emitter.instruction("call __rt_warn_array_offset_on_null");                 // emit PHP's warning for indexing a null receiver
     emitter.label("__rt_mixed_array_get_null");
     emitter.instruction("mov rax, 8");                                          // tag = 8 (null) for mixed_from_value
     emitter.instruction("mov rdi, 0");                                          // value_lo = 0

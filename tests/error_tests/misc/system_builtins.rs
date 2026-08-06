@@ -130,7 +130,48 @@ fn test_error_putenv_wrong_args() {
 /// Verifies that `phpversion()` with any arguments yields a no-args diagnostic.
 #[test]
 fn test_error_phpversion_wrong_args() {
-    expect_error("<?php phpversion(1);", "phpversion() takes no arguments");
+    // `phpversion()` takes an optional `?string $extension`, so a non-string argument is
+    // now a TYPE diagnostic rather than an arity one. Documented divergence, shared with
+    // `extension_loaded()`: reference PHP coerces `phpversion(1)` to the string `"1"` and
+    // returns `false` for the unknown extension, while elephc rejects it because the
+    // lowering has no runtime int-to-string conversion on that path.
+    expect_error(
+        "<?php phpversion(1);",
+        "phpversion() extension argument must be string",
+    );
+}
+
+/// Verifies `get_loaded_extensions()` rejects more than its optional flag argument.
+#[test]
+fn test_error_get_loaded_extensions_wrong_args() {
+    expect_error(
+        "<?php get_loaded_extensions(false, true);",
+        "get_loaded_extensions() takes at most 1 argument",
+    );
+}
+
+/// Verifies `hrtime()` rejects more than its optional numeric-format flag.
+#[test]
+fn test_error_hrtime_wrong_args() {
+    expect_error(
+        "<?php hrtime(false, true);",
+        "hrtime() takes at most 1 argument",
+    );
+}
+
+/// Verifies `header()` requires between one and three arguments.
+#[test]
+fn test_error_header_wrong_args() {
+    expect_error("<?php header();", "header() takes 1 to 3 arguments");
+}
+
+/// Verifies `http_response_code()` rejects more than one optional status code.
+#[test]
+fn test_error_http_response_code_wrong_args() {
+    expect_error(
+        "<?php http_response_code(200, 201);",
+        "http_response_code() takes 0 or 1 arguments",
+    );
 }
 
 /// Verifies that `php_uname()` with two arguments yields a wrong-args diagnostic.

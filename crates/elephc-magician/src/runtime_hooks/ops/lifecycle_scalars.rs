@@ -21,6 +21,16 @@ macro_rules! impl_lifecycle_scalar_ops {
         }
     }
 
+    /// Returns the PHP object handle reported by `spl_object_id()`.
+    fn php_object_handle(&mut self, object: RuntimeCellHandle) -> Result<u64, EvalStatus> {
+        let handle = unsafe { __elephc_eval_value_object_handle(object.as_ptr()) };
+        if handle == 0 {
+            Err(EvalStatus::RuntimeFatal)
+        } else {
+            Ok(handle)
+        }
+    }
+
     /// Returns the object payload that the next release would destroy, when known.
     fn final_object_identity_for_release(
         &mut self,
@@ -71,6 +81,16 @@ macro_rules! impl_lifecycle_scalar_ops {
     /// Creates a boxed resource Mixed cell through the generated runtime wrapper.
     fn resource(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
         Self::handle(unsafe { __elephc_eval_value_resource(value) })
+    }
+
+    /// Creates a boxed inert hash-context Mixed cell through the generated runtime wrapper.
+    ///
+    /// The wrapper stamps resource kind 5, so `__rt_mixed_from_value` skips PHP id
+    /// binding and `__rt_mixed_free_deep` runs no destructor: PHP counts a
+    /// `HashContext` in the object-handle space, and the native context behind this key
+    /// is owned by `crate::stream_resources::EvalHashContext`.
+    fn hash_context(&mut self, value: i64) -> Result<RuntimeCellHandle, EvalStatus> {
+        Self::handle(unsafe { __elephc_eval_value_hash_context(value) })
     }
 
     /// Creates a boxed float Mixed cell through the generated runtime wrapper.

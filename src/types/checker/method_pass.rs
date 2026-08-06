@@ -33,7 +33,6 @@ impl Checker {
     pub(super) fn type_check_methods_until_stable(
         &mut self,
         flattened_classes: &[FlattenedClass],
-        global_env: &TypeEnv,
         errors: &mut Vec<CompileError>,
     ) -> Result<(), CompileError> {
         let mut method_passes_remaining = (flattened_classes.len().max(1) * 2) + 1;
@@ -47,7 +46,7 @@ impl Checker {
                         continue;
                     }
                     let method_key = php_symbol_key(&method.name);
-                    let mut method_env: TypeEnv = global_env.clone();
+                    let mut method_env = Self::seed_method_env();
                     if !method.is_static {
                         method_env.insert("this".to_string(), PhpType::Object(class.name.clone()));
                     }
@@ -85,7 +84,9 @@ impl Checker {
                                             PhpType::Array(_) | PhpType::AssocArray { .. }
                                         )
                                     })
-                                    .map(|t| Self::specialize_generic_array_hint(&declared, &t))
+                                    .map(|t| {
+                                        Self::specialize_generic_array_param_hint(&declared, &t)
+                                    })
                                     .unwrap_or(declared)
                             } else {
                                 declared
@@ -135,6 +136,13 @@ impl Checker {
                     self.current_method = Some(method_key.clone());
                     self.current_method_is_static = method.is_static;
                     self.current_by_ref_return = method.by_ref_return;
+                    let loop_storage_scope = format!("{}::{}", class.name, method.name);
+                    self.loop_storage_types
+                        .retain(|(scope, _), _| scope != &loop_storage_scope);
+                    let previous_loop_storage_scope = std::mem::replace(
+                        &mut self.current_loop_storage_scope,
+                        loop_storage_scope,
+                    );
                     let method_ref_params: Vec<String> = method
                         .params
                         .iter()
@@ -160,6 +168,7 @@ impl Checker {
                     self.current_method = None;
                     self.current_method_is_static = false;
                     self.current_by_ref_return = false;
+                    self.current_loop_storage_scope = previous_loop_storage_scope;
                 }
             }
 
@@ -173,6 +182,18 @@ impl Checker {
             method_passes_remaining -= 1;
         }
         Ok(())
+    }
+
+    /// Builds the PHP-local base environment shared by all method bodies.
+    ///
+    /// Methods can read request superglobals without a `global` declaration, but
+    /// ordinary top-level locals belong to file scope and must not leak into a
+    /// method. Explicit `global` statements resolve through `self.top_level_env`.
+    fn seed_method_env() -> TypeEnv {
+        crate::superglobals::SUPERGLOBALS
+            .iter()
+            .map(|name| ((*name).to_string(), crate::superglobals::superglobal_type()))
+            .collect()
     }
 
     /// Patches untyped constructor parameters with property types when the constructor

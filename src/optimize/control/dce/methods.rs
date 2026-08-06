@@ -30,8 +30,11 @@ pub(crate) fn dce_method(method: ClassMethod, class_name: &str, parent_name: Opt
         class_name: class_name.to_string(),
         parent_name: parent_name.map(str::to_string),
     };
+    let guards = GuardState::for_params(&method.params);
     ClassMethod {
-        body: with_class_effect_context(Some(context), || dce_block(method.body)),
+        body: with_class_effect_context(Some(context), || {
+            dce_block_with_guards(method.body, guards)
+        }),
         ..method
     }
 }
@@ -40,8 +43,9 @@ pub(crate) fn dce_method(method: ClassMethod, class_name: &str, parent_name: Opt
 /// Used for methods where the class hierarchy is irrelevant to effect analysis,
 /// such as methods defined outside class bodies or during incremental passes.
 pub(crate) fn dce_method_without_context(method: ClassMethod) -> ClassMethod {
+    let guards = GuardState::for_params(&method.params);
     ClassMethod {
-        body: with_class_effect_context(None, || dce_block(method.body)),
+        body: with_class_effect_context(None, || dce_block_with_guards(method.body, guards)),
         ..method
     }
 }

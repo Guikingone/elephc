@@ -121,8 +121,7 @@ impl EvalStreamResources {
         uri: &str,
         mode: &str,
     ) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.user_wrapper_streams.insert(
             id,
             EvalUserWrapperStream {
@@ -142,8 +141,7 @@ impl EvalStreamResources {
         object: RuntimeCellHandle,
         class_name: &str,
     ) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.user_wrapper_directories.insert(
             id,
             EvalUserWrapperDirectory {

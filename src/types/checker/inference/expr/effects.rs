@@ -14,7 +14,7 @@ use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::Checker;
-use super::super::syntactic::wider_type_syntactic;
+use super::merge_null_coalesce_result_type;
 
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -36,14 +36,9 @@ impl Checker {
     /// - Assignment expressions call `check_assignment_expression` to properly register the binding.
     /// - Binary `&&`/`||` clone the environment before the right branch to prevent assignments
     ///   in the left branch from leaking into the right branch (PHP semantics).
-    /// - Ternary, null coalesce, and match clone the environment per branch; the result type is
-    ///   the wider of all branch types via `wider_type_syntactic`.
-    /// - A branch's ARRAY STORAGE conversions are merged back out of the clone
-    ///   (`merge_array_storage_effects`): the branch's other bindings are conditional and must not
-    ///   leak, but a conversion rewrites the array in place and the lowering hoists it to the
-    ///   statement's entry, so it happens on EVERY path. Dropping it here compiles the callee of
-    ///   `h($m, match ($c) { 1 => $m[0] = "s", default => "d" })` for `array<int>` while the caller
-    ///   hands it boxed slots.
+    /// - Ternary, null coalesce, and match clone the environment per branch so assignments
+    ///   do not leak across arms; match/ternary result types then reuse `infer_type`'s
+    ///   Mixed-aware branch merge (not the Str-absorbing syntactic join).
     /// - `preg_replace_callback` argument at index 1 is skipped (special handling for capture groups).
     pub(crate) fn infer_type_with_assignment_effects(
         &mut self,
@@ -104,7 +99,6 @@ impl Checker {
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let mut right_env = env.clone();
                     self.infer_type_with_assignment_effects(right, &mut right_env)?;
-                    merge_array_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)
                 } else {
                     self.infer_type_with_assignment_effects(right, env)?;
@@ -117,32 +111,28 @@ impl Checker {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
                     let mut default_env = env.clone();
-                    let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    merge_array_storage_effects(env, &default_env);
-                    default_ty
+                    self.infer_type_with_assignment_effects(default, &mut default_env)?
                 };
-                if Self::union_contains_void(&value_ty) {
-                    Ok(wider_type_syntactic(
-                        &self.strip_void_from_union(&value_ty),
-                        &default_ty,
-                    ))
+                let non_null_value = if Self::union_contains_void(&value_ty) {
+                    self.strip_void_from_union(&value_ty)
                 } else {
-                    Ok(wider_type_syntactic(&value_ty, &default_ty))
-                }
+                    value_ty
+                };
+                Ok(merge_null_coalesce_result_type(
+                    non_null_value,
+                    default_ty,
+                ))
             }
             ExprKind::ShortTernary { value, default } => {
                 let value_ty = self.infer_type_with_assignment_effects(value, env)?;
-                let default_ty = if value_ty == PhpType::Void {
-                    self.infer_type_with_assignment_effects(default, env)?
+                if value_ty == PhpType::Void {
+                    self.infer_type_with_assignment_effects(default, env)?;
                 } else {
                     let mut default_env = env.clone();
-                    let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    merge_array_storage_effects(env, &default_env);
-                    default_ty
-                };
-                Ok(wider_type_syntactic(&value_ty, &default_ty))
+                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                }
+                // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
+                self.infer_type(expr, env)
             }
             ExprKind::Ternary {
                 condition,
@@ -160,14 +150,10 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
-                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
-                // Representation changes are hoisted to the enclosing statement entry,
-                // so both the outer environment and the sibling arm must observe them.
-                merge_array_storage_effects(env, &then_env);
-                merge_array_storage_effects(&mut else_env, &then_env);
-                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
-                merge_array_storage_effects(env, &else_env);
-                Ok(wider_type_syntactic(&then_ty, &else_ty))
+                self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                // Result type comes from the Mixed-aware ternary merge in `infer_type`.
+                self.infer_type(expr, env)
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
@@ -188,30 +174,20 @@ impl Checker {
                 default,
             } => {
                 self.infer_type_with_assignment_effects(subject, env)?;
-                let mut result_ty = None;
                 for (conditions, result) in arms {
                     let mut arm_env = env.clone();
                     for condition in conditions {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
-                    let arm_ty = self.infer_type_with_assignment_effects(result, &mut arm_env)?;
-                    merge_array_storage_effects(env, &arm_env);
-                    result_ty = Some(match result_ty {
-                        Some(current) => wider_type_syntactic(&current, &arm_ty),
-                        None => arm_ty,
-                    });
+                    self.infer_type_with_assignment_effects(result, &mut arm_env)?;
                 }
                 if let Some(default) = default {
                     let mut default_env = env.clone();
-                    let default_ty =
-                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
-                    merge_array_storage_effects(env, &default_env);
-                    result_ty = Some(match result_ty {
-                        Some(current) => wider_type_syntactic(&current, &default_ty),
-                        None => default_ty,
-                    });
+                    self.infer_type_with_assignment_effects(default, &mut default_env)?;
                 }
-                Ok(result_ty.unwrap_or(PhpType::Void))
+                // Result type comes from the Mixed-aware match merge in `infer_type`
+                // (assignment effects must not reintroduce the Str-absorbing syntactic join).
+                self.infer_type(expr, env)
             }
             ExprKind::ArrayAccess { array, index } => {
                 self.infer_type_with_assignment_effects(array, env)?;
@@ -343,19 +319,10 @@ impl Checker {
                 self.infer_type_with_assignment_effects(property, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::MethodCall {
-                object,
-                method,
-                args,
-            }
-            | ExprKind::NullsafeMethodCall {
-                object,
-                method,
-                args,
-            } => {
+            ExprKind::MethodCall { object, args, .. }
+            | ExprKind::NullsafeMethodCall { object, args, .. } => {
                 self.infer_type_with_assignment_effects(object, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
-                self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
@@ -444,42 +411,6 @@ impl Checker {
             .is_some_and(callable_target_is_preg_replace_callback)
     }
 
-    /// Widens PDOStatement binding destinations before validation so their escaping
-    /// references use the boxed storage that the EIR call lowering materializes.
-    fn promote_pdo_binding_ref_storage(
-        &mut self,
-        object: &Expr,
-        method: &str,
-        args: &[Expr],
-        env: &mut TypeEnv,
-    ) -> Result<(), CompileError> {
-        let object_ty = self.infer_type(object, env)?;
-        if !type_may_be_pdo_statement(&object_ty) {
-            return Ok(());
-        }
-        let method_key = crate::names::php_symbol_key(method);
-        let parameter_name = match method_key.as_str() {
-            "bindparam" => "variable",
-            "bindcolumn" => "var",
-            _ => return Ok(()),
-        };
-        let argument = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
-            ExprKind::NamedArg { name, value } if name == parameter_name => Some(value.as_ref()),
-            ExprKind::NamedArg { .. } => None,
-            _ if index == 1 => Some(arg),
-            _ => None,
-        });
-        let Some(Expr {
-            kind: ExprKind::Variable(name),
-            ..
-        }) = argument
-        else {
-            return Ok(());
-        };
-        env.insert(name.clone(), PhpType::Mixed);
-        Ok(())
-    }
-
     /// Marks the active statement stream as having crossed eval and widens local facts.
     fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
         self.eval_barrier_active = true;
@@ -494,45 +425,6 @@ impl Checker {
             self.callable_array_targets.remove(&name);
             self.first_class_callable_targets.remove(&name);
         }
-    }
-}
-
-/// Returns whether a receiver type contains PDOStatement, including the
-/// `PDOStatement|false` contract returned by `PDO::prepare()` and `query()`.
-fn type_may_be_pdo_statement(ty: &PhpType) -> bool {
-    match ty {
-        PhpType::Object(class) => class.trim_start_matches('\\') == "PDOStatement",
-        PhpType::Union(members) => members.iter().any(type_may_be_pdo_statement),
-        _ => false,
-    }
-}
-
-/// Merges the array storage-representation conversions performed inside a conditionally-evaluated
-/// branch back into the environment the branch was cloned from.
-///
-/// Every OTHER binding a branch makes is conditional and correctly dropped with the clone. A storage
-/// conversion is not: `Op::ArrayToMixed` and `Op::ArrayToHash` rewrite the array the local already
-/// points at, and the lowering hoists both to the enclosing STATEMENT's entry — precisely so no op
-/// inside can execute against a representation another op replaced — so by the time the statement
-/// finishes, the conversion has run on every path through it, taken branch or not.
-///
-/// If the checker drops the fact, it keeps typing the local as a raw indexed array and specializes
-/// any callee it is passed to for raw scalar slots, while the lowering hands that callee boxed cell
-/// pointers. Only the conversions the lowering can actually perform are merged
-/// (`array_storage_conversion`), so the two views cannot drift apart in either direction.
-///
-/// A name bound only inside the branch (not present in `env`) stays branch-local: it is not a
-/// conversion of anything the outer scope can see.
-fn merge_array_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
-    let converted = branch_env
-        .iter()
-        .filter_map(|(name, branch_ty)| {
-            let converted = crate::types::array_storage_conversion(env.get(name), branch_ty)?;
-            Some((name.clone(), converted))
-        })
-        .collect::<Vec<_>>();
-    for (name, converted) in converted {
-        env.insert(name, converted);
     }
 }
 

@@ -19,7 +19,6 @@ use crate::codegen::platform::Arch;
 use crate::ir::{Function, LocalKind, Module};
 use crate::types::ClassInfo;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Fixed object slot layout for the synthetic `ReflectionAttribute` class.
 struct ReflectionAttributeLayout {
@@ -203,6 +202,7 @@ fn emit_alloc_reflection_attribute_object_aarch64(
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     emitter.instruction("mov x9, #4");                                          // heap kind 4 marks ReflectionAttribute as an object
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the object heap header before the payload
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
     emitter.instruction(&format!("mov x10, #{}", layout.class_id));             // materialize the ReflectionAttribute class id
     emitter.instruction("str x10, [x0]");                                       // store the class id at object payload offset zero
     for index in 0..layout.property_count {
@@ -222,9 +222,10 @@ fn emit_alloc_reflection_attribute_object_x86_64(
     abi::emit_call_label(emitter, "__rt_heap_alloc");
     emitter.instruction(&format!(
         "mov r10, 0x{:x}",
-        (X86_64_HEAP_MAGIC_HI32 << 32) | 4
+        crate::codegen_support::sentinels::x86_64_heap_kind_word(4)
     ));                                                                         // materialize the x86_64 object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the object heap header before the payload
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction(&format!("mov r10, {}", layout.class_id));              // materialize the ReflectionAttribute class id
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store the class id at object payload offset zero
     for index in 0..layout.property_count {

@@ -15,9 +15,9 @@ use crate::codegen_support::platform::Arch;
 
 /// Emits the `__rt_resource_write_stdout` runtime helper.
 ///
-/// Writes `"Resource id #<id>"` to stdout, where `<id>` is the 1-based display
-/// form of the resource index passed in `x0` (0-based internally, converted to
-/// 1-based for display). Calls `__rt_itoa` to format the decimal id. Both the
+/// Writes `"Resource id #<id>"` to stdout, where `<id>` is the PHP resource id
+/// that `__rt_resource_id_of` reports for the native payload passed in `x0` (see
+/// `runtime::resource_ids`). Calls `__rt_itoa` to format the decimal id. Both the
 /// prefix and the id are emitted through `__rt_stdout_write` so the `--web`
 /// capture indirection sees the bytes. Falls through to the ARM64 default after
 /// the x86_64 Linux branch.
@@ -41,7 +41,7 @@ pub fn emit_resource_write_stdout(emitter: &mut Emitter) {
     emitter.instruction("mov x1, x2");                                          // prefix length → x1 per __rt_stdout_write's ABI
     emitter.instruction("bl __rt_stdout_write");                                // route the prefix through the capture indirection
     emitter.instruction("ldr x0, [sp, #8]");                                    // reload the native resource payload for display-id formatting
-    emitter.instruction("add x0, x0, #1");                                      // present resources as 1-based ids like PHP's display form
+    abi::emit_call_label(emitter, "__rt_resource_id_of");                       // resolve the payload to its PHP resource id through the registry
     abi::emit_call_label(emitter, "__rt_itoa");                                 // convert the resource display id into decimal text (x1/x2)
     emitter.instruction("mov x0, x1");                                          // capture-aware write: id pointer → x0
     emitter.instruction("mov x1, x2");                                          // id length → x1 per __rt_stdout_write's ABI
@@ -67,7 +67,7 @@ fn emit_resource_write_stdout_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rdx");                                        // prefix length → second arg register
     emitter.instruction("call __rt_stdout_write");                              // route the prefix through the capture indirection
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the native resource payload for display-id formatting
-    emitter.instruction("add rax, 1");                                          // present resources as 1-based ids like PHP's display form
+    abi::emit_call_label(emitter, "__rt_resource_id_of");                       // resolve the payload to its PHP resource id through the registry
     abi::emit_call_label(emitter, "__rt_itoa");                                 // convert the resource display id into decimal text (rax ptr, rdx len)
     emitter.instruction("mov rdi, rax");                                        // capture-aware write: id pointer → first arg register
     emitter.instruction("mov rsi, rdx");                                        // id length → second arg register

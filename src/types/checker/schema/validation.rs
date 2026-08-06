@@ -10,7 +10,7 @@
 
 use crate::errors::CompileError;
 use crate::names::php_symbol_key;
-use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, Visibility};
+use crate::parser::ast::{Attribute, ClassMethod, Expr, ExprKind, StmtKind, TypeExpr, Visibility};
 use crate::types::{FunctionSig, PhpType};
 
 use super::super::Checker;
@@ -22,6 +22,7 @@ use super::super::Checker;
 pub(crate) fn build_method_sig(
     checker: &Checker,
     method: &ClassMethod,
+    declaring_type: &str,
 ) -> Result<FunctionSig, CompileError> {
     let method_key = php_symbol_key(&method.name);
     let params: Vec<(String, PhpType)> = method
@@ -71,8 +72,9 @@ pub(crate) fn build_method_sig(
         }
     }
     let return_type = match method.return_type.as_ref() {
-        Some(type_ann) => checker.resolve_declared_return_type_hint(
+        Some(type_ann) => checker.resolve_method_return_type_hint(
             type_ann,
+            declaring_type,
             method.span,
             &format!("Method '{}'", method.name),
         )?,
@@ -305,7 +307,7 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
-/// Returns true for PDO's internal SQLSTATE-aware widening of Exception::getCode().
+/// Returns true for PDO's internal SQLSTATE-aware widening of `Exception::getCode()`.
 pub(crate) fn is_pdo_exception_get_code_contract(
     class_name: &str,
     method_name: &str,
@@ -321,21 +323,51 @@ pub(crate) fn is_pdo_exception_get_code_contract(
         && types.contains(&PhpType::Int)
 }
 
+/// Checks a preserved late-static parent/interface return against a child declaration.
+///
+/// A concrete class name cannot replace `static`: that would become unsound for further
+/// subclasses. `never` remains a valid covariant narrowing, while compound returns are
+/// compared after binding only their `static` members to the current receiver.
+pub(crate) fn late_static_return_compatible(
+    checker: &Checker,
+    expected: Option<&TypeExpr>,
+    actual: Option<&TypeExpr>,
+    actual_resolved: &PhpType,
+    receiver_type: &str,
+    span: crate::span::Span,
+) -> Result<Option<bool>, CompileError> {
+    let Some(expected) = expected else {
+        return Ok(None);
+    };
+    if matches!(actual_resolved, PhpType::Never) {
+        return Ok(Some(true));
+    }
+    let Some(actual) = actual.filter(|return_type| return_type.contains_late_static()) else {
+        return Ok(Some(false));
+    };
+    let expected =
+        checker.resolve_late_static_return_type_hint(expected, receiver_type, span)?;
+    let actual = checker.resolve_late_static_return_type_hint(actual, receiver_type, span)?;
+    Ok(Some(declared_return_type_compatible(
+        checker, &expected, &actual,
+    )))
+}
+
 /// Validates that `method` can override `parent_sig` in class `class_name`.
 /// Builds the child signature via `build_method_sig`, skips validation for `__construct`,
 /// checks signature compatibility, and ensures the child does not remove a declared
-/// return type when the parent has one or make it incompatible. PDOException's internal
-/// getCode override is allowed to widen the compiler-owned Exception integer slot to PHP's
-/// PDO-specific SQLSTATE `string|int` contract.
+/// return type when the parent has one or make it incompatible.
 pub(crate) fn validate_override_signature(
     checker: &Checker,
-    class_name: &str,
+    class: &crate::types::traits::FlattenedClass,
     method: &ClassMethod,
     parent_sig: &FunctionSig,
+    parent_late_static_return: Option<&TypeExpr>,
     is_static: bool,
 ) -> Result<(), CompileError> {
     let kind = if is_static { "static method" } else { "method" };
-    let child_sig = build_method_sig(checker, method)?;
+    let class_name = class.name.as_str();
+    let child_sig = build_method_sig(checker, method, class_name)?;
     if php_symbol_key(&method.name) == "__construct" {
         return Ok(());
     }
@@ -357,15 +389,33 @@ pub(crate) fn validate_override_signature(
             ),
         ));
     }
-    let pdo_exception_sqlstate_override = is_pdo_exception_get_code_contract(
+    let late_static_compatible = late_static_return_compatible(
+        checker,
+        parent_late_static_return,
+        method.return_type.as_ref(),
+        &child_sig.return_type,
+        class_name,
+        method.span,
+    )?;
+    let return_compatible = is_pdo_exception_get_code_contract(
         class_name,
         &method.name,
         &child_sig.return_type,
-    );
-    if parent_sig.declared_return
-        && !pdo_exception_sqlstate_override
-        && !declared_return_type_compatible(checker, &parent_sig.return_type, &child_sig.return_type)
-    {
+    ) || late_static_compatible.unwrap_or_else(|| {
+        declared_return_type_compatible(
+            checker,
+            &parent_sig.return_type,
+            &child_sig.return_type,
+        ) || covariant_self_return_compatible(
+            checker,
+            class_name,
+            class.extends.as_deref(),
+            &class.implements,
+            parent_sig,
+            &child_sig,
+        )
+    });
+    if parent_sig.declared_return && !return_compatible {
         return Err(CompileError::new(
             method.span,
             &format!(
@@ -375,4 +425,41 @@ pub(crate) fn validate_override_signature(
         ));
     }
     Ok(())
+}
+
+/// Returns true when a child method may return the child class itself against a wider parent return.
+///
+/// Covers PHP covariant returns (`parent::w(): Base` overridden as `w(): static` / `w(): Child`)
+/// while the child is mid-construction — `type_accepts` cannot see the subclass edge yet because
+/// `checker.classes` lacks the child, but the parent class is already registered.
+fn covariant_self_return_compatible(
+    checker: &Checker,
+    class_name: &str,
+    extends: Option<&str>,
+    implements: &[String],
+    parent_sig: &FunctionSig,
+    child_sig: &FunctionSig,
+) -> bool {
+    match (&parent_sig.return_type, &child_sig.return_type) {
+        (PhpType::Object(expected_name), PhpType::Object(actual_name))
+            if actual_name == class_name =>
+        {
+            if expected_name == class_name {
+                return true;
+            }
+            if let Some(parent) = extends {
+                if parent == expected_name
+                    || checker.is_subclass_of(parent, expected_name)
+                    || checker.class_implements_interface(parent, expected_name)
+                {
+                    return true;
+                }
+            }
+            implements.iter().any(|iface| {
+                iface == expected_name
+                    || checker.interface_extends_interface(iface, expected_name)
+            })
+        }
+        _ => false,
+    }
 }

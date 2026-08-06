@@ -341,16 +341,20 @@ a conservative return-to-parameter alias summary for each source function and
 method. A proven-fresh result permits cleanup of unrelated arguments; a direct
 passthrough protects only the returned parameter. Unknown calls, indirect
 storage reads, and every possible descendant override merge to the conservative
-result, so a type-compatible true alias remains live. Builtins and extern calls
-continue to use their separate ownership contracts and conservative fallback.
-The builtin registry can additionally declare result storage independent from
-all arguments, including scratch-backed results that are not fresh heap blocks;
-that contract feeds both direct-call cleanup and summaries for source wrappers.
+result, so a type-compatible true alias remains live. Registry builtins use the
+`BuiltinResultOwnership` value from their shared semantic descriptor; extern calls
+retain a conservative fallback. The descriptor can distinguish fresh, borrowed,
+independent, explicit argument-alias, and may-alias storage, including scratch-backed
+results that are not fresh heap blocks. That contract feeds direct-call cleanup,
+optimizer reasoning, and summaries for source wrappers.
 
 ## Effects
 
-Each instruction and terminator carries an immutable `Effects` summary assigned
-by the builder. Effects are conservative and PHP-observable.
+Each instruction and terminator carries an `Effects` summary. The builder
+assigns a conservative opcode or semantic-descriptor default; after the complete
+module is lowered, an effect-refinement fixed point may replace the summary on
+explicitly refinable direct calls, instance calls, and property reads. Final
+effects are immutable after validation and remain PHP-observable.
 
 ```rust
 pub struct Effects {
@@ -394,19 +398,37 @@ pub struct Effects {
 Effect sources:
 
 - Scalar arithmetic and comparison: hardcoded by opcode.
-- Builtins: from `src/optimize/effects/builtins.rs`, broadened to full bitsets
-  for EIR.
-- User functions/methods/closures: from analyzed function body effects.
+- Registry builtins: from `BuiltinSemantics::effects`, either a fixed bitset or a
+  shared resolver over normalized argument types.
+- User functions/methods/closures: from a whole-module monotone fixed point over
+  lowered bodies. Direct calls inherit the target summary; virtual instance calls
+  union every concrete implementation reachable from the checked receiver type,
+  while a fixed `object_new` receiver remains exact. A runtime eval bridge keeps
+  non-exact class dispatch conservative because it can register new subclasses.
+- Array/hash reads: typed opcodes distinguish ordinary/silent reads from
+  warning-producing misses; they do not claim a catchable exception merely
+  because a PHP warning is observable.
+- Property reads: checked class layouts distinguish declared untyped slots,
+  typed-slot initialization errors, missing-property warnings, synthetic
+  property hooks, and `__get`. Runtime-computed names retain warning/deopt and
+  any reachable typed-slot or magic-method effects.
 - Callable aliases and first-class callables: from `src/optimize/effects/calls.rs`
   and descriptor metadata.
 - Extern calls: conservative unless the extern declaration later gains explicit
   purity metadata.
-- Runtime calls: from an EIR runtime effect table keyed by helper name/category.
+- Typed runtime calls: from `RuntimeFnId` / `RuntimeCallTarget` metadata; concrete
+  helper symbols are selected only after EIR validation.
 
 Pure means no flags set. A pure operation may be CSE'd or removed if its result
 is unused. Any operation with `may_throw`, `may_fatal`, `may_warn`, `output`,
 `writes_*`, `alloc_*`, or `refcount_op` is observable unless a later pass proves
 otherwise.
+
+`may_throw` is reserved for catchable PHP exceptions. A warning, fatal path, or
+dynamic deoptimization remains observable through its own flag but does not by
+itself make a surrounding `catch` reachable. Unknown calls and reads keep the
+conservative union; refinement only removes flags proved impossible from
+checked module metadata.
 
 ## Instruction Set
 
@@ -592,8 +614,8 @@ closure bodies lower as normal `Function` values.
 |---|---|---|---|
 | `Call(function_id, args)` | normalized args | return type | callee effect summary |
 | `FunctionVariantCall(group, args)` | normalized args | return type | union of variant effects |
-| `BuiltinCall(name, args)` | normalized args | builtin return | builtin effect summary |
-| `RuntimeCall(helper, args)` | ABI args | helper return | runtime helper effect summary |
+| `LanguageConstructCall(name, args)` | normalized args | construct-specific return | compiler-resident construct effect summary |
+| `RuntimeCall(target, args)` | normalized typed operands | target-declared return | descriptor/typed-target effect summary |
 | `ExternCall(name, args)` | C ABI args | extern return | conservative FFI effects |
 | `ClosureNew` | captures | `I64` callable descriptor | `alloc_heap`, `refcount_op` |
 | `ClosureCall` | descriptor/local callable, args | return type | target effect summary or conservative |
@@ -604,7 +626,7 @@ closure bodies lower as normal `Function` values.
 | `PipeCall` | value, callable | callable return | evaluates value before callable invocation |
 
 Call argument rules are not reimplemented in each opcode. EIR lowering consumes
-the shared semantic planner in `src/types/call_args.rs` and preserves the
+the shared semantic planner in `src/types/call_args/` and preserves the
 observable order:
 
 1. Evaluate arguments in PHP source order.
@@ -671,9 +693,12 @@ outside PHP's heap.
 | `GeneratorYieldFrom` | iterable | yielded values | iterator/generator effects |
 | `GeneratorReturn` | value | `Void` | writes generator return state |
 
-`Yield` and `YieldFrom` are not emitted through the normal expression result
-path today. EIR must model them through generator state-machine lowering rather
-than ordinary expression instructions.
+`Yield` and `YieldFrom` are ordinary EIR instructions inside a generator body.
+The backend emits that body as a normal Mixed-returning function on a dedicated
+stackful coroutine stack. `GeneratorYield` records the boxed key/value and calls
+`__rt_gen_suspend`; resuming supplies the instruction result. `GeneratorYieldFrom`
+drives a generator delegate through `__rt_gen_delegate`, while array delegation
+is expanded into an iterator loop during EIR lowering.
 
 ### Include and Resolver Artifacts
 
@@ -1300,7 +1325,7 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `PostIncrement` | Load local, save old value, increment, store, return old value. |
 | `PreDecrement` | Load local, decrement, store, return new value. |
 | `PostDecrement` | Load local, save old value, decrement, store, return old value. |
-| `FunctionCall` | If extern: `ExternCall`; if builtin: `BuiltinCall`; otherwise `Call`/variant dispatch after shared argument planning. Literal `eval()` becomes `EvalLiteralCall` so later lowering can choose native, scope-only, or interpreter execution. |
+| `FunctionCall` | If extern: `ExternCall`; if registry builtin: descriptor-emitted EIR primitives/graphs or typed `RuntimeCall`; otherwise `Call`/variant dispatch after shared argument planning. Compiler-resident constructs use `LanguageConstructCall`; literal `eval()` becomes `EvalLiteralCall` so later lowering can choose native, scope-only, or interpreter execution. |
 | `ArrayLiteral` | Allocate indexed array and insert elements in source order, including spread handling. |
 | `ArrayLiteralAssoc` | Allocate hash table and insert key/value pairs in source order; empty hash keeps mixed key/value metadata. |
 | `Match` | Lower subject once; build strict-comparison arm CFG; default absence may `Fatal` via match-unhandled runtime. |
@@ -1332,8 +1357,8 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ScopedConstantAccess` | Resolve class constant or enum case metadata; emit scalar/object result. |
 | `NewScopedObject` | Allocate `self`, `parent`, or late-static object and call constructor. |
 | `MagicConstant` | Must not reach EIR; validator rejects it because magic constants are lowered earlier. |
-| `Yield` | Lower through generator state-machine path; emits `GeneratorYield`/`GeneratorSuspend`. |
-| `YieldFrom` | Lower iterable forwarding through generator state-machine path. |
+| `Yield` | Emit `GeneratorYield`; codegen records the key/value and suspends the stackful coroutine through `__rt_gen_suspend`. |
+| `YieldFrom` | Emit `GeneratorYieldFrom` for generator delegation; array delegation is expanded into an iterator loop that re-yields each entry. |
 
 ### Binary Operators
 

@@ -9,8 +9,12 @@
 
 #[path = "runtime_gc/basics.rs"]
 mod basics;
+#[path = "runtime_gc/nullable_string_return.rs"]
+mod nullable_string_return;
 #[path = "runtime_gc/regressions.rs"]
 mod regressions;
+#[path = "runtime_gc/assoc_rebind_release.rs"]
+mod assoc_rebind_release;
 #[path = "runtime_gc/stack_args.rs"]
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]

@@ -2,7 +2,7 @@
 //! Lowers string-returning scalar builtins for the EIR backend.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Runtime helpers keep owning returned string storage; this module only
@@ -18,7 +18,6 @@ use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Stack cleanup slots for split builtin string coercions that allocate owned temporaries.
 struct SplitStringTempCleanups {
@@ -823,20 +822,52 @@ pub(crate) fn lower_str_repeat(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers `strstr(haystack, needle)` by searching and returning the matching suffix.
 pub(crate) fn lower_strstr(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.len() != 2 {
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
-            "strstr expected 2 args, got {}",
+            "strstr expected 2 or 3 args, got {}",
             inst.operands.len()
         )));
     }
-    let found_label = ctx.next_label("strstr_found");
-    let end_label = ctx.next_label("strstr_end");
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_strstr_aarch64(ctx, inst, &found_label, &end_label)?,
-        Arch::X86_64 => lower_strstr_x86_64(ctx, inst, &found_label, &end_label)?,
+    if inst.result.is_some() && inst.result_php_type.codegen_repr() != PhpType::Mixed {
+        // `crate::builtins::string::strstr::check` types EVERY call `string|false`, whose
+        // representation is `Mixed`, and the arms below leave a BOXED cell in the integer
+        // result register. A `Str` result type here would make `store_if_result` copy the
+        // string-pair registers instead, which no longer hold the answer — fail loudly rather
+        // than emit that silently wrong store.
+        return Err(CodegenIrError::invalid_module(format!(
+            "strstr result must be Mixed (string|false), got {:?}",
+            inst.result_php_type
+        )));
     }
-    ctx.emitter.label(&end_label);
+    let labels = StrstrLabels {
+        prefix: ctx.next_label("strstr_prefix"),
+        miss: ctx.next_label("strstr_miss"),
+        box_match: ctx.next_label("strstr_box_match"),
+        end: ctx.next_label("strstr_end"),
+    };
+    // The `$before_needle` flag is materialized FIRST and parked on the temporary stack: every
+    // register that could hold it (including the caller-saved scratch the truthiness helpers
+    // use) is clobbered by the haystack/needle materialization and the `__rt_strpos` call.
+    materialize_truthy_flag(ctx, inst, 2, "strstr")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_strstr_aarch64(ctx, inst, &labels)?,
+        Arch::X86_64 => lower_strstr_x86_64(ctx, inst, &labels)?,
+    }
+    ctx.emitter.label(&labels.end);
     store_if_result(ctx, inst)
+}
+
+/// The four branch targets `lower_strstr` threads through its per-architecture emitters.
+///
+/// `prefix` selects the `$before_needle` substring, `miss` boxes PHP's `false`, `box_match` is
+/// where both hit arms converge to box the selected substring as a string, and `end` is the
+/// common continuation where the boxed `Mixed` cell is stored.
+struct StrstrLabels {
+    prefix: String,
+    miss: String,
+    box_match: String,
+    end: String,
 }
 
 /// Lowers `str_replace()`/`str_ireplace()` with three string operands.
@@ -1080,7 +1111,7 @@ fn lower_gzcompress_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // seed destLen with the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 32], rax");                   // save the destination buffer pointer
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the destination buffer pointer
@@ -1170,7 +1201,7 @@ fn lower_gzdeflate_x86_64(
     ctx.emitter.instruction("call compressBound");                              // compute the worst-case compressed byte length
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], rax");                  // save the output capacity
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the compressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
@@ -1302,7 +1333,7 @@ fn lower_gzinflate_x86_64(
     ctx.emitter.instruction("mov QWORD PTR [rsp + 144], r9");                   // save the output capacity
     ctx.emitter.instruction("mov rax, r9");                                     // pass the output capacity to the heap allocator
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the decompressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 128], rax");                  // save the destination buffer pointer
 
@@ -1393,7 +1424,7 @@ fn lower_gzuncompress_x86_64(ctx: &mut FunctionContext<'_>, ok: &str, after: &st
     ctx.emitter.instruction("mov QWORD PTR [rsp + 16], r9");                    // seed destLen with the output capacity
     ctx.emitter.instruction("mov rax, r9");                                     // pass the output capacity to the heap allocator
     ctx.emitter.instruction("call __rt_heap_alloc");                            // allocate the decompressed-data buffer
-    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 1)); // materialize the x86_64 string heap kind word
+    ctx.emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the x86_64 string heap kind word
     ctx.emitter.instruction("mov QWORD PTR [rax - 8], r10");                    // stamp the output buffer as a heap string
     ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // save the destination buffer pointer
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the destination buffer pointer
@@ -1626,8 +1657,7 @@ fn lower_str_repeat_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 fn lower_strstr_aarch64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    found_label: &str,
-    end_label: &str,
+    labels: &StrstrLabels,
 ) -> Result<()> {
     load_string_arg_to_regs(ctx, inst, 0, "strstr", "x1", "x2")?;
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the haystack while materializing the needle string
@@ -1637,15 +1667,23 @@ fn lower_strstr_aarch64(
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack into primary string argument registers
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the haystack while strpos() returns the match offset
     abi::emit_call_label(ctx.emitter, "__rt_strpos");
-    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack for suffix reconstruction
+    ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the haystack for substring reconstruction
+    ctx.emitter.instruction("ldr x9, [sp], #16");                               // reload the parked $before_needle flag now that every call is done
     ctx.emitter.instruction("cmp x0, #0");                                      // check whether strpos() returned a valid match offset
-    ctx.emitter.instruction(&format!("b.ge {}", found_label));                  // build the matching suffix when the needle was found
-    ctx.emitter.instruction("mov x1, #0");                                      // return a null pointer for the empty not-found string
-    ctx.emitter.instruction("mov x2, #0");                                      // return zero length for the empty not-found string
-    ctx.emitter.instruction(&format!("b {}", end_label));                       // skip suffix pointer adjustment for a miss
-    ctx.emitter.label(found_label);
+    ctx.emitter.instruction(&format!("b.lt {}", labels.miss));                  // PHP returns false, not "", when the needle is absent
+    ctx.emitter.instruction("cmp x9, #0");                                      // was $before_needle truthy?
+    ctx.emitter.instruction(&format!("b.ne {}", labels.prefix));                // a truthy flag selects the part BEFORE the needle
     ctx.emitter.instruction("add x1, x1, x0");                                  // advance the haystack pointer to the matching suffix
     ctx.emitter.instruction("sub x2, x2, x0");                                  // shrink the haystack length to the matching suffix length
+    ctx.emitter.instruction(&format!("b {}", labels.box_match));                // both hit arms box the selected substring identically
+    ctx.emitter.label(&labels.prefix);
+    ctx.emitter.instruction("mov x2, x0");                                      // keep the haystack pointer and cut the length at the match offset
+    ctx.emitter.label(&labels.box_match);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    ctx.emitter.instruction(&format!("b {}", labels.end));                      // skip the miss arm once the substring is boxed
+    ctx.emitter.label(&labels.miss);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     Ok(())
 }
 
@@ -1653,8 +1691,7 @@ fn lower_strstr_aarch64(
 fn lower_strstr_x86_64(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
-    found_label: &str,
-    end_label: &str,
+    labels: &StrstrLabels,
 ) -> Result<()> {
     load_string_arg_to_regs(ctx, inst, 0, "strstr", "rax", "rdx")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
@@ -1670,14 +1707,22 @@ fn lower_strstr_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_strpos");
     ctx.emitter.instruction("mov r8, rax");                                     // preserve the signed match offset while restoring the haystack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    abi::emit_pop_reg(ctx.emitter, "r9");                                       // reload the parked $before_needle flag now that every call is done
     ctx.emitter.instruction("cmp r8, 0");                                       // check whether strpos() returned a valid match offset
-    ctx.emitter.instruction(&format!("jge {}", found_label));                   // build the matching suffix when the needle was found
-    ctx.emitter.instruction("xor eax, eax");                                    // return a null pointer for the empty not-found string
-    ctx.emitter.instruction("xor edx, edx");                                    // return zero length for the empty not-found string
-    ctx.emitter.instruction(&format!("jmp {}", end_label));                     // skip suffix pointer adjustment for a miss
-    ctx.emitter.label(found_label);
+    ctx.emitter.instruction(&format!("jl {}", labels.miss));                    // PHP returns false, not "", when the needle is absent
+    ctx.emitter.instruction("cmp r9, 0");                                       // was $before_needle truthy?
+    ctx.emitter.instruction(&format!("jne {}", labels.prefix));                 // a truthy flag selects the part BEFORE the needle
     ctx.emitter.instruction("add rax, r8");                                     // advance the haystack pointer to the matching suffix
     ctx.emitter.instruction("sub rdx, r8");                                     // shrink the haystack length to the matching suffix length
+    ctx.emitter.instruction(&format!("jmp {}", labels.box_match));              // both hit arms box the selected substring identically
+    ctx.emitter.label(&labels.prefix);
+    ctx.emitter.instruction("mov rdx, r8");                                     // keep the haystack pointer and cut the length at the match offset
+    ctx.emitter.label(&labels.box_match);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+    ctx.emitter.instruction(&format!("jmp {}", labels.end));                    // skip the miss arm once the substring is boxed
+    ctx.emitter.label(&labels.miss);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
     Ok(())
 }
 
@@ -2339,7 +2384,11 @@ fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Resul
     let array = expect_operand(inst, 1)?;
     match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
-            PhpType::Int | PhpType::Bool => Ok("__rt_implode_int"),
+            // PHP stringifies bool elements as "1"/"" — NOT as the "1"/"0" that
+            // `__rt_implode_int`'s `__rt_itoa` pass would produce — so bool arrays get their
+            // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
+            PhpType::Bool => Ok("__rt_implode_bool"),
+            PhpType::Int => Ok("__rt_implode_int"),
             PhpType::Str | PhpType::Mixed | PhpType::Never => Ok("__rt_implode"),
             other => Err(CodegenIrError::unsupported(format!(
                 "implode array element PHP type {:?}",
@@ -2952,18 +3001,20 @@ fn pack_sprintf_arg_x86_64(
 fn emit_printf_write_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, #1");                              // pass stdout as the destination file descriptor
-            ctx.emitter.syscall(4);
-            ctx.emitter.instruction("mov x0, x2");                              // return the formatted byte count as printf()'s integer result
+            ctx.emitter.instruction("stp x2, xzr, [sp, #-16]!");                // preserve the formatted byte count across the funnel call
+            ctx.emitter.instruction("mov x0, x1");                              // pass the formatted string pointer as the write buffer
+            ctx.emitter.instruction("mov x1, x2");                              // pass the formatted string length as the write byte count
+            abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // return the formatted byte count as printf()'s integer result
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r8, rdx");                             // preserve the formatted byte count across syscall-clobbered registers
-            ctx.emitter.instruction("mov rsi, rax");                            // pass the formatted string pointer as the write buffer
-            ctx.emitter.instruction("mov rdx, r8");                             // pass the formatted string length as the write byte count
-            ctx.emitter.instruction("mov edi, 1");                              // pass stdout as the destination file descriptor
-            ctx.emitter.instruction("mov eax, 1");                              // select Linux x86_64 syscall 1 for write
-            ctx.emitter.instruction("syscall");                                 // write the formatted printf() result to stdout
-            ctx.emitter.instruction("mov rax, r8");                             // return the formatted byte count as printf()'s integer result
+            ctx.emitter.instruction("push rdx");                                // preserve the formatted byte count across the funnel call
+            ctx.emitter.instruction("push rdx");                                // keep the stack 16-byte aligned for the call
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the formatted string pointer as the write buffer
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the formatted string length as the write byte count
+            abi::emit_call_label(ctx.emitter, "__rt_stdout_write");
+            ctx.emitter.instruction("pop rax");                                 // drop the alignment copy of the byte count
+            ctx.emitter.instruction("pop rax");                                 // return the formatted byte count as printf()'s integer result
         }
     }
 }

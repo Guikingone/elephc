@@ -37,9 +37,10 @@ impl Checker {
                     ));
                     continue;
                 }
-                if let Some(builtin) =
+                let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
-                {
+                });
+                if let Some(builtin) = builtin {
                     errors.push(CompileError::new(
                         stmt.span,
                         &format!("Cannot redeclare built-in function: {}", builtin),
@@ -70,9 +71,10 @@ impl Checker {
                     ));
                     continue;
                 }
-                if let Some(builtin) =
+                let builtin = crate::strict_php::with_source_mode(stmt.source_mode, || {
                     crate::types::checker::builtins::canonical_builtin_function_name(name)
-                {
+                });
+                if let Some(builtin) = builtin {
                     errors.push(CompileError::new(
                         stmt.span,
                         &format!("Cannot redeclare built-in function: {}", builtin),

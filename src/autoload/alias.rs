@@ -51,6 +51,7 @@ fn collect_aliases_in_stmt(stmt: Stmt, alias_decls: &mut Vec<Stmt>) -> Option<St
     }
 
     let span = stmt.span;
+    let source_mode = stmt.source_mode;
     let attributes = stmt.attributes;
     match stmt.kind {
         StmtKind::NamespaceBlock { name, body } => Some(Stmt {
@@ -59,6 +60,7 @@ fn collect_aliases_in_stmt(stmt: Stmt, alias_decls: &mut Vec<Stmt>) -> Option<St
                 body: collect_aliases_in_top_level(body, alias_decls),
             },
             span,
+            source_mode,
             attributes,
         }),
         StmtKind::IncludeOnceGuard { label, body } => Some(Stmt {
@@ -67,16 +69,19 @@ fn collect_aliases_in_stmt(stmt: Stmt, alias_decls: &mut Vec<Stmt>) -> Option<St
                 body: collect_aliases_in_top_level(body, alias_decls),
             },
             span,
+            source_mode,
             attributes,
         }),
         StmtKind::Synthetic(body) => Some(Stmt {
             kind: StmtKind::Synthetic(collect_aliases_in_top_level(body, alias_decls)),
             span,
+            source_mode,
             attributes,
         }),
         kind => Some(Stmt {
             kind,
             span,
+            source_mode,
             attributes,
         }),
     }

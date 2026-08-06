@@ -64,6 +64,62 @@ fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) 
     dir.join(stem)
 }
 
+
+/// A spawned web server, stopped completely when it is killed OR dropped.
+///
+/// # Why this exists
+///
+/// `Child::kill` sends SIGKILL. The `--web` binary is a PREFORK server, so the parent dies
+/// instantly without reaping anything and its worker is orphaned, still holding the port. A
+/// test that looked perfectly green therefore leaked one process per server it started, and a
+/// full run of this file starts dozens.
+///
+/// The teardown here asks the parent to terminate first (SIGTERM, which it can act on), then
+/// sweeps anything still listening on this server's address. The address comes from
+/// `free_port`, so it is unique to this server and the sweep can never reach another test's —
+/// or another session's — process.
+///
+/// [`Drop`] runs the same teardown, which is the half an explicit call cannot cover: a failing
+/// assertion panics straight past every `child.kill()` below, and that is exactly the path on
+/// which a leak goes unnoticed.
+struct ServerHandle {
+    /// The spawned parent process.
+    child: std::process::Child,
+    /// The `host:port` this server listens on, used to sweep its workers.
+    addr: String,
+}
+
+impl ServerHandle {
+    /// Stops the server and every worker it forked. Idempotent.
+    fn shutdown(&mut self) {
+        let _ = Command::new("kill").arg(self.child.id().to_string()).status();
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = Command::new("pkill")
+            .arg("-f")
+            .arg(format!("--listen {}", self.addr))
+            .status();
+        let _ = self.child.kill();
+    }
+
+    /// Stops the server. Named `kill` so every call site below reads unchanged.
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.shutdown();
+        Ok(())
+    }
+
+    /// Reaps the parent process.
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.child.wait()
+    }
+}
+
+impl Drop for ServerHandle {
+    /// Guarantees teardown even when a test panics before reaching its `kill()`.
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 /// Picks an ephemeral localhost port by binding :0 and releasing it.
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -83,7 +139,7 @@ fn wait_until_ready(addr: &str) {
 }
 
 /// Spawns the server binary on `addr`, waits until it accepts connections.
-fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
+fn spawn_server(bin: &Path, addr: &str, workers: &str) -> ServerHandle {
     let child = Command::new(bin)
         .arg("--listen")
         .arg(addr)
@@ -92,7 +148,10 @@ fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Spawns the server binary with extra environment variables set on the server
@@ -103,7 +162,7 @@ fn spawn_server_with_env(
     addr: &str,
     workers: &str,
     env: &[(&str, &str)],
-) -> std::process::Child {
+) -> ServerHandle {
     let mut cmd = Command::new(bin);
     cmd.arg("--listen").arg(addr).arg("--workers").arg(workers);
     for (k, v) in env {
@@ -111,11 +170,14 @@ fn spawn_server_with_env(
     }
     let child = cmd.spawn().expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Spawns the server with stderr redirected to a file for diagnostic assertions.
-fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> std::process::Child {
+fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> ServerHandle {
     let stderr = fs::File::create(stderr_path).expect("failed to create server stderr capture");
     let child = Command::new(bin)
         .arg("--listen")
@@ -126,7 +188,10 @@ fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> std::
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Sends one HTTP/1.1 GET and returns the full raw response text.
@@ -588,6 +653,78 @@ fn session_counter_persists() {
         r2.ends_with("2"),
         "second request counter should be 2: {:?}",
         r2
+    );
+}
+
+/// Verifies `session.use_strict_mode=1` rejects a client-supplied session ID
+/// that has no backing session (session-fixation defense): the forged cookie
+/// ID is discarded, a fresh random ID is minted and reissued via `Set-Cookie`,
+/// and the session works under the new ID (the counter persists to 2 on a
+/// follow-up request carrying it). The contrast leg proves the rejection is
+/// strict mode's doing: with strict mode off, the same kind of unknown cookie
+/// ID is adopted as-is.
+#[test]
+fn session_strict_mode_rejects_unknown_cookie_id() {
+    let dir = make_test_dir("sess_strict");
+    // A per-test save_path keeps forged-ID lookups (and the lax leg's adopted
+    // session file) isolated from the shared platform temp directory.
+    let save_path = dir.to_string_lossy().replace('\\', "/");
+    let src = format!(
+        "<?php $strict = isset($_GET['strict']) ? 1 : 0; session_start(['save_path' => '{save_path}', 'use_strict_mode' => $strict]); if (!isset($_SESSION['hits'])) {{ $_SESSION['hits'] = 0; }} $_SESSION['hits'] = $_SESSION['hits'] + 1; echo session_id() . ':' . $_SESSION['hits'];"
+    );
+    let bin = compile_web(&dir, &src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    // Strict leg: a forged ID with no session behind it must not be adopted.
+    let forged = "elephcforgedstrictaaaaaaaaaaaaaa";
+    let r1 = http_request(
+        &addr,
+        "GET",
+        "/?strict=1",
+        &[("Cookie", &format!("PHPSESSID={}", forged))],
+        "",
+    );
+    let fresh = extract_phpsessid(&r1)
+        .expect("strict mode must reissue a fresh cookie after rejecting the forged id");
+    // Follow-up with the fresh ID: its session record now exists, so strict
+    // mode accepts it and the counter persists.
+    let r2 = http_request(
+        &addr,
+        "GET",
+        "/?strict=1",
+        &[("Cookie", &format!("PHPSESSID={}", fresh))],
+        "",
+    );
+    // Contrast leg: with strict mode off an unknown cookie ID is adopted as-is.
+    let adopted = "elephcforgedlaxadoptbbbbbbbbbbbb";
+    let r3 = http_request(
+        &addr,
+        "GET",
+        "/",
+        &[("Cookie", &format!("PHPSESSID={}", adopted))],
+        "",
+    );
+    let _ = child.kill();
+    let _ = child.wait();
+    assert_ne!(
+        fresh, forged,
+        "strict mode must mint a fresh id instead of adopting the forged one"
+    );
+    assert!(
+        r1.ends_with(&format!("{}:1", fresh)),
+        "strict-mode request should run under the fresh id with a new counter: {:?}",
+        r1
+    );
+    assert!(
+        r2.ends_with(&format!("{}:2", fresh)),
+        "the reissued id must pass strict validation and persist the counter: {:?}",
+        r2
+    );
+    assert!(
+        r3.ends_with(&format!("{}:1", adopted)),
+        "with strict mode off the unknown cookie id must be adopted: {:?}",
+        r3
     );
 }
 
@@ -1151,7 +1288,7 @@ fn spawn_server_stderr_to_file(
     addr: &str,
     workers: &str,
     stderr_file: &Path,
-) -> std::process::Child {
+) -> ServerHandle {
     let f = fs::File::create(stderr_file).unwrap();
     let child = Command::new(bin)
         .arg("--listen")
@@ -1162,7 +1299,10 @@ fn spawn_server_stderr_to_file(
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Verifies `error_log($msg, 3, $file)` appends each message verbatim to the
@@ -1751,4 +1891,143 @@ fn session_custom_handler_lazy_update_timestamp() {
     let _ = child.wait();
     assert!(first.ends_with('W'), "first request must write: {first:?}");
     assert!(second.ends_with('U'), "unchanged request must update timestamp: {second:?}");
+}
+
+/// CHARACTERIZATION PIN — guards the upcoming INI-dispatcher-generalization
+/// refactor against silent regressions in today's closed, session-only
+/// `ini_get`/`ini_set`/`ini_get_all` surface (generated PHP in
+/// `src/web_prelude.rs`, defaults sourced from
+/// `crates/elephc-web/src/session/state.rs`).
+///
+/// This freezes, verbatim, the CURRENT behavior observed on this branch
+/// (default `--php-version` resolves to 8.5, so the `session.*` key list
+/// includes `session.cookie_partitioned`, giving 33 total directives):
+///
+/// 1. `ini_get()` on 23 distinct `session.*` directives, in the PHP default
+///    (unstarted-session) state, returns exactly:
+///    `1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,`
+///    (empty-string ini_get results render as PHP's ini convention: `''` for
+///    off-booleans and for the yet-unset save_path/cookie_domain/etc.)
+/// 2. `ini_set('session.gc_maxlifetime', '9999')` returns the OLD value
+///    `"1440"`, and a subsequent `ini_get` of the same key reflects the new
+///    value `"9999"` — the round-trip contract.
+/// 3. `ini_get('opcache.enable')` now returns the raw INI string `"1"`,
+///    while `ini_get('nonexistent.key')` still returns `false`. RE-PINNED
+///    (the conscious, intended change foreseen below): the dispatcher now
+///    answers `opcache.*` directives with their raw INI strings AHEAD of the
+///    still-unchanged `session.*` surface (opcache keys are disjoint from
+///    session keys), and every other/unknown key remains `false`. opcache.*
+///    `ini_get` is now live under `--web`. This was the LOAD-BEARING DELTA:
+///    if this pin ever fails because a non-session key stops returning
+///    `false`, that is a conscious, intended change to re-pin, not a bug.
+/// 4. `ini_get_all()` shape and EXTENSION FILTER. RE-PINNED (the conscious,
+///    intended change this docblock foresees): the filter is no longer
+///    "`'session'` or `[]`" — it now reproduces php-src's dispatch.
+///
+///    - The argument is matched VERBATIM against the module registry, whose
+///      keys are lowercase, with NO case folding. This is deliberately
+///      UNLIKE `extension_loaded`, which IS case-insensitive; the two must
+///      not share a comparison helper. So `'session'` yields the 33
+///      `session.*` directives and `'zend opcache'` yields the 54
+///      `opcache.*` ones, while `'Zend OPcache'` — the spelling
+///      `get_loaded_extensions()` reports — is NOT FOUND.
+///    - A module that is KNOWN but registers no INI directives yields an
+///      EMPTY ARRAY (`'json'` → count 0), matching reference PHP 8.5.6
+///      (spl/json/ctype/reflection all return `[]`).
+///    - A module that is NOT in the registry yields `false` PLUS an
+///      `E_WARNING` reading exactly
+///      `ini_get_all(): Extension "<name>" cannot be found` (rendered
+///      `Warning: <msg>` on the worker's stderr). `'foo'` — which used to
+///      return `[]` — is now this case, which is why the pinned field for it
+///      changed from a count to `F`. `ini_get_all` is therefore
+///      `array|false`; the probe narrows with `is_array()` before counting,
+///      and the return type HINT is deliberately omitted in the prelude so
+///      ordinary union return inference handles the exits.
+///    - The default (`null`) extension yields BOTH blocks — 33 `session.*`
+///      followed by 54 `opcache.*` = 87 total on the 8.5 default — with the
+///      `session.*` entries byte-identical and appearing FIRST
+///      (`isset($all['session.gc_maxlifetime'])` stays true, first key is
+///      `session.name`). `'core'` maps to that same unfiltered surface,
+///      reproducing php-src's rule that Core's `module_number` is 0 so the
+///      per-module filter is skipped for it.
+///    - KEY ORDER: the `session.*` block keeps its REGISTRATION order
+///      (unchanged, byte for byte), and the `opcache.*` block is now SORTED
+///      ASCENDING, matching reference `ini_get_all`. The pin walks the
+///      opcache keys with `strcmp` (`S`) and pins the last key
+///      (`opcache.validate_timestamps`). `opcache_get_configuration()`
+///      keeps registration order and is unaffected.
+///    - Each detail entry is `['global_value' => v, 'local_value' => v,
+///      'access' => n]` where `n` is `7` for a normal session directive
+///      (`session.name`), `2` (PHP_INI_PERDIR) for an `upload_progress.*`
+///      directive (`session.upload_progress.enabled`), and the `PHP_INI_*`
+///      level for an opcache directive.
+///
+/// 5. `$details === false` (the flat-value projection) now WORKS. It used to
+///    crash the worker into an empty HTTP reply — one loop wrote an array
+///    literal on the `$details` branch and a scalar on the other into the
+///    same array slot — so it was excluded from this pin. It is covered
+///    directly by `tests/opcache_ini_tests.rs` on the CLI surface; this pin
+///    stays on the `$details === true` shape it has always pinned.
+///
+/// If this pin fails because a NON-session key stops returning `false` from
+/// `ini_get`, or because the extension-filter dispatch above changes, that is
+/// a conscious, intended change to re-pin, not a bug. A change in any
+/// `session.*` value, count, or order is a REGRESSION.
+#[test]
+fn session_ini_surface_is_pinned() {
+    let dir = make_test_dir("ini_surface_pin");
+    let src = r#"<?php
+$parts = [];
+$keys = ['session.gc_maxlifetime','session.name','session.save_path','session.save_handler','session.cache_limiter','session.cache_expire','session.cookie_lifetime','session.cookie_path','session.cookie_domain','session.cookie_secure','session.cookie_httponly','session.use_cookies','session.use_strict_mode','session.use_only_cookies','session.lazy_write','session.use_trans_sid','session.gc_probability','session.gc_divisor','session.sid_length','session.sid_bits_per_character','session.auto_start','session.serialize_handler','session.referer_check'];
+$vals = [];
+foreach ($keys as $k) {
+    $v = ini_get($k);
+    $vals[] = ($v === false) ? 'F' : $v;
+}
+$parts[] = implode(',', $vals);
+$old = ini_set('session.gc_maxlifetime', '9999');
+$new = ini_get('session.gc_maxlifetime');
+$parts[] = $old . '>' . $new;
+$parts[] = (ini_get('opcache.enable') === false ? 'F' : 'X') . (ini_get('nonexistent.key') === false ? 'F' : 'X');
+$foo = ini_get_all('foo');
+$json = ini_get_all('json');
+$sess = ini_get_all('session');
+$all = ini_get_all();
+$zend = ini_get_all('zend opcache');
+$cased = ini_get_all('Zend OPcache');
+if (is_array($json) && is_array($sess) && is_array($all) && is_array($zend)) {
+    $parts[] = ($foo === false ? 'F' : 'X') . ':' . count($json) . ':' . count($sess) . ':' . count($all) . ':' . (isset($all['session.gc_maxlifetime']) ? 'Y' : 'N');
+    $name_entry = $sess['session.name'];
+    $parts[] = $name_entry['global_value'] . '|' . $name_entry['local_value'] . '|' . $name_entry['access'];
+    $upload_entry = $sess['session.upload_progress.enabled'];
+    $parts[] = (string)$upload_entry['access'];
+    $first = ''; $last = ''; $oprev = ''; $osorted = 1;
+    foreach ($all as $ak => $av) {
+        $aks = (string) $ak;
+        if ($first === '') { $first = $aks; }
+        if (substr($aks, 0, 8) === 'opcache.') {
+            if ($oprev !== '' && strcmp($aks, $oprev) <= 0) { $osorted = 0; }
+            $oprev = $aks;
+        }
+        $last = $aks;
+    }
+    $parts[] = count($zend) . ':' . ($cased === false ? 'F' : 'X') . ':' . $first . ':' . $last . ':' . ($osorted === 1 ? 'S' : 'U');
+}
+echo implode('#', $parts);"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let response = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let expected = "1440,PHPSESSID,,files,nocache,180,0,/,,,,1,,1,1,,1,100,32,4,,php,\
+#1440>9999#XF#F:0:33:87:Y#PHPSESSID|PHPSESSID|7#2\
+#54:F:session.name:opcache.validate_timestamps:S";
+    assert!(
+        response.ends_with(expected),
+        "session ini surface pin mismatch (INI-dispatcher refactor changed \
+         observable behavior): {response:?}\nexpected suffix: {expected:?}"
+    );
 }

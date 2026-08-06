@@ -15,5 +15,8 @@ mod callbacks;
 mod foreach_key_write;
 mod foreach_value_append;
 mod list_and_keys;
+mod list_unpack;
+mod nested_autovivify;
 mod nested_mixed_write;
+mod mixed_append_autovivify;
 mod assoc_set_ops;

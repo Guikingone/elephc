@@ -2,31 +2,30 @@
 title: "hash_update() — internals"
 description: "Compiler internals for hash_update(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 363
+  order: 380
 ---
 
 ## `hash_update()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_update.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:295](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L295) (`lower_hash_update`)
-- **Function symbol**: `lower_hash_update()`
+- **Signature**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs)
+- **Lowering**: [`(not lowered)`:0]()
+- **Function symbol**: `(none — type-checker only)()`
 
 
-### Lowering notes
+## Semantic descriptor
 
-- Lowers `hash_update(context, data)` through the incremental hash runtime helper.
+_Compiler-resident construct; this name is intentionally outside the builtin registry._
 
-## Runtime helpers
+## EIR and runtime boundary
 
-The following runtime helpers are referenced:
-- `__rt_hash_update`
+_Compiler-resident lowering; no registry-backed typed runtime target applies._
 
 ## Signature summary
 
 ```php
-function hash_update(resource $context, string $data): bool
+function hash_update(mixed $context, mixed $data): mixed
 ```
 
 ## What the type checker enforces

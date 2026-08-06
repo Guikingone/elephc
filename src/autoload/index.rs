@@ -192,7 +192,7 @@ fn walk_psr4(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
         let path = entry.path();
         if path.is_dir() {
             walk_psr4(&path, ns_prefix, root, index);
-        } else if path.extension().is_some_and(|ext| ext == "php") {
+        } else if crate::source::is_composer_source_path(&path) {
             let Ok(rel) = path.strip_prefix(root) else {
                 continue;
             };
@@ -207,9 +207,7 @@ fn walk_psr4(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
                 continue;
             }
             if let Some(last) = parts.last_mut() {
-                if let Some(stripped) = last.strip_suffix(".php") {
-                    *last = stripped.to_string();
-                }
+                *last = crate::source::composer_source_stem(last);
             }
             let suffix = parts.join("\\");
             let prefix = ns_prefix.trim_matches('\\');
@@ -247,7 +245,7 @@ fn walk_psr0(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
         let path = entry.path();
         if path.is_dir() {
             walk_psr0(&path, ns_prefix, root, index);
-        } else if path.extension().is_some_and(|ext| ext == "php") {
+        } else if crate::source::is_composer_source_path(&path) {
             let Ok(rel) = path.strip_prefix(root) else {
                 continue;
             };
@@ -262,9 +260,7 @@ fn walk_psr0(dir: &Path, ns_prefix: &str, root: &Path, index: &mut HashMap<Strin
                 continue;
             }
             if let Some(last) = parts.last_mut() {
-                if let Some(stripped) = last.strip_suffix(".php") {
-                    *last = stripped.to_string();
-                }
+                *last = crate::source::composer_source_stem(last);
             }
             let prefix = ns_prefix.trim_matches('\\');
             let prefix_has_namespace = prefix.contains('\\');
@@ -495,18 +491,19 @@ mod tests {
     }
 }
 
-/// Parse a PHP file and index all class/interface/trait/enum declarations found.
+/// Parses a PHP/LFC source file and indexes all class/interface/trait/enum declarations found.
 fn scan_classmap_file(path: &Path, index: &mut HashMap<String, PathBuf>) {
-    if !path.extension().is_some_and(|ext| ext == "php") {
+    if !crate::source::is_composer_source_path(path) {
         return;
     }
     let Ok(content) = std::fs::read_to_string(path) else {
         return;
     };
-    let Ok(tokens) = crate::lexer::tokenize(&content) else {
+    let mode = crate::source::SourceMode::from_path(path);
+    let Ok(tokens) = crate::lexer::tokenize_with_mode(&content, mode) else {
         return;
     };
-    let Ok(ast) = crate::parser::parse(&tokens) else {
+    let Ok(ast) = crate::parser::parse_with_mode(&tokens, mode) else {
         return;
     };
     let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());

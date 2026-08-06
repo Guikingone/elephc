@@ -18,7 +18,8 @@ use super::super::Checker;
 impl Checker {
     /// Resolves the canonical `FunctionSig` for a first-class callable expression.
     ///
-    /// Looks up the target in this order: user-defined functions → `fn_decls` → extern functions → builtins.
+    /// LFC prefers an elephc extension builtin over a same-named strict-PHP user
+    /// declaration; other targets use user declarations, externs, then builtins.
     /// Returns a wrapped signature where all parameters are marked as declared (callable syntax has no
     /// type inference at the call site). Visibility checks are applied for static-method and instance-method targets.
     ///
@@ -36,6 +37,25 @@ impl Checker {
         match target {
             CallableTarget::Function(name) => {
                 let function_name = name.as_str();
+                let function_key =
+                    crate::names::php_symbol_key(function_name.trim_start_matches('\\'));
+                let prefer_extension_builtin = !crate::strict_php::is_enabled()
+                    && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+                        &function_key,
+                        true,
+                    );
+                if prefer_extension_builtin {
+                    return crate::types::first_class_callable_builtin_sig(&function_key)
+                        .ok_or_else(|| {
+                            CompileError::new(
+                                span,
+                                &format!(
+                                    "First-class callable syntax does not support builtin '{}' yet",
+                                    function_name
+                                ),
+                            )
+                        });
+                }
                 if let Some(sig) = self.functions.get(function_name) {
                     let effective_sig =
                         Self::callable_sig_for_declared_params(sig, &sig.declared_params);

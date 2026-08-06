@@ -12,6 +12,7 @@
 use crate::ir::effects::Effects;
 use crate::ir::function::{FunctionId, LocalSlotId};
 use crate::ir::module::DataId;
+use crate::ir::runtime_call::RuntimeCallTarget;
 use crate::ir::types::{IrHeapKind, IrType};
 use crate::ir::value::{Ownership, ValueId};
 use crate::span::Span;
@@ -111,6 +112,13 @@ pub enum Immediate {
     F64(f64),
     Bool(bool),
     Data(DataId),
+    /// Data-pool reference carrying the strict-PHP profile of its physical call site.
+    ProfiledData {
+        /// Referenced string or name data.
+        data: DataId,
+        /// Whether strict PHP is effective at this call site.
+        strict_php: bool,
+    },
     LocalSlot(LocalSlotId),
     LocalSlotPair {
         first: LocalSlotId,
@@ -120,6 +128,7 @@ pub enum Immediate {
     FunctionRef(FunctionId),
     BuiltinRef(BuiltinId),
     RuntimeRef(RuntimeId),
+    RuntimeCall(RuntimeCallTarget),
     ExternRef(u32),
     ClassRef(u32),
     EnumCaseRef {
@@ -144,6 +153,7 @@ pub enum Immediate {
     },
     HeapKind(IrHeapKind),
     MixedTag(u8),
+    TypePredicate(PhpTypePredicate),
     MixedNumericOp(MixedNumericOp),
     CmpPredicate(CmpPredicate),
     CastTarget(IrType),
@@ -158,6 +168,37 @@ pub enum MixedNumericOp {
     Add,
     Sub,
     Mul,
+}
+
+/// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum PhpTypePredicate {
+    Array,
+    Bool,
+    Float,
+    Int,
+    Iterable,
+    Object,
+    Resource,
+    Scalar,
+    String,
+}
+
+impl PhpTypePredicate {
+    /// Returns the stable textual spelling used by the EIR printer.
+    pub const fn as_eir(self) -> &'static str {
+        match self {
+            Self::Array => "array",
+            Self::Bool => "bool",
+            Self::Float => "float",
+            Self::Int => "int",
+            Self::Iterable => "iterable",
+            Self::Object => "object",
+            Self::Resource => "resource",
+            Self::Scalar => "scalar",
+            Self::String => "string",
+        }
+    }
 }
 
 impl MixedNumericOp {
@@ -261,6 +302,7 @@ pub enum Op {
     Spaceship,
     IsNull,
     IsTruthy,
+    TypePredicate,
     IsEmpty,
     InstanceOf,
     IToF,
@@ -358,6 +400,22 @@ pub enum Op {
     DynamicObjectNew,
     DynamicObjectNewMixed,
     DynamicObjectNewWithoutConstructorMixed,
+    /// Reinterprets one runtime callable descriptor as an opaque bridge pointer.
+    CallablePtr,
+    /// Normalizes any supported PHP callable form into an owned descriptor.
+    NormalizeCallable,
+    /// Returns the address of one compiler-emitted PDO callback adapter.
+    PdoAdapterAddr,
+    /// Reports whether an AOT class selected by runtime name has a constructor.
+    DynamicClassHasConstructor,
+    /// Classifies a runtime class name for PDO statement construction.
+    DynamicPdoStatementClassStatus,
+    /// Classifies a runtime late-static class name for `PDO::connect()`.
+    DynamicPdoCalledClassStatus,
+    /// Invokes a PDO statement subclass constructor from a boxed argument container.
+    DynamicPdoStatementConstructorCall,
+    /// Initializes the private base state of a PDO statement subclass.
+    DynamicPdoStatementInitialize,
     PropGet,
     PropInitialized,
     PropSet,
@@ -402,7 +460,8 @@ pub enum Op {
     InstanceOfDynamic,
     Call,
     FunctionVariantCall,
-    BuiltinCall,
+    ClosureBind,
+    LanguageConstructCall,
     EvalLiteralCall,
     EvalScopeGet,
     EvalScopeSet,
@@ -468,6 +527,7 @@ pub enum Op {
     FunctionVariantDispatch,
     Acquire,
     Release,
+    ReleaseUnlessAliases,
     GcCollect,
     Move,
     Borrow,
@@ -515,12 +575,15 @@ impl Op {
             | StrToF
             | StrToNumber
             | MixedTagOf
-            | IsNull
-            | IsTruthy
             | IsEmpty
             | FunctionVariantDispatch
             | PtrCast
             | PtrOffset
+            | CallablePtr
+            | PdoAdapterAddr
+            | DynamicClassHasConstructor
+            | DynamicPdoStatementClassStatus
+            | DynamicPdoCalledClassStatus
             | Move
             | Borrow
             | Nop => E::PURE,
@@ -529,8 +592,9 @@ impl Op {
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
-            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | CatchBind | FinallyEnter
-            | FinallyExit => E::WRITES_LOCAL,
+            StoreLocal | UnsetLocal | StoreRefCell | ListUnpack | FinallyEnter | FinallyExit => {
+                E::WRITES_LOCAL
+            }
             PromoteLocalRefCell => {
                 E::READS_LOCAL | E::WRITES_LOCAL | E::ALLOC_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP
             }
@@ -548,6 +612,7 @@ impl Op {
             | ClassAttrArgs
             | ClassGetAttributes
             | CatchCurrent => E::READS_GLOBAL,
+            CatchBind => E::READS_GLOBAL | E::WRITES_GLOBAL,
             StoreGlobal
             | StoreStaticLocal
             | StoreStaticProperty
@@ -564,16 +629,17 @@ impl Op {
             Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
-            | ClosureNew | FirstClassCallableNew | CallableArrayNew | BufferNew | GeneratorNew => {
+            | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew
+            | GeneratorNew => {
                 E::ALLOC_HEAP
             }
-            MixedUnbox | MixedCastBool | MixedCastInt | MixedCastFloat | ArrayGetSilent
-            | HashGetSilent
-            | ArrayIsset | HashIsset | BufferGet | BufferLen | PackedFieldGet | PtrRead
+            IsNull | IsTruthy | TypePredicate | MixedUnbox | MixedCastBool | MixedCastInt
+            | MixedCastFloat | BufferGet | BufferLen | PackedFieldGet | PtrRead
             | PtrReadString => {
                 E::READS_HEAP | E::MAY_FATAL
             }
-            ArrayGet | HashGet => E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN,
+            ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset => E::READS_HEAP,
+            ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
             ArrayGetForWrite | HashGetForWrite => {
                 E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN | E::REFCOUNT_OP
             }
@@ -581,9 +647,15 @@ impl Op {
             | HashCloneShallow | ObjectCloneShallow => {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
-            ArrayLen | HashLen => E::READS_HEAP | E::MAY_FATAL,
-            ArrayKeyExists | OffsetExists | PropGet | PropInitialized | LoadPropRefCell => {
+            ArrayLen | HashLen => E::READS_HEAP,
+            ArrayKeyExists | OffsetExists | PropInitialized | LoadPropRefCell => {
                 E::READS_HEAP
+            }
+            PropGet | NullsafePropGet => {
+                E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
+            }
+            DynamicPropGet => {
+                E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
@@ -604,10 +676,12 @@ impl Op {
                 E::READS_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
             }
             HashSpread => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP,
+            MethodCall | NullsafeMethodCall => {
+                E::READS_HEAP | E::MAY_THROW | E::MAY_DEOPT
+            }
             IterStart | IterCurrentKey | IterCurrentValue | IteratorMethodCall
             | SplRuntimeCall | DynamicObjectNew | DynamicObjectNewMixed
-            | DynamicObjectNewWithoutConstructorMixed | DynamicPropGet | NullsafePropGet
-            | NullsafeMethodCall | MethodLookup | MethodCall | StaticMethodCall
+            | DynamicObjectNewWithoutConstructorMixed | MethodLookup | StaticMethodCall
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
@@ -626,7 +700,8 @@ impl Op {
             }
             Call
             | FunctionVariantCall
-            | BuiltinCall
+            | ClosureBind
+            | LanguageConstructCall
             | EvalLiteralCall
             | EvalFunctionCall
             | EvalFunctionCallArray
@@ -634,6 +709,8 @@ impl Op {
             | EvalStaticMethodCall
             | RuntimeCall
             | MixedArrayGetForWrite
+            | DynamicPdoStatementConstructorCall
+            | DynamicPdoStatementInitialize
             | ClosureCall
             | ExprCall
             | CallableDescriptorInvoke
@@ -654,6 +731,7 @@ impl Op {
                     | E::WRITES_HEAP
             }
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
+            ReleaseUnlessAliases => E::REFCOUNT_OP | E::WRITES_HEAP | E::READS_HEAP,
             GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ClassConstant => E::MAY_DEOPT,
         }
@@ -665,7 +743,8 @@ impl Op {
             self,
             Op::Call
                 | Op::FunctionVariantCall
-                | Op::BuiltinCall
+                | Op::ClosureBind
+                | Op::LanguageConstructCall
                 | Op::EvalLiteralCall
                 | Op::EvalFunctionCall
                 | Op::EvalFunctionCallArray
@@ -675,6 +754,9 @@ impl Op {
                 | Op::ExternCall
                 | Op::MethodCall
                 | Op::StaticMethodCall
+                | Op::PropGet
+                | Op::NullsafePropGet
+                | Op::DynamicPropGet
                 | Op::ClosureCall
                 | Op::ExprCall
                 | Op::CallableDescriptorInvoke
@@ -753,6 +835,7 @@ impl Op {
             Spaceship => "spaceship",
             IsNull => "is_null",
             IsTruthy => "is_truthy",
+            TypePredicate => "type_predicate",
             IsEmpty => "is_empty",
             InstanceOf => "instance_of",
             IToF => "i_to_f",
@@ -836,6 +919,14 @@ impl Op {
             DynamicObjectNewWithoutConstructorMixed => {
                 "dynamic_object_new_without_constructor_mixed"
             }
+            CallablePtr => "callable_ptr",
+            NormalizeCallable => "normalize_callable",
+            PdoAdapterAddr => "pdo_adapter_addr",
+            DynamicClassHasConstructor => "dynamic_class_has_constructor",
+            DynamicPdoStatementClassStatus => "dynamic_pdo_statement_class_status",
+            DynamicPdoCalledClassStatus => "dynamic_pdo_called_class_status",
+            DynamicPdoStatementConstructorCall => "dynamic_pdo_statement_constructor_call",
+            DynamicPdoStatementInitialize => "dynamic_pdo_statement_initialize",
             PropGet => "prop_get",
             PropInitialized => "prop_initialized",
             PropSet => "prop_set",
@@ -860,7 +951,8 @@ impl Op {
             InstanceOfDynamic => "instance_of_dynamic",
             Call => "call",
             FunctionVariantCall => "function_variant_call",
-            BuiltinCall => "builtin_call",
+            ClosureBind => "closure_bind",
+            LanguageConstructCall => "language_construct_call",
             EvalLiteralCall => "eval_literal_call",
             EvalScopeGet => "eval_scope_get",
             EvalScopeSet => "eval_scope_set",
@@ -925,6 +1017,7 @@ impl Op {
             FunctionVariantDispatch => "function_variant_dispatch",
             Acquire => "acquire",
             Release => "release",
+            ReleaseUnlessAliases => "release_unless_aliases",
             GcCollect => "gc_collect",
             Move => "move",
             Borrow => "borrow",

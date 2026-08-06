@@ -44,12 +44,7 @@ pub fn emit_throw_current(emitter: &mut Emitter) {
 
     // -- uncaught exceptions terminate the process with a fatal message --
     emitter.label("__rt_throw_current_uncaught");
-    abi::emit_symbol_address(emitter, "x1", "_uncaught_exc_msg"); // load page of the uncaught-exception error message
-    emitter.instruction("mov x2, #32");                                         // uncaught exception message length in bytes
-    emitter.instruction("mov x0, #2");                                          // fd = stderr for fatal runtime diagnostics
-    emitter.syscall(4);
-    emitter.instruction("mov x0, #1");                                          // exit status 1 indicates abnormal termination
-    emitter.syscall(1);
+    emitter.instruction("b __rt_report_uncaught_exception");                    // report the Throwable's class and message, then exit 255 like PHP
 }
 
 /// Emits `__rt_throw_current` for Linux x86_64. Uses the System V AMD64 ABI: preserves rbp as
@@ -78,12 +73,5 @@ fn emit_throw_current_linux_x86_64(emitter: &mut Emitter) {
     emitter.bl_c("longjmp"); // transfer control directly back to the saved catch resume point
 
     emitter.label("__rt_throw_current_uncaught");
-    abi::emit_symbol_address(emitter, "rsi", "_uncaught_exc_msg");
-    emitter.instruction("mov edx, 32"); // uncaught exception message length in bytes
-    emitter.instruction("mov edi, 2"); // fd = stderr for fatal runtime diagnostics
-    emitter.instruction("mov eax, 1"); // Linux x86_64 syscall 1 = write
-    emitter.instruction("syscall"); // write the fatal uncaught-exception message to stderr
-    emitter.instruction("mov edi, 1"); // exit status 1 indicates abnormal termination
-    emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
-    emitter.instruction("syscall"); // terminate the process after reporting the uncaught exception
+    emitter.instruction("jmp __rt_report_uncaught_exception");                  // report the Throwable's class and message, then exit 255 like PHP
 }

@@ -2,31 +2,30 @@
 title: "hash_init() — internals"
 description: "Compiler internals for hash_init(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 362
+  order: 379
 ---
 
 ## `hash_init()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_init.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:284](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L284) (`lower_hash_init`)
-- **Function symbol**: `lower_hash_init()`
+- **Signature**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs)
+- **Lowering**: [`(not lowered)`:0]()
+- **Function symbol**: `(none — type-checker only)()`
 
 
-### Lowering notes
+## Semantic descriptor
 
-- Lowers `hash_init(algo)` and returns a boxed HashContext resource.
+_Compiler-resident construct; this name is intentionally outside the builtin registry._
 
-## Runtime helpers
+## EIR and runtime boundary
 
-The following runtime helpers are referenced:
-- `__rt_hash_init`
+_Compiler-resident lowering; no registry-backed typed runtime target applies._
 
 ## Signature summary
 
 ```php
-function hash_init(string $algo, int $flags = 0, string $key = ''): mixed
+function hash_init(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed
 ```
 
 ## What the type checker enforces

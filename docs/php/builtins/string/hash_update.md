@@ -1,38 +1,27 @@
 ---
 title: "hash_update()"
-description: "Pumps data into an active incremental hashing context."
+description: "Feeds data into an incremental hashing context. Provided by the compiler-injected hash prelude in compiled code."
 sidebar:
-  order: 363
+  order: 380
 ---
 
 ## hash_update()
 
 ```php
-function hash_update(resource $context, string $data): bool
+function hash_update(mixed $context, mixed $data): mixed
 ```
 
-Pumps data into an active incremental hashing context.
+Feeds data into an incremental hashing context. Provided by the compiler-injected hash prelude in compiled code.
 
 **Parameters**:
-- `$context` (`resource`)
-- `$data` (`string`)
+- `$context` (`mixed`)
+- `$data` (`mixed`)
 
-**Returns**: `bool`
+**Returns**: `mixed`
 
 ## Availability
 
-- **Compiled (AOT)**: supported by the Elephc code generator.
+- **Compiled (AOT)**: not available — compiled programs cannot call this builtin yet.
 - **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_update.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
-
-
-
-
-
-
-
-## Internals
-
-For how `hash_update` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_update.md).
-

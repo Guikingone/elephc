@@ -245,6 +245,7 @@ pub(crate) fn set_request(
     body: Vec<u8>,
     meta: RequestMeta,
 ) {
+    /// Converts request metadata into a NUL-free C string for the exported request slots.
     fn cstr(s: &str) -> CString {
         CString::new(s.replace('\0', "")).unwrap_or_default()
     }

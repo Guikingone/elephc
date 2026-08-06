@@ -9,13 +9,21 @@
 //! - Fixed symbols are cached across compilations, so only target-independent runtime data belongs here.
 
 use super::{
-    DIRNAME_LEVELS_MSG, HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
-    HASH_UNKNOWN_ALGO_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    DIRNAME_LEVELS_MSG, HASH_COPY_FINALIZED_CTX_MSG, HASH_FINAL_FINALIZED_CTX_MSG,
+    HASH_HMAC_UNKNOWN_ALGO_MSG, HASH_INIT_UNKNOWN_ALGO_MSG,
+    HASH_UNKNOWN_ALGO_MSG, HASH_UPDATE_FINALIZED_CTX_MSG, MB_STRLEN_UNKNOWN_ENCODING_MSG,
+    OB_CLOSURE_INVOKE_NAME, OB_DEFAULT_HANDLER_NAME, OB_FATAL_IN_HANDLER, OB_NTC_CREATE_FAIL,
+    OB_NTC_G_CLEAN, OB_NTC_G_END_CLEAN, OB_NTC_G_END_FLUSH, OB_NTC_G_FLUSH, OB_NTC_G_GET_CLEAN,
+    OB_NTC_G_GET_FLUSH, OB_NTC_NO_CLEAN, OB_NTC_NO_END_CLEAN, OB_NTC_NO_END_FLUSH,
+    OB_NTC_NO_FLUSH, OB_NTC_NO_GET_FLUSH, OB_WARN_BAD_CALLBACK_GENERIC,
+    OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
 use crate::codegen_support::platform::Target;
-use crate::types::checker::builtins::supported_builtin_function_names;
+use crate::types::checker::builtins::{
+    all_supported_builtin_function_names, supported_builtin_function_names_for_profile,
+};
 
 /// Emit the fixed runtime `.data` section as assembly text.
 /// Cached across compilations because it contains only target-independent
@@ -45,6 +53,94 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _print_r_mode, 8, 3\n");
     out.push_str(".comm _print_r_off, 8, 3\n");
     out.push_str(".comm _print_r_buf, 65536, 3\n");
+    // Output-buffering (ob_*) stack state. _ob_level is the active nesting depth
+    // (0 = no buffering) consulted by __rt_stdout_write and __rt_pr_write before
+    // the terminal write syscall; _ob_ptrs/_ob_lens/_ob_caps are 64-slot parallel
+    // arrays (heap buffer base pointer, used bytes, capacity) indexed by level-1.
+    // Buffers are heap-allocated by __rt_ob_start, grown by __rt_ob_append, and
+    // written to the terminal sink by __rt_ob_flush_all at process exit.
+    out.push_str(".comm _ob_level, 8, 3\n");
+    out.push_str(".comm _ob_ptrs, 512, 3\n");
+    out.push_str(".comm _ob_lens, 512, 3\n");
+    out.push_str(".comm _ob_caps, 512, 3\n");
+    // Per-level output-buffer metadata (parallel to _ob_ptrs, indexed by level-1):
+    // the user-handler invocation stub + env word (stub 0 = default handler; env
+    // is a retained callable-descriptor pointer for AOT handlers or a magician
+    // registry id for eval handlers), the persisted handler display name
+    // (ptr/len), the auto-flush chunk size, the ob_start() flags word, and the
+    // started flag (set at the first handler invocation; feeds PHP started bits).
+    out.push_str(".comm _ob_handler_stubs, 512, 3\n");
+    out.push_str(".comm _ob_handler_envs, 512, 3\n");
+    out.push_str(".comm _ob_name_ptrs, 512, 3\n");
+    out.push_str(".comm _ob_name_lens, 512, 3\n");
+    out.push_str(".comm _ob_chunk_sizes, 512, 3\n");
+    out.push_str(".comm _ob_flags, 512, 3\n");
+    out.push_str(".comm _ob_started, 512, 3\n");
+    // _ob_in_handler: non-zero while a user output handler runs. Output produced
+    // inside a handler is discarded (PHP behavior) via the __rt_stdout_write and
+    // __rt_pr_write branches, and ob_start() inside a handler is a fatal error.
+    out.push_str(".comm _ob_in_handler, 8, 3\n");
+    // _ob_flushing: re-entry guard for the process-exit drain. A user handler
+    // running during __rt_ob_flush_all may call exit() again; the guard makes
+    // the nested drain a no-op instead of an infinite loop.
+    out.push_str(".comm _ob_flushing, 8, 3\n");
+    // _elephc_eval_ob_handler_fn: installed Rust callback (magician) that runs
+    // an eval-registered ob_start() handler: fn(id, buf, len, phase) -> Mixed
+    // result cell pointer (0 = pass-through). Called via __rt_ob_eval_trampoline.
+    out.push_str(".comm _elephc_eval_ob_handler_fn, 8, 3\n");
+    // "Closure::__invoke": PHP display name for closure / first-class-callable
+    // output handlers in ob_get_status()/ob_list_handlers().
+    out.push_str(&format!(
+        ".globl _ob_closure_invoke_name\n_ob_closure_invoke_name:\n    .ascii {OB_CLOSURE_INVOKE_NAME:?}\n"
+    ));
+    // ob_implicit_flush() stored flag. Semantically inert in elephc: terminal
+    // writes are unbuffered syscalls, so implicit flushing is always on.
+    out.push_str(".comm _ob_implicit_flush, 8, 3\n");
+    // ob_get_status()/ob_list_handlers() string constants: PHP's default handler
+    // name and the status-array key strings read by __rt_ob_get_status.
+    out.push_str(&format!(
+        ".globl _ob_handler_name\n_ob_handler_name:\n    .ascii {OB_DEFAULT_HANDLER_NAME:?}\n"
+    ));
+    for (sym, key) in [
+        ("_ob_k_name", "name"),
+        ("_ob_k_type", "type"),
+        ("_ob_k_flags", "flags"),
+        ("_ob_k_level", "level"),
+        ("_ob_k_chunk_size", "chunk_size"),
+        ("_ob_k_buffer_size", "buffer_size"),
+        ("_ob_k_buffer_used", "buffer_used"),
+    ] {
+        out.push_str(&format!(".globl {sym}\n{sym}:\n    .ascii \"{key}\"\n"));
+    }
+    // ob_* PHP-parity diagnostics (texts shared with the ob_* runtime emitters
+    // via runtime::data consts so byte lengths stay single-sourced). The
+    // no-buffer notices are complete lines; the flags-gated notices are
+    // prefixes completed at runtime with the handler display name and
+    // " (LEVEL)\n" via __rt_ob_notice_named. All are ordinary output routed
+    // through __rt_stdout_write, so active parent buffers capture them exactly
+    // like PHP with display_errors enabled.
+    for (label, message) in [
+        ("_ob_ntc_no_end_flush", OB_NTC_NO_END_FLUSH),
+        ("_ob_ntc_no_get_flush", OB_NTC_NO_GET_FLUSH),
+        ("_ob_ntc_no_end_clean", OB_NTC_NO_END_CLEAN),
+        ("_ob_ntc_no_flush", OB_NTC_NO_FLUSH),
+        ("_ob_ntc_no_clean", OB_NTC_NO_CLEAN),
+        ("_ob_ntc_g_clean", OB_NTC_G_CLEAN),
+        ("_ob_ntc_g_flush", OB_NTC_G_FLUSH),
+        ("_ob_ntc_g_end_clean", OB_NTC_G_END_CLEAN),
+        ("_ob_ntc_g_get_clean", OB_NTC_G_GET_CLEAN),
+        ("_ob_ntc_g_end_flush", OB_NTC_G_END_FLUSH),
+        ("_ob_ntc_g_get_flush", OB_NTC_G_GET_FLUSH),
+        ("_ob_ntc_g_open", " ("),
+        ("_ob_ntc_g_close", ")\n"),
+        ("_ob_warn_bad_callback_prefix", OB_WARN_BAD_CALLBACK_PREFIX),
+        ("_ob_warn_bad_callback_suffix", OB_WARN_BAD_CALLBACK_SUFFIX),
+        ("_ob_warn_bad_callback_generic", OB_WARN_BAD_CALLBACK_GENERIC),
+        ("_ob_ntc_create_fail", OB_NTC_CREATE_FAIL),
+        ("_ob_fatal_in_handler", OB_FATAL_IN_HANDLER),
+    ] {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     // serialize()/unserialize() reference tracking (PHP r:/R: back-references).
     // serialize: a global value counter (every serialized value consumes the next
     // index, keys excluded) plus a pointer->index map of already-serialized objects
@@ -118,6 +214,42 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _heap_small_bins, 32, 3\n");
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
     out.push_str(".comm _web_heap_guard_enabled, 8, 3\n");
+    // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
+    // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
+    // blocks can never share a granule because the smallest block is 16 header
+    // bytes plus the allocator's 8-byte minimum payload = 24 > 16, so the mapping
+    // needs no hashing, no probing and no capacity policy. It stores handles keyed
+    // BY POSITION and never an object pointer, so it owns nothing, keeps nothing
+    // alive and is never a GC root. `_obj_handle_free` is the LIFO stack of
+    // released handles php-src reuses from; its depth can never exceed the number
+    // of distinct handles, which is bounded by the peak live-object count, which is
+    // bounded by `heap_size / 24`. See `runtime::objects::handles`.
+    out.push_str(&format!(
+        ".comm _obj_handle_index, {}, 3\n",
+        crate::codegen_support::runtime::object_handle_index_slots(heap_size) * 4
+    ));
+    out.push_str(&format!(
+        ".comm _obj_handle_free, {}, 3\n",
+        crate::codegen_support::runtime::object_handle_free_slots(heap_size) * 4
+    ));
+    out.push_str(".comm _obj_handle_free_top, 8, 3\n");
+    // PHP RESOURCE ids. A SEPARATE numbering space from the object handles above —
+    // php-src keeps `zend_resource.handle` and `zend_object.handle` in two unrelated
+    // lists, so `resource(5)` and `object(C)#5` can and do coexist. The table maps a
+    // native resource payload (a file descriptor, a DIR*, an elephc-crypto
+    // HashContext handle) to the small integer PHP shows. It is an OPEN-ADDRESSED
+    // hash rather than the direct-mapped granule table the object pool uses, because
+    // resource payloads are not heap-block addresses: descriptors are tiny integers
+    // and bridge handles come from the C allocator, so neither has a granule to index.
+    // Occupancy lives in the value word (id 0 = empty slot; minted ids start at 5).
+    out.push_str(&format!(
+        ".comm _resource_id_keys, {}, 3\n",
+        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8
+    ));
+    out.push_str(&format!(
+        ".comm _resource_id_vals, {}, 3\n",
+        crate::codegen_support::runtime::RESOURCE_ID_TABLE_SLOTS * 8
+    ));
     out.push_str(".comm _gc_collecting, 8, 3\n");
     out.push_str(".comm _gc_release_suppressed, 8, 3\n");
     out.push_str(".comm _json_last_error, 8, 3\n");
@@ -133,6 +265,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _json_error_location_active, 8, 3\n");
     out.push_str(".comm _json_error_line, 8, 3\n");
     out.push_str(".comm _json_error_column, 8, 3\n");
+    // `_obj_handle_next` is the never-used PHP object-handle cursor. PHP's first
+    // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
+    // "this block never acquired a handle".
+    out.push_str(".globl _obj_handle_next\n_obj_handle_next:\n    .quad 1\n");
+    // `_resource_id_next` is the never-used PHP RESOURCE id cursor. It starts at 5,
+    // not at 1, and that number is measured rather than chosen: under PHP 8.5.6 CLI
+    // the three standard streams occupy ids 1..3 (`get_resource_id(STDIN|STDOUT|STDERR)`
+    // returns 1, 2, 3), id 4 is consumed by the SAPI before user code runs, and the
+    // first resource a script opens is therefore id 5 — identically for `php file.php`
+    // and for `php -r`. elephc already renders STDIN/STDOUT/STDERR as 1/2/3, so
+    // starting user resources at 5 reproduces reference numbering end to end.
+    out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
     out.push_str(&format!(".globl _heap_max\n_heap_max:\n    .quad {}\n", heap_size));
     out.push_str(".globl _heap_err_msg\n_heap_err_msg:\n    .ascii \"Fatal error: heap memory exhausted\\n\"\n");
     out.push_str(".globl _heap_dbg_bad_refcount_msg\n_heap_dbg_bad_refcount_msg:\n    .ascii \"Fatal error: heap debug detected bad refcount\\n\"\n");
@@ -163,6 +307,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&format!(
         ".globl _hash_init_unknown_algo_msg\n_hash_init_unknown_algo_msg:\n    .ascii {:?}\n",
         HASH_INIT_UNKNOWN_ALGO_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _hash_update_finalized_ctx_msg\n_hash_update_finalized_ctx_msg:\n    .ascii {:?}\n",
+        HASH_UPDATE_FINALIZED_CTX_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _hash_final_finalized_ctx_msg\n_hash_final_finalized_ctx_msg:\n    .ascii {:?}\n",
+        HASH_FINAL_FINALIZED_CTX_MSG
+    ));
+    out.push_str(&format!(
+        ".globl _hash_copy_finalized_ctx_msg\n_hash_copy_finalized_ctx_msg:\n    .ascii {:?}\n",
+        HASH_COPY_FINALIZED_CTX_MSG
     ));
     out.push_str(&format!(
         ".globl _mb_strlen_unknown_encoding_msg\n_mb_strlen_unknown_encoding_msg:\n    .ascii {:?}\n",
@@ -257,6 +413,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _uncaught_exc_msg\n_uncaught_exc_msg:\n    .ascii \"Fatal error: uncaught exception\\n\"\n");
+    out.push_str(".globl _uncaught_exc_prefix\n_uncaught_exc_prefix:\n    .ascii \"Fatal error: Uncaught \"\n");
+    out.push_str(".globl _uncaught_exc_sep\n_uncaught_exc_sep:\n    .ascii \": \"\n");
+    out.push_str(".globl _uncaught_exc_in\n_uncaught_exc_in:\n    .ascii \" in \"\n");
+    out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
+    out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
     out.push_str(".globl _diag_file_get_contents_failed_msg\n_diag_file_get_contents_failed_msg:\n    .ascii \"Warning: file_get_contents(): Failed to open stream\\n\"\n");
     out.push_str(".globl _diag_fopen_failed_msg\n_diag_fopen_failed_msg:\n    .ascii \"Warning: fopen(): Failed to open stream\\n\"\n");
@@ -265,6 +426,29 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _diag_array_offset_on_null\n_diag_array_offset_on_null:\n    .ascii \"Warning: Trying to access array offset on null\\n\"\n");
+    // -- one complete message per foreach() argument type, shared with the helper emitter --
+    // `__rt_warn_foreach_non_iterable` derives every `write()` length from the same table,
+    // so the bytes here and the immediates there can never drift apart.
+    for (label, message) in
+        crate::codegen_support::runtime::arrays::FOREACH_NON_ITERABLE_MESSAGES
+    {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
+    // -- php-src's array_flip() skipped-entry warning, shared with the `__rt_hash_flip` emitter --
+    // `__rt_hash_flip` derives its `write()` length from the same table, so the bytes here and
+    // the immediate there can never drift apart.
+    for (label, message) in crate::codegen_support::runtime::arrays::ARRAY_FLIP_SKIPPED_MESSAGES {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
+    // -- PHP 8.5's NAN-to-bool coercion warning, shared with `__rt_warn_nan_coerced_bool` --
+    // Emitted for every profile even though only 8.5 call sites reference it: the literal is
+    // 50 bytes of `.data` and keeping it unconditional means the runtime `.data` layout does
+    // not have to agree with the version gate that lives on the CALL sites.
+    for (label, message) in
+        crate::codegen_support::runtime::arrays::NAN_BOOL_COERCION_MESSAGES
+    {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     out.push_str(".globl _fiber_msg_already_started\n_fiber_msg_already_started:\n    .ascii \"Cannot start a fiber that has already been started\"\n");
     out.push_str(".globl _fiber_msg_not_suspended\n_fiber_msg_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
@@ -379,6 +563,13 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // shared runtime can release unfinalized HashContext handles without naming
     // elephc-crypto directly.
     out.push_str(".comm _elephc_crypto_free_fn, 8, 3\n");
+    // _elephc_crypto_is_finalized_fn: indirect pointer to elephc_crypto_is_finalized.
+    // __rt_hash_update / __rt_hash_final / __rt_hash_copy ask through it whether the
+    // incoming context was already consumed by a previous hash_final(), which is the
+    // condition PHP 8 answers with a TypeError. A null slot means the bridge is not
+    // linked, in which case the guards skip the question exactly like every other
+    // elephc-crypto call in this family.
+    out.push_str(".comm _elephc_crypto_is_finalized_fn, 8, 3\n");
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.
@@ -717,25 +908,57 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // __rt_hash_get. v1 limitation: only one active context at a time —
     // a fresh stream_context_create overwrites the slot.
     out.push_str(".comm _stream_context_options, 8, 3\n");
-    // var_dump body literals (rodata): per-element prefix/suffix bytes
-    // used by the array walkers __rt_var_dump_array_int / _str.
-    out.push_str(".globl _vd_indent_open\n_vd_indent_open:\n    .ascii \"  [\"\n");
+    // var_dump body literals (rodata): per-element prefix/suffix bytes used by
+    // the array/hash walkers. NONE of them carry a leading indent: every
+    // var_dump line is padded by `__rt_vd_pad`, which writes `_vd_indent`
+    // spaces first, so one set of literals serves every nesting depth.
+    out.push_str(".globl _vd_indent_open\n_vd_indent_open:\n    .ascii \"[\"\n");
     out.push_str(".globl _vd_close_arrow\n_vd_close_arrow:\n    .ascii \"]=>\\n\"\n");
-    out.push_str(".globl _vd_int_prefix\n_vd_int_prefix:\n    .ascii \"  int(\"\n");
+    out.push_str(".globl _vd_int_prefix\n_vd_int_prefix:\n    .ascii \"int(\"\n");
     out.push_str(".globl _vd_close_paren\n_vd_close_paren:\n    .ascii \")\\n\"\n");
-    out.push_str(".globl _vd_str_prefix\n_vd_str_prefix:\n    .ascii \"  string(\"\n");
+    out.push_str(".globl _vd_str_prefix\n_vd_str_prefix:\n    .ascii \"string(\"\n");
     out.push_str(".globl _vd_close_paren_space\n_vd_close_paren_space:\n    .ascii \") \\\"\"\n");
     out.push_str(".globl _vd_close_quote\n_vd_close_quote:\n    .ascii \"\\\"\\n\"\n");
-    // var_dump bool-array literals — preformatted lines (12 / 13 bytes) so
-    // the bool walker is a single dispatch + write.
-    out.push_str(".globl _vd_bool_true_line\n_vd_bool_true_line:\n    .ascii \"  bool(true)\\n\"\n");
-    out.push_str(".globl _vd_bool_false_line\n_vd_bool_false_line:\n    .ascii \"  bool(false)\\n\"\n");
-    out.push_str(".globl _vd_float_prefix\n_vd_float_prefix:\n    .ascii \"  float(\"\n");
-    out.push_str(".globl _vd_null_line\n_vd_null_line:\n    .ascii \"  NULL\\n\"\n");
-    // var_dump hash (associative array) string-key delimiters: `  ["` before the
-    // key bytes and `"]=>\n` after, matching PHP's `  ["key"]=>` line format.
-    out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"  [\\\"\"\n");
+    // var_dump bool literals — preformatted lines (11 / 12 bytes) so the bool
+    // emitter is a single dispatch + write after the indent pad.
+    out.push_str(".globl _vd_bool_true_line\n_vd_bool_true_line:\n    .ascii \"bool(true)\\n\"\n");
+    out.push_str(".globl _vd_bool_false_line\n_vd_bool_false_line:\n    .ascii \"bool(false)\\n\"\n");
+    out.push_str(".globl _vd_float_prefix\n_vd_float_prefix:\n    .ascii \"float(\"\n");
+    out.push_str(".globl _vd_null_line\n_vd_null_line:\n    .ascii \"NULL\\n\"\n");
+    // var_dump hash (associative array) string-key delimiters: `["` before the
+    // key bytes and `"]=>\n` after, matching PHP's `["key"]=>` line format.
+    out.push_str(".globl _vd_str_key_open\n_vd_str_key_open:\n    .ascii \"[\\\"\"\n");
     out.push_str(".globl _vd_str_key_close\n_vd_str_key_close:\n    .ascii \"\\\"]=>\\n\"\n");
+    // var_dump nested-container delimiters: `array(` + count + `) {\n` opens a
+    // nested array/hash on its value line, `}\n` closes it at the same indent.
+    out.push_str(".globl _vd_array_prefix\n_vd_array_prefix:\n    .ascii \"array(\"\n");
+    out.push_str(".globl _vd_brace_open\n_vd_brace_open:\n    .ascii \") {\\n\"\n");
+    out.push_str(".globl _vd_brace_close\n_vd_brace_close:\n    .ascii \"}\\n\"\n");
+    // _vd_indent: current var_dump line indentation, in spaces. The var_dump
+    // builtin sets it to 2 around a top-level array body and back to 0 after;
+    // `__rt_var_dump_value` bumps it by 2 across each nested container walk.
+    out.push_str(".comm _vd_indent, 8, 3\n");
+    // var_dump object delimiters: `object(` + class name + `)#` + the PHP object
+    // handle + ` (` + initialized property count + `) {\n` opens an object on its
+    // value line; the shared `_vd_brace_close` closes it. The handle is the same
+    // small dense integer `spl_object_id()` returns — both read it from
+    // `__rt_object_handle_of`, so the printed `#N` and `spl_object_id()` can never
+    // disagree. See `runtime::objects::handles` for the pool.
+    out.push_str(".globl _vd_object_prefix\n_vd_object_prefix:\n    .ascii \"object(\"\n");
+    out.push_str(".globl _vd_object_mid\n_vd_object_mid:\n    .ascii \")#\"\n");
+    out.push_str(".globl _vd_object_count_open\n_vd_object_count_open:\n    .ascii \" (\"\n");
+    // `uninitialized(` opens the line var_dump prints for a typed property read
+    // before its first write; `_vd_close_paren` closes it.
+    out.push_str(".globl _vd_uninit_prefix\n_vd_uninit_prefix:\n    .ascii \"uninitialized(\"\n");
+    // `*RECURSION*` replaces the value of a container already on the walk stack.
+    out.push_str(".globl _vd_recursion_line\n_vd_recursion_line:\n    .ascii \"*RECURSION*\\n\"\n");
+    // _vd_seen / _vd_seen_n: the var_dump recursion guard — a bounded stack of
+    // the object pointers currently being walked, pushed and popped around each
+    // object body by `__rt_var_dump_value`'s tag-6 branch. 256 entries × 8 B.
+    // The capacity MUST match `VD_SEEN_CAPACITY` in `runtime::io::var_dump_object`:
+    // a lookup that reaches the cap reports recursion, which is what bounds the walk.
+    out.push_str(".comm _vd_seen, 2048, 3\n");
+    out.push_str(".comm _vd_seen_n, 8, 3\n");
     // print_r body literals (rodata): PHP's `Array\n(\n` header, `)\n` footer,
     // `[`/`] => ` key delimiters (unquoted keys, unlike var_dump), a lone
     // newline, the `1` rendered for boolean true, and a 64-space pad used by
@@ -782,6 +1005,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _heap_dbg_clean_label\n_heap_dbg_clean_label:\n    .ascii \"clean\\n\"\n");
     out.push_str(".globl _heap_dbg_newline\n_heap_dbg_newline:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _resource_id_prefix\n_resource_id_prefix:\n    .ascii \"Resource id #\"\n");
+    out.push_str(".globl _resource_type_stream\n_resource_type_stream:\n    .ascii \"stream\"\n");
+    out.push_str(".globl _resource_type_unknown\n_resource_type_unknown:\n    .ascii \"Unknown\"\n");
     out.push_str(".globl _fmt_g\n_fmt_g:\n    .asciz \"%.14G\"\n");
     out.push_str(".globl _fmt_star_e\n_fmt_star_e:\n    .asciz \"%.*e\"\n");
     out.push_str(".globl _fmt_star_f\n_fmt_star_f:\n    .asciz \"%.*f\"\n");
@@ -872,7 +1097,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
 /// routine and callable-invoke paths.
 fn emit_builtin_callable_data() -> String {
     let mut out = String::new();
-    let builtins = supported_builtin_function_names();
+    let strict_builtins = supported_builtin_function_names_for_profile(true);
+    let mut builtins = all_supported_builtin_function_names();
+    builtins.sort_by_key(|name| !strict_builtins.contains(name));
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!(
             ".globl _callable_builtin_name_{0}\n_callable_builtin_name_{0}:\n    .ascii \"{1}\"\n",
@@ -885,6 +1112,11 @@ fn emit_builtin_callable_data() -> String {
     out.push_str(".p2align 3\n");
     out.push_str(".globl _callable_builtin_count\n_callable_builtin_count:\n");
     out.push_str(&format!("    .quad {}\n", builtins.len()));
+    out.push_str(
+        ".globl _callable_builtin_strict_count\n_callable_builtin_strict_count:\n",
+    );
+    out.push_str(&format!("    .quad {}\n", strict_builtins.len()));
+    out.push_str(".comm _callable_strict_profile, 8, 3\n");
     out.push_str(".globl _callable_builtin_table\n_callable_builtin_table:\n");
     for (idx, name) in builtins.iter().enumerate() {
         out.push_str(&format!("    .quad _callable_builtin_name_{}\n", idx));

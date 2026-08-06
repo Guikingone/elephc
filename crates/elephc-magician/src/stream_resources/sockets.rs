@@ -16,8 +16,7 @@ impl EvalStreamResources {
     pub(crate) fn open_tcp_listener(&mut self, address: &str) -> Option<i64> {
         let listener = TcpListener::bind(eval_tcp_address(address)).ok()?;
         let local = listener.local_addr().ok()?.to_string();
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.socket_names.insert(
             id,
             EvalSocketNames {

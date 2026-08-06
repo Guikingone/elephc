@@ -381,8 +381,7 @@ fn emit_call_descriptor_invoker_from_wrapper(emitter: &mut Emitter, descriptor_r
     let invoker_reg = abi::symbol_scratch_reg(emitter);
 
     if descriptor_reg != descriptor_arg_reg {
-        emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg));
-        // pass the selected callable descriptor to the uniform invoker
+        emitter.instruction(&format!("mov {}, {}", descriptor_arg_reg, descriptor_reg)); // pass the selected callable descriptor to the uniform invoker
     }
     callable_descriptor::emit_load_invoker_from_descriptor(
         emitter,

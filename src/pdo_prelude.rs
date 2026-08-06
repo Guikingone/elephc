@@ -4371,19 +4371,19 @@ class PDOStatement implements IteratorAggregate {
                     if ($_refWasStream) {
                         $_s = (string) $_value;
                     } elseif ($_driverName === "cubrid" && !is_resource($_value)) {
-                        $_fileValue = file_get_contents((string) $_value);
-                        if ($_fileValue === false) {
+                        $_lobFileValue = file_get_contents((string) $_value);
+                        if ($_lobFileValue === false) {
                             $_bindError = "__elephc_pdo_driver_error";
                             break;
                         }
-                        $_s = (string) $_fileValue;
+                        $_s = (string) $_lobFileValue;
                     } elseif (is_resource($_value)) {
-                        $_streamValue = stream_get_contents($_value);
-                        if ($_streamValue === false) {
+                        $_lobStreamValue = stream_get_contents($_value);
+                        if ($_lobStreamValue === false) {
                             $_bindError = "__elephc_pdo_driver_error";
                             break;
                         }
-                        $_s = (string) $_streamValue;
+                        $_s = (string) $_lobStreamValue;
                     } else {
                         $_s = (string) $_value;
                     }
@@ -6564,7 +6564,8 @@ namespace Pdo {
                 $this->noticeCallback = function($_message) {};
                 return;
             }
-            $this->noticeCallback = $callback;
+            callable $_typedNoticeCallback = $callback;
+            $this->noticeCallback = $_typedNoticeCallback;
         }
 
         protected function __elephcDrainPgsqlNotices(): void {
@@ -6805,7 +6806,7 @@ pub fn inject_if_used_for_version(
     }
     let source = prelude_source_for_version(php_version);
     let tokens = crate::lexer::tokenize(source.as_ref()).expect("PDO prelude must tokenize");
-    let mut combined = crate::parser::parse(&tokens).expect("PDO prelude must parse");
+    let mut combined = crate::parser::parse_internal(&tokens).expect("PDO prelude must parse");
     combined.extend(program);
     combined
 }
@@ -7255,7 +7256,7 @@ mod version_tests {
         assert!(!source.contains("public static function connect"));
         assert!(!source.contains("namespace Pdo {"));
         let tokens = crate::lexer::tokenize(source.as_ref()).expect("tokenize PHP 8.3 PDO prelude");
-        crate::parser::parse(&tokens).expect("parse PHP 8.3 PDO prelude");
+        crate::parser::parse_internal(&tokens).expect("parse PHP 8.3 PDO prelude");
     }
 
     /// Verifies PHP 8.0 keeps query text as private implementation storage because
@@ -7266,7 +7267,7 @@ mod version_tests {
         assert_eq!(source.matches("private string $queryString;").count(), 2);
         assert!(!source.contains("public readonly string $queryString;"));
         let tokens = crate::lexer::tokenize(source.as_ref()).expect("tokenize PHP 8.0 PDO prelude");
-        crate::parser::parse(&tokens).expect("parse PHP 8.0 PDO prelude");
+        crate::parser::parse_internal(&tokens).expect("parse PHP 8.0 PDO prelude");
     }
 
     /// Verifies PHP 8.1 exposes both public query-string properties while retaining
@@ -7307,7 +7308,7 @@ mod version_tests {
         assert!(!prelude_source_for_version(PhpVersion::Php84)
             .contains("#[\\Deprecated(\"as it has no effect\")]"));
         let tokens = crate::lexer::tokenize(source.as_ref()).expect("tokenize PHP 8.5 PDO prelude");
-        crate::parser::parse(&tokens).expect("parse PHP 8.5 PDO prelude");
+        crate::parser::parse_internal(&tokens).expect("parse PHP 8.5 PDO prelude");
     }
 
     /// PHP 8.5+ alone enables lazy simple-query consumption on PostgreSQL statements.
@@ -7380,7 +7381,7 @@ mod version_tests {
             "#[\\Deprecated(\"use Pdo\\\\Odbc::ATTR_ASSUME_UTF8 instead\")]"
         ));
         let tokens = crate::lexer::tokenize(php85.as_ref()).expect("tokenize PHP 8.5 ODBC prelude");
-        crate::parser::parse(&tokens).expect("parse PHP 8.5 ODBC prelude");
+        crate::parser::parse_internal(&tokens).expect("parse PHP 8.5 ODBC prelude");
     }
 
     /// PDO_IBM 1.7.0 keeps legacy aliases, adds `Pdo\Ibm` in PHP 8.4, and
@@ -7402,7 +7403,7 @@ mod version_tests {
             "#[\\Deprecated(\"use Pdo\\\\Ibm::ATTR_INFO_USERID instead\")]"
         ));
         let tokens = crate::lexer::tokenize(php85.as_ref()).expect("tokenize PHP 8.5 IBM prelude");
-        crate::parser::parse(&tokens).expect("parse PHP 8.5 IBM prelude");
+        crate::parser::parse_internal(&tokens).expect("parse PHP 8.5 IBM prelude");
     }
 
     /// PDO_CUBRID keeps its historical PDO-only API on every supported PHP target.
@@ -7417,7 +7418,7 @@ mod version_tests {
             assert!(!source.contains("class Cubrid extends \\PDO"));
             let tokens = crate::lexer::tokenize(source.as_ref())
                 .expect("tokenize PDO_CUBRID prelude");
-            crate::parser::parse(&tokens).expect("parse PDO_CUBRID prelude");
+            crate::parser::parse_internal(&tokens).expect("parse PDO_CUBRID prelude");
         }
     }
 
@@ -7436,7 +7437,7 @@ mod version_tests {
         let php84 = prelude_source_for_version(PhpVersion::Php84);
         assert!(php84.contains("optional PDO_OCI connect dispatch"));
         let tokens = crate::lexer::tokenize(php84.as_ref()).expect("tokenize PHP 8.4 OCI prelude");
-        crate::parser::parse(&tokens).expect("parse PHP 8.4 OCI prelude");
+        crate::parser::parse_internal(&tokens).expect("parse PHP 8.4 OCI prelude");
     }
 
     /// Every supported PHP target generates syntactically valid PDO source, while
@@ -7447,7 +7448,7 @@ mod version_tests {
             let source = prelude_source_for_version(version);
             let tokens = crate::lexer::tokenize(source.as_ref())
                 .unwrap_or_else(|error| panic!("tokenize PHP {version} PDO prelude: {error}"));
-            crate::parser::parse(&tokens)
+            crate::parser::parse_internal(&tokens)
                 .unwrap_or_else(|error| panic!("parse PHP {version} PDO prelude: {error}"));
         }
         assert!(prelude_source_for_version(PhpVersion::Php85)

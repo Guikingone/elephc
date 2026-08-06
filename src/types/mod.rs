@@ -14,8 +14,6 @@ pub mod checker;
 pub mod traits;
 /// Array key type inference, normalization, and PHP integer/string coercion rules.
 mod array_keys;
-/// The array storage-representation conversions the checker and the lowering must agree on.
-mod array_storage;
 /// PHP array extension integer constants.
 pub(crate) mod array_constants;
 /// Call argument planning: named, positional, and spread semantics.
@@ -55,12 +53,12 @@ pub(crate) use array_keys::{
     normalized_array_key_type, parse_php_string_offset_literal,
     static_array_key_forces_hash_storage,
 };
-pub(crate) use array_storage::{array_storage_conversion, join_array_storage_conversion};
 pub use ffi::{ctype_stack_size, ctype_to_php_type, packed_type_size};
 pub use model::{PhpType, TypeEnv};
 pub(crate) use return_alias::{
     collect_return_alias_summaries, ReturnAliasSummaries, ReturnArgAlias,
 };
+pub(crate) use result::LoopStorageTypes;
 pub use result::{check_with_target, CheckResult, ThrowAccessInfo, ThrowAccessKind};
 pub use schema::{
     AttrArgEntry, AttrArgValue, AttrKey, ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo,
@@ -71,8 +69,6 @@ pub(crate) use schema::{collect_attribute_args, collect_attribute_names};
 pub(crate) use signatures::{
     builtin_call_sig, callable_wrapper_sig, first_class_callable_builtin_sig,
 };
-#[cfg(test)]
-pub(crate) use signatures::legacy_builtin_call_sig;
 pub use signatures::FunctionSig;
 
 /// Type checks the program after name resolution. Returns `CheckResult` with type
@@ -83,4 +79,9 @@ pub fn check(
     program: &crate::parser::ast::Program,
 ) -> Result<CheckResult, crate::errors::CompileError> {
     result::check(program)
+}
+
+/// Returns the stable checker/EIR scope key for a closure nested at `span`.
+pub(crate) fn nested_loop_storage_scope(parent: &str, span: crate::span::Span) -> String {
+    format!("{}::closure@{}:{}", parent, span.line, span.col)
 }

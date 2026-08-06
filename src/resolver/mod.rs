@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Includes are resolved in source-file context so declarations are available before type checking.
+//! - `resolve_collecting_includes` additionally surfaces the canonical path of every file the
+//!   resolver statically loaded, which `crate::opcache_prelude` bakes into the OPcache script
+//!   manifest.
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -50,15 +53,61 @@ use state::ResolveState;
 /// processed for cycle detection), and `ResolveState` (per-file state
 /// including discovered function variants). The `discovery` phase performs
 /// filesystem I/O to locate included files before any AST rewriting occurs.
+///
+/// This is the include-set-discarding wrapper over [`resolve_collecting_includes`]. It is kept
+/// because the fourteen call sites that do not care about the include set (the `ir_lower`,
+/// `error_tests` and `tests/codegen/support` harnesses) read better without a `.0`; only
+/// `crate::pipeline`, which bakes the OPcache script manifest, takes the longer form.
+#[allow(dead_code)] // Consumed by the test harnesses; `crate::pipeline` uses the collecting form.
 pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileError> {
+    resolve_collecting_includes(program, base_dir).map(|(program, _)| program)
+}
+
+/// Same as [`resolve`], but also returns the CANONICAL path of every source file the
+/// resolver statically loaded through `include` / `require` / `include_once` /
+/// `require_once`, each exactly once.
+///
+/// SOURCE OF THE SET: the engine's `declared_once`, threaded through
+/// `resolver::engine::resolve_stmts` and inserted by
+/// `resolver::engine_includes::resolve_include_stmt` for every one of the four include
+/// forms once its target has been parsed. It is deliberately NOT
+/// `discovery::DiscoveryEntry::canonical`: `DiscoveryOutput::push` drops any entry whose
+/// `declarations` are empty, so a file that only holds executable statements (a config
+/// array, a bootstrap side effect) would never be recorded — yet it IS compiled into the
+/// binary and therefore IS a cached script. `declared_once` records every include the
+/// engine actually inlined, declarations or not, and its `HashSet` gives the
+/// exactly-once property for free (repeat plain `include`s of one file collapse to one
+/// manifest entry, which is what "cached script" means).
+///
+/// The paths carry the SAME normalization `__FILE__` bakes
+/// (`crate::magic_constants::file_pass`, `Path::canonicalize`): `resolve_include_stmt`
+/// canonicalizes before inserting, and only inserts after the target parsed — so a
+/// missing file (whose `canonicalize` would have fallen back to the raw path) never
+/// reaches the set.
+///
+/// The vector is SORTED so a build is byte-reproducible; `declared_once` is a `HashSet`
+/// and its iteration order is not.
+pub fn resolve_collecting_includes(
+    program: Program,
+    base_dir: &Path,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
+    resolve_collecting_includes_with_defines(program, base_dir, &HashSet::new())
+}
+
+/// Resolves includes while applying the invocation's conditional symbols to every loaded file.
+pub fn resolve_collecting_includes_with_defines(
+    program: Program,
+    base_dir: &Path,
+    defines: &HashSet<String>,
+) -> Result<(Program, Vec<PathBuf>), CompileError> {
     if !has_includes(&program) {
-        return Ok(program);
+        return Ok((program, Vec::new()));
     }
 
-    let discovery = discover_include_declarations(&program, base_dir)?;
+    let discovery = discover_include_declarations(&program, base_dir, defines)?;
     let mut declared_once: HashSet<PathBuf> = HashSet::new();
     let mut include_chain: Vec<PathBuf> = Vec::new();
-    let mut state = ResolveState::default();
+    let mut state = ResolveState::with_conditional_defines(defines);
     let resolved = resolve_stmts(
         program,
         base_dir,
@@ -68,8 +117,11 @@ pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileErro
         &discovery.function_variants,
     )?;
 
+    let mut included_files: Vec<PathBuf> = declared_once.into_iter().collect();
+    included_files.sort();
+
     if discovery.declarations.is_empty() {
-        return Ok(resolved);
+        return Ok((resolved, included_files));
     }
 
     let prelude_span = discovery
@@ -85,5 +137,5 @@ pub fn resolve(program: Program, base_dir: &Path) -> Result<Program, CompileErro
         prelude_span,
     )];
     resolved_with_prelude.extend(resolved);
-    Ok(resolved_with_prelude)
+    Ok((resolved_with_prelude, included_files))
 }

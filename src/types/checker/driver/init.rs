@@ -26,7 +26,8 @@ use super::super::Checker;
 impl Checker {
     /// Constructs a new `Checker` with pre-populated builtin constants and empty declaration tables.
     ///
-    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, `SID`, pathinfo
+    /// Initializes the global constant map with PHP built-in constants (`PHP_OS`, the
+    /// `PHP_VERSION*` / `PHP_SAPI` version surface, `SID`, pathinfo
     /// constants, `ENT_*` HTML-escaping flags, `FNM_*` flags, stream resources, and lock flags),
     /// array, JSON, stream, date, and preg constants, `PHP_SESSION_*`
     /// session-status constants, and `E_*` error-level constants. All other tables (function declarations,
@@ -41,6 +42,16 @@ impl Checker {
     pub(super) fn new(target_platform: Platform) -> Self {
         let mut constants = HashMap::new();
         constants.insert("PHP_OS".to_string(), PhpType::Str);
+        // The PHP version surface. Only the TYPES are declared here — the values are baked per
+        // compilation from `--php-version` / `--web` by `codegen::prescan::collect_constants`,
+        // exactly as `PHP_OS`'s value is baked from the target platform.
+        constants.insert("PHP_VERSION".to_string(), PhpType::Str);
+        constants.insert("PHP_VERSION_ID".to_string(), PhpType::Int);
+        constants.insert("PHP_MAJOR_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_MINOR_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_RELEASE_VERSION".to_string(), PhpType::Int);
+        constants.insert("PHP_EXTRA_VERSION".to_string(), PhpType::Str);
+        constants.insert("PHP_SAPI".to_string(), PhpType::Str);
         // Deprecated session-id constant; elephc is cookie-only so it always
         // resolves to the empty string (see `codegen::prescan::collect_constants`).
         constants.insert("SID".to_string(), PhpType::Str);
@@ -84,6 +95,24 @@ impl Checker {
         for (name, _value) in ERROR_LEVEL_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        // Lexer-tokenized numeric / math constants — needed so `use const PHP_INT_MAX as X`
+        // aliases resolve through ConstRef rather than only via dedicated lexer tokens.
+        constants.insert("PHP_INT_MAX".to_string(), PhpType::Int);
+        constants.insert("PHP_INT_MIN".to_string(), PhpType::Int);
+        constants.insert("PHP_FLOAT_MAX".to_string(), PhpType::Float);
+        constants.insert("PHP_FLOAT_MIN".to_string(), PhpType::Float);
+        constants.insert("PHP_FLOAT_EPSILON".to_string(), PhpType::Float);
+        constants.insert("INF".to_string(), PhpType::Float);
+        constants.insert("NAN".to_string(), PhpType::Float);
+        constants.insert("M_PI".to_string(), PhpType::Float);
+        constants.insert("M_E".to_string(), PhpType::Float);
+        constants.insert("M_SQRT2".to_string(), PhpType::Float);
+        constants.insert("M_PI_2".to_string(), PhpType::Float);
+        constants.insert("M_PI_4".to_string(), PhpType::Float);
+        constants.insert("M_LOG2E".to_string(), PhpType::Float);
+        constants.insert("M_LOG10E".to_string(), PhpType::Float);
+        constants.insert("PHP_EOL".to_string(), PhpType::Str);
+        constants.insert("DIRECTORY_SEPARATOR".to_string(), PhpType::Str);
 
         Self {
             target_platform,
@@ -129,9 +158,12 @@ impl Checker {
             eval_barrier_active: false,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
+            current_loop_storage_scope: "main".to_string(),
             warnings: Vec::new(),
             reference_property_promotions: HashSet::new(),
             throw_access_sites: HashMap::new(),
+            builtin_call_types: HashMap::new(),
+            loop_storage_types: HashMap::new(),
         }
     }
 }

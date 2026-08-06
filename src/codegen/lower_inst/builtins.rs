@@ -1,6 +1,6 @@
 //! Purpose:
-//! Lowers the first scalar PHP builtin calls emitted as EIR `BuiltinCall` instructions.
-//! Covers concrete scalar casts, type predicates, selected Mixed tag predicates, and string length.
+//! Owns target-aware builtin emitters plus the small set of PHP language constructs
+//! represented by EIR `LanguageConstructCall` instructions.
 //!
 //! Called from:
 //! - `crate::codegen::lower_inst::lower_instruction()`.
@@ -13,17 +13,17 @@ use std::collections::BTreeSet;
 
 use crate::codegen::abi;
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, Op, ValueDef, ValueId};
+use crate::codegen_support::data_section::DataWord;
+use crate::ir::{Immediate, Instruction, Op, PhpTypePredicate, ValueDef, ValueId};
 use crate::names::{define_seen_symbol, ir_global_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
-use crate::types::checker::builtins::is_php_visible_builtin_function;
+use crate::types::checker::builtins::{
+    is_php_visible_builtin_function_for_profile, supported_builtin_function_names_for_profile,
+};
 use crate::types::{ClassInfo, PhpType};
 
 use super::super::context::FunctionContext;
-use super::{
-    conversions, expect_data, expect_operand, load_value_to_first_int_arg, predicates,
-    store_if_result,
-};
+use super::{expect_data, expect_operand, load_value_to_first_int_arg, predicates, store_if_result};
 use crate::codegen::{CodegenIrError, Result};
 
 pub(crate) mod attributes;
@@ -38,6 +38,7 @@ mod isset;
 pub(crate) mod is_numeric;
 pub(crate) mod json;
 pub(crate) mod math;
+pub(crate) mod output_buffering;
 pub(crate) mod pointers;
 pub(crate) mod regex;
 pub(crate) mod serialize;
@@ -49,34 +50,17 @@ pub(crate) mod types;
 const DEFINE_ALREADY_DEFINED_WARNING: &str =
     "Warning: define(): Constant already defined\n";
 
-/// Lowers a scalar builtin call by matching the canonical PHP function name.
-///
-/// Consults the builtin registry first using the canonical key, then handles
-/// compiler-resident language constructs that are not registry builtins.
-pub(super) fn lower_builtin_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+/// Lowers one compiler-resident PHP language construct by its canonical name.
+pub(super) fn lower_language_construct_call(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let name = ctx.function_name_data(expect_data(inst)?)?;
     let key = php_symbol_key(name.trim_start_matches('\\'));
-    // Registry-first: if the builtin is registered, invoke its lowering hook.
-    // Falls through to compiler-resident constructs when the name is not registered.
-    if let Some(def) = crate::builtins::registry::lookup(key.as_str()) {
-        return (def.spec.lower)(ctx, inst);
-    }
     match key.as_str() {
-        "closure_bind" => lower_closure_bind(ctx, inst),
         "eval" => eval::lower_eval(ctx, inst),
-        "strval" => lower_strval(ctx, inst),
-        "method_exists" | "property_exists" => lower_member_exists(ctx, inst, key.as_str()),
-        "is_integer" | "is_long" => {
-            lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Int)
-        }
-        "is_double" | "is_real" => {
-            lower_static_type_predicate(ctx, inst, key.as_str(), PhpType::Float)
-        }
         "empty" => lower_empty(ctx, inst),
         "unset" => types::lower_unset_builtin(ctx, inst),
         "isset" => isset::lower_isset(ctx, inst),
         "exit" | "die" => system::lower_exit(ctx, inst),
-        _ => Err(CodegenIrError::unsupported(format!("builtin call {}", name))),
+        _ => Err(CodegenIrError::unsupported(format!("language construct {}", name))),
     }
 }
 
@@ -418,7 +402,10 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     ensure_arg_count(inst, "gettype", 1)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.raw_value_php_type(value)?;
-    if matches!(ty, PhpType::TaggedScalar) {
+    // Dispatch on the codegen representation: a nullable-int union stores an
+    // inline tagged scalar, not a boxed Mixed cell, so unboxing it would read
+    // a non-pointer payload as a heap cell and crash.
+    if matches!(ty.codegen_repr(), PhpType::TaggedScalar) {
         emit_tagged_scalar_gettype(ctx, value)?;
         return store_if_result(ctx, inst);
     }
@@ -489,12 +476,12 @@ fn emit_mixed_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<(
 fn emit_branch_on_gettype_mixed_tag(ctx: &mut FunctionContext<'_>, tag: u8, label: &str) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp x0, #{}", tag)); // compare the unboxed Mixed tag against this gettype() case
-            ctx.emitter.instruction(&format!("b.eq {}", label)); // branch to the matching gettype() type-name case
+            ctx.emitter.instruction(&format!("cmp x0, #{}", tag));              // compare the unboxed Mixed tag against this gettype() case
+            ctx.emitter.instruction(&format!("b.eq {}", label));                // branch to the matching gettype() type-name case
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp rax, {}", tag)); // compare the unboxed Mixed tag against this gettype() case
-            ctx.emitter.instruction(&format!("je {}", label)); // branch to the matching gettype() type-name case
+            ctx.emitter.instruction(&format!("cmp rax, {}", tag));              // compare the unboxed Mixed tag against this gettype() case
+            ctx.emitter.instruction(&format!("je {}", label));                  // branch to the matching gettype() type-name case
         }
     }
 }
@@ -535,14 +522,108 @@ fn emit_type_name_result(ctx: &mut FunctionContext<'_>, type_name: &[u8]) {
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
 }
 
-/// Lowers `phpversion()` as the compiler package version string.
-pub(crate) fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "phpversion", 0)?;
-    let (label, len) = ctx.data.add_string(env!("CARGO_PKG_VERSION").as_bytes());
+/// Emits the reported PHP version string into the string result registers.
+///
+/// The value is `crate::web_prelude::PhpVersion::version_string()` for the compilation's
+/// `--php-version` profile — the PHP LANGUAGE version elephc targets, never elephc's own
+/// package version. Reference PHP 8.5.6 reports `8.5.6` here; elephc reports `8.5.0`, the
+/// same deliberate `.0` divergence `opcache_get_configuration()['version']['version']` already
+/// makes (see `PhpVersion::version_string` for the rule).
+fn emit_reported_php_version(ctx: &mut FunctionContext<'_>) {
+    let version = crate::codegen::compile_php_version().version_string();
+    let (label, len) = ctx.data.add_string(version.as_bytes());
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
     abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+}
+
+/// Lowers `phpversion()` and `phpversion($extension)`.
+///
+/// - `phpversion()` folds to a static string (result type `Str`).
+/// - `phpversion($extension)` folds to `string|false`, which the backend represents as a
+///   boxed `Mixed` cell (result type `Mixed`, matching the builtin's `eir_result_type`). A
+///   loaded extension yields the SAME version string as `phpversion()` — reference PHP reports
+///   the interpreter's own version for every bundled extension (verified on 8.5.6: `Core`,
+///   `json`, `pcre`, `Zend OPcache`, … all report `8.5.6`), and every extension elephc reports
+///   as loaded is a bundled-equivalent, so there is no per-extension version to track. An
+///   unknown extension yields `false`.
+///
+/// MEMBERSHIP IS `extension_loaded()`'s, EXACTLY: both the literal fold and the dynamic
+/// membership test go through [`extension_is_loaded`] / [`dynamic_extension_loaded_candidates`],
+/// so `phpversion($e) !== false` and `extension_loaded($e)` cannot disagree — including for the
+/// bridges linked into this particular compilation.
+///
+/// WHY THE DECISION LIVES HERE AND NOT IN THE CHECKER: the effective extension set is
+/// core ∪ `crate::codegen::linked_extensions()`, and the linked set is only complete after type
+/// checking (it includes bridges auto-detected from `check_result.required_libraries`). A
+/// checker-side or EIR-side fold would therefore see a SMALLER set than this one and could
+/// answer `false` where codegen answers a string. Typing the whole one-argument arity as
+/// `string|false` keeps the single decision point here, where the set is truthful.
+pub(crate) fn lower_phpversion(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "phpversion", 0, 1)?;
+    let Some(value) = inst.operands.first().copied() else {
+        emit_reported_php_version(ctx);
+        return store_if_result(ctx, inst);
+    };
+    if let Some(extension_name) = maybe_const_string_operand(ctx, value)? {
+        if extension_is_loaded(&extension_name) {
+            emit_reported_php_version(ctx);
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+        } else {
+            emit_static_bool(ctx, false);
+            crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        }
+    } else {
+        lower_dynamic_phpversion(ctx, value)?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Lowers a dynamic (non-literal) `phpversion($name)` over the effective extension set.
+///
+/// Same shape as [`lower_dynamic_extension_loaded`] — the runtime string is materialized into
+/// one 16-byte temporary stack slot and compared against every baked candidate with
+/// `__rt_strcasecmp`, matching PHP's case-insensitive extension-name lookup (verified on
+/// reference 8.5.6: `phpversion('core')` and `phpversion('Core')` both return the version).
+/// Only the *answer* differs: a match yields the boxed version string, a miss yields boxed
+/// `false`.
+///
+/// The temporary slot must be released on BOTH exits, and the boxing happens after the
+/// branches rejoin only for the matched arm, because the two arms box different tags. Each arm
+/// therefore boxes its own value and jumps to the shared release.
+fn lower_dynamic_phpversion(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(
+            "phpversion with non-string dynamic extension name",
+        ));
+    }
+    let candidates = dynamic_extension_loaded_candidates();
+    if candidates.is_empty() {
+        emit_static_bool(ctx, false);
+        crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+        return Ok(());
+    }
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    let matched_label = ctx.next_label("phpversion_dynamic_match");
+    let done_label = ctx.next_label("phpversion_dynamic_done");
+    for candidate in &candidates {
+        emit_branch_if_saved_string_matches_ci(ctx, candidate.as_bytes(), &matched_label);
+    }
+    emit_static_bool(ctx, false);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Bool);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&matched_label);
+    emit_reported_php_version(ctx);
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
 }
 
 /// Lowers `defined("NAME")` for compile-time string constant names.
@@ -554,27 +635,342 @@ pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
-/// Lowers `function_exists("name")` for compile-time string names.
+/// Compile-time-known set of "loaded" PHP extensions for `extension_loaded()` and the regular
+/// (non-Zend) list returned by `get_loaded_extensions(false)`.
+///
+/// KEEP IN SYNC with `crates/elephc-magician/src/interpreter/builtins/network_env/extension_loaded.rs`.
+/// This is only the always-present core set. Bridge-linked extensions (e.g. `PDO`, `hash`,
+/// `openssl`) are added on top per-compilation from the linked-bridge set via
+/// `crate::codegen::linked_extensions()` — see [`extension_is_loaded`] and
+/// `lower_get_loaded_extensions`. The magician eval interpreter has no AOT link step, so it
+/// reports only this core set (documented divergence: `extension_loaded('PDO')` is `false` in eval).
+pub(crate) const CORE_LOADED_EXTENSIONS: &[&str] = &[
+    "Core",
+    "standard",
+    "SPL",
+    "json",
+    "pcre",
+    "date",
+    "ctype",
+    "mbstring",
+    "Reflection",
+    "Zend OPcache",
+];
+
+/// Compile-time-known set of loaded Zend extensions returned by `get_loaded_extensions(true)`.
+///
+/// Elephc ships the OPcache Zend extension but no Xdebug, so this list holds only "Zend OPcache".
+/// KEEP IN SYNC with `crates/elephc-magician/src/interpreter/builtins/network_env/get_loaded_extensions.rs`.
+pub(crate) const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
+
+/// Returns true when `name` matches an always-present core extension OR a bridge
+/// actually linked into this compilation (`crate::codegen::linked_extensions()`),
+/// compared case-insensitively.
+///
+/// Mirrors PHP's case-insensitive extension-name comparison: only the canonical names match
+/// (e.g. "opcache" is not an alias for "Zend OPcache"). The linked set is populated by the
+/// pipeline before codegen from the bridges this program links (e.g. `PDO` under `--with-pdo`
+/// or `hash` when a program uses `hash()`), so a bridge-free program reports only the core set.
+fn extension_is_loaded(name: &str) -> bool {
+    CORE_LOADED_EXTENSIONS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(name))
+        || crate::codegen::linked_extensions()
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(name))
+}
+
+/// Lowers `extension_loaded($extension)` over the effective extension set.
+///
+/// A literal name const-folds to a static boolean (no runtime cost). A dynamic name is lowered
+/// to a case-insensitive membership test against the same effective set (core ∪ linked bridges),
+/// which is baked into the binary at compile time — see [`lower_dynamic_extension_loaded`].
+pub(crate) fn lower_extension_loaded(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "extension_loaded", 1)?;
+    let value = expect_operand(inst, 0)?;
+    if let Some(extension_name) = maybe_const_string_operand(ctx, value)? {
+        emit_static_bool(ctx, extension_is_loaded(&extension_name));
+    } else {
+        lower_dynamic_extension_loaded(ctx, value)?;
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Lowers a dynamic (non-literal) `extension_loaded($name)` membership test.
+///
+/// The extension set is fully known at compile time (core ∪ the bridges this program links), so
+/// only the *name* is dynamic. The runtime string is materialized into one 16-byte temporary
+/// stack slot (pointer + length) and compared against every baked candidate with
+/// `__rt_strcasecmp`, matching PHP's case-insensitive extension-name lookup
+/// (`extension_loaded('JSON') === extension_loaded('json')`).
+///
+/// The temporary slot is read back from SP before each comparison rather than being kept in a
+/// register, because `__rt_strcasecmp` receives its arguments in caller-saved registers. The slot
+/// itself survives every call: `__rt_strcasecmp` is a leaf helper that never touches SP.
+fn lower_dynamic_extension_loaded(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(
+            "extension_loaded with non-string dynamic name",
+        ));
+    }
+    let candidates = dynamic_extension_loaded_candidates();
+    if candidates.is_empty() {
+        emit_static_bool(ctx, false);
+        return Ok(());
+    }
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+
+    let matched_label = ctx.next_label("extension_loaded_dynamic_match");
+    let done_label = ctx.next_label("extension_loaded_dynamic_done");
+    for candidate in &candidates {
+        emit_branch_if_saved_string_matches_ci(ctx, candidate.as_bytes(), &matched_label);
+    }
+    emit_static_bool(ctx, false);
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&matched_label);
+    emit_static_bool(ctx, true);
+
+    ctx.emitter.label(&done_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Returns the effective extension set a dynamic `extension_loaded()` test compares against.
+///
+/// This is exactly the set [`extension_is_loaded`] folds against for a literal name: the
+/// always-present core extensions plus the canonical names of the bridges actually linked into
+/// this compilation, de-duplicated case-insensitively so a bridge that shadows a core name is not
+/// compared twice.
+fn dynamic_extension_loaded_candidates() -> Vec<String> {
+    let mut candidates: Vec<String> = CORE_LOADED_EXTENSIONS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for extension in crate::codegen::linked_extensions() {
+        if !candidates
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&extension))
+        {
+            candidates.push(extension);
+        }
+    }
+    candidates
+}
+
+/// Lowers `function_exists($name)` over the set of functions this program actually declares.
+///
+/// A literal name const-folds (see [`literal_function_exists`]); any other string expression
+/// lowers to a baked case-insensitive membership test over the same set
+/// (see [`lower_dynamic_function_exists`]), so feature-detection loops such as
+/// `foreach ($names as $n) if (function_exists($n))` compile.
+pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "function_exists", 1)?;
+    let strict_php = super::instruction_strict_php_profile(inst);
+    let value = expect_operand(inst, 0)?;
+    if let Some(function_name) = maybe_const_string_operand(ctx, value)? {
+        match function_exists_needle(&function_name) {
+            None => emit_static_bool(ctx, false),
+            Some(bare) => {
+                if let Some(group_name) = ctx.function_variant_group_name(bare) {
+                    emit_variant_function_exists(ctx, &group_name);
+                } else {
+                    emit_static_bool(ctx, literal_function_exists(ctx, bare, strict_php));
+                }
+            }
+        }
+    } else {
+        lower_dynamic_function_exists(ctx, value, strict_php)?;
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Normalizes a `function_exists()` argument into the bare name to look up, or `None` when no
+/// declaration can ever carry it.
+///
+/// PHP accepts a single leading namespace separator (`function_exists('\strlen') === true`) but
+/// nothing else: the empty string, a lone `\`, and a doubled separator (`'\\strlen'`) are all
+/// `false`. `__rt_function_exists_lookup` applies exactly this normalization to the runtime
+/// needle, so the literal fold and the dynamic lookup answer identically.
+fn function_exists_needle(name: &str) -> Option<&str> {
+    let bare = name.strip_prefix('\\').unwrap_or(name);
+    (!bare.is_empty() && !bare.starts_with('\\')).then_some(bare)
+}
+
+/// Returns whether a compile-time `function_exists("name")` folds to true for an already
+/// normalized bare name, ignoring the include-variant groups the caller handles separately.
 ///
 /// Recognizes user functions, externs, catalog builtins, and the date/time procedural aliases
 /// that `name_resolver` desugars (including the injected timezone-introspection prelude
 /// functions). The aliases are matched through `is_date_procedural_alias` rather than the catalog
 /// because their call sites are rewritten before codegen, so they never reach the builtin catalog
-/// yet must still report as existing to match PHP.
-pub(crate) fn lower_function_exists(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "function_exists", 1)?;
-    let value = expect_operand(inst, 0)?;
-    let function_name = const_string_operand(ctx, value)?;
-    if let Some(group_name) = ctx.function_variant_group_name(&function_name) {
-        emit_variant_function_exists(ctx, &group_name);
-    } else {
-        let exists = ctx.function_by_name(&function_name).is_some()
-            || ctx.has_extern_function(&function_name)
-            || is_php_visible_builtin_function(function_name.trim_start_matches('\\'))
-            || crate::name_resolver::is_date_procedural_alias(&function_name);
-        emit_static_bool(ctx, exists);
+/// yet must still report as existing to match PHP. Aliases and catalog builtins live in the
+/// global namespace only, so a qualified name never resolves to one — `function_exists('Foo\mktime')`
+/// is `false`, as in PHP.
+///
+/// [`dynamic_function_exists_candidates`] enumerates exactly the names this predicate accepts;
+/// a unit test below checks that correspondence in both directions.
+fn literal_function_exists(
+    ctx: &FunctionContext<'_>,
+    bare_name: &str,
+    strict_php: bool,
+) -> bool {
+    ctx.function_by_name(bare_name).is_some()
+        || ctx.has_extern_function(bare_name)
+        || is_php_visible_builtin_function_for_profile(bare_name, strict_php)
+        || (!bare_name.contains('\\')
+            && crate::name_resolver::is_date_procedural_alias(bare_name))
+}
+
+/// One baked candidate for a dynamic `function_exists()` lookup: a declared name plus, for an
+/// include-loaded variant group, the `.comm` symbol that holds the currently active
+/// implementation pointer.
+struct FunctionExistsCandidate {
+    /// The declared PHP function name, compared case-insensitively at runtime.
+    name: String,
+    /// The include-variant "active" symbol, or `None` for an unconditional declaration.
+    active_symbol: Option<String>,
+}
+
+/// Lowers a dynamic (non-literal) `function_exists($name)` membership test.
+///
+/// The *set* of declared functions is fully known at compile time — an AOT binary cannot gain a
+/// function at runtime, it can only activate an include-loaded variant — so only the *name* is
+/// dynamic. Rather than emitting one comparison per candidate (there are several hundred, which
+/// would add tens of kilobytes of code to every call site), the candidate names are emitted once
+/// into `.data` as a shared 24-bytes-per-entry table and scanned by the table-driven
+/// `__rt_function_exists_lookup` helper. The table is deduplicated by `DataSection::add_words`,
+/// so every dynamic call site in a program shares a single table.
+///
+/// The runtime string is materialized into one 16-byte temporary stack slot and re-loaded from
+/// there into the helper's argument registers, following the same discipline as
+/// [`lower_dynamic_extension_loaded`]; the helper itself re-loads the needle from its own frame
+/// before each `__rt_strcasecmp` call.
+fn lower_dynamic_function_exists(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    strict_php: bool,
+) -> Result<()> {
+    if ctx.value_php_type(value)?.codegen_repr() != PhpType::Str {
+        return Err(CodegenIrError::unsupported(
+            "function_exists with non-string dynamic name",
+        ));
     }
-    store_if_result(ctx, inst)
+    let candidates = dynamic_function_exists_candidates(ctx, strict_php);
+    if candidates.is_empty() {
+        emit_static_bool(ctx, false);
+        return Ok(());
+    }
+
+    let table_label = emit_function_exists_candidate_table(ctx, &candidates);
+    let count = candidates.len() as i64;
+
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    ctx.load_string_value_to_regs(value, ptr_reg, len_reg)?;
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    // The table address and count are materialized first so the needle registers are the last
+    // thing written before the call and nothing can clobber them in between.
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x2", &table_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x3", count);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 8);
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "rdx", &table_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", count);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 8);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_function_exists_lookup");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    Ok(())
+}
+
+/// Emits the shared `.data` candidate table and returns its label.
+///
+/// Each entry is three 8-byte words: name pointer, name length, and either the include-variant
+/// "active" symbol address or 0. The variant symbols are declared with `add_comm` here exactly as
+/// [`emit_variant_function_exists`] does for the literal path, so the table never references an
+/// undefined symbol.
+fn emit_function_exists_candidate_table(
+    ctx: &mut FunctionContext<'_>,
+    candidates: &[FunctionExistsCandidate],
+) -> String {
+    let mut words = Vec::with_capacity(candidates.len() * 3);
+    for candidate in candidates {
+        let (name_label, name_len) = ctx.data.add_string(candidate.name.as_bytes());
+        words.push(DataWord::Symbol(name_label));
+        words.push(DataWord::U64(name_len as u64));
+        match &candidate.active_symbol {
+            Some(symbol) => {
+                ctx.data.add_comm(symbol.clone(), 8);
+                words.push(DataWord::Symbol(symbol.clone()));
+            }
+            None => words.push(DataWord::U64(0)),
+        }
+    }
+    ctx.data.add_words(words)
+}
+
+/// Collects the function names a dynamic `function_exists()` test compares against.
+///
+/// Every source here is the enumeration of one disjunct of the compile-time fold, so the dynamic
+/// answer cannot disagree with the literal one:
+///
+/// | Compile-time check                              | Enumerated here                                  |
+/// |-------------------------------------------------|--------------------------------------------------|
+/// | `ctx.function_variant_group_name()`             | `collect_dispatch_groups()` (with active symbol) |
+/// | `ctx.function_by_name()`                        | `module.functions` + `module.closures`           |
+/// | `ctx.has_extern_function()`                     | `module.extern_decls`                            |
+/// | `is_php_visible_builtin_function()`             | `supported_builtin_function_names()`             |
+/// | `name_resolver::is_date_procedural_alias()`     | `name_resolver::date_procedural_alias_names()`   |
+///
+/// Names are de-duplicated case-insensitively with `php_symbol_key`, the same key the
+/// compile-time lookups use. Variant groups are collected first so that a name which is both a
+/// group and a plain declaration keeps its runtime activity check, mirroring the literal path's
+/// ordering (it tests `function_variant_group_name` before anything else).
+fn dynamic_function_exists_candidates(
+    ctx: &FunctionContext<'_>,
+    strict_php: bool,
+) -> Vec<FunctionExistsCandidate> {
+    let mut seen: BTreeSet<String> = BTreeSet::new();
+    let mut candidates: Vec<FunctionExistsCandidate> = Vec::new();
+    let mut push = |name: &str, active_symbol: Option<String>| {
+        let Some(bare) = function_exists_needle(name) else {
+            return;
+        };
+        if !seen.insert(php_symbol_key(bare)) {
+            return;
+        }
+        candidates.push(FunctionExistsCandidate {
+            name: bare.to_string(),
+            active_symbol,
+        });
+    };
+
+    for group in crate::ir::function_variants::collect_dispatch_groups(ctx.module) {
+        let symbol = crate::names::function_variant_active_symbol(&group.name);
+        push(&group.name, Some(symbol));
+    }
+    for function in ctx.module.functions.iter().chain(ctx.module.closures.iter()) {
+        push(&function.name, None);
+    }
+    for extern_decl in &ctx.module.extern_decls {
+        push(&extern_decl.name, None);
+    }
+    for name in supported_builtin_function_names_for_profile(strict_php) {
+        push(name, None);
+    }
+    for name in crate::name_resolver::date_procedural_alias_names() {
+        push(name, None);
+    }
+    candidates
 }
 
 /// Lowers AOT class/interface/enum existence checks for literal or dynamic string names.
@@ -672,13 +1068,22 @@ fn emit_branch_if_dynamic_class_like_exists_candidate(
     matched_label: &str,
 ) {
     let bare_candidate = candidate.trim_start_matches('\\');
-    emit_dynamic_class_like_exists_compare(ctx, bare_candidate.as_bytes(), matched_label);
+    emit_branch_if_saved_string_matches_ci(ctx, bare_candidate.as_bytes(), matched_label);
     let qualified_candidate = format!("\\{}", bare_candidate);
-    emit_dynamic_class_like_exists_compare(ctx, qualified_candidate.as_bytes(), matched_label);
+    emit_branch_if_saved_string_matches_ci(ctx, qualified_candidate.as_bytes(), matched_label);
 }
 
-/// Emits one case-insensitive comparison for the saved dynamic class-like lookup.
-fn emit_dynamic_class_like_exists_compare(
+/// Emits one case-insensitive comparison of the string saved in the current 16-byte temporary
+/// stack slot (`[sp] = pointer`, `[sp + 8] = length`) against a baked candidate, branching to
+/// `matched_label` on equality.
+///
+/// Shared by the dynamic `class_exists()`-family lookup and dynamic `extension_loaded()`. The
+/// caller owns the temporary slot: it must push the runtime string with `emit_push_reg_pair`
+/// before the first comparison and release 16 bytes once all comparisons are done. `__rt_strcasecmp`
+/// is a leaf helper (no nested call, no SP adjustment) that reads its operands from
+/// `x1/x2/x3/x4` on AArch64 and `rdi/rsi/rdx/rcx` on x86_64 and clobbers only caller-saved
+/// scratch, so the slot and SP are intact across every emitted comparison.
+fn emit_branch_if_saved_string_matches_ci(
     ctx: &mut FunctionContext<'_>,
     candidate: &[u8],
     matched_label: &str,
@@ -691,8 +1096,8 @@ fn emit_dynamic_class_like_exists_compare(
             abi::emit_symbol_address(ctx.emitter, "x3", &candidate_label);
             abi::emit_load_int_immediate(ctx.emitter, "x4", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("cmp x0, #0"); // did the dynamic class-like name match this metadata entry?
-            ctx.emitter.instruction(&format!("b.eq {}", matched_label)); // report existence when the runtime name matches case-insensitively
+            ctx.emitter.instruction("cmp x0, #0");                              // did the dynamic class-like name match this metadata entry?
+            ctx.emitter.instruction(&format!("b.eq {}", matched_label));        // report existence when the runtime name matches case-insensitively
         }
         Arch::X86_64 => {
             abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 0);
@@ -700,8 +1105,8 @@ fn emit_dynamic_class_like_exists_compare(
             abi::emit_symbol_address(ctx.emitter, "rdx", &candidate_label);
             abi::emit_load_int_immediate(ctx.emitter, "rcx", candidate_len as i64);
             abi::emit_call_label(ctx.emitter, "__rt_strcasecmp");
-            ctx.emitter.instruction("test rax, rax"); // did the dynamic class-like name match this metadata entry?
-            ctx.emitter.instruction(&format!("je {}", matched_label)); // report existence when the runtime name matches case-insensitively
+            ctx.emitter.instruction("test rax, rax");                           // did the dynamic class-like name match this metadata entry?
+            ctx.emitter.instruction(&format!("je {}", matched_label));          // report existence when the runtime name matches case-insensitively
         }
     }
 }
@@ -709,6 +1114,8 @@ fn emit_dynamic_class_like_exists_compare(
 /// Lowers `is_callable(value)` through static lookup or runtime callable-shape helpers.
 pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "is_callable", 1)?;
+    let strict_php = super::instruction_strict_php_profile(inst);
+    set_is_callable_strict_profile(ctx, strict_php);
     let value = expect_operand(inst, 0)?;
     let value_ty = ctx.value_php_type(value)?.codegen_repr();
     if has_eval_context(ctx) && value_ty != PhpType::Callable {
@@ -721,7 +1128,10 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
                 if let Some((class_name, method_name)) = function_name.rsplit_once("::") {
                     emit_static_bool(ctx, static_method_string_is_callable(ctx, class_name, method_name));
                 } else {
-                    emit_static_bool(ctx, callable_name_exists(ctx, &function_name));
+                    emit_static_bool(
+                        ctx,
+                        callable_name_exists(ctx, &function_name, strict_php),
+                    );
                 }
             } else {
                 ctx.load_value_to_result(value)?;
@@ -768,28 +1178,44 @@ pub(crate) fn lower_is_callable(ctx: &mut FunctionContext<'_>, inst: &Instructio
 /// Calls the runtime `is_callable` helper for pointer-shaped values already in result regs.
 fn emit_is_callable_pointer_lookup(ctx: &mut FunctionContext<'_>, label: &str) {
     if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax"); // move pointer-shaped value into helper argument 0
+        ctx.emitter.instruction("mov rdi, rax");                                // move pointer-shaped value into helper argument 0
     }
     abi::emit_call_label(ctx.emitter, label);
+}
+
+/// Stores the current `is_callable()` call site's builtin visibility for nested runtime helpers.
+fn set_is_callable_strict_profile(ctx: &mut FunctionContext<'_>, strict_php: bool) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_symbol_address(ctx.emitter, "x9", "_callable_strict_profile");
+            abi::emit_load_int_immediate(ctx.emitter, "x10", i64::from(strict_php));
+            ctx.emitter.instruction("str x10, [x9]");                           // publish the call-site builtin visibility for nested string probes
+        }
+        Arch::X86_64 => {
+            abi::emit_symbol_address(ctx.emitter, "r10", "_callable_strict_profile");
+            abi::emit_load_int_immediate(ctx.emitter, "r11", i64::from(strict_php));
+            ctx.emitter.instruction("mov QWORD PTR [r10], r11");                // publish the call-site builtin visibility for nested string probes
+        }
+    }
 }
 
 /// Calls the runtime `is_callable` string-name helper for a loaded dynamic string value.
 fn emit_is_callable_dynamic_string_lookup(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x0, x1"); // move string pointer into helper argument 0
-            ctx.emitter.instruction("mov x1, x2"); // move string length into helper argument 1
+            ctx.emitter.instruction("mov x0, x1");                              // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov x1, x2");                              // move string length into helper argument 1
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, rax"); // move string pointer into helper argument 0
-            ctx.emitter.instruction("mov rsi, rdx"); // move string length into helper argument 1
+            ctx.emitter.instruction("mov rdi, rax");                            // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov rsi, rdx");                            // move string length into helper argument 1
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_is_callable_string");
 }
 
 /// Lowers `method_exists()` and `property_exists()` through eval or static metadata.
-fn lower_member_exists(
+pub(super) fn lower_member_exists(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
@@ -1003,8 +1429,8 @@ fn emit_variant_function_exists(ctx: &mut FunctionContext<'_>, function_name: &s
     abi::emit_load_symbol_to_reg(ctx.emitter, result_reg, &active_symbol, 0);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg)); // test whether an include has activated this function variant
-            ctx.emitter.instruction(&format!("cset {}, ne", result_reg)); // return true only when a function variant is active
+            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));        // test whether an include has activated this function variant
+            ctx.emitter.instruction(&format!("cset {}, ne", result_reg));       // return true only when a function variant is active
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // test whether an include has activated this function variant
@@ -1071,7 +1497,7 @@ pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// Lowers the synthetic `closure_bind` call: rebinds a closure's captured
 /// `$this` to a new receiver via `__rt_closure_bind(descriptor, new_this)`,
 /// returning the rebound closure descriptor.
-fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "closure_bind", 2)?;
     let descriptor = expect_operand(inst, 0)?;
     let new_this = expect_operand(inst, 1)?;
@@ -1089,160 +1515,21 @@ fn lower_closure_bind(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Resu
     store_if_result(ctx, inst)
 }
 
-/// Lowers `strlen()` by coercing string-like values and returning the byte length.
-pub(crate) fn lower_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "strlen", 1)?;
-    let value = expect_operand(inst, 0)?;
-    let ty = ctx.load_value_to_result(value)?;
-    match ty.codegen_repr() {
-        PhpType::Str => {}
-        PhpType::Mixed | PhpType::Union(_) => {
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "strlen for PHP type {:?}",
-                other
-            )));
-        }
-    }
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    let len_reg = abi::string_result_regs(ctx.emitter).1;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("mov {}, {}", result_reg, len_reg)); // return the byte length of the loaded PHP string
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `intval()` for concrete scalar operands.
-pub(crate) fn lower_intval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "intval", 1)?;
-    let value = expect_operand(inst, 0)?;
-    match ctx.value_php_type(value)? {
-        PhpType::Int | PhpType::Bool | PhpType::False => {
-            ctx.load_value_to_result(value)?;
-        }
-        PhpType::Void | PhpType::Never => {
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-        }
-        PhpType::Float => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_float_result_to_int_result(ctx.emitter);
-        }
-        PhpType::Str => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            load_value_to_first_int_arg(ctx, value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "intval for PHP type {:?}",
-                other
-            )))
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `floatval()` for concrete scalar operands.
-pub(crate) fn lower_floatval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "floatval", 1)?;
-    let value = expect_operand(inst, 0)?;
-    match ctx.value_php_type(value)? {
-        PhpType::Float => {
-            ctx.load_value_to_result(value)?;
-        }
-        PhpType::Int | PhpType::Bool | PhpType::False => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_int_result_to_float_result(ctx.emitter);
-        }
-        PhpType::Void | PhpType::Never => {
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-            abi::emit_int_result_to_float_result(ctx.emitter);
-        }
-        PhpType::Str => {
-            ctx.load_value_to_result(value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_str_to_number");
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            load_value_to_first_int_arg(ctx, value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_float");
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "floatval for PHP type {:?}",
-                other
-            )))
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `boolval()` using the same concrete scalar PHP truthiness rules as `IsTruthy`.
-pub(crate) fn lower_boolval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "boolval", 1)?;
-    let value = expect_operand(inst, 0)?;
-    match ctx.value_php_type(value)? {
-        PhpType::Bool | PhpType::False | PhpType::Int => {
-            ctx.load_value_to_result(value)?;
-            predicates::emit_int_result_nonzero_bool(ctx);
-        }
-        PhpType::Void | PhpType::Never => {
-            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
-        }
-        PhpType::Float => {
-            ctx.load_value_to_result(value)?;
-            predicates::emit_float_result_nonzero_bool(ctx);
-        }
-        PhpType::Str => {
-            predicates::emit_string_truthiness(ctx, value)?;
-        }
-        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
-            predicates::emit_array_truthiness(ctx, value)?;
-        }
-        PhpType::Mixed | PhpType::Union(_) => {
-            load_value_to_first_int_arg(ctx, value)?;
-            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_bool");
-        }
-        other => {
-            return Err(CodegenIrError::unsupported(format!(
-                "boolval for PHP type {:?}",
-                other
-            )))
-        }
-    }
-    store_if_result(ctx, inst)
-}
-
-/// Lowers `strval()` through the same semantics as an explicit PHP string cast.
-fn lower_strval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "strval", 1)?;
-    conversions::lower_cast_to_string(ctx, inst)
-}
-
 /// Lowers `empty()` for concrete scalar and array-like operands.
 fn lower_empty(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "empty", 1)?;
     let value = expect_operand(inst, 0)?;
     match ctx.raw_value_php_type(value)? {
-        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Pointer(_) => {
+        PhpType::Int | PhpType::Pointer(_) => {
             ctx.load_value_to_result(value)?;
             emit_int_result_zero_bool(ctx);
         }
+        // Sentinel-marked slots; see `emit_sentinel_null_or_zero_empty_bool`.
+        ty @ (PhpType::Bool | PhpType::False | PhpType::Float) => {
+            emit_sentinel_null_or_zero_empty_bool(ctx, value, ty == PhpType::Float)?;
+        }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
-        }
-        PhpType::Float => {
-            ctx.load_value_to_result(value)?;
-            emit_float_result_zero_bool(ctx);
         }
         PhpType::Str => {
             ctx.load_value_to_result(value)?;
@@ -1272,6 +1559,60 @@ fn lower_empty(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> 
     store_if_result(ctx, inst)
 }
 
+/// Emits `empty()` for an unboxed scalar slot whose miss marker is the in-band
+/// `NULL_SENTINEL`: true when the payload carries the sentinel (PHP null is empty), otherwise
+/// the ordinary zero test for the slot's own type.
+///
+/// `bool` and `float` element slots have no tagged representation, so a silent missed read
+/// leaves the sentinel word behind (`emit_float_null_sentinel` for floats). Testing the
+/// payload alone answered `false` for a missing `bool` element — the sentinel is a non-zero
+/// integer — and would answer `false` for a missing `float` element too, since its marker is a
+/// NaN rather than `0.0`. A genuine `bool` is only ever 0 or 1 and the float marker's bit
+/// pattern is unreachable by arithmetic, so neither check misfires on a real value.
+///
+/// `is_float` selects where the payload lives: the float result register (compared on raw
+/// bits, because a float compare reports the sentinel NaN as unordered rather than equal) or
+/// the integer result register.
+fn emit_sentinel_null_or_zero_empty_bool(
+    ctx: &mut FunctionContext<'_>,
+    value: crate::ir::ValueId,
+    is_float: bool,
+) -> Result<()> {
+    let empty_label = ctx.next_label("empty_sentinel_true");
+    let done_label = ctx.next_label("empty_sentinel_done");
+    ctx.load_value_to_result(value)?;
+    if is_float {
+        crate::codegen::sentinels::emit_float_result_bits_to_int_result(ctx.emitter);
+    }
+    let sentinel_reg = abi::secondary_scratch_reg(ctx.emitter);
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_load_int_immediate(ctx.emitter, sentinel_reg, crate::codegen::NULL_SENTINEL);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, sentinel_reg)); // does the scalar payload carry the in-band null sentinel?
+            ctx.emitter
+                .instruction(&format!("b.eq {}", empty_label));                 // PHP null is empty()
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("cmp {}, {}", result_reg, sentinel_reg)); // does the scalar payload carry the in-band null sentinel?
+            ctx.emitter
+                .instruction(&format!("je {}", empty_label));                   // PHP null is empty()
+        }
+    }
+    if is_float {
+        emit_float_result_zero_bool(ctx);
+    } else {
+        emit_int_result_zero_bool(ctx);
+    }
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&empty_label);
+    abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 1);
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Emits true for a tagged scalar that is null or an integer zero.
 fn emit_tagged_scalar_empty_bool(ctx: &mut FunctionContext<'_>, value: crate::ir::ValueId) -> Result<()> {
     let empty_label = ctx.next_label("empty_tagged_true");
@@ -1291,31 +1632,55 @@ fn emit_int_result_zero_bool(ctx: &mut FunctionContext<'_>) {
     let result_reg = abi::int_result_reg(ctx.emitter);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg)); // compare the empty() integer operand against zero
-            ctx.emitter.instruction(&format!("cset {}, eq", result_reg)); // return true when the integer operand is zero
+            ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));        // compare the empty() integer operand against zero
+            ctx.emitter.instruction(&format!("cset {}, eq", result_reg));       // return true when the integer operand is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, 0", result_reg)); // compare the empty() integer operand against zero
-            ctx.emitter.instruction("sete al"); // materialize true when the integer operand is zero
-            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));         // compare the empty() integer operand against zero
+            ctx.emitter.instruction("sete al");                                 // materialize true when the integer operand is zero
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
 }
 
 /// Emits true when the canonical float result register is zero.
+///
+/// `empty($x)` is `!(bool)$x`, so a NAN operand must answer FALSE — `var_dump(empty($n))` on a
+/// genuine NAN prints `bool(false)`. Saying so on x86_64 takes an explicit parity fixup; see
+/// `emit_x86_64_float_zero_from_flags`.
+///
+/// The in-band `NULL_SENTINEL` miss marker is filtered by the caller
+/// (`emit_sentinel_null_or_zero_empty_bool`) BEFORE this runs, so the NAN reaching here is
+/// always a real program value.
 fn emit_float_result_zero_bool(ctx: &mut FunctionContext<'_>) {
+    predicates::emit_nan_bool_coercion_probe(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("fcmp d0, #0.0"); // compare the empty() float operand against zero
-            ctx.emitter.instruction("cset x0, eq"); // return true when the float operand is zero
+            // AArch64 `fcmp` reports unordered as `N=0 Z=0 C=1 V=1`, so `eq` (Z==1) already
+            // answers false for a NAN. No parity fixup is needed on this arch.
+            ctx.emitter.instruction("fcmp d0, #0.0");                           // compare the empty() float operand against zero
+            ctx.emitter.instruction("cset x0, eq");                             // return true when the float operand is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xorpd xmm1, xmm1"); // materialize a zero float register for empty() comparison
-            ctx.emitter.instruction("ucomisd xmm0, xmm1"); // compare the empty() float operand against zero
-            ctx.emitter.instruction("sete al"); // materialize true when the float operand is zero
-            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
+            ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize a zero float register for empty() comparison
+            ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the empty() float operand against zero
+            emit_x86_64_float_zero_from_flags(ctx);
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
+}
+
+/// Materializes "this float is zero" from x86_64 `ucomisd` flags, counting NAN as NOT zero.
+///
+/// `ucomisd` sets `ZF=PF=CF=1` for an UNORDERED compare, so a bare `sete al` reads a NAN as
+/// EQUAL to zero and makes `empty(NAN)` answer `true` — the inverse of PHP, and of what the
+/// AArch64 arm produces from the same source. Masking with `PF` clear restores
+/// `empty(NAN) === false` and leaves every ordered comparison untouched (`PF=0` there). This
+/// mirrors the `==` branch of `comparisons::emit_x86_64_float_equality_result`.
+fn emit_x86_64_float_zero_from_flags(ctx: &mut FunctionContext<'_>) {
+    ctx.emitter.instruction("sete al");                                         // materialize true when the float operand is ordered-equal to zero
+    ctx.emitter.instruction("setnp r10b");                                      // materialize whether the comparison was ordered
+    ctx.emitter.instruction("and al, r10b");                                    // a NAN is not empty, so clear the unordered case
 }
 
 /// Emits true when the loaded string length register is zero.
@@ -1323,13 +1688,13 @@ fn emit_string_length_zero_bool(ctx: &mut FunctionContext<'_>) {
     let len_reg = abi::string_result_regs(ctx.emitter).1;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg)); // compare the empty() string length against zero
-            ctx.emitter.instruction("cset x0, eq"); // return true when the string length is zero
+            ctx.emitter.instruction(&format!("cmp {}, #0", len_reg));           // compare the empty() string length against zero
+            ctx.emitter.instruction("cset x0, eq");                             // return true when the string length is zero
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg)); // compare the empty() string length against zero
-            ctx.emitter.instruction("sete al"); // materialize true when the string length is zero
-            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&format!("cmp {}, 0", len_reg));            // compare the empty() string length against zero
+            ctx.emitter.instruction("sete al");                                 // materialize true when the string length is zero
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
 }
@@ -1338,15 +1703,46 @@ fn emit_string_length_zero_bool(ctx: &mut FunctionContext<'_>) {
 fn invert_bool_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("eor x0, x0, #1"); // invert the canonical boolean result for empty()
+            ctx.emitter.instruction("eor x0, x0, #1");                          // invert the canonical boolean result for empty()
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("xor rax, 1"); // invert the canonical boolean result for empty()
+            ctx.emitter.instruction("xor rax, 1");                              // invert the canonical boolean result for empty()
         }
     }
 }
 
-/// Lowers a static `is_*` predicate for concrete non-Mixed values.
+/// Lowers the reusable EIR PHP type predicate through target-aware value inspection.
+pub(crate) fn lower_type_predicate(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let Some(Immediate::TypePredicate(predicate)) = inst.immediate else {
+        return Err(CodegenIrError::unsupported(
+            "type_predicate requires a typed predicate immediate",
+        ));
+    };
+    match predicate {
+        PhpTypePredicate::Array => lower_is_array(ctx, inst),
+        PhpTypePredicate::Bool => {
+            lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Bool)
+        }
+        PhpTypePredicate::Float => {
+            lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Float)
+        }
+        PhpTypePredicate::Int => {
+            lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Int)
+        }
+        PhpTypePredicate::Iterable => lower_is_iterable(ctx, inst),
+        PhpTypePredicate::Object => lower_is_object(ctx, inst),
+        PhpTypePredicate::Resource => types::lower_is_resource(ctx, inst),
+        PhpTypePredicate::Scalar => lower_is_scalar(ctx, inst),
+        PhpTypePredicate::String => {
+            lower_static_type_predicate(ctx, inst, "type_predicate", PhpType::Str)
+        }
+    }
+}
+
+/// Lowers a static PHP type predicate for concrete non-Mixed values.
 pub(crate) fn lower_static_type_predicate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -1388,17 +1784,17 @@ fn emit_tagged_scalar_int_predicate(
                 "cmp x1, #{}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
             );
-            ctx.emitter.instruction(&cmp_inst); // does the tagged scalar carry the runtime null tag?
-            ctx.emitter.instruction("cset x0, ne"); // materialize true when the tagged scalar holds an integer
+            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
+            ctx.emitter.instruction("cset x0, ne");                             // materialize true when the tagged scalar holds an integer
         }
         Arch::X86_64 => {
             let cmp_inst = format!(
                 "cmp rdx, {}",
                 crate::codegen::sentinels::TAGGED_SCALAR_TAG_NULL
             );
-            ctx.emitter.instruction(&cmp_inst); // does the tagged scalar carry the runtime null tag?
-            ctx.emitter.instruction("setne al"); // materialize true when the tagged scalar holds an integer
-            ctx.emitter.instruction("movzx rax, al"); // widen the boolean byte into the integer result register
+            ctx.emitter.instruction(&cmp_inst);                                 // does the tagged scalar carry the runtime null tag?
+            ctx.emitter.instruction("setne al");                                // materialize true when the tagged scalar holds an integer
+            ctx.emitter.instruction("movzx rax, al");                           // widen the boolean byte into the integer result register
         }
     }
     Ok(())
@@ -1449,24 +1845,24 @@ fn emit_mixed_is_iterable(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resu
     abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #4"); // check for a boxed indexed-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", true_case)); // indexed arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp x0, #5"); // check for a boxed associative-array payload
-            ctx.emitter.instruction(&format!("b.eq {}", true_case)); // associative arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp x0, #6"); // check for a boxed object payload
-            ctx.emitter.instruction(&format!("b.eq {}", object_case)); // objects need a Traversable interface check
-            ctx.emitter.instruction("mov x0, #0"); // all other Mixed payloads are not iterable
-            ctx.emitter.instruction(&format!("b {}", done)); // skip the truthy result path
+            ctx.emitter.instruction("cmp x0, #4");                              // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // indexed arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp x0, #5");                              // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("b.eq {}", true_case));            // associative arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp x0, #6");                              // check for a boxed object payload
+            ctx.emitter.instruction(&format!("b.eq {}", object_case));          // objects need a Traversable interface check
+            ctx.emitter.instruction("mov x0, #0");                              // all other Mixed payloads are not iterable
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the truthy result path
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 4"); // check for a boxed indexed-array payload
-            ctx.emitter.instruction(&format!("je {}", true_case)); // indexed arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp rax, 5"); // check for a boxed associative-array payload
-            ctx.emitter.instruction(&format!("je {}", true_case)); // associative arrays satisfy is_iterable
-            ctx.emitter.instruction("cmp rax, 6"); // check for a boxed object payload
-            ctx.emitter.instruction(&format!("je {}", object_case)); // objects need a Traversable interface check
-            ctx.emitter.instruction("mov rax, 0"); // all other Mixed payloads are not iterable
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip the truthy result path
+            ctx.emitter.instruction("cmp rax, 4");                              // check for a boxed indexed-array payload
+            ctx.emitter.instruction(&format!("je {}", true_case));              // indexed arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp rax, 5");                              // check for a boxed associative-array payload
+            ctx.emitter.instruction(&format!("je {}", true_case));              // associative arrays satisfy is_iterable
+            ctx.emitter.instruction("cmp rax, 6");                              // check for a boxed object payload
+            ctx.emitter.instruction(&format!("je {}", object_case));            // objects need a Traversable interface check
+            ctx.emitter.instruction("mov rax, 0");                              // all other Mixed payloads are not iterable
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the truthy result path
         }
     }
     ctx.emitter.label(&object_case);
@@ -1492,16 +1888,16 @@ fn emit_runtime_object_iterable_check(
     }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("str x1, [sp, #-16]!"); // preserve the unboxed object pointer across Traversable checks
+            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // preserve the unboxed object pointer across Traversable checks
             for interface_id in interface_ids {
                 emit_saved_object_interface_check(ctx, interface_id, &object_true);
             }
-            ctx.emitter.instruction("add sp, sp, #16"); // discard the saved object pointer after failed checks
-            ctx.emitter.instruction("mov x0, #0"); // non-Traversable objects are not iterable
-            ctx.emitter.instruction(&format!("b {}", done)); // skip the truthy result path
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the saved object pointer after failed checks
+            ctx.emitter.instruction("mov x0, #0");                              // non-Traversable objects are not iterable
+            ctx.emitter.instruction(&format!("b {}", done));                    // skip the truthy result path
             ctx.emitter.label(&object_true);
-            ctx.emitter.instruction("add sp, sp, #16"); // discard the saved object pointer before returning true
-            ctx.emitter.instruction(&format!("b {}", true_case)); // continue through the shared truthy result path
+            ctx.emitter.instruction("add sp, sp, #16");                         // discard the saved object pointer before returning true
+            ctx.emitter.instruction(&format!("b {}", true_case));               // continue through the shared truthy result path
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rdi");
@@ -1509,11 +1905,11 @@ fn emit_runtime_object_iterable_check(
                 emit_saved_object_interface_check(ctx, interface_id, &object_true);
             }
             abi::emit_pop_reg(ctx.emitter, "r10");
-            ctx.emitter.instruction("xor eax, eax"); // non-Traversable objects are not iterable
-            ctx.emitter.instruction(&format!("jmp {}", done)); // skip the truthy result path
+            ctx.emitter.instruction("xor eax, eax");                            // non-Traversable objects are not iterable
+            ctx.emitter.instruction(&format!("jmp {}", done));                  // skip the truthy result path
             ctx.emitter.label(&object_true);
             abi::emit_pop_reg(ctx.emitter, "r10");
-            ctx.emitter.instruction(&format!("jmp {}", true_case)); // continue through the shared truthy result path
+            ctx.emitter.instruction(&format!("jmp {}", true_case));             // continue through the shared truthy result path
         }
     }
 }
@@ -1526,20 +1922,20 @@ fn emit_saved_object_interface_check(
 ) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("ldr x0, [sp]"); // reload the object pointer as matcher argument 1
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the object pointer as matcher argument 1
             abi::emit_load_int_immediate(ctx.emitter, "x1", interface_id as i64);
             abi::emit_load_int_immediate(ctx.emitter, "x2", 1);
             abi::emit_call_label(ctx.emitter, "__rt_exception_matches"); // check whether the object implements the Traversable interface
-            ctx.emitter.instruction("cmp x0, #0"); // test whether the runtime matcher succeeded
-            ctx.emitter.instruction(&format!("b.ne {}", true_case)); // a matching interface makes the object iterable
+            ctx.emitter.instruction("cmp x0, #0");                              // test whether the runtime matcher succeeded
+            ctx.emitter.instruction(&format!("b.ne {}", true_case));            // a matching interface makes the object iterable
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]"); // reload the object pointer as matcher argument 1
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the object pointer as matcher argument 1
             abi::emit_load_int_immediate(ctx.emitter, "rsi", interface_id as i64);
             abi::emit_load_int_immediate(ctx.emitter, "rdx", 1);
             abi::emit_call_label(ctx.emitter, "__rt_exception_matches"); // check whether the object implements the Traversable interface
-            ctx.emitter.instruction("test rax, rax"); // test whether the runtime matcher succeeded
-            ctx.emitter.instruction(&format!("jne {}", true_case)); // a matching interface makes the object iterable
+            ctx.emitter.instruction("test rax, rax");                           // test whether the runtime matcher succeeded
+            ctx.emitter.instruction(&format!("jne {}", true_case));             // a matching interface makes the object iterable
         }
     }
 }
@@ -1601,14 +1997,6 @@ fn interface_extends_traversable(ctx: &FunctionContext<'_>, interface_name: &str
 /// Normalizes a PHP class or interface name for metadata lookups.
 fn normalized_type_name(type_name: &str) -> &str {
     type_name.trim_start_matches('\\')
-}
-
-/// Lowers `is_null()` for concrete scalar values and boxed Mixed payloads.
-pub(crate) fn lower_is_null_builtin(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "is_null", 1)?;
-    let value = expect_operand(inst, 0)?;
-    predicates::emit_is_null_result(ctx, value)?;
-    store_if_result(ctx, inst)
 }
 
 /// Lowers `is_array()`: true for statically-known arrays/hashes, or a boxed Mixed/Union value
@@ -1682,11 +2070,18 @@ fn emit_static_bool(ctx: &mut FunctionContext<'_>, value: bool) {
 }
 
 /// Returns true when a static callable name resolves to any known callable function.
-fn callable_name_exists(ctx: &FunctionContext<'_>, name: &str) -> bool {
+fn callable_name_exists(
+    ctx: &FunctionContext<'_>,
+    name: &str,
+    strict_php: bool,
+) -> bool {
     ctx.function_variant_group_name(name).is_some()
         || ctx.function_by_name(name).is_some()
         || ctx.has_extern_function(name)
-        || is_php_visible_builtin_function(name.trim_start_matches('\\'))
+        || is_php_visible_builtin_function_for_profile(
+            name.trim_start_matches('\\'),
+            strict_php,
+        )
 }
 
 /// Checks whether a PHP symbol is present in an iterator of known names.
@@ -1704,9 +2099,13 @@ fn is_internal_synthetic_class_name(name: &str) -> bool {
 }
 
 /// Returns a string literal value defined by a `ConstStr` instruction.
+///
+/// The remaining callers (`is_callable()` static-string folding, `method_exists()` /
+/// `property_exists()`) still require a compile-time name; `function_exists()` no longer does and
+/// uses [`maybe_const_string_operand`] plus [`lower_dynamic_function_exists`] instead.
 fn const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<String> {
     maybe_const_string_operand(ctx, value)?.ok_or_else(|| {
-        CodegenIrError::unsupported("function_exists with non-literal function name")
+        CodegenIrError::unsupported("builtin requires a literal string name")
     })
 }
 
@@ -1728,7 +2127,7 @@ fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Resu
     }
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
         return Err(CodegenIrError::invalid_module(
-            "function_exists string literal has no data id",
+            "ConstStr operand has no data id",
         ));
     };
     ctx.module
@@ -1783,4 +2182,57 @@ fn ensure_arg_count_between(
         max,
         inst.operands.len()
     )))
+}
+
+#[cfg(test)]
+mod function_exists_tests {
+    use super::*;
+
+    /// The dynamic `function_exists()` lookup bakes a name list into the binary while the literal
+    /// fold calls a predicate. Everything the *table builder* contributes that does not depend on
+    /// the EIR module must therefore be accepted by the predicate, or a name would report `true`
+    /// for `function_exists('x')` and `false` for `function_exists($x)`.
+    #[test]
+    fn every_baked_catalog_name_is_accepted_by_the_literal_fold() {
+        for name in
+            crate::types::checker::builtins::catalog::supported_builtin_function_names()
+        {
+            assert!(
+                crate::types::checker::builtins::is_php_visible_builtin_function(name),
+                "baked catalog candidate {:?} is rejected by the literal function_exists() fold",
+                name
+            );
+        }
+    }
+
+    /// Same guarantee for the procedural date/time aliases, which are not registry builtins: the
+    /// enumeration and the predicate must both read `DATE_PROCEDURAL_ALIASES`.
+    #[test]
+    fn every_baked_date_alias_is_accepted_by_the_literal_fold() {
+        for name in crate::name_resolver::date_procedural_alias_names() {
+            assert!(
+                crate::name_resolver::is_date_procedural_alias(name),
+                "baked date alias candidate {:?} is rejected by is_date_procedural_alias()",
+                name
+            );
+            assert!(
+                !name.contains('\\') && name.to_ascii_lowercase() == *name,
+                "date alias {:?} must be a bare lowercase name so the baked table matches",
+                name
+            );
+        }
+    }
+
+    /// `function_exists_needle` implements PHP's leading-separator rule for both paths: exactly
+    /// one optional `\`, and never an empty remainder.
+    #[test]
+    fn needle_normalization_matches_php_leading_separator_rule() {
+        assert_eq!(function_exists_needle("strlen"), Some("strlen"));
+        assert_eq!(function_exists_needle("\\strlen"), Some("strlen"));
+        assert_eq!(function_exists_needle("Foo\\bar"), Some("Foo\\bar"));
+        assert_eq!(function_exists_needle("\\Foo\\bar"), Some("Foo\\bar"));
+        assert_eq!(function_exists_needle("\\\\strlen"), None);
+        assert_eq!(function_exists_needle("\\"), None);
+        assert_eq!(function_exists_needle(""), None);
+    }
 }

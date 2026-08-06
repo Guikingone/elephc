@@ -54,6 +54,13 @@ PHP source (.php)
      │
      ▼
 ┌──────────────┐
+│   Preludes   │  src/{pdo,tz,list_id,var_export,opcache,image,hash,web,version}_prelude*
+│              │  Injects only the compiler-owned PHP surfaces required by
+│              │  resolved source usage, forced bridge flags, or --web.
+└─────┬────────┘
+      │
+      ▼
+┌──────────────┐
 │ NameResolver │  src/name_resolver/
 │              │  Flattens namespace/use scopes and rewrites names to
 │              │  canonical fully-qualified names before semantic passes.
@@ -67,6 +74,13 @@ PHP source (.php)
 └────┬─────┘
      │
      ▼
+┌──────────────┐
+│ OPcache bake │  src/opcache_prelude/
+│              │  Completes the resolved/autoloaded script manifest and
+│              │  replaces the injected placeholder bodies with baked data.
+└─────┬────────┘
+      │
+      ▼
 ┌──────────────┐
 │  Optimizer   │  src/optimize/
 │   (fold)     │  Folds scalar constants and simplifies pure expressions
@@ -143,9 +157,10 @@ PHP source (.php)
      │
      ▼
 ┌───────────────┐
-│ Tooling glue  │  src/runtime_cache.rs, src/source_map.rs
-│               │  Reuses cached runtime objects, optionally emits
-│               │  sidecar source maps, and feeds timing output in CLI mode.
+│ Tooling glue  │  runtime_cache.rs, native_deps/, link_plan.rs, link_planning.rs
+│               │  Reuses cached runtime objects, resolves required managed
+│               │  artifacts read-only for final links, and builds a typed
+│               │  link plan. Source maps/timings remain optional outputs.
 └─────┬─────────┘
       │
       ▼
@@ -181,14 +196,29 @@ src/
 ├── cli.rs                     Command-line option parsing
 ├── pipeline.rs                Frontend/backend compilation pipeline
 ├── exports.rs                 #[Export] collection and C-ABI signature validation for --emit cdylib
-├── linker.rs                  Assembler and linker invocation
+├── link_plan.rs               Ordered typed archives, libraries, paths, frameworks, and Linux link mode
+├── link_planning.rs           Compile/runtime/user/managed inputs to one final ordered link plan
+├── linker/                    Link-plan rendering, bridge discovery, SDK lookup, and archive handling
+├── native_deps/               Curated native package subsystem
+│   ├── orchestration.rs       Slim native-command state-transition coordinator
+│   ├── materialize.rs         Locked download/extract/build/receipt/publication path
+│   ├── catalog.rs             Exact trusted PCRE2 and zlib source/recipe metadata
+│   ├── cache.rs               Cache keys, advisory locks, and atomic publication
+│   ├── doctor.rs              Read-only project/artifact/cache-size diagnostics
+│   ├── prune.rs               Explicit stale-fingerprint and abandoned-staging cleanup
+│   ├── resolver.rs            Read-only compile requirement to exact archive resolution
+│   └── recipes/               Reviewed PCRE2/shim and zlib source-build recipes
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
+├── builtins/                  `builtin!` registry: single source of truth driving the builtin catalog, signatures, type checking, lowering dispatch, and docs
+├── builtin_metadata.rs        Public builtin metadata snapshots for parity tests and external audits
 ├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
 ├── magic_constants.rs         Per-file lowering for PHP magic constants
 ├── magic_constants/           File/scope/trait magic-constant walkers
 ├── conditional/               Build-time `ifdef` pass
+├── strict_php.rs              `--strict-php` mode state and audit entry point
+├── strict_php/                Strict-mode AST audit pass rejecting elephc-only syntax extensions
 ├── autoload/                  Composer/SPL AOT autoload indexing, rule interpretation, and file insertion
 ├── resolver/                  Include/require resolution, declaration discovery, once guards
 ├── eval_aot.rs                Target-independent literal eval planning and fallback classification
@@ -201,17 +231,23 @@ src/
 ├── codegen_support/           Shared ABI, runtime, platform, metadata, and callable support
 ├── runtime_cache.rs           Cached shared runtime object preparation
 ├── source_map.rs              Assembly comment markers → JSON sidecar map
+├── debug_info.rs              DWARF debug-info injection for `--debug-info` (lldb/gdb source mapping)
 ├── termination.rs             Structured terminal-effect analysis shared by checker and optimizer
 ├── names.rs                   Qualified/FQN name model + assembly symbol mangling
 ├── name_resolver/             Namespace/use resolution to canonical names
 ├── pdo_prelude.rs             PDO standard-library prelude injection entry point
-├── pdo_prelude/               AST usage detection for PDO classes, subclasses, and `pdo_drivers()`
+├── pdo_prelude/               PDO driver detection from the DSN prefix
 ├── tz_prelude.rs              Timezone-introspection prelude injection entry point
 ├── tz_prelude/                Timezone-introspection prelude usage detection
 ├── list_id_prelude.rs         DateTimeZone identifier-list prelude injection entry point
 ├── list_id_prelude/           Identifier-list prelude detection and baked table data
 ├── var_export_prelude.rs      var_export prelude injection entry point
 ├── var_export_prelude/        var_export prelude usage detection
+├── image_prelude.rs           Image (GD, Exif/IPTC, Imagick, Gmagick, Cairo) prelude injection entry point
+├── image_prelude/             Image prelude usage detection
+├── web_prelude.rs             --web request superglobals and session prelude injection (flag-gated, not usage-detected)
+├── web_prelude/               Web-prelude function-reachability analysis for pay-for-use injection
+├── superglobals.rs            Canonical --web request-superglobal set shared by checker, IR lowering, and runtime reset
 │
 ├── lexer/
 │   ├── mod.rs                 tokenize() → Vec<(Token, Span)>
@@ -252,7 +288,7 @@ src/
 │       ├── builtin_spl_exceptions.rs SPL exception hierarchy metadata
 │       ├── builtin_stdclass.rs stdClass dynamic-property metadata
 │       ├── builtin_types/     Shared builtin class/type helper predicates
-│       ├── builtins/          Built-in function type signatures
+│       ├── builtins/          Registry integration plus compiler-resident language-construct checks
 │       ├── callables/         Closure, extern-callable, and first-class callable signature resolution
 │       ├── extern_decl.rs     Extern declaration validation
 │       ├── functions.rs       Function-checking module root / orchestration
@@ -270,13 +306,21 @@ src/
 ├── codegen/
 │   ├── mod.rs                 Active EIR → target assembly entry point
 │   ├── context.rs             Per-function lowering state and value placement
+│   ├── shared_state.rs        Module-wide artifacts shared across function contexts (callable descriptor/wrapper/invoker dedup)
+│   ├── local_analysis.rs      Precomputed local-slot facts (explicit stores, ref-cell representation, owned parameters)
 │   ├── frame.rs               EIR frame layout and local/temporary slots
+│   ├── frame/                 Frame-layout unit tests
 │   ├── block_emit.rs          Basic-block scheduling and emission
 │   ├── lower_inst.rs          EIR instruction lowering dispatcher
-│   ├── lower_inst/            Target-aware instruction, builtin, callable, object, ownership, and conversion lowerers
+│   ├── lower_inst/            Target-aware instruction, typed runtime-target, callable, object, ownership, and conversion lowerers
+│   ├── lower_inst/runtime_calls.rs Typed RuntimeCallTarget dispatcher with no PHP-name lookup
+│   ├── lower_inst/runtime_functions/ Bounded RuntimeFnId backend implementation groups
 │   ├── lower_term.rs          EIR terminator lowering
 │   ├── value_placement.rs     Linear-scan register and stack value placement
 │   ├── runtime_callable_invoker.rs Runtime callable-descriptor invocation lowering
+│   ├── function_variants.rs   Include-loaded function-variant dispatcher emission
+│   ├── literal_defaults.rs    Literal property defaults → backend-native values
+│   ├── eval_*_helpers.rs      Eval-to-native bridge helpers: callables, class constants, constructors, methods, properties, ref args, reflection (+ owners), static properties (9 files)
 │   ├── fibers.rs              Fiber-aware EIR codegen integration
 │   └── web.rs                 `--web` program-entry lowering
 │
@@ -290,7 +334,14 @@ src/
 │   ├── value_boxing.rs        Shared runtime-value and owned-value boxing into Mixed cells
 │   ├── wrappers/              Shared callback and fiber wrapper emitters
 │   ├── interface_wrappers.rs  Interface dispatch return-shape adapters
-│   ├── reflection.rs          ReflectionAttribute materialization helpers
+│   ├── dynamic_new.rs         Builtin-class allow-list metadata for dynamic object construction
+│   ├── hash_crypto.rs         `hash()` / `hash_hmac()` routing through the elephc-crypto staticlib
+│   ├── phar_stream.rs         `phar://` URL and PHAR archive metadata parsing for I/O lowering
+│   ├── runtime_features.rs    Runtime helper-family derivation keeping optional native link deps pay-for-use
+│   ├── stream_filters/        zlib/bzip2/iconv stream-filter attachment helper emitters
+│   ├── tls.rs                 TLS bridge entry-point publication into runtime function-pointer slots
+│   ├── try_handlers.rs        Stack-layout constants for EIR exception-handler slots
+│   ├── reflection.rs          Shared ReflectionAttribute materialization helpers
 │   ├── prescan.rs             Constant pre-scan feeding EIR lowering
 │   ├── program_usage.rs       Required-class analysis feeding metadata emission
 │   ├── program_usage/         Required-class scanners
@@ -322,18 +373,17 @@ src/
 │       ├── eval_bridge.rs     C-ABI value, callable, class, and runtime hooks used by Magician
 │       ├── eval_scope.rs      Core materialized-scope helpers usable without the interpreter
 │       ├── emitters.rs        `emit_runtime()` orchestration — emits every runtime category in a fixed order
-│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (72 files)
-│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (150 files)
-│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (4 files)
-│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (114 files)
+│       ├── strings/           itoa, concat, resource display, ftoa, sprintf, md5, sha1, str_persist, ... (74 files)
+│       ├── arrays/            heap_alloc, heap_free, array_free_deep, array_grow, hash_grow, hash_*, mixed boxing/freeing, mixed instanceof, sort, usort, refcount, gc/decref dispatch, ... (155 files)
+│       ├── callables/         Runtime `is_callable()` fallback for dynamic strings/arrays/hashes/objects/Mixed, callable descriptor release, and `Closure::bind` support (5 files)
+│       ├── io/                fopen, fgets, fread, stat, streams, sockets, filters, scandir, ... (118 files)
 │       ├── buffers/           buffer_new, buffer_len, bounds_fail, use_after_free helpers (5 files incl. mod.rs)
 │       ├── exceptions.rs      Exception runtime module root / re-exports
-│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (6 files)
-│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (70 files)
+│       ├── exceptions/        cleanup_frames, dynamic_instanceof, matches, throw_current, rethrow_current, class_implements helpers (7 files)
+│       ├── system/            build_argv, time, getenv, shell_exec, php_uname, date, gmdate, mktime, strtotime, getdate, localtime, checkdate, microtime, hrtime, date_default_timezone, match_unhandled, json_encode_*, json_decode, preg_*, ... (43 files)
 │       ├── pointers/          ptoa, ptr_check_nonnull, str_to_cstr, cstr_to_str, ptr_read_string, ptr_write_string, ... (7 files)
 │       ├── fibers/            stack allocation/free, context switch, entry trampoline (4 files) + `api/` (target-aware public API helpers)
-│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (6 files)
-│       ├── pdo/               SQLite UDF/collation/aggregate callback adapters (5 files)
+│       ├── objects/           stdClass, Mixed property/index access, JSON stdClass encoding, destructor dispatch, new-by-name helpers (10 files)
 │       ├── spl/               SplDoublyLinkedList and SplFixedArray runtime container helpers (3 files)
 │       ├── generators/        Generator frame layout and fiber-backed coroutine __rt_gen_* helpers (3 files)
 │       └── zval/              Zval bridge packing, unpacking, type, and lifetime helpers (11 files)
@@ -344,8 +394,14 @@ src/
     └── report.rs              Error formatting
 
 crates/
+├── elephc-crypto/             Pure-Rust hashing/HMAC bridge staticlib behind PHP `hash()` / `hash_hmac()`
+├── elephc-image/              Pure-Rust image bridge staticlib (GD, Exif, Imagick, Gmagick, Cairo C ABI)
 ├── elephc-magician/           Optional EvalIR parser/interpreter staticlib for dynamic eval
-└── elephc-pdo/                Optional PDO driver bridge and native-client adapters
+├── elephc-pdo/                Multi-driver database bridge staticlib behind the PDO prelude
+├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
+├── elephc-tls/                TLS bridge for the `https://` stream wrapper
+├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
+└── elephc-web/                Prefork HTTP server bridge for `--web` binaries
 ```
 
 ## ARM64 calling conventions
@@ -396,7 +452,7 @@ Namespace syntax is preserved through parsing and include resolution, then norma
 - tracks the current `namespace` scope
 - applies `use`, `use function`, and `use const` aliases, including group-use forms
 - resolves class/interface/trait/function/constant references to canonical fully-qualified names
-- rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists("name")` keeps PHP's literal-name introspection semantics instead
+- rewrites supported string-literal callbacks such as `call_user_func("name", ...)` to the resolved target name; `function_exists($name)` keeps PHP's introspection semantics instead — a literal name is not namespace-resolved, and a dynamic name is matched at run time against the declared-function set baked into the binary
 - flattens namespace-only AST statements so downstream passes operate on a simpler canonical AST
 
 `src/names.rs` is the shared utility layer for this work. It defines the internal `Name` representation plus common helpers for:

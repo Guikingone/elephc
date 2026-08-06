@@ -3,7 +3,7 @@
 //! Delegates aggregate iteration, set operations, and key checks to existing runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Aggregate helpers accept indexed arrays with 8-byte payload slots, and
@@ -16,6 +16,7 @@ use crate::codegen::{
     emit_box_current_value_as_mixed,
 };
 use crate::codegen::{CodegenIrError, Result};
+use crate::codegen_support::runtime::HashMapResultKind;
 use crate::codegen_support::DeferredCallbackWrapper;
 use crate::ir::{BlockId, Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::names::{function_symbol, method_symbol, php_symbol_key, static_method_symbol};
@@ -46,14 +47,40 @@ pub(crate) fn lower_call_user_func_builtin_escape(
     )))
 }
 
-/// Lowers `array_sum()` over supported indexed-array payloads.
+/// Lowers `array_sum()` over supported indexed arrays and boxed-Mixed associative values.
 pub(crate) fn lower_array_sum(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(ctx, inst, "array_sum", "__rt_array_sum")
+    super::ensure_arg_count(inst, "array_sum", 1)?;
+    let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+    ) {
+        ctx.load_value_to_result(array)?;
+        if ctx.emitter.target.arch == Arch::X86_64 {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the associative-array pointer as the runtime helper argument
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_hash_sum_mixed");
+        return store_if_result(ctx, inst);
+    }
+
+    lower_indexed_array_aggregate(
+        ctx,
+        inst,
+        "array_sum",
+        "__rt_array_sum",
+        Some("__rt_array_sum_mixed"),
+    )
 }
 
 /// Lowers `array_product()` over supported indexed-array payloads.
 pub(crate) fn lower_array_product(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_indexed_array_aggregate(ctx, inst, "array_product", "__rt_array_product")
+    lower_indexed_array_aggregate(
+        ctx,
+        inst,
+        "array_product",
+        "__rt_array_product",
+        None,
+    )
 }
 
 /// Lowers `array_push()` by appending one value and publishing the mutated array.
@@ -176,9 +203,19 @@ pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
 }
 
 /// Lowers `array_flip()` through the hash-building runtime helpers.
+///
+/// Associative sources take the `__rt_hash_flip` path, which walks the source hash and
+/// dispatches on each entry's RUNTIME value tag; indexed sources keep the existing
+/// static-element-type helpers.
 pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(
+        ctx.value_php_type(array)?.codegen_repr(),
+        PhpType::AssocArray { .. }
+    ) {
+        return lower_hash_flip(ctx, inst, array);
+    }
     let value_elem_ty = array_flip_source_element_type(ctx.value_php_type(array)?)?;
     require_array_flip_result_type(&value_elem_ty, &inst.result_php_type.codegen_repr())?;
     ctx.load_value_to_result(array)?;
@@ -187,6 +224,79 @@ pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction
     }
     abi::emit_call_label(ctx.emitter, array_flip_runtime_helper(&value_elem_ty));
     store_if_result(ctx, inst)
+}
+
+/// Lowers `array_flip()` over an ASSOCIATIVE source through `__rt_hash_flip`.
+///
+/// Flipping turns source keys into destination values, so the destination hash's declared
+/// `value_type` is the runtime tag of the RESULT's value type — which the checker derived
+/// from the source KEY type. The helper dispatches per entry on the runtime value tag, so
+/// `Int`, `Str`, and boxed `Mixed` source values all share this one lowering; values PHP
+/// refuses as keys are warned about and skipped inside the helper.
+fn lower_hash_flip(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    hash_flip_source_value_type(&ctx.value_php_type(array)?.codegen_repr())?;
+    let dest_value_ty = hash_flip_result_value_type(&inst.result_php_type.codegen_repr())?;
+    let dest_value_tag = runtime_value_tag("array_flip", &dest_value_ty)?;
+    ctx.load_value_to_result(array)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("mov x1, #{}", dest_value_tag));           // pass the destination value_type tag to the hash-flip helper
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the source hash pointer as the first hash-flip argument
+            ctx.emitter
+                .instruction(&format!("mov rsi, {}", dest_value_tag));           // pass the destination value_type tag to the hash-flip helper
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_hash_flip");
+    store_if_result(ctx, inst)
+}
+
+/// Returns the source value type when `__rt_hash_flip` can flip a hash faithfully.
+///
+/// Only `Int` and `Str` values are accepted. A `Mixed`-valued hash is refused ON PURPOSE:
+/// building a heterogeneous associative array currently mis-tags its entries UPSTREAM of this
+/// lowering — `$a["k1"] = 1; $a["k2"] = "s";` stores the string payload under the int tag, which
+/// `var_dump()` of the source array already renders as `int(<pointer>)` without `array_flip()`
+/// ever being involved. The flip dispatches on that per-entry tag, so accepting a Mixed-valued
+/// source would turn a visible upstream defect into a silent pointer-keyed miscompile. Refusing
+/// keeps the failure honest until the hash-construction path tags Mixed values correctly.
+fn hash_flip_source_value_type(source_ty: &PhpType) -> Result<PhpType> {
+    match source_ty {
+        PhpType::AssocArray { value, .. } => {
+            let value = value.codegen_repr();
+            if matches!(value, PhpType::Int | PhpType::Str) {
+                return Ok(value);
+            }
+            Err(CodegenIrError::unsupported(format!(
+                "array_flip for associative value PHP type {:?}",
+                value
+            )))
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_flip for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Returns the destination `value_type` for an associative `array_flip()`.
+///
+/// Rejects any result shape other than a hash: `__rt_hash_flip` always builds a hash, so a
+/// non-`AssocArray` result would mean the checker and the backend disagree.
+fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType> {
+    match result_ty {
+        PhpType::AssocArray { value, .. } => Ok(value.codegen_repr()),
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_flip associative result PHP type {:?}",
+            other
+        ))),
+    }
 }
 
 /// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
@@ -268,6 +378,7 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
                     Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                     visible_arg_types,
                     PhpType::Bool,
+                    super::super::instruction_strict_php_profile(inst),
                     "array_filter",
                     |ctx, wrapper_label, env_bytes| {
                         match ctx.emitter.target.arch {
@@ -322,12 +433,41 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     store_if_result(ctx, inst)
 }
 
+/// Destination shape an `array_map()` lowering builds.
+///
+/// php-src's single-array `array_map()` PRESERVES string keys, so an associative source must
+/// rebuild a hash rather than a list. The two shapes share every callback-resolution path and
+/// differ only in which runtime helper receives the resolved callback.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ArrayMapTarget {
+    /// Indexed source: the `__rt_array_map*` helpers build a list.
+    Indexed,
+    /// Associative source: `__rt_hash_map` rebuilds a hash under the source keys.
+    Hash,
+}
+
 /// Lowers `array_map()` through the callback runtime helper matching the callback result type.
+///
+/// Associative sources take the `__rt_hash_map` path, which walks the source hash and reuses
+/// each entry's key; indexed sources keep the existing list-building helpers. Callback
+/// resolution — descriptor, runtime string name, callable array, or a statically bound function
+/// — is identical for both and is shared verbatim.
 pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "array_map", 2)?;
     let callback = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
-    let elem_ty = array_map_callback_array_element_type(ctx.value_php_type(array)?)?;
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    let (elem_ty, target) = if matches!(source_ty, PhpType::AssocArray { .. }) {
+        (
+            hash_map_source_value_type(&source_ty)?,
+            ArrayMapTarget::Hash,
+        )
+    } else {
+        (
+            array_map_callback_array_element_type(ctx.value_php_type(array)?)?,
+            ArrayMapTarget::Indexed,
+        )
+    };
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
@@ -340,6 +480,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 &elem_ty,
                 &callback_elem_ty,
                 &result_elem_ty,
+                target,
             );
         }
         PhpType::Str => {
@@ -351,6 +492,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
                 PhpType::Mixed,
+                super::super::instruction_strict_php_profile(inst),
                 "array_map",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -359,15 +501,11 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(
-                        ctx.emitter,
-                        array_map_runtime_label(&callback_elem_ty, env_bytes),
-                    );
+                    emit_array_map_runtime_call(ctx, &callback_elem_ty, env_bytes, target)?;
                     Ok(())
                 },
             )?;
-            normalize_indexed_array_result(ctx, "array_map", &callback_elem_ty, &result_elem_ty)?;
-            box_array_result_for_mixed_builtin(ctx, inst, &result_elem_ty);
+            finish_array_map_result(ctx, inst, target, &callback_elem_ty, &result_elem_ty)?;
             store_if_result(ctx, inst)?;
             return Ok(());
         }
@@ -382,6 +520,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
                 &elem_ty,
                 &callback_elem_ty,
                 &result_elem_ty,
+                target,
             );
         }
         _ => {}
@@ -397,6 +536,7 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             &elem_ty,
             &callback_elem_ty,
             &result_elem_ty,
+            target,
         );
     }
     let callback_binding =
@@ -410,21 +550,11 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_binding.label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    let runtime_label = if callback_elem_ty == PhpType::Str {
-        if env_bytes == 0 {
-            "__rt_array_map_str"
-        } else {
-            "__rt_array_map_str_owned"
-        }
-    } else {
-        "__rt_array_map"
-    };
-    abi::emit_call_label(ctx.emitter, runtime_label);
+    emit_array_map_runtime_call(ctx, &callback_elem_ty, env_bytes, target)?;
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
-    normalize_indexed_array_result(ctx, "array_map", &callback_elem_ty, &result_elem_ty)?;
-    box_array_result_for_mixed_builtin(ctx, inst, &result_elem_ty);
+    finish_array_map_result(ctx, inst, target, &callback_elem_ty, &result_elem_ty)?;
     store_if_result(ctx, inst)
 }
 
@@ -437,6 +567,7 @@ fn lower_array_map_descriptor_callback(
     elem_ty: &PhpType,
     callback_elem_ty: &PhpType,
     result_elem_ty: &PhpType,
+    target: ArrayMapTarget,
 ) -> Result<()> {
     let wrapper_label =
         emit_descriptor_callback_wrapper(ctx, vec![elem_ty.clone()], callback_elem_ty.clone());
@@ -447,13 +578,9 @@ fn lower_array_map_descriptor_callback(
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        array_map_runtime_label(callback_elem_ty, env_bytes),
-    );
+    emit_array_map_runtime_call(ctx, callback_elem_ty, env_bytes, target)?;
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
-    normalize_indexed_array_result(ctx, "array_map", callback_elem_ty, result_elem_ty)?;
-    box_array_result_for_mixed_builtin(ctx, inst, result_elem_ty);
+    finish_array_map_result(ctx, inst, target, callback_elem_ty, result_elem_ty)?;
     store_if_result(ctx, inst)
 }
 
@@ -466,6 +593,7 @@ fn lower_array_map_callable_array_descriptor_callback(
     elem_ty: &PhpType,
     callback_elem_ty: &PhpType,
     result_elem_ty: &PhpType,
+    target: ArrayMapTarget,
 ) -> Result<()> {
     let wrapper_label =
         emit_descriptor_callback_wrapper(ctx, vec![elem_ty.clone()], callback_elem_ty.clone());
@@ -482,14 +610,10 @@ fn lower_array_map_callable_array_descriptor_callback(
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &wrapper_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(
-        ctx.emitter,
-        array_map_runtime_label(callback_elem_ty, env_bytes),
-    );
+    emit_array_map_runtime_call(ctx, callback_elem_ty, env_bytes, target)?;
     release_descriptor_callback_env_preserving_result(ctx);
     abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
-    normalize_indexed_array_result(ctx, "array_map", callback_elem_ty, result_elem_ty)?;
-    box_array_result_for_mixed_builtin(ctx, inst, result_elem_ty);
+    finish_array_map_result(ctx, inst, target, callback_elem_ty, result_elem_ty)?;
     store_if_result(ctx, inst)
 }
 
@@ -573,6 +697,7 @@ fn lower_runtime_string_descriptor_callback<F>(
     source_arg_ty: Option<&PhpType>,
     visible_arg_types: Vec<PhpType>,
     return_ty: PhpType,
+    strict_php: bool,
     owner: &str,
     mut emit_call: F,
 ) -> Result<()>
@@ -592,7 +717,13 @@ where
 
     let call_reg = abi::nested_call_reg(ctx.emitter);
     let specialization_ty = visible_arg_types.first().or(source_arg_ty);
-    let cases = runtime_string_descriptor_cases(ctx, specialization_ty)?;
+    let candidate_names = ctx.runtime_callable_candidates(callback);
+    let cases = runtime_string_descriptor_cases(
+        ctx,
+        specialization_ty,
+        candidate_names.as_deref(),
+        strict_php,
+    )?;
 
     let done_label = ctx.next_label(&format!("{}_runtime_string_callback_done", owner));
     let selector = callable_dispatch::RuntimeCallableSelector::StringNameStack {
@@ -675,6 +806,149 @@ fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, owner: &str
     }
 }
 
+/// Emits the `array_map()` runtime call for the resolved callback and destination shape.
+///
+/// The caller has already loaded argument registers 0/1/2 with the callback address, the source
+/// container and the callback environment. An indexed destination needs nothing more; a hash
+/// destination additionally takes the result-kind selector and the destination `value_type` tag
+/// in argument registers 3 and 4, which are untouched by the shared setup above.
+fn emit_array_map_runtime_call(
+    ctx: &mut FunctionContext<'_>,
+    callback_elem_ty: &PhpType,
+    env_bytes: usize,
+    target: ArrayMapTarget,
+) -> Result<()> {
+    match target {
+        ArrayMapTarget::Indexed => {
+            abi::emit_call_label(
+                ctx.emitter,
+                array_map_runtime_label(callback_elem_ty, env_bytes),
+            );
+        }
+        ArrayMapTarget::Hash => {
+            let result_kind = hash_map_result_kind(callback_elem_ty, env_bytes);
+            let dest_value_tag = runtime_value_tag("array_map", callback_elem_ty)?;
+            let kind_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 3);
+            let tag_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 4);
+            abi::emit_load_int_immediate(ctx.emitter, kind_arg_reg, result_kind as i64);
+            abi::emit_load_int_immediate(ctx.emitter, tag_arg_reg, dest_value_tag as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_map");
+        }
+    }
+    Ok(())
+}
+
+/// Returns where `__rt_hash_map` must look for the callback result, and who owns it.
+///
+/// The mapping mirrors `array_map_runtime_label` one-for-one, so the hash destination inherits
+/// exactly the callback ABI contracts the indexed helpers already implement:
+/// `__rt_array_map_mixed` and `__rt_array_map` leave a pointer-sized result in the integer
+/// return register, `__rt_array_map_str` leaves a BORROWED string pair, and
+/// `__rt_array_map_str_owned` leaves an already-owned one.
+fn hash_map_result_kind(callback_elem_ty: &PhpType, env_bytes: usize) -> HashMapResultKind {
+    if callback_elem_ty == &PhpType::Str {
+        if env_bytes == 0 {
+            HashMapResultKind::Persist
+        } else {
+            HashMapResultKind::Owned
+        }
+    } else {
+        HashMapResultKind::Scalar
+    }
+}
+
+/// Returns the source VALUE type when `__rt_hash_map` can map a hash faithfully.
+///
+/// Only `Int`, `Bool` and `Str` values are accepted. A `Mixed`-valued hash is refused ON
+/// PURPOSE, for the same reason `hash_flip_source_value_type` refuses one: an associative array
+/// built entry by entry currently mis-tags heterogeneous values UPSTREAM of this lowering —
+/// `$a["k1"] = 1; $a["k2"] = "s";` stores the string payload under the int tag, which
+/// `var_dump()` of the source array already renders as `int(<pointer>)` with no `array_map()`
+/// involved. `__rt_hash_map` picks the callback ARGUMENT ABI from that per-entry tag, so
+/// accepting a Mixed-valued source would feed a raw string pointer to a callback expecting a
+/// boxed cell. Refusing keeps the failure honest until the hash-construction path tags Mixed
+/// values correctly.
+fn hash_map_source_value_type(source_ty: &PhpType) -> Result<PhpType> {
+    match source_ty {
+        PhpType::AssocArray { value, .. } => {
+            let value = value.codegen_repr();
+            if matches!(value, PhpType::Int | PhpType::Bool | PhpType::Str) {
+                return Ok(value);
+            }
+            Err(CodegenIrError::unsupported(format!(
+                "array_map for associative value PHP type {:?}",
+                value
+            )))
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "array_map for PHP type {:?}",
+            other
+        ))),
+    }
+}
+
+/// Stamps or widens the `array_map()` result for the destination shape that produced it.
+///
+/// An indexed destination keeps the existing element stamp / `__rt_array_to_mixed` widening.
+/// A hash destination is already stamped by `__rt_hash_new` with the tag
+/// `emit_array_map_runtime_call` passed, so it only needs the Mixed widening when the EIR result
+/// slot is wider than what the callback actually produced.
+fn finish_array_map_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    target: ArrayMapTarget,
+    callback_elem_ty: &PhpType,
+    result_elem_ty: &PhpType,
+) -> Result<()> {
+    match target {
+        ArrayMapTarget::Indexed => {
+            normalize_indexed_array_result(ctx, "array_map", callback_elem_ty, result_elem_ty)?;
+            box_array_result_for_mixed_builtin(ctx, inst, result_elem_ty);
+        }
+        ArrayMapTarget::Hash => {
+            if result_elem_ty == &PhpType::Mixed && callback_elem_ty != &PhpType::Mixed {
+                if ctx.emitter.target.arch == Arch::X86_64 {
+                    ctx.emitter.instruction("mov rdi, rax");                    // pass the mapped hash to the Mixed-entry conversion helper
+                }
+                abi::emit_call_label(ctx.emitter, "__rt_hash_to_mixed");
+            }
+            box_hash_result_for_mixed_builtin(ctx, inst, result_elem_ty);
+        }
+    }
+    Ok(())
+}
+
+/// Boxes an associative-array result when the EIR builtin result slot is Mixed-like.
+///
+/// The hash counterpart of `box_array_result_for_mixed_builtin`, and it transfers ownership for
+/// exactly the same reason — see that function for the full retain/release argument. The hash
+/// arrives fresh from `__rt_hash_new` inside `__rt_hash_map`, so the reference in the result
+/// register is untracked and must be handed to the Mixed cell rather than shared with it.
+///
+/// The key type is not part of the boxed payload (the boxing emitters only read the runtime tag
+/// for `AssocArray`, and the matching release only needs it to select `__rt_decref_hash`), so
+/// `Str` stands in for it.
+fn box_hash_result_for_mixed_builtin(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    value_ty: &PhpType,
+) {
+    if inst.result.is_some()
+        && matches!(
+            inst.result_php_type.codegen_repr(),
+            PhpType::Mixed | PhpType::Union(_)
+        )
+    {
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::AssocArray {
+                key: Box::new(PhpType::Str),
+                value: Box::new(value_ty.clone()),
+            },
+        );
+    }
+}
+
 /// Returns the runtime helper selected for an `array_map()` callback result shape.
 fn array_map_runtime_label(callback_elem_ty: &PhpType, env_bytes: usize) -> &'static str {
     if callback_elem_ty == &PhpType::Mixed {
@@ -732,6 +1006,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![initial_ty.clone(), elem_ty.clone()],
                 PhpType::Int,
+                super::super::instruction_strict_php_profile(inst),
                 "array_reduce",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -809,6 +1084,7 @@ pub(crate) fn lower_array_walk(ctx: &mut FunctionContext<'_>, inst: &Instruction
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
                 PhpType::Void,
+                super::super::instruction_strict_php_profile(inst),
                 "array_walk",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -1497,6 +1773,7 @@ fn lower_single_array_callback_builtin(
                 Some(source_arg_ty),
                 visible_arg_types,
                 return_ty,
+                super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     emit_single_array_callback_call(
@@ -1675,6 +1952,7 @@ fn lower_two_array_comparator_builtin(
                 Some(&source_arg_ty),
                 visible_arg_types,
                 comparator_return_ty,
+                super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     emit_two_array_comparator_call(ctx, wrapper_label, arr1, arr2, env_bytes, mode)
@@ -1855,6 +2133,8 @@ fn lower_in_array_with_mode(
         InArrayCase::BoolNeedleStringArray => {
             lower_in_array_bool_needle_string_array(ctx, needle, array)?
         }
+        InArrayCase::MixedIntExact => lower_in_array_mixed_int(ctx, needle, array, true)?,
+        InArrayCase::MixedIntLoose => lower_in_array_mixed_int(ctx, needle, array, false)?,
         InArrayCase::MixedStringExact => {
             lower_in_array_mixed_string(ctx, needle, array, "__rt_str_eq")?
         }
@@ -1870,11 +2150,26 @@ fn lower_indexed_array_aggregate(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
-    helper: &str,
+    scalar_helper: &str,
+    mixed_helper: Option<&str>,
 ) -> Result<()> {
     super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    require_supported_indexed_array(ctx.value_php_type(array)?, name)?;
+    let array_ty = ctx.value_php_type(array)?;
+    let helper = match array_ty.codegen_repr() {
+        PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed => mixed_helper
+            .ok_or_else(|| {
+                CodegenIrError::unsupported(format!(
+                    "{} for PHP type {:?}",
+                    name,
+                    array_ty.codegen_repr()
+                ))
+            })?,
+        _ => {
+            require_supported_indexed_array(array_ty, name)?;
+            scalar_helper
+        }
+    };
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the indexed-array pointer as the runtime helper argument
@@ -2024,7 +2319,8 @@ fn lower_user_sort_static_callback(
     super::ensure_arg_count(inst, name, 2)?;
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
-    user_sort_element_type(ctx.value_php_type(array)?, name)?;
+    let elem_ty = user_sort_element_type(ctx.value_php_type(array)?, name)?;
+    let callback_arg_types = [elem_ty.clone(), elem_ty];
     let source_local = source_load_local_slot(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
     if let Some(slot) = source_local {
@@ -2037,7 +2333,7 @@ fn lower_user_sort_static_callback(
             ctx,
             callback,
             &callback_owner,
-            Some(&[PhpType::Int, PhpType::Int]),
+            Some(&callback_arg_types),
         )?;
         return lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding);
     }
@@ -2046,7 +2342,7 @@ fn lower_user_sort_static_callback(
             lower_descriptor_callback_runtime(
                 ctx,
                 callback,
-                vec![PhpType::Int, PhpType::Int],
+                callback_arg_types.to_vec(),
                 PhpType::Int,
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -2071,9 +2367,10 @@ fn lower_user_sort_static_callback(
             lower_runtime_string_descriptor_callback(
                 ctx,
                 callback,
-                Some(&PhpType::Array(Box::new(PhpType::Int))),
-                vec![PhpType::Int, PhpType::Int],
+                Some(&PhpType::Array(Box::new(callback_arg_types[0].clone()))),
+                callback_arg_types.to_vec(),
                 PhpType::Int,
+                super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -2100,7 +2397,7 @@ fn lower_user_sort_static_callback(
         ctx,
         callback,
         &callback_owner,
-        Some(&[PhpType::Int, PhpType::Int]),
+        Some(&callback_arg_types),
     )?;
     lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding)
 }
@@ -2265,18 +2562,23 @@ fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: bool) -> Re
 ///
 /// User-comparator sorts (`usort`/`uasort`/`uksort`) permute existing
 /// pointer-sized slots through `__rt_usort`, so integer and object/refcounted
-/// handles (each a single 8-byte payload) are sortable; the comparator decides
-/// the ordering and receives each element by its handle. String elements are
-/// rejected here exactly as before — their multi-word descriptors are not
-/// permuted by the 8-byte slot sorter — so they keep producing a clear
-/// unsupported-feature error rather than a corrupt sort.
+/// handles and boxed `Mixed` cells (each a single 8-byte payload) are sortable;
+/// the comparator decides the ordering and receives each element through an ABI
+/// adapter when the runtime slot type differs from its declared parameters.
+/// String elements are rejected here exactly as before — their multi-word
+/// descriptors are not permuted by the 8-byte slot sorter — so they keep
+/// producing a clear unsupported-feature error rather than a corrupt sort.
 fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
             let elem = elem.codegen_repr();
             if matches!(
                 elem,
-                PhpType::Int | PhpType::Void | PhpType::Never | PhpType::Object(_)
+                PhpType::Int
+                    | PhpType::Void
+                    | PhpType::Never
+                    | PhpType::Mixed
+                    | PhpType::Object(_)
             ) {
                 return Ok(elem);
             }
@@ -2590,23 +2892,34 @@ fn array_map_callback_result_element_type(return_ty: &PhpType) -> Result<PhpType
     }
 }
 
+/// Returns the mapped-VALUE view of the `array_map()` EIR result slot.
+///
+/// The slot is an indexed array for an indexed source and an associative array for an
+/// associative one, and only the mapped value type differs between them — the callback dispatch
+/// never looks at the key. `None` means the slot is not an array shape at all.
+fn array_map_result_slot_element_type(inst: &Instruction) -> Option<PhpType> {
+    match inst.result_php_type.codegen_repr() {
+        PhpType::Array(elem) => Some(elem.codegen_repr()),
+        PhpType::AssocArray { value, .. } => Some(value.codegen_repr()),
+        _ => None,
+    }
+}
+
 /// Returns the descriptor callback result element type from the EIR result slot metadata.
 fn array_map_descriptor_callback_result_element_type(inst: &Instruction) -> Result<PhpType> {
-    match inst.result_php_type.codegen_repr() {
-        PhpType::Array(elem) => {
-            let elem = elem.codegen_repr();
-            if matches!(
-                elem,
-                PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Mixed
-            ) {
-                Ok(elem)
-            } else {
-                Err(CodegenIrError::unsupported(format!(
-                    "array_map descriptor callback result element PHP type {:?}",
-                    elem
-                )))
-            }
+    if let Some(elem) = array_map_result_slot_element_type(inst) {
+        if matches!(
+            elem,
+            PhpType::Int | PhpType::Bool | PhpType::Str | PhpType::Mixed
+        ) {
+            return Ok(elem);
         }
+        return Err(CodegenIrError::unsupported(format!(
+            "array_map descriptor callback result element PHP type {:?}",
+            elem
+        )));
+    }
+    match inst.result_php_type.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
         other => Err(CodegenIrError::unsupported(format!(
             "array_map descriptor callback result PHP type {:?}",
@@ -2620,18 +2933,16 @@ fn array_map_result_element_type(
     inst: &Instruction,
     callback_elem_ty: &PhpType,
 ) -> Result<PhpType> {
-    match inst.result_php_type.codegen_repr() {
-        PhpType::Array(elem) => {
-            let result_elem_ty = elem.codegen_repr();
-            if &result_elem_ty == callback_elem_ty || result_elem_ty == PhpType::Mixed {
-                Ok(result_elem_ty)
-            } else {
-                Err(CodegenIrError::unsupported(format!(
-                    "array_map result element PHP type {:?} for callback result PHP type {:?}",
-                    result_elem_ty, callback_elem_ty
-                )))
-            }
+    if let Some(result_elem_ty) = array_map_result_slot_element_type(inst) {
+        if &result_elem_ty == callback_elem_ty || result_elem_ty == PhpType::Mixed {
+            return Ok(result_elem_ty);
         }
+        return Err(CodegenIrError::unsupported(format!(
+            "array_map result element PHP type {:?} for callback result PHP type {:?}",
+            result_elem_ty, callback_elem_ty
+        )));
+    }
+    match inst.result_php_type.codegen_repr() {
         PhpType::Mixed | PhpType::Union(_) => Ok(callback_elem_ty.clone()),
         other => Err(CodegenIrError::unsupported(format!(
             "array_map result PHP type {:?}",
@@ -2641,6 +2952,25 @@ fn array_map_result_element_type(
 }
 
 /// Boxes an indexed-array result when the EIR builtin result slot is Mixed-like.
+///
+/// OWNERSHIP — the container reference is TRANSFERRED into the Mixed cell, it is not shared.
+/// Every caller reaches here holding a container the builtin's own runtime helper just
+/// allocated (`__rt_array_map*` / `__rt_array_column` call `__rt_array_new`), so the pointer in
+/// the result register carries refcount 1 that NOBODY else tracks: once the box happens, the EIR
+/// value for this instruction is the MIXED CELL, not the container, so every downstream
+/// EIR-emitted retain/release — including the one `emit_store_result_to_symbol` performs — acts
+/// on the Mixed cell and can never reach the container's original reference.
+///
+/// `__rt_mixed_from_value` INCREFs a container-tagged payload
+/// (`src/codegen_support/runtime/arrays/mixed_from_value.rs`, the `_retain` arm), which is the
+/// correct contract for a BORROWED payload but leaves a fresh one at refcount 2 with only one
+/// release ever scheduled — the container and its element buffer then outlive the program.
+/// `emit_box_current_owned_value_as_mixed` boxes and then releases that original reference, so
+/// the Mixed cell ends up the container's single owner.
+///
+/// The transfer belongs HERE and only here: when the result slot is NOT Mixed-like no box is
+/// emitted, the container itself stays the EIR value, and the EIR's own release owns it (the
+/// `array_flip` shape). Releasing outside this `if` would duplicate that release.
 fn box_array_result_for_mixed_builtin(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -2652,7 +2982,10 @@ fn box_array_result_for_mixed_builtin(
             PhpType::Mixed | PhpType::Union(_)
         )
     {
-        emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Array(Box::new(elem_ty.clone())));
+        emit_box_current_owned_value_as_mixed(
+            ctx.emitter,
+            &PhpType::Array(Box::new(elem_ty.clone())),
+        );
     }
 }
 
@@ -2674,11 +3007,31 @@ fn static_sort_callback_binding(
         Some(callback) => callback,
         None => static_callback_name_operand(ctx, value, owner)?,
     };
-    if let Some(callee) = ctx.callable_function_by_name(&callback.name) {
+    if let Some((label, param_types, return_ty)) = ctx
+        .callable_function_by_name(&callback.name)
+        .map(|callee| {
+            (
+                function_symbol(&callee.name),
+                callee
+                    .params
+                    .iter()
+                    .map(|param| param.php_type.codegen_repr())
+                    .collect::<Vec<_>>(),
+                callee.return_php_type.codegen_repr(),
+            )
+        })
+    {
+        let (label, env_source) = adapt_direct_callback_visible_args(
+            ctx,
+            label,
+            &param_types,
+            visible_arg_types,
+            owner,
+        )?;
         return Ok(StaticSortCallbackBinding {
-            label: function_symbol(&callee.name),
-            env_source: None,
-            return_ty: callee.return_php_type.codegen_repr(),
+            label,
+            env_source,
+            return_ty,
         });
     }
     if callback.kind == StaticCallbackOperandKind::FirstClassCallable {
@@ -2711,6 +3064,56 @@ fn static_sort_callback_binding(
         "{} '{}' is not a user function or supported first-class static method",
         owner, callback.name
     )))
+}
+
+/// Adapts boxed runtime callback arguments to a direct callback's declared ABI types.
+fn adapt_direct_callback_visible_args(
+    ctx: &mut FunctionContext<'_>,
+    target_label: String,
+    target_param_types: &[PhpType],
+    visible_arg_types: Option<&[PhpType]>,
+    owner: &str,
+) -> Result<(String, Option<StaticCallbackEnvSource>)> {
+    let Some(visible_arg_types) = visible_arg_types else {
+        return Ok((target_label, None));
+    };
+    if visible_arg_types
+        .iter()
+        .map(PhpType::codegen_repr)
+        .eq(target_param_types.iter().map(PhpType::codegen_repr))
+    {
+        return Ok((target_label, None));
+    }
+    if !visible_arg_types
+        .iter()
+        .any(|ty| matches!(ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_)))
+    {
+        return Ok((target_label, None));
+    }
+    if visible_arg_types.len() != target_param_types.len() {
+        return Err(CodegenIrError::unsupported(format!(
+            "{} with runtime callback args {:?} for direct target params {:?}",
+            owner, visible_arg_types, target_param_types
+        )));
+    }
+
+    let wrapper_label = ctx.next_label("direct_callback_arg_adapter");
+    let done_label = ctx.next_label("direct_callback_after_arg_adapter");
+    let wrapper = DeferredCallbackWrapper {
+        label: wrapper_label.clone(),
+        visible_arg_types: visible_arg_types.to_vec(),
+        target_visible_arg_types: Some(target_param_types.to_vec()),
+        capture_types: Vec::new(),
+        descriptor_prefix_types: Vec::new(),
+        descriptor_return_type: None,
+    };
+    abi::emit_jump(ctx.emitter, &done_label);
+    crate::codegen::emit_callback_wrapper(ctx.emitter, &wrapper);
+    ctx.emitter.label(&done_label);
+    Ok((
+        wrapper_label,
+        Some(StaticCallbackEnvSource::FunctionLabel(target_label)),
+    ))
 }
 
 /// Recovers a static `[class, method]` callable array as a static-method callback name.
@@ -3006,11 +3409,15 @@ fn static_callback_name_operand(
         Op::FirstClassCallableNew => StaticCallbackOperandKind::FirstClassCallable,
         _ => unreachable!("callback source instruction was validated earlier"),
     };
-    let Some(Immediate::Data(data)) = inst_ref.immediate.as_ref() else {
-        return Err(CodegenIrError::invalid_module(format!(
-            "{} string literal has no data id",
-            owner
-        )));
+    let data = match inst_ref.immediate.as_ref() {
+        Some(Immediate::Data(data))
+        | Some(Immediate::ProfiledData { data, .. }) => data,
+        _ => {
+            return Err(CodegenIrError::invalid_module(format!(
+                "{} string literal has no data id",
+                owner
+            )));
+        }
     };
     let name = ctx
         .module
@@ -3205,11 +3612,12 @@ enum StaticCallbackCalledClass {
 }
 
 /// Source used by the sort call site to build the callback environment.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 enum StaticCallbackEnvSource {
     Local(LocalSlotId),
     ThisObject(LocalSlotId),
     Value(ValueId),
+    FunctionLabel(String),
 }
 
 /// Resolves a sort static-method callback, allowing `static::` with an environment.
@@ -4044,6 +4452,13 @@ fn reserve_static_callback_env(
                     source_ty
                 )));
             }
+        }
+        StaticCallbackEnvSource::FunctionLabel(label) => {
+            abi::emit_symbol_address(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                &label,
+            );
         }
     }
     match ctx.emitter.target.arch {
@@ -5760,6 +6175,8 @@ enum InArrayCase {
     IntNeedleStringArray,
     StringNeedleBoolArray,
     BoolNeedleStringArray,
+    MixedIntExact,
+    MixedIntLoose,
     MixedStringExact,
     MixedStringLoose,
 }
@@ -5785,6 +6202,10 @@ fn supported_in_array_case(
             PhpType::Mixed if needle_ty == PhpType::Str => match mode {
                 InArrayMode::Loose => Ok(InArrayCase::MixedStringLoose),
                 InArrayMode::Strict => Ok(InArrayCase::MixedStringExact),
+            },
+            PhpType::Mixed if needle_ty == PhpType::Int => match mode {
+                InArrayMode::Loose => Ok(InArrayCase::MixedIntLoose),
+                InArrayMode::Strict => Ok(InArrayCase::MixedIntExact),
             },
             elem_ty => Err(CodegenIrError::unsupported(format!(
                 "in_array needle PHP type {:?} for indexed-array element PHP type {:?}",
@@ -6506,6 +6927,33 @@ fn lower_in_array_mixed_string(
         Arch::AArch64 => lower_in_array_mixed_string_aarch64(ctx, needle, array, eq_helper),
         Arch::X86_64 => lower_in_array_mixed_string_x86_64(ctx, needle, array, eq_helper),
     }
+}
+
+/// Lowers an integer-needle membership scan over boxed-Mixed indexed-array slots.
+///
+/// The runtime helper dispatches on each cell's tag so loose mode preserves PHP
+/// numeric-string, float, bool, and null comparison rules while strict mode
+/// accepts only an integer-tagged cell with the same payload.
+fn lower_in_array_mixed_int(
+    ctx: &mut FunctionContext<'_>,
+    needle: ValueId,
+    array: ValueId,
+    strict: bool,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            ctx.load_value_to_reg(needle, "x1")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x2", i64::from(strict));
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            ctx.load_value_to_reg(needle, "rsi")?;
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", i64::from(strict));
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_in_array_mixed_int");
+    Ok(())
 }
 
 /// Emits the AArch64 boxed-Mixed-array string membership loop.

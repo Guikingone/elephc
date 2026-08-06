@@ -25,7 +25,9 @@ pub mod errors;
 mod eval_aot;
 /// `#[Export]` attribute scan for cdylib emission.
 pub mod exports;
+mod progress;
 /// Image (GD/Exif/Imagick/Gmagick/Cairo) standard-library prelude injection.
+pub mod hash_prelude;
 pub mod image_prelude;
 /// Intrinsic call handling.
 pub mod intrinsics;
@@ -35,16 +37,26 @@ pub mod ir;
 pub mod ir_lower;
 /// IR-level analyses and transforms (liveness, intervals, register allocation).
 pub mod ir_passes;
+/// Ordered typed final-link inputs shared with integration-test providers.
+#[doc(hidden)]
+pub mod link_plan;
 /// Lexer for tokenizing PHP source.
 pub mod lexer;
 /// Conditionally-injected `DateTimeZone::listIdentifiers` filtering prelude.
 pub mod list_id_prelude;
 /// Magic constant substitution.
 pub mod magic_constants;
+/// Curated project-native dependency management and artifact resolution.
+#[doc(hidden)]
+pub mod native_deps;
 /// Namespace and use resolution.
 pub mod name_resolver;
 /// Name resolution and mangling.
 pub mod names;
+/// Compile-time OPcache introspection data (directive matrix).
+pub mod opcache;
+/// `opcache_get_configuration()` standard-library prelude injection.
+pub mod opcache_prelude;
 /// Optimizer passes.
 pub mod optimize;
 /// Parser for PHP syntax.
@@ -53,8 +65,13 @@ pub mod parser;
 pub mod php_version;
 /// PDO (SQLite) standard-library prelude injection.
 pub mod pdo_prelude;
+
+/// PHP language-profile selection and profile-dependence analysis.
+pub mod php_profile;
 /// Resolution of includes.
 pub mod resolver;
+/// Physical source-file classification and per-file language profiles.
+pub mod source;
 /// Source span tracking.
 pub mod span;
 /// `--strict-php` mode state and PHP-compatibility audit pass.
@@ -70,5 +87,8 @@ pub mod types;
 pub mod tz_prelude;
 /// Conditionally-injected `var_export` prelude (elephc-PHP rendering function).
 pub mod var_export_prelude;
+/// Conditionally-injected PHP version-surface prelude (`zend_version`, `php_sapi_name`,
+/// `ini_restore`).
+pub mod version_prelude;
 /// Conditionally-injected `--web` request prelude (extern declarations for bridge getters).
 pub mod web_prelude;

@@ -197,7 +197,7 @@ fn lower_mixed_callable_descriptor_invoke(
         .filter(|target| target.method_key == "__invoke")
         .cloned()
         .collect::<Vec<_>>();
-    let static_cases = runtime_static_method_descriptor_cases(ctx);
+    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     let array_label = (!instance_targets.is_empty() || !static_cases.is_empty())
         .then(|| ctx.next_label("mixed_callable_array"));
     let object_label = (!invokable_targets.is_empty())
@@ -267,7 +267,13 @@ fn lower_mixed_callable_descriptor_invoke(
         ctx.emitter.instruction(&format!("mov {}, rdi", ptr_reg));              // move the unboxed string pointer into the string ABI result register
     }
     abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);                    // spill the unboxed function name across dispatch emission
-    let cases = runtime_string_descriptor_cases(ctx, None)?;
+    let candidate_names = ctx.runtime_callable_candidates(callable);
+    let cases = runtime_string_descriptor_cases(
+        ctx,
+        None,
+        candidate_names.as_deref(),
+        super::instruction_strict_php_profile(inst),
+    )?;
     if cases.is_empty() {
         emit_undefined_runtime_string_call_fatal(ctx);
     } else {
@@ -344,7 +350,7 @@ pub(super) fn emit_runtime_mixed_callable_descriptor_value(
         .filter(|target| target.method_key == "__invoke")
         .cloned()
         .collect::<Vec<_>>();
-    let static_cases = runtime_static_method_descriptor_cases(ctx);
+    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     let array_label = (!instance_targets.is_empty() || !static_cases.is_empty())
         .then(|| ctx.next_label("mixed_callable_value_array"));
     let object_label = (!invokable_targets.is_empty())
@@ -511,7 +517,13 @@ fn lower_runtime_string_descriptor_invoke(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
-    let cases = runtime_string_descriptor_cases(ctx, None)?;
+    let candidate_names = ctx.runtime_callable_candidates(callable);
+    let cases = runtime_string_descriptor_cases(
+        ctx,
+        None,
+        candidate_names.as_deref(),
+        super::instruction_strict_php_profile(inst),
+    )?;
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime string with no descriptor targets",
@@ -575,38 +587,81 @@ fn emit_string_name_descriptor_cases_loop(
 pub(super) fn runtime_string_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
+    candidate_names: Option<&[String]>,
+    strict_php: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let cache_ty = source_arg_ty.map(PhpType::codegen_repr);
     if let Some(cases) = ctx
         .shared
-        .runtime_string_descriptor_cases(cache_ty.as_ref())
+        .runtime_string_descriptor_cases(cache_ty.as_ref(), candidate_names, strict_php)
     {
         return Ok(cases);
     }
-    let mut cases = runtime_extern_descriptor_cases(ctx)?;
-    cases.extend(runtime_builtin_descriptor_cases(ctx, source_arg_ty)?);
-    cases.extend(runtime_user_function_descriptor_cases(ctx, source_arg_ty));
+    let mut cases = runtime_extern_descriptor_cases(ctx, candidate_names)?;
+    cases.extend(runtime_builtin_descriptor_cases(
+        ctx,
+        source_arg_ty,
+        candidate_names,
+        strict_php,
+    )?);
+    cases.extend(runtime_user_function_descriptor_cases(
+        ctx,
+        source_arg_ty,
+        candidate_names,
+        strict_php,
+    ));
     cases.extend(
-        runtime_static_method_descriptor_cases(ctx)
+        runtime_static_method_descriptor_cases(ctx, candidate_names)
             .into_iter()
             .map(|case| case.case),
     );
     cases.sort_by(|left, right| left.label.cmp(&right.label));
     cases.dedup_by(|left, right| left.label == right.label);
+    if cases.is_empty() && candidate_names.is_some() {
+        let fallback = runtime_string_descriptor_cases(ctx, source_arg_ty, None, strict_php)?;
+        ctx.shared.cache_runtime_string_descriptor_cases(
+            cache_ty.as_ref(),
+            candidate_names,
+            strict_php,
+            &fallback,
+        );
+        return Ok(fallback);
+    }
     ctx.shared
-        .cache_runtime_string_descriptor_cases(cache_ty.as_ref(), &cases);
+        .cache_runtime_string_descriptor_cases(
+            cache_ty.as_ref(),
+            candidate_names,
+            strict_php,
+            &cases,
+        );
     Ok(cases)
+}
+
+/// Returns whether one PHP callable name belongs to a finite reachable target set.
+fn runtime_callable_name_is_reachable(
+    name: &str,
+    candidate_names: Option<&[String]>,
+) -> bool {
+    let Some(candidate_names) = candidate_names else {
+        return true;
+    };
+    let key = php_symbol_key(name.trim_start_matches('\\'));
+    candidate_names.iter().any(|candidate| candidate == &key)
 }
 
 /// Builds runtime descriptor cases for extern functions declared in the EIR module.
 fn runtime_extern_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
+    candidate_names: Option<&[String]>,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut decls = ctx.module.extern_decls.iter().collect::<Vec<_>>();
     decls.sort_by(|left, right| left.name.cmp(&right.name));
 
     let mut cases = Vec::new();
     for decl in decls {
+        if !runtime_callable_name_is_reachable(&decl.name, candidate_names) {
+            continue;
+        }
         let wrapper_sig = crate::types::callable_wrapper_sig(&extern_decl_signature(decl));
         let entry_label = emit_runtime_extern_wrapper_inline(ctx, &decl.name, &wrapper_sig)?;
         let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &[]);
@@ -658,10 +713,15 @@ fn extern_decl_signature(decl: &crate::ir::ExternDecl) -> FunctionSig {
 fn runtime_builtin_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
+    candidate_names: Option<&[String]>,
+    strict_php: bool,
 ) -> Result<Vec<callable_dispatch::RuntimeCallableCase>> {
     let mut cases = Vec::new();
-    for name in crate::types::checker::builtins::supported_builtin_function_names() {
-        if !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
+    for name in crate::types::checker::builtins::supported_builtin_function_names_for_profile(
+        strict_php,
+    ) {
+        if !runtime_callable_name_is_reachable(name, candidate_names)
+            || !callable_dispatch::runtime_builtin_wrapper_supported(name, source_arg_ty)
             || ctx
                 .module
                 .extern_decls
@@ -676,7 +736,8 @@ fn runtime_builtin_descriptor_cases(
         let wrapper_sig =
             runtime_builtin_wrapper_sig(name, &crate::types::callable_wrapper_sig(&sig));
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
-        let entry_label = emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig)?;
+        let entry_label =
+            emit_runtime_builtin_wrapper_inline(ctx, name, &case_sig, strict_php)?;
         let invoker_label = emit_runtime_callable_invoker_inline(ctx, &case_sig, &[]);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
@@ -705,6 +766,8 @@ fn runtime_builtin_descriptor_cases(
 fn runtime_user_function_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
     source_arg_ty: Option<&PhpType>,
+    candidate_names: Option<&[String]>,
+    strict_php: bool,
 ) -> Vec<callable_dispatch::RuntimeCallableCase> {
     let mut functions = ctx
         .module
@@ -718,6 +781,17 @@ fn runtime_user_function_descriptor_cases(
 
     let mut cases = Vec::new();
     for function in functions {
+        if !strict_php
+            && crate::types::checker::builtins::catalog::strict_php_hidden_builtin_for_profile(
+                &php_symbol_key(&function.name),
+                true,
+            )
+        {
+            continue;
+        }
+        if !runtime_callable_name_is_reachable(&function.name, candidate_names) {
+            continue;
+        }
         let wrapper_sig =
             crate::types::callable_wrapper_sig(&function_signature_from_eir(function));
         let case_sig = callable_dispatch::specialized_runtime_case_sig(&wrapper_sig, source_arg_ty);
@@ -751,8 +825,11 @@ pub(super) fn emit_runtime_string_descriptor_value(
     callable: ValueId,
     dest_reg: &str,
     op_name: &str,
+    strict_php: bool,
 ) -> Result<()> {
-    let cases = runtime_string_descriptor_cases(ctx, None)?;
+    let candidate_names = ctx.runtime_callable_candidates(callable);
+    let cases =
+        runtime_string_descriptor_cases(ctx, None, candidate_names.as_deref(), strict_php)?;
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string with no descriptor targets",
@@ -800,7 +877,12 @@ fn emit_runtime_string_descriptor_value_from_unboxed(
     ctx: &mut FunctionContext<'_>,
     op_name: &str,
 ) -> Result<()> {
-    let cases = runtime_string_descriptor_cases(ctx, None)?;
+    let cases = runtime_string_descriptor_cases(
+        ctx,
+        None,
+        None,
+        crate::strict_php::is_enabled(),
+    )?;
     if cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string with no descriptor targets",
@@ -1038,7 +1120,7 @@ fn lower_runtime_mixed_callable_array_descriptor_invoke(
     op_name: &str,
 ) -> Result<()> {
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
-    let static_cases = runtime_static_method_descriptor_cases(ctx);
+    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     if instance_targets.is_empty() && static_cases.is_empty() {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime mixed callable array with no descriptor targets",
@@ -1119,7 +1201,7 @@ fn lower_runtime_string_callable_array_descriptor_invoke(
     arg_mixed: ValueId,
     op_name: &str,
 ) -> Result<()> {
-    let static_cases = runtime_static_method_descriptor_cases(ctx);
+    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     if static_cases.is_empty() {
         return Err(CodegenIrError::unsupported(
             "callable_descriptor_invoke for runtime string callable array with no static targets",
@@ -1217,7 +1299,7 @@ fn emit_mixed_callable_array_descriptor_value(
     op_name: &str,
 ) -> Result<()> {
     let instance_targets = runtime_array_instance_method_targets_for_descriptor(ctx);
-    let static_cases = runtime_static_method_descriptor_cases(ctx);
+    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     if instance_targets.is_empty() && static_cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime mixed callable array with no descriptor targets",
@@ -1262,7 +1344,7 @@ fn emit_string_callable_array_descriptor_value(
     callable: ValueId,
     op_name: &str,
 ) -> Result<()> {
-    let static_cases = runtime_static_method_descriptor_cases(ctx);
+    let static_cases = runtime_static_method_descriptor_cases(ctx, None);
     if static_cases.is_empty() {
         return Err(CodegenIrError::unsupported(format!(
             "{} for runtime string callable array with no static targets",
@@ -1337,8 +1419,12 @@ fn runtime_array_instance_method_targets_for_descriptor(
 /// Builds public static-method descriptor cases directly from EIR class metadata.
 fn runtime_static_method_descriptor_cases(
     ctx: &mut FunctionContext<'_>,
+    candidate_names: Option<&[String]>,
 ) -> Vec<callable_dispatch::RuntimeStaticMethodCallableCase> {
-    if let Some(cases) = ctx.shared.runtime_static_method_descriptor_cases() {
+    if let Some(cases) = ctx
+        .shared
+        .runtime_static_method_descriptor_cases(candidate_names)
+    {
         return cases;
     }
     let mut methods = Vec::new();
@@ -1356,6 +1442,10 @@ fn runtime_static_method_descriptor_cases(
                 continue;
             }
             let method_key = php_symbol_key(method_name);
+            let php_name = format!("{}::{}", class_name, method_name);
+            if !runtime_callable_name_is_reachable(&php_name, candidate_names) {
+                continue;
+            }
             let impl_class = class_info
                 .static_method_impl_classes
                 .get(&method_key)
@@ -1378,6 +1468,14 @@ fn runtime_static_method_descriptor_cases(
     let mut cases = Vec::new();
     for (class_name, method_name, method_key, impl_class, class_id, sig) in methods {
         let wrapper_sig = callable_dispatch::static_method_runtime_wrapper_sig(&sig);
+        let php_name = format!("{}::{}", class_name, method_name);
+        if let Some(case) = ctx
+            .shared
+            .runtime_static_method_descriptor_case(&php_name)
+        {
+            cases.push(case);
+            continue;
+        }
         let Ok(entry_label) = emit_static_method_descriptor_entry_wrapper(
             ctx,
             &impl_class,
@@ -1387,7 +1485,6 @@ fn runtime_static_method_descriptor_cases(
         ) else {
             continue;
         };
-        let php_name = format!("{}::{}", class_name, method_name);
         let invoker_label = emit_runtime_callable_invoker_inline(ctx, &wrapper_sig, &[]);
         let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
             ctx.data,
@@ -1409,14 +1506,17 @@ fn runtime_static_method_descriptor_cases(
             descriptor_label,
             php_name: Some(php_name),
         };
-        cases.push(callable_dispatch::RuntimeStaticMethodCallableCase {
+        let static_case = callable_dispatch::RuntimeStaticMethodCallableCase {
             class_name,
             method_name,
             case,
-        });
+        };
+        ctx.shared
+            .cache_runtime_static_method_descriptor_case(&static_case);
+        cases.push(static_case);
     }
     ctx.shared
-        .cache_runtime_static_method_descriptor_cases(&cases);
+        .cache_runtime_static_method_descriptor_cases(candidate_names, &cases);
     cases
 }
 

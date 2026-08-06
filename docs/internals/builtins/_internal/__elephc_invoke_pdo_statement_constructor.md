@@ -2,7 +2,7 @@
 title: "__elephc_invoke_pdo_statement_constructor() — internals"
 description: "Compiler internals for __elephc_invoke_pdo_statement_constructor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 442
+  order: 468
 ---
 
 ## `__elephc_invoke_pdo_statement_constructor()` — internals
@@ -10,18 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/__elephc_invoke_pdo_statement_constructor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/__elephc_invoke_pdo_statement_constructor.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/system.rs`:589](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/system.rs#L589) (`lower_elephc_invoke_pdo_statement_constructor`)
-- **Function symbol**: `lower_elephc_invoke_pdo_statement_constructor()`
+- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Invokes a selected PDOStatement subclass constructor after its native state is initialized.
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_strtotime`
+- **Target strategy**: `eir_primitive`
+- **Validation**: `signature`
+- **Result type source**: `declared`
+- **Result ownership**: `non_heap`
+- **Effects**: `static (17 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

@@ -6,22 +6,23 @@
 //! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
 //!
 //! Key details:
-//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool`/`is_null`/`is_array`/`is_callable($var)` (and aliases),
-//!   `$var instanceof Class`, and the strict comparisons `$var === null`/`$var === false` (and their
-//!   `!==` / operand-swapped forms), optionally negated with a leading `!`. Narrowing is applied to
-//!   each clause in an if/elseif*/else chain (each subsequent clause, and the else, see the
-//!   accumulated complement from previous guards). For a chain with no else where *every* clause
-//!   body always diverges (return/throw/exit/die/never-function), the accumulated complement is
-//!   applied to the statements after the entire if construct.
-//! - `=== false` narrows against the literal `False` subtype and `=== null` against `void`
-//!   (elephc represents `null` as `void`), preserving a full `bool` member when only literal false
-//!   is excluded.
+//! - Recognizes scalar, null, array, and callable `is_*($var)` predicates (and aliases),
+//!   `$var instanceof Class`, and strict null/false comparisons, optionally negated. Narrowing is
+//!   applied to each clause in an
+//!   if/elseif*/else chain (each subsequent clause, and the else, see the accumulated complement
+//!   from previous guards). For a chain with no else where *every* clause body cannot fall through
+//!   to the following statement — via `src/termination.rs`'s structural analysis
+//!   (return/throw/break/continue/exit/die, statically infinite loops, nested if/switch/try whose
+//!   branches all terminate, or a terminal statement before unreachable code), extended
+//!   recursively with checker-known `never` calls — the accumulated complement is applied to the
+//!   statements after the entire if construct.
 //! - Conservative: a concrete (non-union, non-mixed) type is left unchanged, and an empty narrowing
 //!   result falls back to the original type, so valid code is never narrowed away to `Never`.
 
 use crate::errors::CompileError;
 use crate::names::{php_symbol_key, property_hook_get_method};
-use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt, StmtKind};
+use crate::parser::ast::{BinOp, Expr, ExprKind, InstanceOfTarget, Stmt};
+use crate::termination::{block_terminal_effect_with_divergence, TerminalEffect};
 use crate::types::{PhpType, TypeEnv};
 
 use super::super::Checker;
@@ -38,27 +39,20 @@ pub(crate) struct GuardNarrowing {
     pub else_ty: PhpType,
 }
 
-/// The type a guard narrows toward. Most guards map to an exact `PhpType` variant, but `is_array`
-/// needs to match any array member of a union regardless of its element type, and the `PhpType`
-/// model has no bare, element-agnostic array variant — so it is kept as a distinct case.
+/// Describes an exact guard type or the element-agnostic array family.
 enum GuardTarget {
-    /// An exact scalar, `void` (null), or object target, matched by variant equality (an object by
-    /// class name). Covers `is_int`/`is_float`/`is_string`/`is_bool`/`is_null`, `instanceof`, and
-    /// the `=== null` / `=== false` comparisons.
+    /// An exact scalar, null, callable, or object target.
     Exact(PhpType),
-    /// `is_array($x)`: matches any indexed (`Array`) or associative (`AssocArray`) member.
+    /// Any indexed or associative array, regardless of its element types.
     AnyArray,
 }
 
 impl GuardTarget {
-    /// The concrete type to use when the guard is known to hold but the current type carries no
-    /// matching member to keep. Exact scalar/object targets can safely select their target type;
-    /// a bare `mixed` array must stay `Mixed` because the type model cannot represent the union of
-    /// packed and associative runtime array layouts without changing their ABI representation.
+    /// Returns the conservative type used when the current type has no matching union member.
     fn fallback_type(&self) -> PhpType {
         match self {
-            GuardTarget::Exact(ty) => ty.clone(),
-            GuardTarget::AnyArray => PhpType::Mixed,
+            Self::Exact(ty) => ty.clone(),
+            Self::AnyArray => PhpType::Mixed,
         }
     }
 }
@@ -177,10 +171,8 @@ impl Checker {
     }
 
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,
-    /// so `Mixed` and any incompatible concrete type become the target's fallback type; a `Union`
-    /// keeps only its matching members (falling back if none match); a concrete type already
-    /// matching the guard is kept as-is (preserving a more specific class for `instanceof` or the
-    /// element type for `is_array`).
+    /// so `Mixed` and incompatible concrete types use the target fallback; a `Union` keeps matching
+    /// members; a concrete match is preserved, including its array element or object class type.
     fn narrow_to(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
@@ -215,39 +207,39 @@ impl Checker {
         }
     }
 
-    /// Returns true when a statement body always diverges.
+    /// Returns true when a statement body cannot fall through to the statement that textually
+    /// follows it.
     ///
-    /// A body is considered diverging if its last statement is:
-    /// - `return` or `throw`
-    /// - a call to `exit()` or `die()`
-    /// - a call to a user function whose declared return type is `never`
+    /// The structural control-flow analysis in [`crate::termination`] recognizes
+    /// `return`/`throw`/`break`/`continue`/`exit`/`die`, statically infinite loops, and nested
+    /// `if`/`switch`/`try` forms whose branches all terminate, including a terminal statement placed
+    /// before unreachable trailing code. `break`/`continue` count as non-fallthrough here — they
+    /// prevent reaching the following statement even though they do not exit the function, which
+    /// is exactly the distinction post-guard narrowing needs.
     ///
-    /// This is used by type narrowing so that an `if (guard) { ... diverging ... }` (with no else)
-    /// allows the statements *after* the if to be narrowed to the complement type.
-    pub(crate) fn body_always_diverges(&self, body: &[Stmt]) -> bool {
-        let Some(last) = body.last() else {
-            return false;
-        };
-
-        match &last.kind {
-            StmtKind::Return(_) | StmtKind::Throw(_) => true,
-            StmtKind::ExprStmt(expr) => self.expr_always_diverges(expr),
-            _ => false,
-        }
+    /// User functions declared `never` need the checker's function table. The checker supplies that
+    /// one semantic predicate to the shared traversal, so it applies at every nested structural
+    /// level rather than as a separate shallow scan.
+    ///
+    /// Used by type narrowing so that an `if (guard) { ... non-fallthrough ... }` (with no else)
+    /// allows the statements *after* the if to keep the complement type.
+    pub(crate) fn body_cannot_fall_through(&self, body: &[Stmt]) -> bool {
+        block_terminal_effect_with_divergence(body, &|expr| {
+            self.expr_is_declared_never_call(expr)
+        })
+            != TerminalEffect::FallsThrough
     }
 
-    /// Returns true if the expression is known to never return normally: a call to `exit()` or
-    /// `die()` (recognized by name), or a call to a user function whose declared return type is
-    /// `never`. The function name is resolved case-insensitively against the checker's function
-    /// table, matching PHP's call semantics.
-    fn expr_always_diverges(&self, expr: &Expr) -> bool {
+    /// Returns true if the expression calls a user function whose declared return type is `never`.
+    /// The function name is resolved case-insensitively against the checker's function table,
+    /// matching PHP's call semantics. Error suppression preserves the call's divergence.
+    pub(in crate::types::checker) fn expr_is_declared_never_call(&self, expr: &Expr) -> bool {
+        if let ExprKind::ErrorSuppress(inner) = &expr.kind {
+            return self.expr_is_declared_never_call(inner);
+        }
         let ExprKind::FunctionCall { name, .. } = &expr.kind else {
             return false;
         };
-        let lowered = name.to_ascii_lowercase();
-        if lowered == "exit" || lowered == "die" {
-            return true;
-        }
         self.canonical_function_name_folded(name)
             .and_then(|canonical| self.functions.get(&canonical))
             .map(|sig| sig.return_type == PhpType::Never)
@@ -255,10 +247,7 @@ impl Checker {
     }
 }
 
-/// Extracts the guarded receiver, target, and comparison negation from a guard
-/// expression. Recognizes the scalar `is_*` predicates, `is_null`, `instanceof <Name>`, and
-/// `===` / `!==` comparisons with false or null. The receiver may be any expression here;
-/// `guard_env_key` decides which receivers narrowing can actually key.
+/// Extracts the guarded receiver, target, and comparison negation from a guard expression.
 fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> {
     match &cond.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
@@ -323,9 +312,7 @@ fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> 
     }
 }
 
-/// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
-/// (else) members. `AnyArray` matches indexed and associative arrays; exact object targets match
-/// by class name, and exact `bool` also accepts the literal `False` subtype.
+/// Returns whether a union member matches the exact or array-family guard target.
 fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
     match target {
         GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),

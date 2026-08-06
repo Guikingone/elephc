@@ -250,8 +250,12 @@ arbitrary nesting — with the same semantics they have outside a generator.
 
 ## Calling user functions from a generator body
 
-Generator bodies can invoke user functions whose return type is `int`,
-with up to 8 int arguments:
+Generator bodies use the ordinary EIR call path, so they can invoke user
+functions and methods with the same argument and return-value support as code
+outside a generator. The generator-specific seven-value limit applies only to
+the generator function's own parameters and closure captures, which must fit
+the coroutine object's `start_args` slots; it does not limit calls made by the
+body:
 
 ```php
 <?php

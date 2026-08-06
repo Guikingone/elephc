@@ -2,31 +2,30 @@
 title: "hash_final() — internals"
 description: "Compiler internals for hash_final(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 360
+  order: 377
 ---
 
 ## `hash_final()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/builtins/string/hash_final.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/string/hash_final.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/strings.rs`:320](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/strings.rs#L320) (`lower_hash_final`)
-- **Function symbol**: `lower_hash_final()`
+- **Signature**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_final.rs)
+- **Lowering**: [`(not lowered)`:0]()
+- **Function symbol**: `(none — type-checker only)()`
 
 
-### Lowering notes
+## Semantic descriptor
 
-- Lowers `hash_final(context, binary?)` through the incremental hash finalizer.
+_Compiler-resident construct; this name is intentionally outside the builtin registry._
 
-## Runtime helpers
+## EIR and runtime boundary
 
-The following runtime helpers are referenced:
-- `__rt_hash_final`
+_Compiler-resident lowering; no registry-backed typed runtime target applies._
 
 ## Signature summary
 
 ```php
-function hash_final(resource $context, bool $binary = false): string
+function hash_final(mixed $context, mixed $binary = 'false'): mixed
 ```
 
 ## What the type checker enforces

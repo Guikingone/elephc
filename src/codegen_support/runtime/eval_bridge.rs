@@ -13,14 +13,14 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 const EVAL_RUNTIME_TAG_MIXED: i64 = 7;
 const INVOKER_ARG_REF_CELL_TAG: i64 = 11;
 
 /// Builds the x86_64 instruction that installs the Mixed heap-kind marker.
 fn x86_64_mixed_heap_kind_instruction() -> String {
-    format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 5)
+    format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(5))
 }
 
 /// Emits every eval value wrapper required by `libelephc-magician`.
@@ -263,7 +263,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 is an object payload
     emitter.instruction("b.ne __elephc_eval_value_object_class_name_miss");     // non-objects cannot provide a class name
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_class_name_miss");  // reject malformed object payloads
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_object_class_name_miss",
+    );
     emitter.instruction("ldr x10, [x9]");                                       // load the object's runtime class id
     abi::emit_symbol_address(emitter, "x11", "_class_name_count");
     emitter.instruction("ldr x11, [x11]");                                      // load the dense class-name table length
@@ -472,7 +477,8 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // pass the boxed key to the eval key normalizer
     emitter.instruction("bl __elephc_eval_key_normalize");                      // normalize eval array key to key_lo/key_hi
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed array receiver
-    emitter.instruction("bl __rt_mixed_array_get_shared");                      // retain the stored eval cell so by-reference calls can write back
+    emitter.instruction("mov x3, xzr");                                         // eval bridge lookup reports misses through its own result contract
+    emitter.instruction("bl __rt_mixed_array_get");                             // read the boxed Mixed element or Mixed(null)
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the array-get wrapper frame
     emitter.instruction("ret");                                                 // return the boxed element to Rust
@@ -499,14 +505,24 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b.ne __elephc_eval_value_array_key_exists_false");     // non-integer keys never exist in indexed arrays
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed indexed-array receiver
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the indexed-array payload pointer
-    emitter.instruction("cbz x0, __elephc_eval_value_array_key_exists_false");  // missing payload cannot contain a key
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__elephc_eval_value_array_key_exists_false",
+    );
     emitter.instruction("ldr x1, [sp, #8]");                                    // pass normalized integer key to the bounds helper
     emitter.instruction("bl __rt_array_key_exists");                            // return whether the integer key is in bounds
     emitter.instruction("b __elephc_eval_value_array_key_exists_box");          // box the existence flag for Rust
     emitter.label("__elephc_eval_value_array_key_exists_assoc");
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the boxed associative-array receiver
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the hash payload pointer
-    emitter.instruction("cbz x0, __elephc_eval_value_array_key_exists_false");  // missing hash payload cannot contain a key
+    emit_branch_if_null_container(
+        emitter,
+        "x0",
+        "x9",
+        "__elephc_eval_value_array_key_exists_false",
+    );
     emitter.instruction("ldr x1, [sp, #8]");                                    // pass normalized key_lo to the hash lookup
     emitter.instruction("ldr x2, [sp, #16]");                                   // pass normalized key_hi to the hash lookup
     emitter.instruction("bl __rt_hash_get");                                    // return hash found flag in x0
@@ -543,7 +559,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b __elephc_eval_value_array_iter_key_done");           // return the boxed key to Rust
     emitter.label("__elephc_eval_value_array_iter_key_assoc");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the hash payload pointer from the Mixed cell
-    emitter.instruction("cbz x9, __elephc_eval_value_array_iter_key_null");     // null hash payloads produce a null key
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_array_iter_key_null",
+    );
     emitter.instruction("str x9, [sp, #16]");                                   // save the hash pointer for repeated iterator helper calls
     emitter.instruction("str xzr, [sp, #24]");                                  // start the insertion-order position counter at zero
     emitter.instruction("mov x1, xzr");                                         // cursor 0 starts at the hash head entry
@@ -615,7 +636,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the empty length to Rust
     emitter.label("__elephc_eval_value_array_len_load");
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the array/hash payload pointer from the Mixed cell
-    emitter.instruction("cbz x9, __elephc_eval_value_array_len_zero");          // null payloads are treated as empty containers
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_array_len_zero",
+    );
     emitter.instruction("ldr x0, [x9]");                                        // load the runtime container element count
     emitter.instruction("ret");                                                 // return the element count to Rust
 
@@ -625,7 +651,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
     emitter.instruction("b.ne __elephc_eval_value_object_property_len_zero");   // non-objects expose no JSON-visible properties here
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_property_len_zero"); // null object payloads have no visible properties
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_object_property_len_zero",
+    );
     abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
@@ -650,7 +681,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
     emitter.instruction("b.ne __elephc_eval_value_object_property_iter_key_null"); // non-objects have no JSON-visible property key
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_property_iter_key_null"); // null object payloads produce a null key
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_object_property_iter_key_null",
+    );
     abi::emit_symbol_address(emitter, "x10", "_stdclass_class_id");
     emitter.instruction("ldr x10, [x10]");                                      // load the compile-time stdClass class id
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
@@ -881,6 +917,28 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #16");                                     // release the object-identity wrapper frame
     emitter.instruction("ret");                                                 // return the object identity pointer to Rust
 
+    // `__elephc_eval_value_object_handle` is the PHP OBJECT HANDLE, not the address:
+    // the magician's `spl_object_id` / `spl_object_hash` must agree with the AOT
+    // engine and with `var_dump`'s `#N`, and all three read the same pool. The
+    // address-shaped `object_identity` above stays as it is because destructor
+    // bookkeeping keys on the storage, not on the PHP-visible handle.
+    label_c_global(emitter, "__elephc_eval_value_object_handle");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while unboxing the object cell
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across nested calls
+    emitter.instruction("mov x29, sp");                                         // establish a stable object-handle wrapper frame
+    emitter.instruction("bl __rt_mixed_unbox");                                 // unwrap nested Mixed cells to tag and object payload
+    emitter.instruction("cmp x0, #6");                                          // runtime tag 6 means PHP object
+    emitter.instruction("b.ne __elephc_eval_value_object_handle_zero");         // non-object values carry no PHP handle
+    emitter.instruction("mov x0, x1");                                          // pass the unboxed object payload to the handle pool
+    emitter.instruction("bl __rt_object_handle_of");                            // x0 = this object's PHP handle
+    emitter.instruction("b __elephc_eval_value_object_handle_done");            // return the resolved handle
+    emitter.label("__elephc_eval_value_object_handle_zero");
+    emitter.instruction("mov x0, #0");                                          // report "no handle" for non-object values
+    emitter.label("__elephc_eval_value_object_handle_done");
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the object-handle wrapper frame
+    emitter.instruction("ret");                                                 // return the PHP object handle to Rust
+
     label_c_global(emitter, "__elephc_eval_value_cast_int");
     emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame while casting and boxing the value
     emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across helper calls
@@ -920,6 +978,8 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("b.eq __elephc_eval_value_cast_string_float");          // doubles cast through decimal formatting
     emitter.instruction("cmp x0, #3");                                          // is the eval value a boolean?
     emitter.instruction("b.eq __elephc_eval_value_cast_string_bool");           // booleans cast to "1" or the empty string
+    emitter.instruction("cmp x0, #9");                                          // is the eval value a resource?
+    emitter.instruction("b.eq __elephc_eval_value_cast_string_resource");       // resources render as PHP's "Resource id #N"
     emitter.label("__elephc_eval_value_cast_string_empty");
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("mov x1, xzr");                                         // unsupported and falsey payloads use an empty string pointer
@@ -935,6 +995,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.label("__elephc_eval_value_cast_string_box");
     emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
     emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the existing string payload once
+    emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_resource");
+    emitter.instruction("mov x0, x1");                                          // pass the native resource payload to the display formatter
+    emitter.instruction("bl __rt_resource_to_string");                          // format "Resource id #N" into the shared concat scratch (x1/x2)
+    emitter.instruction("mov x0, #1");                                          // runtime tag 1 = string
+    emitter.instruction("bl __rt_mixed_from_value");                            // persist and box the borrowed resource display string
     emitter.instruction("b __elephc_eval_value_cast_string_done");              // restore the wrapper frame and return
     emitter.label("__elephc_eval_value_cast_string_float");
     emitter.instruction("fmov d0, x1");                                         // move the double payload bits into the FP argument register
@@ -977,6 +1043,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
     emitter.instruction("mov x2, xzr");                                         // resource payloads do not use a high word
     emitter.instruction("b __rt_mixed_from_value");                             // box the resource payload and return to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_hash_context");
+    emitter.instruction("mov x1, x0");                                          // move the eval hash-context table key into the mixed payload slot
+    emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource, the shape eval's hash builtins read back
+    emitter.instruction("mov x2, #5");                                          // resource kind 5 = eval-owned inert handle: no PHP id, no destructor
+    emitter.instruction("b __rt_mixed_from_value");                             // box the inert hash-context payload and return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_float");
     emitter.instruction("fmov x1, d0");                                         // move the C double bits into the mixed payload slot
@@ -1551,6 +1623,162 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     label_c_global(emitter, "__elephc_eval_value_echo");
     emitter.instruction("b __rt_mixed_write_stdout");                           // echo one boxed mixed value and return to Rust
 
+    // -- output-buffering (ob_*) bridge: expose the runtime buffer stack to the
+    //    eval interpreter so static and eval'd code share one ob state. --
+    label_c_global(emitter, "__elephc_eval_ob_start");
+    emitter.instruction("b __rt_ob_start");                                     // push a new output buffer; returns 1/0 in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_level");
+    emitter.instruction("b __rt_ob_level");                                     // return the buffer-stack depth in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_length");
+    emitter.instruction("b __rt_ob_length");                                    // return the top buffer length (or -1) in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_clean");
+    emitter.instruction("b __rt_ob_clean");                                     // truncate the top buffer; returns 1/0 in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_flush");
+    emitter.instruction("b __rt_ob_flush");                                     // flush the top buffer to the parent sink; returns 1/0 in x0
+
+    label_c_global(emitter, "__elephc_eval_ob_end");
+    emitter.instruction("cbz x0, __elephc_eval_ob_end_clean_path");             // a zero flush flag discards instead of flushing
+    emitter.instruction("b __rt_ob_end_flush");                                 // flush, pop, and free the top buffer
+    emitter.label("__elephc_eval_ob_end_clean_path");
+    emitter.instruction("b __rt_ob_end_clean");                                 // discard, pop, and free the top buffer
+
+    label_c_global(emitter, "__elephc_eval_ob_contents");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
+    emitter.instruction("cbz x10, __elephc_eval_ob_contents_none");             // no active buffer — report failure to Rust
+    emitter.instruction("sub x10, x10, #1");                                    // top slot index = depth - 1
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_ptrs");       // materialize the buffer-pointer slot array
+    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the top buffer base pointer
+    emitter.instruction("str x12, [x0]");                                       // store the buffer pointer through the caller's out_ptr
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_lens");       // materialize the used-bytes slot array
+    emitter.instruction("ldr x12, [x11, x10, lsl #3]");                         // load the top buffer's used byte count
+    emitter.instruction("str x12, [x1]");                                       // store the byte count through the caller's out_len
+    emitter.instruction("mov x0, #1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust (bytes are copied immediately)
+    emitter.label("__elephc_eval_ob_contents_none");
+    emitter.instruction("mov x0, #0");                                          // report "no active buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_stats");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
+    emitter.instruction("cmp x0, x10");                                         // is the requested slot index within the stack?
+    emitter.instruction("b.hs __elephc_eval_ob_stats_none");                    // out-of-range (or negative) index — report failure
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_lens");       // materialize the used-bytes slot array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's used byte count
+    emitter.instruction("str x12, [x1]");                                       // store it through the caller's out_used
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_caps");       // materialize the capacity slot array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's capacity
+    emitter.instruction("str x12, [x2]");                                       // store it through the caller's out_size
+    emitter.instruction("mov x0, #1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+    emitter.label("__elephc_eval_ob_stats_none");
+    emitter.instruction("mov x0, #0");                                          // report "no such buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_implicit_flush");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_implicit_flush"); // materialize the stored implicit-flush flag address
+    emitter.instruction("str x0, [x9]");                                        // store the (inert) implicit-flush flag
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_start_ex");
+    emitter.instruction("cbz x0, __elephc_eval_ob_start_ex_default");           // a zero has-handler flag selects the default handler
+    crate::codegen::abi::emit_symbol_address(emitter, "x0", "__rt_ob_eval_trampoline"); // eval handlers invoke through the installed magician hook
+    emitter.instruction("b __rt_ob_start_ex");                                  // start the buffer (env/chunk/flags/name already aligned)
+    emitter.label("__elephc_eval_ob_start_ex_default");
+    emitter.instruction("mov x1, #0");                                          // default handlers carry no env word
+    emitter.instruction("b __rt_ob_start_ex");                                  // start the buffer with the default handler
+
+    label_c_global(emitter, "__elephc_eval_install_ob_handler_hook");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_elephc_eval_ob_handler_fn"); // materialize the eval handler hook slot
+    emitter.instruction("str x0, [x9]");                                        // install the magician ob-handler callback
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_get_clean_pop");
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                           // save frame pointer and return address plus out-pointer slots
+    emitter.instruction("mov x29, sp");                                         // establish the wrapper frame pointer
+    emitter.instruction("stp x0, x1, [sp, #16]");                               // save the caller's out_ptr/out_len storage addresses
+    emitter.instruction("bl __rt_ob_get_clean_pop");                            // gate, run the handler, pop → raw pair (or null)
+    emitter.instruction("ldp x9, x10, [sp, #16]");                              // reload the out-pointer storage addresses
+    emitter.instruction("cbz x1, __elephc_eval_ob_get_clean_none");             // refused — report failure to Rust
+    emitter.instruction("str x1, [x9]");                                        // store the owned raw-contents pointer for Rust
+    emitter.instruction("str x2, [x10]");                                       // store the raw-contents length for Rust
+    emitter.instruction("mov x0, #1");                                          // report success to Rust
+    emitter.instruction("b __elephc_eval_ob_get_clean_done");                   // finish
+    emitter.label("__elephc_eval_ob_get_clean_none");
+    emitter.instruction("mov x0, #0");                                          // report refusal to Rust
+    emitter.label("__elephc_eval_ob_get_clean_done");
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
+    emitter.instruction("ret");                                                 // return the success flag
+
+    label_c_global(emitter, "__elephc_eval_ob_get_flush_pop");
+    emitter.instruction("stp x29, x30, [sp, #-32]!");                           // save frame pointer and return address plus out-pointer slots
+    emitter.instruction("mov x29, sp");                                         // establish the wrapper frame pointer
+    emitter.instruction("stp x0, x1, [sp, #16]");                               // save the caller's out_ptr/out_len storage addresses
+    emitter.instruction("bl __rt_ob_get_flush_pop");                            // gate, run the handler, flush, pop → raw pair (or null)
+    emitter.instruction("ldp x9, x10, [sp, #16]");                              // reload the out-pointer storage addresses
+    emitter.instruction("cbz x1, __elephc_eval_ob_get_flush_none");             // refused — report failure to Rust
+    emitter.instruction("str x1, [x9]");                                        // store the owned raw-contents pointer for Rust
+    emitter.instruction("str x2, [x10]");                                       // store the raw-contents length for Rust
+    emitter.instruction("mov x0, #1");                                          // report success to Rust
+    emitter.instruction("b __elephc_eval_ob_get_flush_done");                   // finish
+    emitter.label("__elephc_eval_ob_get_flush_none");
+    emitter.instruction("mov x0, #0");                                          // report refusal to Rust
+    emitter.label("__elephc_eval_ob_get_flush_done");
+    emitter.instruction("ldp x29, x30, [sp], #32");                             // restore frame pointer and return address
+    emitter.instruction("ret");                                                 // return the success flag
+
+    label_c_global(emitter, "__elephc_eval_ob_release_string");
+    emitter.instruction("b __rt_decref_any");                                   // release one bridge-returned owned string
+
+    label_c_global(emitter, "__elephc_eval_ob_slot_meta");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
+    emitter.instruction("cmp x0, x10");                                         // is the requested slot index within the stack?
+    emitter.instruction("b.hs __elephc_eval_ob_slot_meta_none");                // out-of-range index — report failure
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_chunk_sizes"); // materialize the chunk-size slot array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's chunk size
+    emitter.instruction("str x12, [x1]");                                       // store it through the caller's out_chunk
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_flags");      // materialize the flags slot array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's stored flags word
+    emitter.instruction("str x12, [x2]");                                       // store it through the caller's out_flags
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_handler_stubs"); // materialize the handler-stub slot array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's handler stub
+    emitter.instruction("cmp x12, #0");                                         // is a user handler installed?
+    emitter.instruction("cset x12, ne");                                        // bit 0 = user-handler flag
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_started");    // materialize the started-flag slot array
+    emitter.instruction("ldr x13, [x11, x0, lsl #3]");                          // load the slot's started flag
+    emitter.instruction("cmp x13, #0");                                         // has the handler run at least once?
+    emitter.instruction("cset x13, ne");                                        // normalize the started flag to 0/1
+    emitter.instruction("orr x12, x12, x13, lsl #1");                           // bit 1 = started flag
+    emitter.instruction("str x12, [x3]");                                       // store the packed user/started bits
+    emitter.instruction("mov x0, #1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+    emitter.label("__elephc_eval_ob_slot_meta_none");
+    emitter.instruction("mov x0, #0");                                          // report "no such buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_slot_name");
+    crate::codegen::abi::emit_symbol_address(emitter, "x9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("ldr x10, [x9]");                                       // load the current buffer-stack depth
+    emitter.instruction("cmp x0, x10");                                         // is the requested slot index within the stack?
+    emitter.instruction("b.hs __elephc_eval_ob_slot_name_none");                // out-of-range index — report failure
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_name_ptrs");  // materialize the handler-name pointer array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's display-name pointer
+    emitter.instruction("str x12, [x1]");                                       // store it through the caller's out_ptr
+    crate::codegen::abi::emit_symbol_address(emitter, "x11", "_ob_name_lens");  // materialize the handler-name length array
+    emitter.instruction("ldr x12, [x11, x0, lsl #3]");                          // load the slot's display-name length
+    emitter.instruction("str x12, [x2]");                                       // store it through the caller's out_len
+    emitter.instruction("mov x0, #1");                                          // report success to Rust (bytes copied immediately)
+    emitter.instruction("ret");                                                 // return to Rust
+    emitter.label("__elephc_eval_ob_slot_name_none");
+    emitter.instruction("mov x0, #0");                                          // report "no such buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
     label_c_global(emitter, "__elephc_eval_value_string_bytes");
     emitter.instruction("sub sp, sp, #48");                                     // allocate a wrapper frame for output pointers
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across string casting
@@ -1593,7 +1821,12 @@ fn emit_aarch64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 means the concrete payload is a PHP object
     emitter.instruction("b.ne __elephc_eval_value_final_object_none");          // non-object releases have no dynamic destructor
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer from the Mixed cell
-    emitter.instruction("cbz x9, __elephc_eval_value_final_object_none");       // null object payloads are treated as non-final
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_final_object_none",
+    );
     emitter.instruction("ldr w10, [x9, #-12]");                                 // load the object refcount that the Mixed release will decrement
     emitter.instruction("cmp w10, #1");                                         // only the final object owner can run the destructor
     emitter.instruction("csel x0, x9, xzr, eq");                                // return object identity only for the final release
@@ -1837,8 +2070,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 is an object payload
     emitter.instruction("jne __elephc_eval_value_object_class_name_miss_x86");  // non-objects cannot provide a class name
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // check the unboxed object pointer before dereferencing it
-    emitter.instruction("jz __elephc_eval_value_object_class_name_miss_x86");   // reject malformed object payloads
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_object_class_name_miss_x86",
+    );
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the object's runtime class id
     abi::emit_load_symbol_to_reg(emitter, "rdx", "_class_name_count", 0);
     emitter.instruction("cmp r11, rdx");                                        // check whether the class id is in table bounds
@@ -2048,7 +2285,8 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("call __elephc_eval_key_normalize");                    // normalize eval array key to key_lo/key_hi
     emitter.instruction("mov rsi, rax");                                        // pass normalized key_lo to the reader
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed array receiver
-    emitter.instruction("call __rt_mixed_array_get_shared");                    // retain the stored eval cell so by-reference calls can write back
+    emitter.instruction("xor ecx, ecx");                                        // eval bridge lookup reports misses through its own result contract
+    emitter.instruction("call __rt_mixed_array_get");                           // read the boxed Mixed element or Mixed(null)
     emitter.instruction("add rsp, 16");                                         // release the array-get wrapper slots
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the boxed element to Rust
@@ -2075,16 +2313,24 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("jne __elephc_eval_value_array_key_exists_false");      // non-integer keys never exist in indexed arrays
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed indexed-array receiver
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the indexed-array payload pointer
-    emitter.instruction("test rdi, rdi");                                       // missing payload cannot contain a key
-    emitter.instruction("jz __elephc_eval_value_array_key_exists_false");       // report false for missing indexed-array payloads
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__elephc_eval_value_array_key_exists_false",
+    );
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass normalized integer key to the bounds helper
     emitter.instruction("call __rt_array_key_exists");                          // return whether the integer key is in bounds
     emitter.instruction("jmp __elephc_eval_value_array_key_exists_box");        // box the existence flag for Rust
     emitter.label("__elephc_eval_value_array_key_exists_assoc");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the boxed associative-array receiver
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the hash payload pointer
-    emitter.instruction("test rdi, rdi");                                       // missing hash payload cannot contain a key
-    emitter.instruction("jz __elephc_eval_value_array_key_exists_false");       // report false for missing associative-array payloads
+    emit_branch_if_null_container(
+        emitter,
+        "rdi",
+        "r10",
+        "__elephc_eval_value_array_key_exists_false",
+    );
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // pass normalized key_lo to the hash lookup
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // pass normalized key_hi to the hash lookup
     emitter.instruction("call __rt_hash_get");                                  // return hash found flag in rax
@@ -2122,8 +2368,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("jmp __elephc_eval_value_array_iter_key_done");         // return the boxed key to Rust
     emitter.label("__elephc_eval_value_array_iter_key_assoc");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the hash payload pointer from the Mixed cell
-    emitter.instruction("test r10, r10");                                       // null hash payloads produce a null key
-    emitter.instruction("jz __elephc_eval_value_array_iter_key_null");          // branch to boxed null for missing hash payloads
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_array_iter_key_null",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // save the hash pointer for repeated iterator helper calls
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // start the insertion-order position counter at zero
     emitter.instruction("xor esi, esi");                                        // cursor 0 starts at the hash head entry
@@ -2197,8 +2447,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the empty length to Rust
     emitter.label("__elephc_eval_value_array_len_load");
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the array/hash payload pointer from the Mixed cell
-    emitter.instruction("test r10, r10");                                       // is the container payload null?
-    emitter.instruction("jz __elephc_eval_value_array_len_zero");               // null payloads are treated as empty containers
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_array_len_zero",
+    );
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the runtime container element count
     emitter.instruction("ret");                                                 // return the element count to Rust
 
@@ -2209,8 +2463,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 = object
     emitter.instruction("jne __elephc_eval_value_object_property_len_zero");    // non-objects expose no JSON-visible properties here
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // is the object payload null?
-    emitter.instruction("jz __elephc_eval_value_object_property_len_zero");     // null object payloads have no visible properties
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_object_property_len_zero",
+    );
     abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
     emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
@@ -2236,8 +2494,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 = object
     emitter.instruction("jne __elephc_eval_value_object_property_iter_key_null"); // non-objects have no JSON-visible property key
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // is the object payload null?
-    emitter.instruction("jz __elephc_eval_value_object_property_iter_key_null"); // null object payloads produce a null key
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_object_property_iter_key_null",
+    );
     abi::emit_load_symbol_to_reg(emitter, "r11", "_stdclass_class_id", 0);
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
     emitter.instruction("cmp rax, r11");                                        // check whether the object is stdClass
@@ -2471,6 +2733,24 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("ret");                                                 // return the object identity pointer to Rust
 
+    // The PHP OBJECT HANDLE bridge — see the AArch64 arm for why it is separate
+    // from the address-shaped `object_identity` above.
+    label_c_global(emitter, "__elephc_eval_value_object_handle");
+    emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable object-handle wrapper frame
+    emitter.instruction("mov rax, rdi");                                        // pass the boxed Mixed argument to mixed_unbox
+    emitter.instruction("call __rt_mixed_unbox");                               // unwrap nested Mixed cells to tag and object payload
+    emitter.instruction("cmp rax, 6");                                          // runtime tag 6 means PHP object
+    emitter.instruction("jne __elephc_eval_value_object_handle_zero_x86");      // non-object values carry no PHP handle
+    emitter.instruction("mov rax, rdi");                                        // pass the unboxed object payload to the handle pool
+    emitter.instruction("call __rt_object_handle_of");                          // rax = this object's PHP handle
+    emitter.instruction("jmp __elephc_eval_value_object_handle_done_x86");      // return the resolved handle
+    emitter.label("__elephc_eval_value_object_handle_zero_x86");
+    emitter.instruction("xor eax, eax");                                        // report "no handle" for non-object values
+    emitter.label("__elephc_eval_value_object_handle_done_x86");
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the PHP object handle to Rust
+
     label_c_global(emitter, "__elephc_eval_value_cast_int");
     emitter.instruction("push rbp");                                            // align the stack and preserve the Rust caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
@@ -2508,6 +2788,8 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("je __elephc_eval_value_cast_string_float_x86");        // doubles cast through decimal formatting
     emitter.instruction("cmp rax, 3");                                          // is the eval value a boolean?
     emitter.instruction("je __elephc_eval_value_cast_string_bool_x86");         // booleans cast to \"1\" or the empty string
+    emitter.instruction("cmp rax, 9");                                          // is the eval value a resource?
+    emitter.instruction("je __elephc_eval_value_cast_string_resource_x86");     // resources render as PHP's \"Resource id #N\"
     emitter.label("__elephc_eval_value_cast_string_empty_x86");
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("xor edi, edi");                                        // unsupported and falsey payloads use an empty string pointer
@@ -2526,6 +2808,14 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, rdx");                                        // move the existing string length into mixed value_hi
     emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
     emitter.instruction("call __rt_mixed_from_value");                          // persist and box the existing string payload once
+    emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
+    emitter.label("__elephc_eval_value_cast_string_resource_x86");
+    emitter.instruction("mov rax, rdi");                                        // pass the native resource payload to the display formatter
+    emitter.instruction("call __rt_resource_to_string");                        // format \"Resource id #N\" into the shared concat scratch
+    emitter.instruction("mov rdi, rax");                                        // move the formatted string pointer into mixed value_lo
+    emitter.instruction("mov rsi, rdx");                                        // move the formatted string length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the borrowed resource display string
     emitter.instruction("jmp __elephc_eval_value_cast_string_done_x86");        // restore the wrapper frame and return
     emitter.label("__elephc_eval_value_cast_string_float_x86");
     emitter.instruction("movq xmm0, rdi");                                      // move the double payload bits into the FP argument register
@@ -2569,6 +2859,11 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource, with C id already in rdi
     emitter.instruction("xor esi, esi");                                        // resource payloads do not use a high word
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the resource payload and return to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_hash_context");
+    emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource, with the eval table key already in rdi
+    emitter.instruction("mov esi, 5");                                          // resource kind 5 = eval-owned inert handle: no PHP id, no destructor
+    emitter.instruction("jmp __rt_mixed_from_value");                           // box the inert hash-context payload and return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_float");
     emitter.instruction("movq rdi, xmm0");                                      // move the C double bits into mixed value_lo
@@ -3208,6 +3503,178 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("mov rax, rdi");                                        // move the C boxed value argument into mixed echo input
     emitter.instruction("jmp __rt_mixed_write_stdout");                         // echo one boxed mixed value and return to Rust
 
+    // -- output-buffering (ob_*) bridge: expose the runtime buffer stack to the
+    //    eval interpreter so static and eval'd code share one ob state. --
+    label_c_global(emitter, "__elephc_eval_ob_start");
+    emitter.instruction("jmp __rt_ob_start");                                   // push a new output buffer; returns 1/0 in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_level");
+    emitter.instruction("jmp __rt_ob_level");                                   // return the buffer-stack depth in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_length");
+    emitter.instruction("jmp __rt_ob_length");                                  // return the top buffer length (or -1) in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_clean");
+    emitter.instruction("jmp __rt_ob_clean");                                   // truncate the top buffer; returns 1/0 in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_flush");
+    emitter.instruction("jmp __rt_ob_flush");                                   // flush the top buffer to the parent sink; returns 1/0 in rax
+
+    label_c_global(emitter, "__elephc_eval_ob_end");
+    emitter.instruction("test rdi, rdi");                                       // a zero flush flag discards instead of flushing
+    emitter.instruction("jz __elephc_eval_ob_end_clean_path_x86");              // route the discard variant to end_clean
+    emitter.instruction("jmp __rt_ob_end_flush");                               // flush, pop, and free the top buffer
+    emitter.label("__elephc_eval_ob_end_clean_path_x86");
+    emitter.instruction("jmp __rt_ob_end_clean");                               // discard, pop, and free the top buffer
+
+    label_c_global(emitter, "__elephc_eval_ob_contents");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
+    emitter.instruction("test r10, r10");                                       // is any buffer active?
+    emitter.instruction("jz __elephc_eval_ob_contents_none_x86");               // no active buffer — report failure to Rust
+    emitter.instruction("sub r10, 1");                                          // top slot index = depth - 1
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_ptrs");       // materialize the buffer-pointer slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the top buffer base pointer
+    emitter.instruction("mov QWORD PTR [rdi], rax");                            // store the buffer pointer through the caller's out_ptr
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_lens");       // materialize the used-bytes slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + r10*8]");                    // load the top buffer's used byte count
+    emitter.instruction("mov QWORD PTR [rsi], rax");                            // store the byte count through the caller's out_len
+    emitter.instruction("mov eax, 1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust (bytes are copied immediately)
+    emitter.label("__elephc_eval_ob_contents_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report "no active buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_stats");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
+    emitter.instruction("cmp rdi, r10");                                        // is the requested slot index within the stack?
+    emitter.instruction("jae __elephc_eval_ob_stats_none_x86");                 // out-of-range (or negative) index — report failure
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_lens");       // materialize the used-bytes slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's used byte count
+    emitter.instruction("mov QWORD PTR [rsi], rax");                            // store it through the caller's out_used
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_caps");       // materialize the capacity slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's capacity
+    emitter.instruction("mov QWORD PTR [rdx], rax");                            // store it through the caller's out_size
+    emitter.instruction("mov eax, 1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+    emitter.label("__elephc_eval_ob_stats_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report "no such buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_implicit_flush");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_implicit_flush"); // materialize the stored implicit-flush flag address
+    emitter.instruction("mov QWORD PTR [r9], rdi");                             // store the (inert) implicit-flush flag
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_start_ex");
+    emitter.instruction("test rdi, rdi");                                       // a zero has-handler flag selects the default handler
+    emitter.instruction("jz __elephc_eval_ob_start_ex_default_x86");            // route the default-handler variant
+    crate::codegen::abi::emit_symbol_address(emitter, "rdi", "__rt_ob_eval_trampoline"); // eval handlers invoke through the installed magician hook
+    emitter.instruction("jmp __rt_ob_start_ex");                                // start the buffer (env/chunk/flags/name already aligned)
+    emitter.label("__elephc_eval_ob_start_ex_default_x86");
+    emitter.instruction("xor esi, esi");                                        // default handlers carry no env word
+    emitter.instruction("jmp __rt_ob_start_ex");                                // start the buffer with the default handler
+
+    label_c_global(emitter, "__elephc_eval_install_ob_handler_hook");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_elephc_eval_ob_handler_fn"); // materialize the eval handler hook slot
+    emitter.instruction("mov QWORD PTR [r9], rdi");                             // install the magician ob-handler callback
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_get_clean_pop");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve slots for the out-pointer storage addresses
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the caller's out_ptr storage address
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the caller's out_len storage address
+    emitter.instruction("call __rt_ob_get_clean_pop");                          // gate, run the handler, pop → raw pair (or null)
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the out_ptr storage address
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the out_len storage address
+    emitter.instruction("test rax, rax");                                       // did the composite helper return contents?
+    emitter.instruction("jz __elephc_eval_ob_get_clean_none_x86");              // refused — report failure to Rust
+    emitter.instruction("mov QWORD PTR [r9], rax");                             // store the owned raw-contents pointer for Rust
+    emitter.instruction("mov QWORD PTR [r10], rdx");                            // store the raw-contents length for Rust
+    emitter.instruction("mov eax, 1");                                          // report success to Rust
+    emitter.instruction("jmp __elephc_eval_ob_get_clean_done_x86");             // finish
+    emitter.label("__elephc_eval_ob_get_clean_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report refusal to Rust
+    emitter.label("__elephc_eval_ob_get_clean_done_x86");
+    emitter.instruction("add rsp, 16");                                         // release the out-pointer slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the success flag
+
+    label_c_global(emitter, "__elephc_eval_ob_get_flush_pop");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the wrapper frame pointer
+    emitter.instruction("sub rsp, 16");                                         // reserve slots for the out-pointer storage addresses
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the caller's out_ptr storage address
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the caller's out_len storage address
+    emitter.instruction("call __rt_ob_get_flush_pop");                          // gate, run the handler, flush, pop → raw pair (or null)
+    emitter.instruction("mov r9, QWORD PTR [rbp - 8]");                         // reload the out_ptr storage address
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the out_len storage address
+    emitter.instruction("test rax, rax");                                       // did the composite helper return contents?
+    emitter.instruction("jz __elephc_eval_ob_get_flush_none_x86");              // refused — report failure to Rust
+    emitter.instruction("mov QWORD PTR [r9], rax");                             // store the owned raw-contents pointer for Rust
+    emitter.instruction("mov QWORD PTR [r10], rdx");                            // store the raw-contents length for Rust
+    emitter.instruction("mov eax, 1");                                          // report success to Rust
+    emitter.instruction("jmp __elephc_eval_ob_get_flush_done_x86");             // finish
+    emitter.label("__elephc_eval_ob_get_flush_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report refusal to Rust
+    emitter.label("__elephc_eval_ob_get_flush_done_x86");
+    emitter.instruction("add rsp, 16");                                         // release the out-pointer slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the success flag
+
+    label_c_global(emitter, "__elephc_eval_ob_release_string");
+    emitter.instruction("mov rax, rdi");                                        // move the owned string into the runtime release register
+    emitter.instruction("jmp __rt_decref_any");                                 // release one bridge-returned owned string
+
+    label_c_global(emitter, "__elephc_eval_ob_slot_meta");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
+    emitter.instruction("cmp rdi, r10");                                        // is the requested slot index within the stack?
+    emitter.instruction("jae __elephc_eval_ob_slot_meta_none_x86");             // out-of-range index — report failure
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_chunk_sizes"); // materialize the chunk-size slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's chunk size
+    emitter.instruction("mov QWORD PTR [rsi], rax");                            // store it through the caller's out_chunk
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_flags");      // materialize the flags slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's stored flags word
+    emitter.instruction("mov QWORD PTR [rdx], rax");                            // store it through the caller's out_flags
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_handler_stubs"); // materialize the handler-stub slot array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's handler stub
+    emitter.instruction("test rax, rax");                                       // is a user handler installed?
+    emitter.instruction("setnz al");                                            // bit 0 = user-handler flag
+    emitter.instruction("movzx rax, al");                                       // zero-extend the packed bits
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_started");    // materialize the started-flag slot array
+    emitter.instruction("mov r10, QWORD PTR [r11 + rdi*8]");                    // load the slot's started flag
+    emitter.instruction("test r10, r10");                                       // has the handler run at least once?
+    emitter.instruction("jz __elephc_eval_ob_slot_meta_store_x86");             // an unstarted handler keeps bit 1 clear
+    emitter.instruction("or rax, 2");                                           // bit 1 = started flag
+    emitter.label("__elephc_eval_ob_slot_meta_store_x86");
+    emitter.instruction("mov QWORD PTR [rcx], rax");                            // store the packed user/started bits
+    emitter.instruction("mov eax, 1");                                          // report success to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+    emitter.label("__elephc_eval_ob_slot_meta_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report "no such buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
+    label_c_global(emitter, "__elephc_eval_ob_slot_name");
+    crate::codegen::abi::emit_symbol_address(emitter, "r9", "_ob_level");       // materialize the address of the buffer-stack depth
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current buffer-stack depth
+    emitter.instruction("cmp rdi, r10");                                        // is the requested slot index within the stack?
+    emitter.instruction("jae __elephc_eval_ob_slot_name_none_x86");             // out-of-range index — report failure
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_name_ptrs");  // materialize the handler-name pointer array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's display-name pointer
+    emitter.instruction("mov QWORD PTR [rsi], rax");                            // store it through the caller's out_ptr
+    crate::codegen::abi::emit_symbol_address(emitter, "r11", "_ob_name_lens");  // materialize the handler-name length array
+    emitter.instruction("mov rax, QWORD PTR [r11 + rdi*8]");                    // load the slot's display-name length
+    emitter.instruction("mov QWORD PTR [rdx], rax");                            // store it through the caller's out_len
+    emitter.instruction("mov eax, 1");                                          // report success to Rust (bytes copied immediately)
+    emitter.instruction("ret");                                                 // return to Rust
+    emitter.label("__elephc_eval_ob_slot_name_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report "no such buffer" to Rust
+    emitter.instruction("ret");                                                 // return to Rust
+
     label_c_global(emitter, "__elephc_eval_value_string_bytes");
     emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across string casting
     emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
@@ -3258,8 +3725,12 @@ fn emit_x86_64_wrappers(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 means the concrete payload is a PHP object
     emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // non-object releases have no dynamic destructor
     emitter.instruction("mov r10, QWORD PTR [rax + 8]");                        // load the object payload pointer from the Mixed cell
-    emitter.instruction("test r10, r10");                                       // null object payloads are treated as non-final
-    emitter.instruction("jz __elephc_eval_value_final_object_none_x86");        // return zero for null object payloads
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_final_object_none_x86",
+    );
     emitter.instruction("mov r11d, DWORD PTR [r10 - 12]");                      // load the object refcount that the Mixed release will decrement
     emitter.instruction("cmp r11d, 1");                                         // only the final object owner can run the destructor
     emitter.instruction("jne __elephc_eval_value_final_object_none_x86");       // defer destructor execution until object refcount is final
@@ -4419,7 +4890,12 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #6");                                          // tag 6 = object
     emitter.instruction("b.ne __elephc_eval_value_object_clone_shallow_null");  // non-object values cannot be cloned by this bridge
     emitter.instruction("ldr x9, [x0, #8]");                                    // load the object payload pointer
-    emitter.instruction("cbz x9, __elephc_eval_value_object_clone_shallow_null"); // malformed object payloads cannot be cloned
+    emit_branch_if_null_container(
+        emitter,
+        "x9",
+        "x10",
+        "__elephc_eval_value_object_clone_shallow_null",
+    );
     emitter.instruction("str x9, [sp, #0]");                                    // save the source object payload pointer
     emitter.instruction("ldr x11, [x9]");                                       // load the object's runtime class id
     emitter.instruction("str x11, [sp, #56]");                                  // save class id across allocation and ownership calls
@@ -4439,6 +4915,7 @@ fn emit_aarch64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate a clone object payload with the same byte size
     emitter.instruction("mov x9, #4");                                          // heap kind 4 marks object instances for ownership helpers
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp the uniform object heap header
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
     emitter.instruction("ldr x11, [sp, #56]");                                  // reload the source class id
     emitter.instruction("str x11, [x0]");                                       // store the class id at the clone payload head
     emitter.instruction("str x0, [sp, #8]");                                    // save the clone object payload pointer
@@ -4560,8 +5037,12 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 6");                                          // tag 6 = object
     emitter.instruction("jne __elephc_eval_value_object_clone_shallow_null_x86"); // non-object values cannot be cloned by this bridge
     emitter.instruction("mov r10, QWORD PTR [rdi + 8]");                        // load the object payload pointer
-    emitter.instruction("test r10, r10");                                       // malformed object payloads cannot be cloned
-    emitter.instruction("jz __elephc_eval_value_object_clone_shallow_null_x86"); // branch to the null sentinel for missing payloads
+    emit_branch_if_null_container(
+        emitter,
+        "r10",
+        "r11",
+        "__elephc_eval_value_object_clone_shallow_null_x86",
+    );
     emitter.instruction("mov QWORD PTR [rbp - 8], r10");                        // save the source object payload pointer
     emitter.instruction("mov rax, QWORD PTR [r10]");                            // load the object's runtime class id
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // save class id across allocation and ownership calls
@@ -4577,8 +5058,9 @@ fn emit_x86_64_object_clone_shallow_wrapper(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // save payload size for allocation and dyn-prop detection
     emitter.instruction("mov rax, rcx");                                        // pass the source payload size to the heap allocator
     emitter.instruction("call __rt_heap_alloc");                                // allocate a clone object payload with the same byte size
-    emitter.instruction(&format!("mov r10, 0x{:x}", (X86_64_HEAP_MAGIC_HI32 << 32) | 4)); // materialize the x86_64 object heap kind word
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(4))); // materialize the x86_64 object heap kind word
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the uniform object heap header
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // reload the source class id
     emitter.instruction("mov QWORD PTR [rax], rcx");                            // store the class id at the clone payload head
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the clone object payload pointer
@@ -4725,4 +5207,181 @@ fn emit_x86_64_reject_runtime_managed_clone_classes(
 fn label_c_global(emitter: &mut Emitter, name: &str) {
     let symbol = emitter.target.extern_symbol(name);
     emitter.label_global(&symbol);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Emits the whole eval bridge for one target and returns the assembly text.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_eval_bridge_runtime(&mut emitter);
+        emitter.output()
+    }
+
+    /// Pins the AArch64 tag-9 arm of `__elephc_eval_value_cast_string`.
+    ///
+    /// The eval bridge re-implements its own tag dispatch rather than calling
+    /// `__rt_mixed_cast_string`, so fixing the boxed-Mixed cast alone left
+    /// `strval($r)` inside a runtime-interpreted `eval()` returning the EMPTY string
+    /// while PHP 8.5.6 returned `Resource id #5`. Both dispatches must carry the arm.
+    #[test]
+    fn aarch64_eval_string_cast_renders_resources() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(
+            asm.contains("    cmp x0, #9\n    b.eq __elephc_eval_value_cast_string_resource\n"),
+            "{asm}"
+        );
+        assert!(asm.contains("__elephc_eval_value_cast_string_resource:\n"), "{asm}");
+        assert!(asm.contains("bl __rt_resource_to_string"), "{asm}");
+    }
+
+    /// Pins the same arm on x86_64, so the eval bridge cannot render resources on one
+    /// target and empty strings on the other.
+    #[test]
+    fn x86_64_eval_string_cast_renders_resources() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(
+            asm.contains("    cmp rax, 9\n    je __elephc_eval_value_cast_string_resource_x86\n"),
+            "{asm}"
+        );
+        assert!(asm.contains("__elephc_eval_value_cast_string_resource_x86:\n"), "{asm}");
+        assert!(asm.contains("call __rt_resource_to_string"), "{asm}");
+    }
+
+    /// The eval arm hands the borrowed `_concat_buf` scratch straight to
+    /// `__rt_mixed_from_value` with tag 1, which PERSISTS the bytes into a fresh boxed
+    /// string. That copy is what makes returning scratch safe here: the Rust side owns a
+    /// real boxed value and nothing ever frees the concat buffer.
+    #[test]
+    fn the_eval_resource_arm_boxes_a_persisted_string_on_both_targets() {
+        for (target, label, next) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "__elephc_eval_value_cast_string_resource:\n",
+                "__elephc_eval_value_cast_string_float:\n",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "__elephc_eval_value_cast_string_resource_x86:\n",
+                "__elephc_eval_value_cast_string_float_x86:\n",
+            ),
+        ] {
+            let asm = emit_for(target);
+            let arm = asm
+                .split(label)
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing eval resource arm for {target:?}:\n{asm}"));
+            let arm = arm.split(next).next().expect("resource arm precedes the float arm");
+            assert!(
+                arm.contains("__rt_mixed_from_value"),
+                "the eval resource arm must box the formatted string ({target:?}):\n{arm}"
+            );
+            assert!(
+                !arm.contains("__rt_heap_free"),
+                "the eval resource arm must not free borrowed scratch ({target:?}):\n{arm}"
+            );
+        }
+    }
+
+    /// Pins the whole body of `__elephc_eval_value_hash_context` on AArch64.
+    ///
+    /// The symbol exists to stamp resource KIND 5 — eval-owned inert handle — into the
+    /// high payload word, so `__rt_mixed_from_value` skips `__rt_resource_id_of` and
+    /// `__rt_mixed_free_deep` runs no destructor. PHP 8's `hash_init()` returns a
+    /// `HashContext` OBJECT and consumes nothing from the resource counter; routing eval's
+    /// context through `__elephc_eval_value_resource` (which writes `xzr`, i.e. kind 0)
+    /// burned an id and shifted every later `fopen()` in the request.
+    ///
+    /// The full four-line body is pinned rather than `contains("mov x2, #5")`, which
+    /// `mov x2, #50` also satisfies. `mov x2, #5` next to a `b` (never a `bl`) is also the
+    /// tail-branch shape this helper needs: it takes no frame and saves no link register.
+    #[test]
+    fn aarch64_boxes_eval_hash_contexts_as_inert_kind_five() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        assert!(
+            asm.contains(
+                "__elephc_eval_value_hash_context:\n\
+                 \x20   mov x1, x0\n\
+                 \x20   mov x0, #9\n\
+                 \x20   mov x2, #5\n\
+                 \x20   b __rt_mixed_from_value\n"
+            ),
+            "{asm}"
+        );
+    }
+
+    /// Pins the same body on x86_64, where the key already sits in `rdi` per the SysV ABI
+    /// and the internal `__rt_mixed_from_value` contract is tag=rax, lo=rdi, hi=rsi.
+    ///
+    /// Without this the x86 half could be omitted or left writing `xor esi, esi` and every
+    /// aarch64 pin above would still pass — the single-arch blind spot that has already
+    /// let a runtime fix be deleted from one target in this tree.
+    #[test]
+    fn x86_64_boxes_eval_hash_contexts_as_inert_kind_five() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        assert!(
+            asm.contains(
+                "__elephc_eval_value_hash_context:\n\
+                 \x20   mov eax, 9\n\
+                 \x20   mov esi, 5\n\
+                 \x20   jmp __rt_mixed_from_value\n"
+            ),
+            "{asm}"
+        );
+    }
+
+    /// Pins that the hash-context wrapper is DISTINCT from the plain resource wrapper.
+    ///
+    /// The likeliest silent regression is someone "simplifying" the new symbol into an
+    /// alias of `__elephc_eval_value_resource`: the magician side would still compile and
+    /// link, every hash digest would still be correct, and the id leak would come back.
+    /// The plain wrapper must keep zeroing the kind word (genuine eval resources — fopen,
+    /// opendir, popen, sockets — MUST consume ids), and the hash wrapper must not.
+    #[test]
+    fn the_resource_and_hash_context_wrappers_stamp_different_kinds() {
+        for (target, resource_zero, hash_kind) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "mov x2, xzr", "mov x2, #5"),
+            (Target::new(Platform::Linux, Arch::X86_64), "xor esi, esi", "mov esi, 5"),
+        ] {
+            let asm = emit_for(target);
+            let resource_body = body_of(&asm, "__elephc_eval_value_resource");
+            let hash_body = body_of(&asm, "__elephc_eval_value_hash_context");
+            assert!(
+                resource_body.contains(resource_zero),
+                "genuine eval resources must stay kind 0 and keep consuming ids ({target:?}):\n{resource_body}"
+            );
+            assert!(
+                hash_body.contains(hash_kind),
+                "eval hash contexts must be stamped kind 5 ({target:?}):\n{hash_body}"
+            );
+            assert!(
+                !hash_body.contains(resource_zero),
+                "the hash-context wrapper must not zero the kind word ({target:?}):\n{hash_body}"
+            );
+        }
+    }
+
+    /// Returns the instruction lines following `label` up to the next exported helper.
+    ///
+    /// `label_c_global` emits `.globl <sym>` immediately before each wrapper's label, so
+    /// the next `.globl` is where this wrapper's body ends. Splitting on a BLANK line
+    /// would not work — the bridge emits none between wrappers — and would silently hand
+    /// back the whole remainder of the file, making every negative assertion below
+    /// vacuous: `mov x2, xzr` from the very next wrapper would satisfy it.
+    fn body_of<'a>(asm: &'a str, label: &str) -> &'a str {
+        let marker = format!("{label}:\n");
+        let body = asm
+            .split(&marker)
+            .nth(1)
+            .unwrap_or_else(|| panic!("missing {label} in emitted assembly:\n{asm}"));
+        let body = body.split("\n.globl ").next().expect("split yields a first segment");
+        assert!(
+            !body.is_empty(),
+            "isolated an empty body for {label}; the emitter's helper separator changed"
+        );
+        body
+    }
 }

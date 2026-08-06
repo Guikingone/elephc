@@ -5,7 +5,8 @@ sidebar:
   order: 1
 ---
 
-elephc is an ahead-of-time compiler: it reads a `.php` file and produces a
+elephc is an ahead-of-time compiler: it reads a tagged `.php` or tagless `.lfc`
+file and produces a
 standalone native binary with no PHP, Zend Engine, or external virtual-machine
 dependency. Ordinary source is machine code linked against a small hand-written
 runtime baked into the executable. Experimental dynamic `eval()` is the explicit
@@ -19,10 +20,23 @@ elephc hello.php
 ./hello
 ```
 
+For extension-oriented programs, `.lfc` removes PHP's opening and closing tags:
+
+```text
+echo "Hello from tagless source!\n";
+```
+
+```bash
+elephc hello.lfc
+./hello
+```
+
 The compiler writes the output binary next to the source file, using the source
-name without its extension (`hello.php` → `hello`). Nothing else is produced by
-default — no intermediate object files are left behind, no cache pollution in
-your project directory.
+name without its extension (`hello.php` or `hello.lfc` → `hello`). Nothing else
+is produced by default — no intermediate object files are left behind, no cache
+pollution in your project directory. See
+[LFC source files](../beyond-php/lfc-source-files.md) for tags, mixed-project
+includes/autoloading, and `--strict-php`.
 
 ```bash
 elephc src/app.php     # produces ./src/app
@@ -63,6 +77,7 @@ run. See [The Runtime](../internals/the-runtime.md) for what those routines are.
 | [The compilation pipeline](compilation-pipeline.md) | Every phase from source text to binary, in order |
 | [CLI reference](cli-reference.md) | The complete, authoritative list of every flag |
 | [Targets and cross-compilation](targets.md) | The supported target matrix and `--target` |
+| [Native dependencies](native-dependencies.md) | `elephc native`, project manifests/locks, verified artifacts, cache identity, and toolchain selection |
 | [Optimization and codegen controls](optimization.md) | `--regalloc`, `--ir-opt`, `--null-repr`, and what they do |
 | [Output formats and diagnostics](output-and-diagnostics.md) | `--emit`, `--emit-asm`, `--emit-ir`, `--check`, `--timings`, `--source-map`, `--gc-stats`, `--heap-debug` |
 | [Linking, heap, and conditional compilation](linking-and-conditional-compilation.md) | `--link`, `--link-path`, `--framework`, `--heap-size`, `--define` |

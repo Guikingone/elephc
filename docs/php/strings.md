@@ -134,10 +134,11 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | Function | Signature | Description |
 |---|---|---|
 | `strlen()` | `strlen($str): int` | Returns string length |
+| `mb_strlen()` | `mb_strlen($str, $encoding = null): int` | Character count in the given encoding. An omitted or `null` encoding counts UTF-8, grouping malformed sequences like mbstring; `8bit`/`binary`/`7bit` return the byte length; other encodings are decoded through the system `iconv`. An unknown encoding name throws `\ValueError` |
 | `substr()` | `substr($str, $start [, $len]): string` | Extract substring |
 | `strpos()` | `strpos($hay, $needle): int\|false` | Find first occurrence. Returns `false` if not found |
 | `strrpos()` | `strrpos($hay, $needle): int\|false` | Find last occurrence. Returns `false` if not found |
-| `strstr()` | `strstr($hay, $needle): string` | Find first occurrence and return rest |
+| `strstr()` | `strstr($hay, $needle, $before_needle = false): string\|false` | Find first occurrence and return the rest, or the part before it when `$before_needle` is truthy. Returns `false` if not found |
 | `str_replace()` | `str_replace($search, $replace, $subject): string` | Replace all occurrences |
 | `str_ireplace()` | `str_ireplace($search, $replace, $subject): string` | Case-insensitive replace |
 | `substr_replace()` | `substr_replace($str, $repl, $start [, $len]): string` | Replace substring |
@@ -192,6 +193,58 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `hash_update()` | `hash_update($context, $data): bool` | Feed data into an incremental hashing context. |
 | `hash_final()` | `hash_final($context, $binary = false): string` | Finalize a context and return the digest (hex, or raw bytes when `$binary`). |
 | `hash_copy()` | `hash_copy($context): HashContext` | Clone an incremental hashing context so the original and copy can diverge. |
+
+#### The `HashContext` object
+
+`hash_init()` returns a real `HashContext` **object**, matching PHP 8 (which
+migrated incremental hashing from a resource to an object, exactly as GD did with
+`GdImage`). It behaves like any other object:
+
+```php
+$c = hash_init('md5');
+var_dump(is_object($c));            // bool(true)
+var_dump(gettype($c));              // string(6) "object"
+var_dump(get_class($c));            // string(11) "HashContext"
+var_dump($c instanceof HashContext) // bool(true)
+var_dump($c);                       // object(HashContext)#1 (1) { ["algo"]=> string(3) "md5" }
+```
+
+The class is declared by a compiler-injected prelude that is added **only when the
+program references `hash_init`/`hash_update`/`hash_final`/`hash_copy` or names
+`HashContext`**, so programs that never hash neither declare the class nor link the
+`elephc_crypto` bridge.
+
+Supported and matching PHP:
+
+- `is_object()`, `gettype()`, `get_class()`, `instanceof`, and a parameter or return
+  typed `HashContext`.
+- `var_dump()`, including the object handle: a context is drawn from the same handle
+  pool as ordinary objects, and consumes **no** resource id, so it does not shift the
+  ids of surrounding `fopen()` streams.
+- `hash_copy()` returns an independent object — feeding the original after copying
+  does not affect the copy, and finalizing the original leaves the copy usable.
+- Direct construction is rejected. PHP raises `Error: Call to private
+  HashContext::__construct() from global scope` at runtime; elephc rejects it at
+  compile time. `hash_init()` is the only way to obtain one on either side.
+- Using a context after `hash_final()` raises PHP's exact catchable
+  `TypeError: hash_update(): Argument #1 ($context) must be a valid, non-finalized HashContext`
+  (likewise for `hash_final()` and `hash_copy()`).
+- The context is freed automatically when the object goes out of scope.
+
+Known divergences:
+
+- **`serialize()` throws.** PHP serializes a `HashContext` together with its full
+  internal digest state so it round-trips. elephc holds an opaque bridge handle and
+  cannot reproduce that, so `__serialize()` raises an `Exception` rather than emitting
+  a reduced string that would look like a serialized context without being one.
+- **HMAC streaming is unsupported.** `hash_init($algo, HASH_HMAC, $key)` is rejected at
+  compile time (`Function 'hash_init' expects 1 arguments, got 3`). Use
+  [`hash_hmac()`](#) instead, which is fully supported.
+- **`print_r()` and `var_export()`** do not render objects yet — that is a general
+  elephc limitation, not specific to `HashContext`. `print_r()` on any object is a
+  compile-time "unsupported" error and `var_export()` prints nothing.
+- **Inside `eval()`**, `hash_init()` still returns a resource: the eval interpreter has
+  its own hashing implementation that has not been moved to the object model.
 | `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` `"` `'` (single quote as `&#039;`). The `ENT_*` flag constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values; `$flags` and `$encoding` are accepted but the escaper currently always applies `ENT_QUOTES` behaviour |
 | `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
@@ -211,4 +264,4 @@ Read-only. Negative indices count from end. Out-of-bounds returns empty string.
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
 
 Regex functions are documented separately in [Regex](regex.md), including the
-PCRE2 build requirements for programs that use `preg_*`.
+managed `pcre2` declaration required when a `preg_*` program is finally linked.

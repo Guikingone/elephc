@@ -3,7 +3,7 @@
 //! Bridges already-evaluated EIR operands to the shared target-aware regex runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - `preg_match()` captures currently support direct local `$matches` variables.
@@ -107,7 +107,10 @@ pub(crate) fn lower_preg_replace_callback(
     let callback = super::expect_operand(inst, 1)?;
     let subject = super::expect_operand(inst, 2)?;
     let callback_target = preg_replace_callback_target(ctx, callback)?;
-    let env_bytes = callback_target.reserve_env(ctx)?;
+    let env_bytes = callback_target.reserve_env(
+        ctx,
+        super::super::instruction_strict_php_profile(inst),
+    )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg(ctx, pattern, "x1", "x2", "preg_replace_callback pattern")?;
@@ -135,8 +138,12 @@ struct PregReplaceCallbackTarget {
 
 impl PregReplaceCallbackTarget {
     /// Reserves any callback environment required by the regex callback runtime.
-    fn reserve_env(&self, ctx: &mut FunctionContext<'_>) -> Result<usize> {
-        self.env.reserve(ctx)
+    fn reserve_env(
+        &self,
+        ctx: &mut FunctionContext<'_>,
+        strict_php: bool,
+    ) -> Result<usize> {
+        self.env.reserve(ctx, strict_php)
     }
 
     /// Releases any reserved callback environment while preserving the regex result.
@@ -158,12 +165,12 @@ enum PregReplaceCallbackEnv {
 
 impl PregReplaceCallbackEnv {
     /// Reserves the stack environment expected by the deferred regex callback wrapper.
-    fn reserve(&self, ctx: &mut FunctionContext<'_>) -> Result<usize> {
+    fn reserve(&self, ctx: &mut FunctionContext<'_>, strict_php: bool) -> Result<usize> {
         match self {
             Self::None => Ok(0),
             Self::Descriptor(callback) => reserve_descriptor_callback_env(ctx, *callback),
             Self::RuntimeString(callback) => {
-                reserve_runtime_string_descriptor_callback_env(ctx, *callback)
+                reserve_runtime_string_descriptor_callback_env(ctx, *callback, strict_php)
             }
             Self::CallableArray {
                 callable,
@@ -316,6 +323,7 @@ fn reserve_descriptor_callback_env(
 fn reserve_runtime_string_descriptor_callback_env(
     ctx: &mut FunctionContext<'_>,
     callable: ValueId,
+    strict_php: bool,
 ) -> Result<usize> {
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     let descriptor_reg = abi::int_result_reg(ctx.emitter).to_string();
@@ -324,6 +332,7 @@ fn reserve_runtime_string_descriptor_callback_env(
         callable,
         &descriptor_reg,
         "preg_replace_callback",
+        strict_php,
     )?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

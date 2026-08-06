@@ -37,6 +37,7 @@ mod str_ends_with;
 mod str_replace;
 mod explode;
 mod implode;
+mod implode_bool;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
@@ -78,6 +79,7 @@ mod rtrim_mask;
 mod ltrim_mask;
 mod trim_mask;
 mod resource_to_string;
+mod resource_type_name;
 mod resource_write_stdout;
 
 pub use itoa::emit_itoa;
@@ -142,6 +144,8 @@ pub use implode::emit_implode;
 /// Emit implode (join array to string) helper.
 pub use implode_int::emit_implode_int;
 /// Emit integer-optimized implode helper.
+pub use implode_bool::emit_implode_bool;
+/// Emit bool-element implode helper (`true` → `"1"`, `false` → `""`).
 pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
@@ -219,4 +223,6 @@ pub use trim_mask::emit_trim_mask;
 /// Emit trim with custom mask helper.
 pub use resource_to_string::emit_resource_to_string;
 /// Emit resource-to-string conversion.
+pub use resource_type_name::emit_resource_type_name;
+/// Emit the resource type-name resolver (`stream` when open, `Unknown` once closed).
 pub use resource_write_stdout::emit_resource_write_stdout;

@@ -99,6 +99,14 @@ macro_rules! impl_fake_construction_raw_ops {
             FakeValue::Bool(value) => u64::from(value),
             FakeValue::Float(value) => value.to_bits(),
             FakeValue::Int(value) => value as u64,
+            // A tag-9 cell stores eval's resource key verbatim, exactly as
+            // `__elephc_eval_value_resource` boxes it. Falling through to the
+            // catch-all zero here would make every stream lookup resolve resource 0.
+            // The key is NOT the PHP resource id: it carries
+            // `crate::stream_resources::EVAL_RESOURCE_PAYLOAD_BASE` and is only a
+            // lookup key into `EvalStreamResources`. What a display path reports is
+            // `FakeOps::fake_resource_id`, the fake mirror of the runtime registry.
+            FakeValue::Resource(value) => value as u64,
             FakeValue::String(_) | FakeValue::Bytes(_) => value.as_ptr() as u64,
             FakeValue::Array(_)
             | FakeValue::Assoc(_)

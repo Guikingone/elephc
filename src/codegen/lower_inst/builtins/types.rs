@@ -3,13 +3,14 @@
 //! Handles local retyping, class-name lookup against static metadata, and runtime object class ids.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Dynamic object lookups use the same dense `_class_name_*` runtime tables
 //!   emitted for codegen, preserving concrete subclasses.
 
 use crate::codegen::abi;
+use crate::codegen::emit::Emitter;
 use crate::codegen::emit_box_current_value_as_mixed;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
@@ -299,7 +300,13 @@ fn emit_int_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Converts the loaded float result register into a canonical bool.
+///
+/// This is `settype($x, "bool")`'s own copy of float truthiness; it must agree with
+/// `predicates::emit_float_result_nonzero_bool` on every value, NAN included — PHP settypes a
+/// NAN to `true`. See that function for why the x86_64 arm needs a parity fixup and the
+/// AArch64 arm does not.
 fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
+    super::super::predicates::emit_nan_bool_coercion_probe(ctx);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("fmov d1, #0.0");                           // materialize 0.0 for PHP float truthiness
@@ -309,22 +316,21 @@ fn emit_float_result_nonzero_bool(ctx: &mut FunctionContext<'_>) {
         Arch::X86_64 => {
             ctx.emitter.instruction("xorpd xmm1, xmm1");                        // materialize 0.0 for PHP float truthiness
             ctx.emitter.instruction("ucomisd xmm0, xmm1");                      // compare the float payload against zero
-            ctx.emitter.instruction("setne al");                                // normalize non-zero floats to true
+            ctx.emitter.instruction("setne al");                                // normalize ordered non-zero floats to true
+            ctx.emitter.instruction("setp r10b");                               // materialize whether the comparison was unordered (a NAN)
+            ctx.emitter.instruction("or al, r10b");                             // PHP settypes a NAN to true, so merge the unordered case in
             ctx.emitter.instruction("movzx rax, al");                           // widen the normalized boolean byte
         }
     }
 }
 
-/// Converts the loaded resource payload into PHP's one-based integer id.
+/// Converts the loaded resource payload into PHP's resource id.
+///
+/// Answers from the resource-id registry (`runtime::resource_ids`) rather than
+/// from the payload itself; see the twin helper in `lower_inst::conversions` for
+/// why `payload + 1` was not a numbering scheme.
 fn emit_resource_display_id_to_int(ctx: &mut FunctionContext<'_>) {
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("add x0, x0, #1");                          // convert native resource payload to PHP's one-based display id
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("add rax, 1");                              // convert native resource payload to PHP's one-based display id
-        }
-    }
+    abi::emit_call_label(ctx.emitter, "__rt_resource_id_of");
 }
 
 /// Lowers `get_class()` and `get_parent_class()` through static or dynamic class metadata.
@@ -403,6 +409,137 @@ pub(crate) fn lower_get_declared_names(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `get_loaded_extensions($zend_extensions)` as a string array.
+///
+/// The optional flag selects between the regular extension list (default / `false`) and the Zend
+/// extension list (`true`). BOTH lists are known at compile time, so a literal flag bakes exactly
+/// one of them into the emitted array; a dynamic flag emits both behind a runtime branch (see
+/// [`lower_dynamic_get_loaded_extensions`]) rather than failing the compile.
+///
+/// The regular (non-Zend) list is the always-present core set followed by the canonical names of
+/// the bridges actually linked into this compilation (`crate::codegen::linked_extensions()`, e.g.
+/// `PDO`/`hash`), de-duplicated case-insensitively. The Zend list is unaffected: bridges are
+/// ordinary (non-Zend) extensions.
+pub(crate) fn lower_get_loaded_extensions(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    super::ensure_arg_count_between(inst, "get_loaded_extensions", 0, 1)?;
+    let flag = inst.operands.first().copied();
+    let constant_flag = match flag {
+        Some(value) => const_bool_operand(ctx, value)?,
+        None => Some(false),
+    };
+    match (constant_flag, flag) {
+        (Some(zend_extensions), _) => {
+            emit_string_array(ctx, &loaded_extension_names(zend_extensions))?
+        }
+        (None, Some(value)) => lower_dynamic_get_loaded_extensions(ctx, value)?,
+        (None, None) => unreachable!("a missing flag always folds to false"),
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Returns the extension-name list `get_loaded_extensions($zend_extensions)` reports.
+///
+/// Single source of truth for the const-folded and the runtime-selected forms, so they can never
+/// report different sets.
+fn loaded_extension_names(zend_extensions: bool) -> Vec<String> {
+    if zend_extensions {
+        return super::ZEND_LOADED_EXTENSIONS
+            .iter()
+            .map(|name| (*name).to_string())
+            .collect();
+    }
+    let mut names: Vec<String> = super::CORE_LOADED_EXTENSIONS
+        .iter()
+        .map(|name| (*name).to_string())
+        .collect();
+    for extension in crate::codegen::linked_extensions() {
+        if !names.iter().any(|name| name.eq_ignore_ascii_case(&extension)) {
+            names.push(extension);
+        }
+    }
+    names
+}
+
+/// Lowers `get_loaded_extensions($flag)` for a flag that is only known at runtime.
+///
+/// Both candidate lists are compile-time constants, so the emitted code just picks between two
+/// fully baked arrays with a PHP-truthiness test on the flag. Each branch runs the same
+/// [`emit_string_array`] sequence and leaves an `Array<Str>` pointer in the integer result
+/// register, so the two arms agree in shape as well as in type — nothing observes a different
+/// representation depending on which branch ran.
+fn lower_dynamic_get_loaded_extensions(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let flag_type = ctx.value_php_type(value)?.codegen_repr();
+    if !matches!(flag_type, PhpType::Bool | PhpType::False | PhpType::Int) {
+        return Err(CodegenIrError::unsupported(format!(
+            "get_loaded_extensions with a {:?} flag argument",
+            flag_type
+        )));
+    }
+    ctx.load_value_to_result(value)?;
+    let zend_label = ctx.next_label("get_loaded_extensions_zend");
+    let done_label = ctx.next_label("get_loaded_extensions_done");
+    let flag_reg = abi::int_result_reg(ctx.emitter);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cmp {}, #0", flag_reg));          // did the caller ask for the Zend extension list?
+            ctx.emitter.instruction(&format!("b.ne {}", zend_label));           // a truthy flag selects the Zend list
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("test {}, {}", flag_reg, flag_reg));      // did the caller ask for the Zend extension list?
+            ctx.emitter.instruction(&format!("jne {}", zend_label));            // a truthy flag selects the Zend list
+        }
+    }
+    emit_string_array(ctx, &loaded_extension_names(false))?;
+    abi::emit_jump(ctx.emitter, &done_label);
+
+    ctx.emitter.label(&zend_label);
+    emit_string_array(ctx, &loaded_extension_names(true))?;
+
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Reads a literal boolean operand produced by a constant instruction, or `None` when non-literal.
+///
+/// Accepts `ConstBool`, integer, float, null, and string const instructions using PHP truthiness so
+/// any literal the frontend folds into the flag operand resolves at compile time.
+fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(value))) => Ok(Some(*value)),
+        (Op::ConstI64, Some(Immediate::I64(value))) => Ok(Some(*value != 0)),
+        (Op::ConstF64, Some(Immediate::F64(value))) => Ok(Some(*value != 0.0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        (Op::ConstStr, Some(Immediate::Data(data))) => {
+            let value = ctx
+                .module
+                .data
+                .strings
+                .get(data.as_raw() as usize)
+                .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?;
+            Ok(Some(!value.is_empty() && value != "0"))
+        }
+        _ => Ok(None),
+    }
+}
+
 /// Lowers `is_resource(value)` for static resources and boxed Mixed resource cells.
 pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "is_resource", 1)?;
@@ -416,6 +553,19 @@ pub(crate) fn lower_is_resource(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Lowers `get_resource_type(resource)` to elephc's current resource type label.
+///
+/// The label is resolved at RUNTIME through `__rt_resource_type_name`, not baked in as
+/// a literal: PHP 8.5.6 renames a closed resource to `"Unknown"` — measured identical
+/// for `fclose`, `pclose` and `closedir` — and the close state is carried by the sign
+/// bit of the native payload (see `crate::codegen_support::runtime::resource_type_name`).
+///
+/// The operand is deliberately NOT routed through `super::io::load_stream_fd_to_result`.
+/// That helper refuses a statically non-resource argument with
+/// `CodegenIrError::unsupported`, which would turn `get_resource_type(5)` — a program
+/// elephc compiles today — into a compile refusal. elephc over-accepting that call is a
+/// real but SEPARATE debt (PHP throws a `TypeError`); closing it here would silently
+/// change the accepted language. The `other` arm below therefore keeps answering
+/// exactly what it answers today.
 pub(crate) fn lower_get_resource_type(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -423,8 +573,104 @@ pub(crate) fn lower_get_resource_type(
     super::ensure_arg_count(inst, "get_resource_type", 1)?;
     let value = expect_operand(inst, 0)?;
     ctx.load_value_to_result(value)?;
-    emit_string_result(ctx, b"stream");
+    match resource_type_name_shape(&ctx.raw_value_php_type(value)?) {
+        ResourceTypeNameShape::Boxed => emit_boxed_resource_type_name(ctx),
+        ResourceTypeNameShape::Unboxed => {
+            abi::emit_call_label(ctx.emitter, "__rt_resource_type_name");
+        }
+        ResourceTypeNameShape::Constant => emit_string_result(ctx, b"stream"),
+    }
     store_if_result(ctx, inst)
+}
+
+/// How `get_resource_type()` must reach its operand's payload.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ResourceTypeNameShape {
+    /// The operand is a Mixed/Union box: unbox, gate on the resource tag, then resolve.
+    Boxed,
+    /// The operand is an unboxed `Resource`: its payload is already in the result register.
+    Unboxed,
+    /// The operand cannot be a resource: keep the constant this builtin always answered.
+    Constant,
+}
+
+/// Maps a `get_resource_type()` operand's static PHP type to its lowering shape.
+///
+/// Split out of the lowering so the DECISION is testable without a `FunctionContext`.
+/// The `Constant` arm is what preserves today's acceptance: elephc compiles
+/// `get_resource_type(5)` where PHP throws a `TypeError`, and turning that into a compile
+/// refusal — which routing through `super::io::load_stream_fd_to_result` would do — would
+/// change the accepted language in a change nobody reviewed for it.
+fn resource_type_name_shape(raw_ty: &PhpType) -> ResourceTypeNameShape {
+    match raw_ty {
+        PhpType::Mixed | PhpType::Union(_) => ResourceTypeNameShape::Boxed,
+        PhpType::Resource(_) => ResourceTypeNameShape::Unboxed,
+        _ => ResourceTypeNameShape::Constant,
+    }
+}
+
+/// Resolves the type name of a BOXED `get_resource_type()` operand.
+///
+/// Unboxes, and consults `__rt_resource_type_name` only when the runtime tag is 9
+/// (resource). Every other tag keeps answering the constant `"stream"` this builtin has
+/// always answered, which matters for two reasons: elephc accepts
+/// `get_resource_type(5)` today where PHP throws a `TypeError` (a separate,
+/// deliberately untouched debt), and a boxed float's payload word IS its sign-carrying
+/// IEEE bit pattern — `get_resource_type(-1.5)` would otherwise start reporting
+/// `"Unknown"` because bit 63 of `-1.5` is set. The tag gate makes the sign test apply
+/// to genuine resource payloads only.
+fn emit_boxed_resource_type_name(ctx: &mut FunctionContext<'_>) {
+    let (fallback_label, fallback_len) = ctx.data.add_string(b"stream");
+    let resource_label = ctx.next_label("get_resource_type_resource");
+    let done_label = ctx.next_label("get_resource_type_done");
+    emit_boxed_resource_type_name_asm(
+        ctx.emitter,
+        &fallback_label,
+        fallback_len,
+        &resource_label,
+        &done_label,
+    );
+}
+
+/// Emits the assembly body of `emit_boxed_resource_type_name`, split out so both target
+/// variants can be pinned without a `FunctionContext` (the precedent is
+/// `emit_resource_release_sentinel` in `crate::codegen::lower_inst::builtins::io`).
+///
+/// `fallback_label`/`fallback_len` name the `.data` literal answered for every non-resource
+/// tag; `resource_label` and `done_label` are the two locally unique branch targets.
+fn emit_boxed_resource_type_name_asm(
+    emitter: &mut Emitter,
+    fallback_label: &str,
+    fallback_len: usize,
+    resource_label: &str,
+    done_label: &str,
+) {
+    abi::emit_call_label(emitter, "__rt_mixed_unbox");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("cmp x0, #9");                                  // check whether the boxed operand carries the resource tag
+            emitter.instruction(&format!("b.eq {}", resource_label));           // only a genuine resource payload gets a computed type name
+        }
+        Arch::X86_64 => {
+            emitter.instruction("cmp rax, 9");                                  // check whether the boxed operand carries the resource tag
+            emitter.instruction(&format!("je {}", resource_label));             // only a genuine resource payload gets a computed type name
+        }
+    }
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_symbol_address(emitter, ptr_reg, fallback_label);
+    abi::emit_load_int_immediate(emitter, len_reg, fallback_len as i64);        // every non-resource tag keeps the constant this builtin always answered
+    abi::emit_jump(emitter, done_label);
+    emitter.label(resource_label);
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, x1");                                  // move the unboxed Mixed low payload into the integer result register
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov rax, rdi");                                // move the unboxed Mixed low payload into the integer result register
+        }
+    }
+    abi::emit_call_label(emitter, "__rt_resource_type_name");                   // stream while the handle is open, Unknown once it is closed
+    emitter.label(done_label);
 }
 
 /// Lowers `get_resource_id(resource)` by unboxing the native handle and making it one-based.
@@ -797,4 +1043,138 @@ fn optional_const_string_operand(
         .get(data.as_raw() as usize)
         .cloned()
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))?))
+}
+
+#[cfg(test)]
+mod get_resource_type_asm_tests {
+    use super::emit_boxed_resource_type_name_asm;
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    /// Emits the boxed `get_resource_type` body for one target and returns the assembly.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        emit_boxed_resource_type_name_asm(
+            &mut emitter,
+            "_str_stream",
+            6,
+            "_gt_resource",
+            "_gt_done",
+        );
+        emitter.output()
+    }
+
+    /// Pins the whole AArch64 body as an ordered, exact-line block.
+    ///
+    /// The load-bearing line is `bl __rt_resource_type_name`: before it the builtin
+    /// answered the literal `"stream"` unconditionally, so `fclose($r);
+    /// get_resource_type($r)` reported `"stream"` where PHP 8.5.6 reports `"Unknown"`.
+    #[test]
+    fn aarch64_consults_the_runtime_type_name_for_resource_tags() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let expected = concat!(
+            "    bl __rt_mixed_unbox\n",
+            "    cmp x0, #9\n",
+            "    b.eq _gt_resource\n",
+            "    adrp x1, _str_stream@PAGE\n",
+            "    add x1, x1, _str_stream@PAGEOFF\n",
+            "    mov x2, #6\n",
+            "    b _gt_done\n",
+            "_gt_resource:\n",
+            "    mov x0, x1\n",
+            "    bl __rt_resource_type_name\n",
+            "_gt_done:\n",
+        );
+        assert!(asm.contains(expected), "expected block missing:\n{asm}");
+    }
+
+    /// Pins the whole x86_64 body, so the two targets cannot drift: the payload move is
+    /// `mov rax, rdi` here and `mov x0, x1` there, and an aarch64-only pin has already let
+    /// an x86 fix be deleted silently on this branch.
+    #[test]
+    fn x86_64_consults_the_runtime_type_name_for_resource_tags() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let expected = concat!(
+            "    call __rt_mixed_unbox\n",
+            "    cmp rax, 9\n",
+            "    je _gt_resource\n",
+            "    lea rax, [rip + _str_stream]\n",
+            "    mov rdx, 6\n",
+            "    jmp _gt_done\n",
+            "_gt_resource:\n",
+            "    mov rax, rdi\n",
+            "    call __rt_resource_type_name\n",
+            "_gt_done:\n",
+        );
+        assert!(asm.contains(expected), "expected block missing:\n{asm}");
+    }
+
+    /// Pins the operand-shape decision, which the lowering can no longer make inline.
+    ///
+    /// `Mixed`/`Union` is the shape every real program takes (`fopen()` types as
+    /// `Union([Resource(Some("stream")), Bool])`); a bare `Resource` is unreachable today
+    /// but handled uniformly anyway, because a sign test on an already-loaded payload
+    /// costs two instructions and cannot mis-fire. Everything else must stay `Constant`:
+    /// that is the arm that keeps `get_resource_type(5)` compiling, which is a separate
+    /// debt this change deliberately does not close.
+    #[test]
+    fn the_operand_shape_decides_how_the_payload_is_reached() {
+        use super::{resource_type_name_shape, ResourceTypeNameShape};
+        use crate::types::PhpType;
+
+        assert_eq!(
+            resource_type_name_shape(&PhpType::Mixed),
+            ResourceTypeNameShape::Boxed
+        );
+        assert_eq!(
+            resource_type_name_shape(&PhpType::Union(vec![
+                PhpType::Resource(Some("stream".to_string())),
+                PhpType::Bool,
+            ])),
+            ResourceTypeNameShape::Boxed
+        );
+        assert_eq!(
+            resource_type_name_shape(&PhpType::Resource(Some("stream".to_string()))),
+            ResourceTypeNameShape::Unboxed
+        );
+        for other in [PhpType::Int, PhpType::Float, PhpType::Str, PhpType::Bool] {
+            assert_eq!(
+                resource_type_name_shape(&other),
+                ResourceTypeNameShape::Constant,
+                "acceptance must not change for {other:?}"
+            );
+        }
+    }
+
+    /// The non-resource tag must keep answering the constant, on both targets.
+    ///
+    /// elephc accepts `get_resource_type(5)` today where PHP throws a `TypeError`; that
+    /// over-acceptance is a separate debt, and routing every tag through the sign test
+    /// would ALSO make `get_resource_type(-1.5)` report `"Unknown"`, because bit 63 of a
+    /// negative double is set. The tag gate is what keeps both cases at today's answer.
+    #[test]
+    fn a_non_resource_tag_keeps_the_constant_answer_on_both_targets() {
+        for (target, gate) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "    b.eq _gt_resource\n"),
+            (Target::new(Platform::Linux, Arch::X86_64), "    je _gt_resource\n"),
+        ] {
+            let asm = emit_for(target);
+            let fallthrough = asm
+                .split(gate)
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing resource-tag gate for {target:?}:\n{asm}"))
+                .split("_gt_resource:\n")
+                .next()
+                .expect("the fallthrough arm precedes the resource arm")
+                .to_string();
+            assert!(
+                fallthrough.contains("_str_stream"),
+                "the non-resource arm must answer the constant ({target:?}):\n{fallthrough}"
+            );
+            assert!(
+                !fallthrough.contains("__rt_resource_type_name"),
+                "the non-resource arm must not reach the runtime resolver ({target:?}):\n{fallthrough}"
+            );
+        }
+    }
 }

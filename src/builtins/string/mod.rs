@@ -1,7 +1,7 @@
 //! Purpose:
 //! Groups all `string`-area builtin homes into this module so the registry can
 //! collect them in one place. Each submodule declares exactly one builtin via
-//! `builtin!` and provides its type-check and lowering hooks.
+//! `builtin!` and provides its checker contract and typed runtime target.
 //!
 //! Called from:
 //! - `crate::builtins` (`mod string;` in `src/builtins/mod.rs`).
@@ -11,6 +11,15 @@
 //! - Pure-data builtins (no check hook) only need a `lower` fn; the `builtin!`
 //!   `returns:` field provides the declared return type.
 
+// The four incremental hash-context builtins are `internal: true` and carry
+// `__elephc_` names: PHP's `hash_init`/`hash_update`/`hash_final`/`hash_copy` are
+// elephc-PHP wrappers declared by `crate::hash_prelude`, which returns a real
+// `HashContext` object. A prelude function cannot shadow a builtin of the same
+// name, so the raw builtins had to be renamed out of the way.
+pub mod __elephc_hash_ctx_copy;
+pub mod __elephc_hash_ctx_final;
+pub mod __elephc_hash_ctx_init;
+pub mod __elephc_hash_ctx_update;
 pub mod addslashes;
 pub mod base64_decode;
 pub mod base64_encode;
@@ -30,12 +39,8 @@ pub mod gzinflate;
 pub mod gzuncompress;
 pub mod hash;
 pub mod hash_algos;
-pub mod hash_copy;
 pub mod hash_equals;
-pub mod hash_final;
 pub mod hash_hmac;
-pub mod hash_init;
-pub mod hash_update;
 pub mod hex2bin;
 pub mod html_entity_decode;
 pub mod htmlentities;

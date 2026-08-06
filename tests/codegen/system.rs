@@ -1937,6 +1937,28 @@ fn test_preg_match_all_no_matches() {
     assert_eq!(out, "0");
 }
 
+/// Verifies every shim-backed regex family handles an invalid pattern without exposing a
+/// partial handle, invoking callbacks, or returning partially initialized capture data.
+#[test]
+fn test_regex_families_reject_invalid_patterns_safely() {
+    let out = compile_and_run(
+        r#"<?php
+$matches = ["stale"];
+$callbackCalls = 0;
+echo (int)mb_ereg_match("(", "subject") . "|";
+echo preg_match("/(/", "subject", $matches) . ":" . count($matches) . "|";
+echo preg_match_all("/(/", "subject") . "|";
+echo preg_replace("/(/", "x", "subject") . "|";
+echo preg_replace_callback("/(/", function($m) use (&$callbackCalls): string {
+    $callbackCalls = $callbackCalls + 1;
+    return "called";
+}, "subject") . ":" . $callbackCalls . "|";
+echo count(preg_split("/(/", "subject"));
+"#,
+    );
+    assert_eq!(out, "0|0:0|0|subject|subject:0|0");
+}
+
 /// Verifies `preg_replace` substitutes the first matching occurrence of a literal pattern.
 #[test]
 fn test_preg_replace_simple() {
@@ -3155,6 +3177,13 @@ echo count($a), "|",
 /// Verifies `function_exists()` returns `true` for the procedural date/time aliases that the
 /// name resolver rewrites into OOP/built-in expressions (e.g. `date_create`, `idate`,
 /// `gmstrftime`). PHP's introspection must recognize the same surface that the resolver sees.
+///
+/// The aliases live in the global namespace only, so a QUALIFIED spelling is `false`: reference
+/// PHP 8.5.6 prints `bool(false)` for `function_exists('\\foo\\bar\\idate')` and `bool(true)`
+/// for `function_exists('\\date_create')` (a single leading separator is accepted). An earlier
+/// revision of this test asserted `true` for the qualified form, mirroring the resolver's
+/// last-namespace-segment rewrite rule; that spelling is now `false` on both the literal and the
+/// dynamic `function_exists($name)` path, which is what PHP reports.
 #[test]
 fn test_function_exists_date_procedural_aliases() {
     let out = compile_and_run(
@@ -3196,7 +3225,8 @@ echo function_exists("\\foo\\bar\\idate") ? "1" : "0";
 echo function_exists("does_not_exist_alias_xyz") ? "1" : "0";
 "#,
     );
-    assert_eq!(out, "1".repeat(34) + "0");
+    // 33 recognized spellings, then the qualified `\foo\bar\idate` and the unknown name, both false.
+    assert_eq!(out, "1".repeat(33) + "00");
 }
 
 /// Verifies `mktime`/`gmmktime` accept PHP 8.0+'s optional arguments: omitted trailing components

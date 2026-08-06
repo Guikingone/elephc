@@ -21,6 +21,7 @@ use super::io;
 use super::objects;
 use super::pdo;
 use super::pointers;
+use super::resource_ids;
 use super::spl;
 use super::strings;
 use super::system;
@@ -41,6 +42,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // String runtime functions
     strings::emit_itoa(emitter);
     strings::emit_resource_to_string(emitter);
+    strings::emit_resource_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
     strings::emit_ftoa(emitter);
     strings::emit_concat(emitter);
@@ -72,6 +74,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_explode(emitter);
     strings::emit_implode(emitter);
     strings::emit_implode_int(emitter);
+    strings::emit_implode_bool(emitter);
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
@@ -115,6 +118,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
 
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);
+    callables::emit_function_exists_lookup(emitter);
     callables::emit_callable_descriptor_release(emitter);
     callables::emit_closure_bind(emitter);
 
@@ -174,6 +178,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     exceptions::emit_class_implements_interface(emitter);
     exceptions::emit_dynamic_instanceof(emitter);
     exceptions::emit_exception_matches(emitter);
+    exceptions::emit_report_uncaught_exception(emitter);
     exceptions::emit_throw_current(emitter);
     exceptions::emit_rethrow_current(emitter);
 
@@ -229,15 +234,18 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_hash_union(emitter);
     arrays::emit_hash_spread(emitter);
     arrays::emit_hash_to_mixed(emitter);
+    arrays::emit_hash_sum_mixed(emitter);
     arrays::emit_hash_count(emitter);
     arrays::emit_hash_free_deep(emitter);
     arrays::emit_array_key_exists(emitter);
     arrays::emit_array_key_exists_mixed_key(emitter);
     arrays::emit_undefined_array_key_warning(emitter);
     arrays::emit_array_search(emitter);
+    arrays::emit_in_array_mixed_int(emitter);
     arrays::emit_array_reverse(emitter);
     arrays::emit_array_reverse_refcounted(emitter);
     arrays::emit_array_sum(emitter);
+    arrays::emit_array_sum_mixed(emitter);
     arrays::emit_array_product(emitter);
     arrays::emit_array_shift(emitter);
     arrays::emit_array_unshift(emitter);
@@ -264,6 +272,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_intersect_refcounted(emitter);
     arrays::emit_array_flip(emitter);
     arrays::emit_array_flip_string(emitter);
+    arrays::emit_hash_flip(emitter);
+    arrays::emit_hash_map(emitter);
     arrays::emit_array_combine(emitter);
     arrays::emit_array_combine_refcounted(emitter);
     arrays::emit_array_fill_keys(emitter);
@@ -313,6 +323,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);
     arrays::emit_iterable_unsupported_kind(emitter);
+    arrays::emit_foreach_non_iterable_warning(emitter);
+    arrays::emit_nan_bool_coercion_warning(emitter);
     arrays::emit_iterable_write_stdout(emitter);
     arrays::emit_mixed_cast_bool(emitter);
     arrays::emit_mixed_cast_float(emitter);
@@ -344,15 +356,22 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     spl::emit_doubly_linked_list_runtime(emitter);
     spl::emit_fixed_array_runtime(emitter);
 
+    // PHP resource-id registry (its own numbering space, unrelated to object handles)
+    resource_ids::emit_resource_ids(emitter);
+
     // Object runtime functions
+    objects::emit_object_handles(emitter);
     objects::emit_stdclass_new(emitter);
     objects::emit_stdclass_from_hash(emitter);
     objects::emit_stdclass_get(emitter);
     objects::emit_stdclass_set(emitter);
     objects::emit_mixed_property_get(emitter);
     objects::emit_mixed_property_set(emitter);
+    objects::emit_mixed_cell_autovivify_array(emitter);
     objects::emit_mixed_array_get(emitter);
     objects::emit_mixed_array_set(emitter);
+    objects::emit_mixed_array_append(emitter);
+    objects::emit_mixed_array_fetch_for_write(emitter);
     objects::emit_new_by_name(emitter);
     objects::emit_call_object_destructor(emitter);
     objects::emit_json_encode_stdclass(emitter);
@@ -479,7 +498,22 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_var_dump_array_str(emitter);
     io::emit_var_dump_array_bool(emitter);
     io::emit_var_dump_array_float(emitter);
-    io::emit_var_dump_array_mixed(emitter);
+    io::emit_var_dump_indexed(emitter);
+    io::emit_var_dump_value(emitter);
+    io::emit_var_dump_open_container(emitter);
+    io::emit_var_dump_close_container(emitter);
+    io::emit_var_dump_open_object(emitter);
+    io::emit_var_dump_object(emitter);
+    io::emit_var_dump_emit_object_key(emitter);
+    io::emit_var_dump_emit_uninit_line(emitter);
+    io::emit_var_dump_emit_recursion_line(emitter);
+    io::emit_vd_obj_desc(emitter);
+    io::emit_vd_obj_count(emitter);
+    io::emit_vd_seen_find(emitter);
+    io::emit_vd_seen_push(emitter);
+    io::emit_vd_seen_pop(emitter);
+    io::emit_var_dump_pad(emitter);
+    io::emit_var_dump_indent_step(emitter);
     io::emit_var_dump_emit_indexed_key(emitter);
     io::emit_var_dump_emit_string_key(emitter);
     io::emit_var_dump_hash(emitter);
@@ -499,6 +533,26 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_pr_append(emitter);
     io::emit_pr_write(emitter);
     io::emit_pr_finish(emitter);
+    // Output-buffering (ob_*) stack helpers. Always emitted: __rt_stdout_write,
+    // __rt_pr_write, and the process-exit paths reference them unconditionally.
+    io::emit_var_dump_write(emitter);
+    io::emit_ob_start(emitter);
+    io::emit_ob_append(emitter);
+    io::emit_ob_contents(emitter);
+    io::emit_ob_queries(emitter);
+    io::emit_ob_process_and_write(emitter);
+    io::emit_ob_pop_free(emitter);
+    io::emit_ob_gated_ops(emitter);
+    io::emit_ob_get_pop_ops(emitter);
+    io::emit_ob_flush_all(emitter);
+    io::emit_ob_apply_handler(emitter);
+    io::emit_ob_result_to_bytes(emitter);
+    io::emit_ob_invoke_descriptor(emitter);
+    io::emit_ob_eval_trampoline(emitter);
+    io::emit_ob_notice_named(emitter);
+    io::emit_ob_status_entry(emitter);
+    io::emit_ob_get_status(emitter);
+    io::emit_ob_list_handlers(emitter);
     io::emit_file_get_contents(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
@@ -775,11 +829,13 @@ mod tests {
         // A token is an internal helper label iff it is an `L`-localized `__rt_*`
         // name (what `label()` produces under dead stripping). `.alt_entry`
         // helpers stay bare `__rt_*`, so they never match here.
+        /// Returns whether an assembly token names a dead-strip-local runtime helper.
         fn is_internal(tok: &str) -> bool {
             tok.starts_with("L__rt_")
         }
         // True when `s` is a bare label definition body (no whitespace, label
         // characters only, not purely numeric → not an assembler-local `N:`).
+        /// Returns whether a token can be a non-numeric assembly label definition.
         fn is_label_name(s: &str) -> bool {
             !s.is_empty()
                 && !s.bytes().all(|b| b.is_ascii_digit())

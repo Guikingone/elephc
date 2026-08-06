@@ -1,19 +1,19 @@
 //! Purpose:
-//! Public metadata view for eval-interpreter builtin support.
-//! Gives parity tests a stable API for builtin existence and named-argument
-//! parameter lists without duplicating the interpreter registry.
+//! Public raw-catalog metadata view for eval-interpreter builtin support.
+//! Gives parity tests and docs a stable API for builtin existence and
+//! named-argument parameter lists without duplicating the registry.
 //!
 //! Called from:
 //! - `elephc-magician::builtin_metadata` re-export.
 //!
 //! Key details:
 //! - Lookup normalizes names with PHP-style case-insensitivity.
+//! - Runtime capability filters do not remove entries from this metadata view.
 //! - Signature shape is the same registry data used by eval named-argument binding.
 
 use super::builtins::{
-    eval_builtin_param_names, eval_builtin_signature_shape, eval_date_procedural_alias_names,
-    eval_declared_builtin_exists, eval_declared_builtin_spec, eval_extension_builtin_names,
-    eval_php_visible_builtin_exists, eval_php_visible_builtin_function_names,
+    eval_date_procedural_alias_names, eval_extension_builtin_names,
+    eval_php_visible_builtin_function_names, eval_raw_declared_builtin_spec,
     EvalBuiltinDefaultValue,
 };
 
@@ -32,10 +32,10 @@ pub struct BuiltinSignatureMetadata {
     pub by_ref_params: Vec<String>,
 }
 
-/// Returns whether the eval interpreter exposes a PHP-visible builtin name.
+/// Returns whether the eval interpreter catalog implements a PHP-visible builtin name.
 pub fn php_visible_builtin_exists(name: &str) -> bool {
     let canonical = php_symbol_key(name);
-    eval_php_visible_builtin_exists(&canonical)
+    eval_raw_declared_builtin_spec(&canonical).is_some()
 }
 
 /// Returns the eval interpreter's PHP-visible builtin names.
@@ -46,7 +46,7 @@ pub fn php_visible_builtin_names() -> &'static [&'static str] {
 /// Returns whether the eval builtin is backed by the declarative registry.
 pub fn php_visible_builtin_is_registry_declared(name: &str) -> bool {
     let canonical = php_symbol_key(name);
-    eval_declared_builtin_exists(&canonical)
+    eval_raw_declared_builtin_spec(&canonical).is_some()
 }
 
 /// Returns the eval builtins that are elephc extensions (no PHP equivalent),
@@ -60,18 +60,19 @@ pub fn extension_builtin_names() -> &'static [&'static str] {
 /// Returns comparison metadata for one eval builtin signature, when named calls are tracked.
 pub fn builtin_signature_metadata(name: &str) -> Option<BuiltinSignatureMetadata> {
     let canonical = php_symbol_key(name);
-    let params = eval_builtin_param_names(&canonical)?
+    let spec = eval_raw_declared_builtin_spec(&canonical)?;
+    let params = spec
+        .param_names
         .iter()
         .map(|param| (*param).to_string())
         .collect::<Vec<_>>();
-    let shape = eval_builtin_signature_shape(&canonical)?;
     Some(BuiltinSignatureMetadata {
         params,
-        required_param_count: shape.required_param_count,
-        default_param_count: shape.default_param_count,
-        variadic: shape.variadic.map(str::to_string),
-        by_ref_params: shape
-            .by_ref_params
+        required_param_count: spec.required_param_count(),
+        default_param_count: spec.default_param_count(),
+        variadic: spec.variadic.map(str::to_string),
+        by_ref_params: spec
+            .by_ref_param_names()
             .iter()
             .map(|param| (*param).to_string())
             .collect(),
@@ -113,7 +114,7 @@ pub struct BuiltinDocsMetadata {
 /// Returns documentation metadata for one registry-declared eval builtin.
 pub fn builtin_docs_metadata(name: &str) -> Option<BuiltinDocsMetadata> {
     let canonical = php_symbol_key(name);
-    let spec = eval_declared_builtin_spec(&canonical)?;
+    let spec = eval_raw_declared_builtin_spec(&canonical)?;
     Some(BuiltinDocsMetadata {
         name: spec.name.to_string(),
         area: spec.area().name().to_string(),

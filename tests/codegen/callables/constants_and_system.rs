@@ -2327,12 +2327,38 @@ echo getenv("ELEPHC_TEST_VAR");
 
 // -- v0.8 phpversion / php_uname --
 
-// Tests `phpversion()` returns the compiler version string (`CARGO_PKG_VERSION`).
+// Tests `phpversion()` returns the PHP LANGUAGE version of the compile target, not elephc's
+// own package version. The default `--php-version` is 8.5, and elephc reports the profile's
+// `8.<minor>.0` form (reference PHP 8.5.6 reports `8.5.6`) — the same deliberate `.0`
+// divergence `opcache_get_configuration()['version']['version']` makes. See
+// `web_prelude::PhpVersion::version_string`.
 /// Verifies that phpversion.
 #[test]
 fn test_phpversion() {
     let out = compile_and_run("<?php echo phpversion();");
-    assert_eq!(out, env!("CARGO_PKG_VERSION"));
+    assert_eq!(out, "8.5.0");
+}
+
+// Tests `phpversion($extension)` reports the same version for a loaded extension and `false`
+// for an unknown one. Reference PHP 8.5.6 verified: `phpversion('json')` is `'8.5.6'` (every
+// bundled extension reports the interpreter's version) and `phpversion('nope_xyz')` is
+// `false`. Matching is case-insensitive there too, so `Core`/`core` must agree.
+/// Verifies that phpversion with an extension name.
+#[test]
+fn test_phpversion_extension() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(phpversion("json"));
+var_dump(phpversion("Core"));
+var_dump(phpversion("core"));
+var_dump(phpversion("nope_xyz"));
+var_dump(phpversion("json") === phpversion());
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(5) \"8.5.0\"\nstring(5) \"8.5.0\"\nstring(5) \"8.5.0\"\nbool(false)\nbool(true)\n"
+    );
 }
 
 // Tests `php_uname()` and `php_uname("a")` return identical strings (default "a" mode).

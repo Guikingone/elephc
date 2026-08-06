@@ -2,7 +2,7 @@
 title: "ptr_set()"
 description: "Writes one machine word through a raw pointer."
 sidebar:
-  order: 298
+  order: 315
 ---
 
 ## ptr_set()
@@ -36,4 +36,3 @@ _No examples yet — check `examples/` and `showcases/` for usage patterns._
 ## Internals
 
 For how `ptr_set` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_set.md).
-

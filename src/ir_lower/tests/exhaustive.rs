@@ -138,6 +138,8 @@ fn dummy_check_result() -> CheckResult {
         required_libraries: Vec::new(),
         warnings: Vec::new(),
         throw_access_sites: HashMap::new(),
+        builtin_call_types: HashMap::new(),
+        loop_storage_types: HashMap::new(),
     }
 }
 
@@ -208,6 +210,8 @@ fn class_info(_class_name: &str) -> ClassInfo {
         method_decls: Vec::new(),
         methods,
         static_methods,
+        late_static_method_returns: Default::default(),
+        late_static_static_method_returns: Default::default(),
         callable_method_return_sigs: HashMap::new(),
         callable_array_method_return_sigs: HashMap::new(),
         method_visibilities: HashMap::new(),

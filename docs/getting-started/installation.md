@@ -10,15 +10,28 @@ sidebar:
 - Rust toolchain (`cargo`) if building from source
 - A native assembler and linker for your host platform
 
+Projects that install a curated native package also need a POSIX shell, Make, a
+target C compiler, `ar`, and `ranlib`. Elephc verifies and uses these tools but
+does not install them. The catalogued PCRE2 and zlib sources do **not** need to
+be installed from system packages; for example, `elephc native add pcre2`
+downloads, verifies, and builds the exact source into Elephc's cache without a
+system fallback.
+
 On macOS, install Xcode Command Line Tools if you don't have them already:
 
 ```bash
 xcode-select --install
 ```
 
-This provides the assembler (`as`) and linker (`ld`) that elephc uses to produce native binaries.
+This provides the assembler (`as`), linker (`ld`), C compiler, archive tools,
+and Make used to produce binaries and managed native artifacts.
 
-On Linux, install your distro's standard native toolchain so `as`, `ld`, and the libc development files are available.
+On Linux, install your distro's standard native toolchain so `as`, `ld`, `cc`,
+`ar`, `ranlib`, Make, and the libc development files are available. For example,
+Debian/Ubuntu's `build-essential` or Alpine's `build-base` plus `make` provide
+the usual host tools. Cross-target artifacts require an explicit matching C
+compiler, archiver, and ranlib; see [Native
+dependencies](../compiling/native-dependencies.md#build-tools-and-cross-targets).
 
 ## Homebrew (macOS)
 

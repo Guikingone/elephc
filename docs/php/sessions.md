@@ -211,16 +211,35 @@ instance array callable (`[$object, 'method']`), or a static array callable
 ## Runtime configuration (`ini_get` / `ini_set`)
 
 Under `--web`, elephc exposes the `session.*` directive surface through
-`ini_get()`, `ini_set()`, and `ini_get_all()`. The layer is scoped to
-`session.*`: any other directive returns `false` from `ini_get()`/`ini_set()`
-and is omitted from `ini_get_all()`. Values follow PHP's `ini_get` string
-convention — integers as decimals, booleans as `'1'`/`''`, strings verbatim —
-and `ini_set()` returns the previous value.
+`ini_get()`, `ini_set()`, and `ini_get_all()`. Values follow PHP's `ini_get`
+string convention — integers as decimals, booleans as `'1'`/`''`, strings
+verbatim — and `ini_set()` returns the previous value.
+
+The layer also carries the compile-time-baked `opcache.*` block (see
+[OPcache](opcache.md)):
+`ini_get('opcache.enable')` reports its raw INI string,
+`ini_set()` on an `opcache.*` key reports failure because the value is baked
+into the binary, and the unfiltered `ini_get_all()` returns both blocks —
+`session.*` first, in registration order, then `opcache.*`, sorted ascending.
+Any directive outside those two blocks still returns `false` from
+`ini_get()`/`ini_set()`.
+
+`ini_get_all($extension)` filters by module name the way php-src does: the name
+is matched VERBATIM against the lowercase module registry with no case folding,
+so `'session'` and `'zend opcache'` select their blocks while `'Zend OPcache'`
+is not found. A module that is known but registers no INI directives yields
+`[]`; a module that is not registered at all yields `false` plus an `E_WARNING`
+(`ini_get_all(): Extension "…" cannot be found`). `'core'` selects the whole
+unfiltered surface, reproducing php-src's rule that Core's module number is 0.
+`ini_get_all()` is therefore `array|false` — narrow with `is_array()` before
+counting or indexing.
 
 ```php
 ini_set('session.gc_maxlifetime', '3600');
 $ttl = ini_get('session.gc_maxlifetime');   // "3600"
 $all = ini_get_all('session');              // details array of every session.* key
+$oc  = ini_get_all('zend opcache');         // the opcache.* block, keys sorted
+$no  = ini_get_all('Zend OPcache');         // false + E_WARNING (matched verbatim)
 ```
 
 Directives cover `name`, `save_path`, `save_handler`, `cache_limiter`,

@@ -37,6 +37,57 @@ impl EvalStreamResources {
         self.streams.contains_key(&id) || self.user_wrapper_streams.contains_key(&id)
     }
 
+    /// Returns whether an eval-owned resource payload is still OPEN.
+    ///
+    /// Eval-created resources carry no close sentinel: their payload IS the key of these
+    /// tables (`EVAL_RESOURCE_PAYLOAD_BASE + n`), so negating it the way the compiled side
+    /// does would break every builtin that later resolves the handle. Their close state
+    /// therefore lives in the tables instead — `close()`, `pclose()` and
+    /// `close_directory()` REMOVE the entry, and `take_next_id()` never reuses a payload —
+    /// so "handed out and now in no table" is exactly "closed". That is what lets
+    /// `var_dump()` and `get_resource_type()` rename a closed eval resource to `Unknown`,
+    /// as PHP 8.5.6 does.
+    ///
+    /// THE PREDICATE IS "CLOSED UNLESS FOUND", so a table forgotten here would report a
+    /// LIVE resource as closed. The destructure below is therefore exhaustive and names
+    /// every field explicitly instead of sweeping the rest with `..`: adding a resource
+    /// table to `EvalStreamResources` must break this function's compile rather than
+    /// silently mislabel the resources it holds.
+    ///
+    /// `stream_contexts` and `hash_contexts` are consulted even though no close path ever
+    /// removes them, which keeps them permanently live — the behaviour eval `hash_init()`
+    /// has today, where the interpreter still hands back a resource although the compiled
+    /// side models a `HashContext` as an object.
+    pub(crate) fn is_live(&self, id: i64) -> bool {
+        let EvalStreamResources {
+            chunk_sizes: _,
+            default_stream_context: _,
+            disabled_builtin_stream_wrappers: _,
+            next_id: _,
+            socket_names: _,
+            user_stream_wrapper_classes: _,
+            user_stream_wrappers: _,
+            directories,
+            filter_resources,
+            hash_contexts,
+            process_children,
+            socket_listeners,
+            stream_contexts,
+            streams,
+            user_wrapper_directories,
+            user_wrapper_streams,
+        } = self;
+        streams.contains_key(&id)
+            || user_wrapper_streams.contains_key(&id)
+            || directories.contains_key(&id)
+            || user_wrapper_directories.contains_key(&id)
+            || filter_resources.contains(&id)
+            || socket_listeners.contains_key(&id)
+            || hash_contexts.contains_key(&id)
+            || stream_contexts.contains_key(&id)
+            || process_children.contains_key(&id)
+    }
+
     /// Returns a local or remote socket name for a socket resource.
     pub(crate) fn socket_name(&self, id: i64, remote: bool) -> Option<String> {
         let names = self.socket_names.get(&id)?;
@@ -65,8 +116,7 @@ impl EvalStreamResources {
 
     /// Allocates an eval-local stream filter resource handle.
     pub(crate) fn open_filter_resource(&mut self) -> i64 {
-        let id = self.next_id;
-        self.next_id += 1;
+        let id = self.take_next_id();
         self.filter_resources.insert(id);
         id
     }
@@ -394,4 +444,53 @@ impl EvalStreamResources {
         })
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A payload that was never handed out is not live, and one that was is — until the
+    /// matching close removes it.
+    ///
+    /// This is the predicate `var_dump()` and `get_resource_type()` invert to decide
+    /// between `stream` and `Unknown`, so both directions matter: an always-true answer
+    /// would keep the pre-fix behaviour, and an always-false one would rename every LIVE
+    /// eval resource to `Unknown`.
+    #[test]
+    fn a_filter_resource_is_live_only_between_its_open_and_close() {
+        let mut resources = EvalStreamResources::default();
+        let unused = resources.take_next_id();
+        assert!(!resources.is_live(unused));
+
+        let id = resources.open_filter_resource();
+        assert!(resources.is_live(id));
+        assert!(resources.close_filter_resource(id));
+        assert!(!resources.is_live(id));
+    }
+
+    /// A payload from outside the eval namespace is never live here.
+    ///
+    /// Host resources are keyed by file descriptors and allocator handles and live in the
+    /// compiled program, not in these tables, so `is_live` must not be consulted for them
+    /// — `eval_resource_is_closed` gates on `EVAL_RESOURCE_PAYLOAD_BASE` for exactly that
+    /// reason. This pins the shape of the answer if the gate is ever removed by accident.
+    #[test]
+    fn a_host_payload_is_never_live_in_the_eval_tables() {
+        let resources = EvalStreamResources::default();
+        assert!(!resources.is_live(3));
+        assert!(!resources.is_live(0));
+    }
+
+    /// A stream context stays live forever, because no close path removes one.
+    ///
+    /// `is_live` is a "closed unless found" test, so a table left out of it would report
+    /// its live resources as `Unknown`. `stream_contexts` and `hash_contexts` are the two
+    /// tables with no remover at all, which makes them the most likely to be forgotten.
+    #[test]
+    fn a_stream_context_stays_live_because_nothing_closes_one() {
+        let mut resources = EvalStreamResources::default();
+        let id = resources.insert_stream_context(EvalStreamContext { options: None });
+        assert!(resources.is_live(id));
+    }
 }

@@ -23,6 +23,7 @@ use crate::ir::{
 use crate::ir_passes::Allocation;
 use crate::types::PhpType;
 
+use super::callable_reachability::CallableReachabilityAnalysis;
 use super::frame::FrameLayout;
 use super::local_analysis::LocalSlotAnalysis;
 use super::shared_state::SharedCodegenState;
@@ -50,6 +51,7 @@ pub(crate) struct FunctionContext<'a> {
     local_offsets: HashMap<LocalSlotId, usize>,
     ref_cell_state_offsets: HashMap<LocalSlotId, usize>,
     local_analysis: LocalSlotAnalysis,
+    callable_reachability: CallableReachabilityAnalysis,
     current_inst: Option<InstId>,
     current_inst_promoted_ref_cells: HashSet<LocalSlotId>,
     try_handler_offsets: HashMap<i64, usize>,
@@ -78,6 +80,7 @@ impl<'a> FunctionContext<'a> {
         heap_debug: bool,
         epilogue_label: Option<String>,
     ) -> Self {
+        let callable_reachability = CallableReachabilityAnalysis::new(module, function);
         Self {
             module,
             function,
@@ -90,6 +93,7 @@ impl<'a> FunctionContext<'a> {
             local_offsets: layout.local_offsets,
             ref_cell_state_offsets: layout.ref_cell_state_offsets,
             local_analysis: layout.local_analysis,
+            callable_reachability,
             current_inst: None,
             current_inst_promoted_ref_cells: HashSet::new(),
             try_handler_offsets: layout.try_handler_offsets,
@@ -223,6 +227,11 @@ impl<'a> FunctionContext<'a> {
     pub(super) fn callable_function_by_name(&self, name: &str) -> Option<&'a Function> {
         self.function_by_name(name)
             .or_else(|| super::function_variants::variant_callee_for_group(self.module, name))
+    }
+
+    /// Returns the finite runtime callable names proven for one EIR value.
+    pub(super) fn runtime_callable_candidates(&self, value: ValueId) -> Option<Vec<String>> {
+        self.callable_reachability.candidates(value)
     }
 
     /// Returns a function value or a structured backend error.
@@ -854,11 +863,14 @@ impl<'a> FunctionContext<'a> {
         }
     }
 
-    /// Returns true when a value producer can leave an owned source consumed by Mixed boxing.
+    /// Returns true when Mixed boxing can consume the value's owned source reference.
     pub(super) fn value_can_own_mixed_box_source(&self, value: ValueId) -> Result<bool> {
         let value_ty = self.value_php_type(value)?.codegen_repr();
         if value_ty == PhpType::Str {
             return self.value_is_heap_owned_string_for_mixed_box(value);
+        }
+        if self.value_can_transfer_ownership_to_consumer(value)? {
+            return Ok(true);
         }
         let Some(value_ref) = self.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
@@ -885,46 +897,25 @@ impl<'a> FunctionContext<'a> {
                         | PhpType::Iterable
                 ));
         }
-        Ok(matches!(
-            inst.op,
-            Op::Acquire
-                | Op::ArrayNew
-                | Op::HashNew
-                | Op::ArrayToMixed
-                | Op::ArrayCloneShallow
-                | Op::HashCloneShallow
-                | Op::ArrayUnion
-                | Op::HashUnion
-                | Op::ArrayHashUnion
-                | Op::HashArrayUnion
-                | Op::ArrayToHash
-                | Op::ObjectNew
-                | Op::DynamicObjectNew
-                | Op::DynamicObjectNewMixed
-                | Op::ClosureNew
-                | Op::FirstClassCallableNew
-                | Op::CallableArrayNew
-                | Op::BufferNew
-                | Op::GeneratorNew
-                | Op::Call
-                | Op::FunctionVariantCall
-                | Op::BuiltinCall
-                | Op::EvalFunctionCall
-                | Op::EvalFunctionCallArray
-                | Op::EvalConstantFetch
-                | Op::RuntimeCall
-                | Op::ExternCall
-                | Op::MethodCall
-                | Op::NullsafeMethodCall
-                | Op::StaticMethodCall
-                | Op::ClosureCall
-                | Op::CallableDescriptorInvoke
-                | Op::ExprCall
-                | Op::PipeCall
-                | Op::IteratorMethodCall
-                | Op::SplRuntimeCall
-                | Op::FiberRuntimeCall
-        ))
+        Ok(false)
+    }
+
+    /// Returns true when a retaining consumer may take the value's owned reference.
+    ///
+    /// `Owned` identifies the value that must eventually be cleaned up; it does not
+    /// by itself cancel an explicit EIR `release`. When lowering still emits such a
+    /// release, the consumer must retain its own reference instead of stealing the
+    /// one that cleanup will consume.
+    pub(super) fn value_can_transfer_ownership_to_consumer(
+        &self,
+        value: ValueId,
+    ) -> Result<bool> {
+        if self.value_ownership(value)? != Ownership::Owned {
+            return Ok(false);
+        }
+        Ok(!self.function.instructions.iter().any(|inst| {
+            inst.op == Op::Release && inst.operands.first().copied() == Some(value)
+        }))
     }
 
     /// Returns true when a string producer leaves a heap-owned payload that Mixed boxing may consume.

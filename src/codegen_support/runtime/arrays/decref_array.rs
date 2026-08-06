@@ -12,10 +12,6 @@
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
-/// High 32 bits of the x86_64 Linux heap wrapper magic word.
-/// Stored in the uniform heap header's kind word; verified before mutating refcount state
-/// to distinguish foreign/static pointers from heap-backed array payloads.
-const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 
 /// Emits the `__rt_decref_array` runtime helper.
 pub fn emit_decref_array(emitter: &mut Emitter) {
@@ -100,7 +96,7 @@ fn emit_decref_array_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [rax - 8]");                        // load the stamped x86_64 heap kind word from the uniform header
     emitter.instruction("mov r11, r10");                                        // preserve the low-byte runtime kind before checking the high-word marker
     emitter.instruction("shr r10, 32");                                         // isolate the high-word heap marker used by the x86_64 heap wrapper
-    emitter.instruction(&format!("cmp r10d, 0x{:x}", X86_64_HEAP_MAGIC_HI32));  // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
+    emitter.instruction(&format!("cmp r10d, 0x{:x}", crate::codegen_support::sentinels::X86_64_HEAP_MAGIC_HI32)); // verify that the payload is owned by the x86_64 heap wrapper before mutating refcount state
     emitter.instruction("jne __rt_decref_array_skip");                          // skip foreign/static pointers that do not carry elephc heap headers
     emitter.instruction("and r11, 0xff");                                       // isolate the runtime storage kind from the preserved header word
     emitter.instruction("cmp r11, 3");                                          // kind 3 is associative hash storage behind a static Array type

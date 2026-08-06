@@ -32,6 +32,17 @@ impl Checker {
     /// Returns an error for unresolved conditionals, namespace/use directives,
     /// includes, or invalid break/continue levels.
     pub fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
+        crate::strict_php::with_source_mode(stmt.source_mode, || {
+            self.check_stmt_in_current_source_mode(stmt, env)
+        })
+    }
+
+    /// Checks one statement after its physical source profile has been installed.
+    fn check_stmt_in_current_source_mode(
+        &mut self,
+        stmt: &Stmt,
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => {
                 if self.check_empty_indexed_nested_append(stmts, env)? {

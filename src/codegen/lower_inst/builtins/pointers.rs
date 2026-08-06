@@ -4,7 +4,7 @@
 //! and byte-exact string copies through runtime helpers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Pointer values are raw machine addresses in the integer result register.
@@ -133,6 +133,7 @@ pub(crate) fn lower_elephc_callable_ptr(
                 value,
                 &result_reg,
                 "__elephc_callable_ptr",
+                crate::strict_php::is_enabled(),
             )?;
         }
         PhpType::Array(element)
@@ -193,6 +194,7 @@ pub(crate) fn lower_elephc_normalize_callable(
                 value,
                 &result_reg,
                 "__elephc_normalize_callable",
+                crate::strict_php::is_enabled(),
             )?;
         }
         PhpType::Array(element)

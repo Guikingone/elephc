@@ -1,17 +1,28 @@
 //! Purpose:
 //! Lowers PHP diagnostic output builtins for the EIR backend.
-//! Handles concrete scalar/resource values and array/hash shells without recursive dumps.
+//! Handles concrete scalar/resource values plus arrays and hashes, which dump
+//! RECURSIVELY through the runtime walkers.
 //!
 //! Called from:
-//! - `crate::codegen::lower_inst::builtins::lower_builtin_call()`.
+//! - `crate::codegen::lower_inst::builtins::lower_language_construct_call()`.
 //!
 //! Key details:
 //! - Output must match PHP-compatible text for the supported concrete types.
 //! - Mixed dispatch follows the runtime tag/payload contract from `__rt_mixed_unbox`.
-//! - Object dumps read the runtime class id from the object header and map it
-//!   through the EIR module's class metadata.
+//! - `var_dump` emits only the top-level `array(N) {` / `}` frame here; the body
+//!   (and every nested container) comes from `codegen_support::runtime::io::
+//!   var_dump_walk`, driven by the `_vd_indent` global this file sets to 2 for
+//!   the duration of the walk. `print_r` passes its indent as a call argument
+//!   instead — the two schemes are independent.
+//! - `var_dump` of an object hands the instance to `__rt_var_dump_value` with
+//!   the object tag, the same entry point a nested object reaches, so top-level
+//!   and nested dumps share one renderer. The class name, per-property body and
+//!   `*RECURSION*` guard all come from `codegen_support::runtime::io::
+//!   var_dump_object`. KNOWN DIVERGENCE: no `#id` handle — see that module.
 
 use crate::codegen::abi;
+use crate::codegen::data_section::DataSection;
+use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Instruction, ValueId};
@@ -83,6 +94,11 @@ pub(crate) fn lower_print_r(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// one-argument form with a `Mixed` result type) defaults to echo mode, matching
 /// PHP's `$return = false`. `__rt_pr_finish` resets the mode and offset; the echo
 /// branch leaves them untouched (the stored flag was zero).
+///
+/// OWNERSHIP: the capture string from `__rt_pr_finish` is owned solely by this lowering.
+/// `__rt_mixed_from_value` copies it into the box instead of adopting it, and the EIR
+/// `release` for the call site frees the Mixed cell rather than the intermediate, so the
+/// return-mode branch frees the capture string itself once the box holds its own copy.
 fn lower_print_r_runtime_flag(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -117,17 +133,37 @@ fn lower_print_r_runtime_flag(
     emit_compare_reg_zero(ctx, result_reg);
     emit_branch_if_eq(ctx, &echo_label);
     abi::emit_call_label(ctx.emitter, "__rt_pr_finish");
+    // `__rt_pr_finish` hands back a freshly allocated heap string, and the string arm of
+    // `__rt_mixed_from_value` persists (copies) that payload into the box's own storage rather
+    // than adopting it. The capture string therefore has exactly one owner — this lowering — and
+    // nothing downstream can free it, because the EIR `release` for this call site targets the
+    // Mixed cell, not the intermediate. Free it here, once the box owns its copy, or every
+    // runtime-flag `print_r($v, $flag)` leaks one block per call.
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("str x1, [sp, #-16]!");                     // spill the capture string pointer across the boxing call
             ctx.emitter.instruction("mov x0, #1");                              // runtime tag 1 = string for the captured bytes
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("ldr x1, [sp]");                            // reload the capture string pointer
+            ctx.emitter.instruction("str x0, [sp]");                            // park the boxed Mixed result across the free helper
+            ctx.emitter.instruction("mov x0, x1");                              // pass the capture string to the validating heap-free helper
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.instruction("ldr x0, [sp], #16");                       // restore the boxed Mixed result and drop the spill slot
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // captured string pointer → Mixed low payload word
             ctx.emitter.instruction("mov rsi, rdx");                            // captured string length → Mixed high payload word
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve an aligned spill slot pair
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rdi");                // spill the capture string pointer across the boxing call
             ctx.emitter.instruction("mov eax, 1");                              // runtime tag 1 = string for the captured bytes
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction("mov QWORD PTR [rsp+8], rax");              // park the boxed Mixed result across the free helper
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // pass the capture string to the validating heap-free helper
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp+8]");              // restore the boxed Mixed result
+            ctx.emitter.instruction("add rsp, 16");                             // release the spill slot pair
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     abi::emit_jump(ctx.emitter, &done_label);
     ctx.emitter.label(&echo_label);
     match ctx.emitter.target.arch {
@@ -147,7 +183,8 @@ fn lower_print_r_runtime_flag(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `var_dump(value, ...values)` for concrete scalar/resource values and array/hash shells.
+/// Lowers `var_dump(value, ...values)` for concrete scalar/resource values and for
+/// arrays/hashes, which are dumped recursively (nested containers included).
 /// Each operand is dumped independently in source order, matching PHP's variadic var_dump.
 pub(crate) fn lower_var_dump(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.is_empty() {
@@ -468,23 +505,64 @@ fn emit_var_dump_bool(ctx: &mut FunctionContext<'_>) -> Result<()> {
 }
 
 /// Emits `var_dump` output for a stream/generic resource payload.
+///
+/// The number comes from the resource-id registry, never from the payload. The
+/// previous `payload + 1` happened to look right for a descriptor and printed a
+/// raw heap address for anything else — `var_dump(hash_init('md5'))` rendered
+/// `resource(4318862849) of type (stream)`, a different number on every run.
+///
+/// The type name comes from `__rt_resource_type_name`, never from a literal. It used
+/// to be baked into the single closing literal `") of type (stream)\n"`, so a closed
+/// handle kept advertising its original type where PHP 8.5.6 prints
+/// `resource(5) of type (Unknown)`. Splitting that literal in two is what lets the
+/// runtime-computed name sit between the halves.
+///
+/// The payload must therefore survive `__rt_resource_id_of`, which consumes it, so it
+/// is pushed a second time. `abi::emit_push_reg` reserves 16 bytes on both targets, so
+/// nesting the two pushes keeps the stack aligned across the intervening calls; the
+/// two pops below balance the two pushes exactly.
 fn emit_var_dump_resource(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let result_reg = abi::int_result_reg(ctx.emitter);
-    abi::emit_push_reg(ctx.emitter, result_reg);
-    emit_write_literal(ctx, b"resource(");
-    abi::emit_pop_reg(ctx.emitter, result_reg);
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.emitter.instruction("add x0, x0, #1");                          // convert the resource payload into the displayed one-based id
-        }
-        Arch::X86_64 => {
-            ctx.emitter.instruction("add rax, 1");                              // convert the resource payload into the displayed one-based id
-        }
-    }
-    abi::emit_call_label(ctx.emitter, "__rt_itoa");
-    emit_write_current_string(ctx);
-    emit_write_literal(ctx, b") of type (stream)\n");
+    emit_var_dump_resource_asm(ctx.emitter, ctx.data);
     Ok(())
+}
+
+/// Emits the WHOLE `resource(N) of type (T)` line, split out of `emit_var_dump_resource`
+/// so both target variants can be pinned at assembly level without a `FunctionContext`
+/// (the precedent is `emit_resource_release_sentinel` in
+/// `crate::codegen::lower_inst::builtins::io`).
+///
+/// Splitting only the type-name FIELD out was not enough: a sentinel that deleted the
+/// call from the line and restored the old single literal left every field-level pin
+/// green, because the field helper itself was untouched. The whole line therefore lives
+/// here, where a pin sees the literals and the call together — the only shape that fails
+/// when the call site is removed rather than when the callee is broken. `ctx` supplies
+/// nothing else, so this loses no information.
+///
+/// Entry state: the native resource payload is in the int result register. Exit state:
+/// the line has been written and the stack is balanced — two pushes, two pops.
+fn emit_var_dump_resource_asm(emitter: &mut Emitter, data: &mut DataSection) {
+    let result_reg = abi::int_result_reg(emitter);
+    abi::emit_push_reg(emitter, result_reg);
+    emit_literal_to_stdout(emitter, data, b"resource(");
+    abi::emit_pop_reg(emitter, result_reg);
+    abi::emit_push_reg(emitter, result_reg);                                    // __rt_resource_id_of consumes the register copy; the name needs it back
+    abi::emit_call_label(emitter, "__rt_resource_id_of");
+    abi::emit_call_label(emitter, "__rt_itoa");
+    abi::emit_write_stdout(emitter, &PhpType::Str);
+    emit_literal_to_stdout(emitter, data, b") of type (");
+    abi::emit_pop_reg(emitter, result_reg);                                     // recover the payload __rt_resource_id_of consumed
+    abi::emit_call_label(emitter, "__rt_resource_type_name");                   // stream while the handle is open, Unknown once it is closed
+    abi::emit_write_stdout(emitter, &PhpType::Str);
+    emit_literal_to_stdout(emitter, data, b")\n");
+}
+
+/// Writes a compile-time literal byte string to stdout without a `FunctionContext`.
+fn emit_literal_to_stdout(emitter: &mut Emitter, data: &mut DataSection, bytes: &[u8]) {
+    let (label, len) = data.add_string(bytes);
+    let (ptr_reg, len_reg) = abi::string_result_regs(emitter);
+    abi::emit_symbol_address(emitter, ptr_reg, &label);
+    abi::emit_load_int_immediate(emitter, len_reg, len as i64);
+    abi::emit_write_stdout(emitter, &PhpType::Str);
 }
 
 /// Emits `var_dump` output for null, void, or never payloads.
@@ -493,13 +571,30 @@ fn emit_var_dump_null(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits `var_dump` output for an array/hash payload in the integer result register.
+///
+/// Writes the `array(N) {\n` header and the closing `}\n` around the runtime body
+/// walk. The body lines are indented by the runtime through the `_vd_indent`
+/// global: it is set to 2 (PHP's one nesting level) for the duration of the walk
+/// and back to 0 before the closing brace, which sits at the header's indent.
+/// Nested containers manage their own deeper indents inside `__rt_var_dump_value`.
+///
+/// The container payload is checked for BOTH null shapes before the header walk
+/// (issue #581). A zero pointer is what an untyped null-defaulted property rebound
+/// to array storage reads before its first write. The in-band null-container
+/// sentinel is what a missed element read materializes: it is non-zero, so the
+/// plain zero check let it through and the header load dereferenced it after
+/// `array(` had already been written. PHP dumps both as `NULL`.
 fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
-    // An untyped null-defaulted property rebound to array storage reads a null
-    // pointer before its first write; PHP var_dumps that value as NULL.
     let null_label = ctx.next_label("var_dump_array_null");
     let done_label = ctx.next_label("var_dump_array_done");
-    abi::emit_branch_if_int_result_zero(ctx.emitter, &null_label);
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &null_label,
+    );
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"array(");
     abi::emit_pop_reg(ctx.emitter, result_reg);
@@ -515,6 +610,9 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
     abi::emit_call_label(ctx.emitter, "__rt_itoa");
     emit_write_current_string(ctx);
     emit_write_literal(ctx, b") {\n");
+    // -- body lines sit one PHP nesting level (2 spaces) in --
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 2);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_vd_indent", 0);
     abi::emit_pop_reg(ctx.emitter, result_reg);
     if let Some(walker) = var_dump_array_walker(ty) {
         if matches!(ctx.emitter.target.arch, Arch::X86_64) {
@@ -522,6 +620,9 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
         }
         abi::emit_call_label(ctx.emitter, walker);
     }
+    // -- the closing brace aligns with the header, so drop back to column 0 --
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_vd_indent", 0);
     emit_write_literal(ctx, b"}\n");
     ctx.emit_branch(&done_label);
     ctx.emitter.label(&null_label);
@@ -532,10 +633,17 @@ fn emit_var_dump_array(ctx: &mut FunctionContext<'_>, ty: &PhpType) -> Result<()
 
 /// Returns the runtime var_dump walker for an array/hash element layout.
 ///
-/// Homogeneous indexed arrays use a per-element-type walker; `Array(Mixed)` uses the
-/// boxed-cell walker; associative arrays (hashes) use `__rt_var_dump_hash`, which iterates
-/// entries and formats string/integer keys plus scalar values (nested containers fall back
-/// to `NULL`, matching the indexed Mixed walker).
+/// Homogeneous indexed arrays of a scalar element type keep their per-element-type
+/// walker (nothing there can nest). EVERY other indexed element type — `Mixed`
+/// boxed cells, nested `Array`/`AssocArray`, objects — goes through
+/// `__rt_var_dump_indexed`, which self-dispatches on the array's runtime
+/// value_type stamp and recurses through `__rt_var_dump_value`. Associative
+/// arrays (hashes) use `__rt_var_dump_hash`, which iterates entries, formats
+/// string/integer keys and delegates each value to the same recursive renderer.
+///
+/// `Iterable` is deliberately absent: its runtime representation is ambiguous
+/// (a direct indexed array or a hash), so the body is left empty rather than
+/// risking a walk of the wrong layout — the same choice `print_r` makes.
 fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
     match ty {
         PhpType::Array(elem_ty) => match elem_ty.as_ref() {
@@ -543,8 +651,7 @@ fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
             PhpType::Str => Some("__rt_var_dump_array_str"),
             PhpType::Bool => Some("__rt_var_dump_array_bool"),
             PhpType::Float => Some("__rt_var_dump_array_float"),
-            PhpType::Mixed => Some("__rt_var_dump_array_mixed"),
-            _ => None,
+            _ => Some("__rt_var_dump_indexed"),
         },
         PhpType::AssocArray { .. } => Some("__rt_var_dump_hash"),
         _ => None,
@@ -552,62 +659,37 @@ fn var_dump_array_walker(ty: &PhpType) -> Option<&'static str> {
 }
 
 /// Emits `var_dump` output for an object pointer in the integer result register.
+///
+/// Hands the instance straight to `__rt_var_dump_value` with the object tag (6),
+/// which is the SAME entry point a nested object reaches from the array, hash and
+/// object walkers — so a top-level dump and a dump at depth cannot drift apart.
+/// That branch owns the whole rendering: the `object(C) (n) {` header, the
+/// per-property body, the closing `}`, and the `*RECURSION*` guard.
+///
+/// `_vd_indent` is reset to 0 first so the header sits at column 0. The runtime
+/// walkers restore the indent themselves around every nested container, but a
+/// preceding dump that aborted mid-walk would otherwise leak its indent into
+/// this one.
 fn emit_var_dump_dynamic_object(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let mut classes: Vec<_> = ctx
-        .module
-        .class_infos
-        .iter()
-        .map(|(class_name, class_info)| (class_name.clone(), class_info.class_id))
-        .collect();
-    classes.sort_by_key(|(_, class_id)| *class_id);
-    let mut cases = Vec::with_capacity(classes.len());
-    let null_label = ctx.next_label("var_dump_object_null");
-    let fallback = ctx.next_label("var_dump_object_fallback");
-    let done = ctx.next_label("var_dump_object_done");
-
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    abi::emit_push_reg(ctx.emitter, result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, result_reg, 0);
+    abi::emit_store_reg_to_symbol(ctx.emitter, result_reg, "_vd_indent", 0);
+    abi::emit_pop_reg(ctx.emitter, result_reg);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction(&format!("cbz x0, {}", null_label));        // print NULL for defensive null object payloads
-            ctx.emitter.instruction("ldr x9, [x0]");                            // load the object's runtime class id from its header
+            ctx.emitter.instruction("mov x1, x0");                              // object pointer → the value renderer's low payload word
+            ctx.emitter.instruction("mov x2, #0");                              // objects carry no high payload word
+            ctx.emitter.instruction("mov x0, #6");                              // runtime value tag 6 = object
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("test rax, rax");                           // check for defensive null object payloads
-            ctx.emitter.instruction(&format!("je {}", null_label));             // print NULL for defensive null object payloads
-            ctx.emitter.instruction("mov r11, QWORD PTR [rax]");                // load the object's runtime class id from its header
+            ctx.emitter.instruction("mov rsi, rax");                            // object pointer → the value renderer's low payload word
+            ctx.emitter.instruction("xor rdx, rdx");                            // objects carry no high payload word
+            ctx.emitter.instruction("mov rdi, 6");                              // runtime value tag 6 = object
         }
     }
-    for (class_name, class_id) in classes {
-        let case = ctx.next_label("var_dump_object_case");
-        cases.push((case.clone(), class_name));
-        match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction(&format!("cmp x9, #{}", class_id));     // compare the runtime class id against a known class
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction(&format!("cmp r11, {}", class_id));     // compare the runtime class id against a known class
-            }
-        }
-        emit_branch_if_eq(ctx, &case);
-    }
-    abi::emit_jump(ctx.emitter, &fallback);
-    for (case, class_name) in cases {
-        ctx.emitter.label(&case);
-        emit_var_dump_object_name(ctx, &class_name);
-        abi::emit_jump(ctx.emitter, &done);
-    }
-    ctx.emitter.label(&null_label);
-    emit_var_dump_null(ctx);
-    abi::emit_jump(ctx.emitter, &done);
-    ctx.emitter.label(&fallback);
-    emit_write_literal(ctx, b"object\n");
-    ctx.emitter.label(&done);
+    abi::emit_call_label(ctx.emitter, "__rt_var_dump_value");
     Ok(())
-}
-
-/// Emits `object(ClassName)` output for a known runtime class name.
-fn emit_var_dump_object_name(ctx: &mut FunctionContext<'_>, class_name: &str) {
-    let text = format!("object({})\n", class_name);
-    emit_write_literal(ctx, text.as_bytes());
 }
 
 /// Writes a compile-time literal byte string to stdout.
@@ -728,6 +810,180 @@ fn emit_branch_if_eq(ctx: &mut FunctionContext<'_>, label: &str) {
         }
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("je {}", label));                  // branch when the compared register payloads are equal
+        }
+    }
+}
+
+#[cfg(test)]
+mod var_dump_resource_line_tests {
+    use super::emit_var_dump_resource_asm;
+    use crate::codegen::data_section::DataSection;
+    use crate::codegen::emit::Emitter;
+    use crate::codegen::platform::{Arch, Platform, Target};
+
+    /// Emits the whole `var_dump` resource line for one target.
+    fn emit_for(target: Target) -> String {
+        let mut emitter = Emitter::new(target);
+        let mut data = DataSection::new();
+        emit_var_dump_resource_asm(&mut emitter, &mut data);
+        emitter.output()
+    }
+
+    /// Pins the whole AArch64 line as an ordered call/branch sequence.
+    ///
+    /// The load-bearing pair is `bl __rt_resource_type_name` sitting BETWEEN two literal
+    /// writes. Before the fix the line ended in one 19-byte literal
+    /// `") of type (stream)\n"`, so a closed handle kept advertising `stream` where PHP
+    /// 8.5.6 prints `(Unknown)`. Pinning the field helper alone was NOT enough: a sentinel
+    /// that deleted the call from this line and restored the old literal left the field
+    /// helper untouched and every field-level pin green.
+    #[test]
+    fn aarch64_writes_the_type_name_between_the_two_closing_literals() {
+        let asm = emit_for(Target::new(Platform::MacOS, Arch::AArch64));
+        let expected = concat!(
+            "    str x0, [sp, #-16]!\n",
+            "    adrp x1, _str_0@PAGE\n",
+            "    add x1, x1, _str_0@PAGEOFF\n",
+            "    mov x2, #9\n",
+            "    mov x0, x1\n",
+            "    mov x1, x2\n",
+            "    bl __rt_stdout_write\n",
+            "    ldr x0, [sp], #16\n",
+            "    str x0, [sp, #-16]!\n",
+            "    bl __rt_resource_id_of\n",
+            "    bl __rt_itoa\n",
+            "    mov x0, x1\n",
+            "    mov x1, x2\n",
+            "    bl __rt_stdout_write\n",
+            "    adrp x1, _str_1@PAGE\n",
+            "    add x1, x1, _str_1@PAGEOFF\n",
+            "    mov x2, #11\n",
+            "    mov x0, x1\n",
+            "    mov x1, x2\n",
+            "    bl __rt_stdout_write\n",
+            "    ldr x0, [sp], #16\n",
+            "    bl __rt_resource_type_name\n",
+            "    mov x0, x1\n",
+            "    mov x1, x2\n",
+            "    bl __rt_stdout_write\n",
+            "    adrp x1, _str_2@PAGE\n",
+            "    add x1, x1, _str_2@PAGEOFF\n",
+            "    mov x2, #2\n",
+        );
+        assert!(asm.contains(expected), "expected block missing:\n{asm}");
+    }
+
+    /// Pins the same line on x86_64, where the pushes and pops are two-instruction
+    /// sequences and the payload register doubles as the string-result pointer. An
+    /// aarch64-only pin has already let an x86 fix be deleted silently on this branch.
+    #[test]
+    fn x86_64_writes_the_type_name_between_the_two_closing_literals() {
+        let asm = emit_for(Target::new(Platform::Linux, Arch::X86_64));
+        let expected = concat!(
+            "    sub rsp, 16\n",
+            "    mov QWORD PTR [rsp], rax\n",
+            "    lea rax, [rip + _str_0]\n",
+            "    mov rdx, 9\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
+            "    mov rax, QWORD PTR [rsp]\n",
+            "    add rsp, 16\n",
+            "    sub rsp, 16\n",
+            "    mov QWORD PTR [rsp], rax\n",
+            "    call __rt_resource_id_of\n",
+            "    call __rt_itoa\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
+            "    lea rax, [rip + _str_1]\n",
+            "    mov rdx, 11\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
+            "    mov rax, QWORD PTR [rsp]\n",
+            "    add rsp, 16\n",
+            "    call __rt_resource_type_name\n",
+            "    mov rsi, rdx\n",
+            "    mov rdi, rax\n",
+            "    call __rt_stdout_write\n",
+            "    lea rax, [rip + _str_2]\n",
+            "    mov rdx, 2\n",
+        );
+        assert!(asm.contains(expected), "expected block missing:\n{asm}");
+    }
+
+    /// The three literals must be exactly `resource(`, `) of type (` and `)\n` — and in
+    /// particular the pre-fix 19-byte `") of type (stream)\n"` must be gone.
+    ///
+    /// A pin on the assembly alone cannot see this: the literals live in the data section
+    /// and the code only names `_str_N`. Restoring the old single literal would leave the
+    /// instruction stream shorter but still plausible.
+    #[test]
+    fn the_line_interns_no_hardcoded_type_name_on_either_target() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let mut emitter = Emitter::new(target);
+            let mut data = DataSection::new();
+            emit_var_dump_resource_asm(&mut emitter, &mut data);
+            assert_eq!(
+                data.add_string(b"resource(").0,
+                "_str_0",
+                "the first literal must be the opening one ({target:?})"
+            );
+            assert_eq!(
+                data.add_string(b") of type (").0,
+                "_str_1",
+                "the second literal must stop before the type name ({target:?})"
+            );
+            assert_eq!(
+                data.add_string(b")\n").0,
+                "_str_2",
+                "the third literal must be the closing paren alone ({target:?})"
+            );
+            // `add_string` interns: a label of `_str_3` means this byte string was NOT
+            // already in the section, i.e. the pre-fix hardcoded literal is gone. Had it
+            // still been emitted, the call would have returned its existing label.
+            assert_eq!(
+                data.add_string(b") of type (stream)\n").0,
+                "_str_3",
+                "the pre-fix hardcoded type literal must not be interned ({target:?})"
+            );
+        }
+    }
+
+    /// The line must push and pop exactly twice on both targets.
+    ///
+    /// The payload is stashed once around the `resource(` write and once around
+    /// `__rt_resource_id_of`, which consumes the register copy. An unbalanced pop here
+    /// corrupts the caller frame silently on macOS.
+    #[test]
+    fn the_line_balances_two_pushes_with_two_pops_on_both_targets() {
+        for (target, push, pop) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "str x0, [sp, #-16]!",
+                "ldr x0, [sp], #16",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "mov QWORD PTR [rsp], rax",
+                "mov rax, QWORD PTR [rsp]",
+            ),
+        ] {
+            let asm = emit_for(target);
+            assert_eq!(
+                asm.matches(push).count(),
+                2,
+                "exactly two pushes expected ({target:?}):\n{asm}"
+            );
+            assert_eq!(
+                asm.matches(pop).count(),
+                2,
+                "exactly two pops expected ({target:?}):\n{asm}"
+            );
         }
     }
 }

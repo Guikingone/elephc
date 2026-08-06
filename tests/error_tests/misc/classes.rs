@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Verifies `method_exists()` requires both a class/object and method name.
+#[test]
+fn test_error_method_exists_wrong_args() {
+    expect_error(
+        "<?php method_exists(new stdClass());",
+        "method_exists() takes exactly 2 arguments",
+    );
+}
+
+/// Verifies `property_exists()` requires both a class/object and property name.
+#[test]
+fn test_error_property_exists_wrong_args() {
+    expect_error(
+        "<?php property_exists(new stdClass());",
+        "property_exists() takes exactly 2 arguments",
+    );
+}
+
 /// Verifies the error diagnostic for instanceof self outside class scope.
 #[test]
 fn test_error_instanceof_self_outside_class_scope() {
@@ -43,6 +61,26 @@ fn test_error_undefined_method() {
     expect_error(
         "<?php class Box {} $b = new Box(); $b->missing();",
         "Undefined method: Box::missing",
+    );
+}
+
+/// Verifies an interface call keeps its declared ancestor return type.
+#[test]
+fn test_error_interface_method_does_not_infer_receiver_from_wither_name() {
+    expect_error(
+        r#"<?php
+interface Message { public function withHeader(): Message; }
+interface Request extends Message { public function requestOnly(): string; }
+class Plain implements Message { public function withHeader(): Message { return $this; } }
+class Req implements Request {
+    public function withHeader(): Message { return new Plain(); }
+    public function requestOnly(): string { return "req"; }
+}
+function read(Request $request): string {
+    return $request->withHeader()->requestOnly();
+}
+"#,
+        "Undefined method: Message::requestOnly",
     );
 }
 
@@ -289,6 +327,20 @@ fn test_error_typed_property_rejects_callable_type() {
     // callable is not a valid property type.
     expect_error(
         "<?php class Box { public callable $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
+}
+
+/// Verifies nullable and union spellings do not make PHP's forbidden `callable` property
+/// pseudo-type valid.
+#[test]
+fn test_error_typed_property_rejects_nested_callable_types() {
+    expect_error(
+        "<?php class Box { public ?callable $callback; }",
+        "Property Box::$callback cannot use type callable",
+    );
+    expect_error(
+        "<?php class Box { public callable|null $callback; }",
         "Property Box::$callback cannot use type callable",
     );
 }

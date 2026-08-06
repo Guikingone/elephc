@@ -30,6 +30,7 @@ pub(in crate::magic_constants) fn walk_program<P: Pass>(stmts: Vec<Stmt>, pass: 
 /// Statements with no expression children are returned unchanged.
 pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
     let span = stmt.span;
+    let source_mode = stmt.source_mode;
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(walk_program(stmts, pass)),
@@ -414,5 +415,10 @@ pub(super) fn walk_stmt<P: Pass>(stmt: Stmt, pass: &mut P) -> Stmt {
         | StmtKind::ExternClassDecl { .. }
         | StmtKind::ExternGlobalDecl { .. }) => other,
     };
-    Stmt { kind, span, attributes }
+    Stmt {
+        kind,
+        span,
+        source_mode,
+        attributes,
+    }
 }

@@ -1200,3 +1200,166 @@ fn web_namespaced_program_serves() {
     let _ = child.wait();
     assert!(resp.ends_with("hi ada"), "namespaced --web program: {:?}", resp);
 }
+
+/// Verifies the OPcache `opcache_get_status()` prelude function under `--web`, where the
+/// cache is enabled (`opcache.enable` default). Spot-checks the enabled status array:
+/// `opcache_enabled` true; the class-B memory invariant (used + free + wasted ==
+/// `opcache.memory_consumption` = 134217728) and the interned-strings invariant
+/// (used + free == buffer_size); `opcache_statistics.max_cached_keys` == 16229 (derived
+/// from the default `max_accelerated_files`); `opcache_hit_rate` == 0.0; `jit.enabled`
+/// false (default `opcache.jit = disable`); the `scripts` key present for the default
+/// call but ABSENT for `opcache_get_status(false)`; and `start_time` a live `time()`.
+/// The expected string matches reference PHP `opcache_get_status()` run with the cache
+/// enabled.
+#[test]
+fn web_opcache_get_status_reports_enabled_array() {
+    let dir = make_test_dir("web_opcache_status");
+    let src = "<?php \
+$s = opcache_get_status(); \
+$ns = opcache_get_status(false); \
+echo ($s['opcache_enabled'] ? 'EN1' : 'EN0'), ':'; \
+echo (($s['memory_usage']['used_memory'] + $s['memory_usage']['free_memory'] + $s['memory_usage']['wasted_memory']) == 134217728 ? 'MEMOK' : 'MEMBAD'), ':'; \
+echo (($s['interned_strings_usage']['used_memory'] + $s['interned_strings_usage']['free_memory']) == $s['interned_strings_usage']['buffer_size'] ? 'INTOK' : 'INTBAD'), ':'; \
+echo ($s['opcache_statistics']['max_cached_keys'] == 16229 ? 'MCK1' : 'MCK0'), ':'; \
+echo ($s['opcache_statistics']['opcache_hit_rate'] == 0 ? 'HR1' : 'HR0'), ':'; \
+echo ($s['jit']['enabled'] ? 'JIT0' : 'JIT1'), ':'; \
+echo (isset($s['scripts']) ? 'SCR1' : 'SCR0'), ':'; \
+echo (isset($ns['scripts']) ? 'NSCR1' : 'NSCR0'), ':'; \
+echo ($s['opcache_statistics']['start_time'] > 1000000000 ? 'ST1' : 'ST0');";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let resp = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        resp.ends_with("EN1:MEMOK:INTOK:MCK1:HR1:JIT1:SCR1:NSCR0:ST1"),
+        "opcache_get_status --web array mismatch: {:?}",
+        resp
+    );
+}
+
+/// Verifies the OPcache surface keeps the SAME SHAPE on every request of a long-lived worker.
+///
+/// This is the `--web` half of OPcache verification, and it deliberately uses NO reference PHP.
+/// FPM would be the only oracle for cross-request behaviour, and it is out of scope on purpose
+/// (see `docs/php/opcache.md`): elephc replaces FPM rather than plugging into it, and the
+/// cross-request numbers FPM would expose — accumulating `hits`, a growing `scripts` map,
+/// `opcache_reset()`'s deferred restart — are class-B synthetic values under AOT, because there
+/// is no cache to accumulate into. Comparing them to FPM would measure the fidelity of a number
+/// the model deliberately invents.
+///
+/// What IS a real defect, and what this pins, is the surface changing shape between requests of
+/// one worker: a key appearing or vanishing, or iteration order drifting. Nothing in a
+/// single-request CLI test can observe that.
+///
+/// The fingerprint is built with `foreach` and no sorting on purpose — elephc's checker refuses
+/// `ksort()`/`sort()` on the `Mixed` arrays these functions return, and comparing raw iteration
+/// order across requests is a STRICTER check than comparing sorted sets anyway.
+#[test]
+fn web_opcache_surface_keeps_one_shape_across_requests() {
+    let dir = make_test_dir("web_opcache_shape");
+    let src = "<?php \
+$s = opcache_get_status(); \
+foreach ($s as $k => $v) { echo 'S', $k, '|'; } \
+foreach ($s['opcache_statistics'] as $k => $v) { echo 'T', $k, '|'; } \
+foreach ($s['scripts'] as $p => $e) { foreach ($e as $k => $v) { echo 'E', $k, '|'; } } \
+$c = opcache_get_configuration(); \
+foreach ($c['directives'] as $k => $v) { echo 'D', $k, '|'; }";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let body = |r: &str| r.rsplit("\r\n\r\n").next().unwrap_or("").to_string();
+    assert!(!body(&first).is_empty(), "the first request produced no body: {first:?}");
+    assert_eq!(
+        body(&first),
+        body(&second),
+        "the OPcache surface changed shape between request 1 and 2"
+    );
+    assert_eq!(
+        body(&second),
+        body(&third),
+        "the OPcache surface changed shape between request 2 and 3"
+    );
+}
+
+/// Verifies the reporting-only counters stay COHERENT across requests of one worker.
+///
+/// `start_time` must not move — it identifies the worker's cache generation, and a value that
+/// drifted per request would make every rate derived from it meaningless. `num_cached_scripts`
+/// must not shrink: the AOT manifest is fixed at link time, so an entry disappearing would mean
+/// the model lost track of code that is still in the binary.
+///
+/// Both are class-B invariants: the NUMBERS are synthetic, their COHERENCE is not.
+#[test]
+fn web_opcache_counters_stay_coherent_across_requests() {
+    let dir = make_test_dir("web_opcache_counters");
+    let src = "<?php \
+$s = opcache_get_status(); \
+echo $s['opcache_statistics']['start_time'], ':', \
+     $s['opcache_statistics']['num_cached_scripts'], ':', \
+     ($s['opcache_statistics']['opcache_hit_rate'] >= 0 ? 'HR_OK' : 'HR_NEG');";
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+
+    let body = |r: &str| r.rsplit("\r\n\r\n").next().unwrap_or("").to_string();
+    let (a, b) = (body(&first), body(&second));
+    assert!(a.ends_with("HR_OK"), "hit rate must never be negative: {a:?}");
+    assert_eq!(
+        a, b,
+        "start_time / num_cached_scripts must not drift between requests"
+    );
+}
+
+/// Verifies `opcache.enable_cli` has NO effect under `--web`, where only `opcache.enable` governs.
+///
+/// php-src consults `enable_cli` solely on the CLI SAPI; a web request reads `opcache.enable`
+/// alone. elephc resolves that gate at COMPILE time from the target SAPI, so a `--web` build with
+/// `enable_cli=0` must still report an enabled cache — and a `--web` build with `enable=0` must
+/// report it disabled even if `enable_cli=1`. Getting this backwards would produce a binary that
+/// contradicts its own `opcache_get_configuration()`.
+///
+/// This is a class-A contract check and needs no reference process, which is exactly why it
+/// belongs here rather than in an FPM comparison.
+#[test]
+fn web_opcache_gate_ignores_enable_cli() {
+    let src = "<?php $s = opcache_get_status(); echo is_array($s) ? 'ON' : 'OFF';";
+
+    for (flags, expected, why) in [
+        (
+            vec!["--ini", "opcache.enable=1", "--ini", "opcache.enable_cli=0"],
+            "ON",
+            "enable_cli=0 must not disable a web build",
+        ),
+        (
+            vec!["--ini", "opcache.enable=0", "--ini", "opcache.enable_cli=1"],
+            "OFF",
+            "enable_cli=1 must not enable a web build whose opcache.enable is 0",
+        ),
+    ] {
+        let dir = make_test_dir("web_opcache_gate");
+        let bin = compile_web_with_flags(&dir, src, "app", &flags);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{}", port);
+        let mut child = spawn_server(&bin, &addr, "1");
+        let resp = http_get(&addr, "/");
+        let _ = child.kill();
+        let _ = child.wait();
+
+        assert!(resp.ends_with(expected), "{why}; response was {resp:?}");
+    }
+}

@@ -10,6 +10,12 @@
 
 use super::*;
 
+/// Parses a compact PHP program for effect-summary regression tests.
+fn parse_program(source: &str) -> Program {
+    let tokens = crate::lexer::tokenize(source).expect("tokenize failed");
+    crate::parser::parse(&tokens).expect("parse failed")
+}
+
 /// Tests that a static method whose body contains only a call to a pure builtin
 /// (strlen) is classified as PURE in static_method_effects.
 #[test]
@@ -247,8 +253,7 @@ fn test_program_static_method_effects_resolve_parent_receiver() {
     );
 }
 
-/// Tests that a private instance (non-static) method whose body contains only a call
-/// to a pure builtin (strlen) is classified as PURE in private_instance_method_effects.
+/// Tests that a private instance method whose body only calls pure `strlen` is summarized pure.
 #[test]
 fn test_program_private_instance_method_effects_recognize_private_methods() {
     let program = vec![Stmt::new(
@@ -293,10 +298,161 @@ fn test_program_private_instance_method_effects_recognize_private_methods() {
         Span::dummy(),
     )];
 
-    let (_, _, private_instance_method_effects) = compute_program_callable_effects(&program);
+    let (_, _, instance_method_effects) = compute_program_callable_effects(&program);
 
     assert_eq!(
-        private_instance_method_effects.get("Util::len3"),
+        instance_method_effects.get("Util::len3"),
         Some(&Effect::PURE)
+    );
+}
+
+/// Verifies public `$this` calls use a precise exact summary in a final class.
+#[test]
+fn test_program_instance_method_effects_resolve_public_this_dispatch() {
+    let program = parse_program(
+        r#"<?php
+final class Util {
+    public function len3(): int { return strlen("abc"); }
+    public function relay(): int { return $this->len3(); }
+}
+"#,
+    );
+
+    let (_, _, instance_method_effects) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        instance_method_effects.get("Util::relay"),
+        Some(&Effect::PURE)
+    );
+}
+
+/// Verifies virtual `$this` dispatch unions effects from every concrete override.
+#[test]
+fn test_program_instance_method_effects_union_virtual_overrides() {
+    let program = parse_program(
+        r#"<?php
+class Base {
+    public function value(): int { return 1; }
+    public function relay(): int { return $this->value(); }
+}
+final class Child extends Base {
+    public function value(): int { echo "called"; return 2; }
+}
+"#,
+    );
+
+    let (_, _, instance_method_effects) = compute_program_callable_effects(&program);
+    let relay = instance_method_effects
+        .get("Base::relay")
+        .expect("missing Base::relay summary");
+
+    assert!(relay.has_side_effects);
+    assert!(!relay.may_throw);
+}
+
+/// Verifies `eval()` prevents closed-world subclass assumptions for virtual dispatch.
+#[test]
+fn test_program_instance_method_effects_keep_eval_virtual_dispatch_conservative() {
+    let program = parse_program(
+        r#"<?php
+class EvalBase {
+    public function value(): int { return 1; }
+    public function relay(): int { return $this->value(); }
+}
+eval($source);
+"#,
+    );
+
+    let (_, _, instance_method_effects) = compute_program_callable_effects(&program);
+    let relay = instance_method_effects
+        .get("EvalBase::relay")
+        .expect("missing EvalBase::relay summary");
+
+    assert!(relay.has_side_effects);
+    assert!(relay.may_throw);
+}
+
+/// Verifies direct property reads distinguish untyped slots, typed slots, and magic getters.
+#[test]
+fn test_program_instance_property_effects_refine_declared_and_magic_reads() {
+    let program = parse_program(
+        r#"<?php
+final class Box {
+    public $safe;
+    public int $risky;
+    public function safeRead() { return $this->safe; }
+    public function riskyRead() { return $this->risky; }
+    public function missingRead() { return $this->missing; }
+}
+final class MagicBox {
+    public function __get(string $name) { echo $name; return 1; }
+    public function read() { return $this->missing; }
+}
+final class HookBox {
+    public int $computed { get { echo "hook"; return 1; } }
+    public function read() { return $this->computed; }
+}
+final class LockedBox {
+    private function secret() { return 1; }
+}
+final class Intruder {
+    public function read() { return (new LockedBox())->secret(); }
+}
+final class Vault {
+    private $hidden = 1;
+}
+final class PropertyIntruder {
+    public function read() { return (new Vault())->hidden; }
+}
+trait TypedPropertyTrait {
+    public int $traitRisk;
+}
+final class TraitBox {
+    use TypedPropertyTrait;
+    public function read() { return $this->traitRisk; }
+}
+"#,
+    );
+
+    let (_, _, instance_method_effects) = compute_program_callable_effects(&program);
+
+    assert_eq!(
+        instance_method_effects.get("Box::saferead"),
+        Some(&Effect::PURE)
+    );
+    assert!(
+        instance_method_effects
+            .get("Box::riskyread")
+            .is_some_and(|effect| effect.may_throw)
+    );
+    assert!(
+        instance_method_effects
+            .get("Box::missingread")
+            .is_some_and(|effect| effect.has_side_effects && !effect.may_throw)
+    );
+    assert!(
+        instance_method_effects
+            .get("MagicBox::read")
+            .is_some_and(|effect| effect.has_side_effects)
+    );
+    assert!(
+        instance_method_effects
+            .get("HookBox::read")
+            .is_some_and(|effect| effect.has_side_effects && !effect.may_throw)
+    );
+    assert!(
+        instance_method_effects
+            .get("Intruder::read")
+            .is_some_and(|effect| effect.may_throw)
+    );
+    assert!(
+        instance_method_effects
+            .get("PropertyIntruder::read")
+            .is_some_and(|effect| effect.may_throw)
+    );
+    assert!(
+        instance_method_effects
+            .get("TraitBox::read")
+            .is_some_and(|effect| effect.may_throw)
     );
 }

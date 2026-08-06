@@ -43,6 +43,8 @@ $enemies[0]->x = 100;  // packed class field access
 echo $enemies[0]->x;   // 100
 ```
 
+Buffer indices may be statically typed as `int` or `mixed`. A `mixed` index is converted to `int` at runtime before bounds checking; a statically known non-integer index is rejected at compile time.
+
 ## Buffer length
 
 ```php

@@ -2,7 +2,7 @@
 title: "__elephc_callable_ptr() — internals"
 description: "Compiler internals for __elephc_callable_ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 438
+  order: 460
 ---
 
 ## `__elephc_callable_ptr()` — internals
@@ -10,23 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/elephc_callable_ptr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/elephc_callable_ptr.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:111](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L111) (`lower_elephc_callable_ptr`)
-- **Function symbol**: `lower_elephc_callable_ptr()`
+- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `__elephc_callable_ptr($cb)` — the runtime value of a closure or
-- first-class callable already IS the raw pointer to its 64-byte descriptor, so
-- this is a bare identity load into the pointer result register.
-- Dynamic PHP callable forms are normalized into the same descriptor ABI: strings
-- select a static function/method descriptor, arrays select a static or receiver-
-- bound method descriptor, invokable objects bind `__invoke`, and boxed callable
-- descriptors preserve their existing payload.
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `eir_primitive`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `non_heap`
+- **Effects**: `static (0 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

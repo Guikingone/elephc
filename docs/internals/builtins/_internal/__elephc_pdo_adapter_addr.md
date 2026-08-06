@@ -2,7 +2,7 @@
 title: "__elephc_pdo_adapter_addr() — internals"
 description: "Compiler internals for __elephc_pdo_adapter_addr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 446
+  order: 472
 ---
 
 ## `__elephc_pdo_adapter_addr()` — internals
@@ -10,29 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/elephc_pdo_adapter_addr.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/elephc_pdo_adapter_addr.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:235](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L235) (`lower_elephc_pdo_adapter_addr`)
-- **Function symbol**: `lower_elephc_pdo_adapter_addr()`
+- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `__elephc_pdo_adapter_addr($kind)` — materializes the GOT address of the
-- shared codegen PDO callback adapter selected by the constant `$kind`
-- (0 = collation, 1 = scalar user function, 2 = aggregate step, 3 = aggregate
-- finalize). The bridge stores this address per registration and calls it back with
-- the database-provided arguments, so no bridge extern references a `__rt_*` symbol
-- directly.
-- The adapter is an external runtime symbol (emitted in the runtime `.text`
-- section, gated by `RuntimeFeatures::pdo_udf`), so its address is taken through
-- the GOT rather than a same-section page relocation.
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-The following runtime helpers are referenced:
-- `__rt_pdo_call_agg_final`
-- `__rt_pdo_call_agg_step`
-- `__rt_pdo_call_collation`
-- `__rt_pdo_call_scalar`
+- **Target strategy**: `eir_primitive`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `non_heap`
+- **Effects**: `static (0 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

@@ -22,8 +22,12 @@ pub use audit::check;
 use std::cell::Cell;
 
 thread_local! {
-    /// Whether `--strict-php` is active for the compilation running on this thread.
+    /// Whether `--strict-php` was requested for the compilation running on this thread.
     static STRICT_PHP: Cell<bool> = const { Cell::new(false) };
+
+    /// Language mode of the physical source currently being resolved or checked.
+    static SOURCE_MODE: Cell<crate::source::SourceMode> =
+        const { Cell::new(crate::source::SourceMode::Php) };
 }
 
 /// Enables or disables strict-PHP mode for the current thread's compilation.
@@ -31,9 +35,38 @@ pub fn set_enabled(enabled: bool) {
     STRICT_PHP.with(|cell| cell.set(enabled));
 }
 
-/// Returns whether strict-PHP mode is active for the current thread's compilation.
-pub fn is_enabled() -> bool {
+/// Returns whether strict PHP was requested for the current thread's compilation.
+pub fn is_requested() -> bool {
     STRICT_PHP.with(|cell| cell.get())
+}
+
+/// Returns whether strict PHP is effective for the source currently being processed.
+pub fn is_enabled() -> bool {
+    SOURCE_MODE.with(|mode| mode.get().strict_php_is_effective(is_requested()))
+}
+
+/// RAII guard restoring the previous physical-source mode on drop.
+struct SourceModeGuard {
+    previous: crate::source::SourceMode,
+}
+
+impl Drop for SourceModeGuard {
+    /// Restores the source mode that was active before the nested operation.
+    fn drop(&mut self) {
+        SOURCE_MODE.with(|cell| cell.set(self.previous));
+    }
+}
+
+/// Runs one source-sensitive compiler operation under the physical file's mode.
+///
+/// Nested calls restore their caller's mode even when the operation unwinds.
+pub fn with_source_mode<T>(
+    mode: crate::source::SourceMode,
+    operation: impl FnOnce() -> T,
+) -> T {
+    let previous = SOURCE_MODE.with(|cell| cell.replace(mode));
+    let _guard = SourceModeGuard { previous };
+    operation()
 }
 
 /// RAII guard restoring the previous strict-mode state on drop.
@@ -63,7 +96,7 @@ impl Drop for StrictModeGuard {
 /// Used by lib unit tests and integration tests only (see `StrictModeGuard`).
 #[allow(dead_code)]
 pub fn scoped_enable() -> StrictModeGuard {
-    let previous = is_enabled();
+    let previous = is_requested();
     set_enabled(true);
     StrictModeGuard { previous }
 }
@@ -77,11 +110,24 @@ pub fn scoped_enable() -> StrictModeGuard {
 /// Every call site runs it on the parsed AST right after magic-constant
 /// substitution (a PHP-compatible rewrite) and before any pass synthesizes
 /// compiler-internal names or nodes into it.
+#[allow(dead_code)]
 pub fn check_file(
     program: &crate::parser::ast::Program,
     file: &str,
 ) -> Result<(), crate::errors::CompileError> {
-    if !is_enabled() {
+    check_file_with_mode(program, file, crate::source::SourceMode::Php)
+}
+
+/// Audits one physical user source file under its path-selected language mode.
+///
+/// An invocation-level strict request applies only to PHP-mode source. LFC and
+/// compiler-internal source always retain elephc extensions.
+pub fn check_file_with_mode(
+    program: &crate::parser::ast::Program,
+    file: &str,
+    mode: crate::source::SourceMode,
+) -> Result<(), crate::errors::CompileError> {
+    if !mode.strict_php_is_effective(is_requested()) {
         return Ok(());
     }
     let violations = check(program);
@@ -105,6 +151,8 @@ mod tests {
     #[test]
     fn strict_mode_set_and_clear_roundtrip() {
         set_enabled(true);
+        assert!(is_enabled());
+        assert!(!with_source_mode(crate::source::SourceMode::Lfc, is_enabled));
         assert!(is_enabled());
         set_enabled(false);
         assert!(!is_enabled());

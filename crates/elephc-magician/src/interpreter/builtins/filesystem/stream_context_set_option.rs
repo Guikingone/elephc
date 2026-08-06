@@ -126,11 +126,7 @@ pub(in crate::interpreter) fn eval_stream_context_resource_id(
     stream_context: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    if values.type_tag(stream_context)? != EVAL_TAG_RESOURCE {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let display_id = eval_int_value(stream_context, values)?;
-    display_id.checked_sub(1).ok_or(EvalStatus::RuntimeFatal)
+    eval_resource_payload(stream_context, values)
 }
 
 /// Returns the nested wrapper options array, creating one when missing or scalar.

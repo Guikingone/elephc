@@ -79,6 +79,12 @@ pub(super) fn lower_array_len(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 }
 
 /// Lowers typed indexed-array widening to boxed Mixed slots.
+///
+/// Null and in-band null-container-sentinel inputs (missed array reads that a
+/// branch merge forwards, issue #549) pass through unconverted: the runtime
+/// slot tag is recovered from the header at this call site, so the sentinel
+/// must be filtered before the header dereference — a helper-side guard per
+/// the issue #533 convention would fire too late.
 pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -89,28 +95,35 @@ pub(super) fn lower_array_to_mixed(ctx: &mut FunctionContext<'_>, inst: &Instruc
     let array = expect_operand(inst, 0)?;
     indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_to_mixed_result(&inst.result_php_type.codegen_repr(), inst)?;
-    emit_array_to_mixed_operands(ctx, array)?;
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    store_if_result(ctx, inst)
-}
-
-/// Loads the array pointer and runtime element value tag for `__rt_array_to_mixed`.
-fn emit_array_to_mixed_operands(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    let done = ctx.next_label("array_to_mixed_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
+            ctx.emitter.instruction(&format!("cbz x0, {}", done));              // null containers have no header or slots to box
+            abi::emit_load_int_immediate(ctx.emitter, "x9", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp x0, x9");                              // does the array carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("b.eq {}", done));                 // missed-read sentinels pass through unconverted
             ctx.emitter.instruction("ldr x1, [x0, #-8]");                       // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("lsr x1, x1, #8");                          // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and x1, x1, #0x7f");                       // isolate the source element value_type for Mixed boxing
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
         Arch::X86_64 => {
             ctx.load_value_to_reg(array, "rdi")?;
+            ctx.emitter.instruction("mov rax, rdi");                            // default to passing null/sentinel containers through unconverted
+            ctx.emitter.instruction("test rdi, rdi");                           // null containers have no header or slots to box
+            ctx.emitter.instruction(&format!("je {}", done));                   // keep the null container as the passthrough result
+            abi::emit_load_int_immediate(ctx.emitter, "r10", crate::codegen::NULL_SENTINEL);
+            ctx.emitter.instruction("cmp rdi, r10");                            // does the array carry the in-band null-container sentinel?
+            ctx.emitter.instruction(&format!("je {}", done));                   // missed-read sentinels pass through unconverted
             ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");            // load the indexed-array packed header to recover the runtime slot tag
             ctx.emitter.instruction("shr rsi, 8");                              // move the runtime value_type byte into the low bits
             ctx.emitter.instruction("and rsi, 0x7f");                           // isolate the source element value_type for Mixed boxing
+            abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
         }
     }
-    Ok(())
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers indexed-array promotion to associative hash storage.
@@ -604,10 +617,21 @@ pub(super) fn lower_mixed_array_append(
             )))
         }
     }
+    prepare_boxed_mixed_value_for_container(ctx, value)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_mixed_array_append_aarch64(ctx, receiver, value),
-        Arch::X86_64 => lower_mixed_array_append_x86_64(ctx, receiver, value),
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.load_value_to_reg(receiver, "x0")?;
+            abi::emit_pop_reg(ctx.emitter, "x1");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.load_value_to_reg(receiver, "rdi")?;
+            abi::emit_pop_reg(ctx.emitter, "rsi");
+        }
     }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_append");
+    Ok(())
 }
 
 /// Lowers PHP indexed-array union through the shared runtime helper.
@@ -751,7 +775,7 @@ fn lower_array_get_aarch64(
         emit_array_offset_on_null_warning(ctx);
     }
     ctx.emitter.label(&fallback_label);
-    emit_array_get_null_fallback(ctx, result_ty);
+    emit_array_get_null_fallback(ctx, result_ty, !warn_on_missing);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -892,7 +916,7 @@ fn lower_array_get_x86_64(
         emit_array_offset_on_null_warning(ctx);
     }
     ctx.emitter.label(&fallback_label);
-    emit_array_get_null_fallback(ctx, result_ty);
+    emit_array_get_null_fallback(ctx, result_ty, !warn_on_missing);
     ctx.emitter.label(&done_label);
     store_if_result(ctx, inst)
 }
@@ -1184,10 +1208,22 @@ pub(super) fn emit_array_offset_on_null_warning(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Emits the null/miss fallback in the result shape expected by the array element type.
-pub(super) fn emit_array_get_null_fallback(ctx: &mut FunctionContext<'_>, elem_ty: &PhpType) {
+///
+/// `miss_reads_as_null` is true for the *silent* read variants — the ones `??`, `isset()` and
+/// `empty()` lower to — where the caller goes on to ask whether the read produced PHP null.
+/// Only those get the float null marker; a warned read keeps materializing `0.0` so a plain
+/// `$a[$missing]` in value position renders as it always has. See `emit_float_null_sentinel`.
+pub(super) fn emit_array_get_null_fallback(
+    ctx: &mut FunctionContext<'_>,
+    elem_ty: &PhpType,
+    miss_reads_as_null: bool,
+) {
     match elem_ty {
         PhpType::TaggedScalar => {
             crate::codegen::sentinels::emit_tagged_scalar_null(ctx.emitter);
+        }
+        PhpType::Float if miss_reads_as_null => {
+            crate::codegen::sentinels::emit_float_null_sentinel(ctx.emitter);
         }
         PhpType::Float => match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -1555,80 +1591,6 @@ fn lower_array_push_unboxed_mixed_x86_64(
             )));
         }
     }
-    Ok(())
-}
-
-/// Appends to an indexed array stored inside a boxed Mixed cell on AArch64.
-fn lower_mixed_array_append_aarch64(
-    ctx: &mut FunctionContext<'_>,
-    receiver: ValueId,
-    value: ValueId,
-) -> Result<()> {
-    let drop_label = ctx.next_label("mixed_array_append_drop");
-    let done_label = ctx.next_label("mixed_array_append_done");
-    prepare_boxed_mixed_value_for_container(ctx, value)?;
-    abi::emit_push_reg(ctx.emitter, "x0");
-    ctx.load_value_to_reg(receiver, "x0")?;
-    abi::emit_push_reg(ctx.emitter, "x0");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp x0, #4");                                      // require an indexed-array payload before deriving the append key
-    ctx.emitter.instruction(&format!("b.ne {}", drop_label));                   // drop the boxed value when the Mixed cell is not an indexed array
-    ctx.emitter.instruction(&format!("cbz x1, {}", drop_label));                // drop the boxed value when the indexed-array payload is null
-    ctx.emitter.instruction("mov x0, x1");                                      // pass the unboxed indexed-array payload to the Mixed conversion helper
-    ctx.emitter.instruction("ldr x1, [x0, #-8]");                               // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("lsr x1, x1, #8");                                  // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and x1, x1, #0x7f");                               // isolate the indexed-array value_type tag
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    abi::emit_pop_reg(ctx.emitter, "x10");
-    ctx.emitter.instruction("str x0, [x10, #8]");                               // publish the converted indexed array back into the Mixed cell
-    ctx.emitter.instruction("ldr x1, [x0]");                                    // use the current logical length as the append index
-    ctx.emitter.instruction("mov x0, x10");                                     // pass the target Mixed cell to the runtime setter
-    abi::emit_pop_reg(ctx.emitter, "x3");
-    ctx.emitter.instruction("mov x2, #-1");                                     // key_hi = -1 marks an integer array key
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
-    ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the failure cleanup after the setter consumes the value
-    ctx.emitter.label(&drop_label);
-    abi::emit_pop_reg(ctx.emitter, "x9");
-    abi::emit_pop_reg(ctx.emitter, "x0");
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.label(&done_label);
-    Ok(())
-}
-
-/// Appends to an indexed array stored inside a boxed Mixed cell on x86_64.
-fn lower_mixed_array_append_x86_64(
-    ctx: &mut FunctionContext<'_>,
-    receiver: ValueId,
-    value: ValueId,
-) -> Result<()> {
-    let drop_label = ctx.next_label("mixed_array_append_drop");
-    let done_label = ctx.next_label("mixed_array_append_done");
-    prepare_boxed_mixed_value_for_container(ctx, value)?;
-    abi::emit_push_reg(ctx.emitter, "rax");
-    ctx.load_value_to_reg(receiver, "rax")?;
-    abi::emit_push_reg(ctx.emitter, "rax");
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
-    ctx.emitter.instruction("cmp rax, 4");                                      // require an indexed-array payload before deriving the append key
-    ctx.emitter.instruction(&format!("jne {}", drop_label));                    // drop the boxed value when the Mixed cell is not an indexed array
-    ctx.emitter.instruction("test rdi, rdi");                                   // verify the unboxed indexed-array payload is present
-    ctx.emitter.instruction(&format!("je {}", drop_label));                     // drop the boxed value when the indexed-array payload is null
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rdi - 8]");                    // load indexed-array metadata before Mixed-slot conversion
-    ctx.emitter.instruction("shr rsi, 8");                                      // move the runtime value_type tag into the low bits
-    ctx.emitter.instruction("and rsi, 0x7f");                                   // isolate the indexed-array value_type tag
-    abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
-    abi::emit_pop_reg(ctx.emitter, "r10");
-    ctx.emitter.instruction("mov QWORD PTR [r10 + 8], rax");                    // publish the converted indexed array back into the Mixed cell
-    ctx.emitter.instruction("mov rsi, QWORD PTR [rax]");                        // use the current logical length as the append index
-    ctx.emitter.instruction("mov rdi, r10");                                    // pass the target Mixed cell to the runtime setter
-    abi::emit_pop_reg(ctx.emitter, "rcx");
-    ctx.emitter.instruction("mov rdx, -1");                                     // key_hi = -1 marks an integer array key
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
-    ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the failure cleanup after the setter consumes the value
-    ctx.emitter.label(&drop_label);
-    abi::emit_pop_reg(ctx.emitter, "r11");
-    abi::emit_pop_reg(ctx.emitter, "rax");
-    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
-    ctx.emitter.label(&done_label);
     Ok(())
 }
 

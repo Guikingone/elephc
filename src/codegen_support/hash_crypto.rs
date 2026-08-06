@@ -44,6 +44,7 @@ pub(crate) fn publish_elephc_crypto_function_pointers(emitter: &mut Emitter) {
         ("elephc_crypto_final", "_elephc_crypto_final_fn"),
         ("elephc_crypto_clone", "_elephc_crypto_clone_fn"),
         ("elephc_crypto_free", "_elephc_crypto_free_fn"),
+        ("elephc_crypto_is_finalized", "_elephc_crypto_is_finalized_fn"),
     ];
     match emitter.target.arch {
         Arch::AArch64 => {
@@ -80,46 +81,92 @@ pub(crate) fn emit_throw_unknown_algorithm_value_error(
     message_symbol: &str,
     message_len: usize,
 ) {
+    emit_throw_static_hash_exception(
+        emitter,
+        "_spl_value_error_class_id",
+        message_symbol,
+        message_len,
+    );
+}
+
+/// Emits a catchable throw of `class_id_symbol` carrying the fixed runtime message
+/// at `message_symbol` / `message_len`, for any hash-family guard.
+///
+/// This is `emit_throw_unknown_algorithm_value_error` with the exception class
+/// lifted out of the body: the `hash()`/`hash_init()`/`hash_hmac()` unknown-algorithm
+/// paths raise `\ValueError`, while the finalized-context guards on
+/// `hash_update()`/`hash_final()`/`hash_copy()` raise `\TypeError`. Both are the
+/// same object-stamping sequence, so they share one emitter rather than two copies
+/// that could drift on the exception layout.
+///
+/// The emitted code does not return; it branches into `__rt_throw_current` after
+/// publishing the exception object into `_exc_value`.
+pub(crate) fn emit_throw_static_hash_exception(
+    emitter: &mut Emitter,
+    class_id_symbol: &str,
+    message_symbol: &str,
+    message_len: usize,
+) {
     match emitter.target.arch {
-        Arch::AArch64 => emit_throw_value_error_aarch64(emitter, message_symbol, message_len),
-        Arch::X86_64 => emit_throw_value_error_x86_64(emitter, message_symbol, message_len),
+        Arch::AArch64 => {
+            emit_throw_value_error_aarch64(emitter, class_id_symbol, message_symbol, message_len)
+        }
+        Arch::X86_64 => {
+            emit_throw_value_error_x86_64(emitter, class_id_symbol, message_symbol, message_len)
+        }
     }
 }
 
-/// Emits the AArch64 allocation and unwinder handoff for the `hash()` `\ValueError`.
-fn emit_throw_value_error_aarch64(emitter: &mut Emitter, message_symbol: &str, message_len: usize) {
-    emitter.instruction("mov x0, #32");                                         // request Throwable payload storage
+/// Emits the AArch64 allocation and unwinder handoff for a hash-family exception.
+fn emit_throw_value_error_aarch64(
+    emitter: &mut Emitter,
+    class_id_symbol: &str,
+    message_symbol: &str,
+    message_len: usize,
+) {
+    emitter.instruction("mov x0, #56");                                         // request Throwable payload storage (message/code/previous)
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the ValueError object payload
     emitter.instruction("mov x9, #6");                                          // heap kind 6 = object instance
     emitter.instruction("str x9, [x0, #-8]");                                   // stamp allocation as a runtime object
-    abi::emit_symbol_address(emitter, "x9", "_spl_value_error_class_id");
-    emitter.instruction("ldr x9, [x9]");                                        // load ValueError's runtime class id for this program
+    emitter.instruction("bl __rt_object_handle_acquire");                       // bind the new object to its PHP object handle
+    abi::emit_symbol_address(emitter, "x9", class_id_symbol);
+    emitter.instruction("ldr x9, [x9]");                                        // load the exception's runtime class id for this program
     emitter.instruction("str x9, [x0]");                                        // store class id at the object header
     abi::emit_symbol_address(emitter, "x9", message_symbol);
     emitter.instruction("str x9, [x0, #8]");                                    // store static ValueError message pointer
     emitter.instruction(&format!("mov x9, #{}", message_len));                  // load static ValueError message length
     emitter.instruction("str x9, [x0, #16]");                                   // store exception message length
     emitter.instruction("str xzr, [x0, #24]");                                  // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "x0");
+    emitter.instruction("str xzr, [x0, #40]");                                  // previous defaults to null
     abi::emit_symbol_address(emitter, "x9", "_exc_value");
     emitter.instruction("str x0, [x9]");                                        // publish the active exception object
     emitter.instruction("b __rt_throw_current");                                // enter the standard exception unwinder
 }
 
-/// Emits the Linux x86_64 allocation and unwinder handoff for the `hash()` `\ValueError`.
-fn emit_throw_value_error_x86_64(emitter: &mut Emitter, message_symbol: &str, message_len: usize) {
+/// Emits the Linux x86_64 allocation and unwinder handoff for a hash-family exception.
+fn emit_throw_value_error_x86_64(
+    emitter: &mut Emitter,
+    class_id_symbol: &str,
+    message_symbol: &str,
+    message_len: usize,
+) {
     emitter.instruction("push rbp");                                            // preserve caller frame pointer for exception allocation
     emitter.instruction("mov rbp, rsp");                                        // establish aligned helper frame
     emitter.instruction("sub rsp, 16");                                         // keep the nested heap allocation call 16-byte aligned
-    emitter.instruction("mov rax, 32");                                         // request Throwable payload storage
+    emitter.instruction("mov rax, 56");                                         // request Throwable payload storage (message/code/previous)
     emitter.instruction("call __rt_heap_alloc");                                // allocate the ValueError object payload
-    emitter.instruction("mov r10, 0x4548504c00000006");                         // x86_64 heap-kind word: HE LP magic + kind 6 object
+    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(6))); // stamp the canonical x86_64 heap-kind word (magic + kind 6 throwable)
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp allocation as a runtime object
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_spl_value_error_class_id", 0); // load ValueError's runtime class id for this program
+    emitter.instruction("call __rt_object_handle_acquire");                     // bind the new object to its PHP object handle
+    abi::emit_load_symbol_to_reg(emitter, "r10", class_id_symbol, 0); // load the exception's runtime class id for this program
     emitter.instruction("mov QWORD PTR [rax], r10");                            // store class id at the object header
     abi::emit_symbol_address(emitter, "r10", message_symbol); // materialize static ValueError message pointer
     emitter.instruction("mov QWORD PTR [rax + 8], r10");                        // store static ValueError message pointer
     emitter.instruction(&format!("mov QWORD PTR [rax + 16], {}", message_len)); // store static ValueError message length
     emitter.instruction("mov QWORD PTR [rax + 24], 0");                         // exception code defaults to zero
+    crate::codegen_support::sentinels::emit_throwable_creation_line_unknown(emitter, "rax");
+    emitter.instruction("mov QWORD PTR [rax + 40], 0");                         // previous defaults to null
     abi::emit_store_reg_to_symbol(emitter, "rax", "_exc_value", 0); // publish the active exception object
     emitter.instruction("mov rsp, rbp");                                        // release helper frame before throwing
     emitter.instruction("pop rbp");                                             // restore caller frame pointer before throwing

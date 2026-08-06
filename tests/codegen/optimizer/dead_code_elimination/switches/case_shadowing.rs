@@ -35,7 +35,7 @@ echo "!";
     );
 
     assert!(
-        !user_asm.contains("shadowed"),
+        !asm_without_embedded_script_path(&user_asm).contains("shadowed"),
         "shadowed switch case body should not remain in user assembly:\n{}",
         user_asm
     );

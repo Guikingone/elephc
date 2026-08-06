@@ -16,6 +16,8 @@ use crate::context::native_frame_called_class_override_bytes;
 use crate::errors::EvalStatus;
 #[cfg(not(test))]
 use crate::ffi::dynamic_destructors::install_dynamic_object_destructor_hook;
+#[cfg(not(test))]
+use crate::ffi::ob_handlers::install_ob_handler_hook;
 use std::ptr;
 
 /// Returns the ABI version expected by generated elephc eval call sites.
@@ -29,6 +31,8 @@ pub extern "C" fn __elephc_eval_abi_version() -> u32 {
 pub extern "C" fn __elephc_eval_context_new() -> *mut ElephcEvalContext {
     #[cfg(not(test))]
     install_dynamic_object_destructor_hook();
+    #[cfg(not(test))]
+    install_ob_handler_hook();
     Box::into_raw(Box::new(ElephcEvalContext::new()))
 }
 
@@ -45,6 +49,19 @@ pub extern "C" fn __elephc_eval_set_strict_php(enabled: u8) {
     crate::strict_php_mode::set_strict_php_mode(enabled != 0);
 }
 
+/// Selects the PHP language profile eval reports, so that a binary compiled
+/// `--php-version 8.2` answers `8.2.0` from inside `eval()` exactly as it does
+/// natively.
+///
+/// Generated code emits this call before every runtime eval dispatch. Ids outside
+/// the profiles elephc supports leave the active one untouched, which keeps every
+/// consumer that links this archive without elephc's codegen — the test harnesses
+/// in this crate included — on the default profile.
+#[no_mangle]
+pub extern "C" fn __elephc_eval_set_php_version_id(version_id: u32) {
+    crate::eval_php_profile::set_eval_php_version_id(version_id);
+}
+
 /// Frees a process-level eval context handle allocated by the eval bridge.
 ///
 /// # Safety
@@ -56,6 +73,7 @@ pub unsafe extern "C" fn __elephc_eval_context_free(ctx: *mut ElephcEvalContext)
         if let Some(context) = unsafe { ctx.as_ref() } {
             context.unregister_dynamic_object_context();
         }
+        crate::ffi::ob_handlers::unregister_ob_handlers_for_context(ctx);
         drop(Box::from_raw(ctx));
     }
 }

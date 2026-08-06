@@ -66,13 +66,22 @@ pub(crate) fn gcc_cmd() -> &'static str {
 }
 
 /// Returns platform-specific library search paths used during linking.
-/// On macOS checks `/opt/homebrew/lib` and `/usr/local/lib`.
+/// On macOS checks common Homebrew roots plus optional PDO dependency prefixes.
 /// On Linux checks aarch64 sysroot paths.
 pub(crate) fn default_link_paths() -> Vec<String> {
     let mut paths = Vec::new();
     match target().platform {
         Platform::MacOS => {
-            for candidate in ["/opt/homebrew/lib", "/usr/local/lib"] {
+            for candidate in [
+                "/opt/homebrew/lib",
+                "/usr/local/lib",
+                "/opt/homebrew/opt/libpq/lib",
+                "/usr/local/opt/libpq/lib",
+                "/opt/homebrew/opt/freetds/lib",
+                "/usr/local/opt/freetds/lib",
+                "/opt/homebrew/opt/unixodbc/lib",
+                "/usr/local/opt/unixodbc/lib",
+            ] {
                 if std::path::Path::new(candidate).exists() {
                     paths.push(candidate.to_string());
                 }

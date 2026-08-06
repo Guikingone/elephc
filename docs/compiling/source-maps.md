@@ -5,8 +5,8 @@ sidebar:
   order: 7
 ---
 
-`elephc --source-map file.php` writes a `file.map` sidecar next to the generated
-assembly, mapping the assembly back to PHP source. The map is a JSON document
+`elephc --source-map file.php` (or `file.lfc`) writes a `file.map` sidecar next
+to the generated assembly, mapping the assembly back to user source. The map is a JSON document
 with a versioned, machine-readable schema intended for external tooling
 (debuggers, profilers, disassembly viewers).
 
@@ -52,8 +52,8 @@ line directives in the assembly itself; the two flags compose.
 |-------|------|---------|
 | `format` | string | Always `"elephc-source-map"`. |
 | `version` | integer | Schema version; currently `2`. |
-| `source` | string | Path of the compiled PHP file, as passed to the CLI. |
-| `source_sha256` | string \| null | Lowercase-hex SHA-256 of the PHP file at compile time, so tools can detect a stale map; `null` if the file could not be re-read. |
+| `source` | string | Path of the compiled `.php` or `.lfc` entry file, as passed to the CLI. |
+| `source_sha256` | string \| null | Lowercase-hex SHA-256 of the entry source at compile time, so tools can detect a stale map; `null` if the file could not be re-read. |
 | `asm` | string | Path of the assembly file the map describes. |
 
 ### `functions`
@@ -89,7 +89,7 @@ marker comment line, and the instruction's assembly follows it.
 | Field | Type | Meaning |
 |-------|------|---------|
 | `asm_line` | integer | 1-based line of the mapping marker in the `.s` file. |
-| `php_line` / `php_col` | integer | 1-based PHP source position (the expression's anchor: its operator or first token). |
+| `php_line` / `php_col` | integer | 1-based user-source position (the expression's anchor: its operator or first token). The stable field name also applies to LFC. |
 | `php_end_line` / `php_end_col` | integer \| null | Exclusive end of the mapped expression (the character after it). `null` when the extent is unknown. |
 | `op` | string \| null | EIR opcode spelling (e.g. `ichecked_add`, `call`), or `null` when unknown. |
 | `origin` | string \| null | Optimization-pass provenance: `"const_fold"` when the instruction was rewritten to a constant, `"licm"` when it was hoisted out of a loop. `null` for instructions lowered directly from the source. |
@@ -105,7 +105,7 @@ into several functions gets one range per copy.
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `php_line` | integer | 1-based PHP source line. |
+| `php_line` | integer | 1-based user-source line. The stable field name also applies to LFC. |
 | `asm_ranges` | array of `[start, end]` | 1-based inclusive assembly line ranges. |
 
 ### Stability contract

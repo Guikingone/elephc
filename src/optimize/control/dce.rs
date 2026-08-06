@@ -71,7 +71,7 @@ fn dce_block_with_guards(body: Vec<Stmt>, mut guards: GuardState) -> Vec<Stmt> {
             .last()
             .is_some_and(|stmt| !matches!(stmt_terminal_effect(stmt), TerminalEffect::FallsThrough));
         for stmt in &dce_stmt {
-            invalidate_guards_for_stmt(stmt, &mut guards);
+            advance_guards_after_stmt(stmt, &mut guards);
         }
         eliminated.extend(dce_stmt);
         if stops_here {
@@ -281,6 +281,34 @@ fn known_subject_truthiness(subject: &Expr, guards: &GuardState) -> Option<bool>
     None
 }
 
+/// Builds the entry guard state for a pre-tested loop body.
+///
+/// Loop-carried body/update writes and condition-evaluation writes are invalidated
+/// before the taken-true condition is recorded. Impure or throwing conditions do
+/// not contribute facts, matching ordinary branch guard admission.
+fn guards_for_pretested_loop_body(
+    guards: &GuardState,
+    body: &[Stmt],
+    condition: Option<&Expr>,
+    update: Option<&Stmt>,
+) -> GuardState {
+    let mut next = invalidated_guards_for_block(guards, body);
+    if let Some(update) = update {
+        invalidate_guards_for_stmt(update, &mut next);
+    }
+    let Some(condition) = condition else {
+        return next;
+    };
+
+    next = invalidated_guards_for_expr(&next, condition);
+    let effect = expr_effect(condition);
+    if effect.has_side_effects || effect.may_throw {
+        return next;
+    }
+
+    extend_guards(&next, condition, true)
+}
+
 /// Applies DCE to a single statement with default guard state.
 pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
     dce_stmt_with_guards(stmt, &GuardState::default())
@@ -291,11 +319,21 @@ pub(crate) fn dce_stmt(stmt: Stmt) -> Vec<Stmt> {
 /// side-effect-free expression statements. Guard state is propagated and invalidated
 /// based on writes and branch structure.
 fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
+    let source_mode = stmt.source_mode;
+    crate::source::with_parse_mode(source_mode, || {
+        dce_stmt_in_source_mode(stmt, guards)
+    })
+}
+
+/// Applies DCE after reconstructed statements have inherited the input source mode.
+fn dce_stmt_in_source_mode(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
     let span = stmt.span;
+    let source_mode = stmt.source_mode;
     match stmt.kind {
         StmtKind::Echo(expr) => vec![Stmt {
             kind: StmtKind::Echo(prune_expr(expr)),
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::Assign { name, value } => vec![Stmt {
@@ -304,11 +342,13 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::RefAssign { target, source } => vec![Stmt {
             kind: StmtKind::RefAssign { target, source },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::TypedAssign {
@@ -322,6 +362,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::PropertyAssign {
@@ -335,6 +376,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::StaticPropertyAssign {
@@ -348,6 +390,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::StaticPropertyArrayPush {
@@ -361,6 +404,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::StaticPropertyArrayAssign {
@@ -376,6 +420,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::PropertyArrayAssign {
@@ -391,6 +436,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::PropertyArrayPush {
@@ -404,6 +450,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::ArrayAssign { array, index, value } => vec![Stmt {
@@ -413,6 +460,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::NestedArrayAssign { target, value } => vec![Stmt {
@@ -421,6 +469,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::ArrayPush { array, value } => vec![Stmt {
@@ -429,6 +478,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::ListUnpack { vars, value } => vec![Stmt {
@@ -437,6 +487,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::StaticVar { name, init } => vec![Stmt {
@@ -445,6 +496,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 init: prune_expr(init),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::ConstDecl { name, value } => vec![Stmt {
@@ -453,11 +505,13 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 value: prune_expr(value),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::IncludeOnceMark { label } => vec![Stmt {
             kind: StmtKind::IncludeOnceMark { label },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::IncludeOnceGuard { label, body } => vec![Stmt {
@@ -466,6 +520,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 body: dce_block_with_guards(body, guards.clone()),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::If {
@@ -492,58 +547,96 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                         else_body,
                     },
                     span,
+            source_mode,
                     attributes: Vec::new(),
                 }]
             }
         }
-        StmtKind::While { condition, body } => vec![Stmt {
-            kind: StmtKind::While {
-                condition: prune_expr(condition),
-                body: dce_block_with_guards(body, guards.clone()),
-            },
-            span,
-            attributes: Vec::new(),
-        }],
-        StmtKind::DoWhile { body, condition } => vec![Stmt {
-            kind: StmtKind::DoWhile {
-                body: dce_block_with_guards(body, guards.clone()),
-                condition: prune_expr(condition),
-            },
-            span,
-            attributes: Vec::new(),
-        }],
+        StmtKind::While { condition, body } => {
+            let condition = prune_expr(condition);
+            let loop_guards =
+                guards_for_pretested_loop_body(guards, &body, Some(&condition), None);
+            vec![Stmt {
+                kind: StmtKind::While {
+                    condition,
+                    body: dce_block_with_guards(body, loop_guards),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
+        StmtKind::DoWhile { body, condition } => {
+            let loop_guards = invalidated_guards_for_block(guards, &body);
+            let loop_guards = invalidated_guards_for_expr(&loop_guards, &condition);
+            vec![Stmt {
+                kind: StmtKind::DoWhile {
+                    body: dce_block_with_guards(body, loop_guards),
+                    condition: prune_expr(condition),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
         StmtKind::For {
             init,
             condition,
             update,
             body,
-        } => vec![Stmt {
-            kind: StmtKind::For {
-                init: init.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
-                condition: condition.map(prune_expr),
-                update: update.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
-                body: dce_block_with_guards(body, guards.clone()),
-            },
-            span,
-            attributes: Vec::new(),
-        }],
+        } => {
+            let mut entry_guards = guards.clone();
+            if let Some(stmt) = init.as_deref() {
+                advance_guards_after_stmt(stmt, &mut entry_guards);
+            }
+            let condition = condition.map(prune_expr);
+            let loop_guards = guards_for_pretested_loop_body(
+                &entry_guards,
+                &body,
+                condition.as_ref(),
+                update.as_deref(),
+            );
+            vec![Stmt {
+                kind: StmtKind::For {
+                    init: init.and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
+                    condition,
+                    update: update
+                        .and_then(|stmt| dce_stmt(*stmt).into_iter().next().map(Box::new)),
+                    body: dce_block_with_guards(body, loop_guards),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
         StmtKind::Foreach {
             array,
             key_var,
             value_var,
             value_by_ref,
             body,
-        } => vec![Stmt {
-            kind: StmtKind::Foreach {
-                array: prune_expr(array),
-                key_var,
-                value_var,
+        } => {
+            let loop_guards = invalidated_guards_for_foreach_body(
+                guards,
+                &array,
+                key_var.as_deref(),
+                &value_var,
                 value_by_ref,
-                body: dce_block_with_guards(body, guards.clone()),
-            },
-            span,
-            attributes: Vec::new(),
-        }],
+                &body,
+            );
+            vec![Stmt {
+                kind: StmtKind::Foreach {
+                    array: prune_expr(array),
+                    key_var,
+                    value_var,
+                    value_by_ref,
+                    body: dce_block_with_guards(body, loop_guards),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
         StmtKind::Switch {
             subject,
             cases,
@@ -560,6 +653,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 body: dce_block_with_guards(body, guards.clone()),
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::FunctionDecl {
@@ -572,29 +666,35 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             variadic_type,
             return_type,
             body,
-        } => vec![Stmt {
-            kind: StmtKind::FunctionDecl {
-                by_ref_return,
-                name,
-                params,
-                param_attributes,
-                variadic,
-                variadic_by_ref,
-                variadic_type,
-                return_type,
-                body: dce_block_with_guards(body, GuardState::default()),
-            },
-            span,
-            attributes: Vec::new(),
-        }],
+        } => {
+            let function_guards = GuardState::for_params(&params);
+            vec![Stmt {
+                kind: StmtKind::FunctionDecl {
+                    by_ref_return,
+                    name,
+                    params,
+                    param_attributes,
+                    variadic,
+                    variadic_by_ref,
+                    variadic_type,
+                    return_type,
+                    body: dce_block_with_guards(body, function_guards),
+                },
+                span,
+                source_mode,
+                attributes: Vec::new(),
+            }]
+        }
         StmtKind::Return(expr) => vec![Stmt {
             kind: StmtKind::Return(expr.map(prune_expr)),
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::Throw(expr) => vec![Stmt {
             kind: StmtKind::Throw(prune_expr(expr)),
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::ClassDecl {
@@ -628,15 +728,17 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 constants,
                 },
                 span,
+            source_mode,
                 attributes: Vec::new(),
             }]
         }
         StmtKind::ExprStmt(expr) => {
             let expr = prune_expr(expr);
-            if expr_has_side_effects(&expr) {
+            if expr_is_observable(&expr) {
                 vec![Stmt {
                     kind: StmtKind::ExprStmt(expr),
                     span,
+            source_mode,
                     attributes: Vec::new(),
                 }]
             } else {
@@ -662,11 +764,13 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
                 constants,
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::PackedClassDecl { name, fields } => vec![Stmt {
             kind: StmtKind::PackedClassDecl { name, fields },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::InterfaceDecl {
@@ -687,6 +791,7 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             constants,
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
         StmtKind::TraitDecl {
@@ -707,8 +812,9 @@ fn dce_stmt_with_guards(stmt: Stmt, guards: &GuardState) -> Vec<Stmt> {
             constants,
             },
             span,
+            source_mode,
             attributes: Vec::new(),
         }],
-        kind => vec![Stmt { kind, span, attributes: Vec::new() }],
+        kind => vec![Stmt { kind, span, source_mode, attributes: Vec::new() }],
     }
 }

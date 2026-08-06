@@ -29,10 +29,11 @@ case-insensitive PHP language-construct name.
 ```text
 eval($code)
   -> checker: exactly one argument, result Mixed, conservative barrier
-  -> EIR lowering: BuiltinCall or EvalLiteralCall
+  -> EIR lowering: LanguageConstructCall or EvalLiteralCall
   -> literal planner, when the source is statically known
-       -> direct/native EIR
-       -> EIR plus core eval-scope helpers
+       -> internal no-scope EIR function
+       -> internal EIR function with direct read parameters
+       -> internal scope-aware EIR function plus core eval-scope helpers
        -> Magician interpreter fallback
   -> target-aware assembly and optional bridge linking
 ```
@@ -45,14 +46,17 @@ front end has already preserved PHP's dynamic semantics and diagnostics.
 
 | Path | Typical input | Runtime requirements |
 |---|---|---|
-| Direct AOT | A literal fragment whose operations and caller-local reads/writes can be lowered statically | No eval context, scope, or Magician library |
-| Scope-backed AOT | A literal fragment that is statically lowerable but needs materialized known scope values | Core `eval_scope` runtime feature; no interpreter library |
-| Interpreter fallback | A dynamic string or a literal requiring dynamic declarations, includes, references, dynamic calls, or another unsupported AOT shape | `eval_bridge`, synchronized scopes, PCRE2, and `elephc_magician` |
+| No-scope AOT | A literal fragment with no caller-scope access | Internal EIR function; no eval context, scope, or Magician library |
+| Direct-read AOT | A statically lowerable literal with read-only caller values | Internal EIR function with boxed `Mixed` parameters; no eval scope or Magician library |
+| Scope-backed AOT | A statically lowerable literal with known scope writes | Internal EIR function plus core `eval_scope`; no interpreter library |
+| Interpreter fallback | A dynamic string or a literal requiring dynamic declarations, includes, references, dynamic calls, or another unsupported AOT shape | `eval_bridge`, synchronized scopes, and `elephc_magician`; optional capabilities such as regex are linked separately |
 
 `src/eval_aot.rs` parses literal fragments at compile time, applies call-site
 magic-constant metadata, records known scope reads and writes, and produces an
-`EvalAotPlan`. A plan can contain a fully static EIR body, a scope-read EIR
-body, or a conservative fallback reason.
+`EvalAotPlan`. A plan can contain a no-scope EIR body, a scope-aware EIR body,
+or a conservative fallback reason. `src/ir_lower/program.rs` materializes each
+accepted body as a deterministic `__eir@evalaot*` function before validation,
+optimization, register allocation, and normal target-aware codegen.
 
 Current fallback classes include parse failures, `include`/`require`, runtime
 declarations, global/static scope, references and by-reference operations,
@@ -70,8 +74,10 @@ binary links Magician.
 ## EIR representation
 
 Literal calls use `EvalLiteralCall`, carrying the fragment in the module data
-pool. Dynamic calls remain ordinary builtin calls until the eval lowering path
-materializes the runtime code string.
+pool. Dynamic calls remain compiler-resident `LanguageConstructCall` operations
+until the eval lowering path materializes the runtime code string. Registry-backed
+builtins use typed `RuntimeCall` targets instead and never participate in eval-name
+dispatch.
 
 The eval-specific EIR operations are:
 
@@ -99,8 +105,9 @@ Three addressable local kinds hold eval state when required:
 | `EvalScope` | Materialized activation/closure scope shared with the executing fragment. |
 | `EvalGlobalScope` | Materialized program-global scope used by `global` aliases and CLI argument globals. |
 
-Frame sizing and cleanup see these slots before assembly emission. A direct AOT
-fragment does not declare them merely because the source contains `eval()`.
+Frame sizing and cleanup see these slots before assembly emission. A no-scope
+or direct-read AOT fragment does not declare them merely because the source
+contains `eval()`.
 
 ## Checker and optimizer barrier
 
@@ -135,6 +142,15 @@ When interpreter fallback is required, generated code performs these steps:
 6. Call `__elephc_eval_execute` through the target-aware ABI.
 7. Reload dirty, created, or unset scope entries and propagate return/fatal/
    throwable state through the normal generated runtime paths.
+
+Magician has no direct PCRE2 symbols in its base static library. If the final
+EIR module requires the regex runtime, generated eval setup registers the
+managed `elephc_pcre2_v1_*` shim callbacks before creating the context.
+Magician then exposes its regex builtin area through that opaque provider. With
+no provider, `preg_*` names are absent from dynamic eval lookup and calling one
+fails at runtime. Opaque dynamic source can opt into that capability with
+`--with-regex`; visible static regex use enables it through normal feature
+detection.
 
 Top-level scope setup also seeds `$argc` and `$argv`. Function fragments can
 bind those values or compiler-known program globals with PHP `global` aliases.
@@ -183,12 +199,14 @@ capacity.
 ## Linking and targets
 
 `RuntimeFeatures::eval_scope` emits only the core scope helpers.
-`RuntimeFeatures::eval_bridge` additionally links PCRE2 and
-`libelephc_magician.a`. The bridge is registered in `src/linker.rs` as
-`--with-eval` with the optional `ELEPHC_MAGICIAN_LIB_DIR` archive-directory
-override. Normal compilation derives the feature automatically; `--with-eval`
-force-loads the archive and increases binary size but does not alter AOT
-eligibility.
+`RuntimeFeatures::eval_bridge` additionally links `libelephc_magician.a`, but
+not PCRE2. `RuntimeFeatures::regex` independently resolves managed PCRE2 and
+causes eval setup to register the provider callbacks. The bridge is registered
+in `src/linker/` as `--with-eval` with the optional
+`ELEPHC_MAGICIAN_LIB_DIR` archive-directory override. Normal compilation
+derives both features independently; `--with-eval` force-loads the archive,
+while `--with-regex` force-enables the regex runtime for opaque source. Neither
+flag alters AOT eligibility.
 
 All eval lowering and bridge ABI paths are target-aware and covered by
 dedicated integration shards on macOS ARM64, Linux ARM64, and Linux x86_64.

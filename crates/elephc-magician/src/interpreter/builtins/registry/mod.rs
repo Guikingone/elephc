@@ -13,7 +13,7 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use super::super::*;
-use super::spec::EvalBuiltinSpec;
+use super::spec::{EvalArea, EvalBuiltinSpec};
 
 mod binding;
 mod callable;
@@ -124,18 +124,29 @@ fn declared_builtin_registry() -> &'static DeclaredBuiltinRegistry {
 ///
 /// This is the single resolution choke point for eval builtin dispatch and
 /// introspection (`function_exists`/`is_callable` probes), so the strict-PHP
-/// filter lives here: in binaries compiled with `--strict-php`, extension
-/// builtins resolve to `None` and eval'd code behaves as if the names did not
-/// exist, exactly like the PHP interpreter.
+/// filters live here: strict-PHP binaries hide extension builtins, while
+/// binaries without a registered regex provider hide `preg_*` builtins.
 pub(in crate::interpreter) fn eval_declared_builtin_spec(
     name: &str,
 ) -> Option<&'static EvalBuiltinSpec> {
     let key = name.trim_start_matches('\\').to_ascii_lowercase();
     let spec = declared_builtin_registry().by_name.get(&key).copied()?;
-    if crate::strict_php_mode::strict_php_mode() && spec.is_extension() {
-        return None;
-    }
-    Some(spec)
+    builtin_is_available(
+        spec,
+        crate::strict_php_mode::strict_php_mode(),
+        crate::regex_provider::regex_provider_available(),
+    )
+    .then_some(spec)
+}
+
+/// Returns whether one builtin is visible under the active runtime capabilities.
+fn builtin_is_available(
+    spec: &EvalBuiltinSpec,
+    strict_php: bool,
+    regex_available: bool,
+) -> bool {
+    !(strict_php && spec.is_extension())
+        && (!matches!(spec.area(), EvalArea::Regex) || regex_available)
 }
 
 /// Looks up an eval builtin spec WITHOUT the strict-PHP filter.

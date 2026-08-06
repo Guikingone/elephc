@@ -7,8 +7,10 @@
 //!
 //! Key details:
 //! - Mixed helpers use boxed tag/payload cells; tag constants and ownership rules are shared with type checking and codegen.
+//! - Container-shaped null/sentinel payloads are treated as empty before any header load.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::sentinels::emit_branch_if_null_container;
 
 /// Emits `__rt_mixed_is_empty` which implements PHP `empty()` semantics for boxed mixed values.
 ///
@@ -88,6 +90,9 @@ pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_is_empty_float");
     emitter.instruction("ldr d0, [x0, #8]");                                    // load the float payload from value_lo
+    super::emit_nan_bool_coercion_probe_leaf(emitter, "__rt_mixed_is_empty_float_no_nan");
+    // AArch64 `fcmp` reports unordered as `Z=0`, so `eq` already answers false for a NAN,
+    // matching PHP's `empty(NAN) === false`. The x86_64 twin below needs an explicit fixup.
     emitter.instruction("fcmp d0, #0.0");                                       // compare the float payload against 0.0
     emitter.instruction("cset x0, eq");                                         // return 1 when the float payload is 0.0
     emitter.instruction("ret");                                                 // finish float empty() evaluation
@@ -100,7 +105,7 @@ pub fn emit_mixed_is_empty(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_is_empty_array");
     emitter.instruction("ldr x10, [x0, #8]");                                   // load the array/hash pointer from value_lo
-    emitter.instruction("cbz x10, __rt_mixed_is_empty_yes");                    // null containers behave like empty/null
+    emit_branch_if_null_container(emitter, "x10", "x11", "__rt_mixed_is_empty_yes");
     emitter.instruction("ldr x10, [x10]");                                      // load the container element count from the header
     emitter.instruction("cmp x10, #0");                                         // compare the element count against zero
     emitter.instruction("cset x0, eq");                                         // return 1 when the container has no elements
@@ -167,9 +172,14 @@ fn emit_mixed_is_empty_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_is_empty_float_linux_x86_64");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float payload bits into the native x86_64 scalar-double result register
+    super::emit_nan_bool_coercion_probe_leaf(emitter, "__rt_mixed_is_empty_float_no_nan_linux_x86_64");
     emitter.instruction("xorpd xmm1, xmm1");                                    // materialize a canonical 0.0 comparison operand in a scratch SIMD register
     emitter.instruction("ucomisd xmm0, xmm1");                                  // compare the unboxed float payload against 0.0 using the native x86_64 scalar-double compare
+    // `ucomisd` sets ZF for an UNORDERED compare, so a bare `sete` would report a NAN as empty
+    // — the inverse of PHP and of the AArch64 twin above. Mask the unordered case back out.
     emitter.instruction("sete al");                                             // materialize the x86_64 floating-point empty() result in the low byte when the payload equals 0.0
+    emitter.instruction("setnp r10b");                                          // materialize whether the comparison was ordered
+    emitter.instruction("and al, r10b");                                        // a NAN is not empty, so clear the unordered case
     emitter.instruction("movzx eax, al");                                       // widen the x86_64 boolean byte back into the canonical integer result register
     emitter.instruction("ret");                                                 // finish float empty() evaluation on x86_64
 

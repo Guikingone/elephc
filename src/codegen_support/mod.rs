@@ -54,6 +54,50 @@ thread_local! {
     static DECLARED_CLASS_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static DECLARED_INTERFACE_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
     static DECLARED_TRAIT_NAMES: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// Canonical PHP extension names of the bridge staticlibs actually linked
+    /// into the current compilation (e.g. `["PDO", "hash"]`). Set via
+    /// [`set_linked_extensions`] from the pipeline before `generate` runs; read
+    /// by `extension_loaded()` / `get_loaded_extensions()` const-folding so they
+    /// report linked bridges alongside the always-present core set. Thread-local
+    /// so parallel test runs don't interfere.
+    static LINKED_EXTENSIONS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The PHP language profile this compilation targets (`--php-version`) and
+    /// whether it is a `--web` build. Together they are the SINGLE source of
+    /// truth for the reported PHP version surface (`PHP_VERSION`, `PHP_SAPI`,
+    /// `phpversion()`, `zend_version()`, …). Set via [`set_compile_profile`] at
+    /// the very top of `pipeline::compile`; read by
+    /// `codegen_support::prescan::collect_constants` and by the `phpversion()`
+    /// const-fold, both of which sit far below the pipeline's parameter lists.
+    ///
+    /// Seeded into a thread-local for the same reason [`LINKED_EXTENSIONS`] is:
+    /// the fold happens deep in per-instruction lowering and in EIR lowering,
+    /// where threading two more parameters through every entry point would be
+    /// far more invasive than the value is worth. The default — the newest
+    /// maintained profile, non-web — is exactly what an unconfigured caller
+    /// (unit tests, `tests/codegen` harnesses) should observe, so nothing has to
+    /// set it to behave correctly.
+    static COMPILE_PROFILE: Cell<(crate::web_prelude::PhpVersion, bool)> =
+        const { Cell::new((crate::web_prelude::PhpVersion::Php85, false)) };
+}
+
+/// Records the PHP language profile and SAPI mode of the current compilation.
+///
+/// Called once from `pipeline::compile` before any prelude runs, so every later
+/// phase (prescan constants, EIR lowering, per-instruction lowering) observes the
+/// same pair. Read via [`compile_php_version`] / [`compile_is_web_sapi`].
+pub fn set_compile_profile(php_version: crate::web_prelude::PhpVersion, web: bool) {
+    COMPILE_PROFILE.with(|profile| profile.set((php_version, web)));
+}
+
+/// Returns the PHP language profile this compilation targets (default: the newest
+/// maintained profile, matching `--php-version`'s own default).
+pub(crate) fn compile_php_version() -> crate::web_prelude::PhpVersion {
+    COMPILE_PROFILE.with(|profile| profile.get().0)
+}
+
+/// Returns whether this compilation is a `--web` build (default: `false`, i.e. CLI).
+pub(crate) fn compile_is_web_sapi() -> bool {
+    COMPILE_PROFILE.with(|profile| profile.get().1)
 }
 
 /// Sets the number of autoload rules registered.
@@ -64,6 +108,21 @@ pub fn set_autoload_rule_count(n: usize) {
 /// Returns the number of autoload rules registered.
 pub fn autoload_rule_count() -> usize {
     AUTOLOAD_RULE_COUNT.with(|c| c.get())
+}
+
+/// Records the canonical PHP extension names of the bridge staticlibs linked
+/// into the current compilation, so `extension_loaded()` / `get_loaded_extensions()`
+/// report them in addition to the always-present core set. Set from the pipeline
+/// before codegen; read via [`linked_extensions`]. Passing an empty vec (the
+/// default) reports only the core extensions, matching a bridge-free program.
+pub fn set_linked_extensions(extensions: Vec<String>) {
+    LINKED_EXTENSIONS.with(|names| *names.borrow_mut() = extensions);
+}
+
+/// Returns the canonical PHP extension names of the bridges linked into the
+/// current compilation (empty unless [`set_linked_extensions`] ran for it).
+pub(crate) fn linked_extensions() -> Vec<String> {
+    LINKED_EXTENSIONS.with(|names| names.borrow().clone())
 }
 
 /// Stores the declaration order of classes, interfaces, and traits so that
@@ -117,9 +176,9 @@ pub use driver_support::{
 };
 pub(crate) use prescan::collect_constants;
 use program_usage::{collect_required_class_names, collect_required_class_names_in_stmts};
-pub use runtime_features::RuntimeFeatures;
+pub use runtime_features::{LinkRequirement, RuntimeFeatures};
 pub use runtime_features::{
-    required_libraries_for_runtime_features, runtime_features_for_program_and_classes,
+    link_requirements_for_runtime_features, runtime_features_for_program_and_classes,
 };
 pub(crate) use sentinels::NULL_SENTINEL;
 pub(crate) use value_boxing::{
@@ -270,12 +329,20 @@ fn collect_emitted_class_names(
     // descriptors in the user-asm tables, the catch-time inheritance
     // walk in __rt_exception_matches sees a -1 parent for the thrown
     // class and reports no match.
+    // The Error branch is seeded whole for the same reason as the JSON note above:
+    // `intdiv($a, 0)` throws a DivisionByZeroError from a codegen guard that has no
+    // EIR class reference, so its descriptor (and every ancestor's) must be present
+    // or __rt_exception_matches walks into a -1 parent and reports no match.
     for builtin in [
         "Throwable",
         "Error",
         "TypeError",
+        "ArgumentCountError",
         "ValueError",
         "ArithmeticError",
+        "DivisionByZeroError",
+        "AssertionError",
+        "UnhandledMatchError",
         "Exception",
         "LogicException",
         "RuntimeException",

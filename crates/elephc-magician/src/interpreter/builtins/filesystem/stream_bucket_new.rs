@@ -69,9 +69,5 @@ pub(in crate::interpreter) fn eval_stream_extension_resource_id(
     resource: RuntimeCellHandle,
     values: &mut impl RuntimeValueOps,
 ) -> Result<i64, EvalStatus> {
-    if values.type_tag(resource)? != EVAL_TAG_RESOURCE {
-        return Err(EvalStatus::RuntimeFatal);
-    }
-    let display_id = eval_int_value(resource, values)?;
-    display_id.checked_sub(1).ok_or(EvalStatus::RuntimeFatal)
+    eval_resource_payload(resource, values)
 }

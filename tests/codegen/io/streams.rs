@@ -3237,11 +3237,9 @@ echo "|";
 echo getprotobyname("udp");
 echo "|";
 echo getprotobyname("icmp");
-echo "|";
-echo getprotobyname("ip");
 "#,
     );
-    assert_eq!(out, "6|17|1|0");
+    assert_eq!(out, "6|17|1");
 }
 
 /// Verifies compiled PHP output for getprotobyname alias and missing.
@@ -3267,11 +3265,26 @@ echo "|";
 echo getprotobynumber(17);
 echo "|";
 echo getprotobynumber(1);
-echo "|";
-echo getprotobynumber(0);
 "#,
     );
-    assert_eq!(out, "tcp|udp|icmp|ip");
+    assert_eq!(out, "tcp|udp|icmp");
+}
+
+/// Verifies protocol zero and its host-defined name resolve in both directions.
+#[test]
+fn test_protocol_zero_host_name_round_trip() {
+    // Protocol zero is named "ip" on some systems and "hopopt" on others.
+    let out = compile_and_run(
+        r#"<?php
+$name = getprotobynumber(0);
+echo $name . "|" . getprotobyname($name);
+"#,
+    );
+    let (name, number) = out
+        .split_once('|')
+        .expect("expected protocol zero output in name|number format");
+    assert!(!name.is_empty(), "expected a non-empty protocol name");
+    assert_eq!(number, "0", "expected protocol name to round-trip to zero");
 }
 
 /// Verifies compiled PHP output for getprotobynumber persists across calls.
@@ -6549,6 +6562,18 @@ echo $arr[0] . "|" . $arr[1] . "|" . $arr[2];
     assert_eq!(out, "Resource id #1|Resource id #2|Resource id #3");
 }
 
+/// Verifies associative array literals preserve resource value metadata.
+#[test]
+fn test_assoc_array_literal_of_resources_round_trips() {
+    let out = compile_and_run(
+        r#"<?php
+$arr = ["in" => STDIN, "out" => STDOUT, "err" => STDERR];
+echo $arr["in"] . "|" . $arr["out"] . "|" . $arr["err"];
+"#,
+    );
+    assert_eq!(out, "Resource id #1|Resource id #2|Resource id #3");
+}
+
 /// Verifies compiled PHP output for stream get meta data describes file stream.
 #[test]
 fn test_stream_get_meta_data_describes_file_stream() {
@@ -6677,6 +6702,31 @@ fclose($m);
 "#,
     );
     assert_eq!(out, "[alpha][beta][gamma]|done");
+}
+
+/// Verifies prepend order and brigade growth beyond the initial bucket-array capacity.
+#[test]
+fn test_stream_bucket_prepend_then_pop_in_reverse_insertion_order() {
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+$brigade = new stdClass();
+stream_bucket_prepend($brigade, stream_bucket_new($m, "alpha"));
+stream_bucket_prepend($brigade, stream_bucket_new($m, "beta"));
+stream_bucket_prepend($brigade, stream_bucket_new($m, "gamma"));
+stream_bucket_prepend($brigade, stream_bucket_new($m, "delta"));
+stream_bucket_prepend($brigade, stream_bucket_new($m, "epsilon"));
+stream_bucket_prepend($brigade, stream_bucket_new($m, "zeta"));
+while (true) {
+    $b = stream_bucket_make_writeable($brigade);
+    if (is_null($b)) break;
+    echo "[" . $b->data . "]";
+}
+echo "|done";
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "[zeta][epsilon][delta][gamma][beta][alpha]|done");
 }
 
 /// Verifies compiled PHP output for user filter 4arg brigade dispatch.

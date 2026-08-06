@@ -2,7 +2,7 @@
 title: "__elephc_normalize_callable() — internals"
 description: "Compiler internals for __elephc_normalize_callable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 445
+  order: 471
 ---
 
 ## `__elephc_normalize_callable()` — internals
@@ -10,20 +10,29 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/elephc_normalize_callable.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/elephc_normalize_callable.rs)
-- **Lowering**: [`src/codegen/lower_inst/builtins/pointers.rs`:170](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/pointers.rs#L170) (`lower_elephc_normalize_callable`)
-- **Function symbol**: `lower_elephc_normalize_callable()`
+- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Function symbol**: `lower_registry_call()`
 
 
 ### Lowering notes
 
-- Lowers `__elephc_normalize_callable($cb)` into an owned callable descriptor.
-- Static descriptors tolerate retains as persistent values, while runtime descriptors
-- selected from an existing `Callable` or boxed callable need one additional owner for
-- the returned value. Fresh receiver-bound descriptors already start with one owner.
+- Uses the `eir_primitive` strategy from the single-source builtin descriptor.
+- Emits backend-neutral EIR primitives or a small EIR graph through `BuiltinLoweringContext`.
 
-## Runtime helpers
+## Semantic descriptor
 
-_No direct `__rt_*` helpers captured — the lowering is inlined or routes through another builtin._
+- **Target strategy**: `eir_primitive`
+- **Validation**: `checker_hook`
+- **Result type source**: `checked`
+- **Result ownership**: `fresh`
+- **Effects**: `static (3 declared effects)`
+- **Requirements**: `static (0 requirements)`
+- **Callable policy**: `static_only`
+- **Target support**: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
+
+## EIR and runtime boundary
+
+- **Typed EIR target**: descriptor-emitted EIR primitives or graph; no opaque builtin call remains.
 
 ## Signature summary
 

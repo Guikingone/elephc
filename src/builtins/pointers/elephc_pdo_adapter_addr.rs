@@ -19,19 +19,21 @@
 //!   collation).
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
+use crate::builtins::semantics::{
+    internal_eir_semantics, BuiltinLoweringContext, BuiltinResultOwnership,
+    LoweredBuiltinValue, NormalizedBuiltinCall,
+};
 use crate::errors::CompileError;
-use crate::ir::Instruction;
+use crate::ir::{Effects, Op};
 use crate::types::PhpType;
 
 builtin! {
     name: "__elephc_pdo_adapter_addr",
-    area: Internal,
+    area: Pointers,
     params: [kind: Int],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: internal_eir_semantics(lower, Effects::PURE, BuiltinResultOwnership::NonHeap),
     summary: "Returns the address of the shared __rt_pdo_* callback adapter for a kind.",
     internal: true
 }
@@ -51,7 +53,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Pointer(None))
 }
 
-/// Lowers a `__elephc_pdo_adapter_addr` call by dispatching to the shared pointer emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, inst)
+/// Lowers one callback-adapter selector to its dedicated address-producing EIR primitive.
+fn lower(
+    ctx: &mut dyn BuiltinLoweringContext,
+    call: &NormalizedBuiltinCall<'_>,
+) -> Result<LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+    Ok(ctx.emit_value(
+        Op::PdoAdapterAddr,
+        vec![call.operand(0)?],
+        None,
+        call.result_type.clone(),
+        Op::PdoAdapterAddr.default_effects(),
+        Some(call.span),
+    ))
 }

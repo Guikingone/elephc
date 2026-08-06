@@ -6,12 +6,12 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Enum cases are stored in global singleton slots initialized before main
-//!   user code runs. The load result is an object pointer.
+//! - Enum cases live in global singleton slots that are filled LAZILY, on the first
+//!   evaluation of the case, by `crate::codegen::enum_singletons`. The load result
+//!   is an object pointer, and every read of the same case returns the same one.
 
 use crate::codegen::abi;
 use crate::ir::Instruction;
-use crate::names::enum_case_symbol;
 
 use super::super::context::FunctionContext;
 use super::{builtins, expect_data, store_if_result};
@@ -31,12 +31,33 @@ pub(super) fn lower_scoped_constant_get(
             .iter()
             .any(|case| case.name == constant_name.as_str())
         {
-            let symbol = enum_case_symbol(&class_name, &constant_name);
-            abi::emit_load_symbol_to_reg(
+            crate::codegen::enum_singletons::emit_lazy_case_load(
+                ctx,
+                &class_name,
+                &constant_name,
+            );
+            // A case read hands out an OWNED reference, exactly like `cases()` and
+            // `from()`/`tryFrom()` already do (see `enums::emit_load_enum_case_singleton`
+            // and issue #349). Without this incref the singleton's refcount drifts
+            // down by one per read — the consumer's destination acquires the value
+            // and then releases the temporary — so a case passed into a typed
+            // parameter or returned from a typed function is FREED while its global
+            // slot still points at it.
+            //
+            // That under-retention predates lazy materialization; eager creation
+            // merely hid the consequence, because a freed case object's memory was
+            // not handed to another case. Lazily, the next case materialized after
+            // the free reuses the very block that was released, so both slots end up
+            // pointing at ONE object and `E::A === E::B` starts returning true. The
+            // failing shape was `f(D::Ascending)` through a typed parameter followed
+            // by a `D::Descending` read.
+            //
+            // Over-retaining is the safe direction here: the case is a
+            // process-lifetime singleton owned by its slot, so an extra reference
+            // only guarantees what should already be true — it can never be freed.
+            abi::emit_incref_if_refcounted(
                 ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                &symbol,
-                0,
+                &crate::types::PhpType::Object(class_name.clone()),
             );
             return store_if_result(ctx, inst);
         }

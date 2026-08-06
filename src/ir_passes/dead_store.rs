@@ -124,13 +124,22 @@ fn exclude_eval_literal_read_slots(
         if inst.op != Op::EvalLiteralCall {
             continue;
         }
-        let Some(Immediate::Data(data_id)) = inst.immediate else {
-            continue;
+        let (data_id, strict_php) = match inst.immediate {
+            Some(Immediate::Data(data_id)) => (data_id, false),
+            Some(Immediate::ProfiledData {
+                data: data_id,
+                strict_php,
+            }) => (data_id, strict_php),
+            _ => continue,
         };
         let Some(fragment) = data.strings.get(data_id.as_raw() as usize) else {
             continue;
         };
-        let plan = crate::eval_aot::plan_literal_fragment_with_static_calls(fragment, |_, _| false);
+        let plan = crate::eval_aot::plan_literal_fragment_with_static_calls(
+            fragment,
+            strict_php,
+            |_, _| false,
+        );
         for name in plan.reads() {
             if let Some(slot) = slots_by_name.get(name) {
                 eligible.remove(slot);

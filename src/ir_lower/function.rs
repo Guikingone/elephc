@@ -73,11 +73,14 @@ pub(crate) fn lower_main(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        "main".to_string(),
         constants,
         None,
         PhpType::Void,
@@ -264,11 +267,14 @@ pub(crate) fn lower_user_function(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        name.to_string(),
         constants,
         None,
         body_return_type.clone(),
@@ -361,11 +367,14 @@ pub(crate) fn lower_class_method(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        name.clone(),
         constants,
         Some(class_name.to_string()),
         method_body_return_type.clone(),
@@ -423,11 +432,14 @@ pub(crate) fn lower_eval_aot_function(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        "main".to_string(),
         constants,
         None,
         return_type,
@@ -443,8 +455,8 @@ pub(crate) fn lower_eval_aot_function(
     module.add_function(function);
 }
 
-/// Lowers one literal eval fragment as an internal EIR function that reads eval scope.
-pub(crate) fn lower_eval_aot_scope_read_function(
+/// Lowers one literal eval fragment as an internal scope-aware EIR function.
+pub(crate) fn lower_eval_aot_scope_function(
     name: &str,
     body: &[Stmt],
     scope_reads: &std::collections::BTreeSet<String>,
@@ -525,11 +537,14 @@ pub(crate) fn lower_eval_aot_scope_read_function(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        "main".to_string(),
         constants,
         None,
         return_type,
@@ -621,11 +636,14 @@ pub(crate) fn lower_property_init_thunk(
         &check_result.callable_param_sigs,
         &check_result.return_alias_summaries,
         fiber_return_sigs,
-        &check_result.classes,
+        &module.class_infos,
         &check_result.enums,
         &check_result.interfaces,
         &check_result.packed_classes,
         &check_result.throw_access_sites,
+        &check_result.builtin_call_types,
+        &check_result.loop_storage_types,
+        function_name.clone(),
         constants,
         Some(class_name.to_string()),
         PhpType::Void,
@@ -694,6 +712,7 @@ pub(crate) fn lower_closure_function(
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
+    loop_storage_scope: String,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(
         params,
@@ -712,6 +731,7 @@ pub(crate) fn lower_closure_function(
         body,
         captures,
         self_ref_callable_capture,
+        loop_storage_scope,
     )
 }
 
@@ -728,6 +748,7 @@ pub(crate) fn lower_closure_function_with_context(
     contextual_arg_types: &[PhpType],
     self_ref_callable_capture: Option<&str>,
     by_ref_return: bool,
+    loop_storage_scope: String,
 ) -> FunctionSig {
     let mut signature = closure_signature_from_ast(
         params,
@@ -755,6 +776,7 @@ pub(crate) fn lower_closure_function_with_context(
         body,
         captures,
         self_ref_callable_capture,
+        loop_storage_scope,
     )
 }
 
@@ -766,6 +788,7 @@ fn lower_closure_function_with_signature(
     body: &[Stmt],
     captures: &[(String, PhpType, bool)],
     self_ref_callable_capture: Option<&str>,
+    loop_storage_scope: String,
 ) -> FunctionSig {
     // Generator closures lower their body as a Mixed-returning coroutine; see
     // `generator_body_return_type`.
@@ -813,6 +836,9 @@ fn lower_closure_function_with_signature(
         parent.interfaces,
         parent.packed_classes,
         parent.throw_access_sites,
+        parent.builtin_call_types,
+        parent.loop_storage_types,
+        loop_storage_scope,
         &parent.constants,
         parent.current_class.clone(),
         closure_body_return_type.clone(),
@@ -846,6 +872,9 @@ fn lower_body_into_function(
     interfaces: &std::collections::HashMap<String, crate::types::InterfaceInfo>,
     packed_classes: &std::collections::HashMap<String, PackedClassInfo>,
     throw_access_sites: &std::collections::HashMap<Span, crate::types::ThrowAccessInfo>,
+    builtin_call_types: &std::collections::HashMap<Span, PhpType>,
+    loop_storage_types: &crate::types::LoopStorageTypes,
+    loop_storage_scope: String,
     constants: &std::collections::HashMap<String, (ExprKind, PhpType)>,
     current_class: Option<String>,
     return_php_type: PhpType,
@@ -888,6 +917,9 @@ fn lower_body_into_function(
         interfaces,
         packed_classes,
         throw_access_sites,
+        builtin_call_types,
+        loop_storage_types,
+        loop_storage_scope,
         constants,
         top_level_env,
         current_class,
@@ -945,6 +977,10 @@ fn lower_body_into_function(
     // Likewise, erase provisional releases for concrete local loads unless a
     // later store widened their final frame slot to Mixed (issue #538).
     ctx.builder.prune_borrowed_local_load_release_ops();
+    // Publish the lowering-time ownership proof after provisional local-load
+    // releases have been pruned, so codegen can consume EIR metadata instead of
+    // maintaining a second producer allow-list (issue #595).
+    ctx.finalize_value_ownership_metadata();
     ctx.into_closures()
 }
 

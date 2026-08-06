@@ -5,7 +5,7 @@ sidebar:
   order: 8
 ---
 
-**Source:** `src/codegen_support/runtime/` — `mod.rs`, `emitters.rs`, `diagnostics.rs`, `eval_bridge.rs`, `eval_scope.rs`, `data/`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `pdo/`, `spl/`, `system/`, `pointers/`, `fibers/`, `generators/`, `zval/`
+**Source:** `src/codegen_support/runtime/` — `mod.rs`, `emitters.rs`, `diagnostics.rs`, `data/`, `strings/`, `arrays/`, `buffers/`, `callables/`, `exceptions.rs`, `exceptions/`, `io/`, `objects/`, `spl/`, `system/`, `pointers/`, `zval/`, `fibers/`, `generators/`, plus the eval hooks `eval_bridge.rs` / `eval_scope.rs`
 
 The runtime is a collection of **hand-written assembly routines** that handle operations too complex for inline code generation. When the [code generator](the-codegen.md) needs to convert an integer to a string or concatenate two strings, it emits a `bl __rt_itoa` or `bl __rt_concat` — a call to a runtime routine.
 
@@ -24,6 +24,11 @@ generated class/callable metadata, diagnostics, exceptions, and target-aware
 ABI helpers. It is embedded only when the final EIR module requires the
 `eval_bridge` runtime feature; the presence of a fully native literal
 `eval()` call does not force it into the binary.
+
+Magician's base archive does not reference PCRE2. When static detection or
+`--with-regex` enables the regex runtime, generated eval setup registers the
+managed PCRE2 shim as an opaque provider; otherwise regex builtins are absent
+from dynamic eval dispatch.
 
 The compile-time planner, scope/context lifecycle, eval-specific EIR
 instructions, parse cache, ownership rules, and bridge linking contract are
@@ -168,6 +173,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_ltrim_mask` / `__rt_rtrim_mask` | Strip custom mask from left/right | `x1`/`x2` + mask | `x1`/`x2` |
 | `__rt_strrev` | Reverse string (byte-wise) | `x1`/`x2` | `x1`/`x2` |
 | `__rt_grapheme_strrev` | Reverse a UTF-8 string by grapheme cluster for PHP 8.6 `grapheme_strrev()`; returns false on malformed UTF-8 | `x1`/`x2` | `x1`/`x2` |
+| `__rt_mb_strlen` | Multibyte-aware string length for `mb_strlen()` (emitted only for programs that use it) | `x1`/`x2` | `x0` |
 | `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
 | `__rt_str_repeat` | Repeat N times with heap fallback for large results | `x1`/`x2` + count | `x1`/`x2` |
@@ -218,7 +224,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 
 ## Callable routines
 
-**Source:** `src/codegen_support/runtime/callables/` (4 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/callables/` (5 files including `mod.rs`)
 
 These routines implement the runtime fallback path for `is_callable()` when the argument is not a compile-time literal or statically known callable value, plus the `Closure::bind` family helper. They consult generated metadata for builtins, user functions, public methods, public static methods, and `__invoke` objects.
 
@@ -245,7 +251,7 @@ Extern callback trampolines use the same descriptor invoker from a C-facing entr
 
 ## Array routines
 
-**Source:** `src/codegen_support/runtime/arrays/` (150 files)
+**Source:** `src/codegen_support/runtime/arrays/` (155 files)
 
 ### Core allocation
 
@@ -305,6 +311,8 @@ Common copy-producing array/hash routines now also have dedicated `_refcounted` 
 | `__rt_hash_append` | Append with PHP's next automatic integer key (largest existing int key + 1, or 0), then delegate to `__rt_hash_set` | `x0`=hash, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_insert_owned` | Reinsert an already-owned key/value pair during hash growth | `x0`=hash, `x1`/`x2`=normalized key, `x3`/`x4`=value, `x5`=value_tag | `x0` = hash |
 | `__rt_hash_get` | Look up value by key | `x0`=hash, `x1`/`x2`=normalized key | `x0`=found, `x1`=val_lo, `x2`=val_hi, `x3`=value_tag |
+| `__rt_hash_unset` | Remove one key for `unset($hash[$key])`: copy-on-write split, probe like `__rt_hash_get`, release the owned key/value payloads, tombstone the slot (so probe chains stay intact), and unlink it from the insertion-order chain; missing keys are a no-op | `x0`=hash, `x1`/`x2`=normalized key | `x0` = (possibly cloned) hash |
+| `__rt_hash_spread` | Flatten a source hash into a destination hash with PHP `[...$src]` spread semantics: integer keys are re-sequenced from the destination's next automatic key, string keys are preserved, later operands overwrite on collision, and each value is re-owned (strings persisted, refcounted payloads retained) | `x0`=dest hash, source hash | `x0` = (possibly reallocated) dest hash |
 | `__rt_hash_iter_next` | Iterate to next entry in insertion order | `x0`=hash, `x1`=cursor | `x0`=next cursor, `x1`/`x2`=key, `x3`/`x4`=value, `x5`=value_tag |
 | `__rt_hash_union` | Build PHP associative-array union: left duplicate keys win, missing right entries append in insertion order | `x0`=left hash, `x1`=right hash | `x0`=result hash |
 | `__rt_hash_array_union` | Build PHP associative+indexed union by cloning the left hash and appending right indexes absent from the shared key space | `x0`=left hash, `x1`=right array | `x0`=result hash |
@@ -374,11 +382,11 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_mixed_free_deep` | Free a mixed cell and release any nested heap-backed payload; for tag-9 resources, dispatch the kind-specific destructor (kind 1 `close`, kind 2 `__rt_hash_ctx_free`, kind 3 `__rt_pclose`, kind 4 `__rt_closedir`) | `x0` = mixed pointer | — |
 | `__rt_object_free_deep` | Free an object and release heap-backed properties using runtime/class metadata | `x0` = object pointer | — |
 
-Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, `__rt_decref_any` can dispatch through the uniform heap-kind tag to the concrete string/array/hash/object/mixed release path. Arrays, hashes, objects, and boxed mixed cells still use ordinary reference counting first, but when a decref sees a container/object graph that can contain nested heap-backed values, the runtime can invoke `__rt_gc_collect_cycles` to clear transient metadata, count heap-only incoming edges, mark externally reachable blocks, and deep-free the remaining unreachable array/hash/object/mixed island.
+Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, `__rt_decref_any` can dispatch through the uniform heap-kind tag to the concrete string/array/hash/object/mixed release path. Runtime-thrown Throwable payloads carry the dedicated heap kind `6`, which `__rt_decref_any` and `__rt_object_free_deep` accept and route through the same object release path (issue #448). Arrays, hashes, objects, and boxed mixed cells still use ordinary reference counting first, but when a decref sees a container/object graph that can contain nested heap-backed values, the runtime can invoke `__rt_gc_collect_cycles` to clear transient metadata, count heap-only incoming edges, mark externally reachable blocks, and deep-free the remaining unreachable array/hash/object/mixed island.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus 27 files under `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/`)
+**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories; 70 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -402,7 +410,7 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 
 ## Exception routines
 
-**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (6 files)
+**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (7 files)
 
 elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
 
@@ -416,7 +424,11 @@ elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp
 | `__rt_throw_current` | Unwind to the nearest active handler or print the fatal uncaught-exception message and exit | reads `_exc_value`, `_exc_handler_top`, `_exc_call_frame_top` | does not return normally |
 | `__rt_rethrow_current` | Re-enter the ordinary throw path with the currently active exception | none (uses global exception state) | does not return normally |
 
-The fatal uncaught-exception path writes `Fatal error: uncaught exception` to stderr and exits with status 1. The runtime also resets the concat-buffer cursor before the final `longjmp`, so partially built string state from the throwing frame does not leak into the resumed catch/finally code.
+The fatal uncaught-exception path tail-jumps to `__rt_report_uncaught_exception`, which reads the published `_exc_value` and writes `Fatal error: Uncaught <Class>: <message> in <file>:<line>` to stderr before exiting with status 255. The class name comes from `_class_name_entries`, the message from payload offsets 8/16, the line from the payload's creation-line slot (`THROWABLE_CREATION_LINE_OFFSET`, formatted through `__rt_itoa`), and the file from `_script_source_file`. An empty message drops the `": "` separator, and a zero line drops the whole ` in <file>:<line>` suffix, both matching reference PHP.
+
+Codegen guards in `codegen::lower_inst::exceptions` have their OWN uncaught path: they write a fatal message baked at emit time and exit before the throwable is ever allocated, so they never reach this helper. They share `UNCAUGHT_EXIT_STATUS` with it so the status a script observes does not depend on which kind of exception escaped.
+
+The runtime also resets the concat-buffer cursor before the final `longjmp`, so partially built string state from the throwing frame does not leak into the resumed catch/finally code.
 
 ### Date/time routines
 
@@ -482,22 +494,43 @@ These helpers back PHP's `serialize()` / `unserialize()`. The serializer writes 
 
 ### Regex routines
 
-**Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`, `system/preg_match.rs`, `system/preg_match_all.rs`, `system/preg_replace.rs`, `system/preg_replace_callback.rs`, `system/preg_split.rs`
+**Files:** `system/preg_strip.rs`, `system/pcre_to_posix.rs`,
+`system/mb_ereg_match.rs`, `system/preg_match.rs`,
+`system/preg_match_all.rs`, `system/preg_replace.rs`,
+`system/preg_replace_callback.rs`, `system/preg_split.rs`; the embedded shim
+source is `src/native_deps/recipes/pcre2_shim.c`.
 
-All regex routines use PCRE2 through the PCRE2 POSIX-compatible wrapper (`pcre2_regcomp()`, `pcre2_regexec()`, and `pcre2_regfree()`). `__rt_preg_strip` strips PHP-style delimiters and maps supported modifiers (`i`, `m`, `s`, `u`, `U`) to PCRE2 wrapper flags. `__rt_pcre_to_posix` keeps its historic symbol name for compatibility with existing emitters, but now only materializes the stripped PCRE pattern as a null-terminated C string. Regex-enabled programs request `pcre2-posix` and `pcre2-8` during final linking.
+Generated runtime assembly calls only the versioned
+`elephc_pcre2_v1_compile`, `elephc_pcre2_v1_exec`, and
+`elephc_pcre2_v1_free` ABI. The Elephc-owned C shim uses PCRE2's POSIX wrapper
+internally, but no `regex_t`, `regmatch_t`, `regoff_t`, or other PCRE2-owned
+layout crosses the boundary. `compile` returns an opaque handle and slot count;
+`exec` writes fixed 16-byte `[start, end]` signed-64-bit pairs, initializing
+unmatched and surplus slots to `[-1, -1]`.
+
+`__rt_preg_strip` strips PHP-style delimiters and maps supported modifiers (`i`,
+`m`, `s`, `u`, `U`) to shim compile flags. `__rt_pcre_to_posix` keeps its
+historic symbol name for compatibility but only materializes a null-terminated
+pattern. `__rt_mb_ereg_match` backs `mb_ereg_match()` through the same shim. The
+whole regex family is emitted only when the program's `RuntimeFeatures` request
+it. A final-link regex program resolves the managed `pcre2` package and links
+exact verified archives in shim, POSIX, then 8-bit order. Dynamic eval does so
+only when static regex detection or `--with-regex` requests the same feature.
+There is no production system-PCRE2 fallback; compilation itself never installs
+a package.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_preg_match` | Test if a regex matches the subject string. Compiles the pattern, executes once, frees | pattern + subject strings | `x0` = 1 (match) or 0 (no match) |
-| `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the compiled `regex_t.re_nsub` capture count, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings | pattern + subject strings | match flag plus matches array pointer |
+| `__rt_preg_match_capture` | Test once and materialize PHP's optional `$matches` array from the shim-reported slot count and fixed offset pairs, omitting trailing unmatched captures while keeping interior unmatched captures as empty strings | pattern + subject strings | match flag plus matches array pointer |
 | `__rt_preg_match_all` | Count all non-overlapping matches by repeatedly executing the regex with advancing offsets | pattern + subject strings | `x0` = match count |
 | `__rt_preg_replace` | Replace all regex matches with a replacement string. Builds the result incrementally in the concat buffer and expands `$0`..`$99` / `\0`..`\99` from the PCRE2 capture vector | pattern + replacement + subject | `x1`/`x2` = result string |
-| `__rt_preg_replace_callback` | Replace all regex matches by allocating capture storage from `regex_t.re_nsub`, building an indexed `$matches` string array, invoking the callback, and appending the callback string result while preserving concat-buffer state across callback prologues | pattern + callback + subject | `x1`/`x2` = result string |
-| `__rt_preg_split` | Split the subject string at regex match boundaries using `regex_t.re_nsub`-sized capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
+| `__rt_preg_replace_callback` | Replace all regex matches using shim-sized fixed-pair capture storage, building an indexed `$matches` string array, invoking the callback, and appending its string result while preserving concat-buffer state across callback prologues | pattern + callback + subject | `x1`/`x2` = result string |
+| `__rt_preg_split` | Split the subject string at regex match boundaries using shim-sized fixed-pair capture storage. Applies limit, no-empty, delimiter-capture, and offset-capture flags; dynamic flags return boxed Mixed slots to preserve layout | pattern + subject strings, limit, flags | `x0` = array pointer |
 
 ## I/O routines
 
-**Source:** `src/codegen_support/runtime/io/` (114 files)
+**Source:** `src/codegen_support/runtime/io/` (118 files)
 
 These routines handle file and filesystem operations through target-aware libc/syscall helpers. PHP strings (pointer + length) must be converted to null-terminated C strings before passing to C or OS APIs — `__rt_cstr` handles the primary buffer and also emits `__rt_cstr2` for routines that need a second simultaneous C string.
 
@@ -595,7 +628,53 @@ Userspace `streamWrapper` classes registered with `stream_wrapper_register()` di
 
 ### var_dump output routines
 
-`var_dump()` lowering calls a family of `__rt_var_dump_array_*` routines (`int`, `float`, `str`, `bool`, `mixed`) that walk array payloads and a set of `__rt_var_dump_emit_*` helpers that print one typed line (`int(...)`, `float(...)`, `bool(...)`, string headers, indexed keys) with the PHP-compatible indentation.
+`var_dump()` lowering calls a family of `__rt_var_dump_array_*` routines (`int`, `float`, `str`, `bool`, `mixed`) that walk array payloads, `__rt_var_dump_hash` for associative arrays, and a set of `__rt_var_dump_emit_*` helpers that print one typed line (`int(...)`, `float(...)`, `bool(...)`, string headers, indexed keys) with the PHP-compatible indentation. The walkers do not issue raw `write` syscalls: they call `__rt_vd_write`, a register-preserving shim that routes the bytes through `__rt_stdout_write` (so output buffering, `print_r` return-mode capture, and `--web` capture all see var_dump output) while saving and restoring every register — including the float walker's pending `d0` — that the walkers expect a raw syscall to leave untouched.
+
+### The stdout funnel and `--web` helpers
+
+Every terminal stdout write in a compiled program travels through one indirection, `__rt_stdout_write` (`io/stdout_write.rs`). Its branch order is part of the output contract:
+
+1. **print_r return-mode capture** — while `_print_r_mode` is set, append the bytes to `_print_r_buf` via `__rt_pr_append` instead of writing
+2. **user output-handler guard** — while `_ob_in_handler` is set, discard the bytes entirely (PHP discards output produced inside an `ob_start()` handler)
+3. **output-buffer capture** — while the `ob_*` stack is non-empty (`_ob_level` > 0), append the bytes to the top output buffer via `__rt_ob_append`
+4. **`--web` capture** — in `--web` builds only, a non-zero `elephc_web_capture` flag routes the bytes to `elephc_web_write` so the bridge can capture the per-request response body
+5. **plain `write(1, ptr, len)` syscall** — the universal fallback
+
+The `--web` capture branch is emitted only when compiling with `--web`, so ordinary binaries never reference the bridge symbols. A few related helpers are always emitted so their EIR calls resolve on every build, with bodies that differ under `--web`: `__rt_php_input` (reads the request body for `file_get_contents('php://input')`, false otherwise) and `__rt_http_response_code` / `__rt_header` (call the bridge setters under `--web`, no-ops otherwise). PHP session support (`session_*`) is **not** part of this runtime: it lives in the `--web` PHP prelude (`src/web_prelude.rs`) as `elephc_web_session_*` extern functions provided by the web bridge.
+
+### print_r rendering and capture routines
+
+`print_r()` uses walker helpers that mirror the var_dump family — `__rt_print_r_spaces`, `__rt_print_r_open` / `__rt_print_r_close`, `__rt_print_r_int_key` / `__rt_print_r_str_key`, `__rt_print_r_value`, `__rt_print_r_indexed`, and `__rt_print_r_hash` — all writing through `__rt_pr_write`. Return mode (`print_r($value, true)`) is backed by three capture helpers in `io/print_r_buffer.rs`:
+
+| Routine | What it does |
+|---|---|
+| `__rt_pr_append` | Append bytes to the 64KB `_print_r_buf` at `_print_r_off`, clamping to the remaining capacity so oversized captures truncate instead of overflowing |
+| `__rt_pr_write` | Walker-facing write wrapper: branch on `_print_r_mode` between the stdout path and `__rt_pr_append` |
+| `__rt_pr_finish` | Persist the captured bytes to an owned heap string via `__rt_str_persist` and reset the capture state |
+
+### Output buffering (`ob_*`) routines
+
+Added with 0.26.2, the `ob_*` builtins are backed by a runtime buffer stack (`io/ob_buffer.rs`, `io/ob_handler.rs`, `io/ob_status.rs`). State lives in fixed data: `_ob_level` is the nesting depth, and 64-slot parallel arrays (`_ob_ptrs` / `_ob_lens` / `_ob_caps` plus `_ob_handler_stubs` / `_ob_handler_envs` / `_ob_name_ptrs` / `_ob_name_lens` / `_ob_chunk_sizes` / `_ob_flags` / `_ob_started`) hold each level's heap-allocated buffer and handler metadata. Buffer capacity is PHP-shaped: 16384 bytes by default, or the page-aligned chunk size + 1 when a chunk size is given, growing by doubling. These helpers are always emitted because `__rt_stdout_write`, `__rt_pr_write`, and the process-exit paths reference them unconditionally.
+
+| Routine | What it does |
+|---|---|
+| `__rt_ob_start_ex` / `__rt_ob_start` | Push a new output buffer with handler stub + env word, chunk size, flags, and persisted display name; `__rt_ob_start` is the default-handler compatibility wrapper. Calling `ob_start()` inside a running handler is a fatal error |
+| `__rt_ob_append` | Append bytes to the top buffer, growing it as needed; reaching a non-zero chunk-size threshold triggers an auto-flush with the WRITE handler phase |
+| `__rt_ob_contents` | Return a persisted copy of the top buffer contents |
+| `__rt_ob_length` / `__rt_ob_level` | Integer queries: top buffer's used byte count (-1 when inactive) / nesting depth |
+| `__rt_ob_process_and_write` | Shared flush/clean core for one slot: run the handler phase, then emit or discard the buffered bytes |
+| `__rt_ob_pop_free` | Pop the top buffer, releasing its storage and handler resources |
+| `__rt_ob_clean` / `__rt_ob_end_clean` / `__rt_ob_flush` / `__rt_ob_end_flush` | The four flags-gated bool-returning mutations, with PHP's per-operation gating flags, handler phases, and notice texts |
+| `__rt_ob_get_clean_pop` / `__rt_ob_get_flush_pop` | Composite helpers behind `ob_get_clean()` (silent on no buffer) and `ob_get_flush()` (PHP notice on no buffer) |
+| `__rt_ob_flush_all` | Drain every still-active buffer at process exit, top-down with the FINAL handler phase, guarded by `_ob_flushing` against handler-triggered re-entry; gating flags are ignored because PHP force-flushes at shutdown |
+| `__rt_ob_apply_handler` | User-handler dispatch core: compute the handler phase (ORing in START on the first run), set `_ob_in_handler` around the call so handler output is discarded |
+| `__rt_ob_result_to_bytes` | Map a handler's Mixed result to the replacement bytes: `false` passes the original through, anything else is cast to string and persisted |
+| `__rt_ob_invoke_descriptor` | Invoke an AOT callable-descriptor handler through its uniform `(descriptor, mixed-arg-array)` invoker |
+| `__rt_ob_eval_trampoline` | Invoke an eval-registered handler through the installed magician hook (`_elephc_eval_ob_handler_fn`) |
+| `__rt_ob_notice_named` | Write the PHP-parity `Failed to ... buffer of NAME (LEVEL)` notice |
+| `__rt_ob_get_status` / `__rt_ob_status_entry` / `__rt_ob_list_handlers` | Build the `ob_get_status()` status hash (simple and full modes) and the `ob_list_handlers()` name array |
+
+Handler stubs use a uniform ABI — `stub(env, buf_ptr, buf_len, phase)` returns a replaced-flag plus the owned replacement string — where AOT handlers pass a retained callable-descriptor pointer as `env` and eval handlers pass a magician registry id. All `ob_*` notices and warnings are ordinary output routed through `__rt_stdout_write`, so active parent buffers capture them exactly like PHP.
 
 ## Pointer routines
 
@@ -611,6 +690,22 @@ These helpers support the compiler-specific pointer builtins.
 | `__rt_cstr_to_str` | Copy a borrowed null-terminated C string back into an owned elephc string | `x0` = C string pointer | `x1`/`x2` = elephc string |
 | `__rt_ptr_read_string` | Copy a fixed-length byte range from a raw pointer into an owned elephc string | `x0` = pointer, `x1` = length | `x1`/`x2` = elephc string |
 | `__rt_ptr_write_string` | Copy an elephc string's bytes into the memory addressed by a raw pointer | `x0` = pointer, `x1`/`x2` = string | — |
+
+## zval bridge routines
+
+**Source:** `src/codegen_support/runtime/zval/` (11 files including `mod.rs`)
+
+These helpers back the PHP `zval` bridge extension: they convert elephc runtime values (boxed `Mixed` cells, indexed/hash arrays, strings) into PHP `zval` / `zend_string` / `zend_array` structures and back. String and array children are freshly allocated through `__rt_heap_alloc`, so a produced `zval` owns independent PHP-shaped storage.
+
+| Routine | What it does |
+|---|---|
+| `__rt_zval_pack` | Convert a boxed `Mixed` cell into a 16-byte `zval` heap block |
+| `__rt_zval_pack_array_packed` / `__rt_zval_pack_array_hash` | Build `zend_array` storage from an indexed array / associative hash |
+| `__rt_zval_unpack` / `__rt_zval_unpack_array` | Convert a `zval` (or `zend_array`) back into elephc runtime values |
+| `__rt_zval_string_new` | Allocate a `zend_string` from an elephc string |
+| `__rt_zval_djbx33a` | The DJBX33A hash used for `zend_string` key hashing |
+| `__rt_zval_type` | Report a `zval`'s type tag |
+| `__rt_zval_free` / `__rt_zval_free_array` / `__rt_zval_free_children` | Release packed `zval` storage, including nested children |
 
 ## Buffer routines
 
@@ -644,44 +739,9 @@ These helpers support the compiler-specific `buffer<T>` hot-path data type.
 | `__rt_hash_may_have_cyclic_values` | Scan hash entries to check if any contain refcounted children | `x0` = hash pointer | `x0` = 0 (scalar-only) or 1 (has cycles) |
 | `__rt_match_unhandled` | Abort with `Fatal error: unhandled match case` | — | does not return |
 
-## zval bridge routines
-
-**Source:** `src/codegen_support/runtime/zval/` (11 files including `mod.rs`)
-
-These routines implement the compiler extension that converts owned elephc values to and
-from PHP-compatible `zval`, `zend_string`, and `zend_array` layouts. Packed and hash arrays
-are rebuilt recursively, and the free helpers release every PHP-shaped child exactly once.
-
-| Routine | What it does |
-|---|---|
-| `__rt_zval_string_new` | Allocate a PHP-compatible `zend_string` and copy source bytes |
-| `__rt_zval_djbx33a` | Compute the hash stored in a PHP string or hash key |
-| `__rt_zval_pack` / `__rt_zval_pack_element` | Convert a boxed elephc `Mixed` value or one typed element into an owned 16-byte `zval` |
-| `__rt_zval_pack_array_packed` / `__rt_zval_pack_array_hash` | Rebuild indexed or associative arrays as PHP `zend_array` storage |
-| `__rt_zval_unpack` / `__rt_zval_unpack_array` | Convert a PHP-shaped scalar/array back into an owned boxed elephc value |
-| `__rt_zval_type` | Return the PHP type tag stored in a `zval` |
-| `__rt_zval_free_array` | Recursively release a packed/hash `zend_array` and its children |
-| `__rt_zval_free` / `__rt_zval_free_children` | Release one `zval` and any owned string/array payload |
-
-## PDO callback routines
-
-**Source:** `src/codegen_support/runtime/pdo/` (5 files including `mod.rs`)
-
-The PDO bridge calls these target-aware adapters when SQLite invokes a compiled-PHP
-collation, scalar function, or aggregate. They box native SQLite arguments, re-enter the
-generated callable dispatcher, translate the return value, and contain exceptions at the
-C callback boundary.
-
-| Routine | What it does |
-|---|---|
-| `__rt_pdo_call_collation` | Invoke a PHP collation comparator and coerce its result to an integer ordering value |
-| `__rt_pdo_call_scalar` | Invoke a PHP scalar SQLite UDF with boxed row arguments and translate its scalar result |
-| `__rt_pdo_call_agg_step` | Invoke an aggregate step callback and persist its returned accumulator |
-| `__rt_pdo_call_agg_final` | Invoke an aggregate finalizer and translate the completed aggregate result |
-
 ## Object and stdClass routines
 
-**Source:** `src/codegen_support/runtime/objects/` (6 files)
+**Source:** `src/codegen_support/runtime/objects/` (10 files)
 
 These helpers support `stdClass`, `json_decode()` object results, boxed Mixed property/index access, object destructor dispatch, and dynamic `new $name()` instantiation. `stdClass` instances use a compact `[class_id][hash_ptr]` payload, with dynamic properties stored in a hash of boxed `Mixed` values.
 
@@ -695,9 +755,7 @@ These helpers support `stdClass`, `json_decode()` object results, boxed Mixed pr
 | `__rt_stdclass_set` | Store a boxed Mixed value into a dynamic property hash | object pointer + property string + boxed value | — |
 | `__rt_mixed_property_get` | Unbox a Mixed object payload and dispatch stdClass property reads | boxed `mixed` + property string | boxed `mixed` payload |
 | `__rt_mixed_property_set` | Unbox a Mixed object payload and dispatch stdClass property writes | boxed `mixed` + property string + boxed value | — |
-| `__rt_mixed_array_get` | Unbox Mixed array/hash/stdClass payloads for ordinary `$mixed[$key]` value access, detaching stored boxed zvals | boxed `mixed` + normalized key tuple | owned boxed `mixed` payload |
-| `__rt_mixed_array_get_for_write` | COW-normalize a Mixed array/hash receiver and return its selected writable boxed zval | boxed `mixed` + normalized key tuple | owned boxed `mixed` payload |
-| `__rt_mixed_array_get_shared` | Retain the exact stored boxed cell for internal eval variable handles and AOT by-reference writeback | boxed `mixed` + normalized key tuple | owned shared boxed `mixed` payload |
+| `__rt_mixed_array_get` | Unbox Mixed array/hash/stdClass payloads for `$mixed[$key]` access | boxed `mixed` + normalized key tuple | boxed `mixed` payload |
 | `__rt_mixed_array_set` | Unbox a Mixed indexed-array/hash payload and write a boxed Mixed value for `$mixed[$key] = ...`; consumes the boxed value on success | boxed `mixed` + normalized key tuple + boxed value | — |
 | `__rt_json_encode_stdclass` | Encode the dynamic-property hash backing stdClass as a JSON object | stdClass hash pointer | `x1`/`x2` = JSON string |
 
@@ -758,7 +816,7 @@ Generators are stamped as object heap blocks (heap kind `4`) because `Generator`
 
 ## Fiber routines
 
-**Source:** `src/codegen_support/runtime/fibers/` (8 files including the target-aware `api/` subdirectory)
+**Source:** `src/codegen_support/runtime/fibers/` (4 top-level files plus 4 files in the `api/` subdirectory)
 
 These helpers implement PHP 8.1-style cooperative coroutines. They are emitted by the shared runtime on every supported target.
 
@@ -782,35 +840,42 @@ These helpers implement PHP 8.1-style cooperative coroutines. They are emitted b
 
 **File:** `src/codegen_support/runtime/emitters.rs`
 
-The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. It
-covers strings, arrays/hashes and GC, callables, I/O, system/date/JSON/regex helpers,
-exceptions, objects/SPL, buffers, pointers, the zval bridge, optional PDO callbacks,
-fibers, and generators. Each runtime module owns the shared helper surface and dispatches
-internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI
-setup. The four `__rt_pdo_*` adapters are emitted only when `RuntimeFeatures::pdo_udf` is
-reachable; the zval pack/unpack family is always available to extension codegen.
+The `emit_runtime()` function calls the target-aware routine emitters in a fixed order. Each runtime module owns the shared helper surface and dispatches internally when AArch64 and Linux `x86_64` need different instruction sequences or ABI setup. A `RuntimeFeatures` argument gates the optional groups: the regex family and `__rt_mb_strlen` are emitted only for programs that use them, the eval bridge/scope helpers only when the final EIR module requires them, and the `--web` flag selects the web-aware bodies of `__rt_stdout_write`, `__rt_php_input`, `__rt_http_response_code`, and `__rt_header`.
 
 ```rust
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // diagnostics: runtime warning emission and @ suppression state
     // strings: itoa, resource display/stdout, ftoa, concat, atoi, equality, formatting, trim/mask,
-    // search/replace, explode/implode, hashing, encoding, sscanf, ...
+    // search/replace, explode/implode, hashing, encoding, sscanf, mb_strlen (gated), ...
     // callables: dynamic is_callable() fallback, callable-descriptor release, Closure::bind
-    // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, serialize/unserialize, regex
+    // system: argv, time, getenv, shell, date/mktime/strtotime, JSON, serialize/unserialize, regex (gated)
     // exceptions: cleanup walk, catch matching, class-implements, throw/rethrow helpers
     // generators: fiber-backed Generator suspend/current/key/valid/next/send/rewind/throw/getReturn/yield-from
-    // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount
+    // arrays: heap alloc/free, array/hash helpers, sort, callbacks, refcount, GC
+    // eval bridge/scope: boxed-value hooks and native eval scope helpers (gated)
     // spl: SplDoublyLinkedList/SplStack/SplQueue and SplFixedArray storage helpers
     // objects: stdClass dynamic properties and boxed Mixed property/index dispatch
     // buffers: contiguous buffer allocation, bounds checking, UAF traps
-    // io: c-string buffers, file I/O, stat/fs helpers, scandir/glob/tempnam, CSV
+    // io: stdout funnel + web helpers, c-string buffers, file I/O, stat/fs helpers,
+    // scandir/glob/tempnam, CSV, streams/sockets, var_dump/print_r, ob_* buffer stack
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str
-    // PDO: callback adapters when features.pdo_udf is reachable
+    // zval: pack/unpack bridge between elephc values and PHP zval structures
     // fibers: guarded stack allocation, context switch, entry trampoline, Fiber API
 }
 ```
 
-Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_class_implements_interface`, `__rt_callable_descriptor_release`, `__rt_closure_bind`, `__rt_serialize_value`, `__rt_unserialize_begin`, `__rt_spl_dll_new`, `__rt_spl_fixed_new`, `__rt_gen_suspend`, `__rt_gen_current`, `__rt_gen_send`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
+Notable runtime-only helpers emitted here include `__rt_diag_push_suppression`, `__rt_diag_pop_suppression`, `__rt_diag_warning`, `__rt_exception_cleanup_frames`, `__rt_exception_matches`, `__rt_instanceof_lookup`, `__rt_instanceof_invalid_target`, `__rt_throw_current`, `__rt_heap_debug_fail`, `__rt_heap_kind`, `__rt_hash_insert_owned`, `__rt_hash_free_deep`, `__rt_array_column_ref`, `__rt_mixed_instanceof`, `__rt_iterable_write_stdout`, `__rt_iterable_unsupported_kind`, `__rt_class_implements_interface`, `__rt_callable_descriptor_release`, `__rt_closure_bind`, `__rt_serialize_value`, `__rt_unserialize_begin`, `__rt_spl_dll_new`, `__rt_spl_fixed_new`, `__rt_gen_suspend`, `__rt_gen_current`, `__rt_gen_send`, `__rt_preg_strip`, `__rt_pcre_to_posix`, `__rt_str_to_cstr`, `__rt_cstr_to_str`, `__rt_stdout_write`, `__rt_vd_write`, `__rt_pr_write`, `__rt_ob_start_ex`, `__rt_ob_apply_handler`, `__rt_ob_flush_all`, `__rt_zval_pack`, `__rt_fiber_switch`, and `__rt_fiber_entry` in addition to the more user-visible helpers.
+
+### Internal helper inventory
+
+The tables above document the public runtime operations. The emitters also split complex operations into the following internal symbols so the linker can dead-strip each unit independently:
+
+- **Arrays, hashes, and Mixed values:** `__rt_abs_mixed`, `__rt_amr_box_value`, `__rt_array_edge_key`, `__rt_array_ensure_elem_for_write`, `__rt_array_fill_assoc`, `__rt_array_fill_str`, `__rt_array_find_any_all`, `__rt_array_get_mixed_key`, `__rt_array_is_list`, `__rt_array_merge_recursive`, `__rt_array_multisort`, `__rt_array_replace`, `__rt_array_replace_recursive`, `__rt_array_set_int`, `__rt_array_set_mixed`, `__rt_array_set_mixed_key`, `__rt_array_set_refcounted`, `__rt_array_set_str`, `__rt_array_sum_mixed`, `__rt_array_to_hash`, `__rt_array_udiff_uintersect`, `__rt_array_walk_recursive`, `__rt_assoc_diff_intersect`, `__rt_hash_flip`, `__rt_hash_map`, `__rt_hash_sum_mixed`, `__rt_hash_to_indexed_array`, `__rt_in_array_mixed_int`, `__rt_mixed_array_append`, `__rt_mixed_array_get_for_write`, `__rt_mixed_cell_autovivify_array`, `__rt_mixed_cell_promote_to_hash`, `__rt_mixed_new_empty_array_cell`, and `__rt_mixed_numeric_common`.
+- **Strings, dates, JSON, and serialization:** `__rt_concat_append`, `__rt_date_entry`, `__rt_implode_bool`, `__rt_json_validate_number`, `__rt_json_validate_string`, `__rt_microtime_build_into`, `__rt_microtime_mixed`, `__rt_microtime_str`, `__rt_mktime_shifted`, `__rt_serialize_begin`, `__rt_serialize_hash_body`, `__rt_serialize_indexed_body`, `__rt_serialize_pstr`, `__rt_serialize_uint`, `__rt_unser_at`, and `__rt_unser_key`.
+- **Objects, callables, resources, and zvals:** `__rt_box_wrapper_stat_result`, `__rt_function_exists_lookup`, `__rt_obj_store_prop`, `__rt_object_handle_acquire`, `__rt_object_handle_of`, `__rt_object_handle_release`, `__rt_resource_id_mint`, `__rt_resource_id_of`, `__rt_resource_type_name`, `__rt_spl_object_hash`, `__rt_zval_pack_element`.
+- **Files, streams, sockets, and networking:** `__rt_addr_is_udp`, `__rt_build_sockaddr_in6`, `__rt_chgrp_group`, `__rt_chown_user`, `__rt_disk_space`, `__rt_fd_write`, `__rt_file_get_contents_maybe_url`, `__rt_format_sockaddr_in`, `__rt_format_sockaddr_in6`, `__rt_format_sockaddr_unix`, `__rt_fsockopen`, `__rt_fwrite`, `__rt_get_int_context_option`, `__rt_get_string_context_option`, `__rt_http_build_copy_aarch64`, `__rt_http_build_copy_x86`, `__rt_inet6_pton`, `__rt_inet_addr_parse`, `__rt_lchgrp_group`, `__rt_lchown_user`, `__rt_opendir`, `__rt_opendir_glob`, `__rt_path_is_wrapper`, `__rt_popen`, `__rt_readdir`, `__rt_readfile_wrapper`, `__rt_rewinddir`, `__rt_servent_load`, `__rt_stash_connect_host`, `__rt_stream_wrapper_register`, and `__rt_stream_wrapper_unregister`.
+- **User stream wrappers:** `__rt_user_wrapper_dir_closedir`, `__rt_user_wrapper_dir_readdir`, `__rt_user_wrapper_dir_rewinddir`, `__rt_user_wrapper_fclose`, `__rt_user_wrapper_feof`, `__rt_user_wrapper_fflush`, `__rt_user_wrapper_flock`, `__rt_user_wrapper_fread`, `__rt_user_wrapper_fseek`, `__rt_user_wrapper_fstat`, `__rt_user_wrapper_ftell`, `__rt_user_wrapper_ftruncate`, `__rt_user_wrapper_fwrite`, `__rt_user_wrapper_opendir`, `__rt_user_wrapper_path_op`, `__rt_user_wrapper_rename`, `__rt_user_wrapper_set_option`, `__rt_user_wrapper_stream_cast`, `__rt_user_wrapper_url_stat`, and `__rt_user_wrapper_url_stat_field`.
+- **Diagnostics and structured output:** `__rt_touch_meta_array`, `__rt_var_dump_array_bool`, `__rt_var_dump_array_float`, `__rt_var_dump_array_int`, `__rt_var_dump_array_str`, `__rt_var_dump_close_container`, `__rt_var_dump_emit_bool_line`, `__rt_var_dump_emit_float_line`, `__rt_var_dump_emit_indexed_key`, `__rt_var_dump_emit_int_line`, `__rt_var_dump_emit_null_line`, `__rt_var_dump_emit_object_key`, `__rt_var_dump_emit_recursion_line`, `__rt_var_dump_emit_string_key`, `__rt_var_dump_emit_string_line`, `__rt_var_dump_emit_uninit_line`, `__rt_var_dump_indexed`, `__rt_var_dump_object`, `__rt_var_dump_open_container`, `__rt_var_dump_open_object`, `__rt_var_dump_value`, `__rt_vd_indent_pop`, `__rt_vd_indent_push`, `__rt_vd_obj_count`, `__rt_vd_obj_desc`, `__rt_vd_pad`, `__rt_vd_seen_find`, `__rt_vd_seen_pop`, `__rt_vd_seen_push`, `__rt_warn_array_offset_on_null`, `__rt_warn_foreach_non_iterable`, `__rt_warn_nan_coerced_bool`, and `__rt_warn_undefined_array_key_str`.
 
 Compiled **executables** dead-strip unreachable runtime helpers at link time. On Linux each `__rt_*` helper is emitted in its own `.text.<name>` section and collected with `--gc-sections`; on macOS the runtime object carries a `.subsections_via_symbols` footer so each helper is a separately collectable atom dropped by `-dead_strip` (internal cross-helper labels stay assembler-local `L`-locals, with the few helpers reached by a `b`/`bl` from another atom marked `.alt_entry` so they remain live symbols). Combined with the AST-side control-flow pruning and dead-code elimination elephc already does before codegen, only the helpers a program actually reaches are linked. Shared libraries (`--emit cdylib`) keep the full runtime so every exported entry stays callable.
 
@@ -823,6 +888,26 @@ The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` 
 ```asm
 .comm _concat_buf, 65536     ; 64KB string buffer
 .comm _concat_off, 8         ; current offset into string buffer
+.comm _print_r_mode, 8       ; print_r($v, true) return-mode capture flag
+.comm _print_r_off, 8        ; print_r capture write offset
+.comm _print_r_buf, 65536    ; 64KB print_r return-mode capture buffer
+.comm _ob_level, 8           ; output-buffer (ob_*) stack depth
+.comm _ob_ptrs, 512          ; 64-slot ob buffer base pointers
+.comm _ob_lens, 512          ; 64-slot ob buffer used byte counts
+.comm _ob_caps, 512          ; 64-slot ob buffer capacities
+.comm _ob_handler_stubs, 512 ; 64-slot output-handler invocation stubs
+.comm _ob_handler_envs, 512  ; 64-slot handler env words (descriptor ptr / eval registry id)
+.comm _ob_name_ptrs, 512     ; 64-slot handler display-name pointers
+.comm _ob_name_lens, 512     ; 64-slot handler display-name lengths
+.comm _ob_chunk_sizes, 512   ; 64-slot auto-flush chunk sizes
+.comm _ob_flags, 512         ; 64-slot ob_start() flags words
+.comm _ob_started, 512       ; 64-slot handler-started flags
+.comm _ob_in_handler, 8      ; non-zero while a user output handler runs (output discarded)
+.comm _ob_flushing, 8        ; process-exit drain re-entry guard
+.comm _ob_implicit_flush, 8  ; stored ob_implicit_flush() flag (semantically inert)
+.comm _elephc_eval_ob_handler_fn, 8 ; magician hook for eval-registered ob handlers
+.comm _elephc_eval_dynamic_object_destruct_fn, 8 ; eval-bridge dynamic-object destructor hook
+.comm elephc_web_capture, 8  ; --web output-capture flag (per-target C-ABI symbol mangling)
 .comm _global_argc, 8        ; saved argc from OS
 .comm _global_argv, 8        ; saved argv pointer from OS
 .comm _exc_handler_top, 8    ; top of the active exception-handler stack
@@ -888,6 +973,9 @@ Additionally, the runtime emits static data tables:
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_resource_id_prefix` — prefix used by resource display helpers
+- `_pr_spaces`, `_pr_open`, `_pr_close` — the 64-space padding block and `(\n` / `)\n` literals used by the `print_r` walkers
+- `_ob_handler_name`, `_ob_closure_invoke_name`, `_ob_k_*` — the default-handler / `Closure::__invoke` display names and status-array key strings used by `ob_get_status()` and `ob_list_handlers()`
+- `_ob_ntc_*`, `_ob_warn_bad_callback_*`, `_ob_fatal_in_handler` — PHP-parity `ob_*` notice, warning, and fatal texts, routed through `__rt_stdout_write` so parent buffers capture them like PHP
 - `_uncaught_exc_msg` — fatal exception string written by `__rt_throw_current` when no handler exists
 - `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — suppressible runtime warning text routed through `__rt_diag_warning`
 - `_fiber_msg_already_started`, `_fiber_msg_not_suspended`, `_fiber_msg_throw_not_suspended`, `_fiber_msg_not_terminated`, `_fiber_msg_suspend_outside`, `_fiber_msg_unsupported_callable`, `_fiber_msg_stack_alloc_failed` — messages used by `FiberError` runtime paths
@@ -915,6 +1003,6 @@ Additionally, the runtime emits static data tables:
 
 When `--heap-debug` is enabled, the runtime also activates `__rt_heap_debug_check_live`, `__rt_heap_debug_validate_free_list`, and `__rt_heap_debug_report`. These helpers turn allocator corruption into immediate fatal errors for duplicate frees, zero-refcount `incref`/`decref` paths, and malformed free-list or small-bin state, poison freed payload bytes with `0xA5`, and print an end-of-process summary with alloc/free counts, live block count, live bytes, leak summary, and the peak live-byte watermark.
 
-Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, and `5=boxed mixed`, which lets runtime dispatch stay independent from each payload's internal layout. Generator frames use heap kind `4` because `Generator` is a built-in object with a custom payload layout. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, `_class_static_vtable_ptrs`, and static-property storage slots so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support inherited instance dispatch, static-property reads/writes, and late static binding.
+Every heap allocation now also carries a uniform 8-byte kind tag in its 16-byte allocator header. The current runtime uses `0=raw/untyped`, `1=string`, `2=indexed array`, `3=assoc/hash`, `4=object`, `5=boxed mixed`, and `6=throwable` (the compact runtime-thrown exception/error payloads, accepted by the release dispatchers and routed through the object release path), which lets runtime dispatch stay independent from each payload's internal layout. Generator frames use heap kind `4` because `Generator` is a built-in object with a custom payload layout. On x86_64 the kind word additionally carries the ASCII marker `"ELPH"` in its high 32 bits; every stamp is built through the shared `codegen_support::sentinels` helpers (`x86_64_heap_kind_word()` / `X86_64_HEAP_MAGIC_HI32`) rather than hand-typed immediates, and the refcount/free helpers ignore pointers whose header lacks the marker. The low 16 bits keep the persistent container metadata: low byte = heap kind, bits `8..14` = indexed-array runtime `value_type`, and bit `15` = copy-on-write container flag. The collector reuses higher bits for transient reachable/incoming-edge metadata during `__rt_gc_collect_cycles`. Runtime data also now includes `_gc_collecting`, `_gc_release_suppressed`, `_class_gc_desc_count`, `_class_gc_desc_ptrs`, `_class_vtable_ptrs`, `_class_static_vtable_ptrs`, and static-property storage slots so deep-free / cycle-collection paths can coordinate nested releases, discover class property traversal metadata, and support inherited instance dispatch, static-property reads/writes, and late static binding.
 
 See [Memory Model](memory-model.md) for details on how these buffers work.

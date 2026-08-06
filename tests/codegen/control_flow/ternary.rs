@@ -30,6 +30,22 @@ fn test_ternary_int() {
     assert_eq!(out, "7");
 }
 
+/// Regression test for gettype() on a ternary-produced nullable int: the
+/// merge temp is an inline tagged scalar (`null|int`), which the gettype()
+/// emitter previously unboxed as a boxed Mixed cell and crashed.
+#[test]
+fn test_ternary_int_null_gettype() {
+    let out = compile_and_run(
+        r#"<?php
+$v = ($argc == 1) ? 1 : null;
+echo gettype($v), "|";
+$w = ($argc == 99) ? 1 : null;
+echo gettype($w);
+"#,
+    );
+    assert_eq!(out, "integer|NULL");
+}
+
 /// Tests ternary with mixed types when array_pop returns null on empty array.
 #[test]
 fn test_ternary_mixed_types_str_vs_int() {
@@ -223,4 +239,102 @@ echo $pick ? $n->a : $n->b;
 "#,
     );
     assert_eq!(out, "Tishri");
+}
+
+/// Regression for the assignment-effects ternary path: assigning a
+/// heterogeneous ternary to a local and returning it through an inferred
+/// return type must preserve per-branch types (`object|string`), matching
+/// the match assign→return fix for issue #488.
+#[test]
+fn test_ternary_heterogeneous_assign_inferred_return_preserves_types() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    $v = $n === 0 ? new stdClass() : "s";
+    return $v;
+}
+echo gettype(pick(0)), "|", gettype(pick(1));
+"#,
+    );
+    assert_eq!(out, "object|string");
+}
+
+/// Regression for the short-ternary checker/lowering mismatch: a truthy int
+/// combined with a string fallback must keep its PHP integer type and value.
+#[test]
+fn test_short_ternary_heterogeneous_result_preserves_truthy_type() {
+    let out = compile_and_run(
+        r#"<?php
+function pick(int $n) {
+    return $n ?: "fallback";
+}
+echo gettype(pick(7)), "|", pick(7), "|", gettype(pick(0)), "|", pick(0);
+"#,
+    );
+    assert_eq!(out, "integer|7|string|fallback");
+}
+
+/// Regression for issue #494: inferred ternary returns must retain nullability
+/// for object/null branches, including the assignment-effects path.
+#[test]
+fn test_ternary_object_null_inferred_returns_keep_null() {
+    let out = compile_and_run(
+        r#"<?php
+function direct(int $n) {
+    return $n === 0 ? new stdClass() : null;
+}
+function assigned(int $n) {
+    $value = $n === 0 ? new stdClass() : null;
+    return $value;
+}
+echo gettype(direct(0)), "|", gettype(direct(1)), "|";
+echo gettype(assigned(0)), "|", gettype(assigned(1));
+"#,
+    );
+    assert_eq!(out, "object|NULL|object|NULL");
+}
+
+/// Regression test for issue #549 (ternary sibling): branches producing
+/// indexed arrays with different element types must widen the merged temp to
+/// array-of-Mixed. `$argc` is 1 under the test runner, so the int branch is
+/// selected; before the fix the temp was typed array<string> and reading the
+/// int branch's scalar slots as string descriptors segfaulted.
+#[test]
+fn test_ternary_array_int_and_array_string_branches_selects_int_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$r = $argc == 1 ? [1, 2] : ["a", "b"];
+echo $r[0], "\n", $r[1], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n");
+}
+
+/// Reverse branch order for issue #549: the string branch is selected while
+/// the int branch's element type won the merge before the fix, so the string
+/// slots were read back as raw pointer garbage.
+#[test]
+fn test_ternary_array_string_and_array_int_branches_selects_string_arm() {
+    let out = compile_and_run(
+        r#"<?php
+$r = $argc == 1 ? ["a", "b"] : [1, 2];
+echo $r[0], "\n", $r[1], "\n";
+"#,
+    );
+    assert_eq!(out, "a\nb\n");
+}
+
+/// Short-ternary variant of issue #549: `$a ?: default` with mismatched array
+/// element types must widen the merge and copy-on-write the forwarded local,
+/// leaving `$a`'s own typed slots untouched after the expression.
+#[test]
+fn test_short_ternary_array_value_widens_against_string_default() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1, 2];
+$r = $a ?: ["x", "y"];
+echo $r[0], "\n", $r[1], "\n", $a[0], "\n";
+"#,
+    );
+    assert_eq!(out, "1\n2\n1\n");
 }

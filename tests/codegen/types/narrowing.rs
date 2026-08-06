@@ -10,10 +10,6 @@
 //!   chains, and `: never`-function divergence that keeps the complement after an exhaustive chain.
 //!   The guarded variables are untyped parameters that are unions at runtime (heterogeneous calls),
 //!   so these tests depend on both the union parameter inference and the narrowing. Outputs match PHP.
-//! - Later fixtures exercise `is_array`/`is_null` predicates and the `=== null` / `=== false` (and
-//!   `!==`) comparison guards over `array|false` / `?array` return values: without narrowing the
-//!   checker rejects `count($x)` on the union, so these prove the array/false/null members are
-//!   correctly dropped in the complement branch. Outputs match PHP.
 
 use super::*;
 
@@ -297,208 +293,301 @@ fn test_narrowing_restores_all_narrowed_variables() {
     assert_eq!(out, "8");
 }
 
-/// Verifies `is_array` narrowing: the then-branch of `if (is_array($x))` uses the `array|false`
-/// value as an array (via `count`), which the checker rejects without narrowing (`count` requires
-/// an array, not the union). The else-branch keeps the `false` alternative.
+/// Verifies a null guard whose body returns before unreachable trailing code still narrows the
+/// `?array` value to `Array` for the list unpack after the `if` (issue #590 shape 1). The former
+/// last-statement-only model saw the dead `echo` instead of the terminal `return` and dropped the
+/// narrowing.
 #[test]
-fn test_is_array_narrowing_allows_count() {
+fn test_narrow_after_terminal_return_before_unreachable_code() {
     let out = compile_and_run(
         r#"<?php
-        function make(bool $b): array|false { return $b ? [1, 2, 3] : false; }
-        function g(bool $b): int {
-            $x = make($b);
-            if (is_array($x)) { return count($x); }
-            return -1;
-        }
-        echo g(true), "|", g(false);
-        "#,
-    );
-    assert_eq!(out, "3|-1");
-}
-
-/// Verifies the negated-`is_array` early-return idiom: after `if (!is_array($x)) { return; }` the
-/// trailing statement must see `$x` narrowed to `array` (the diverging body drops the `false`
-/// alternative), so `count($x)` is accepted.
-#[test]
-fn test_negated_is_array_early_return_narrows_remainder() {
-    let out = compile_and_run(
-        r#"<?php
-        function make(bool $b): array|false { return $b ? ["a", "b", "c", "d"] : false; }
-        function g(bool $b): int {
-            $x = make($b);
-            if (!is_array($x)) { return -1; }
-            return count($x);
-        }
-        echo g(true), "|", g(false);
-        "#,
-    );
-    assert_eq!(out, "4|-1");
-}
-
-/// Verifies `is_array` keeps a `mixed` associative array's runtime layout so foreach exposes its
-/// string key instead of treating the value as a packed array with numeric indexes.
-#[test]
-fn test_is_array_narrowing_preserves_mixed_associative_keys() {
-    let out = compile_and_run(
-        r#"<?php
-        function describeFirst(mixed $value): string {
-            if (!is_array($value)) { return "not-array"; }
-            foreach ($value as $key => $item) { return (string)$key . ":" . $item; }
-            return "empty";
-        }
-        echo describeFirst(["driver" => "sqlite"]);
-        "#,
-    );
-    assert_eq!(out, "driver:sqlite");
-}
-
-/// Verifies a string key recovered from a guarded `mixed` array can select and assign an option
-/// value outside the foreach body, matching the generated session/PDO dispatcher pattern.
-#[test]
-fn test_is_array_narrowing_dispatches_mixed_associative_option() {
-    let out = compile_and_run(
-        r#"<?php
-        function option(mixed $options): bool {
-            if (!is_array($options)) { return true; }
-            $selected = true;
-            foreach ($options as $key => $value) {
-                if (is_int($key)) { continue; }
-                $keyString = (string)$key;
-                if ($keyString === "use_cookies") { $selected = $value; }
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                return "empty";
+                echo "unreachable";
             }
-            return $selected;
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
         }
-        echo option(["use_cookies" => false]) ? "wrong" : "ok";
+        echo consume(["a", "b"]), "|", consume(null);
         "#,
     );
-    assert_eq!(out, "ok");
+    assert_eq!(out, "a=b|empty");
 }
 
-/// Verifies a nullable option accumulator written inside foreach is visible to the strict-null
-/// guard after the loop, including when the selected PHP value is literal `false`.
+/// Verifies a null guard whose nested `if` terminates on every branch (return / throw) narrows the
+/// `?array` value for the following list unpack (issue #590 shape 2).
 #[test]
-fn test_is_array_narrowing_keeps_nullable_option_write_after_foreach() {
+fn test_narrow_after_nested_if_all_branches_terminate() {
     let out = compile_and_run(
         r#"<?php
-        function option(mixed $options): bool {
-            if (!is_array($options)) { return true; }
-            $selected = null;
-            foreach ($options as $key => $value) {
-                if (is_int($key)) { continue; }
-                $keyString = (string)$key;
-                if ($keyString === "use_cookies") { $selected = $value; }
+        function consume(?array $entry, bool $flag): string {
+            if ($entry === null) {
+                if ($flag) {
+                    return "flag";
+                } else {
+                    throw new Exception("missing");
+                }
             }
-            if ($selected !== null) { return (bool)$selected; }
-            return true;
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
         }
-        echo option(["use_cookies" => false]) ? "wrong" : "ok";
+        echo consume(["a", "b"], true);
         "#,
     );
-    assert_eq!(out, "ok");
+    assert_eq!(out, "a=b");
 }
 
-/// Verifies `array_key_exists()` accepts and runtime-dispatches a `mixed` array after an
-/// `is_array()` guard, including an associative key stored in hash representation.
+/// Verifies `exit()` and `die()` participate in the shared structural traversal when both paths of
+/// a nested `if` diverge. The old shallow checker overlay did not inspect the inner branches.
 #[test]
-fn test_is_array_narrowing_allows_mixed_array_key_exists() {
+fn test_narrow_after_nested_if_exit_and_die_paths() {
     let out = compile_and_run(
         r#"<?php
-        function hasDriver(mixed $value): bool {
-            if (!is_array($value)) { return false; }
-            return array_key_exists("driver", $value);
+        function consume(?array $entry, bool $flag): string {
+            if ($entry === null) {
+                if ($flag) {
+                    exit(1);
+                } else {
+                    die(2);
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
         }
-        echo hasDriver(["driver" => "sqlite"]) ? "yes" : "no";
+        echo consume(["a", "b"], true);
         "#,
     );
-    assert_eq!(out, "yes");
+    assert_eq!(out, "a=b");
 }
 
-/// Verifies `=== false` narrowing: the else-branch of `if ($x === false)` drops the `false` member
-/// of `array|false`, so `count($x)` on the remaining `array` is accepted.
+/// Verifies checker-known `never` calls are threaded through nested structural analysis and can
+/// combine with an ordinary terminal branch.
 #[test]
-fn test_strict_eq_false_else_narrows_to_array() {
+fn test_narrow_after_nested_if_never_and_return_paths() {
     let out = compile_and_run(
         r#"<?php
-        function make(bool $b): array|false { return $b ? [10, 20] : false; }
-        function g(bool $b): int {
-            $x = make($b);
-            if ($x === false) { return -1; }
-            return count($x);
+        function fail(string $message): never { throw new Exception($message); }
+        function consume(?array $entry, bool $flag): string {
+            if ($entry === null) {
+                if ($flag) {
+                    fail("missing");
+                } else {
+                    return "empty";
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
         }
-        echo g(true), "|", g(false);
+        echo consume(["a", "b"], true);
         "#,
     );
-    assert_eq!(out, "2|-1");
+    assert_eq!(out, "a=b");
 }
 
-/// Verifies `!== false` narrowing: the then-branch of `if ($x !== false)` keeps only the non-false
-/// `array` member, mirroring `=== false` with the branches swapped.
+/// Verifies a statically infinite loop without a reachable `break` is non-fallthrough for
+/// post-guard narrowing, matching the shared function-exit analysis.
 #[test]
-fn test_strict_not_eq_false_then_narrows_to_array() {
+fn test_narrow_after_statically_infinite_loop() {
     let out = compile_and_run(
         r#"<?php
-        function make(bool $b): array|false { return $b ? [7, 8, 9] : false; }
-        function g(bool $b): int {
-            $x = make($b);
-            if ($x !== false) { return count($x); }
-            return -1;
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                while (true) {
+                    continue;
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
         }
-        echo g(true), "|", g(false);
+        echo consume(["a", "b"]);
         "#,
     );
-    assert_eq!(out, "3|-1");
+    assert_eq!(out, "a=b");
 }
 
-/// Verifies `=== null` narrowing over a `?array` return: the else-branch drops the `null` (`void`)
-/// member so `count($x)` on the remaining `array` is accepted. Also covers the operand-swapped
-/// form `null === $x` in the sibling test below.
+/// Verifies a `do`/`while` whose mandatory first iteration exits through a checker-known `never`
+/// call is non-fallthrough even when its condition is false.
 #[test]
-fn test_strict_eq_null_else_narrows_to_array() {
+fn test_narrow_after_do_while_body_never_call() {
     let out = compile_and_run(
         r#"<?php
-        function make(bool $b): ?array { return $b ? [1, 2, 3, 4, 5] : null; }
-        function g(bool $b): int {
-            $x = make($b);
-            if ($x === null) { return 0; }
-            return count($x);
+        function fail(string $message): never { throw new Exception($message); }
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                do {
+                    fail("missing");
+                } while (false);
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
         }
-        echo g(true), "|", g(false);
+        echo consume(["a", "b"]);
         "#,
     );
-    assert_eq!(out, "5|0");
+    assert_eq!(out, "a=b");
 }
 
-/// Verifies the operand-swapped comparison `null === $x` narrows identically to `$x === null`.
+/// Verifies a null guard whose nested `switch` exits on its single case and its `default` narrows
+/// the `?array` value for the following list unpack.
 #[test]
-fn test_strict_eq_null_swapped_operands_narrows() {
+fn test_narrow_after_nested_switch_all_paths_terminate() {
     let out = compile_and_run(
         r#"<?php
-        function make(bool $b): ?array { return $b ? [1, 2] : null; }
-        function g(bool $b): int {
-            $x = make($b);
-            if (null === $x) { return 0; }
-            return count($x);
+        function consume(?array $entry, int $mode): string {
+            if ($entry === null) {
+                switch ($mode) {
+                    case 1:
+                        return "one";
+                    default:
+                        throw new Exception("missing");
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
         }
-        echo g(true), "|", g(false);
+        echo consume(["a", "b"], 1);
         "#,
     );
-    assert_eq!(out, "2|0");
+    assert_eq!(out, "a=b");
 }
 
-/// Verifies `is_null` narrowing: the else-branch drops the `null` member of `?array`, and the
-/// then-branch takes the null path.
+/// Verifies a nested exhaustive `switch` combines a checker-known `never` call with shared
+/// `exit()` termination and still preserves the post-guard complement.
 #[test]
-fn test_is_null_narrowing_over_nullable_array() {
+fn test_narrow_after_nested_switch_never_and_exit_paths() {
     let out = compile_and_run(
         r#"<?php
-        function make(bool $b): ?array { return $b ? [9] : null; }
-        function g(bool $b): int {
-            $x = make($b);
-            if (is_null($x)) { return 0; }
-            return count($x);
+        function fail(string $message): never { throw new Exception($message); }
+        function consume(?array $entry, int $mode): string {
+            if ($entry === null) {
+                switch ($mode) {
+                    case 1:
+                        fail("missing");
+                    default:
+                        exit(2);
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
         }
-        echo g(true), "|", g(false);
+        echo consume(["a", "b"], 1);
         "#,
     );
-    assert_eq!(out, "1|0");
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies a null guard whose nested `try`/`catch` exits on both the try and the catch bodies
+/// narrows the `?array` value for the following list unpack.
+#[test]
+fn test_narrow_after_nested_try_all_paths_terminate() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                try {
+                    throw new Exception("inner");
+                } catch (Throwable $e) {
+                    return "caught";
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]), "|", consume(null);
+        "#,
+    );
+    assert_eq!(out, "a=b|caught");
+}
+
+/// Verifies checker-known `never` divergence is propagated through `try` analysis while the catch
+/// path uses shared `die()` termination.
+#[test]
+fn test_narrow_after_nested_try_never_and_die_paths() {
+    let out = compile_and_run(
+        r#"<?php
+        function fail(string $message): never { throw new Exception($message); }
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                try {
+                    fail("missing");
+                } catch (Throwable $e) {
+                    die(2);
+                }
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies a null guard ending in `continue` before unreachable trailing code keeps the `?array`
+/// narrowing for the list unpack later in the same loop body. `continue` cannot reach the following
+/// statement even though it does not exit the function, so the complement is still sound.
+#[test]
+fn test_narrow_after_continue_before_unreachable_code() {
+    let out = compile_and_run(
+        r#"<?php
+        function row(int $n): ?array {
+            if ($n < 0) { return null; }
+            return ["k" . $n, "v" . $n];
+        }
+        $out = "";
+        foreach ([1, -1, 2] as $n) {
+            $entry = row($n);
+            if ($entry === null) {
+                continue;
+                echo "unreachable";
+            }
+            [$key, $value] = $entry;
+            $out .= $key . "=" . $value . ";";
+        }
+        echo $out;
+        "#,
+    );
+    assert_eq!(out, "k1=v1;k2=v2;");
+}
+
+/// Verifies shared `exit()` termination still fires when the call is not the block's last
+/// statement, allowing the structural block scan to ignore unreachable trailing code.
+#[test]
+fn test_narrow_after_exit_before_unreachable_code() {
+    let out = compile_and_run(
+        r#"<?php
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                exit(1);
+                echo "unreachable";
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]);
+        "#,
+    );
+    assert_eq!(out, "a=b");
+}
+
+/// Verifies checker-known `never` divergence still fires when the call precedes unreachable
+/// trailing code. The checker supplies the function-table lookup to the shared structural model.
+#[test]
+fn test_narrow_after_never_call_before_unreachable_code() {
+    let out = compile_and_run(
+        r#"<?php
+        function fail(string $m): never { throw new Exception($m); }
+        function consume(?array $entry): string {
+            if ($entry === null) {
+                fail("empty");
+                echo "unreachable";
+            }
+            [$key, $value] = $entry;
+            return $key . "=" . $value;
+        }
+        echo consume(["a", "b"]);
+        "#,
+    );
+    assert_eq!(out, "a=b");
 }

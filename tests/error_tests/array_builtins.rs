@@ -438,6 +438,15 @@ fn test_error_list_unpack_non_array() {
     expect_error("<?php [$a, $b] = 42;", "List unpacking requires an array");
 }
 
+/// Verifies list unpacking rejects a nullable array when no guard removes the null member.
+#[test]
+fn test_error_list_unpack_nullable_array_without_guard() {
+    expect_error(
+        "<?php function row(): ?array { return null; } $entry = row(); [$a, $b] = $entry;",
+        "List unpacking requires an array",
+    );
+}
+
 // --- call_user_func_array errors ---
 
 /// Verifies that error call user func array wrong args.
@@ -475,6 +484,24 @@ fn test_indexed_array_unrelated_object_values_widen_to_mixed() {
     assert!(
         check_source("<?php class Dog {} class Car {} $items = [new Dog(), new Car()];").is_ok(),
         "heterogeneous indexed-array values should widen to mixed",
+    );
+}
+
+/// Verifies `array_map()` rejects object elements until its callback runtime supports them.
+#[test]
+fn test_error_array_map_rejects_object_elements() {
+    expect_error(
+        "<?php final class Box {} $items = [new Box()]; array_map(static fn(Box $box): Box => $box, $items);",
+        "array_map() does not yet support object array elements",
+    );
+}
+
+/// Verifies contextual callback checking still rejects declarations incompatible with known elements.
+#[test]
+fn test_error_array_callback_rejects_known_element_mismatch() {
+    expect_error(
+        "<?php array_map(static fn(string $value): string => $value, [1, 2]);",
+        "array_map() callback parameter $value expects Str, got Int",
     );
 }
 

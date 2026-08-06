@@ -61,15 +61,30 @@ fn test_var_dump_hash_heterogeneous_values() {
     );
 }
 
-/// Regression: a nested array value inside a hash falls back to `NULL` (the
-/// same limitation as the indexed Mixed walker) instead of crashing or
-/// emitting garbage. The surrounding scalar entries still format correctly.
+/// Regression: a nested array value inside a hash is dumped RECURSIVELY, indented
+/// one level (2 spaces) deeper than its `["inner"]=>` key line, with its closing
+/// brace back at the key's indent. It used to fall back to `NULL`. The
+/// surrounding scalar entries still format correctly. Output matches PHP exactly.
 #[test]
-fn test_var_dump_hash_nested_value_falls_back_to_null() {
+fn test_var_dump_hash_nested_value_recurses() {
     let out = compile_and_run(r#"<?php var_dump(["x" => 5, "inner" => [1, 2], "y" => 7]);"#);
     assert_eq!(
         out,
-        "array(3) {\n  [\"x\"]=>\n  int(5)\n  [\"inner\"]=>\n  NULL\n  [\"y\"]=>\n  int(7)\n}\n"
+        concat!(
+            "array(3) {\n",
+            "  [\"x\"]=>\n",
+            "  int(5)\n",
+            "  [\"inner\"]=>\n",
+            "  array(2) {\n",
+            "    [0]=>\n",
+            "    int(1)\n",
+            "    [1]=>\n",
+            "    int(2)\n",
+            "  }\n",
+            "  [\"y\"]=>\n",
+            "  int(7)\n",
+            "}\n",
+        )
     );
 }
 

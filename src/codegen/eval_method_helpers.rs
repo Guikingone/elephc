@@ -67,7 +67,12 @@ struct EvalStaticMethodSlot {
 const BUILTIN_THROWABLE_METHOD_CLASSES: &[&str] = &[
     "Error",
     "TypeError",
+    "ArgumentCountError",
     "ValueError",
+    "ArithmeticError",
+    "DivisionByZeroError",
+    "AssertionError",
+    "UnhandledMatchError",
     "Exception",
     "LogicException",
     "BadFunctionCallException",

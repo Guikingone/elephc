@@ -73,6 +73,9 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_bool_from_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
+    super::emit_nan_bool_coercion_probe(emitter, "__rt_mixed_cast_bool_float_no_nan");
+    // AArch64 `fcmp` reports unordered as `Z=0`, so `ne` already answers true for a NAN,
+    // matching PHP's `(bool)NAN === true`. The x86_64 twin below needs an explicit fixup.
     emitter.instruction("fcmp d0, #0.0");                                       // compare the float payload against zero
     emitter.instruction("cset x0, ne");                                         // floats are truthy when non-zero
     emitter.instruction("b __rt_mixed_cast_bool_done");                         // return the float truthiness result
@@ -156,9 +159,14 @@ fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_mixed_cast_bool_from_float_linux_x86_64");
     emitter.instruction("movq xmm0, rdi");                                      // move the unboxed float bits into the floating-point result register
+    super::emit_nan_bool_coercion_probe(emitter, "__rt_mixed_cast_bool_float_no_nan_linux_x86_64");
     emitter.instruction("xorpd xmm1, xmm1");                                    // materialize a zero floating-point register for the truthiness comparison
     emitter.instruction("ucomisd xmm0, xmm1");                                  // compare the float payload against zero
-    emitter.instruction("setne al");                                            // floats are truthy when they compare non-equal to zero
+    // `ucomisd` sets ZF for an UNORDERED compare, so a bare `setne` would answer false for a
+    // NAN — the inverse of PHP and of the AArch64 twin above. Fold the parity flag back in.
+    emitter.instruction("setne al");                                            // floats are truthy when they compare ordered-non-equal to zero
+    emitter.instruction("setp r10b");                                           // materialize whether the comparison was unordered (a NAN)
+    emitter.instruction("or al, r10b");                                         // PHP counts NAN as truthy, so merge the unordered case in
     emitter.instruction("movzx rax, al");                                       // normalize the boolean result back to a full integer register
     emitter.instruction("jmp __rt_mixed_cast_bool_done_linux_x86_64");          // return the float truthiness result
 

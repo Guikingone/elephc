@@ -122,7 +122,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         ExprKind::PreDecrement(name) => ExprKind::PreDecrement(name),
         ExprKind::PostDecrement(name) => ExprKind::PostDecrement(name),
         ExprKind::FunctionCall { name, args } => {
-            let arg_env = (!function_call_effect(name.as_str()).has_side_effects).then_some(env);
+            let arg_env = (!function_call_effect(name.as_str(), &args).has_side_effects).then_some(env);
             let by_ref = function_by_ref_params(name.as_str());
             ExprKind::FunctionCall {
                 name,
@@ -300,7 +300,7 @@ pub(crate) fn propagate_expr(expr: Expr, env: &ConstantEnv) -> Expr {
         } => {
             let object = propagate_expr(*object, env);
             let arg_env =
-                (!private_instance_method_call_effect(&object, &method).has_side_effects)
+                (!instance_method_call_effect(&object, &method).has_side_effects)
                     .then_some(env);
             let by_ref = method_by_ref_params(&method);
             ExprKind::MethodCall {
@@ -523,6 +523,7 @@ pub(crate) fn build_if_stmt(
                             else_body: None,
                         },
                         span,
+                        source_mode: crate::source::current_parse_mode(),
                         attributes: Vec::new(),
                     };
                 }
@@ -538,6 +539,7 @@ pub(crate) fn build_if_stmt(
             else_body,
         },
         span,
+        source_mode: crate::source::current_parse_mode(),
         attributes: Vec::new(),
     }
 }

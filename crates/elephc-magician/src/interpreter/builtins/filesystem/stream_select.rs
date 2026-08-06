@@ -166,8 +166,7 @@ fn eval_stream_select_cast_value(
     if values.type_tag(value)? != EVAL_TAG_RESOURCE {
         return Ok(());
     }
-    let display_id = eval_int_value(value, values)?;
-    let Some(id) = display_id.checked_sub(1) else {
+    let Ok(id) = eval_resource_payload(value, values) else {
         return Ok(());
     };
     let Some(result) =

@@ -20,19 +20,21 @@
 //!   string, not a descriptor).
 
 use crate::builtins::spec::BuiltinCheckCtx;
-use crate::codegen::context::FunctionContext;
-use crate::codegen::CodegenIrError;
 use crate::errors::CompileError;
-use crate::ir::Instruction;
+use crate::builtins::semantics::{
+    internal_eir_semantics, BuiltinLoweringContext, BuiltinResultOwnership,
+    LoweredBuiltinValue, NormalizedBuiltinCall,
+};
+use crate::ir::{Effects, Op};
 use crate::types::PhpType;
 
 builtin! {
     name: "__elephc_callable_ptr",
-    area: Internal,
+    area: Pointers,
     params: [value: Mixed],
     returns: Mixed,
     check: check,
-    lower: lower,
+    semantics: internal_eir_semantics(lower, Effects::PURE, BuiltinResultOwnership::NonHeap),
     summary: "Reinterprets a closure / first-class callable as its raw descriptor pointer.",
     internal: true
 }
@@ -48,7 +50,17 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Pointer(None))
 }
 
-/// Lowers a `__elephc_callable_ptr` call by dispatching to the shared pointer emitter.
-fn lower(ctx: &mut FunctionContext, inst: &Instruction) -> Result<(), CodegenIrError> {
-    crate::codegen::lower_inst::builtins::pointers::lower_elephc_callable_ptr(ctx, inst)
+/// Lowers a normalized callable value to the dedicated descriptor-pointer EIR primitive.
+fn lower(
+    ctx: &mut dyn BuiltinLoweringContext,
+    call: &NormalizedBuiltinCall<'_>,
+) -> Result<LoweredBuiltinValue, crate::builtins::semantics::BuiltinLoweringError> {
+    Ok(ctx.emit_value(
+        Op::CallablePtr,
+        vec![call.operand(0)?],
+        None,
+        call.result_type.clone(),
+        Op::CallablePtr.default_effects(),
+        Some(call.span),
+    ))
 }

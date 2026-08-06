@@ -116,6 +116,24 @@ fn test_error_union_typed_local_rejects_invalid_initializer() {
     expect_error("<?php int|string $value = 1.5;", "cannot initialize $value");
 }
 
+/// Verifies a boxed `mixed` value cannot enter an object parameter without a runtime tag check.
+#[test]
+fn test_error_mixed_rejected_at_object_parameter_boundary() {
+    expect_error(
+        "<?php final class Box {} function take(Box $box): void {} function relay(mixed $value): void { take($value); }",
+        "Function 'take' parameter $box expects Object(\"Box\"), got Mixed",
+    );
+}
+
+/// Verifies a boxed `mixed` value cannot leave a function through an array return boundary.
+#[test]
+fn test_error_mixed_rejected_at_array_return_boundary() {
+    expect_error(
+        "<?php function relay(mixed $value): array { return $value; }",
+        "Function 'relay' return type expects Array(Mixed), got Mixed",
+    );
+}
+
 /// Verifies that referencing an undefined variable produces an "Undefined variable" error.
 #[test]
 fn test_error_undefined_variable() {
@@ -142,6 +160,102 @@ fn test_error_arithmetic_on_string() {
     expect_error(
         "<?php $x = \"hi\"; echo $x + 1;",
         "Arithmetic operators require numeric operands",
+    );
+}
+
+/// Verifies a name beginning with `with` does not imply a late-static fluent return.
+#[test]
+fn test_error_with_prefix_does_not_refine_declared_ancestor_return() {
+    expect_error(
+        r#"<?php
+interface Account {
+    public function withdraw(int $amount): Account;
+}
+interface Savings extends Account {
+    public function interestRate(): int;
+}
+final class SavingsAccount implements Savings {
+    public function withdraw(int $amount): Account { return $this; }
+    public function interestRate(): int { return 4; }
+}
+function rate(Savings $account): int {
+    return $account->withdraw(10)->interestRate();
+}
+echo rate(new SavingsAccount());
+"#,
+        "Undefined method: Account::interestRate",
+    );
+}
+
+/// Verifies that binding `static` preserves distinct explicit union members.
+///
+/// `static|Choice` called on `SpecialChoice` becomes `SpecialChoice|Choice`, so a
+/// subclass-only method is not safe on the result even though one branch is late-bound.
+#[test]
+fn test_error_late_static_union_keeps_explicit_ancestor_member() {
+    expect_error(
+        r#"<?php
+class Choice {
+    public function choose(bool $same): static|Choice {
+        return $same ? $this : new Choice();
+    }
+}
+class SpecialChoice extends Choice {
+    public function special(): string { return "special"; }
+}
+function render(SpecialChoice $choice): string {
+    return $choice->choose(false)->special();
+}
+"#,
+        "Undefined method",
+    );
+}
+
+/// Verifies an interface `static` contract cannot be implemented as the concrete class name.
+#[test]
+fn test_error_interface_static_return_requires_late_static_implementation() {
+    expect_error(
+        r#"<?php
+interface CreatesLateBound {
+    public function create(): static;
+}
+class ConcreteCreator implements CreatesLateBound {
+    public function create(): ConcreteCreator { return $this; }
+}
+"#,
+        "incompatible return type",
+    );
+}
+
+/// Verifies overriding `static` with the immediate child name is rejected for future subclasses.
+#[test]
+fn test_error_static_return_override_cannot_become_concrete_child() {
+    expect_error(
+        r#"<?php
+class LateBoundBase {
+    public function copy(): static { return $this; }
+}
+class ConcreteCopy extends LateBoundBase {
+    public function copy(): ConcreteCopy { return $this; }
+}
+"#,
+        "incompatible return type",
+    );
+}
+
+/// Verifies a child interface must preserve its parent's late-static return contract.
+#[test]
+fn test_error_interface_redeclaration_cannot_replace_static_with_child_name() {
+    expect_error(
+        r#"<?php
+interface LateBoundContract {
+    public function copy(): static;
+}
+interface ConcreteContract extends LateBoundContract {
+    public function copy(): ConcreteContract;
+}
+"#,
+        "compatible late-static return type",
     );
 }
 
@@ -281,11 +395,21 @@ fn test_error_is_kind_predicates_arity() {
 
 // --- Error positions ---
 
-/// Verifies that the null coalesce operator widens the inferred return type to float
-/// when one branch is int and the other is a float literal.
+/// Verifies that `??` merges two DIFFERENT arm types to `mixed` rather than letting one arm
+/// absorb the other.
+///
+/// This test previously asserted `Float`, on the theory that `??` widens like an arithmetic
+/// operator. It does not: `??` is `isset($a) ? $a : $b` and performs no coercion at all, so
+/// `fallback_pi("hi")` must return the string `"hi"`. Under the old `Float` inference the
+/// value branch was lowered as a float coercion and the caller silently received `float(0)`
+/// for a string argument, `float(2)` for `2` and `float(1)` for `true` (reference PHP 8.5.6:
+/// `string(2) "hi"`, `int(2)`, `bool(true)`). `Mixed` is the only merge that keeps every arm
+/// intact; `null_coalesce_merge_type` in `src/types/checker/inference/syntactic.rs` computes
+/// it, and it agrees with the IR-level `wider_type_for_merge` that already emitted a Mixed
+/// merge slot for this shape.
 /// Input: `function fallback_pi($x) { return $x ?? 3.14159; }`
 #[test]
-fn test_null_coalesce_widens_function_return_type_in_checker() {
+fn test_null_coalesce_merges_mismatched_arms_to_mixed_in_checker() {
     let tokens = tokenize("<?php function fallback_pi($x) { return $x ?? 3.14159; }")
         .expect("tokenize failed");
     let ast = parse(&tokens).expect("parse failed");
@@ -296,7 +420,7 @@ fn test_null_coalesce_widens_function_return_type_in_checker() {
         .functions
         .get("fallback_pi")
         .expect("missing function signature for fallback_pi");
-    assert_eq!(sig.return_type, PhpType::Float);
+    assert_eq!(sig.return_type, PhpType::Mixed);
 
     // Verifies that `array` return hints preserve the element type through property storage
     // and method return inference, using a `Wad` class with `Entry` objects.
@@ -754,5 +878,116 @@ fn test_error_nullable_intersection_type_rejected() {
         check_source("<?php interface A {} interface B {} function f(?A&B $x): int { return 1; }")
             .is_err(),
         "?A&B should be rejected, not silently accepted",
+    );
+}
+
+/// `Exception::__construct` third parameter must be `?Throwable`, matching PHP.
+#[test]
+fn test_error_exception_previous_rejects_non_throwable() {
+    expect_error(
+        "<?php throw new Exception('x', 0, previous: 123);",
+        "previous",
+    );
+}
+
+/// Regression for issue #587: a `match` merging two indexed arrays with different
+/// element types (`[1, 2]` vs `["a", "b"]`) must type as `array<mixed>`, so passing
+/// the result to a by-ref `array` parameter type-checks instead of failing with
+/// "expects Array(Mixed), got Mixed".
+#[test]
+fn test_heterogeneous_match_array_merge_accepts_by_ref_array_param() {
+    expect_no_error(
+        "<?php $r = match($argc) { 1 => [1, 2], default => [\"a\", \"b\"] }; \
+         function add(array &$a): void { $a[] = 5; } add($r);",
+    );
+}
+
+/// Regression for issue #587: a heterogeneous `match` array merge must satisfy the
+/// `array` argument of `array_sum()` and `in_array()`, which previously rejected the
+/// `mixed`-typed result.
+#[test]
+fn test_heterogeneous_match_array_merge_accepts_array_builtins() {
+    expect_no_error(
+        "<?php $r = match($argc) { 1 => [1, 2], default => [\"a\", \"b\"] }; \
+         echo array_sum($r); echo in_array(2, $r);",
+    );
+}
+
+/// Regression for issue #587: spreading a heterogeneous `match` array merge
+/// (`[...$r]`) must type-check. This also clears the misleading follow-on
+/// "Undefined variable: $s" that appeared because the spread's failure left the
+/// assignment target untyped.
+#[test]
+fn test_heterogeneous_match_array_merge_accepts_spread() {
+    expect_no_error(
+        "<?php $r = match($argc) { 1 => [1, 2], default => [\"a\", \"b\"] }; \
+         $s = [...$r]; echo count($s);",
+    );
+}
+
+/// Regression for issue #587: the same elementwise widening must apply to a
+/// ternary merge, not just `match`, since both share the merge join.
+#[test]
+fn test_heterogeneous_ternary_array_merge_accepts_array_use() {
+    expect_no_error("<?php $r = $argc > 1 ? [1, 2] : [\"a\", \"b\"]; echo array_sum($r);");
+}
+
+/// Regression for issue #587: `??` must join array element types just like
+/// `match`/ternary after removing null from the value side, instead of retaining
+/// the left branch's `array<int>` type.
+#[test]
+fn test_heterogeneous_null_coalesce_array_merge_widens_element_type() {
+    let tokens = tokenize(
+        "<?php function maybe(int $n) { return $n === 1 ? [1, 2] : null; } \
+         $r = maybe($argc) ?? [\"a\", \"b\"];",
+    )
+    .expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let ast = elephc::optimize::fold_constants(ast);
+    let result = types::check(&ast).expect("expected source to type-check");
+
+    assert_eq!(
+        result.global_env.get("r"),
+        Some(&PhpType::Array(Box::new(PhpType::Mixed)))
+    );
+}
+
+/// An empty branch contributes no element values, so `[]` merged with
+/// `array<int>` retains `array<int>` instead of widening unnecessarily.
+#[test]
+fn test_empty_match_array_branch_keeps_populated_element_type() {
+    let tokens = tokenize(
+        "<?php $r = match($argc) { 1 => [], default => [1, 2] };",
+    )
+    .expect("tokenize failed");
+    let ast = parse(&tokens).expect("parse failed");
+    let ast = elephc::optimize::fold_constants(ast);
+    let result = types::check(&ast).expect("expected source to type-check");
+
+    assert_eq!(
+        result.global_env.get("r"),
+        Some(&PhpType::Array(Box::new(PhpType::Int)))
+    );
+}
+
+/// Regression for issue #587: an associative merge whose value types differ
+/// (`["k" => 1]` vs `["k" => "v"]`) must widen elementwise to `array<string, mixed>`
+/// and stay an array, not collapse to bare `mixed`.
+#[test]
+fn test_heterogeneous_match_assoc_merge_stays_array() {
+    expect_no_error(
+        "<?php $r = match($argc) { 1 => [\"k\" => 1], default => [\"k\" => \"v\"] }; \
+         echo array_sum($r);",
+    );
+}
+
+/// Guards issue #587's fix against over-widening: a merge of non-array scalar arms
+/// (`1` vs `"a"`) must still type as `mixed`, so an array-only use like `array_sum()`
+/// stays rejected.
+#[test]
+fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
+    expect_error(
+        "<?php $r = match($argc) { 1 => 1, default => \"a\" }; echo array_sum($r);",
+        "array_sum() argument must be array",
     );
 }

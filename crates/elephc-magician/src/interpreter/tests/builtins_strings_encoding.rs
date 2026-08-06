@@ -399,6 +399,92 @@ return true;"#,
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval hash contexts consume NO PHP resource id, so later resources keep theirs.
+///
+/// PHP 8's `hash_init()`/`hash_copy()` return `HashContext` OBJECTS. Objects and resources
+/// are unrelated numbering spaces in php-src, so a hash context takes nothing from the
+/// counter `get_resource_id()` reports:
+///
+/// ```text
+/// eval('hash_init("md5"); hash_copy($h); $x = fopen(...);') -> get_resource_id($x) === 5
+/// ```
+///
+/// The interpreter used to box its context with `RuntimeValueOps::resource`, which binds an
+/// id, so each context stole one and this program reported 7 instead of 5. `hash_context()`
+/// boxes resource kind 5 instead — id-less and destructor-less.
+///
+/// `stream_context_create()` supplies the trailing GENUINE resource because it needs no
+/// filesystem, and it doubles as the control: if the fix had disabled id binding wholesale
+/// rather than only for hash contexts, `$sc` would report nothing sensible here.
+///
+/// NOTE FOR THE NEXT READER: this assertion is only meaningful because `FakeOps` models
+/// inert payloads (`inert_resources`). The fake binds an id for EVERY `FakeValue::Resource`
+/// in `alloc`, so a `hash_context()` that merely forwarded to `runtime_resource` would keep
+/// this test — and every other magician test — structurally unable to see the defect.
+#[test]
+fn execute_program_hash_contexts_consume_no_resource_id() {
+    let program = parse_fragment(
+        br#"$ctx = hash_init("md5");
+$copy = hash_copy($ctx);
+$again = hash_init("sha1");
+$sc = stream_context_create();
+echo get_resource_id($sc);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "5");
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+    assert_eq!(
+        values.resource_ids.len(),
+        1,
+        "only the stream context may hold a PHP resource id: {:?}",
+        values.resource_ids
+    );
+    assert_eq!(
+        values.inert_resources.len(),
+        3,
+        "both hash_init() calls and the hash_copy() must be inert: {:?}",
+        values.inert_resources
+    );
+}
+
+/// Verifies eval hash contexts stay usable after being boxed as inert kind-5 cells.
+///
+/// Guards the other half of the change. The id fix must not be bought by degrading the
+/// context: the low payload word is still the `EvalStreamResources` key, so
+/// `eval_resource_payload` must resolve it and the digests must stay exact. A `hash_copy()`
+/// that shared state with its source, or a key that resolved to the wrong slot, would show
+/// up as a changed digest rather than a changed id.
+#[test]
+fn execute_program_inert_hash_contexts_still_hash_correctly() {
+    let program = parse_fragment(
+        br#"$a = hash_init("md5");
+hash_update($a, "abc");
+$b = hash_copy($a);
+hash_update($b, "def");
+echo hash_final($a); echo ":";
+echo hash_final($b);
+return true;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "900150983cd24fb0d6963f7d28e17f72:e80b5017098950fc58aad83c8c14978e"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+
 /// Verifies eval `ctype_*` predicates dispatch through direct, named, and callable paths.
 #[test]
 fn execute_program_dispatches_ctype_builtins() {

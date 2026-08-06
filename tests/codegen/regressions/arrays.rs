@@ -2922,3 +2922,648 @@ echo "[" . (str_repeat("x", 0) ?? "bad") . "]";
     assert_eq!(out.stdout, "[fallback][][]");
     assert_eq!(out.stderr, "");
 }
+
+// --- Issue #556: by-reference foreach over a missing array element ---
+
+/// Regression for issue #556: a by-reference foreach directly over a missed
+/// element warns for the miss and skips the loop body instead of handing the
+/// null-container sentinel to the copy-on-write helper.
+#[test]
+fn test_byref_foreach_over_first_index_miss_skips_loop() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] as &$v) { $v = 'changed'; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Guard for issue #556: the `?? []` by-reference form iterates the empty
+/// default silently — the coalesce materializes a real empty array, so the
+/// sentinel never reaches the iterator; this locks that behavior in place.
+#[test]
+fn test_byref_foreach_over_first_index_miss_coalesce_default() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] ?? [] as &$v) { $v = 'changed'; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #556: a string-keyed miss feeding a by-reference foreach
+/// takes the same null-source path as the indexed form.
+#[test]
+fn test_byref_foreach_over_assoc_key_miss_skips_loop() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = ['k' => ['q' => 1]];
+foreach ($h['nope'] as &$v) { $v = 2; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("Warning: Undefined array key \"nope\""));
+}
+
+/// Control for issue #556: the null-source guards must not disturb ordinary
+/// by-reference mutation and aliasing over a real array.
+#[test]
+fn test_byref_foreach_over_present_source_still_mutates() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$ok = ['a', 'b'];
+foreach ($ok as &$v) { $v = strtoupper($v); }
+unset($v);
+echo implode(',', $ok);
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "A,B");
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #556: the skipped by-reference loop must leave the heap
+/// clean — the sentinel source must never enter refcount or copy-on-write traffic.
+#[test]
+fn test_byref_foreach_over_first_index_miss_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] as &$v) { $v = 'changed'; }
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+/// Regression for issue #556: the null-container sentinel must be recognized before any
+/// array-header load on the by-reference foreach path, on every supported target.
+/// The guard placement follows the #533 convention: the sentinel check lives inside the
+/// copy-on-write runtime helpers (like `__rt_hash_iter_next`), `IterStart` folds a
+/// sentinel source to the canonical zero pointer in the iterator's private slot, and the
+/// per-iteration `IterNext` live-length read needs only the cheap zero check.
+/// Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
+#[test]
+fn test_byref_foreach_missing_source_emits_null_container_guards() {
+    let dir = make_cli_test_dir("elephc_byref_foreach_null_guards");
+    let (user_asm, runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] as &$v) { $v = 'changed'; }
+echo 'done';
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    // -- runtime: both COW helpers bail on the sentinel before the refcount load --
+    for helper in ["array_ensure_unique", "hash_ensure_unique"] {
+        let start = runtime_asm
+            .find(&format!("runtime: {helper}"))
+            .unwrap_or_else(|| panic!("missing {helper} runtime section"));
+        let section = &runtime_asm[start..];
+        let end = section[10..]
+            .find("--- runtime:")
+            .map(|pos| pos + 10)
+            .unwrap_or(section.len());
+        let section = &section[..end];
+        // Internal labels are `L`-prefixed on macOS only, so the bail branch is
+        // matched as branch mnemonic + label suffix on one line instead of verbatim.
+        let (sentinel_cmp, bail_branch, refcount_load) = match target().arch {
+            Arch::AArch64 => ("cmp x0, x9", "b.eq", "[x0, #-12]"),
+            Arch::X86_64 => ("cmp rdi, r10", "je", "[rdi - 12]"),
+        };
+        let done_label = format!("__rt_{helper}_done");
+        let cmp_pos = section
+            .find(sentinel_cmp)
+            .unwrap_or_else(|| panic!("{helper}: missing sentinel compare:\n{section}"));
+        // Scan for the bail line only after the sentinel compare: the plain null
+        // check earlier in the helper branches to the same done label (on x86_64
+        // with the same `je` mnemonic).
+        let after_cmp = &section[cmp_pos..];
+        let bail_pos = {
+            let mut offset = cmp_pos;
+            let mut found = None;
+            for line in after_cmp.lines() {
+                if line.contains(bail_branch) && line.contains(&done_label) {
+                    found = Some(offset);
+                    break;
+                }
+                offset += line.len() + 1;
+            }
+            found.unwrap_or_else(|| panic!("{helper}: missing sentinel bail branch:\n{section}"))
+        };
+        let refcount_pos = section
+            .find(refcount_load)
+            .unwrap_or_else(|| panic!("{helper}: missing refcount load:\n{section}"));
+        assert!(
+            cmp_pos < bail_pos && bail_pos < refcount_pos,
+            "{helper}: sentinel guard must precede the refcount load:\n{section}"
+        );
+    }
+
+    // -- IterStart: the sentinel source is folded to zero in the iterator slot --
+    let normalize = match target().arch {
+        Arch::AArch64 => "csel x0, xzr, x0, eq",
+        Arch::X86_64 => "cmove rax, r10",
+    };
+    assert!(
+        user_asm.contains(normalize),
+        "missing iter_start sentinel-to-zero normalization:\n{user_asm}"
+    );
+
+    // -- IterNext: the by-reference live-length read keeps its zero-source guard --
+    // Look for the label *definition* (a line ending with ':'), not the branch operand.
+    assert!(
+        user_asm
+            .lines()
+            .any(|line| line.trim_end().ends_with(':') && line.contains("iter_len_null_source")),
+        "missing iter_next zero-length guard label:\n{user_asm}"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Regression for issue #556: a missed read assigned to a local and then iterated
+/// by reference exercises the ensure-unique store-back path; the loop is skipped
+/// and the origin local still carries its null marker afterwards (a botched fix
+/// that normalized the local itself would make `??` keep an empty array instead).
+#[test]
+fn test_byref_foreach_over_missing_local_source_keeps_local_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+foreach ($arr as &$v) { $v = 'changed'; }
+$probe = $arr ?? 'was-null';
+echo is_array($probe) ? 'kept-array' : $probe;
+echo '|done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "was-null|done");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #556: the keyed by-reference form over a missed element
+/// skips the loop without binding a key or crashing.
+#[test]
+fn test_byref_foreach_keyed_over_first_index_miss_skips_loop() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+foreach ($a[7] as $k => &$v) { $v = 'changed'; echo 'k=' . $k; }
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Guard for issue #556: by-reference foreach still reads the live array length,
+/// so elements appended during iteration are visited exactly like PHP.
+#[test]
+fn test_byref_foreach_still_visits_elements_appended_during_iteration() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [10, 20];
+foreach ($a as &$v) {
+    if (count($a) < 3) { $a[] = 30; }
+    echo $v . ',';
+}
+echo 'done';
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "10,20,30,done");
+    assert_eq!(out.stderr, "");
+}
+
+// --- Issue #585: missed array read forwarded through a ternary merge into the boxed
+// Mixed array reader/writer (unguarded null-container sentinel) ---
+
+/// Regression for issue #585: a missed indexed read (`$rows[5]`) forwarded as one
+/// arm of a ternary whole-boxes into a Mixed whose payload pointer is the in-band
+/// null-container sentinel. Reading `$r[0] ?? "none"` must warn for the miss and
+/// yield the default instead of dereferencing the sentinel in `__rt_mixed_array_get`.
+/// `$argc` keeps the ternary runtime-live so the nullable-union boxing path (which
+/// bypasses `wider_type_for_merge`) is exercised instead of being constant-folded.
+#[test]
+fn test_ternary_missed_indexed_read_merge_read_yields_default() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+echo ($r[0] ?? "none"), "\n";
+echo "done", "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "none\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+}
+
+/// Guard for issue #585: the present ternary arm (taken when `$argc != 1` is false)
+/// still whole-boxes into a Mixed indexed array and reads back through the same
+/// guarded helper, so the sentinel guard does not regress valid boxed reads.
+#[test]
+fn test_ternary_indexed_merge_present_arm_reads_element() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc != 1 ? $rows[5] : ["a", "b"];
+echo ($r[0] ?? "none"), "\n";
+echo "done", "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "a\ndone\n");
+    assert_eq!(out.stderr, "");
+}
+
+/// Ordinary reads from a valid indexed array boxed behind Mixed diagnose missing
+/// integer and string keys, while the same keys under coalescing stay quiet.
+#[test]
+fn test_ternary_indexed_merge_present_arm_preserves_missing_key_warning_modes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc != 1 ? $rows[5] : ["a", "b"];
+var_dump($r[7]);
+echo ($r[8] ?? "quiet-int"), "\n";
+var_dump($r["missing"]);
+echo ($r["quiet"] ?? "quiet-string"), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\nquiet-int\nNULL\nquiet-string\n");
+    assert_eq!(out.stderr.matches("Warning: Undefined array key 7").count(), 1);
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Undefined array key \"missing\"")
+            .count(),
+        1
+    );
+    assert!(!out.stderr.contains("Undefined array key 8"));
+    assert!(!out.stderr.contains("Undefined array key \"quiet\""));
+}
+
+/// Regression for issue #585: the previously crashing read path must leave the heap
+/// clean — the boxed Mixed carrying the sentinel container is released like any other
+/// temporary rather than entering refcount traffic on a bogus pointer.
+#[test]
+fn test_ternary_missed_indexed_read_merge_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+echo ($r[0] ?? "none"), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "none\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression for issue #585 (sibling writer): an indexed write into the null
+/// produced by the same ternary merge autovivifies an array, matching PHP instead
+/// of dropping the write or dereferencing the legacy sentinel shape.
+#[test]
+fn test_ternary_missed_indexed_read_merge_write_autovivifies() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+$r[0] = "z";
+echo ($r[0] ?? "none"), "\n";
+echo "done", "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "z\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 5"));
+}
+
+/// Regression for issue #585 (sibling writer): the autovivified keyed write
+/// transfers the boxed value into the fresh array and leaves ownership balanced.
+#[test]
+fn test_ternary_missed_indexed_read_merge_write_is_heap_clean() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+$r[0] = "z";
+echo "done", "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// The malformed container-shaped Mixed no longer escapes boxing: ordinary reads
+/// see canonical PHP null (and warn), while coalescing reads stay quiet.
+#[test]
+fn test_ternary_missed_read_boxes_canonical_null_and_preserves_warning_mode() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["a", "b"];
+echo is_null($r) ? "null\n" : "not-null\n";
+echo $r === null ? "strict-null\n" : "not-strict-null\n";
+var_dump($r[0]);
+echo ($r[0] ?? "quiet"), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "null\nstrict-null\nNULL\nquiet\n");
+    assert_eq!(
+        out.stderr
+            .matches("Warning: Trying to access array offset on null")
+            .count(),
+        1
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 5").count(),
+        1
+    );
+}
+
+/// Sentinel-derived nulls stay canonical across non-indexing Mixed consumers:
+/// count/casts/empty, JSON encoding, and serialization must not dereference a
+/// container-shaped payload or observe it as an array.
+#[test]
+fn test_ternary_missed_read_structural_mixed_consumers_observe_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["fallback"];
+echo count($r), "\n";
+echo empty($r) ? "empty\n" : "not-empty\n";
+echo (int) $r, "\n";
+echo json_encode($r), "\n";
+echo serialize($r), "\n";
+echo zval_type(zval_pack($r)), "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "0\nempty\n0\nnull\nN;\n1\n");
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 5").count(),
+        1
+    );
+}
+
+/// Nullable container elements can be retained inside typed indexed and
+/// associative storage, whole-boxed, and read back as canonical nulls.
+#[test]
+fn test_ternary_missed_read_normalizes_sentinel_children_in_typed_containers() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [["present"]];
+$typed = [$rows[5]];
+$indexed = $argc == 1 ? $typed : [7];
+$typed_map = ["missed" => $rows[6]];
+$assoc = $argc == 1 ? $typed_map : ["missed" => 7];
+$set = [["seed"]];
+$set[0] = $rows[7];
+$assigned = $argc == 1 ? $set : [7];
+echo is_null($indexed[0]) && $indexed[0] === null ? "indexed-null\n" : "indexed-shape\n";
+echo is_null($assoc["missed"]) && $assoc["missed"] === null ? "assoc-null\n" : "assoc-shape\n";
+echo is_null($assigned[0]) && $assigned[0] === null ? "assigned-null\n" : "assigned-shape\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "indexed-null\nassoc-null\nassigned-null\n");
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 5").count(),
+        1
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 6").count(),
+        1
+    );
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 7").count(),
+        1
+    );
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+/// Keyed writes on sentinel-derived nulls follow PHP for integer, negative, and
+/// string keys; negative/string keys promote the fresh indexed array to hash storage.
+#[test]
+fn test_ternary_missed_read_keyed_writes_autovivify_all_key_shapes() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$rows = [[1, 2]];
+$a = $argc == 1 ? $rows[5] : ["fallback"];
+$a[0] = "zero";
+$b = $argc == 1 ? $rows[5] : ["fallback"];
+$b[-1] = "negative";
+$c = $argc == 1 ? $rows[5] : ["fallback"];
+$c["name"] = "string";
+echo $a[0], "|", $b[-1], "|", $c["name"], "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "zero|negative|string\n");
+    assert_eq!(
+        out.stderr.matches("Warning: Undefined array key 5").count(),
+        3
+    );
+}
+
+/// Nested keyed writes autovivify the null root in place, so the child created
+/// by fetch-for-write remains attached to the original Mixed local.
+#[test]
+fn test_ternary_missed_read_nested_write_autovivifies_root_in_place() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$rows = [[1, 2]];
+$r = $argc == 1 ? $rows[5] : ["fallback"];
+$r["outer"]["inner"] = "value";
+echo $r["outer"]["inner"], "\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "value\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected a clean heap, got: {}",
+        out.stderr
+    );
+}
+
+// --- Issue #581: var_dump() of a value carrying the null-container sentinel ---
+
+/// Regression for issue #581: the exact repro. `$a[7]` misses, so the Array-typed
+/// local `$arr` carries the in-band null-container sentinel. `var_dump($arr)` must
+/// print `NULL` and keep running instead of walking the sentinel as an array header.
+#[test]
+fn test_var_dump_missed_indexed_read_prints_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+var_dump($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Regression for issue #581: the same miss taken from a hash source, whose value
+/// type is an indexed array, reaches the identical Array dump branch.
+#[test]
+fn test_var_dump_missed_hash_read_of_array_value_prints_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ['k' => ['x', 'y']];
+$arr = $a['zz'];
+var_dump($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\ndone\n");
+    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+}
+
+/// Regression for issue #581: a hash source whose value type is itself a hash takes
+/// the `AssocArray` dump branch, which shares the same unguarded header walk.
+#[test]
+fn test_var_dump_missed_hash_read_of_hash_value_prints_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = ['k' => ['x' => 1]];
+$arr = $a['zz'];
+var_dump($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\ndone\n");
+    assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
+}
+
+/// Regression for issue #581: a miss forwarded through `?? null` keeps the sentinel
+/// payload while suppressing the warning; the dump must still print `NULL`.
+#[test]
+fn test_var_dump_missed_read_through_coalesce_null_prints_null() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7] ?? null;
+var_dump($arr);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "NULL\ndone\n");
+    assert_eq!(out.stderr, "");
+}
+
+/// Guard for issue #581: a genuine null local and a present array keep their existing
+/// renderings, so the added sentinel guard does not reroute live containers to `NULL`.
+#[test]
+fn test_var_dump_null_local_and_present_arrays_are_unchanged() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$n = null;
+var_dump($n);
+$a = [['x', 'y']];
+var_dump($a[0]);
+$h = ['k' => 'v'];
+var_dump($h);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "NULL\narray(2) {\n  [0]=>\n  string(1) \"x\"\n  [1]=>\n  string(1) \"y\"\n}\n\
+array(1) {\n  [\"k\"]=>\n  string(1) \"v\"\n}\ndone\n"
+    );
+    assert_eq!(out.stderr, "");
+}
+
+/// Regression for issue #581: the null-container sentinel must be recognized before the
+/// array-header load on the `var_dump` array branch, on every supported target. The plain
+/// zero check that used to guard this branch let the non-zero sentinel through, so the
+/// assertion is on ordering: the sentinel comparison has to precede the header load inside
+/// the array body. Run under `ELEPHC_TEST_TARGET` to cover the non-host architectures.
+#[test]
+fn test_var_dump_array_emits_null_container_guard_before_header_load() {
+    let dir = make_cli_test_dir("elephc_var_dump_null_container_guard");
+    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+$a = [['x', 'y']];
+$arr = $a[7];
+var_dump($arr);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    // The zero check branches to the null label first, so the label's first mention opens
+    // the array body and its definition closes it; the guard and the walk sit in between.
+    let body_start = user_asm
+        .find("var_dump_array_null")
+        .expect("missing var_dump array null branch");
+    let body_end = user_asm
+        .match_indices("var_dump_array_null")
+        .map(|(pos, _)| pos)
+        .find(|pos| user_asm[*pos..].lines().next().is_some_and(|l| l.ends_with(':')))
+        .expect("missing var_dump array null label definition");
+    let body = &user_asm[body_start..body_end];
+
+    let (sentinel_cmp, header_load) = match target().arch {
+        Arch::AArch64 => ("cmp x0, x10", "ldr x0, [x0]"),
+        Arch::X86_64 => ("cmp rax, r10", "mov rax, QWORD PTR [rax]"),
+    };
+    let cmp_pos = body
+        .find(sentinel_cmp)
+        .unwrap_or_else(|| panic!("missing sentinel comparison `{sentinel_cmp}` in:\n{body}"));
+    let load_pos = body
+        .find(header_load)
+        .unwrap_or_else(|| panic!("missing array header load `{header_load}` in:\n{body}"));
+    assert!(
+        cmp_pos < load_pos,
+        "sentinel comparison must precede the array header load, got:\n{body}"
+    );
+}

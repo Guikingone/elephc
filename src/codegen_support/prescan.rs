@@ -29,6 +29,17 @@ use crate::types::PhpType;
 /// stream handles (`STDIN`/`STDOUT`/`STDERR`), `LOCK_*` values, array callback-mode
 /// constants, `JSON_*` integer constants, and `PREG_*` integer constants. User constants
 /// come from `const` declarations and `define()` calls discovered by `collect_constant_decls`.
+///
+/// The PHP VERSION SURFACE (`PHP_VERSION`, `PHP_VERSION_ID`, `PHP_MAJOR_VERSION`,
+/// `PHP_MINOR_VERSION`, `PHP_RELEASE_VERSION`, `PHP_EXTRA_VERSION`) and `PHP_SAPI` are baked
+/// here through exactly the same mechanism as `PHP_OS`: a literal seeded into this map, whose
+/// type is declared in `types::checker::driver::init` and whose name bypasses symbol-table
+/// resolution in `name_resolver::names::is_builtin_global_constant`. Their values come from the
+/// compilation's `--php-version` profile and `--web` mode, read from the codegen thread-local
+/// pair (`compile_php_version` / `compile_is_web_sapi`) rather than from a parameter, because
+/// this function sits under `ir_lower::lower` which does not carry the profile. See
+/// `web_prelude::PhpVersion::version_string` for the version rule and `web_prelude::sapi_name`
+/// for the SAPI mapping.
 pub(crate) fn collect_constants(
     program: &Program,
     target_platform: Platform,
@@ -38,6 +49,59 @@ pub(crate) fn collect_constants(
         "PHP_OS".to_string(),
         (
             ExprKind::StringLiteral(target_platform.php_os_name().to_string()),
+            PhpType::Str,
+        ),
+    );
+    let php_version = crate::codegen_support::compile_php_version();
+    constants.insert(
+        "PHP_VERSION".to_string(),
+        (
+            ExprKind::StringLiteral(php_version.version_string().to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "PHP_VERSION_ID".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(php_version.version_id())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "PHP_MAJOR_VERSION".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(php_version.major())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "PHP_MINOR_VERSION".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(php_version.minor())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "PHP_RELEASE_VERSION".to_string(),
+        (
+            ExprKind::IntLiteral(i64::from(php_version.release())),
+            PhpType::Int,
+        ),
+    );
+    constants.insert(
+        "PHP_EXTRA_VERSION".to_string(),
+        (
+            ExprKind::StringLiteral(php_version.extra_version().to_string()),
+            PhpType::Str,
+        ),
+    );
+    constants.insert(
+        "PHP_SAPI".to_string(),
+        (
+            ExprKind::StringLiteral(
+                crate::web_prelude::sapi_name(crate::codegen_support::compile_is_web_sapi())
+                    .to_string(),
+            ),
             PhpType::Str,
         ),
     );
@@ -162,6 +226,89 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    // Lexer-tokenized numeric / math constants (also reachable via `use const` aliases).
+    constants.insert(
+        "PHP_INT_MAX".to_string(),
+        (ExprKind::IntLiteral(i64::MAX), PhpType::Int),
+    );
+    constants.insert(
+        "PHP_INT_MIN".to_string(),
+        (ExprKind::IntLiteral(i64::MIN), PhpType::Int),
+    );
+    constants.insert(
+        "PHP_FLOAT_MAX".to_string(),
+        (ExprKind::FloatLiteral(f64::MAX), PhpType::Float),
+    );
+    constants.insert(
+        "PHP_FLOAT_MIN".to_string(),
+        (ExprKind::FloatLiteral(f64::MIN_POSITIVE), PhpType::Float),
+    );
+    constants.insert(
+        "PHP_FLOAT_EPSILON".to_string(),
+        (ExprKind::FloatLiteral(f64::EPSILON), PhpType::Float),
+    );
+    constants.insert(
+        "INF".to_string(),
+        (ExprKind::FloatLiteral(f64::INFINITY), PhpType::Float),
+    );
+    constants.insert(
+        "NAN".to_string(),
+        (ExprKind::FloatLiteral(f64::NAN), PhpType::Float),
+    );
+    constants.insert(
+        "M_PI".to_string(),
+        (ExprKind::FloatLiteral(std::f64::consts::PI), PhpType::Float),
+    );
+    constants.insert(
+        "M_E".to_string(),
+        (ExprKind::FloatLiteral(std::f64::consts::E), PhpType::Float),
+    );
+    constants.insert(
+        "M_SQRT2".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::SQRT_2),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "M_PI_2".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_2),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "M_PI_4".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::FRAC_PI_4),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "M_LOG2E".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::LOG2_E),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "M_LOG10E".to_string(),
+        (
+            ExprKind::FloatLiteral(std::f64::consts::LOG10_E),
+            PhpType::Float,
+        ),
+    );
+    constants.insert(
+        "PHP_EOL".to_string(),
+        (ExprKind::StringLiteral("\n".to_string()), PhpType::Str),
+    );
+    constants.insert(
+        "DIRECTORY_SEPARATOR".to_string(),
+        (
+            ExprKind::StringLiteral(std::path::MAIN_SEPARATOR.to_string()),
+            PhpType::Str,
+        ),
+    );
     collect_constant_decls(program, &mut constants);
     constants
 }
