@@ -61,7 +61,7 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("fgetcsv"),
-            Some(["stream", "length", "separator"].as_slice())
+            Some(["stream", "length", "separator", "enclosure", "escape"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_default_value("fgetcsv", 2),
