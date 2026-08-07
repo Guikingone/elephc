@@ -31,6 +31,7 @@ pub(super) fn emit_resource_registry_x86_64(emitter: &mut Emitter) {
     emit_resource_retain(emitter);
     emit_resource_release(emitter);
     emit_registry_request_reset(emitter);
+    emit_registry_teardown(emitter);
     emit_resource_mark_closing(emitter);
     emit_resource_mark_closed(emitter);
     emit_resource_id_of_registry(emitter);
@@ -690,6 +691,37 @@ fn emit_registry_request_reset(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 64");                                         // release request-reset scratch storage
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return after deterministic request shutdown
+}
+
+/// Emits process-exit teardown: releases the slot array `__rt_resource_registry_init`
+/// allocated and resets the globals so a later init starts from a clean registry.
+///
+/// This is the counterpart of init, NOT of the request reset. A `--web` worker reuses
+/// one slot array across requests and must only run the request reset; the CLI epilogue
+/// runs this afterwards so the array does not show up as a leaked block under
+/// `--heap-debug` in every program, stream-using or not.
+fn emit_registry_teardown(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: release the opaque resource registry at process exit ---");
+    emitter.label_global("__rt_resource_registry_teardown");
+    emitter.instruction("sub rsp, 8");                                          // realign the stack for the heap-free call
+    abi::emit_symbol_address(emitter, "r9", "_resource_registry_ptr");
+    emitter.instruction("mov rdi, QWORD PTR [r9]");                             // load the dynamic slot-array pointer
+    emitter.instruction("test rdi, rdi");                                       // has the registry ever been initialized?
+    emitter.instruction("jz __rt_resource_registry_teardown_done");             // an uninitialized registry owns no storage
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // clear the pointer before freeing it
+    emitter.instruction("call __rt_heap_free");                                 // release the dynamic registry slot array
+    abi::emit_symbol_address(emitter, "r9", "_resource_registry_len");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // no slots remain initialized
+    abi::emit_symbol_address(emitter, "r9", "_resource_registry_cap");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // no capacity remains
+    abi::emit_symbol_address(emitter, "r9", "_resource_registry_free");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // drop the free-list head with its storage
+    abi::emit_symbol_address(emitter, "r9", "_resource_registry_live");
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // no live resources remain
+    emitter.label("__rt_resource_registry_teardown_done");
+    emitter.instruction("add rsp, 8");                                          // release the alignment padding
+    emitter.instruction("ret");
 }
 
 /// Emits the x86_64 Live-to-Closing lifecycle transition.

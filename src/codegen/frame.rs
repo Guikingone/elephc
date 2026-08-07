@@ -285,6 +285,14 @@ pub(super) fn emit_main_epilogue(ctx: &mut FunctionContext<'_>) {
     emit_main_local_epilogue_cleanup(ctx);
     emit_main_static_local_cleanup(ctx);
     emit_main_global_epilogue_cleanup(ctx);
+    // Deterministic resource shutdown, symmetric with the per-request reset the
+    // --web path already performs at frame.rs:420. Without it a CLI program leaks
+    // every request-owned resource still live at exit, most visibly the default
+    // stream context that the first stream open creates.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_request_reset");
+    // Then release the slot array itself. Only the CLI does this: a --web worker
+    // reuses one registry across requests, so it stops at the request reset above.
+    abi::emit_call_label(ctx.emitter, "__rt_resource_registry_teardown");
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     if ctx.gc_stats {
