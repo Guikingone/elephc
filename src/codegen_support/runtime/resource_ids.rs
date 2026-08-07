@@ -530,14 +530,38 @@ mod tests {
         }
     }
 
-    /// The AArch64 helpers must never end a body with `ret` after an internal `bl`,
-    /// and in fact contain no `bl` at all: they are leaf helpers so the call sites
-    /// (including `__rt_mixed_from_value`, mid-allocation) cannot lose `x30`.
+    /// These stopped being leaf helpers when `__rt_resource_id_of` began asking the
+    /// authoritative registry first, so the property that actually protects the call
+    /// sites (including `__rt_mixed_from_value`, mid-allocation) is no longer "contains
+    /// no `bl`" but "never loses `x30` across the one it does contain".
+    ///
+    /// The save is the `stp x0, x30` that also preserves the candidate handle, and BOTH
+    /// paths out of the lookup must undo it: the registry hit reloads `x30` and drops the
+    /// slot, the legacy miss pops the pair back.
     #[test]
-    fn aarch64_helpers_are_leaf_helpers() {
+    fn aarch64_helpers_preserve_the_link_register_across_the_registry_lookup() {
         let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
         emit_resource_ids(&mut emitter);
         let asm = emitter.output();
-        assert!(!asm.contains("    bl "), "resource-id helpers must stay leaf helpers:\n{asm}");
+        assert_eq!(
+            asm.matches("    bl ").count(),
+            1,
+            "only the registry lookup may be called:\n{asm}"
+        );
+        let (before, after) = asm
+            .split_once("    bl __rt_resource_id_of_registry\n")
+            .expect("the registry lookup must be emitted");
+        assert!(
+            before.contains("    stp x0, x30, [sp, #-16]!\n"),
+            "the link register must be saved BEFORE the lookup:\n{asm}"
+        );
+        assert!(
+            after.contains("    ldr x30, [sp, #8]\n"),
+            "the registry-hit path must restore the link register:\n{asm}"
+        );
+        assert!(
+            after.contains("    ldp x0, x30, [sp], #16\n"),
+            "the legacy path must restore the link register:\n{asm}"
+        );
     }
 }
