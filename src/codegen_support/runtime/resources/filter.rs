@@ -1,0 +1,546 @@
+//! Purpose:
+//! Emits the stream-filter resource primitives: `__rt_filter_state` (opaque
+//! handle → FilterState), `__rt_filter_create`, and the doubly linked chain
+//! operations `__rt_stream_filter_link` / `__rt_stream_filter_unlink`.
+//!
+//! Called from:
+//! - `crate::codegen_support::runtime::resources::emit_resources()`.
+//! - `stream_filter_append` / `stream_filter_prepend` / `stream_filter_remove`
+//!   lowering, and stream teardown when closing still-attached filters.
+//!
+//! Key details:
+//! - PHP hands `stream_filter_append()` back a resource whose lifetime is
+//!   observable: `stream_filter_remove()` closes it, and closing the owning
+//!   stream closes every filter still attached. Modelling filters as registry
+//!   resources is what makes `is_resource()` report that invalidation.
+//! - The chain is doubly linked so a middle node can be unlinked without
+//!   disturbing its neighbours. The previous design stored two filter-id bytes
+//!   per descriptor and could not represent a third filter at all.
+//! - Read and write chains are separate lists rooted in StreamState. A filter
+//!   attached with `STREAM_FILTER_ALL` is linked into both, which is why the
+//!   direction bits are stored per node rather than inferred from the root.
+
+use crate::codegen_support::runtime::resources::layout::{
+    FILTER_BUILTIN_ID_OFFSET, FILTER_DIRECTION_OFFSET, FILTER_FLAGS_OFFSET, FILTER_NEXT_OFFSET,
+    FILTER_OBJECT_OFFSET, FILTER_PARAMS_OFFSET, FILTER_PREV_OFFSET, FILTER_STATE_SIZE,
+    FILTER_STREAM_HANDLE_OFFSET, RESOURCE_KIND_FILTER, RESOURCE_STATUS_LIVE,
+    SLOT_KIND_OFFSET, SLOT_STATE_PTR_OFFSET, SLOT_STATUS_OFFSET,
+};
+use crate::codegen_support::{emit::Emitter, platform::Arch};
+
+/// Emits every filter-resource runtime helper for the active target.
+pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emit_filter_state_aarch64(emitter);
+            emit_filter_create_aarch64(emitter);
+            emit_filter_link_aarch64(emitter);
+            emit_filter_unlink_aarch64(emitter);
+        }
+        Arch::X86_64 => {
+            emit_filter_state_x86_64(emitter);
+            emit_filter_create_x86_64(emitter);
+            emit_filter_link_x86_64(emitter);
+            emit_filter_unlink_x86_64(emitter);
+        }
+    }
+}
+
+/// `__rt_filter_state(handle) -> FilterState*` (AArch64), null when not a live filter.
+fn emit_filter_state_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: resolve an opaque stream-filter state ---");
+    emitter.label_global("__rt_filter_state");
+    emitter.instruction("sub sp, sp, #16");                                     // preserve the link register around generic lookup
+    emitter.instruction("str x30, [sp, #8]");                                   // save the caller link register
+    emitter.instruction("bl __rt_resource_lookup_any");                         // validate and resolve the opaque handle
+    emitter.instruction("cbz x0, __rt_filter_state_fail");                      // reject invalid or stale resources
+    emitter.instruction(&format!("ldr x9, [x0, #{SLOT_KIND_OFFSET}]"));         // load the registry resource kind
+    emitter.instruction(&format!("cmp x9, #{RESOURCE_KIND_FILTER}"));           // is the slot a stream filter?
+    emitter.instruction("b.ne __rt_filter_state_fail");                         // reject streams, contexts, and other resources
+    emitter.instruction(&format!("ldr x9, [x0, #{SLOT_STATUS_OFFSET}]"));       // load the filter lifecycle state
+    emitter.instruction(&format!("cmp x9, #{RESOURCE_STATUS_LIVE}"));           // only Live filters expose their state
+    emitter.instruction("b.ne __rt_filter_state_fail");                         // reject Closing and Closed filters
+    emitter.instruction(&format!("ldr x0, [x0, #{SLOT_STATE_PTR_OFFSET}]"));    // return the stable filter-state pointer
+    emitter.instruction("b __rt_filter_state_done");                            // join the helper epilogue
+    emitter.label("__rt_filter_state_fail");
+    emitter.instruction("mov x0, #0");                                          // return null for invalid filter resources
+    emitter.label("__rt_filter_state_done");
+    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
+    emitter.instruction("add sp, sp, #16");                                     // release the aligned link-register save
+    emitter.instruction("ret");                                                 // return the filter-state pointer or null
+}
+
+/// `__rt_filter_create(builtin_id, obj, direction, params) -> handle` (AArch64).
+///
+/// Allocates a zeroed FilterState, seeds it, and registers it as a filter
+/// resource. Returns 0 when the heap or the registry is exhausted.
+fn emit_filter_create_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: create a stream-filter resource ---");
+    emitter.label_global("__rt_filter_create");
+    // Frame: [0]=builtin id [8]=obj [16]=direction [24]=params [32]=state ptr
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the creation frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the built-in filter id
+    emitter.instruction("str x1, [sp, #8]");                                    // preserve the user-filter object
+    emitter.instruction("str x2, [sp, #16]");                                   // preserve the direction bits
+    emitter.instruction("str x3, [sp, #24]");                                   // preserve the retained params value
+
+    emitter.instruction(&format!("mov x0, #{FILTER_STATE_SIZE}"));              // FilterState payload size
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the stable filter state
+    emitter.instruction("cbz x0, __rt_filter_create_fail");                     // heap exhausted
+    emitter.instruction("str x0, [sp, #32]");                                   // spill the state pointer across the registry call
+
+    // -- zero the payload so both chain links start empty --
+    emitter.instruction("mov x9, #0");                                          // byte cursor
+    emitter.label("__rt_filter_create_zero");
+    emitter.instruction(&format!("cmp x9, #{FILTER_STATE_SIZE}"));              // cleared every byte?
+    emitter.instruction("b.ge __rt_filter_create_zeroed");
+    emitter.instruction("str xzr, [x0, x9]");                                   // clear one word
+    emitter.instruction("add x9, x9, #8");                                      // advance the cursor
+    emitter.instruction("b __rt_filter_create_zero");
+    emitter.label("__rt_filter_create_zeroed");
+
+    // -- seed the descriptor fields --
+    emitter.instruction("ldr x9, [sp, #0]");
+    emitter.instruction(&format!("str x9, [x0, #{FILTER_BUILTIN_ID_OFFSET}]")); // built-in filter id (0 for user filters)
+    emitter.instruction("ldr x9, [sp, #8]");
+    emitter.instruction(&format!("str x9, [x0, #{FILTER_OBJECT_OFFSET}]"));     // php_user_filter instance
+    emitter.instruction("ldr x9, [sp, #16]");
+    emitter.instruction(&format!("str x9, [x0, #{FILTER_DIRECTION_OFFSET}]"));  // direction bits
+    emitter.instruction("ldr x9, [sp, #24]");
+    emitter.instruction(&format!("str x9, [x0, #{FILTER_PARAMS_OFFSET}]"));     // retained params value
+
+    // -- register the filter as an owned resource --
+    emitter.instruction("mov x1, x0");                                          // stable state pointer
+    emitter.instruction(&format!("mov x0, #{RESOURCE_KIND_FILTER}"));           // resource kind
+    emitter.instruction("mov x2, #1");                                          // RESOURCE_FLAG_OWNS_STATE
+    emitter.instruction("bl __rt_resource_alloc");                              // x0 = opaque filter handle (0 on failure)
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the creation frame
+    emitter.instruction("ret");                                                 // return the filter handle
+
+    emitter.label("__rt_filter_create_fail");
+    emitter.instruction("mov x0, #0");                                          // report allocation failure
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the creation frame
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// `__rt_stream_filter_link(stream_handle, filter_handle, head_offset, prepend)` (AArch64).
+///
+/// Links a filter node into one direction's chain. `prepend` non-zero inserts at
+/// the head; otherwise the node is appended at the tail, which is what
+/// `stream_filter_append()` needs so the chain applies in attachment order.
+fn emit_filter_link_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: link a filter into a stream chain ---");
+    emitter.label_global("__rt_stream_filter_link");
+    // Frame: [0]=stream handle [8]=filter handle [16]=head offset [24]=prepend
+    //        [32]=filter state [40]=stream state
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the link frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the owning stream handle
+    emitter.instruction("str x1, [sp, #8]");                                    // preserve the filter handle
+    emitter.instruction("str x2, [sp, #16]");                                   // preserve the chain-head byte offset
+    emitter.instruction("str x3, [sp, #24]");                                   // preserve the prepend flag
+
+    emitter.instruction("mov x0, x1");                                          // resolve the filter state
+    emitter.instruction("bl __rt_filter_state");
+    emitter.instruction("cbz x0, __rt_filter_link_fail");                       // reject a dead filter handle
+    emitter.instruction("str x0, [sp, #32]");                                   // spill the filter state
+    emitter.instruction("ldr x0, [sp, #0]");                                    // resolve the owning stream state
+    emitter.instruction("bl __rt_stream_state");
+    emitter.instruction("cbz x0, __rt_filter_link_fail");                       // reject a dead stream handle
+    emitter.instruction("str x0, [sp, #40]");                                   // spill the stream state
+
+    // -- record the owner so removal can find this chain again --
+    emitter.instruction("ldr x9, [sp, #32]");                                   // filter state
+    emitter.instruction("ldr x10, [sp, #0]");                                   // owning stream handle
+    emitter.instruction(&format!(
+        "str x10, [x9, #{FILTER_STREAM_HANDLE_OFFSET}]"
+    ));                                                                         // remember the owning stream
+
+    emitter.instruction("ldr x11, [sp, #16]");                                  // chain-head offset within StreamState
+    emitter.instruction("ldr x12, [sp, #40]");                                  // stream state
+    emitter.instruction("add x11, x12, x11");                                   // address of the chain head slot
+    emitter.instruction("ldr x13, [x11]");                                      // current head filter handle
+    emitter.instruction("ldr x14, [sp, #24]");                                  // prepend flag
+    emitter.instruction("cbz x14, __rt_filter_link_append");                    // append is the stream_filter_append path
+
+    // -- prepend: the new node becomes the head --
+    emitter.instruction("ldr x15, [sp, #8]");                                   // the new filter handle
+    emitter.instruction(&format!("str x13, [x9, #{FILTER_NEXT_OFFSET}]"));      // new->next = old head
+    emitter.instruction(&format!("str xzr, [x9, #{FILTER_PREV_OFFSET}]"));      // new->prev = none
+    emitter.instruction("str x15, [x11]");                                      // head = new node
+    emitter.instruction("cbz x13, __rt_filter_link_ok");                        // empty chain: nothing to back-link
+    emitter.instruction("mov x0, x13");                                         // resolve the previous head
+    emitter.instruction("bl __rt_filter_state");
+    emitter.instruction("cbz x0, __rt_filter_link_ok");                         // a stale head simply ends the chain
+    emitter.instruction("ldr x15, [sp, #8]");                                   // reload the new filter handle
+    emitter.instruction(&format!("str x15, [x0, #{FILTER_PREV_OFFSET}]"));      // old head->prev = new node
+    emitter.instruction("b __rt_filter_link_ok");
+
+    // -- append: walk to the tail and link there --
+    emitter.label("__rt_filter_link_append");
+    emitter.instruction("cbnz x13, __rt_filter_link_walk");                     // non-empty chain: find the tail
+    emitter.instruction("ldr x15, [sp, #8]");                                   // the new filter handle
+    emitter.instruction("str x15, [x11]");                                      // empty chain: the node is the head
+    emitter.instruction("b __rt_filter_link_ok");
+
+    emitter.label("__rt_filter_link_walk");
+    emitter.instruction("mov x0, x13");                                         // resolve the current node
+    emitter.instruction("bl __rt_filter_state");
+    emitter.instruction("cbz x0, __rt_filter_link_fail");                       // a broken chain cannot be extended
+    emitter.instruction(&format!("ldr x14, [x0, #{FILTER_NEXT_OFFSET}]"));      // next handle
+    emitter.instruction("cbz x14, __rt_filter_link_tail");                      // reached the tail
+    emitter.instruction("mov x13, x14");                                        // advance to the next node
+    emitter.instruction("b __rt_filter_link_walk");
+
+    emitter.label("__rt_filter_link_tail");
+    emitter.instruction("ldr x15, [sp, #8]");                                   // the new filter handle
+    emitter.instruction(&format!("str x15, [x0, #{FILTER_NEXT_OFFSET}]"));      // tail->next = new node
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the new filter state
+    emitter.instruction(&format!("str x13, [x9, #{FILTER_PREV_OFFSET}]"));      // new->prev = old tail
+    emitter.instruction(&format!("str xzr, [x9, #{FILTER_NEXT_OFFSET}]"));      // new->next = none
+
+    emitter.label("__rt_filter_link_ok");
+    emitter.instruction("mov x0, #1");                                          // report success
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the link frame
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_filter_link_fail");
+    emitter.instruction("mov x0, #0");                                          // report failure
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the link frame
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// `__rt_stream_filter_unlink(filter_handle, head_offset)` (AArch64).
+///
+/// Detaches one node from a chain, repairing both neighbours. The head slot is
+/// only rewritten when the removed node actually was the head, so removing a
+/// middle node leaves its neighbours attached.
+fn emit_filter_unlink_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: unlink a filter from a stream chain ---");
+    emitter.label_global("__rt_stream_filter_unlink");
+    // Frame: [0]=filter handle [8]=head offset [16]=prev [24]=next [32]=filter state
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the unlink frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the filter handle
+    emitter.instruction("str x1, [sp, #8]");                                    // preserve the chain-head byte offset
+
+    emitter.instruction("bl __rt_filter_state");                                // resolve the filter state
+    emitter.instruction("cbz x0, __rt_filter_unlink_fail");                     // nothing to unlink
+    emitter.instruction("str x0, [sp, #32]");                                   // spill the filter state
+    emitter.instruction(&format!("ldr x9, [x0, #{FILTER_PREV_OFFSET}]"));       // previous node handle
+    emitter.instruction("str x9, [sp, #16]");
+    emitter.instruction(&format!("ldr x10, [x0, #{FILTER_NEXT_OFFSET}]"));      // next node handle
+    emitter.instruction("str x10, [sp, #24]");
+
+    // -- prev->next = next, or move the chain head when this node was first --
+    emitter.instruction("ldr x9, [sp, #16]");
+    emitter.instruction("cbz x9, __rt_filter_unlink_was_head");                 // no predecessor: this node was the head
+    emitter.instruction("mov x0, x9");                                          // resolve the predecessor
+    emitter.instruction("bl __rt_filter_state");
+    emitter.instruction("cbz x0, __rt_filter_unlink_next");                     // a stale predecessor needs no repair
+    emitter.instruction("ldr x10, [sp, #24]");                                  // successor handle
+    emitter.instruction(&format!("str x10, [x0, #{FILTER_NEXT_OFFSET}]"));      // prev->next = next
+    emitter.instruction("b __rt_filter_unlink_next");
+
+    emitter.label("__rt_filter_unlink_was_head");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the removed filter state
+    emitter.instruction(&format!(
+        "ldr x0, [x0, #{FILTER_STREAM_HANDLE_OFFSET}]"
+    ));                                                                         // the owning stream handle
+    emitter.instruction("cbz x0, __rt_filter_unlink_next");                     // detached node: no chain to repair
+    emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
+    emitter.instruction("cbz x0, __rt_filter_unlink_next");                     // the stream is gone: nothing to repair
+    emitter.instruction("ldr x11, [sp, #8]");                                   // chain-head offset
+    emitter.instruction("add x11, x0, x11");                                    // address of the chain head slot
+    emitter.instruction("ldr x10, [sp, #24]");                                  // successor handle
+    emitter.instruction("str x10, [x11]");                                      // head = next
+
+    // -- next->prev = prev --
+    emitter.label("__rt_filter_unlink_next");
+    emitter.instruction("ldr x10, [sp, #24]");
+    emitter.instruction("cbz x10, __rt_filter_unlink_ok");                      // no successor to repair
+    emitter.instruction("mov x0, x10");                                         // resolve the successor
+    emitter.instruction("bl __rt_filter_state");
+    emitter.instruction("cbz x0, __rt_filter_unlink_ok");                       // a stale successor needs no repair
+    emitter.instruction("ldr x9, [sp, #16]");                                   // predecessor handle
+    emitter.instruction(&format!("str x9, [x0, #{FILTER_PREV_OFFSET}]"));       // next->prev = prev
+
+    emitter.label("__rt_filter_unlink_ok");
+    // -- isolate the removed node so a double removal is inert --
+    emitter.instruction("ldr x0, [sp, #32]");
+    emitter.instruction(&format!("str xzr, [x0, #{FILTER_NEXT_OFFSET}]"));
+    emitter.instruction(&format!("str xzr, [x0, #{FILTER_PREV_OFFSET}]"));
+    emitter.instruction(&format!("str xzr, [x0, #{FILTER_STREAM_HANDLE_OFFSET}]"));
+    emitter.instruction("mov x0, #1");                                          // report success
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the unlink frame
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_filter_unlink_fail");
+    emitter.instruction("mov x0, #0");                                          // report failure
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the unlink frame
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// x86_64 variant of [`emit_filter_state_aarch64`].
+fn emit_filter_state_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: resolve an opaque stream-filter state ---");
+    emitter.label_global("__rt_filter_state");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable lookup frame
+    emitter.instruction("call __rt_resource_lookup_any");                       // validate and resolve the opaque handle
+    emitter.instruction("test rax, rax");                                       // did the handle resolve?
+    emitter.instruction("jz __rt_filter_state_fail");                           // reject invalid or stale resources
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {SLOT_KIND_OFFSET}]")); // registry resource kind
+    emitter.instruction(&format!("cmp r10, {RESOURCE_KIND_FILTER}"));           // is the slot a stream filter?
+    emitter.instruction("jne __rt_filter_state_fail");                          // reject streams, contexts, and other resources
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {SLOT_STATUS_OFFSET}]")); // lifecycle state
+    emitter.instruction(&format!("cmp r10, {RESOURCE_STATUS_LIVE}"));           // only Live filters expose their state
+    emitter.instruction("jne __rt_filter_state_fail");                          // reject Closing and Closed filters
+    emitter.instruction(&format!("mov rax, QWORD PTR [rax + {SLOT_STATE_PTR_OFFSET}]")); // stable filter-state pointer
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the filter-state pointer
+    emitter.label("__rt_filter_state_fail");
+    emitter.instruction("xor eax, eax");                                        // return null for invalid filter resources
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// x86_64 variant of [`emit_filter_create_aarch64`].
+fn emit_filter_create_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: create a stream-filter resource ---");
+    emitter.label_global("__rt_filter_create");
+    // Frame: [-8]=builtin id [-16]=obj [-24]=direction [-32]=params [-40]=state ptr
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the creation frame
+    emitter.instruction("sub rsp, 48");                                         // reserve spill slots (keeps rsp 16-byte aligned)
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the built-in filter id
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the user-filter object
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the direction bits
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // preserve the retained params value
+
+    emitter.instruction(&format!("mov rax, {FILTER_STATE_SIZE}"));              // FilterState payload size
+    emitter.instruction("call __rt_heap_alloc");                                // allocate the stable filter state
+    emitter.instruction("test rax, rax");                                       // heap exhausted?
+    emitter.instruction("jz __rt_filter_create_fail");
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // spill the state pointer
+
+    // -- zero the payload so both chain links start empty --
+    emitter.instruction("xor rcx, rcx");                                        // byte cursor
+    emitter.label("__rt_filter_create_zero");
+    emitter.instruction(&format!("cmp rcx, {FILTER_STATE_SIZE}"));              // cleared every byte?
+    emitter.instruction("jge __rt_filter_create_zeroed");
+    emitter.instruction("mov QWORD PTR [rax + rcx], 0");                        // clear one word
+    emitter.instruction("add rcx, 8");                                          // advance the cursor
+    emitter.instruction("jmp __rt_filter_create_zero");
+    emitter.label("__rt_filter_create_zeroed");
+
+    // -- seed the descriptor fields --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_BUILTIN_ID_OFFSET}], r10")); // built-in filter id
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_OBJECT_OFFSET}], r10")); // php_user_filter instance
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_DIRECTION_OFFSET}], r10")); // direction bits
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_PARAMS_OFFSET}], r10")); // retained params value
+
+    // -- register the filter as an owned resource --
+    emitter.instruction("mov rsi, rax");                                        // stable state pointer
+    emitter.instruction(&format!("mov rdi, {RESOURCE_KIND_FILTER}"));           // resource kind
+    emitter.instruction("mov rdx, 1");                                          // RESOURCE_FLAG_OWNS_STATE
+    emitter.instruction("call __rt_resource_alloc");                            // rax = opaque filter handle (0 on failure)
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return the filter handle
+
+    emitter.label("__rt_filter_create_fail");
+    emitter.instruction("xor eax, eax");                                        // report allocation failure
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// x86_64 variant of [`emit_filter_link_aarch64`].
+fn emit_filter_link_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: link a filter into a stream chain ---");
+    emitter.label_global("__rt_stream_filter_link");
+    // Frame: [-8]=stream handle [-16]=filter handle [-24]=head offset
+    //        [-32]=prepend [-40]=filter state [-48]=stream state
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the link frame
+    emitter.instruction("sub rsp, 64");                                         // reserve spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the owning stream handle
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the filter handle
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the chain-head byte offset
+    emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // preserve the prepend flag
+
+    emitter.instruction("mov rdi, rsi");                                        // resolve the filter state
+    emitter.instruction("call __rt_filter_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_link_fail");                            // reject a dead filter handle
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // spill the filter state
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // resolve the owning stream state
+    emitter.instruction("call __rt_stream_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_link_fail");                            // reject a dead stream handle
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // spill the stream state
+
+    // -- record the owner so removal can find this chain again --
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // filter state
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // owning stream handle
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {FILTER_STREAM_HANDLE_OFFSET}], r10"));
+
+    emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // chain-head offset
+    emitter.instruction("add r11, QWORD PTR [rbp - 48]");                       // address of the chain head slot
+    emitter.instruction("mov r8, QWORD PTR [r11]");                             // current head filter handle
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // prepend flag
+    emitter.instruction("test rcx, rcx");
+    emitter.instruction("jz __rt_filter_link_append_x");                        // append is the stream_filter_append path
+
+    // -- prepend: the new node becomes the head --
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // the new filter handle
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {FILTER_NEXT_OFFSET}], r8")); // new->next = old head
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {FILTER_PREV_OFFSET}], 0")); // new->prev = none
+    emitter.instruction("mov QWORD PTR [r11], rdx");                            // head = new node
+    emitter.instruction("test r8, r8");
+    emitter.instruction("jz __rt_filter_link_ok_x");                            // empty chain: nothing to back-link
+    emitter.instruction("mov rdi, r8");                                         // resolve the previous head
+    emitter.instruction("call __rt_filter_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_link_ok_x");                            // a stale head simply ends the chain
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // reload the new filter handle
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_PREV_OFFSET}], rdx")); // old head->prev = new node
+    emitter.instruction("jmp __rt_filter_link_ok_x");
+
+    // -- append: walk to the tail and link there --
+    emitter.label("__rt_filter_link_append_x");
+    emitter.instruction("test r8, r8");
+    emitter.instruction("jnz __rt_filter_link_walk_x");                         // non-empty chain: find the tail
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // the new filter handle
+    emitter.instruction("mov QWORD PTR [r11], rdx");                            // empty chain: the node is the head
+    emitter.instruction("jmp __rt_filter_link_ok_x");
+
+    emitter.label("__rt_filter_link_walk_x");
+    emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // spill the current node handle
+    emitter.instruction("mov rdi, r8");                                         // resolve the current node
+    emitter.instruction("call __rt_filter_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_link_fail");                            // a broken chain cannot be extended
+    emitter.instruction(&format!("mov r8, QWORD PTR [rax + {FILTER_NEXT_OFFSET}]")); // next handle
+    emitter.instruction("test r8, r8");
+    emitter.instruction("jz __rt_filter_link_tail_x");                          // reached the tail
+    emitter.instruction("jmp __rt_filter_link_walk_x");                         // advance to the next node
+
+    emitter.label("__rt_filter_link_tail_x");
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // the new filter handle
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_NEXT_OFFSET}], rdx")); // tail->next = new node
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // reload the new filter state
+    emitter.instruction("mov r10, QWORD PTR [rbp - 56]");                       // the old tail handle
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {FILTER_PREV_OFFSET}], r10")); // new->prev = old tail
+    emitter.instruction(&format!("mov QWORD PTR [r9 + {FILTER_NEXT_OFFSET}], 0")); // new->next = none
+
+    emitter.label("__rt_filter_link_ok_x");
+    emitter.instruction("mov eax, 1");                                          // report success
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_filter_link_fail");
+    emitter.instruction("xor eax, eax");                                        // report failure
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// x86_64 variant of [`emit_filter_unlink_aarch64`].
+fn emit_filter_unlink_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: unlink a filter from a stream chain ---");
+    emitter.label_global("__rt_stream_filter_unlink");
+    // Frame: [-8]=filter handle [-16]=head offset [-24]=prev [-32]=next [-40]=filter state
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the unlink frame
+    emitter.instruction("sub rsp, 48");                                         // reserve spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the filter handle
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the chain-head byte offset
+
+    emitter.instruction("call __rt_filter_state");                              // resolve the filter state
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_unlink_fail");                          // nothing to unlink
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // spill the filter state
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {FILTER_PREV_OFFSET}]")); // previous node handle
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");
+    emitter.instruction(&format!("mov r11, QWORD PTR [rax + {FILTER_NEXT_OFFSET}]")); // next node handle
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");
+
+    // -- prev->next = next, or move the chain head when this node was first --
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_filter_unlink_was_head_x");                    // no predecessor: this node was the head
+    emitter.instruction("mov rdi, r10");                                        // resolve the predecessor
+    emitter.instruction("call __rt_filter_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_unlink_next_x");                        // a stale predecessor needs no repair
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // successor handle
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_NEXT_OFFSET}], r11")); // prev->next = next
+    emitter.instruction("jmp __rt_filter_unlink_next_x");
+
+    emitter.label("__rt_filter_unlink_was_head_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the removed filter state
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {FILTER_STREAM_HANDLE_OFFSET}]")); // owning stream handle
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_filter_unlink_next_x");                        // detached node: no chain to repair
+    emitter.instruction("call __rt_stream_state");                              // resolve the owning stream state
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_unlink_next_x");                        // the stream is gone: nothing to repair
+    emitter.instruction("add rax, QWORD PTR [rbp - 16]");                       // address of the chain head slot
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // successor handle
+    emitter.instruction("mov QWORD PTR [rax], r11");                            // head = next
+
+    // -- next->prev = prev --
+    emitter.label("__rt_filter_unlink_next_x");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_filter_unlink_ok_x");                          // no successor to repair
+    emitter.instruction("mov rdi, r11");                                        // resolve the successor
+    emitter.instruction("call __rt_filter_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_filter_unlink_ok_x");                          // a stale successor needs no repair
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // predecessor handle
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_PREV_OFFSET}], r10")); // next->prev = prev
+
+    emitter.label("__rt_filter_unlink_ok_x");
+    // -- isolate the removed node so a double removal is inert --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_NEXT_OFFSET}], 0"));
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_PREV_OFFSET}], 0"));
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_STREAM_HANDLE_OFFSET}], 0"));
+    emitter.instruction("mov eax, 1");                                          // report success
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_filter_unlink_fail");
+    emitter.instruction("xor eax, eax");                                        // report failure
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// Silences unused-constant warnings for the lifecycle fields consumed by the
+/// `onClose` step, which lands with the chain-application rewiring.
+const _: () = {
+    let _ = FILTER_FLAGS_OFFSET;
+    let _ = crate::codegen_support::runtime::resources::layout::FILTER_FLAG_ONCLOSE_CALLED;
+};

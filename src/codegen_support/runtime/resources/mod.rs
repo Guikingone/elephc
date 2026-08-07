@@ -10,6 +10,7 @@
 //! - Target-specific leaf emitters share the layouts declared in `layout`.
 
 mod context;
+mod filter;
 pub(crate) mod layout;
 mod registry;
 mod stream;
@@ -21,6 +22,7 @@ pub(crate) fn emit_resource_runtime(emitter: &mut Emitter) {
     registry::emit_resource_registry(emitter);
     stream::emit_stream_resources(emitter);
     context::emit_context_resources(emitter);
+    filter::emit_filter_resources(emitter);
 }
 
 #[cfg(test)]

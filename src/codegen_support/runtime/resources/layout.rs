@@ -60,6 +60,14 @@ pub(crate) const RESOURCE_KIND_STREAM: u64 = 1;
 /// Stream-context registry-slot kind.
 pub(crate) const RESOURCE_KIND_CONTEXT: u64 = 2;
 
+/// Stream-filter registry-slot kind.
+///
+/// A filter is a PHP-visible resource with its own lifetime: `stream_filter_append()`
+/// hands one back, `stream_filter_remove()` closes it, and closing the owning stream
+/// closes every filter still attached. Modelling it as a registry resource is what
+/// lets `is_resource()` observe that invalidation.
+pub(crate) const RESOURCE_KIND_FILTER: u64 = 3;
+
 /// Live resource lifecycle state.
 pub(crate) const RESOURCE_STATUS_LIVE: u64 = 1;
 
@@ -114,6 +122,17 @@ pub(crate) const STREAM_BACKEND_AUX_OFFSET: i64 = 64;
 /// Byte offset of the retained stream-context registry handle.
 pub(crate) const STREAM_CONTEXT_HANDLE_OFFSET: i64 = 80;
 
+/// Byte offset of the read-direction filter chain head (filter handle, 0 = no filters).
+///
+/// The chain is a doubly linked list of filter resources, so `stream_filter_remove()`
+/// can unlink a middle node without disturbing its neighbours. The previous design
+/// stored two filter-id bytes per descriptor, which could not represent a third
+/// filter at all, let alone removal from the middle.
+pub(crate) const STREAM_READ_FILTER_HEAD_OFFSET: i64 = 88;
+
+/// Byte offset of the write-direction filter chain head (filter handle, 0 = no filters).
+pub(crate) const STREAM_WRITE_FILTER_HEAD_OFFSET: i64 = 96;
+
 /// Byte offset of the PHP-visible stream chunk size, or zero for the 8192-byte default.
 pub(crate) const STREAM_CHUNK_SIZE_OFFSET: i64 = 144;
 
@@ -159,8 +178,54 @@ pub(crate) const CONTEXT_NOTIFIER_OFFSET: i64 = 16;
 /// Byte offset of stream-context state flags.
 pub(crate) const CONTEXT_FLAGS_OFFSET: i64 = 24;
 
+/// Size in bytes of one stable filter-state allocation.
+pub(crate) const FILTER_STATE_SIZE: u64 = 64;
+
+/// Byte offset of the next filter in the chain (filter handle, 0 = tail).
+pub(crate) const FILTER_NEXT_OFFSET: i64 = 0;
+
+/// Byte offset of the previous filter in the chain (filter handle, 0 = head).
+pub(crate) const FILTER_PREV_OFFSET: i64 = 8;
+
+/// Byte offset of the owning stream handle, used to unlink on removal.
+pub(crate) const FILTER_STREAM_HANDLE_OFFSET: i64 = 16;
+
+/// Byte offset of the built-in filter id, or zero when a user class drives it.
+pub(crate) const FILTER_BUILTIN_ID_OFFSET: i64 = 24;
+
+/// Byte offset of the `php_user_filter` instance backing a user filter.
+pub(crate) const FILTER_OBJECT_OFFSET: i64 = 32;
+
+/// Byte offset of the direction bits this node was attached with.
+pub(crate) const FILTER_DIRECTION_OFFSET: i64 = 40;
+
+/// Byte offset of the retained `$params` value handed to `onCreate()`.
+pub(crate) const FILTER_PARAMS_OFFSET: i64 = 48;
+
+/// Byte offset of the filter lifecycle flags.
+pub(crate) const FILTER_FLAGS_OFFSET: i64 = 56;
+
+/// Read-direction bit, matching PHP's `STREAM_FILTER_READ`.
+pub(crate) const FILTER_DIRECTION_READ: u64 = 1;
+
+/// Write-direction bit, matching PHP's `STREAM_FILTER_WRITE`.
+pub(crate) const FILTER_DIRECTION_WRITE: u64 = 2;
+
+/// Set once `onClose()` has run so stream teardown cannot invoke it twice.
+pub(crate) const FILTER_FLAG_ONCLOSE_CALLED: u64 = 1;
+
 const _: () = {
     assert!(RESOURCE_KIND_FREE == 0);
+    assert!(RESOURCE_KIND_FILTER != RESOURCE_KIND_STREAM);
+    assert!(RESOURCE_KIND_FILTER != RESOURCE_KIND_CONTEXT);
+    // The chain heads must live inside StreamState and clear of its other fields.
+    assert!(STREAM_READ_FILTER_HEAD_OFFSET > STREAM_CONTEXT_HANDLE_OFFSET);
+    assert!(STREAM_WRITE_FILTER_HEAD_OFFSET == STREAM_READ_FILTER_HEAD_OFFSET + 8);
+    assert!(STREAM_WRITE_FILTER_HEAD_OFFSET < STREAM_CHUNK_SIZE_OFFSET);
+    assert!(FILTER_PREV_OFFSET == FILTER_NEXT_OFFSET + 8);
+    assert!(FILTER_STREAM_HANDLE_OFFSET == FILTER_PREV_OFFSET + 8);
+    assert!(FILTER_FLAGS_OFFSET + 8 == FILTER_STATE_SIZE as i64);
+    assert!(FILTER_DIRECTION_READ | FILTER_DIRECTION_WRITE == 3);
     assert!(SLOT_REQUEST_EPOCH_OFFSET == SLOT_NEXT_FREE_OFFSET);
     assert!(STREAM_WRAPPER_ID_OFFSET == STREAM_BACKEND_KIND_OFFSET + 8);
     assert!(STREAM_URI_PTR_OFFSET == STREAM_FD_OFFSET + 8);
