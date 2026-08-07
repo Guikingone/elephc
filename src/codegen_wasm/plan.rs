@@ -253,12 +253,15 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
                 .any(|inst| {
                     inst.op == crate::ir::Op::RuntimeCall
                         && inst.immediate.is_none()
-                        && super::capability::array_access_read_is_supported(function, inst)
+                        && (super::capability::array_access_read_is_supported(function, inst)
+                            || super::capability::array_access_write_is_supported(function, inst))
                 })
         })
     {
-        if !layout_values.iter().any(|value| value == "offsetGet") {
-            layout_values.push("offsetGet".to_string());
+        for name in ["offsetGet", "offsetSet"] {
+            if !layout_values.iter().any(|value| value == name) {
+                layout_values.push(name.to_string());
+            }
         }
     }
     // `Foo::class` answers a compile-time string, so every class name an EIR `ConstClassName`

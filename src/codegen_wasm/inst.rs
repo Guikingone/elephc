@@ -2479,6 +2479,9 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         None if super::capability::array_access_read_is_supported(ctx.function, inst) => {
             return super::methods::lower_array_access_get(ctx, inst);
         }
+        None if super::capability::array_access_write_is_supported(ctx.function, inst) => {
+            return super::methods::lower_array_access_set(ctx, inst);
+        }
         None if inst.operands.len() == 3 && !inst.is_void() => {
             return super::inst_hash::lower_mixed_array_get(ctx, inst);
         }

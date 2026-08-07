@@ -5824,6 +5824,9 @@ fn method_body_argument_shape_issue(
                 index + 1
             ));
         };
+        if argument_boxes_into_a_mixed_parameter(value, parameter) {
+            continue;
+        }
         if value.ir_type != parameter.ir_type
             || (value.php_type.codegen_repr() != parameter.php_type.codegen_repr()
                 && !argument_is_a_descendant_of_the_parameter(
@@ -6000,6 +6003,8 @@ fn check_runtime_call(
         None if mixed_array_read_is_supported(module, function, call) => {}
         // `$obj[$key]` on an `ArrayAccess` implementor: dispatched to `offsetGet`.
         None if array_access_read_is_supported(function, call) => {}
+        // `$obj[$key] = $value` on the same: dispatched to `offsetSet`.
+        None if array_access_write_is_supported(function, call) => {}
         // The one-operand narrowing of a boxed value into a declared class slot.
         None if mixed_object_narrowing_is_supported(function, call) => {}
         // The widening of a concrete scalar into a `?int` slot.
@@ -6063,6 +6068,57 @@ fn mixed_array_read_is_supported(module: &Module, function: &Function, call: &In
     operand_ir(2) == Some(IrType::I64)
 }
 
+/// Returns true when an untyped `Op::RuntimeCall` is `$obj[$key] = $value` on an `ArrayAccess`
+/// implementor, which dispatches to `offsetSet`.
+///
+/// Told apart from the READ by the RESULT: a subscript write lowers void, while a read always
+/// produces one. That is how the native backend decides it too — operand count alone cannot,
+/// since a read carries a trailing warn-on-missing flag that makes both forms three-operand.
+pub(super) fn array_access_write_is_supported(function: &Function, call: &Instruction) -> bool {
+    if call.operands.len() != 3 || !call.is_void() {
+        return false;
+    }
+    let operand_ir = |index: usize| {
+        call.operands
+            .get(index)
+            .and_then(|value| function.value(*value))
+            .map(|value| value.ir_type)
+    };
+    let boxable = |index: usize| {
+        matches!(
+            operand_ir(index),
+            Some(IrType::I64 | IrType::F64 | IrType::Str | IrType::Heap(IrHeapKind::Mixed))
+        )
+    };
+    operand_ir(0) == Some(IrType::Heap(IrHeapKind::Object)) && boxable(1) && boxable(2)
+}
+
+/// Returns true when a CONCRETE scalar argument reaches a `mixed` parameter, which the call
+/// lowering boxes at the call site.
+///
+/// `$map[$k]` on an `ArrayAccess` implementor reaches `offsetExists(mixed $offset)` with a bare
+/// string, and a `mixed`-typed parameter is the single commonest shape a concrete argument meets
+/// — 25 of the examples that still refuse carry it. Each of these has an EXACT tag and payload,
+/// which is what `box_value_into_mixed_cell` needs; a heap container has neither, so it is left
+/// out of this relaxation rather than guessed at.
+pub(super) fn argument_boxes_into_a_mixed_parameter(
+    value: &crate::ir::Value,
+    parameter: &crate::ir::FunctionParam,
+) -> bool {
+    parameter.ir_type == IrType::Heap(IrHeapKind::Mixed)
+        && parameter.php_type.codegen_repr() == PhpType::Mixed
+        && matches!(value.ir_type, IrType::I64 | IrType::F64 | IrType::Str)
+        && matches!(
+            value.php_type.codegen_repr(),
+            PhpType::Int
+                | PhpType::Bool
+                | PhpType::False
+                | PhpType::Float
+                | PhpType::Str
+                | PhpType::Void
+        )
+}
+
 /// Returns the LITERAL constant name a `define()` call names, when it has one.
 ///
 /// Only a literal is admitted: the duplicate flag is a per-name global, and a computed name
@@ -6098,8 +6154,8 @@ pub(super) fn define_constant_name<'a>(
 /// `offsetGet` this module can call directly — an interface-typed or Mixed receiver would need
 /// the dispatch the method lowering does from a name, and that name is not in the string table.
 ///
-/// A WRITE (`$obj[$k] = v`) lowers void and is deliberately NOT admitted here: it would need
-/// `offsetSet`, whose second argument this shape does not carry.
+/// A WRITE carries the same three operands but no RESULT, and its third operand is the value
+/// rather than the warn flag — see `array_access_write_is_supported`.
 pub(super) fn array_access_read_is_supported(function: &Function, call: &Instruction) -> bool {
     if call.operands.len() != 3 || call.is_void() {
         return false;

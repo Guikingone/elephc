@@ -192,14 +192,47 @@ pub(super) fn lower_method_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<(
     } else {
         WasmRepr::val_types(inst.result_type).len()
     };
+    // A CONCRETE scalar reaching a `mixed` parameter is boxed at the call site; the audit admits
+    // exactly the shapes with an exact tag and payload. The caller owns the argument — parameter
+    // slots are excluded from the callee's epilogue cleanup — so each minted cell is released
+    // after the call rather than leaked per invocation.
+    let body_params: Vec<crate::ir::FunctionParam> = ctx
+        .module
+        .class_methods
+        .iter()
+        .find(|body| body.name == format!("{}::{}", impl_class, method_name))
+        .map(|body| body.params.clone())
+        .unwrap_or_default();
     ctx.emit_load_value(receiver)?;
-    for &arg in inst.operands.iter().skip(1) {
-        ctx.emit_load_value(arg)?;
+    let mut minted_cells: Vec<String> = Vec::new();
+    for (index, &arg) in inst.operands.iter().skip(1).enumerate() {
+        let boxes = ctx
+            .function
+            .value(arg)
+            .zip(body_params.get(index + 1))
+            .is_some_and(|(value, parameter)| {
+                super::capability::argument_boxes_into_a_mixed_parameter(value, parameter)
+            });
+        if boxes {
+            let repr = ctx.value_repr(arg)?.clone();
+            let cell = super::inst::box_value_into_mixed_cell(ctx, arg, &repr)?;
+            ctx.fb
+                .ins(&format!("local.get {}", cell), "argument boxed for a `mixed` parameter");
+            minted_cells.push(cell);
+        } else {
+            ctx.emit_load_value(arg)?;
+        }
     }
     ctx.fb.ins(
         &format!("call ${}", callee_symbol),
         &format!("{}::{} ({})", class_name, method_name, mode),
     );
+    for cell in &minted_cells {
+        ctx.fb.ins(
+            &format!("(call $__rt_decref_any (local.get {}))", cell),
+            "release the boxed argument",
+        );
+    }
 
     // A `void` method returns nothing, but PHP still gives its CALL EXPRESSION the value null —
     // which is what the EIR materializes when the result is used. Nothing came back on the
@@ -311,13 +344,23 @@ fn lower_interface_method_call(
 /// string or int. So the name comes from static data laid out by `plan_module`, and the key is
 /// boxed here.
 pub(super) fn lower_array_access_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    lower_array_access(ctx, inst, true)
+}
+
+/// Lowers `$obj[$key] = $value` on an `ArrayAccess` implementor, dispatching to `offsetSet`.
+pub(super) fn lower_array_access_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    lower_array_access(ctx, inst, false)
+}
+
+fn lower_array_access(ctx: &mut FnCtx, inst: &Instruction, is_read: bool) -> Result<()> {
+    let method_name = if is_read { "offsetGet" } else { "offsetSet" };
     let receiver = operand(inst, 0)?;
     let key = operand(inst, 1)?;
     let receiver_ty = ctx.value_php_type(receiver)?;
     let class_name = exact_static_object_class(&receiver_ty).ok_or_else(|| {
         WasmError::Unsupported(format!("ArrayAccess read on receiver {:?}", receiver_ty))
     })?;
-    let method_key = php_symbol_key("offsetGet");
+    let method_key = php_symbol_key(method_name);
     let ci = ctx
         .module
         .class_infos
@@ -329,38 +372,58 @@ pub(super) fn lower_array_access_get(ctx: &mut FnCtx, inst: &Instruction) -> Res
         .get(&method_key)
         .cloned()
         .unwrap_or_else(|| class_name.clone());
-    let (method_ptr, method_len) = ctx.default_str_literal("offsetGet")?;
+    let (method_ptr, method_len) = ctx.default_str_literal(method_name)?;
     emit_null_receiver_check(ctx, receiver, method_ptr, method_len)?;
     let callee_symbol = if dynamic {
         let introducer = resolve_vtable_introducer(ctx, &class_name, &method_key)?;
         method_dispatch_symbol(&introducer, &method_key)
     } else {
-        method_symbol(&format!("{}::offsetGet", impl_class))
+        method_symbol(&format!("{}::{}", impl_class, method_name))
     };
-    let key_repr = ctx.value_repr(key)?.clone();
-    let cell = super::inst::box_value_into_mixed_cell(ctx, key, &key_repr)?;
+    // Both parameters are declared `mixed`, so every argument is boxed here.
+    let mut minted: Vec<String> = Vec::new();
     ctx.emit_load_value(receiver)?;
-    ctx.fb
-        .ins(&format!("local.get {}", cell), "the offset, boxed for `mixed $offset`");
+    let key_repr = ctx.value_repr(key)?.clone();
+    let key_cell = super::inst::box_value_into_mixed_cell(ctx, key, &key_repr)?;
+    ctx.fb.ins(
+        &format!("local.get {}", key_cell),
+        "the offset, boxed for `mixed $offset`",
+    );
+    minted.push(key_cell);
+    if !is_read {
+        let value = operand(inst, 2)?;
+        let value_repr = ctx.value_repr(value)?.clone();
+        let value_cell = super::inst::box_value_into_mixed_cell(ctx, value, &value_repr)?;
+        ctx.fb.ins(
+            &format!("local.get {}", value_cell),
+            "the value, boxed for `mixed $value`",
+        );
+        minted.push(value_cell);
+    }
     ctx.fb.ins(
         &format!("call ${}", callee_symbol),
         &format!(
-            "{}::offsetGet ({})",
+            "{}::{} ({})",
             class_name,
+            method_name,
             if dynamic { "dispatch" } else { "direct" }
         ),
     );
-    let result = inst
-        .result
-        .ok_or_else(|| WasmError::Unsupported("ArrayAccess read has no result".to_string()))?;
-    ctx.emit_store_value(result)?;
-    // The cell was minted for this call alone. `offsetGet` borrows its argument — it acquires
+    if is_read {
+        let result = inst
+            .result
+            .ok_or_else(|| WasmError::Unsupported("ArrayAccess read has no result".to_string()))?;
+        ctx.emit_store_value(result)?;
+    }
+    // Each cell was minted for this call alone. The callee borrows its arguments — it acquires
     // whatever it keeps — so the caller's single reference is dropped here rather than leaked
-    // once per subscript read.
-    ctx.fb.ins(
-        &format!("(call $__rt_decref_any (local.get {}))", cell),
-        "release the offset box",
-    );
+    // once per subscript.
+    for cell in &minted {
+        ctx.fb.ins(
+            &format!("(call $__rt_decref_any (local.get {}))", cell),
+            "release the boxed subscript argument",
+        );
+    }
     Ok(())
 }
 
