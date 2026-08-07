@@ -1,0 +1,319 @@
+//! Purpose:
+//! Emits x86_64 concat, comparison, and spaceship wrappers.
+//!
+//! Called from:
+//! - The eval bridge runtime facade and sibling bridge emitters.
+//!
+//! Key details:
+//! - Loose comparison paths retain their target-specific control flow.
+
+use super::*;
+
+/// Emits x86_64 concat, comparison, and spaceship wrappers.
+pub(super) fn emit_x86_64_compare(emitter: &mut Emitter) {
+    label_c_global(emitter, "__elephc_eval_value_concat");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for right operand and left string pair
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_string input
+    emitter.instruction("call __rt_mixed_cast_string");                         // cast the left boxed operand to a PHP string pair
+    emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the left string pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the left string length
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for string casting
+    emitter.instruction("call __rt_mixed_cast_string");                         // cast the right boxed operand to a PHP string pair
+    emitter.instruction("mov rdi, rax");                                        // move the right string pointer into concat's right pointer register
+    emitter.instruction("mov rsi, rdx");                                        // move the right string length into concat's right length register
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the left string pointer for concat
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the left string length for concat
+    emitter.instruction("call __rt_concat");                                    // concatenate the two PHP string pairs
+    emitter.instruction("mov rdi, rax");                                        // move the concat string pointer into mixed value_lo
+    emitter.instruction("mov rsi, rdx");                                        // move the concat string length into mixed value_hi
+    emitter.instruction("mov eax, 1");                                          // runtime tag 1 = string for boxing the concat result
+    emitter.instruction("call __rt_mixed_from_value");                          // persist and box the concatenated string
+    emitter.instruction("add rsp, 32");                                         // release the concat wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed concat result to Rust
+
+    label_c_global(emitter, "__elephc_eval_value_compare");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across comparison helpers
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable comparison wrapper frame
+    emitter.instruction("sub rsp, 32");                                         // reserve slots for operands, opcode, and numeric casts
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the left boxed operand
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the right boxed operand
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the eval comparison opcode
+    emitter.instruction("cmp rdx, 0");                                          // is this loose equality?
+    emitter.instruction("je __elephc_eval_value_compare_eq");                   // route == through the mixed loose-equality helper
+    emitter.instruction("cmp rdx, 1");                                          // is this loose inequality?
+    emitter.instruction("je __elephc_eval_value_compare_ne");                   // route != through the mixed loose-equality helper
+    emitter.instruction("cmp rdx, 6");                                          // is this strict equality?
+    emitter.instruction("je __elephc_eval_value_compare_strict_eq");            // route === through the mixed strict-equality helper
+    emitter.instruction("cmp rdx, 7");                                          // is this strict inequality?
+    emitter.instruction("je __elephc_eval_value_compare_strict_ne");            // route !== through the mixed strict-equality helper
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left boxed operand to a numeric comparison double
+    emitter.instruction("movsd QWORD PTR [rbp - 32], xmm0");                    // save the normalized left numeric operand
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand for numeric casting
+    emitter.instruction("mov rax, rdi");                                        // move the right boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a numeric comparison double
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 32]");                    // reload the left numeric operand for the float comparison
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the eval comparison opcode for dispatch
+    emitter.instruction("cmp r10, 2");                                          // is this a less-than comparison?
+    emitter.instruction("je __elephc_eval_value_compare_lt");                   // materialize left < right from float comparison flags
+    emitter.instruction("cmp r10, 3");                                          // is this a less-than-or-equal comparison?
+    emitter.instruction("je __elephc_eval_value_compare_lte");                  // materialize left <= right from float comparison flags
+    emitter.instruction("cmp r10, 4");                                          // is this a greater-than comparison?
+    emitter.instruction("je __elephc_eval_value_compare_gt");                   // materialize left > right from float comparison flags
+    emitter.instruction("cmp r10, 5");                                          // is this a greater-than-or-equal comparison?
+    emitter.instruction("je __elephc_eval_value_compare_gte");                  // materialize left >= right from float comparison flags
+    emitter.instruction("xor eax, eax");                                        // unknown comparison opcodes fail closed as false
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the fallback false result
+    emitter.label("__elephc_eval_value_compare_eq");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left operand for loose equality
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the right operand for loose equality
+    emitter.instruction("call __elephc_eval_mixed_loose_eq");                   // compute scalar PHP loose equality
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the equality result
+    emitter.label("__elephc_eval_value_compare_ne");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left operand for loose inequality
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the right operand for loose inequality
+    emitter.instruction("call __elephc_eval_mixed_loose_eq");                   // compute scalar PHP loose equality before inversion
+    emitter.instruction("xor rax, 1");                                          // invert equality for the != operator
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the inequality result
+    emitter.label("__elephc_eval_value_compare_strict_eq");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left operand for strict equality
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the right operand for strict equality
+    emitter.instruction("call __rt_mixed_strict_eq");                           // compute PHP strict equality
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the strict-equality result
+    emitter.label("__elephc_eval_value_compare_strict_ne");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left operand for strict inequality
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the right operand for strict inequality
+    emitter.instruction("call __rt_mixed_strict_eq");                           // compute PHP strict equality before inversion
+    emitter.instruction("xor rax, 1");                                          // invert equality for the !== operator
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the strict-inequality result
+    emitter.label("__elephc_eval_value_compare_lt");
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare numeric eval operands for <
+    emitter.instruction("setb al");                                             // set true when left is below right
+    emitter.instruction("setnp r10b");                                          // require an ordered comparison
+    emitter.instruction("and al, r10b");                                        // clear unordered NaN less-than results
+    emitter.instruction("movzx rax, al");                                       // widen the less-than boolean result
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the less-than result
+    emitter.label("__elephc_eval_value_compare_lte");
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare numeric eval operands for <=
+    emitter.instruction("setbe al");                                            // set true when left is below or equal to right
+    emitter.instruction("setnp r10b");                                          // require an ordered comparison
+    emitter.instruction("and al, r10b");                                        // clear unordered NaN less-than-or-equal results
+    emitter.instruction("movzx rax, al");                                       // widen the less-than-or-equal boolean result
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the less-than-or-equal result
+    emitter.label("__elephc_eval_value_compare_gt");
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare numeric eval operands for >
+    emitter.instruction("seta al");                                             // set true when left is above right
+    emitter.instruction("setnp r10b");                                          // require an ordered comparison
+    emitter.instruction("and al, r10b");                                        // clear unordered NaN greater-than results
+    emitter.instruction("movzx rax, al");                                       // widen the greater-than boolean result
+    emitter.instruction("jmp __elephc_eval_value_compare_box");                 // box the greater-than result
+    emitter.label("__elephc_eval_value_compare_gte");
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare numeric eval operands for >=
+    emitter.instruction("setae al");                                            // set true when left is above or equal to right
+    emitter.instruction("setnp r10b");                                          // require an ordered comparison
+    emitter.instruction("and al, r10b");                                        // clear unordered NaN greater-than-or-equal results
+    emitter.instruction("movzx rax, al");                                       // widen the greater-than-or-equal boolean result
+    emitter.label("__elephc_eval_value_compare_box");
+    emitter.instruction("mov rdi, rax");                                        // move the comparison boolean into the Mixed payload register
+    emitter.instruction("mov eax, 3");                                          // runtime tag 3 = bool
+    emitter.instruction("xor esi, esi");                                        // bool payloads do not use a high word
+    emitter.instruction("call __rt_mixed_from_value");                          // box the comparison result as a Mixed bool
+    emitter.instruction("add rsp, 32");                                         // release the comparison wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed comparison result to Rust
+
+    emitter.label("__elephc_eval_mixed_loose_eq");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across mixed helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable loose-equality helper frame
+    emitter.instruction("sub rsp, 96");                                         // allocate helper slots for unboxed tags, payloads, and casts
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the left boxed operand for later casts
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the right boxed operand for later casts
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_unbox input
+    emitter.instruction("call __rt_mixed_unbox");                               // unbox the left eval operand into tag and payload words
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the left runtime tag
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the left low payload word
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // save the left high payload word
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the right boxed operand for unboxing
+    emitter.instruction("call __rt_mixed_unbox");                               // unbox the right eval operand into tag and payload words
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // save the right runtime tag
+    emitter.instruction("mov QWORD PTR [rbp - 56], rdi");                       // save the right low payload word
+    emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the right high payload word
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the left runtime tag for equality dispatch
+    emitter.instruction("cmp r10, 3");                                          // does the left operand have PHP bool semantics?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_bool");                // bool comparisons use truthiness on both operands
+    emitter.instruction("cmp rax, 3");                                          // does the right operand have PHP bool semantics?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_bool");                // bool comparisons use truthiness on both operands
+    emitter.instruction("cmp r10, rax");                                        // do the operands have the same runtime tag?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_same_tag");            // same-tag scalars use focused payload comparisons
+    emitter.instruction("cmp r10, 8");                                          // is the left operand null?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_left_null");           // null compares equal only to empty strings before numeric fallback
+    emitter.instruction("cmp rax, 8");                                          // is the right operand null?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_right_null");          // null compares equal only to empty strings before numeric fallback
+    emitter.instruction("cmp r10, 1");                                          // is a non-matching left operand a string?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_left_string");         // compare numeric strings against numeric scalars
+    emitter.instruction("cmp rax, 1");                                          // is a non-matching right operand a string?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_right_string");        // compare numeric strings against numeric scalars
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_numeric");            // remaining scalar mismatches compare numerically
+    emitter.label("__elephc_eval_mixed_loose_eq_same_tag");
+    emitter.instruction("cmp r10, 8");                                          // are both operands null?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_true");                // null loosely equals null
+    emitter.instruction("cmp r10, 1");                                          // are both operands strings?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_strings");             // strings use PHP loose string equality
+    emitter.instruction("cmp r10, 2");                                          // are both operands floats?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_floats");              // floats compare with native floating equality
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // reload the left low payload word
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 56]");                       // compare low payload words for int and pointer-like scalars
+    emitter.instruction("jne __elephc_eval_mixed_loose_eq_false");              // mismatched low payloads are not equal
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // reload the left high payload word
+    emitter.instruction("cmp r11, QWORD PTR [rbp - 64]");                       // compare high payload words for pointer-like scalars
+    emitter.instruction("sete al");                                             // materialize same-tag payload equality
+    emitter.instruction("movzx rax, al");                                       // widen the payload equality result
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the payload equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_strings");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the left string pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reload the left string length
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 56]");                       // reload the right string pointer
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // reload the right string length
+    emitter.instruction("call __rt_str_loose_eq");                              // compare strings with PHP loose numeric-string rules
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the string loose-equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_floats");
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 32]");                    // reload the left float payload
+    emitter.instruction("movsd xmm0, QWORD PTR [rbp - 56]");                    // reload the right float payload
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare same-tag float payloads
+    emitter.instruction("sete al");                                             // set true for ordered float equality
+    emitter.instruction("setnp r10b");                                          // require an ordered comparison
+    emitter.instruction("and al, r10b");                                        // clear unordered NaN equality
+    emitter.instruction("movzx rax, al");                                       // widen the float equality result
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the float equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_left_null");
+    emitter.instruction("cmp rax, 1");                                          // is null being compared with a string?
+    emitter.instruction("jne __elephc_eval_mixed_loose_eq_numeric");            // non-string null comparisons fall back to numeric zero
+    emitter.instruction("cmp QWORD PTR [rbp - 64], 0");                         // null loosely equals only the empty string
+    emitter.instruction("sete al");                                             // materialize the null/string equality result
+    emitter.instruction("movzx rax, al");                                       // widen the null/string equality result
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the null/string equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_right_null");
+    emitter.instruction("cmp r10, 1");                                          // is null being compared with a string?
+    emitter.instruction("jne __elephc_eval_mixed_loose_eq_numeric");            // non-string null comparisons fall back to numeric zero
+    emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                         // null loosely equals only the empty string
+    emitter.instruction("sete al");                                             // materialize the string/null equality result
+    emitter.instruction("movzx rax, al");                                       // widen the string/null equality result
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the string/null equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_left_string");
+    emitter.instruction("cmp rax, 0");                                          // can the right operand be compared numerically as an int?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_left_string_numeric"); // parse the left string for numeric equality
+    emitter.instruction("cmp rax, 2");                                          // can the right operand be compared numerically as a float?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_left_string_numeric"); // parse the left string for numeric equality
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_false");              // non-numeric string mismatches are not loosely equal here
+    emitter.label("__elephc_eval_mixed_loose_eq_left_string_numeric");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the left string pointer for numeric parsing
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // reload the left string length for numeric parsing
+    emitter.instruction("call __rt_str_to_number");                             // parse the left string under PHP numeric-string rules
+    emitter.instruction("test rax, rax");                                       // did the left string parse as numeric?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_false");               // non-numeric strings do not equal numeric scalars
+    emitter.instruction("movsd QWORD PTR [rbp - 72], xmm0");                    // save the parsed left numeric-string value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand for numeric casting
+    emitter.instruction("mov rax, rdi");                                        // move the right boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right operand to a comparison double
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 72]");                    // reload the parsed left numeric-string value
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare parsed string and numeric scalar values
+    emitter.instruction("sete al");                                             // set true for ordered string/numeric equality
+    emitter.instruction("setnp r10b");                                          // require an ordered comparison
+    emitter.instruction("and al, r10b");                                        // clear unordered NaN equality
+    emitter.instruction("movzx rax, al");                                       // widen the string/numeric equality result
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the string/numeric equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_right_string");
+    emitter.instruction("cmp r10, 0");                                          // can the left operand be compared numerically as an int?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_right_string_numeric"); // parse the right string for numeric equality
+    emitter.instruction("cmp r10, 2");                                          // can the left operand be compared numerically as a float?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_right_string_numeric"); // parse the right string for numeric equality
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_false");              // non-numeric string mismatches are not loosely equal here
+    emitter.label("__elephc_eval_mixed_loose_eq_right_string_numeric");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the right string pointer for numeric parsing
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 64]");                       // reload the right string length for numeric parsing
+    emitter.instruction("call __rt_str_to_number");                             // parse the right string under PHP numeric-string rules
+    emitter.instruction("test rax, rax");                                       // did the right string parse as numeric?
+    emitter.instruction("je __elephc_eval_mixed_loose_eq_false");               // non-numeric strings do not equal numeric scalars
+    emitter.instruction("movsd QWORD PTR [rbp - 72], xmm0");                    // save the parsed right numeric-string value
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed operand for numeric casting
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left operand to a comparison double
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 72]");                    // reload the parsed right numeric-string value
+    emitter.instruction("ucomisd xmm0, xmm1");                                  // compare numeric scalar and parsed string values
+    emitter.instruction("sete al");                                             // set true for ordered numeric/string equality
+    emitter.instruction("setnp r10b");                                          // require an ordered comparison
+    emitter.instruction("and al, r10b");                                        // clear unordered NaN equality
+    emitter.instruction("movzx rax, al");                                       // widen the numeric/string equality result
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the numeric/string equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_bool");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed operand for truthiness
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_bool input
+    emitter.instruction("call __rt_mixed_cast_bool");                           // cast the left operand to PHP truthiness
+    emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save the left truthiness result
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand for truthiness
+    emitter.instruction("mov rax, rdi");                                        // move the right boxed operand into mixed_cast_bool input
+    emitter.instruction("call __rt_mixed_cast_bool");                           // cast the right operand to PHP truthiness
+    emitter.instruction("cmp QWORD PTR [rbp - 72], rax");                       // compare boolean truthiness for loose equality
+    emitter.instruction("sete al");                                             // materialize bool loose equality
+    emitter.instruction("movzx rax, al");                                       // widen the bool equality result
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the bool loose-equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_numeric");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the left boxed operand for numeric equality
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left operand to a comparison double
+    emitter.instruction("movsd QWORD PTR [rbp - 72], xmm0");                    // save the left numeric equality operand
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // reload the right boxed operand for numeric equality
+    emitter.instruction("mov rax, rdi");                                        // move the right boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right operand to a comparison double
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 72]");                    // reload the left numeric equality operand
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare numeric operands for loose equality
+    emitter.instruction("sete al");                                             // set true for ordered numeric equality
+    emitter.instruction("setnp r10b");                                          // require an ordered comparison
+    emitter.instruction("and al, r10b");                                        // clear unordered NaN equality
+    emitter.instruction("movzx rax, al");                                       // widen the numeric equality result
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the numeric loose-equality result
+    emitter.label("__elephc_eval_mixed_loose_eq_true");
+    emitter.instruction("mov rax, 1");                                          // materialize true for loose equality
+    emitter.instruction("jmp __elephc_eval_mixed_loose_eq_done");               // return the true result
+    emitter.label("__elephc_eval_mixed_loose_eq_false");
+    emitter.instruction("xor eax, eax");                                        // materialize false for loose equality
+    emitter.label("__elephc_eval_mixed_loose_eq_done");
+    emitter.instruction("add rsp, 96");                                         // release the loose-equality helper slots
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the loose-equality boolean in rax
+
+    label_c_global(emitter, "__elephc_eval_value_spaceship");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer across helper calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned slots for the right operand and left double
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the right boxed operand while casting the left operand
+    emitter.instruction("mov rax, rdi");                                        // move the left boxed operand into mixed_cast_float input
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the left boxed operand to a PHP numeric double
+    emitter.instruction("movsd QWORD PTR [rbp - 16], xmm0");                    // save the left numeric spaceship operand
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the right boxed operand for numeric casting
+    emitter.instruction("call __rt_mixed_cast_float");                          // cast the right boxed operand to a PHP numeric double
+    emitter.instruction("movsd xmm1, QWORD PTR [rbp - 16]");                    // reload the left numeric spaceship operand
+    emitter.instruction("ucomisd xmm1, xmm0");                                  // compare left and right numeric operands for spaceship
+    emitter.instruction("jp __elephc_eval_value_spaceship_gt_x86");             // PHP treats unordered NaN spaceship comparisons as greater
+    emitter.instruction("ja __elephc_eval_value_spaceship_gt_x86");             // route left > right to result 1
+    emitter.instruction("jb __elephc_eval_value_spaceship_lt_x86");             // route left < right to result -1
+    emitter.instruction("xor edi, edi");                                        // equal operands produce spaceship result 0
+    emitter.instruction("jmp __elephc_eval_value_spaceship_box_x86");           // box the equal spaceship result
+    emitter.label("__elephc_eval_value_spaceship_gt_x86");
+    emitter.instruction("mov rdi, 1");                                          // greater or unordered comparisons produce result 1
+    emitter.instruction("jmp __elephc_eval_value_spaceship_box_x86");           // box the greater spaceship result
+    emitter.label("__elephc_eval_value_spaceship_lt_x86");
+    emitter.instruction("mov rdi, -1");                                         // lesser comparisons produce result -1
+    emitter.label("__elephc_eval_value_spaceship_box_x86");
+    emitter.instruction("xor esi, esi");                                        // integer payloads do not use a high word
+    emitter.instruction("mov eax, 0");                                          // runtime tag 0 = integer
+    emitter.instruction("call __rt_mixed_from_value");                          // box the spaceship result into a Mixed cell
+    emitter.instruction("add rsp, 32");                                         // release the spaceship wrapper slots
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
+    emitter.instruction("ret");                                                 // return the boxed spaceship result to Rust
+
+}

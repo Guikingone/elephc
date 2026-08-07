@@ -1,0 +1,121 @@
+//! Purpose:
+//! Whole-archive compression decoding, encoding, and filesystem path operations.
+//!
+//! Called from:
+//! - Archive parsing, compression APIs, and C ABI wrappers.
+//!
+//! Key details:
+//! - Gzip and bzip2 wrappers are decoded before container-family dispatch.
+
+use super::*;
+
+/// Parses archive bytes into a full [`Archive`] (entries plus global metadata/stub).
+///
+/// Dispatch is by container signature rather than try-each-and-fallback: tar/zip-based
+/// phars embed a `.phar/stub.php` containing `__HALT_COMPILER();`, so a native-first
+/// scan would mistake them for native PHARs. ZIP starts with `PK\x03\x04` (or
+/// `PK\x05\x06` when empty); TAR carries the ustar magic at offset 257; everything
+/// else (a `<?php` stub) is a native PHAR.
+pub(super) fn parse_archive(data: &[u8]) -> Option<Archive> {
+    // A whole-archive gzip/bzip2 wrapper (e.g. `.tar.gz` / `.tar.bz2`) is decoded
+    // transparently, then the inner archive is parsed normally.
+    if data.starts_with(b"\x1f\x8b") {
+        return parse_archive(&decompress_gzip_stream(data)?);
+    }
+    if data.starts_with(b"BZh") {
+        return parse_archive(&decompress_bzip2_stream(data)?);
+    }
+    if data.starts_with(b"PK\x03\x04") || data.starts_with(b"PK\x05\x06") {
+        parse_zip_archive(data)
+    } else if data.get(257..262) == Some(b"ustar") {
+        parse_tar_archive(data)
+    } else {
+        parse_native_phar_archive(data)
+    }
+}
+
+/// Decompresses a whole gzip (`.gz`) stream into its plain bytes.
+pub(super) fn decompress_gzip_stream(data: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut decoder = flate2::read::GzDecoder::new(data);
+    std::io::Read::read_to_end(&mut decoder, &mut out).ok()?;
+    Some(out)
+}
+
+/// Decompresses a whole bzip2 (`.bz2`) stream into its plain bytes.
+pub(super) fn decompress_bzip2_stream(data: &[u8]) -> Option<Vec<u8>> {
+    let mut out = Vec::new();
+    let mut decoder = bzip2_rs::DecoderReader::new(data);
+    std::io::Read::read_to_end(&mut decoder, &mut out).ok()?;
+    Some(out)
+}
+
+/// Returns the plain (uncompressed) archive bytes, stripping a whole-archive gzip or
+/// bzip2 wrapper when present so a recompress operates on the canonical archive.
+pub(super) fn uncompressed_archive_bytes(raw: &[u8]) -> Option<Vec<u8>> {
+    if raw.starts_with(b"\x1f\x8b") {
+        decompress_gzip_stream(raw)
+    } else if raw.starts_with(b"BZh") {
+        decompress_bzip2_stream(raw)
+    } else {
+        Some(raw.to_vec())
+    }
+}
+
+/// Returns the destination path for compressing `src`: any existing `.gz`/`.bz2`
+/// suffix is stripped, then `.<new_ext>` is appended (e.g. `foo.tar` → `foo.tar.gz`).
+pub(super) fn compression_dest_path(src: &[u8], new_ext: &str) -> Option<Vec<u8>> {
+    let s = std::str::from_utf8(src).ok()?;
+    let base = s
+        .strip_suffix(".gz")
+        .or_else(|| s.strip_suffix(".bz2"))
+        .unwrap_or(s);
+    Some(format!("{base}.{new_ext}").into_bytes())
+}
+
+/// Reads `src`, gzip-wraps its plain archive bytes, writes them to `<base>.gz`, and
+/// returns that destination path (PHP `PharData::compress(Phar::GZ)`).
+pub(super) fn gzip_archive(src: &[u8]) -> Option<Vec<u8>> {
+    let plain = uncompressed_archive_bytes(&read_path(src)?)?;
+    let mut encoder =
+        flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    std::io::Write::write_all(&mut encoder, &plain).ok()?;
+    let dest = compression_dest_path(src, "gz")?;
+    write_path(&dest, &encoder.finish().ok()?)?;
+    Some(dest)
+}
+
+/// Reads `src`, bzip2-wraps its plain archive bytes, writes them to `<base>.bz2`, and
+/// returns that destination path (PHP `PharData::compress(Phar::BZ2)`).
+pub(super) fn bzip2_archive(src: &[u8]) -> Option<Vec<u8>> {
+    let plain = uncompressed_archive_bytes(&read_path(src)?)?;
+    let mut encoder = bzip2::write::BzEncoder::new(Vec::new(), bzip2::Compression::default());
+    std::io::Write::write_all(&mut encoder, &plain).ok()?;
+    let dest = compression_dest_path(src, "bz2")?;
+    write_path(&dest, &encoder.finish().ok()?)?;
+    Some(dest)
+}
+
+/// Reads a whole-archive-compressed `src` (a `.gz`/`.bz2` path), writes its plain
+/// bytes to the path with that suffix removed, and returns that destination path
+/// (PHP `PharData::decompress()`). Fails when `src` carries no compression suffix.
+pub(super) fn decompress_archive(src: &[u8]) -> Option<Vec<u8>> {
+    let s = std::str::from_utf8(src).ok()?;
+    let dest = s
+        .strip_suffix(".gz")
+        .or_else(|| s.strip_suffix(".bz2"))?
+        .as_bytes()
+        .to_vec();
+    write_path(&dest, &uncompressed_archive_bytes(&read_path(src)?)?)?;
+    Some(dest)
+}
+
+/// Reads a filesystem path given as UTF-8 bytes.
+pub(super) fn read_path(path: &[u8]) -> Option<Vec<u8>> {
+    std::fs::read(std::path::Path::new(std::str::from_utf8(path).ok()?)).ok()
+}
+
+/// Writes `bytes` to a filesystem path given as UTF-8 bytes.
+pub(super) fn write_path(path: &[u8], bytes: &[u8]) -> Option<()> {
+    std::fs::write(std::path::Path::new(std::str::from_utf8(path).ok()?), bytes).ok()
+}
