@@ -6998,6 +6998,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Rewind
         | RuntimeFnId::Fseek
         | RuntimeFnId::StreamGetContents
+        | RuntimeFnId::StreamCopyToStream
         | RuntimeFnId::FileExists
         | RuntimeFnId::Unlink
         | RuntimeFnId::FileGetContents
@@ -7236,7 +7237,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StreamContextSetDefault
         | RuntimeFnId::StreamContextSetOption
         | RuntimeFnId::StreamContextSetParams
-        | RuntimeFnId::StreamCopyToStream
         | RuntimeFnId::StreamFilterAppend
         | RuntimeFnId::StreamFilterPrepend
         | RuntimeFnId::StreamFilterRegister

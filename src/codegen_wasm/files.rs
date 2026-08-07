@@ -53,6 +53,7 @@ pub(super) fn emit_file_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_FTELL);
     wm.add_raw_func(RT_FSEEK);
     wm.add_raw_func(&rt_stream_get_contents());
+    wm.add_raw_func(RT_STREAM_COPY_TO_STREAM);
     wm.add_raw_func(RT_REWIND);
 }
 
@@ -682,6 +683,29 @@ fn rt_stream_get_contents() -> String {
         flag = MEMSTREAM_FLAG
     )
 }
+
+/// `__rt_stream_copy_to_stream`: pipes a stream's remainder into another, boxed as `int|false`.
+///
+/// Composed from the two helpers rather than reimplementing a read loop: the source read is
+/// exactly `stream_get_contents`, including how it resolves "everything remaining" and honours
+/// an explicit offset, and the destination write is `fwrite`. Reading the whole span at once
+/// matches what `stream_get_contents` already does and keeps one contract for both stream kinds.
+///
+/// The intermediate cell is released here — it is this function's own reference, and the string
+/// bytes have been written out by the time it goes.
+const RT_STREAM_COPY_TO_STREAM: &str = r#"(func $__rt_stream_copy_to_stream (param $from i32) (param $to i32) (param $len i64) (param $offset i64) (result i32)
+  (local $cell i32) (local $ptr i32) (local $n i64) (local $written i64)
+  (local.set $cell (call $__rt_stream_get_contents (local.get $from) (local.get $len) (local.get $offset)))
+  (if (i64.ne (i64.load (local.get $cell)) (i64.const 1))         ;; tag 1 = string; anything else failed
+    (then
+      (call $__rt_decref_any (local.get $cell))
+      (return (call $__rt_mixed_from_value (i64.const 3) (i64.const 0) (i64.const 0)))))
+  (local.set $ptr (i32.wrap_i64 (i64.load (i32.add (local.get $cell) (i32.const 8)))))
+  (local.set $n (i64.load (i32.add (local.get $cell) (i32.const 16))))
+  (local.set $written (call $__rt_fwrite (local.get $to) (local.get $ptr) (local.get $n)))
+  (call $__rt_decref_any (local.get $cell))
+  (call $__rt_mixed_from_value (i64.const 0) (local.get $written) (i64.const 0)))
+"#;
 
 /// `__rt_fclose`: closes a stream, answering PHP's true/false — but never fd 0, 1 or 2.
 ///

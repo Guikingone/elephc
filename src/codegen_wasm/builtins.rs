@@ -3459,6 +3459,12 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
             &[STREAM, IrType::I64, IrType::I64],
             STREAM,
         ),
+        // Answers `int|false`, so its result is a boxed cell too.
+        RuntimeFnId::StreamCopyToStream => (
+            "$__rt_stream_copy_to_stream",
+            &[STREAM, STREAM, IrType::I64, IrType::I64],
+            STREAM,
+        ),
         RuntimeFnId::FileExists => ("$__rt_file_exists", &[IrType::Str], IrType::I64),
         RuntimeFnId::Unlink => ("$__rt_unlink", &[IrType::Str], IrType::I64),
         RuntimeFnId::FileGetContents => ("$__rt_file_get_contents", &[IrType::Str], STREAM),
@@ -3484,6 +3490,8 @@ pub(super) fn file_builtin_helper(target: RuntimeFnId) -> Option<FileBuiltin> {
             // "everything remaining" for a negative length and "do not seek" for a negative
             // offset, so -1 carries both defaults.
             RuntimeFnId::StreamGetContents => &[-1, -1][..],
+            // Same two defaults, after the two stream operands.
+            RuntimeFnId::StreamCopyToStream => &[-1, -1][..],
             _ => &[][..],
         },
     })
@@ -3637,6 +3645,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Rewind
             | RuntimeFnId::Fseek
             | RuntimeFnId::StreamGetContents
+            | RuntimeFnId::StreamCopyToStream
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
             | RuntimeFnId::Fclose

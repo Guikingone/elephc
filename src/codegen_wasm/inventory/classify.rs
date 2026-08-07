@@ -213,7 +213,8 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         | RuntimeFnId::Ftell
         | RuntimeFnId::Rewind
         | RuntimeFnId::Fseek
-        | RuntimeFnId::StreamGetContents => (
+        | RuntimeFnId::StreamGetContents
+        | RuntimeFnId::StreamCopyToStream => (
             "codegen_wasm::files",
             "codegen_wasm::builtins::lower_file_builtin",
             &[
