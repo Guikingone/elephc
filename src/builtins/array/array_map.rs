@@ -36,6 +36,21 @@ builtin! {
     php_manual: "https://www.php.net/manual/en/function.array-map.php",
 }
 
+/// Returns the result type of an `array_map()` call whose array argument is a gradual boundary.
+///
+/// Single source of truth for the two layers that must agree about it: the `check` hook below,
+/// and `crate::ir_lower`'s rewrite of the gradual call into
+/// `array_combine(array_keys($a), array_map($cb, array_values($a)))`, whose `array_combine` result
+/// is exactly this keyed type. PHP's single-array `array_map()` preserves its source's keys, so
+/// this must NOT be a list type: a list source simply yields keys `0..n-1`, which is the same PHP
+/// array, while a hash source keeps its own keys instead of being silently reindexed.
+pub(crate) fn gradual_result_type() -> PhpType {
+    PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    }
+}
+
 /// Builds semantics that reuse the callback-sensitive result recorded by the checker.
 const fn array_map_semantics() -> BuiltinSemantics {
     let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayMap);
@@ -64,9 +79,16 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 )?;
             Ok(PhpType::Array(Box::new(callback_ret_ty)))
         }
-        // Gradual boundary: a `Mixed` or union-containing-array argument is accepted;
-        // the element type is unknown, so the callback is checked against a `Mixed`
-        // element and the result is a list of `Mixed`.
+        // Gradual boundary: a `Mixed` or union-containing-array argument is accepted; the element
+        // type is unknown, so the callback is checked against a `Mixed` element.
+        //
+        // The RESULT must not promise a list. PHP's single-array `array_map()` PRESERVES its
+        // source's keys, so a gradual source that turns out to hold a string-keyed hash produces a
+        // hash, which an `array<mixed>` slot cannot represent — promising one would leave the
+        // backend no faithful option but a silent key-losing reindex, the same shape-promise
+        // defect fixed for `array_keys`. `crate::ir_lower` rewrites the gradual call into
+        // `array_combine(array_keys($a), array_map($cb, array_values($a)))`, whose result is
+        // exactly this keyed type, and answers it from the same helper so the two cannot drift.
         t if crate::types::checker::builtins::arrays::array_arg_is_gradually_acceptable(&t) => {
             let callback_arg_types = [PhpType::Mixed];
             crate::types::checker::builtins::check_array_callback_builtin_call(
@@ -77,7 +99,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
                 cx.env,
                 "array_map() callback",
             )?;
-            Ok(PhpType::Array(Box::new(PhpType::Mixed)))
+            Ok(gradual_result_type())
         }
         _ => Err(CompileError::new(
             cx.span,

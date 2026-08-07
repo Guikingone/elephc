@@ -33,11 +33,58 @@ pub(super) fn lower_array_keys(ctx: &mut FunctionContext<'_>, inst: &Instruction
         PhpType::AssocArray { key, .. } => {
             lower_assoc_array_keys(ctx, inst, array, &key.codegen_repr(), &result_elem_ty)
         }
+        PhpType::Mixed | PhpType::Union(_) => {
+            lower_gradual_array_keys(ctx, inst, array, &result_elem_ty)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "array_keys for PHP type {:?}",
             other
         ))),
     }
+}
+
+/// Lowers `array_keys()` for a boxed `Mixed`/union array through the gradual runtime boundary.
+///
+/// The sibling of `array_values()`'s gradual path, and deliberately the same shape: the runtime
+/// guard clones indexed or associative input into one independently owned Mixed-keyed hash, key
+/// extraction then reuses the ordinary associative implementation, and the temporary hash is
+/// released after the resulting indexed array has been preserved. The source box stays borrowed
+/// and unchanged, so aliases keep PHP copy-on-write isolation.
+///
+/// A boxed source was refused outright before, even though the checker accepted it — the
+/// gradual arm of `array_keys`' `check` hook answers `array<mixed>` and nothing lowered it.
+fn lower_gradual_array_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    result_elem_ty: &PhpType,
+) -> Result<()> {
+    require_supported_assoc_result_type(&PhpType::Mixed, result_elem_ty)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(array, "x0")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+            abi::emit_push_reg(ctx.emitter, "x0");
+            lower_assoc_array_keys_aarch64(ctx, &PhpType::Mixed, result_elem_ty)?;
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x9");
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(array, "rdi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_to_owned_hash");
+            abi::emit_push_reg(ctx.emitter, "rax");
+            lower_assoc_array_keys_x86_64(ctx, &PhpType::Mixed, result_elem_ty)?;
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 16);
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "r10");
+        }
+    }
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `array_keys()` for a PHP `array<mixed>` value that may hold indexed or hash storage.

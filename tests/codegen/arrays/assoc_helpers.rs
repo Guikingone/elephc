@@ -251,6 +251,27 @@ echo count($l), "|", $l[0], ",", $l[1], ",", $l[2];
     assert_eq!(out, "3|0,1,2");
 }
 
+/// `array_keys()` over a boxed gradual value had no lowering at all, even though the checker's
+/// gradual arm accepted it and answered `array<mixed>` — every such call was refused with
+/// `array_keys for PHP type Mixed`. It is the sibling of `array_values()`'s gradual path and now
+/// shares its shape: clone the boxed source into one owned hash, extract, release the temporary.
+/// php-verified against `php -n`, including SPARSE integer keys, which stay sparse.
+#[test]
+fn test_array_keys_of_a_boxed_gradual_value() {
+    let out = compile_and_run(
+        r#"<?php
+function keysOf(mixed $a): array {
+    return array_keys($a);
+}
+echo implode(",", keysOf(["x" => 1, "y" => 2])), "\n";
+echo implode(",", keysOf([10, 20, 30])), "\n";
+echo implode(",", keysOf([5 => "a", 9 => "b"])), "\n";
+echo count(keysOf([])), "\n";
+"#,
+    );
+    assert_eq!(out, "x,y\n0,1,2\n5,9\n0\n");
+}
+
 /// Verifies array_search() returns the first-matching key in insertion order, not the last.
 /// Fixture: three-element assoc array where "same" maps to two keys; confirms only first is returned and array size is unchanged.
 #[test]

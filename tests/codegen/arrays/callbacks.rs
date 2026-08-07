@@ -287,6 +287,92 @@ foreach ($filtered as $value) { echo $value; }
     assert_eq!(out, "22040");
 }
 
+/// Verifies a gradual array source dispatches indexed and associative storage at runtime while
+/// preserving keys, callback modes, and reference-backed hash entries.
+#[test]
+fn test_array_filter_mixed_source_preserves_runtime_array_shape_and_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function filter_dynamic_value(mixed $values): mixed {
+    if (!is_array($values)) {
+        return [];
+    }
+    return array_filter($values, static fn ($value): bool => false !== $value && 0 !== $value);
+}
+
+function filter_dynamic_key(mixed $values): mixed {
+    return array_filter($values, static fn ($key): bool => is_string($key), ARRAY_FILTER_USE_KEY);
+}
+
+function filter_dynamic_both(mixed $values): mixed {
+    return array_filter(
+        $values,
+        static fn ($value, $key): bool => is_int($key) && $value > 0,
+        ARRAY_FILTER_USE_BOTH,
+    );
+}
+
+$indexed = filter_dynamic_value([false, 2, 0, 4]);
+echo count($indexed) . ":";
+foreach ($indexed as $key => $value) {
+    echo $key . "=" . $value . ";";
+}
+echo "|";
+
+$source = ["a" => false, "b" => 2, 3 => 0, 4 => 4];
+$byValue = filter_dynamic_value($source);
+foreach ($byValue as $key => $value) {
+    echo (is_string($key) ? "s" : "i") . $key . "=" . $value . ";";
+}
+echo "|";
+$byKey = filter_dynamic_key($source);
+foreach ($byKey as $key => $value) {
+    echo $key . ";";
+}
+echo "|";
+$byBoth = filter_dynamic_both($source);
+foreach ($byBoth as $key => $value) {
+    echo $key . "=" . $value . ";";
+}
+echo "|";
+
+$referenced = 5;
+$withReference = ["keep" => &$referenced, "drop" => 0];
+$filteredReference = filter_dynamic_value($withReference);
+$referenced = 9;
+echo $filteredReference["keep"];
+"#,
+    );
+    assert_eq!(out, "2:1=2;3=4;|sb=2;i4=4;|a;b;|4=4;|9");
+}
+
+/// Verifies a non-array gradual payload throws PHP's catchable argument `TypeError` before the
+/// callback can run.
+#[test]
+fn test_array_filter_mixed_source_rejects_runtime_scalar() {
+    let out = compile_and_run(
+        r#"<?php
+function filter_anything(mixed $value): mixed {
+    return array_filter($value, static function ($entry): bool {
+        echo "callback";
+        return true;
+    });
+}
+
+try {
+    filter_anything(42);
+    echo "bad";
+} catch (TypeError $error) {
+    echo $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "array_filter(): Argument #1 ($array) must be of type array, int given"
+    );
+}
+
 /// Verifies invalid literal modes throw a catchable `ValueError` before callback invocation.
 #[test]
 fn test_array_filter_invalid_literal_mode_throws_value_error() {
@@ -1424,6 +1510,55 @@ foreach ($r as $v) { echo $v; echo ","; }
 "#,
     );
     assert_eq!(out, "5,15,");
+}
+
+/// `array_map()` over a GRADUAL source must preserve the source's keys.
+///
+/// PHP's single-array `array_map()` preserves keys, so an untyped `$list` that turns out to hold a
+/// string-keyed hash produces a hash — which the old `array<mixed>` result type could not
+/// represent, and the backend refused the boxed source outright
+/// (`array_map for PHP type Mixed`). That stopped the Symfony `--web` build inside
+/// `Symfony\Polyfill\Mbstring\Mbstring::mb_detect_encoding`.
+///
+/// All three shapes are pinned against `php -n`: a string-keyed hash keeps its keys, a list keeps
+/// `0..n-1`, and SPARSE integer keys stay sparse rather than being reindexed.
+#[test]
+fn test_array_map_over_a_gradual_source_preserves_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function upper(mixed $list): mixed {
+    return array_map('strtoupper', $list);
+}
+foreach (upper(["x" => "a", "y" => "b"]) as $k => $v) { echo $k, "=", $v, ";"; }
+echo "\n";
+foreach (upper(["p", "q", "r"]) as $k => $v) { echo $k, "=", $v, ";"; }
+echo "\n";
+foreach (upper([5 => "m", 9 => "n"]) as $k => $v) { echo $k, "=", $v, ";"; }
+echo "\n";
+echo count(upper([])), "\n";
+"#,
+    );
+    assert_eq!(out, "x=A;y=B;\n0=P;1=Q;2=R;\n5=M;9=N;\n0\n");
+}
+
+/// A builtin string callback must accept a gradually-typed element, because PHP coerces weakly.
+///
+/// `array_map('strtoupper', ["x", 1])` is ordinary PHP that answers `["X", "1"]`, but the runtime
+/// string-callable ladder only offered a case when the element was already a concrete `string`, so
+/// no case matched and the program aborted with "callback string does not name a supported
+/// callable". `strlen` — a unary string builtin in the same family — already modelled the full
+/// weak-coercion source set; the two now share it. Pinned against `php -n`.
+#[test]
+fn test_array_map_string_builtin_callback_accepts_mixed_elements() {
+    let out = compile_and_run(
+        r#"<?php
+$a = ["x", 1];
+foreach (array_map('strtoupper', $a) as $k => $v) { echo $k, "=", $v, ";"; }
+echo "\n";
+echo implode(",", array_map('strtoupper', ["a", "b"])), "\n";
+"#,
+    );
+    assert_eq!(out, "0=X;1=1;\nA,B\n");
 }
 
 /// Verifies array_udiff() / array_uintersect() result sizes and case-insensitive calls.

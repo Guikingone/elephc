@@ -406,7 +406,7 @@ fn callable_accepts_any_source(_source: Option<&PhpType>) -> bool {
 
 /// Accepts runtime wrapper sources that already use concrete string storage.
 pub fn callable_accepts_string_source(source: Option<&PhpType>) -> bool {
-    source.is_none_or(|source| source.codegen_repr() == PhpType::Str)
+    source.is_none_or(strlen_accepts_source)
 }
 
 /// Accepts the dynamic string-like sources supported by shared `strlen` validation.
@@ -472,13 +472,19 @@ pub fn lower_registry_call(
             Op::TypePredicate.default_effects(),
             Some(span),
         )),
-        BuiltinLowering::Runtime(target) => Ok(ctx.emit_runtime_call(
-            target,
-            operands.to_vec(),
-            resolved_result_type,
-            effects,
-            Some(span),
-        )),
+        BuiltinLowering::Runtime(target) => {
+            let runtime_operands = match target {
+                RuntimeCallTarget::UnaryString(_) => vec![normalized.operand(0)?],
+                _ => operands.to_vec(),
+            };
+            Ok(ctx.emit_runtime_call(
+                target,
+                runtime_operands,
+                resolved_result_type,
+                effects,
+                Some(span),
+            ))
+        }
     }
 }
 

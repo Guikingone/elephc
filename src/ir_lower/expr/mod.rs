@@ -2359,6 +2359,11 @@ fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name, args: &[E
     } else {
         lower_builtin_call_args(ctx, canonical, sig.as_ref(), args)
     };
+    if !is_extern && !is_user_function {
+        if let Some(value) = lower_gradual_array_map(ctx, canonical, &operands, expr) {
+            return value;
+        }
+    }
     let php_type = if is_extern || is_user_function {
         call_return_type(ctx, canonical, &operands)
     } else if let Some(php_type) =
@@ -4520,6 +4525,80 @@ fn lower_static_array_map(
         super::stmt::release_indexed_array_write_operand(ctx, Some(&elem_type), value, item.span);
     }
     Some(array)
+}
+
+/// Lowers `array_map($callback, $array)` when `$array` is a boxed gradual value.
+///
+/// PHP's single-array `array_map()` PRESERVES its source's keys, so a gradual source that turns
+/// out to hold a string-keyed hash produces a hash. The backend's `array_map` helpers all iterate
+/// INDEXED storage (`__rt_array_map_mixed` reads the source's length and element width straight
+/// out of an indexed header), and there is no key-preserving variant — so a boxed source was
+/// refused outright, which is what stopped the Symfony `--web` build inside
+/// `Symfony\Polyfill\Mbstring\Mbstring::mb_detect_encoding`.
+///
+/// Rather than hand-writing a key-preserving map per architecture, the gradual case is expressed
+/// as the composition PHP itself would compute:
+///
+/// ```text
+/// array_map($cb, $a)  ==  array_combine(array_keys($a), array_map($cb, array_values($a)))
+/// ```
+///
+/// Every step already lowers: `array_keys` and `array_values` both have gradual arms that clone
+/// the boxed source into one owned hash, the inner `array_map` receives a CONCRETE `array<mixed>`
+/// and takes the ordinary path, and `array_combine` falls back to `__rt_array_combine_mixed` for
+/// Mixed-element operands. The rewrite runs on already-lowered operands, so the source expression
+/// is evaluated exactly once no matter how many times it appears in the composition.
+///
+/// The result is an `array<mixed, mixed>` in both cases — a list source yields keys `0..n-1`,
+/// which is the same PHP array. `array_map`'s checker hook answers the same type for its gradual
+/// arm so the two layers cannot disagree about the representation.
+fn lower_gradual_array_map(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &str,
+    operands: &[crate::ir::ValueId],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.trim_start_matches('\\')) != "array_map" || operands.len() != 2 {
+        return None;
+    }
+    let source = operands[1];
+    if !matches!(
+        ctx.builder.value_php_type(source).codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        return None;
+    }
+    let mixed_list = PhpType::Array(Box::new(PhpType::Mixed));
+    let span = expr.span;
+    let keys = emit_builtin_call_value(ctx, "array_keys", vec![source], mixed_list.clone(), span, None);
+    let values =
+        emit_builtin_call_value(ctx, "array_values", vec![source], mixed_list.clone(), span, None);
+    let mapped = emit_builtin_call_value(
+        ctx,
+        "array_map",
+        vec![operands[0], values.value],
+        mixed_list,
+        span,
+        None,
+    );
+    let combined = emit_builtin_call_value(
+        ctx,
+        "array_combine",
+        vec![keys.value, mapped.value],
+        crate::builtins::array::array_map::gradual_result_type(),
+        span,
+        None,
+    );
+    // The three intermediates are owned temporaries of this expression, exactly as they would be
+    // had the composition been written in PHP; `array_combine` copies what it needs out of them.
+    release_owned_call_arg_temporaries(
+        ctx,
+        &[keys.value, values.value, mapped.value],
+        Some(combined.value),
+        &ReturnArgAlias::None,
+        span,
+    );
+    Some(combined)
 }
 
 /// Lowers `array_reduce()` for a static callback and immediate indexed-array literal.
