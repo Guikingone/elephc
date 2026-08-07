@@ -16,8 +16,7 @@ eval_builtin! {
         error_message: by_ref = EvalBuiltinDefaultValue::Null,
         timeout = EvalBuiltinDefaultValue::Null,
         flags = EvalBuiltinDefaultValue::Int(1),
-        context = EvalBuiltinDefaultValue::Null,
-        peername = EvalBuiltinDefaultValue::Null
+        context = EvalBuiltinDefaultValue::Null
     ],
     by_ref: [error_code, error_message],
     direct: Filesystem,

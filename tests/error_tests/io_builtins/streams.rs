@@ -427,7 +427,7 @@ fn test_error_stream_context_and_bucket_wrong_args() {
 fn test_error_stream_socket_server_wrong_args() {
     expect_error(
         "<?php stream_socket_server();",
-        "stream_socket_server() takes exactly 1 argument",
+        "stream_socket_server() takes 1 to 5 arguments",
     );
 }
 
@@ -436,7 +436,7 @@ fn test_error_stream_socket_server_wrong_args() {
 fn test_error_stream_socket_client_wrong_args() {
     expect_error(
         "<?php stream_socket_client();",
-        "stream_socket_client() takes exactly 1 argument",
+        "stream_socket_client() takes 1 to 6 arguments",
     );
 }
 

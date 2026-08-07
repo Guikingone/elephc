@@ -14,7 +14,7 @@ use super::*;
 fn test_error_file_get_contents_wrong_args() {
     expect_error(
         "<?php file_get_contents();",
-        "file_get_contents() takes exactly 1 argument",
+        "file_get_contents() takes 1 to 5 arguments",
     );
 }
 
@@ -43,7 +43,7 @@ fn test_error_hash_file_wrong_args() {
 /// Verifies `readfile()` rejects zero arguments with arity error.
 #[test]
 fn test_error_readfile_wrong_args() {
-    expect_error("<?php readfile();", "readfile() takes exactly 1 argument");
+    expect_error("<?php readfile();", "readfile() takes 1 to 3 arguments");
 }
 
 /// Verifies `readfile()` returning `false` is incompatible with declared `int` return type.
@@ -64,7 +64,7 @@ function dump_file(): int {
 fn test_error_file_put_contents_wrong_args() {
     expect_error(
         r#"<?php file_put_contents("x");"#,
-        "file_put_contents() takes exactly 2 arguments",
+        "file_put_contents() takes 2 to 4 arguments",
     );
 }
 

@@ -24,8 +24,7 @@ builtin! {
         ref error_message: Mixed = DefaultSpec::Null,
         timeout: Mixed = DefaultSpec::Null,
         flags: Int = DefaultSpec::Int(1),
-        context: Mixed = DefaultSpec::Null,
-        peername: Mixed = DefaultSpec::Null
+        context: Mixed = DefaultSpec::Null
     ],
     returns: Mixed,
     check: check,
