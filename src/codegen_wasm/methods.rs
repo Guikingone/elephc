@@ -295,6 +295,75 @@ fn lower_interface_method_call(
 ///            Fatal error: Uncaught Error: Call to a member function getMessage() on null
 ///   fused guard: prints an empty message and CONTINUES — it read address 0 + offset
 /// ```
+/// Lowers `$obj[$key]` where the receiver is an `ArrayAccess` implementor, dispatching to
+/// `offsetGet`.
+///
+/// The EIR emits this as an UNTYPED runtime call — no immediate names the method — carrying
+/// `(receiver, key, warn_flag)`. The native backend reads the same shape in
+/// `try_lower_array_access_runtime_call`: a result marks it a read, and the trailing
+/// warn-on-missing flag is dropped so `offsetGet` keeps its one-argument PHP signature. Only
+/// that flag distinguishes a read from `offsetSet`, which lowers void.
+///
+/// `lower_method_call` cannot be reused as-is for two reasons, both measured: it needs an
+/// `Immediate::Data` naming the method, and `offsetGet` is NOT in the module string table — a
+/// program that only ever writes `$obj[$k]` never mentions the name — and it loads arguments
+/// raw, whereas `offsetGet(mixed $offset)` takes a boxed cell while the key arrives as a bare
+/// string or int. So the name comes from static data laid out by `plan_module`, and the key is
+/// boxed here.
+pub(super) fn lower_array_access_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let receiver = operand(inst, 0)?;
+    let key = operand(inst, 1)?;
+    let receiver_ty = ctx.value_php_type(receiver)?;
+    let class_name = exact_static_object_class(&receiver_ty).ok_or_else(|| {
+        WasmError::Unsupported(format!("ArrayAccess read on receiver {:?}", receiver_ty))
+    })?;
+    let method_key = php_symbol_key("offsetGet");
+    let ci = ctx
+        .module
+        .class_infos
+        .get(&class_name)
+        .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))?;
+    let dynamic = ci.vtable_slots.contains_key(&method_key) && !ci.final_methods.contains(&method_key);
+    let impl_class = ci
+        .method_impl_classes
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_else(|| class_name.clone());
+    let (method_ptr, method_len) = ctx.default_str_literal("offsetGet")?;
+    emit_null_receiver_check(ctx, receiver, method_ptr, method_len)?;
+    let callee_symbol = if dynamic {
+        let introducer = resolve_vtable_introducer(ctx, &class_name, &method_key)?;
+        method_dispatch_symbol(&introducer, &method_key)
+    } else {
+        method_symbol(&format!("{}::offsetGet", impl_class))
+    };
+    let key_repr = ctx.value_repr(key)?.clone();
+    let cell = super::inst::box_value_into_mixed_cell(ctx, key, &key_repr)?;
+    ctx.emit_load_value(receiver)?;
+    ctx.fb
+        .ins(&format!("local.get {}", cell), "the offset, boxed for `mixed $offset`");
+    ctx.fb.ins(
+        &format!("call ${}", callee_symbol),
+        &format!(
+            "{}::offsetGet ({})",
+            class_name,
+            if dynamic { "dispatch" } else { "direct" }
+        ),
+    );
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("ArrayAccess read has no result".to_string()))?;
+    ctx.emit_store_value(result)?;
+    // The cell was minted for this call alone. `offsetGet` borrows its argument — it acquires
+    // whatever it keeps — so the caller's single reference is dropped here rather than leaked
+    // once per subscript read.
+    ctx.fb.ins(
+        &format!("(call $__rt_decref_any (local.get {}))", cell),
+        "release the offset box",
+    );
+    Ok(())
+}
+
 fn emit_null_receiver_check(
     ctx: &mut FnCtx,
     receiver: ValueId,

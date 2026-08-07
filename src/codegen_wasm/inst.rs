@@ -2473,6 +2473,12 @@ fn lower_runtime_call(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         // An untyped call is discriminated by its operands, exactly as the native backend does
         // it: three operands with a result is the generic `$mixed[$key]` read, and one operand
         // narrowing a boxed value to a declared class is the unbox below.
+        // An OBJECT receiver is `ArrayAccess` indexing, not the boxed `$mixed[$key]` read —
+        // both carry three operands and a result, so the receiver decides. This arm must stay
+        // ahead of the one below, which would otherwise treat the object as a Mixed cell.
+        None if super::capability::array_access_read_is_supported(ctx.function, inst) => {
+            return super::methods::lower_array_access_get(ctx, inst);
+        }
         None if inst.operands.len() == 3 && !inst.is_void() => {
             return super::inst_hash::lower_mixed_array_get(ctx, inst);
         }
@@ -4228,7 +4234,7 @@ fn push_boxed_scalar(
 /// identical composition and differ only in the runtime call that follows. The cell carries ONE
 /// reference, handed to the array without increfing — for a container operand the boxing increfed
 /// the child, so the operand's own reference is dropped here to leave the cell as sole owner.
-fn box_value_into_mixed_cell(
+pub(super) fn box_value_into_mixed_cell(
     ctx: &mut FnCtx,
     value: ValueId,
     value_repr: &WasmRepr,

@@ -5998,6 +5998,8 @@ fn check_runtime_call(
         // so the only compile-time questions are the shapes of the three operands and whether the
         // module carries the command runtime the warnings live in.
         None if mixed_array_read_is_supported(module, function, call) => {}
+        // `$obj[$key]` on an `ArrayAccess` implementor: dispatched to `offsetGet`.
+        None if array_access_read_is_supported(function, call) => {}
         // The one-operand narrowing of a boxed value into a declared class slot.
         None if mixed_object_narrowing_is_supported(function, call) => {}
         // The widening of a concrete scalar into a `?int` slot.
@@ -6059,6 +6061,34 @@ fn mixed_array_read_is_supported(module: &Module, function: &Function, call: &In
         return false;
     }
     operand_ir(2) == Some(IrType::I64)
+}
+
+/// Returns true when an untyped `Op::RuntimeCall` is `$obj[$key]` on an `ArrayAccess` receiver.
+///
+/// Same three operands and result as the boxed `$mixed[$key]` read above; the RECEIVER is what
+/// separates them. Admitted only for a receiver whose exact class is known and whose
+/// `offsetGet` this module can call directly — an interface-typed or Mixed receiver would need
+/// the dispatch the method lowering does from a name, and that name is not in the string table.
+///
+/// A WRITE (`$obj[$k] = v`) lowers void and is deliberately NOT admitted here: it would need
+/// `offsetSet`, whose second argument this shape does not carry.
+pub(super) fn array_access_read_is_supported(function: &Function, call: &Instruction) -> bool {
+    if call.operands.len() != 3 || call.is_void() {
+        return false;
+    }
+    let operand_ir = |index: usize| {
+        call.operands
+            .get(index)
+            .and_then(|value| function.value(*value))
+            .map(|value| value.ir_type)
+    };
+    operand_ir(0) == Some(IrType::Heap(IrHeapKind::Object))
+        && matches!(
+            operand_ir(1),
+            Some(IrType::I64 | IrType::F64 | IrType::Str | IrType::Heap(IrHeapKind::Mixed))
+        )
+        && operand_ir(2) == Some(IrType::I64)
+        && call.result_type == IrType::Heap(IrHeapKind::Mixed)
 }
 
 /// Returns true when an untyped `Op::RuntimeCall` narrows one boxed value to a declared class.
@@ -7728,7 +7758,10 @@ pub(super) fn op_is_supported(op: Op) -> bool {
 #[cfg(test)]
 mod tests {
     use super::super::runtime::DIAG_SUPPRESS_GUARD;
-    use super::{loose_eq_shape_issue, validate_module as validate_and_plan, LoweredWasmPlan, WasmError};
+    use super::{
+        array_access_read_is_supported, loose_eq_shape_issue,
+        validate_module as validate_and_plan, LoweredWasmPlan, WasmError,
+    };
     use crate::codegen::platform::Target;
     use crate::codegen::Emit;
     use crate::ir::{
@@ -10080,6 +10113,70 @@ mod tests {
             2,
             "only the two normal reads should call the warning helper: {wat}"
         );
+    }
+
+    /// The two untyped three-operand reads are told apart by their RECEIVER, and only by it.
+    ///
+    /// `$mixed[$key]` and `$obj[$key]` carry the same operand count, the same key and warn-flag
+    /// shapes, and the same boxed result, so a lowering that keyed off arity alone would send an
+    /// `ArrayAccess` object into `__rt_mixed_array_get` and read the object header as a Mixed
+    /// cell. This pins the discrimination in both directions.
+    #[test]
+    fn array_access_and_mixed_reads_are_told_apart_by_their_receiver() {
+        for (receiver_ir, receiver_php, is_array_access) in [
+            (
+                IrType::Heap(IrHeapKind::Object),
+                PhpType::Object("Box".to_string()),
+                true,
+            ),
+            (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed, false),
+        ] {
+            let mut function =
+                Function::new("reads".to_string(), IrType::Void, PhpType::Void);
+            function.flags.is_main = true;
+            let call = {
+                let mut builder = Builder::new(&mut function);
+                let entry = builder.create_named_block("entry", Vec::new());
+                builder.set_entry(entry);
+                builder.position_at_end(entry);
+                let receiver = builder
+                    .emit(
+                        Op::ObjectNew,
+                        Vec::new(),
+                        Some(Immediate::Data(crate::ir::DataId::from_raw(0))),
+                        receiver_ir,
+                        receiver_php,
+                        Ownership::Owned,
+                    )
+                    .expect("receiver");
+                let key = builder.emit_const_str(crate::ir::DataId::from_raw(0));
+                let warn = builder.emit_const_i64(1);
+                let read = builder
+                    .emit(
+                        Op::RuntimeCall,
+                        vec![receiver, key, warn],
+                        None,
+                        IrType::Heap(IrHeapKind::Mixed),
+                        PhpType::Mixed,
+                        Ownership::Owned,
+                    )
+                    .expect("read");
+                let _ = read;
+                builder.terminate(Terminator::Return { value: None });
+                function
+                    .instructions
+                    .iter()
+                    .find(|inst| inst.op == Op::RuntimeCall)
+                    .cloned()
+                    .expect("the read instruction")
+            };
+            assert_eq!(
+                array_access_read_is_supported(&function, &call),
+                is_array_access,
+                "an {receiver_ir:?} receiver must {} the ArrayAccess path",
+                if is_array_access { "take" } else { "not take" }
+            );
+        }
     }
 
     /// Every `__rt_warn_*` helper must open with the `@` suppression guard.

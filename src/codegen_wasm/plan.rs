@@ -200,6 +200,29 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // `$obj[$key]` on an `ArrayAccess` implementor dispatches to `offsetGet`, but a program that
+    // only ever writes the subscript never MENTIONS that name, so it is absent from the module
+    // string table. The null-receiver check names the method it was about to call, so lay the
+    // bytes out for any module carrying the untyped runtime call that shape uses.
+    if module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .any(|function| {
+            function
+                .instructions
+                .iter()
+                .any(|inst| {
+                    inst.op == crate::ir::Op::RuntimeCall
+                        && inst.immediate.is_none()
+                        && super::capability::array_access_read_is_supported(function, inst)
+                })
+        })
+    {
+        if !layout_values.iter().any(|value| value == "offsetGet") {
+            layout_values.push("offsetGet".to_string());
+        }
+    }
     // `Foo::class` answers a compile-time string, so every class name an EIR `ConstClassName`
     // names needs its bytes addressable in static data.
     for function in module.functions.iter().chain(module.class_methods.iter()) {
