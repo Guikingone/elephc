@@ -299,6 +299,18 @@ pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
     emitter.instruction("mov x2, #5");                                          // resource kind 5 = eval-owned inert handle: no PHP id, no destructor
     emitter.instruction("b __rt_mixed_from_value");                             // box the inert hash-context payload and return to Rust
 
+    label_c_global(emitter, "__elephc_eval_resource_is_closed");
+    emitter.instruction("sub sp, sp, #16");                                     // allocate a wrapper frame across the type-name call
+    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address across the call
+    emitter.instruction("mov x29, sp");                                         // establish a stable wrapper frame pointer
+    emitter.instruction("bl __rt_resource_type_name");                          // ask the resource registry which name this payload reports
+    abi::emit_symbol_address(emitter, "x9", "_resource_type_unknown");
+    emitter.instruction("cmp x1, x9");                                          // a closed handle is exactly the one that reports the Unknown literal
+    emitter.instruction("cset x0, eq");                                         // report closed as 1 and open as 0
+    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the wrapper frame
+    emitter.instruction("ret");                                                 // return the closed predicate to Rust
+
     label_c_global(emitter, "__elephc_eval_value_float");
     emitter.instruction("fmov x1, d0");                                         // move the C double bits into the mixed payload slot
     emitter.instruction("mov x0, #2");                                          // runtime tag 2 = double
