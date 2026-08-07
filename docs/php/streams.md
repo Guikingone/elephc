@@ -20,6 +20,32 @@ code should guard failed opens before using the handle.
 `"resource"`, `is_resource(STDIN)` returns `true`, and
 `get_resource_type(STDIN)` returns `"stream"`.
 
+### Resource ids
+
+Ids follow PHP's reference numbering:
+
+| id | holder |
+|---|---|
+| 1, 2, 3 | `STDIN`, `STDOUT`, `STDERR` |
+| 4 | the request's default stream context |
+| 5 and up | resources the program opens |
+
+Id 4 is not reserved by the runtime at startup: PHP creates the default stream
+context lazily, at the **first stream open of any kind**, and keeps it for the
+rest of the request. `stream_context_get_default()` therefore reports a LOWER id
+than a stream opened before it, and a program that never opens a stream never
+mints it.
+
+Ids are never reused. Closing a handle and opening another gives the new one the
+next number, even when the operating system hands back the same descriptor.
+`var_dump()`, `get_resource_id()`, an `(int)` cast, and `"$handle"` all report the
+same id, and streams opened inside `eval()` draw from the same counter, so a mixed
+program numbers its resources exactly as PHP does.
+
+A `php://stdout` (or `php://stdin`, `php://stderr`, `php://fd/N`) handle is a
+DUPLICATE of the descriptor, as in php-src, so `fclose()` on it closes only that
+copy and the program's own output keeps working.
+
 ## Basic stream I/O
 
 | Function | Signature | Description |
@@ -320,7 +346,18 @@ close. elephc still reports the single open type name `"stream"`; PHP's further
 names (`"stream-context"`, `"stream filter"`) are not distinguished yet.
 
 `stream_get_meta_data()` derives `eof`, `seekable`, `blocked`, and `mode` from
-the live descriptor. `stream_type` is `"STDIO"` for seekable streams and
-`"tcp_socket"` for non-seekable streams. `wrapper_type` is reported as
-`"plainfile"` and `uri` as the empty string because elephc does not track
-per-resource open paths in v1.
+the live descriptor. `wrapper_type` and `uri` are recorded per handle when the
+stream is opened, so a file reports `plainfile` with its path, a `php://` stream
+reports `PHP`, and a `data:` URL reports `RFC2397` — PHP's name for that wrapper,
+which is the RFC rather than the scheme.
+
+Known differences from PHP 8.5.6, all in reported names rather than behavior:
+
+- `stream_type` is `"STDIO"` for seekable streams and `"tcp_socket"` for
+  non-seekable ones. PHP distinguishes further: `MEMORY` for `php://memory`,
+  `TEMP` for `php://temp`, `Output` for `php://output`, and `RFC2397` for a
+  `data:` URL.
+- `uri` is empty for a stream with no user-supplied path, such as `tmpfile()`,
+  where PHP reports the temporary file it created.
+- `php://` targets are resolved for LITERAL paths. `fopen($url, …)` with the URL
+  in a variable goes through the ordinary filesystem open and fails.

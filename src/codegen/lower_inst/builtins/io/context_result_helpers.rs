@@ -460,6 +460,28 @@ pub(super) fn emit_fd_result(ctx: &mut FunctionContext<'_>, fd: i64) {
     abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), fd);
 }
 
+/// Emits `dup(fd)` and leaves the FRESH descriptor as the current integer result.
+///
+/// A `php://stdout` handle must not be the process's own descriptor. php-src's
+/// `php://` wrapper duplicates it (`ext/standard/php_fopen_wrapper.c`), so closing the
+/// stream closes only the copy. Handing out descriptor 1 directly made
+/// `fclose(fopen('php://stdout', 'w'))` close the program's real standard output: every
+/// later `echo` was written to a closed descriptor and silently discarded, while the
+/// program still exited 0.
+///
+/// `dup` returning `-1` flows into the caller's `false` boxing like any other failed
+/// open. The call is safe here because the descriptor is boxed through
+/// `__rt_mixed_from_value` immediately afterwards, so this path already contains a call
+/// and the enclosing frame already preserves the link register.
+pub(super) fn emit_dup_fd_result(ctx: &mut FunctionContext<'_>, fd: i64) {
+    let arg_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x0",
+        Arch::X86_64 => "rdi",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, arg_reg, fd);
+    ctx.emitter.bl_c("dup");                                                    // hand out a copy, never the process's own descriptor
+}
+
 /// Emits a boolean scalar as the current integer result.
 pub(super) fn emit_bool_result(ctx: &mut FunctionContext<'_>, value: bool) {
     abi::emit_load_int_immediate(

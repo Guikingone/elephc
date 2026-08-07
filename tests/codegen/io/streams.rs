@@ -1610,6 +1610,30 @@ fn test_fopen_php_stdout_writes_to_stdout() {
     assert_eq!(out, "via php-wrapper");
 }
 
+/// Verifies closing a `php://stdout` handle leaves the program's own stdout usable.
+///
+/// The wrapper used to hand back descriptor 1 itself, so `fclose()` closed the process's
+/// standard output: `after` was written to a closed descriptor and vanished, while the
+/// program still exited 0 — output loss with no diagnostic anywhere. php-src duplicates
+/// the descriptor in `php_fopen_wrapper.c`, and reference PHP 8.5.6 prints both lines.
+///
+/// The `before` line is asserted too: a wrapper that failed to open at all would drop
+/// only the `via-handle` write and still print `after`, passing a test that pinned the
+/// tail alone.
+#[test]
+fn test_closing_php_stdout_leaves_the_process_stdout_open() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://stdout", "w");
+echo "before\n";
+fwrite($h, "via-handle\n");
+fclose($h);
+echo "after\n";
+"#,
+    );
+    assert_eq!(out, "before\nvia-handle\nafter\n");
+}
+
 /// Verifies compiled PHP output for fopen php output is stdout alias.
 #[test]
 fn test_fopen_php_output_is_stdout_alias() {
@@ -6712,6 +6736,22 @@ fclose($f);
         out,
         "mode=w seekable=1 eof=0 type=STDIO wrap=plainfile blocked=1 unread=0 timed_out=0"
     );
+}
+
+/// Verifies the `data:` wrapper reports PHP's name for it, `RFC2397`.
+///
+/// elephc answered `data` — the scheme, not the wrapper. Reference PHP 8.5.6 names it
+/// after the RFC that defines `data:` URLs, and a program branching on `wrapper_type`
+/// (as PSR-7 and Flysystem adapters do) saw a name that exists nowhere in PHP.
+#[test]
+fn test_stream_get_meta_data_names_the_data_wrapper_rfc2397() {
+    let out = compile_and_run(
+        r#"<?php
+$d = fopen("data://text/plain,hi", "r");
+echo stream_get_meta_data($d)["wrapper_type"];
+"#,
+    );
+    assert_eq!(out, "RFC2397");
 }
 
 /// Verifies compiled PHP output for stream get meta data reports eof consistently with feof.

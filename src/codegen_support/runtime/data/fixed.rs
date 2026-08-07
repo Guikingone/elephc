@@ -1128,7 +1128,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_wrapper_ftps\n_meta_wrapper_ftps:\n    .ascii \"ftps\"\n");
     out.push_str(".globl _meta_wrapper_phar\n_meta_wrapper_phar:\n    .ascii \"phar\"\n");
     out.push_str(".globl _meta_wrapper_php\n_meta_wrapper_php:\n    .ascii \"PHP\"\n");
-    out.push_str(".globl _meta_wrapper_data\n_meta_wrapper_data:\n    .ascii \"data\"\n");
+    out.push_str(".globl _meta_wrapper_data\n_meta_wrapper_data:\n    .ascii \"RFC2397\"\n");
     out.push_str(".globl _meta_wrapper_zlib\n_meta_wrapper_zlib:\n    .ascii \"compress.zlib\"\n");
     out.push_str(".globl _meta_wrapper_bzip2\n_meta_wrapper_bzip2:\n    .ascii \"compress.bzip2\"\n");
     out.push_str(".globl _meta_wrapper_glob\n_meta_wrapper_glob:\n    .ascii \"glob\"\n");

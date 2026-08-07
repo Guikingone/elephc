@@ -356,7 +356,7 @@ pub(super) fn emit_literal_fopen_result(
 ) -> Result<()> {
     let mode = expect_operand(inst, 1)?;
     if let Some(fd) = php_standard_stream_fd(path).or_else(|| php_fd_stream(path)) {
-        emit_fd_result(ctx, fd);
+        emit_dup_fd_result(ctx, fd);
         box_stream_fd_or_false_result(ctx, "fopen");
         emit_record_stream_meta_after_boxed_literal(ctx, 6, path);
         return Ok(());
