@@ -8541,7 +8541,13 @@ fn lower_stream_get_contents_seek(
             ctx.emitter.instruction(&format!("b.lt {}", skip_seek));            // keep the current position for negative offsets
             ctx.emitter.instruction("mov x1, x0");                              // pass offset as the second seek argument
             ctx.emitter.instruction("mov x2, #0");                              // pass SEEK_SET as the third seek argument
-            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // reload the backend descriptor for seeking
+            ctx.emitter.instruction("ldr x0, [sp, #24]");                       // reload the opaque stream handle
+            // The saved slot now holds the opaque handle, so resolve the backend
+            // descriptor before the wrapper probe and lseek. Passing a handle to
+            // lseek made every offset-seeking stream_get_contents report failure.
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the seek arguments across the resolve
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the seek arguments
             ctx.emitter.instruction("mov w9, #0x4000");                         // materialize the high half of USER_WRAPPER_FD_BASE
             ctx.emitter.instruction("lsl w9, w9, #16");                         // form the synthetic wrapper fd base 0x40000000
             ctx.emitter.instruction("cmp x0, x9");                              // test whether the handle is a synthetic wrapper fd
@@ -8563,7 +8569,16 @@ fn lower_stream_get_contents_seek(
             ctx.emitter.instruction(&format!("jl {}", skip_seek));              // keep the current position for negative offsets
             ctx.emitter.instruction("mov rsi, rax");                            // pass offset as the second seek argument
             ctx.emitter.instruction("xor edx, edx");                            // pass SEEK_SET as the third seek argument
-            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");           // reload the backend descriptor for seeking
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 24]");           // reload the opaque stream handle
+            // The saved slot now holds the opaque handle, so resolve the backend
+            // descriptor before the wrapper probe and lseek. Passing a handle to
+            // lseek made every offset-seeking stream_get_contents report failure.
+            ctx.emitter.instruction("push rsi");                                // preserve the seek arguments across the resolve
+            ctx.emitter.instruction("push rdx");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_fd");
+            ctx.emitter.instruction("pop rdx");
+            ctx.emitter.instruction("pop rsi");
+            ctx.emitter.instruction("mov rdi, rax");                            // seek on the resolved descriptor
             ctx.emitter.instruction("mov r9d, 0x40000000");                     // materialize USER_WRAPPER_FD_BASE for synthetic handles
             ctx.emitter.instruction("cmp rdi, r9");                             // test whether the handle is a synthetic wrapper fd
             ctx.emitter.instruction(&format!("jge {}", wrap_seek));             // dispatch synthetic handles to wrapper stream_seek

@@ -12,6 +12,9 @@
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
+/// Capacity of the shared `_concat_buf` accumulation buffer.
+const CONCAT_BUF_CAPACITY: u64 = 65536;
+
 /// Emits the `__rt_fread` runtime helper for reading bytes from a stream handle.
 ///
 /// On ARM64: reads into the concat buffer, updates `_concat_off`, sets StreamState EOF,
@@ -69,9 +72,23 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- get concat_buf write position --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load current write offset
+    // Clamp the request to what the shared buffer can still hold. Without this a
+    // read past the 64 KiB capacity ran straight off the end; `_concat_off` is
+    // declared immediately after `_concat_buf`, so the first bytes overwritten
+    // were the accumulator itself, which both corrupted memory and truncated the
+    // result at an arbitrary length.
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x12, x11, x10");                                   // compute write pointer: buf + offset
+    // The start pointer must be published before the capacity check: the
+    // buffer-full exit joins the common epilogue, which reads it back.
     emitter.instruction("str x12, [sp, #16]");                                  // save start pointer for return value
+    emitter.instruction(&format!("mov x13, #{CONCAT_BUF_CAPACITY}"));           // shared concat-buffer capacity
+    emitter.instruction("subs x13, x13, x10");                                  // bytes still available after the write cursor
+    emitter.instruction("b.le __rt_fread_buffer_full");                         // no capacity left: report a zero-length read
+    emitter.instruction("ldr x14, [sp, #8]");                                   // requested byte count
+    emitter.instruction("cmp x14, x13");                                        // does the request exceed the remaining capacity?
+    emitter.instruction("csel x14, x13, x14, gt");                              // clamp to the remaining capacity
+    emitter.instruction("str x14, [sp, #8]");                                   // publish the clamped request
 
     // -- TLS dispatch: route through elephc_tls_read when fd has an
     //    attached session (Phase 11 B3). --
@@ -137,6 +154,10 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #1");                                          // publish the EOF state
     emitter.instruction("bl __rt_stream_eof_set");                              // update only this stream's stable state
     emitter.instruction("b __rt_fread_done");                                   // preserve a successful short-read result
+
+    emitter.label("__rt_fread_buffer_full");
+    emitter.instruction("str xzr, [sp, #24]");                                  // a full shared buffer yields an empty read rather than an overflow
+    emitter.instruction("b __rt_fread_done");                                   // join the common return path
 
     emitter.label("__rt_fread_would_block");
     emitter.instruction("str xzr, [sp, #24]");                                  // return an empty read without setting EOF for EAGAIN/EWOULDBLOCK
