@@ -459,6 +459,8 @@ fn emit_stream_destroy_state(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #16]");                             // preserve the caller frame and link register
     emitter.instruction("add x29, sp, #16");                                    // establish a stable teardown frame
     emitter.instruction("str x0, [sp, #0]");                                    // preserve StreamState across nested releases
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload StreamState for the attached filter chains
+    emitter.instruction("bl __rt_stream_close_filter_chains");                  // PHP invalidates filter resources when their stream closes
     emitter.instruction(&format!(
         "ldr x0, [x0, #{}]", STREAM_URI_PTR_OFFSET
     ));                                                                         // load the owned URI allocation

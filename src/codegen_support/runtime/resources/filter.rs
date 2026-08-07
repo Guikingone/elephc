@@ -24,6 +24,7 @@ use crate::codegen_support::runtime::resources::layout::{
     FILTER_BUILTIN_ID_OFFSET, FILTER_DIRECTION_OFFSET, FILTER_FLAGS_OFFSET, FILTER_NEXT_OFFSET,
     FILTER_OBJECT_OFFSET, FILTER_PARAMS_OFFSET, FILTER_PREV_OFFSET, FILTER_STATE_SIZE,
     FILTER_STREAM_HANDLE_OFFSET, RESOURCE_KIND_FILTER, RESOURCE_STATUS_LIVE,
+    STREAM_READ_FILTER_HEAD_OFFSET,
     SLOT_KIND_OFFSET, SLOT_STATE_PTR_OFFSET, SLOT_STATUS_OFFSET,
     STREAM_WRITE_FILTER_HEAD_OFFSET,
 };
@@ -39,6 +40,7 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_unlink_aarch64(emitter);
             emit_filter_apply_chain_aarch64(emitter);
             emit_fwrite_filtered_aarch64(emitter);
+            emit_stream_close_filter_chains(emitter);
         }
         Arch::X86_64 => {
             emit_filter_state_x86_64(emitter);
@@ -47,6 +49,7 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_unlink_x86_64(emitter);
             emit_filter_apply_chain_x86_64(emitter);
             emit_fwrite_filtered_x86_64(emitter);
+            emit_stream_close_filter_chains(emitter);
         }
     }
 }
@@ -834,3 +837,126 @@ const _: () = {
     let _ = FILTER_FLAGS_OFFSET;
     let _ = crate::codegen_support::runtime::resources::layout::FILTER_FLAG_ONCLOSE_CALLED;
 };
+
+/// `__rt_stream_close_filter_chains(state)` closes every filter still attached.
+///
+/// PHP invalidates a filter resource when its stream closes, so this runs from
+/// the stream-state destructor and therefore covers both `fclose()` and a
+/// release driven by scope exit.
+///
+/// The successor is read before the node is closed: closing may free the state.
+/// A filter attached with `STREAM_FILTER_ALL` sits in both chains, so it is
+/// visited twice; `__rt_resource_mark_closed` reports already-closed resources
+/// as a no-op, which makes the second visit inert.
+pub fn emit_stream_close_filter_chains(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_stream_close_filter_chains_x86_64(emitter);
+        return;
+    }
+    emitter.blank();
+    emitter.comment("--- runtime: close a stream's attached filters ---");
+    emitter.label_global("__rt_stream_close_filter_chains");
+    // Frame: [0]=state [8]=current head offset [16]=node handle [24]=next handle
+    emitter.instruction("sub sp, sp, #48");                                     // reserve the teardown frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    emitter.instruction("cbz x0, __rt_scfc_done");                              // a null state owns no chains
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the stream state
+    emitter.instruction(&format!("mov x9, #{STREAM_READ_FILTER_HEAD_OFFSET}")); // start with the read chain
+    emitter.instruction("str x9, [sp, #8]");
+
+    emitter.label("__rt_scfc_chain");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // stream state
+    emitter.instruction("ldr x9, [sp, #8]");                                    // current chain-head offset
+    emitter.instruction("add x10, x0, x9");                                     // chain head slot address
+    emitter.instruction("ldr x11, [x10]");                                      // first node handle
+    emitter.instruction("str xzr, [x10]");                                      // detach the chain before closing it
+    emitter.instruction("str x11, [sp, #16]");                                  // walk cursor
+
+    emitter.label("__rt_scfc_node");
+    emitter.instruction("ldr x11, [sp, #16]");
+    emitter.instruction("cbz x11, __rt_scfc_chain_done");                       // end of chain
+    emitter.instruction("mov x0, x11");                                         // resolve the node to read its successor
+    emitter.instruction("bl __rt_filter_state");
+    emitter.instruction("cbz x0, __rt_scfc_close");                             // already dead: nothing to read ahead
+    emitter.instruction(&format!("ldr x12, [x0, #{FILTER_NEXT_OFFSET}]"));      // successor handle
+    emitter.instruction("str x12, [sp, #24]");
+    emitter.instruction("b __rt_scfc_close_ready");
+    emitter.label("__rt_scfc_close");
+    emitter.instruction("str xzr, [sp, #24]");                                  // a stale node ends the walk
+    emitter.label("__rt_scfc_close_ready");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // node handle
+    emitter.instruction("bl __rt_resource_mark_closed");                        // publish Closed exactly once
+    emitter.instruction("ldr x0, [sp, #16]");                                   // node handle
+    emitter.instruction("bl __rt_resource_release");                            // drop the attach-time reference
+    emitter.instruction("ldr x12, [sp, #24]");                                  // advance to the successor
+    emitter.instruction("str x12, [sp, #16]");
+    emitter.instruction("b __rt_scfc_node");
+
+    emitter.label("__rt_scfc_chain_done");
+    emitter.instruction("ldr x9, [sp, #8]");
+    emitter.instruction(&format!("cmp x9, #{STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+    emitter.instruction("b.eq __rt_scfc_done");                                 // both chains handled
+    emitter.instruction(&format!("mov x9, #{STREAM_WRITE_FILTER_HEAD_OFFSET}")); // continue with the write chain
+    emitter.instruction("str x9, [sp, #8]");
+    emitter.instruction("b __rt_scfc_chain");
+
+    emitter.label("__rt_scfc_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the teardown frame
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// x86_64 variant of [`emit_stream_close_filter_chains`].
+fn emit_stream_close_filter_chains_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: close a stream's attached filters ---");
+    emitter.label_global("__rt_stream_close_filter_chains");
+    // Frame: [-8]=state [-16]=head offset [-24]=node handle [-32]=next handle
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the teardown frame
+    emitter.instruction("sub rsp, 48");                                         // reserve spill slots
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_scfc_done_x");                                 // a null state owns no chains
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the stream state
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 16], {STREAM_READ_FILTER_HEAD_OFFSET}"));
+
+    emitter.label("__rt_scfc_chain_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // stream state
+    emitter.instruction("add rax, QWORD PTR [rbp - 16]");                       // chain head slot address
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // first node handle
+    emitter.instruction("mov QWORD PTR [rax], 0");                              // detach the chain before closing it
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // walk cursor
+
+    emitter.label("__rt_scfc_node_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_scfc_chain_done_x");                           // end of chain
+    emitter.instruction("mov rdi, r10");                                        // resolve the node to read its successor
+    emitter.instruction("call __rt_filter_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_scfc_close_x");                                // already dead: nothing to read ahead
+    emitter.instruction(&format!("mov r11, QWORD PTR [rax + {FILTER_NEXT_OFFSET}]"));
+    emitter.instruction("mov QWORD PTR [rbp - 32], r11");
+    emitter.instruction("jmp __rt_scfc_close_ready_x");
+    emitter.label("__rt_scfc_close_x");
+    emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // a stale node ends the walk
+    emitter.label("__rt_scfc_close_ready_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // node handle
+    emitter.instruction("call __rt_resource_mark_closed");                      // publish Closed exactly once
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // node handle
+    emitter.instruction("call __rt_resource_release");                          // drop the attach-time reference
+    emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // advance to the successor
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");
+    emitter.instruction("jmp __rt_scfc_node_x");
+
+    emitter.label("__rt_scfc_chain_done_x");
+    emitter.instruction(&format!("cmp QWORD PTR [rbp - 16], {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+    emitter.instruction("je __rt_scfc_done_x");                                 // both chains handled
+    emitter.instruction(&format!("mov QWORD PTR [rbp - 16], {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+    emitter.instruction("jmp __rt_scfc_chain_x");
+
+    emitter.label("__rt_scfc_done_x");
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return to the caller
+}

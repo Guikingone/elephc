@@ -3560,6 +3560,12 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         Arch::AArch64 => {
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // resolve the opaque handle while preserving its descriptor
             abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            // PHP invalidates attached filter resources at fclose(), not when the
+            // last reference to the stream goes away, so the chains are closed here
+            // as well as from the state destructor.
+            ctx.emitter.instruction("stp x0, x1, [sp, #-16]!");                 // preserve the resolved state across the teardown call
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_filter_chains");
+            ctx.emitter.instruction("ldp x0, x1, [sp], #16");                   // restore the resolved state
             ctx.emitter.instruction(&format!("cbz x0, {}", not_popen_label));   // retain defensive descriptor cleanup if state vanished
             ctx.emitter.instruction(&format!(
                 "ldr x9, [x0, #{}]", STREAM_BACKEND_KIND_OFFSET
@@ -3584,6 +3590,13 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 16]");           // resolve the opaque handle while preserving its descriptor
             abi::emit_call_label(ctx.emitter, "__rt_stream_state");
+            // PHP invalidates attached filter resources at fclose(), not when the
+            // last reference to the stream goes away, so the chains are closed here
+            // as well as from the state destructor.
+            ctx.emitter.instruction("push rax");                                // preserve the resolved state across the teardown call
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_close_filter_chains");
+            ctx.emitter.instruction("pop rax");                                 // restore the resolved state
             ctx.emitter.instruction("test rax, rax");                           // did the Closing StreamState resolve?
             ctx.emitter.instruction(&format!("jz {}", not_popen_label));        // retain defensive descriptor cleanup if state vanished
             ctx.emitter.instruction(&format!(

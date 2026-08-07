@@ -484,6 +484,8 @@ fn emit_stream_destroy_state(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable teardown frame
     emitter.instruction("sub rsp, 16");                                         // reserve aligned StreamState storage
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve StreamState across nested releases
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload StreamState for the attached filter chains
+    emitter.instruction("call __rt_stream_close_filter_chains");                // PHP invalidates filter resources when their stream closes
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [rax + {}]", STREAM_URI_PTR_OFFSET
     ));                                                                         // load the owned URI allocation
