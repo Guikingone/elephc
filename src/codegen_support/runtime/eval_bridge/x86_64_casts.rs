@@ -288,6 +288,14 @@ pub(super) fn emit_x86_64_casts(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the C integer payload in rdi and return
 
     label_c_global(emitter, "__elephc_eval_value_resource");
+    emitter.instruction("push rbp");                                            // preserve the Rust caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable wrapper frame pointer
+    emitter.instruction("push rdi");                                            // preserve the eval payload across the context call
+    emitter.instruction("sub rsp, 8");                                          // realign the stack for the context call
+    emitter.instruction("call __rt_stream_default_context_ensure");             // PHP mints id 4 for the request default BEFORE the first stream
+    emitter.instruction("add rsp, 8");                                          // release the alignment padding
+    emitter.instruction("pop rdi");                                             // restore the eval payload into mixed value_lo
+    emitter.instruction("pop rbp");                                             // restore the Rust caller frame pointer
     emitter.instruction("mov eax, 9");                                          // runtime tag 9 = resource, with C id already in rdi
     emitter.instruction("xor esi, esi");                                        // resource payloads do not use a high word
     emitter.instruction("jmp __rt_mixed_from_value");                           // box the resource payload and return to Rust

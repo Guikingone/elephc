@@ -11,10 +11,11 @@
 //!   notifier children before freeing the 32-byte state allocation.
 
 use super::layout::{
-    CONTEXT_NOTIFIER_OFFSET, CONTEXT_OPTIONS_OFFSET, CONTEXT_PARAMS_OFFSET,
-    RESOURCE_KIND_CONTEXT, RESOURCE_STATUS_LIVE, SLOT_KIND_OFFSET, SLOT_STATE_PTR_OFFSET,
-    SLOT_STATUS_OFFSET,
+    CONTEXT_FLAGS_OFFSET, CONTEXT_NOTIFIER_OFFSET, CONTEXT_OPTIONS_OFFSET,
+    CONTEXT_PARAMS_OFFSET, CONTEXT_STATE_SIZE, RESOURCE_KIND_CONTEXT, RESOURCE_STATUS_LIVE,
+    SLOT_KIND_OFFSET, SLOT_STATE_PTR_OFFSET, SLOT_STATUS_OFFSET,
 };
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
 
@@ -24,12 +25,117 @@ pub(super) fn emit_context_resources(emitter: &mut Emitter) {
         Arch::AArch64 => {
             emit_context_state_aarch64(emitter);
             emit_context_destroy_state_aarch64(emitter);
+            emit_default_context_ensure_aarch64(emitter);
         }
         Arch::X86_64 => {
             emit_context_state_x86_64(emitter);
             emit_context_destroy_state_x86_64(emitter);
+            emit_default_context_ensure_x86_64(emitter);
         }
     }
+}
+
+/// Emits AArch64 lazy creation of the request-default stream context.
+///
+/// # Inputs
+/// - none.
+///
+/// # Outputs
+/// - `x0` / `rax`: the request-global default context handle, or `0` if it could not
+///   be allocated.
+///
+/// # Why this exists
+/// PHP mints resource id 4 for the request's default stream context, created at the
+/// FIRST stream open of any kind and retained for the rest of the request. The compiled
+/// side does that inline in `fopen`/`opendir` lowering, but a stream opened INSIDE a
+/// runtime-interpreted `eval()` never runs that lowering, so nothing consumed id 4 and
+/// every eval resource reported an id one lower than PHP's — `eval('$a = fopen(…)')`
+/// answered `4` where PHP 8.5.6 answers `5`. The eval bridge calls this before it boxes
+/// a resource, which is the moment eval mints an id.
+///
+/// # ABI details
+/// - Calls `__rt_heap_alloc`, `__rt_resource_alloc` and, on the unwind path,
+///   `__rt_heap_free`, so it saves and restores `x30` around them.
+/// - The state is allocated ZEROED. The inline lowering hands the newly created state
+///   the options and notifier scratch its own call site staged; the request default has
+///   neither, which is why the lowering clears both globals before creating it.
+fn emit_default_context_ensure_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: lazily create the request-default stream context ---");
+    emitter.label_global("__rt_stream_default_context_ensure");
+    abi::emit_symbol_address(emitter, "x9", "_stream_default_context_handle");
+    emitter.instruction("ldr x0, [x9]");                                        // load the request-global default context handle
+    emitter.instruction("cbnz x0, __rt_stream_default_context_ensure_done");    // one context per request: reuse the existing one
+    emitter.instruction("sub sp, sp, #16");                                     // reserve the state slot and a link-register save
+    emitter.instruction("str x30, [sp, #8]");                                   // save the caller link register across the allocations
+    emitter.instruction(&format!("mov x0, #{}", CONTEXT_STATE_SIZE));           // ContextState stores options, params, notifier and flags
+    emitter.instruction("bl __rt_heap_alloc");
+    emitter.instruction("cbz x0, __rt_stream_default_context_ensure_failed");   // report no context when the state cannot be allocated
+    emitter.instruction("str x0, [sp, #0]");                                    // keep ContextState reachable across the registry call
+    emitter.instruction(&format!("str xzr, [x0, #{}]", CONTEXT_OPTIONS_OFFSET)); // the request default carries no options
+    emitter.instruction(&format!("str xzr, [x0, #{}]", CONTEXT_PARAMS_OFFSET));  // the request default carries no params
+    emitter.instruction(&format!("str xzr, [x0, #{}]", CONTEXT_NOTIFIER_OFFSET)); // the request default carries no notifier
+    emitter.instruction(&format!("str xzr, [x0, #{}]", CONTEXT_FLAGS_OFFSET));   // ContextState flags start clear
+    emitter.instruction("mov x1, x0");                                          // pass ContextState as the registry slot state
+    emitter.instruction(&format!("mov x0, #{}", RESOURCE_KIND_CONTEXT));        // registry resource kind 2 = Context
+    emitter.instruction("mov x2, #1");                                          // the request default owns its state
+    emitter.instruction("bl __rt_resource_alloc");
+    emitter.instruction("cbz x0, __rt_stream_default_context_ensure_unwind");   // free ContextState when registry growth fails
+    abi::emit_symbol_address(emitter, "x9", "_stream_default_context_handle");
+    emitter.instruction("str x0, [x9]");                                        // transfer the creator reference to the request-global owner
+    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
+    emitter.instruction("add sp, sp, #16");                                     // release the creation frame
+    emitter.instruction("ret");                                                 // return the freshly created default context handle
+
+    emitter.label("__rt_stream_default_context_ensure_unwind");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the orphaned ContextState
+    emitter.instruction("bl __rt_heap_free");
+    emitter.instruction("mov x0, #0");                                          // report no context after unwinding the state
+    emitter.label("__rt_stream_default_context_ensure_failed");
+    emitter.instruction("ldr x30, [sp, #8]");                                   // restore the caller link register
+    emitter.instruction("add sp, sp, #16");                                     // release the creation frame
+    emitter.label("__rt_stream_default_context_ensure_done");
+    emitter.instruction("ret");                                                 // return the existing or absent default context handle
+}
+
+/// x86_64 counterpart of `emit_default_context_ensure_aarch64`.
+fn emit_default_context_ensure_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: lazily create the request-default stream context ---");
+    emitter.label_global("__rt_stream_default_context_ensure");
+    abi::emit_symbol_address(emitter, "r9", "_stream_default_context_handle");
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // load the request-global default context handle
+    emitter.instruction("test rax, rax");                                       // has this request already created its default context?
+    emitter.instruction("jnz __rt_stream_default_context_ensure_done_x86");     // one context per request: reuse the existing one
+    emitter.instruction("sub rsp, 24");                                         // reserve the state slot and realign for the calls
+    emitter.instruction(&format!("mov eax, {}", CONTEXT_STATE_SIZE));           // ContextState stores options, params, notifier and flags
+    emitter.instruction("call __rt_heap_alloc");
+    emitter.instruction("test rax, rax");                                       // did libc allocate ContextState?
+    emitter.instruction("jz __rt_stream_default_context_ensure_failed_x86");    // report no context when the state cannot be allocated
+    emitter.instruction("mov QWORD PTR [rsp], rax");                            // keep ContextState reachable across the registry call
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", CONTEXT_OPTIONS_OFFSET)); // the request default carries no options
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", CONTEXT_PARAMS_OFFSET));  // the request default carries no params
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", CONTEXT_NOTIFIER_OFFSET)); // the request default carries no notifier
+    emitter.instruction(&format!("mov QWORD PTR [rax + {}], 0", CONTEXT_FLAGS_OFFSET));   // ContextState flags start clear
+    emitter.instruction("mov rsi, rax");                                        // pass ContextState as the registry slot state
+    emitter.instruction(&format!("mov edi, {}", RESOURCE_KIND_CONTEXT));        // registry resource kind 2 = Context
+    emitter.instruction("mov edx, 1");                                          // the request default owns its state
+    emitter.instruction("call __rt_resource_alloc");
+    emitter.instruction("test rax, rax");                                       // did the registry allocate a generation handle?
+    emitter.instruction("jz __rt_stream_default_context_ensure_unwind_x86");    // free ContextState when registry growth fails
+    abi::emit_symbol_address(emitter, "r9", "_stream_default_context_handle");
+    emitter.instruction("mov QWORD PTR [r9], rax");                             // transfer the creator reference to the request-global owner
+    emitter.instruction("add rsp, 24");                                         // release the creation frame
+    emitter.instruction("ret");                                                 // return the freshly created default context handle
+
+    emitter.label("__rt_stream_default_context_ensure_unwind_x86");
+    emitter.instruction("mov rax, QWORD PTR [rsp]");                            // reload the orphaned ContextState
+    emitter.instruction("call __rt_heap_free");
+    emitter.instruction("xor eax, eax");                                        // report no context after unwinding the state
+    emitter.label("__rt_stream_default_context_ensure_failed_x86");
+    emitter.instruction("add rsp, 24");                                         // release the creation frame
+    emitter.label("__rt_stream_default_context_ensure_done_x86");
+    emitter.instruction("ret");                                                 // return the existing or absent default context handle
 }
 
 /// Emits AArch64 Live Context state lookup.

@@ -288,7 +288,14 @@ pub(super) fn emit_aarch64_casts(emitter: &mut Emitter) {
     emitter.instruction("b __rt_mixed_from_value");                             // box the integer payload and return to Rust
 
     label_c_global(emitter, "__elephc_eval_value_resource");
-    emitter.instruction("mov x1, x0");                                          // move the C resource id into the mixed payload slot
+    emitter.instruction("sub sp, sp, #32");                                     // reserve a payload slot and a saved frame
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the context call
+    emitter.instruction("add x29, sp, #16");                                    // establish a stable wrapper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the eval payload across the context call
+    emitter.instruction("bl __rt_stream_default_context_ensure");               // PHP mints id 4 for the request default BEFORE the first stream
+    emitter.instruction("ldr x1, [sp, #0]");                                    // move the C resource id into the mixed payload slot
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the wrapper frame before the tail branch
     emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
     emitter.instruction("mov x2, xzr");                                         // resource payloads do not use a high word
     emitter.instruction("b __rt_mixed_from_value");                             // box the resource payload and return to Rust

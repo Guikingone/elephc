@@ -61,8 +61,49 @@ mod tests {
                 "__rt_stream_close_backend:",
                 "__rt_context_state:",
                 "__rt_context_destroy_state:",
+                "__rt_stream_default_context_ensure:",
             ] {
                 assert!(asm.contains(label), "{target:?} omitted {label}");
+            }
+        }
+    }
+
+    /// Verifies the request-default context is created ONCE and owns its state.
+    ///
+    /// PHP mints resource id 4 for the request's default stream context at the first
+    /// stream open and retains it, so a second creation would consume a second id and
+    /// shift every later resource. The emitted body must therefore return the stored
+    /// handle when one exists (the early-out), register the state as an OWNED Context
+    /// (kind 2, request-owned 1) so request teardown frees it, and publish the handle
+    /// back into `_stream_default_context_handle`.
+    ///
+    /// Asserted per target rather than once: this helper exists because a target that
+    /// skipped it reported every eval resource id one lower than PHP's, and that is
+    /// precisely the kind of divergence a single-target assertion hides.
+    #[test]
+    fn the_request_default_context_is_created_once_and_owns_its_state() {
+        for (target, reuse, kind, owned) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "cbnz x0, __rt_stream_default_context_ensure_done",
+                "mov x0, #2",
+                "mov x2, #1",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "jnz __rt_stream_default_context_ensure_done_x86",
+                "mov edi, 2",
+                "mov edx, 1",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_resource_runtime(&mut emitter);
+            let asm = emitter.output();
+            for needle in [reuse, kind, owned] {
+                assert!(
+                    asm.contains(needle),
+                    "{target:?} lost `{needle}` from the default-context helper:\n{asm}"
+                );
             }
         }
     }

@@ -283,6 +283,37 @@ mod tests {
         }
     }
 
+    /// Pins that boxing an eval resource first materializes the request-default context,
+    /// and that boxing a hash context does NOT.
+    ///
+    /// PHP mints resource id 4 for the request's default stream context at the first
+    /// stream open of any kind. A stream opened INSIDE a runtime-interpreted `eval()`
+    /// runs no `fopen` lowering, so nothing created that context and every eval resource
+    /// reported an id one lower than PHP's: `eval('$a = fopen(…)')` answered `4` where
+    /// PHP 8.5.6 answers `5`. This wrapper is where eval mints an id, so the creation
+    /// belongs here — and only here: `hash_init()` returns a `HashContext` OBJECT that
+    /// consumes no resource id and opens no stream, so its wrapper must stay clear of
+    /// the call or every `hash_init()` would burn id 4 and shift the ids back.
+    #[test]
+    fn boxing_an_eval_resource_creates_the_request_default_context_first() {
+        for target in [
+            Target::new(Platform::MacOS, Arch::AArch64),
+            Target::new(Platform::Linux, Arch::X86_64),
+        ] {
+            let asm = emit_for(target);
+            let resource_body = body_of(&asm, "__elephc_eval_value_resource");
+            let hash_body = body_of(&asm, "__elephc_eval_value_hash_context");
+            assert!(
+                resource_body.contains("__rt_stream_default_context_ensure"),
+                "eval resources must create the request default context first ({target:?}):\n{resource_body}"
+            );
+            assert!(
+                !hash_body.contains("__rt_stream_default_context_ensure"),
+                "an eval hash context opens no stream and must not create one ({target:?}):\n{hash_body}"
+            );
+        }
+    }
+
     /// Pins the whole body of `__elephc_eval_resource_is_closed` on AArch64.
     ///
     /// The symbol is how eval learns that a HOST resource was closed. Nothing about the
