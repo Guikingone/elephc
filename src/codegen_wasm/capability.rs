@@ -2597,11 +2597,11 @@ fn array_store_shape_issue(
             IrType::Heap(IrHeapKind::Array | IrHeapKind::Object),
             PhpType::Array(_) | PhpType::Object(_),
         ) if is_push => true,
-        // An already-boxed cell stays PUSH-only. The setter itself is sound — see
-        // `lower_array_set` for the measurement — but a consumed write's result is released
-        // without a matching acquire, which would free the cell the array just took a share
-        // of. Refusing costs coverage; admitting would return null from `$a[0]`.
-        (PhpType::Mixed, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed) if is_push => true,
+        // An already-boxed cell, push or set alike. This was PUSH-only for as long as an owned
+        // `load_local` handed out a BORROW while the EIR released it, which freed the cell the
+        // array had just taken a share of and made `$a[0]` read back null. `lower_load_local`
+        // now increfs exactly when the EIR declares `own=owned`, so the write is balanced.
+        (PhpType::Mixed, IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed) => true,
         // A raw scalar boxed into a Mixed cell at the WRITE site — push or set alike, since
         // `__rt_array_set_mixed` stores what `__rt_array_push_mixed` appends. Each of these has
         // an exact tag and payload; a heap container has neither, so it stays refused.

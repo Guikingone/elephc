@@ -1435,7 +1435,59 @@ fn lower_load_local(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         super::refcell::emit_cell_load(ctx, &ptr_local, &result_repr)?;
         return ctx.emit_store_value(result);
     }
-    transfer::emit_transfer_from_slot(ctx, slot, result)
+    transfer::emit_transfer_from_slot(ctx, slot, result)?;
+    // The EIR states the ownership it expects of this load, and `own=owned` means an OWNED
+    // reference — the EIR then emits a matching `release`. Copying the slot's words alone hands
+    // out a BORROW, so that release eats the container's share: `$a[$k] ??= ...` consumed
+    // directly read back NULL, while the same expression stored to a local was right, because
+    // storing emits its own `acquire` first. A `maybe_owned` load stays a borrow and is
+    // untouched, which is every array and object load that has no release.
+    if owned_heap_load(ctx, result) {
+        ctx.emit_load_value(result)?;
+        ctx.fb.ins(
+            "call $__rt_incref",
+            "the EIR asked for an owned reference, and will release it",
+        );
+    }
+    Ok(())
+}
+
+/// Whether this load's result is a HEAP value the EIR both declares `own=owned` AND releases.
+///
+/// Two narrower conditions than they look, both established by flipping this predicate off in the
+/// same binary and re-measuring rather than by reading the EIR:
+///
+/// * `own=owned` alone is not enough — some owned loads carry no release, and increfing those
+///   grew a probe from 3 pages to 85 over 200..20000 iterations;
+/// * a release is not enough either. The EIR reads a slot's PREVIOUS value purely to release
+///   it before `store_local` overwrites the slot, and that load's only use is the release.
+///   Increfing there makes the release consume the new reference and strands the slot's own:
+///   `$b = $a;` alone grew to 31 pages where the same loop with this predicate off is flat at 3.
+///
+/// So the reference is owed exactly when the value is USED for something besides being
+/// released — the consumed-directly case, which is the read-back-null bug this exists to fix.
+fn owned_heap_load(ctx: &FnCtx, result: crate::ir::ValueId) -> bool {
+    let declared_owned = ctx.function.value(result).is_some_and(|value| {
+        value.ownership == crate::ir::Ownership::Owned
+            && matches!(value.ir_type, IrType::Heap(_))
+    });
+    if !declared_owned {
+        return false;
+    }
+    let released = ctx
+        .function
+        .instructions
+        .iter()
+        .any(|candidate| candidate.op == Op::Release && candidate.operands.contains(&result));
+    // A load whose ONLY use is the release is the OVERWRITE idiom: the EIR reads the slot's
+    // previous value purely to give up the slot's reference before `store_local` replaces it.
+    // Increfing there makes the release consume the NEW reference and strands the slot's own —
+    // which is the leak, and it has nothing to do with boxed cells: `$b = $a;` alone grew to
+    // 31 pages. A load that is also USED owes a reference; one that is only released does not.
+    let used_beyond_release = ctx.function.instructions.iter().any(|candidate| {
+        candidate.op != Op::Release && candidate.operands.contains(&result)
+    });
+    released && used_beyond_release
 }
 
 /// Lowers `StoreLocal`: stores the operand value into the slot.
@@ -4633,6 +4685,37 @@ fn lower_array_set(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 "call $__rt_array_set_ptr",
                 "set container element (COW, releases the replaced child)",
             );
+        }
+        // An ALREADY-boxed cell written into an `array<mixed>`. The array takes its own share
+        // and the EIR releases the operand right after the set, the same contract the container
+        // arm above uses — and the same one `array_push` uses for this value shape.
+        WasmRepr::Ptr(_)
+            if matches!(
+                ctx.function.value(value).map(|v| v.ir_type),
+                Some(IrType::Heap(IrHeapKind::Mixed))
+            ) && array_stores_mixed_cells(ctx, array) =>
+        {
+            let cell = ctx.fresh_temp(ValType::I32);
+            ctx.emit_load_value(value)?;
+            ctx.fb
+                .ins(&format!("local.set {}", cell), "the cell being stored");
+            ctx.fb.ins(
+                &format!("(call $__rt_incref (local.get {}))", cell),
+                "the array takes its own share of the cell",
+            );
+            ctx.emit_load_value(array)?;
+            ctx.emit_load_value(index)?;
+            ctx.fb
+                .ins(&format!("local.get {}", cell), "mixed cell pointer");
+            ctx.fb.ins(
+                "call $__rt_array_set_mixed",
+                "set boxed element (COW, releases the replaced cell)",
+            );
+            // As in the raw-scalar path: a bool lives INSIDE its cell here, so restamping the
+            // array's value type would make the deep free skip every child.
+            ctx.emit_store_value(array)?;
+            write_back_container_slot(ctx, array)?;
+            return Ok(());
         }
         other => return Err(WasmError::Unsupported(format!("array_set of {:?}", other))),
     }
