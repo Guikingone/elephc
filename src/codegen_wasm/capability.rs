@@ -5694,6 +5694,11 @@ fn static_method_call_shape_issue(
         let Some(value) = owner.value(*operand) else {
             return Some(format!("argument #{index} is missing from the value table"));
         };
+        // A concrete scalar bound to a `mixed` parameter is a legal boxing transfer, which the
+        // call lowering performs — the same relaxation the instance-call path applies.
+        if argument_boxes_into_a_mixed_parameter(value, parameter) {
+            continue;
+        }
         if value.ir_type != parameter.ir_type
             || value.php_type.codegen_repr() != parameter.php_type.codegen_repr()
         {

@@ -352,6 +352,55 @@ pub(super) fn lower_array_access_set(ctx: &mut FnCtx, inst: &Instruction) -> Res
     lower_array_access(ctx, inst, false)
 }
 
+/// Pushes one call argument, boxing a concrete scalar when the callee's parameter is `mixed`.
+///
+/// Returns the minted cell when it boxed, so the caller can release it after the call: the
+/// caller owns the argument, since parameter slots are excluded from the callee's epilogue.
+fn push_call_argument(
+    ctx: &mut FnCtx,
+    arg: ValueId,
+    parameter: Option<&crate::ir::FunctionParam>,
+) -> Result<Option<String>> {
+    let boxes = ctx
+        .function
+        .value(arg)
+        .zip(parameter)
+        .is_some_and(|(value, parameter)| {
+            super::capability::argument_boxes_into_a_mixed_parameter(value, parameter)
+        });
+    if !boxes {
+        ctx.emit_load_value(arg)?;
+        return Ok(None);
+    }
+    let repr = ctx.value_repr(arg)?.clone();
+    let cell = super::inst::box_value_into_mixed_cell(ctx, arg, &repr)?;
+    ctx.fb.ins(
+        &format!("local.get {}", cell),
+        "argument boxed for a `mixed` parameter",
+    );
+    Ok(Some(cell))
+}
+
+/// Returns the parameter list of one compiled method body, for the boxing decision above.
+fn method_body_params(ctx: &FnCtx, qualified_name: &str) -> Vec<crate::ir::FunctionParam> {
+    ctx.module
+        .class_methods
+        .iter()
+        .find(|body| body.name == qualified_name)
+        .map(|body| body.params.clone())
+        .unwrap_or_default()
+}
+
+/// Releases every cell minted for one call's arguments.
+fn release_boxed_arguments(ctx: &mut FnCtx, minted: &[String]) {
+    for cell in minted {
+        ctx.fb.ins(
+            &format!("(call $__rt_decref_any (local.get {}))", cell),
+            "release the boxed argument",
+        );
+    }
+}
+
 /// Lowers a read of an UNDECLARED property to the class's `__get($name)`.
 ///
 /// PHP does not read storage here at all — it calls the magic accessor with the property name
@@ -1373,13 +1422,18 @@ pub(super) fn lower_static_method_call(ctx: &mut FnCtx, inst: &Instruction) -> R
             &format!("i64.const {}", ci.class_id as i64),
             &format!("{}::{} called_class_id", receiver_class, method_name),
         );
-        for &arg in &inst.operands {
-            ctx.emit_load_value(arg)?;
+        let params = method_body_params(ctx, &format!("{}::{}", impl_class, method_name));
+        let mut minted = Vec::new();
+        for (index, &arg) in inst.operands.iter().enumerate() {
+            if let Some(cell) = push_call_argument(ctx, arg, params.get(index + 1))? {
+                minted.push(cell);
+            }
         }
         ctx.fb.ins(
             &format!("call ${}", callee_symbol),
             &format!("{}::{} (static)", receiver_class, method_name),
         );
+        release_boxed_arguments(ctx, &minted);
     } else if lexical_instance {
         let impl_class = ci
             .method_impl_classes
@@ -1389,13 +1443,18 @@ pub(super) fn lower_static_method_call(ctx: &mut FnCtx, inst: &Instruction) -> R
         let callee_symbol = method_symbol(&format!("{}::{}", impl_class, method_name));
         // Forward the current `this` (slot 0) as the receiver of the instance method.
         ctx.emit_load_slot(LocalSlotId::from_raw(0))?;
-        for &arg in &inst.operands {
-            ctx.emit_load_value(arg)?;
+        let params = method_body_params(ctx, &format!("{}::{}", impl_class, method_name));
+        let mut minted = Vec::new();
+        for (index, &arg) in inst.operands.iter().enumerate() {
+            if let Some(cell) = push_call_argument(ctx, arg, params.get(index + 1))? {
+                minted.push(cell);
+            }
         }
         ctx.fb.ins(
             &format!("call ${}", callee_symbol),
             &format!("{}::{} (lexical instance via {}::)", impl_class, method_name, receiver_label),
         );
+        release_boxed_arguments(ctx, &minted);
     } else {
         return Err(WasmError::Unsupported(format!(
             "unresolvable static call {} (static method not found; lexical instance fallback \
