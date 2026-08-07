@@ -1366,7 +1366,7 @@ pub(crate) fn lower_stream_wrapper_unregister(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_wrapper_restore(protocol)` as a successful no-op.
+/// Lowers `stream_wrapper_restore(protocol)` by clearing its disabled bit.
 pub(crate) fn lower_stream_wrapper_restore(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -1374,7 +1374,51 @@ pub(crate) fn lower_stream_wrapper_restore(
     super::ensure_arg_count(inst, "stream_wrapper_restore", 1)?;
     let protocol = expect_operand(inst, 0)?;
     load_string_to_result(ctx, protocol, "stream_wrapper_restore protocol")?;
-    emit_bool_result(ctx, true);
+    // Previously an unconditional true, which claimed success for names that were
+    // never built in. Restoring clears the disabled bit that
+    // stream_wrapper_unregister() set, and reports false for anything else.
+    let restored = ctx.next_label("swr_restored");
+    let done = ctx.next_label("swr_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // protocol pointer
+            ctx.emitter.instruction("mov x1, x2");                              // protocol length
+            abi::emit_call_label(ctx.emitter, "__rt_builtin_wrapper_index");
+            ctx.emitter.instruction("cmp x0, #0");
+            ctx.emitter.instruction(&format!("b.ge {}", restored));             // a built-in name can be restored
+            ctx.emitter.instruction("mov x0, #0");                              // unknown scheme reports false
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&restored);
+            abi::emit_symbol_address(ctx.emitter, "x9", "_disabled_builtin_wrappers");
+            ctx.emitter.instruction("ldr x10, [x9]");                           // current disabled mask
+            ctx.emitter.instruction("mov x11, #1");
+            ctx.emitter.instruction("lsl x11, x11, x0");                        // bit for this wrapper
+            ctx.emitter.instruction("bic x10, x10, x11");                       // clear it: the built-in is available again
+            ctx.emitter.instruction("str x10, [x9]");
+            ctx.emitter.instruction("mov x0, #1");                              // report success
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // protocol pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // protocol length
+            abi::emit_call_label(ctx.emitter, "__rt_builtin_wrapper_index");
+            ctx.emitter.instruction("cmp rax, 0");
+            ctx.emitter.instruction(&format!("jge {}", restored));              // a built-in name can be restored
+            ctx.emitter.instruction("xor eax, eax");                            // unknown scheme reports false
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&restored);
+            ctx.emitter.instruction("mov rcx, rax");                            // built-in index
+            abi::emit_symbol_address(ctx.emitter, "r9", "_disabled_builtin_wrappers");
+            ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // current disabled mask
+            ctx.emitter.instruction("mov r11, 1");
+            ctx.emitter.instruction("shl r11, cl");                             // bit for this wrapper
+            ctx.emitter.instruction("not r11");
+            ctx.emitter.instruction("and r10, r11");                            // clear it: the built-in is available again
+            ctx.emitter.instruction("mov QWORD PTR [r9], r10");
+            ctx.emitter.instruction("mov eax, 1");                              // report success
+            ctx.emitter.label(&done);
+        }
+    }
     store_if_result(ctx, inst)
 }
 

@@ -418,6 +418,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_data_stream(emitter);
     io::emit_apply_stream_filter(emitter);
     io::emit_builtin_filter_id(emitter);
+    io::emit_builtin_wrapper_index(emitter);
     io::emit_ftp(emitter);
     io::emit_http(emitter);
     io::emit_https(emitter);

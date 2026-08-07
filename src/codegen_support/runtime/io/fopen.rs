@@ -85,6 +85,15 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fopen_uw_slot");                                // continue scanning slots
     emitter.label("__rt_fopen_uw_done");
 
+    // -- refuse plain paths while the file:// wrapper is unregistered --
+    // stream_wrapper_unregister("file") must actually stop opens, otherwise the
+    // call reports success and changes nothing. Index 0 is "file" in the built-in
+    // wrapper list.
+    abi::emit_symbol_address(emitter, "x9", "_disabled_builtin_wrappers");
+    emitter.instruction("ldr x10, [x9]");                                       // disabled built-in mask
+    emitter.instruction("tst x10, #1");                                         // is file:// unregistered?
+    emitter.instruction("b.ne __rt_fopen_fail");                                // report PHP false while it is
+
     // -- save mode string for later parsing --
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save mode ptr and len on stack
 

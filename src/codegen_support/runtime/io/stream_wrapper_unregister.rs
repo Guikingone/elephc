@@ -11,7 +11,7 @@
 //!   wins; the slot is cleared by setting `protocol_ptr` to `0`. Returns 1 on
 //!   a successful unregistration, 0 when no registered protocol matches.
 
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits the `__rt_stream_wrapper_unregister` runtime helper.
 /// Input:  AArch64 x0 = protocol ptr, x1 = protocol len.
@@ -26,6 +26,8 @@ pub fn emit_stream_wrapper_unregister(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_wrapper_unregister ---");
     emitter.label_global("__rt_stream_wrapper_unregister");
+    emitter.instruction("mov x15, x0");                                         // preserve the protocol pointer for the built-in probe
+    emitter.instruction("mov x16, x1");                                         // preserve the protocol length
 
     super::emit_load_table_base(emitter, "x4");
     emitter.instruction("mov x5, #0");                                          // wrapper slot index
@@ -64,7 +66,33 @@ pub fn emit_stream_wrapper_unregister(emitter: &mut Emitter) {
     emitter.instruction("b __rt_swu_scan");                                     // continue scanning
 
     emitter.label("__rt_swu_miss");
-    emitter.instruction("mov x0, #0");                                          // return false when no slot matched
+    // PHP allows a built-in wrapper to be unregistered. Built-ins are not in the
+    // user table, so a miss falls through to the disabled-wrapper bitmask before
+    // reporting failure.
+    emitter.instruction("sub sp, sp, #32");                                     // frame for the built-in probe
+    emitter.instruction("stp x29, x30, [sp, #16]");
+    emitter.instruction("add x29, sp, #16");
+    emitter.instruction("mov x0, x15");                                         // restore the protocol pointer
+    emitter.instruction("mov x1, x16");                                         // restore the protocol length
+    emitter.instruction("bl __rt_builtin_wrapper_index");                       // x0 = built-in index or -1
+    emitter.instruction("cmp x0, #0");
+    emitter.instruction("b.lt __rt_swu_really_miss");                           // not a built-in either
+    abi::emit_symbol_address(emitter, "x9", "_disabled_builtin_wrappers");
+    emitter.instruction("ldr x10, [x9]");                                       // current disabled mask
+    emitter.instruction("mov x11, #1");
+    emitter.instruction("lsl x11, x11, x0");                                    // bit for this wrapper
+    emitter.instruction("tst x10, x11");                                        // already unregistered?
+    emitter.instruction("b.ne __rt_swu_really_miss");                           // PHP reports false on a second unregister
+    emitter.instruction("orr x10, x10, x11");                                   // mark the built-in disabled
+    emitter.instruction("str x10, [x9]");
+    emitter.instruction("mov x0, #1");                                          // report a successful unregistration
+    emitter.instruction("ldp x29, x30, [sp, #16]");
+    emitter.instruction("add sp, sp, #32");
+    emitter.instruction("ret");                                                 // return to the caller
+    emitter.label("__rt_swu_really_miss");
+    emitter.instruction("mov x0, #0");                                          // return false when nothing matched
+    emitter.instruction("ldp x29, x30, [sp, #16]");
+    emitter.instruction("add sp, sp, #32");
     emitter.instruction("ret");                                                 // return to the caller
 }
 
