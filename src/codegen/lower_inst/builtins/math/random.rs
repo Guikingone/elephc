@@ -67,7 +67,7 @@ pub(crate) fn lower_random_int(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "random_int", 2)?;
+    super::super::ensure_arg_count(inst, "random_int", 2)?;
     lower_random_range(
         ctx,
         inst,

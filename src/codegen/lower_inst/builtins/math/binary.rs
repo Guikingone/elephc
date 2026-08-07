@@ -23,7 +23,7 @@ pub(crate) fn lower_intdiv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "intdiv", 2)?;
+    super::super::ensure_arg_count(inst, "intdiv", 2)?;
     let zero_label = ctx.next_label("intdiv_zero");
     let overflow_label = ctx.next_label("intdiv_overflow");
     let done_label = ctx.next_label("intdiv_done");
@@ -68,7 +68,7 @@ pub(crate) fn lower_fdiv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "fdiv", 2)?;
+    super::super::ensure_arg_count(inst, "fdiv", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "fdiv")?;
@@ -98,7 +98,7 @@ pub(crate) fn lower_fmod(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "fmod", 2)?;
+    super::super::ensure_arg_count(inst, "fmod", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "fmod")?;
@@ -126,7 +126,7 @@ pub(crate) fn lower_pow(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "pow", 2)?;
+    super::super::ensure_arg_count(inst, "pow", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "pow")?;

@@ -15289,9 +15289,9 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/codegen/lower_inst/builtins.rs",
+      "codegen_file": "src/codegen/lower_inst/builtins/count_empty.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1607,
+      "codegen_line": 92,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
