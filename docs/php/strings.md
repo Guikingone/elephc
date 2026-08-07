@@ -325,6 +325,7 @@ Known divergences:
 | `htmlspecialchars()` | `htmlspecialchars($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Escape HTML special chars: `&` `<` `>` `"` `'` (single quote as `&#039;`). The `ENT_*` flag constants (`ENT_QUOTES`, `ENT_COMPAT`, `ENT_NOQUOTES`, `ENT_HTML401`, `ENT_HTML5`, `ENT_XHTML`, `ENT_XML1`, `ENT_SUBSTITUTE`, `ENT_IGNORE`) are defined with PHP's values; `$flags` and `$encoding` are accepted but the escaper currently always applies `ENT_QUOTES` behaviour |
 | `htmlentities()` | `htmlentities($str, $flags = ENT_QUOTES \| ENT_SUBSTITUTE \| ENT_HTML401, $encoding = "UTF-8"): string` | Alias for htmlspecialchars |
 | `html_entity_decode()` | `html_entity_decode($str): string` | Decode HTML entities |
+| `parse_url()` | `parse_url(string $url, int $component = -1): array\|string\|int\|null\|false` | Parse present URL components without decoding them; `PHP_URL_*` selects one component |
 | `urlencode()` | `urlencode($str): string` | URL-encode (spaces as +) |
 | `urldecode()` | `urldecode($str): string` | URL-decode |
 | `rawurlencode()` | `rawurlencode($str): string` | URL-encode (spaces as %20) |
@@ -340,6 +341,14 @@ Known divergences:
 | `ctype_digit()` | `ctype_digit($str): bool` | All chars are 0-9 |
 | `ctype_alnum()` | `ctype_alnum($str): bool` | All chars are alphanumeric |
 | `ctype_space()` | `ctype_space($str): bool` | All chars are whitespace |
+
+`parse_url()` follows PHP's component shapes: without a selector (or with any
+negative selector) it returns an associative array containing only present keys,
+with `port` stored as an integer. `PHP_URL_SCHEME` through `PHP_URL_FRAGMENT`
+select one string or integer component, returning `null` when that component is
+absent. A malformed URL returns `false` in either mode; selectors greater than
+`PHP_URL_FRAGMENT` raise a catchable `ValueError`. Query and fragment bytes are
+returned verbatim rather than decoded.
 
 Regex functions are documented separately in [Regex](regex.md), including the
 managed `pcre2` declaration required when a `preg_*` program is finally linked.

@@ -22,6 +22,21 @@ expect_builtin_arity_error!(
 );
 
 expect_builtin_arity_error!(
+    test_error_parse_url_wrong_args,
+    "<?php parse_url();",
+    "parse_url() takes 1 or 2 arguments"
+);
+
+/// Verifies that `parse_url()` rejects a statically non-integer component selector.
+#[test]
+fn test_error_parse_url_component_type() {
+    expect_error(
+        "<?php parse_url('https://example.com', 'host');",
+        "parse_url() component must be int",
+    );
+}
+
+expect_builtin_arity_error!(
     test_error_base64_decode_wrong_args,
     "<?php base64_decode();",
     "base64_decode() takes 1 or 2 arguments"

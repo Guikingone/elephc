@@ -61,6 +61,7 @@ pub mod md5;
 pub mod nl2br;
 pub mod number_format;
 pub mod ord;
+pub mod parse_url;
 pub mod printf;
 pub mod quoted_printable_encode;
 pub mod quotemeta;

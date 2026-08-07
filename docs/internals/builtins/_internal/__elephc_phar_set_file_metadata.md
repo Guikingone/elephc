@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_file_metadata() — internals"
 description: "Compiler internals for __elephc_phar_set_file_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 507
+  order: 508
 ---
 
 ## `__elephc_phar_set_file_metadata()` — internals

@@ -426,6 +426,7 @@ pub enum RuntimeFnId {
     Md5,
     NumberFormat,
     Ord,
+    ParseUrl,
     Printf,
     Rtrim,
     Sha1,
@@ -874,7 +875,8 @@ impl RuntimeFnId {
             // `strpos()`/`strrpos()`/`stripos()`/`strripos()` `$offset` outside the haystack,
             // `substr_count()` empty needle or out-of-subject offset/length,
             // `wordwrap()` empty break or zero cutting width, `min()`/`max()` over an
-            // empty array), so they must not be treated
+            // empty array, `parse_url()` unknown `$component` identifier), so they must not
+            // be treated
             // as removable pure calls: dead-code elimination would drop the diagnostic, and
             // the try-prefix hoist would move the call out of the `try` that must catch it.
             RuntimeFnId::ArrayChunk
@@ -900,6 +902,7 @@ impl RuntimeFnId {
             | RuntimeFnId::SubstrCount
             | RuntimeFnId::BaseConvert
             | RuntimeFnId::ChunkSplit
+            | RuntimeFnId::ParseUrl
             | RuntimeFnId::Wordwrap => crate::ir::Effects::MAY_THROW,
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
@@ -1287,6 +1290,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::ObGetLength
                 | RuntimeFnId::ObGetStatus
                 | RuntimeFnId::ObListHandlers
+                | RuntimeFnId::ParseUrl
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
@@ -1736,6 +1740,7 @@ impl RuntimeFnId {
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Octdec => "octdec",
             RuntimeFnId::Ord => "ord",
+            RuntimeFnId::ParseUrl => "parse_url",
             RuntimeFnId::Printf => "printf",
             RuntimeFnId::Rtrim => "rtrim",
             RuntimeFnId::Sha1 => "sha1",

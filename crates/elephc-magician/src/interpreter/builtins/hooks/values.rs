@@ -197,6 +197,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     NumberFormat,
     /// Dispatches `ord(...)`.
     Ord,
+    /// Dispatches `parse_url(...)`.
+    ParseUrl,
     /// Dispatches `pi()`.
     Pi,
     /// Dispatches `pow(...)`.
@@ -525,6 +527,9 @@ impl EvalValuesHook {
                 eval_number_format_declared_values_result(evaluated_args, values)
             }
             Self::Ord => one_arg(evaluated_args, values, eval_ord_result),
+            Self::ParseUrl => {
+                eval_parse_url_declared_values_result(evaluated_args, context, values)
+            }
             Self::Pi => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);

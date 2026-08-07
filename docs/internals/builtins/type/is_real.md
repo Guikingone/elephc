@@ -2,7 +2,7 @@
 title: "is_real() — internals"
 description: "Compiler internals for is_real(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 481
+  order: 482
 ---
 
 ## `is_real()` — internals
