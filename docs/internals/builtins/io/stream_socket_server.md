@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function stream_socket_server(string $address, int $error_code = null, int $error_message = null, int $flags = 12, mixed $context = null, mixed $peername = null): mixed
+function stream_socket_server(string $address, int $error_code = null, int $error_message = null, int $flags = 12, mixed $context = null): mixed
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 1–6 arguments (5 optional).
+- **Arity**: takes 1–5 arguments (4 optional).
 - **By-reference parameters**: `$error_code`, `$error_message`.
 
 ## Eval interpreter (magician)

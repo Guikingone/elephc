@@ -8,7 +8,7 @@ sidebar:
 ## stream_socket_server()
 
 ```php
-function stream_socket_server(string $address, int $error_code = null, int $error_message = null, int $flags = 12, mixed $context = null, mixed $peername = null): mixed
+function stream_socket_server(string $address, int $error_code = null, int $error_message = null, int $flags = 12, mixed $context = null): mixed
 ```
 
 Create an Internet or Unix domain server socket.
@@ -19,7 +19,6 @@ Create an Internet or Unix domain server socket.
 - `$error_message` (`int`), passed by reference, default `null`, optional
 - `$flags` (`int`), default `12`, optional
 - `$context` (`mixed`), default `null`, optional
-- `$peername` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 

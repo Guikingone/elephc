@@ -49448,12 +49448,6 @@
           "default": "null",
           "name": "context",
           "optional": true
-        },
-        {
-          "by_ref": false,
-          "default": "null",
-          "name": "peername",
-          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -49576,13 +49570,6 @@
           "by_ref": false,
           "default": "null",
           "name": "context",
-          "optional": true,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": "null",
-          "name": "peername",
           "optional": true,
           "type": "mixed"
         }
@@ -50369,12 +50356,6 @@
           "default": "null",
           "name": "context",
           "optional": true
-        },
-        {
-          "by_ref": false,
-          "default": "null",
-          "name": "peername",
-          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -50490,13 +50471,6 @@
           "by_ref": false,
           "default": "null",
           "name": "context",
-          "optional": true,
-          "type": "mixed"
-        },
-        {
-          "by_ref": false,
-          "default": "null",
-          "name": "peername",
           "optional": true,
           "type": "mixed"
         }

@@ -8,7 +8,7 @@ sidebar:
 ## stream_socket_client()
 
 ```php
-function stream_socket_client(string $address, int $error_code = null, int $error_message = null, string $timeout = null, int $flags = 1, mixed $context = null, mixed $peername = null): mixed
+function stream_socket_client(string $address, int $error_code = null, int $error_message = null, string $timeout = null, int $flags = 1, mixed $context = null): mixed
 ```
 
 Open Internet or Unix domain socket connection.
@@ -20,7 +20,6 @@ Open Internet or Unix domain socket connection.
 - `$timeout` (`string`), default `null`, optional
 - `$flags` (`int`), default `1`, optional
 - `$context` (`mixed`), default `null`, optional
-- `$peername` (`mixed`), default `null`, optional
 
 **Returns**: `mixed`
 
