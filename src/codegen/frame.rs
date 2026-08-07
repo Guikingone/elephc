@@ -172,6 +172,9 @@ pub(super) fn emit_main_prologue(ctx: &mut FunctionContext<'_>) {
     emit_callee_saved_saves(ctx);
     ctx.emitter.comment("save argc/argv to globals");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // Must follow the argc/argv store: the signal() call clobbers the process
+    // argument registers, which silently emptied $argc/$argv.
+    abi::emit_ignore_sigpipe(ctx.emitter);
     if ctx.heap_debug {
         ctx.emitter.comment("enable heap debug flag");
         abi::emit_enable_heap_debug_flag(ctx.emitter);
@@ -449,6 +452,9 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     ctx.emitter
         .comment("save argc/argv to globals for the bridge and handler");
     abi::emit_store_process_args_to_globals(ctx.emitter);
+    // Must follow the argc/argv store: the signal() call clobbers the process
+    // argument registers, which silently emptied $argc/$argv.
+    abi::emit_ignore_sigpipe(ctx.emitter);
     let argc_reg = abi::int_arg_reg_name(target, 0);
     let argv_reg = abi::int_arg_reg_name(target, 1);
     let handler_reg = abi::int_arg_reg_name(target, 2);

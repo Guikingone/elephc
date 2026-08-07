@@ -15,6 +15,30 @@ use super::{
     temp_int_reg,
 };
 
+/// Ignore SIGPIPE for the whole process, the way the PHP CLI does.
+///
+/// Without this, writing to a socket whose peer has closed kills the program
+/// with signal 13 before any output is flushed: `fwrite()` on a half-closed
+/// connection terminated the process instead of returning a byte count.
+///
+/// `signal(2)` is called through libc so the platform picks its own sigaction
+/// shim; SIGPIPE is 13 and SIG_IGN is 1 on both supported targets.
+pub fn emit_ignore_sigpipe(emitter: &mut Emitter) {
+    emitter.comment("ignore SIGPIPE so a closed peer cannot kill the process");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("mov x0, #13");                                 // SIGPIPE
+            emitter.instruction("mov x1, #1");                                  // SIG_IGN
+            emitter.instruction("bl _signal");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("mov edi, 13");                                 // SIGPIPE
+            emitter.instruction("mov esi, 1");                                  // SIG_IGN
+            emitter.instruction("call signal");
+        }
+    }
+}
+
 /// Store OS-provided argc and argv into global symbols.
 pub fn emit_store_process_args_to_globals(emitter: &mut Emitter) {
     emit_store_reg_to_symbol(emitter, process_argc_reg(emitter.target), "_global_argc", 0);
