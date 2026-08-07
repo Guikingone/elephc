@@ -247,25 +247,29 @@ fn ir_opt_enabled_for_codegen_fixture() -> bool {
     }
 }
 
-// Injects an exit harness into user assembly before the final `ret` instruction.
-// Rewrites macOS-style syscall sequence to Linux-style syscall sequence if needed,
-// then patches the assembly in-place using a target-specific needle. Panics if the
-// needle is not found (indicates a codegen emit change that broke the harness injection).
-/// Injects main exit harness into the compiler metadata registry.
-pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
-    let needle = match (target().platform, target().arch) {
+/// Returns the process-exit epilogue emitted for a supported test target.
+fn main_exit_needle(target: Target) -> &'static str {
+    match (target.platform, target.arch) {
         (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
-        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #93\n    svc #0",
+        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #94\n    svc #0",
         (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 231\n    syscall",
         (_, Arch::AArch64) => panic!(
             "main exit harness is not implemented yet for target {}",
-            target()
+            target
         ),
         (_, Arch::X86_64) => panic!(
             "main exit harness is not implemented yet for target {}",
-            target()
+            target
         ),
-    };
+    }
+}
+
+/// Injects an exit harness before the target's final process-exit epilogue.
+///
+/// Transforms macOS-dialect harness assembly for Linux and panics when codegen no
+/// longer emits the expected target-specific epilogue.
+pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
+    let needle = main_exit_needle(target());
     // Harness strings are written in macOS assembly dialect; transform for Linux if needed
     let harness = target().transform_assembly(harness);
     let replacement = format!("{harness}\n{needle}");
@@ -709,4 +713,26 @@ pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
         out.push(line);
     }
     out.join("\n")
+}
+
+#[cfg(test)]
+mod exit_harness_tests {
+    use super::*;
+
+    /// Verifies each supported target uses the process-wide exit epilogue emitted by codegen.
+    #[test]
+    fn main_exit_needles_match_supported_target_abis() {
+        assert_eq!(
+            main_exit_needle(Target::new(Platform::MacOS, Arch::AArch64)),
+            "    mov x0, #0\n    mov x16, #1\n    svc #0x80"
+        );
+        assert_eq!(
+            main_exit_needle(Target::new(Platform::Linux, Arch::AArch64)),
+            "    mov x0, #0\n    mov x8, #94\n    svc #0"
+        );
+        assert_eq!(
+            main_exit_needle(Target::new(Platform::Linux, Arch::X86_64)),
+            "    mov edi, 0\n    mov eax, 231\n    syscall"
+        );
+    }
 }

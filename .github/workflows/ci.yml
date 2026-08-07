@@ -14,6 +14,10 @@ concurrency:
 
 env:
   CARGO_TERM_COLOR: always
+  # Deep parser/lowering fixtures overflow Rust's small default worker stack on
+  # ARM64 runners. Keep one value for every archived nextest process so shard
+  # placement cannot change whether a test has enough stack.
+  RUST_MIN_STACK: "33554432"
   BRIDGE_CRATES: >-
     -p elephc-tls
     -p elephc-pdo
