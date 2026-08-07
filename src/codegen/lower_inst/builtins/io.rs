@@ -787,7 +787,15 @@ fn parse_php_filter_url(path: &str) -> Option<(u8, u8, String)> {
     Some((mode_bits, filter_id, resource.to_string()))
 }
 
-/// Records `php://filter` read/write filter ids on a successfully opened resource.
+/// Attaches the `php://filter` filters to a successfully opened resource.
+///
+/// The boxed `fopen` result stays in the int result register; the filter nodes
+/// are linked onto the stream's chains.
+///
+/// This used to stamp the legacy per-descriptor slots using the boxed payload as
+/// an index. Since the registry migration that payload is an opaque handle, not
+/// a descriptor, so indexing a 512-byte table with it wrote far out of bounds and
+/// crashed every `php://filter` open.
 fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_bits: u8, filter_id: u8) {
     let done_label = ctx.next_label("php_filter_done");
     match ctx.emitter.target.arch {
@@ -795,32 +803,64 @@ fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_bits: u8, fi
             ctx.emitter.instruction("ldr x9, [x0]");                            // load the boxed fopen result tag
             ctx.emitter.instruction("cmp x9, #9");                              // test whether fopen returned a resource
             ctx.emitter.instruction(&format!("b.ne {}", done_label));           // leave false results unmodified
-            ctx.emitter.instruction("ldr x1, [x0, #8]");                        // load the descriptor payload from the boxed resource
+            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the boxed fopen result
+            ctx.emitter.instruction("ldr x9, [x0, #8]");                        // opaque stream handle from the Mixed payload
+            ctx.emitter.instruction("str x9, [sp, #8]");                        // preserve the stream handle
+            ctx.emitter.instruction(&format!("mov x0, #{filter_id}"));          // built-in filter id
+            ctx.emitter.instruction("mov x1, #0");                              // built-ins carry no user-filter object
+            ctx.emitter.instruction(&format!("mov x2, #{mode_bits}"));          // direction bits from the URL
+            ctx.emitter.instruction("mov x3, #0");                              // built-ins retain no params value
+            abi::emit_call_label(ctx.emitter, "__rt_filter_create");
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the filter handle
             if mode_bits & 1 != 0 {
-                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
-                ctx.emitter.instruction(&format!("mov w10, #{}", filter_id));   // materialize the php://filter read filter id
-                ctx.emitter.instruction("strb w10, [x9, x1]");                  // attach the read filter to this descriptor
+                ctx.emitter.instruction("ldr x0, [sp, #8]");                    // stream handle
+                ctx.emitter.instruction("ldr x1, [sp, #16]");                   // filter handle
+                ctx.emitter.instruction(&format!("mov x2, #{STREAM_READ_FILTER_HEAD_OFFSET}"));
+                ctx.emitter.instruction("mov x3, #0");                          // append at the chain tail
+                abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
             }
             if mode_bits & 2 != 0 {
-                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
-                ctx.emitter.instruction(&format!("mov w10, #{}", filter_id));   // materialize the php://filter write filter id
-                ctx.emitter.instruction("strb w10, [x9, x1]");                  // attach the write filter to this descriptor
+                ctx.emitter.instruction("ldr x0, [sp, #8]");                    // stream handle
+                ctx.emitter.instruction("ldr x1, [sp, #16]");                   // filter handle
+                ctx.emitter.instruction(&format!("mov x2, #{STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+                ctx.emitter.instruction("mov x3, #0");                          // append at the chain tail
+                abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
             }
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // restore the boxed fopen result
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
             ctx.emitter.label(&done_label);
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // load the boxed fopen result tag
             ctx.emitter.instruction("cmp r9, 9");                               // test whether fopen returned a resource
             ctx.emitter.instruction(&format!("jne {}", done_label));            // leave false results unmodified
-            ctx.emitter.instruction("mov rcx, QWORD PTR [rax + 8]");            // load the descriptor payload from the boxed resource
+            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the boxed fopen result
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax + 8]");             // opaque stream handle from the Mixed payload
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r9");             // preserve the stream handle
+            ctx.emitter.instruction(&format!("mov rdi, {filter_id}"));          // built-in filter id
+            ctx.emitter.instruction("xor esi, esi");                            // built-ins carry no user-filter object
+            ctx.emitter.instruction(&format!("mov rdx, {mode_bits}"));          // direction bits from the URL
+            ctx.emitter.instruction("xor ecx, ecx");                            // built-ins retain no params value
+            abi::emit_call_label(ctx.emitter, "__rt_filter_create");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the filter handle
             if mode_bits & 1 != 0 {
-                abi::emit_symbol_address(ctx.emitter, "r8", "_stream_read_filters"); // read-filter table base
-                ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); // attach the read filter to this descriptor
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");        // stream handle
+                ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");       // filter handle
+                ctx.emitter.instruction(&format!("mov rdx, {STREAM_READ_FILTER_HEAD_OFFSET}"));
+                ctx.emitter.instruction("xor ecx, ecx");                        // append at the chain tail
+                abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
             }
             if mode_bits & 2 != 0 {
-                abi::emit_symbol_address(ctx.emitter, "r8", "_stream_write_filters"); // write-filter table base
-                ctx.emitter.instruction(&format!("mov BYTE PTR [r8 + rcx], {}", filter_id)); // attach the write filter to this descriptor
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 8]");        // stream handle
+                ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");       // filter handle
+                ctx.emitter.instruction(&format!("mov rdx, {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+                ctx.emitter.instruction("xor ecx, ecx");                        // append at the chain tail
+                abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
             }
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the boxed fopen result
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
             ctx.emitter.label(&done_label);
         }
     }
