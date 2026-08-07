@@ -16,7 +16,9 @@ eval_builtin! {
         stream,
         fields,
         separator = EvalBuiltinDefaultValue::String(","),
-        enclosure = EvalBuiltinDefaultValue::String("\"")
+        enclosure = EvalBuiltinDefaultValue::String("\""),
+        escape = EvalBuiltinDefaultValue::String("\\"),
+        eol = EvalBuiltinDefaultValue::String("\n")
     ],
     direct: Filesystem,
     values: Filesystem,

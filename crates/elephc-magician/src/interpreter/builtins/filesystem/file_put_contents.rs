@@ -10,7 +10,12 @@
 eval_builtin! {
     name: "file_put_contents",
     area: Filesystem,
-    params: [filename, data],
+    params: [
+        filename,
+        data,
+        flags = EvalBuiltinDefaultValue::Int(0),
+        context = EvalBuiltinDefaultValue::Null
+    ],
     direct: Filesystem,
     values: Filesystem,
 }

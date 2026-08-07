@@ -10,7 +10,13 @@
 eval_builtin! {
     name: "file_get_contents",
     area: Filesystem,
-    params: [filename],
+    params: [
+        filename,
+        use_include_path = EvalBuiltinDefaultValue::Bool(false),
+        context = EvalBuiltinDefaultValue::Null,
+        offset = EvalBuiltinDefaultValue::Int(0),
+        length = EvalBuiltinDefaultValue::Null
+    ],
     direct: Filesystem,
     values: Filesystem,
 }
