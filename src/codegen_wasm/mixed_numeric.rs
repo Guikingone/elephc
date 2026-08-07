@@ -239,6 +239,8 @@ pub(super) fn emit_mixed_numeric_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_MIXED_NUMERIC_SUB);
     wm.add_raw_func(RT_MIXED_NUMERIC_MUL);
     wm.add_raw_func(RT_THREEWAY);
+    wm.add_raw_func(RT_MIXED_TRUTHY_PARTS);
+    wm.add_raw_func(&rt_mixed_cmp_mixed());
     wm.add_raw_func(&rt_mixed_cmp_i64());
 }
 
@@ -313,6 +315,214 @@ fn rt_mixed_cmp_i64() -> String {
   unreachable)                                                    ;; elephc-trap:post-noreturn:mixed-compare
 "#,
         value_offset = CLASS_VALUE_OFFSET
+    )
+}
+
+/// `__rt_mixed_truthy_parts`: PHP truthiness from an already-unboxed `(tag, lo, hi)`.
+///
+/// Separate from `__rt_mixed_truthy`, which takes a cell and WARNS on a NaN: a comparison
+/// converts silently, and NaN is truthy — `f64.ne(v, 0)` is already 1 for it, which is the
+/// behaviour `NAN <=> true` being 0 depends on.
+const RT_MIXED_TRUTHY_PARTS: &str = r#"(func $__rt_mixed_truthy_parts (param $tag i64) (param $lo i64) (param $hi i64) (result i64)
+  (if (i64.eq (local.get $tag) (i64.const 8))                     ;; null
+    (then (return (i64.const 0))))
+  (if (i64.eq (local.get $tag) (i64.const 2))                     ;; float: NaN is TRUTHY
+    (then (return (i64.extend_i32_u
+      (f64.ne (f64.reinterpret_i64 (local.get $lo)) (f64.const 0))))))
+  (if (i64.eq (local.get $tag) (i64.const 1))                     ;; string: "" and "0" are false
+    (then
+      (if (i64.eqz (local.get $hi))
+        (then (return (i64.const 0))))
+      (if (i32.and (i64.eq (local.get $hi) (i64.const 1))
+            (i32.eq (i32.load8_u (i32.wrap_i64 (local.get $lo))) (i32.const 48)))
+        (then (return (i64.const 0))))
+      (return (i64.const 1))))
+  (if (i32.or (i64.eq (local.get $tag) (i64.const 4)) (i64.eq (local.get $tag) (i64.const 5)))
+    (then (return (i64.extend_i32_u                               ;; empty container is false
+      (i64.ne (i64.load (i32.wrap_i64 (local.get $lo))) (i64.const 0))))))
+  (i64.extend_i32_u (i64.ne (local.get $lo) (i64.const 0))))      ;; int and bool
+"#;
+
+/// `__rt_mixed_cmp_mixed`: php-src's `zend_compare` between two boxed cells.
+///
+/// Written against `scripts/php_compare_model.py`, which is validated on 7844 ordered pairs of
+/// `php -n` output. The rule ORDER below is load-bearing and was measured, not assumed:
+///
+///   * a null against a STRING is a string comparison against `""`, not a boolean one;
+///   * bool/null on either side makes BOTH sides booleans — and this outranks the NaN rule,
+///     because NaN is TRUTHY: `NAN <=> true` is 0 while `NAN <=> 0` is 1;
+///   * two ints compare exactly, so `PHP_INT_MAX` against `"9223372036854775807"` is 0, while
+///     mixing an int with a float converts the int and makes
+///     `9007199254740993 <=> 9007199254740992.0` equal;
+///   * a number against a NON-numeric string renders the number as a string and compares bytes;
+///   * two numeric strings that tie as doubles fall back to bytes only when one overflowed.
+///
+/// An array outranks any scalar, as in `__rt_mixed_cmp_i64`. Two arrays, and any object,
+/// resource or callable, are not modelled and reach the same shared failure this file's other
+/// comparison helper uses for them.
+fn rt_mixed_cmp_mixed() -> String {
+    format!(
+        r#"(func $__rt_mixed_cmp_mixed (param $a i32) (param $b i32) (result i64)
+  (local $ta i64) (local $la i64) (local $ha i64)
+  (local $tb i64) (local $lb i64) (local $hb i64)
+  (local $ba i64) (local $bb i64) (local $ca i32) (local $cb i32)
+  (local $na i64) (local $nb i64) (local $fa f64) (local $fb f64)
+  (local $ip i32) (local $il i32) (local $tie i64) (local $oa i32) (local $ob i32)
+  (call $__rt_mixed_unbox (local.get $a))
+  (local.set $ha)
+  (local.set $la)
+  (local.set $ta)
+  (call $__rt_mixed_unbox (local.get $b))
+  (local.set $hb)
+  (local.set $lb)
+  (local.set $tb)
+  ;; null vs STRING is a string comparison against "", NOT the boolean rule below.
+  (if (i32.and (i64.eq (local.get $ta) (i64.const 8)) (i64.eq (local.get $tb) (i64.const 1)))
+    (then (return (call $__rt_i64_threeway
+      (call $__rt_str_cmp (i32.const 0) (i64.const 0)
+        (i32.wrap_i64 (local.get $lb)) (local.get $hb) (i32.const 0))
+      (i64.const 0)))))
+  (if (i32.and (i64.eq (local.get $tb) (i64.const 8)) (i64.eq (local.get $ta) (i64.const 1)))
+    (then (return (call $__rt_i64_threeway
+      (call $__rt_str_cmp (i32.wrap_i64 (local.get $la)) (local.get $ha)
+        (i32.const 0) (i64.const 0) (i32.const 0))
+      (i64.const 0)))))
+  ;; bool or null on EITHER side: both become booleans. Ahead of the NaN rule on purpose.
+  (if (i32.or
+        (i32.or (i64.eq (local.get $ta) (i64.const 3)) (i64.eq (local.get $ta) (i64.const 8)))
+        (i32.or (i64.eq (local.get $tb) (i64.const 3)) (i64.eq (local.get $tb) (i64.const 8))))
+    (then
+      (return (call $__rt_i64_threeway
+        (call $__rt_mixed_truthy_parts (local.get $ta) (local.get $la) (local.get $ha))
+        (call $__rt_mixed_truthy_parts (local.get $tb) (local.get $lb) (local.get $hb))))))
+  ;; NaN on either side answers 1 in BOTH directions, and must be settled here rather than
+  ;; left to the paths below: the string-against-number path negates its result when the
+  ;; string sat on the right, which would turn php's 1 into -1.
+  (if (i32.and (i64.eq (local.get $ta) (i64.const 2))
+        (f64.ne (f64.reinterpret_i64 (local.get $la)) (f64.reinterpret_i64 (local.get $la))))
+    (then (return (i64.const 1))))
+  (if (i32.and (i64.eq (local.get $tb) (i64.const 2))
+        (f64.ne (f64.reinterpret_i64 (local.get $lb)) (f64.reinterpret_i64 (local.get $lb))))
+    (then (return (i64.const 1))))
+  ;; Two strings.
+  (if (i32.and (i64.eq (local.get $ta) (i64.const 1)) (i64.eq (local.get $tb) (i64.const 1)))
+    (then
+      (local.set $ca (call $__rt_str_numeric_class
+        (i32.wrap_i64 (local.get $la)) (i32.wrap_i64 (local.get $ha))))
+      (local.set $na (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))
+      (local.set $oa (i32.load (i32.add (global.get $__float_scratch) (i32.const {oflow_offset}))))
+      (local.set $cb (call $__rt_str_numeric_class
+        (i32.wrap_i64 (local.get $lb)) (i32.wrap_i64 (local.get $hb))))
+      (local.set $nb (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))
+      (local.set $ob (i32.load (i32.add (global.get $__float_scratch) (i32.const {oflow_offset}))))
+      (if (i32.and
+            (i32.or (i32.eq (local.get $ca) (i32.const 1)) (i32.eq (local.get $ca) (i32.const 2)))
+            (i32.or (i32.eq (local.get $cb) (i32.const 1)) (i32.eq (local.get $cb) (i32.const 2))))
+        (then
+          (if (i32.and (i32.eq (local.get $ca) (i32.const 1)) (i32.eq (local.get $cb) (i32.const 1)))
+            (then (return (call $__rt_i64_threeway (local.get $na) (local.get $nb)))))
+          (local.set $fa (if (result f64) (i32.eq (local.get $ca) (i32.const 1))
+            (then (f64.convert_i64_s (local.get $na)))
+            (else (f64.reinterpret_i64 (local.get $na)))))
+          (local.set $fb (if (result f64) (i32.eq (local.get $cb) (i32.const 1))
+            (then (f64.convert_i64_s (local.get $nb)))
+            (else (f64.reinterpret_i64 (local.get $nb)))))
+          (local.set $tie (call $__rt_f64_threeway (local.get $fa) (local.get $fb)))
+          ;; A numeric tie between an OVERFLOWED integer string and another number falls back
+          ;; to the bytes; an ordinary decimal tie such as "1.5"/"1.50" does not.
+          (if (i32.and (i64.eqz (local.get $tie))
+                (i32.or (local.get $oa) (local.get $ob)))
+            (then (return (call $__rt_i64_threeway
+              (call $__rt_str_cmp (i32.wrap_i64 (local.get $la)) (local.get $ha)
+                (i32.wrap_i64 (local.get $lb)) (local.get $hb) (i32.const 0))
+              (i64.const 0)))))
+          (return (local.get $tie))))
+      (return (call $__rt_i64_threeway
+        (call $__rt_str_cmp (i32.wrap_i64 (local.get $la)) (local.get $ha)
+          (i32.wrap_i64 (local.get $lb)) (local.get $hb) (i32.const 0))
+        (i64.const 0)))))
+  ;; An array outranks any scalar, whichever side it is on.
+  (if (i32.and
+        (i32.or (i64.eq (local.get $ta) (i64.const 4)) (i64.eq (local.get $ta) (i64.const 5)))
+        (i32.eqz (i32.or (i64.eq (local.get $tb) (i64.const 4)) (i64.eq (local.get $tb) (i64.const 5)))))
+    (then (return (i64.const 1))))
+  (if (i32.and
+        (i32.or (i64.eq (local.get $tb) (i64.const 4)) (i64.eq (local.get $tb) (i64.const 5)))
+        (i32.eqz (i32.or (i64.eq (local.get $ta) (i64.const 4)) (i64.eq (local.get $ta) (i64.const 5)))))
+    (then (return (i64.const -1))))
+  ;; One string against one number: numeric when the string is, else the NUMBER is rendered
+  ;; and the two compare as bytes.
+  (if (i64.eq (local.get $ta) (i64.const 1))
+    (then (return (call $__rt_mixed_cmp_str_num
+      (i32.wrap_i64 (local.get $la)) (local.get $ha)
+      (local.get $tb) (local.get $lb) (i32.const 0)))))
+  (if (i64.eq (local.get $tb) (i64.const 1))
+    (then (return (call $__rt_mixed_cmp_str_num
+      (i32.wrap_i64 (local.get $lb)) (local.get $hb)
+      (local.get $ta) (local.get $la) (i32.const 1)))))
+  ;; Two numbers: exact when both are ints, otherwise both become doubles.
+  (if (i32.and (i64.eqz (local.get $ta)) (i64.eqz (local.get $tb)))
+    (then (return (call $__rt_i64_threeway (local.get $la) (local.get $lb)))))
+  (if (i32.and
+        (i32.or (i64.eqz (local.get $ta)) (i64.eq (local.get $ta) (i64.const 2)))
+        (i32.or (i64.eqz (local.get $tb)) (i64.eq (local.get $tb) (i64.const 2))))
+    (then
+      (local.set $fa (if (result f64) (i64.eqz (local.get $ta))
+        (then (f64.convert_i64_s (local.get $la)))
+        (else (f64.reinterpret_i64 (local.get $la)))))
+      (local.set $fb (if (result f64) (i64.eqz (local.get $tb))
+        (then (f64.convert_i64_s (local.get $lb)))
+        (else (f64.reinterpret_i64 (local.get $lb)))))
+      (return (call $__rt_f64_threeway (local.get $fa) (local.get $fb)))))
+  (call $__rt_fail (i32.const 9))                                 ;; two arrays, or an object
+  unreachable)                                                    ;; elephc-trap:post-noreturn:mixed-compare
+
+;; One STRING against one NUMBER, with `$flip` naming which side the string was on.
+(func $__rt_mixed_cmp_str_num (param $sp i32) (param $sl i64) (param $ntag i64) (param $nlo i64) (param $flip i32) (result i64)
+  (local $cls i32) (local $nv i64) (local $r i64) (local $bp i32) (local $bl i32)
+  (local.set $cls (call $__rt_str_numeric_class (local.get $sp) (i32.wrap_i64 (local.get $sl))))
+  (local.set $nv (i64.load (i32.add (global.get $__float_scratch) (i32.const {value_offset}))))
+  (if (i32.eq (local.get $cls) (i32.const 1))                     ;; integral string inside i64
+    (then
+      (local.set $r (if (result i64) (i64.eqz (local.get $ntag))
+        (then (call $__rt_i64_threeway (local.get $nv) (local.get $nlo)))
+        (else (call $__rt_f64_threeway
+          (f64.convert_i64_s (local.get $nv)) (f64.reinterpret_i64 (local.get $nlo))))))
+      (return (if (result i64) (local.get $flip)
+        (then (i64.sub (i64.const 0) (local.get $r))) (else (local.get $r))))))
+  (if (i32.eq (local.get $cls) (i32.const 2))                     ;; float-shaped string
+    (then
+      (local.set $r (call $__rt_f64_threeway
+        (f64.reinterpret_i64 (local.get $nv))
+        (if (result f64) (i64.eqz (local.get $ntag))
+          (then (f64.convert_i64_s (local.get $nlo)))
+          (else (f64.reinterpret_i64 (local.get $nlo))))))
+      (return (if (result i64) (local.get $flip)
+        (then (i64.sub (i64.const 0) (local.get $r))) (else (local.get $r))))))
+  ;; NOT numeric: php renders the NUMBER as a string and compares bytes.
+  (if (i64.eqz (local.get $ntag))
+    (then
+      (call $__rt_itoa (local.get $nlo) (i32.add (global.get $__float_scratch) (i32.const 9216)))
+      (local.set $bl)
+      (local.set $bp))
+    (else
+      ;; The same call shape `Op::FToStr` uses, so a float renders here exactly as `echo`
+      ;; would print it — `1.0E+300`, which is what the byte comparison then sees.
+      (call $__rt_ftoa (local.get $nlo)
+        (i32.add (global.get $__float_scratch) (i32.const 1024)) (i32.const 80)
+        (i32.add (global.get $__float_scratch) (i32.const 2048)) (i32.const 792)
+        (i32.add (global.get $__float_scratch) (i32.const 4096)))
+      (local.set $bl)
+      (local.set $bp)))
+  (local.set $r (call $__rt_i64_threeway
+    (call $__rt_str_cmp (local.get $sp) (local.get $sl)
+      (local.get $bp) (i64.extend_i32_u (local.get $bl)) (i32.const 0))
+    (i64.const 0)))
+  (if (result i64) (local.get $flip)
+    (then (i64.sub (i64.const 0) (local.get $r))) (else (local.get $r))))
+"#,
+        value_offset = CLASS_VALUE_OFFSET,
+        oflow_offset = CLASS_OFLOW_OFFSET
     )
 }
 

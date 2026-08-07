@@ -1493,6 +1493,92 @@ pub(super) fn object_to_string_impl(module: &Module, class_name: &str) -> Option
 /// The price is that the value compared against must already be materialized at the cast, which
 /// is what the position walk below establishes; an earlier attempt to keep the comparison at the
 /// `ICmp` and hold the box alive across the release instead was reverted.
+/// The same stand-in when BOTH sides of the comparison are boxed.
+///
+/// `$a[$i] > $max` with two untyped operands is the commonest shape left in the corpus, and it
+/// is what `__rt_mixed_cmp_mixed` exists for. The pair is answered ONCE, by the cast on the
+/// left: it yields php-src's -1/0/1, and the cast on the right yields 0, so the `ICmp` the EIR
+/// already emitted becomes `pred(cmp, 0)` — the correct predicate with no change to its own
+/// lowering. Answering at both casts would compare the pair twice and discard one answer.
+///
+/// Returns the two CELLS in source order plus whether `inst` is the left one.
+pub(super) fn cast_pair_stands_in_for_mixed_comparison(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<(ValueId, ValueId, bool)> {
+    if !matches!(inst.immediate, Some(Immediate::CastTarget(IrType::I64))) {
+        return None;
+    }
+    if inst.result_type != IrType::I64 || inst.result_php_type.codegen_repr() != PhpType::Int {
+        return None;
+    }
+    let [source] = inst.operands.as_slice() else {
+        return None;
+    };
+    let value = function.value(*source)?;
+    if value.ir_type != IrType::Heap(IrHeapKind::Mixed)
+        || value.php_type.codegen_repr() != PhpType::Mixed
+    {
+        return None;
+    }
+    let result = inst.result?;
+    let mut comparison = None;
+    for candidate in &function.instructions {
+        if !candidate.operands.contains(&result) {
+            continue;
+        }
+        if candidate.op != Op::ICmp || comparison.is_some() {
+            return None;
+        }
+        comparison = Some(candidate);
+    }
+    // A terminator use is invisible to the scan above and would read the three-way answer as
+    // though it were the integer conversion — the same trap the single-sided stand-in avoids.
+    if function
+        .blocks
+        .iter()
+        .filter_map(|block| block.terminator.as_ref())
+        .any(|terminator| terminator_reads(terminator, result))
+    {
+        return None;
+    }
+    let comparison = comparison?;
+    let [left, right] = comparison.operands.as_slice() else {
+        return None;
+    };
+    let is_left = *left == result;
+    let other = if is_left { *right } else { *left };
+    if other == result {
+        return None;
+    }
+    // The other side must be the SAME kind of stand-in: a cast of a boxed value feeding this
+    // very comparison. Its own source is the second cell.
+    let other_cast = function
+        .instructions
+        .iter()
+        .find(|candidate| candidate.result == Some(other))?;
+    if other_cast.op != Op::Cast
+        || !matches!(other_cast.immediate, Some(Immediate::CastTarget(IrType::I64)))
+    {
+        return None;
+    }
+    let [other_source] = other_cast.operands.as_slice() else {
+        return None;
+    };
+    let other_value = function.value(*other_source)?;
+    if other_value.ir_type != IrType::Heap(IrHeapKind::Mixed)
+        || other_value.php_type.codegen_repr() != PhpType::Mixed
+    {
+        return None;
+    }
+    let (left_cell, right_cell) = if is_left {
+        (*source, *other_source)
+    } else {
+        (*other_source, *source)
+    };
+    Some((left_cell, right_cell, is_left))
+}
+
 pub(super) fn cast_stands_in_for_mixed_comparison(
     function: &Function,
     inst: &Instruction,
@@ -1766,6 +1852,22 @@ pub(super) fn icmp_compares_a_boxed_value(
             .then(|| cast_stands_in_for_mixed_comparison(function, defining))
             .flatten()
     };
+    // When BOTH sides are stand-ins the pair was already answered at the left cast and the
+    // right one is the literal zero this comparison tests against, so the ordinary two-operand
+    // lowering is exactly right. Firing here instead would compare that zero with itself —
+    // `0 <= 0` is always true, which turned `while ($i * $i <= $n)` into an endless first pass.
+    let pair = |value: ValueId| -> bool {
+        function
+            .instructions
+            .iter()
+            .find(|candidate| candidate.result == Some(value))
+            .filter(|defining| defining.op == Op::Cast)
+            .and_then(|defining| cast_pair_stands_in_for_mixed_comparison(function, defining))
+            .is_some()
+    };
+    if pair(*left) || pair(*right) {
+        return None;
+    }
     match (boxed(*left), boxed(*right)) {
         (Some(found), None) | (None, Some(found)) => Some(found),
         _ => None,
@@ -1940,11 +2042,17 @@ fn cast_shape_issue(
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
     let int_argument_coercion = mixed_int_argument_coercion(function, inst).is_some()
         && module.functions.iter().any(|candidate| candidate.flags.is_main);
+    // Two boxed operands of one comparison: `__rt_mixed_cmp_mixed` answers the pair, so neither
+    // cast is a conversion. It can reach php's own failure for an object, so it is a
+    // command-module rule like the rest.
+    let comparison_pair = cast_pair_stands_in_for_mixed_comparison(function, inst).is_some()
+        && module.functions.iter().any(|candidate| candidate.flags.is_main);
     let admitted_mixed_scalar = (explicit
         || widened_by_checked_arithmetic
         || return_coercion
         || comparison_stand_in
         || arithmetic_coercion
+        || comparison_pair
         || (int_argument_coercion && target == IrType::I64))
         && matches!(target, IrType::I64 | IrType::F64)
         || ((explicit || cast_feeds_string_context(function, inst) || string_argument_coercion)

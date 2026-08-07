@@ -2042,6 +2042,26 @@ fn lower_cast(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     // comparison instead: PHP compares the BOX, and here — before any release the EIR schedules
     // for an owned temporary — the box is guaranteed alive. What lands in this result is the
     // -1/0/1 answer, which the `ICmp` downstream tests against zero.
+    // BOTH sides boxed: the pair is answered once, at the LEFT cast, and the right cast
+    // becomes the zero the `ICmp` then compares that answer against.
+    if let Some((left_cell, right_cell, is_left)) =
+        super::capability::cast_pair_stands_in_for_mixed_comparison(ctx.function, inst)
+    {
+        if is_left {
+            ctx.emit_load_value(left_cell)?;
+            ctx.emit_load_value(right_cell)?;
+            ctx.fb.ins(
+                "call $__rt_mixed_cmp_mixed",
+                "PHP's comparison of two boxed values",
+            );
+        } else {
+            ctx.fb.ins(
+                "i64.const 0",
+                "the pair was answered at the other cast; compare against zero",
+            );
+        }
+        return store_result(ctx, inst);
+    }
     if let Some((cell, other, _)) =
         super::capability::cast_stands_in_for_mixed_comparison(ctx.function, inst)
     {
