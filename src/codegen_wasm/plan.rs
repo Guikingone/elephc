@@ -171,6 +171,35 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // `get_resource_type()` answers one of two php-src spellings — `stream` while the handle is
+    // open, `Unknown` once `fclose` has run — and picks between them at runtime, so a module
+    // that calls it needs both addressable for the same reason `gettype` does.
+    if module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .any(|function| {
+            function.instructions.iter().any(|inst| {
+                matches!(
+                    inst.immediate.as_ref(),
+                    Some(crate::ir::Immediate::RuntimeCall(
+                        crate::ir::RuntimeCallTarget::Function(
+                            crate::ir::RuntimeFnId::GetResourceType
+                        ) | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                            target: crate::ir::RuntimeFnId::GetResourceType,
+                            ..
+                        }
+                    ))
+                )
+            })
+        })
+    {
+        for name in ["stream", "Unknown"] {
+            if !layout_values.iter().any(|value| value == name) {
+                layout_values.push(name.to_string());
+            }
+        }
+    }
     // `Foo::class` answers a compile-time string, so every class name an EIR `ConstClassName`
     // names needs its bytes addressable in static data.
     for function in module.functions.iter().chain(module.class_methods.iter()) {

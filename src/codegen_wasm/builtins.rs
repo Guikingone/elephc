@@ -3588,7 +3588,24 @@ fn file_builtin_shape_issue(
 }
 
 /// Lowers one file builtin: load every operand in order, call the helper, store the result.
-fn lower_file_builtin(ctx: &mut FnCtx, inst: &Instruction, file: FileBuiltin) -> Result<()> {
+fn lower_file_builtin(
+    ctx: &mut FnCtx,
+    inst: &Instruction,
+    file: FileBuiltin,
+    target: RuntimeFnId,
+) -> Result<()> {
+    // `fclose` must leave a mark later queries can see: php-src answers `Unknown` from
+    // `get_resource_type` once a handle is closed. The box is stamped HERE rather than inside
+    // the helper because the loop below resolves a stream operand to its raw fd, so the helper
+    // never sees the box — and a raw predefined fd has no box to stamp at all.
+    let closed_box = (target == RuntimeFnId::Fclose)
+        .then(|| operand(inst, 0).ok())
+        .flatten()
+        .filter(|value| {
+            ctx.function
+                .value(*value)
+                .is_some_and(|value| value.ir_type == IrType::Heap(IrHeapKind::Mixed))
+        });
     for (index, expected) in file.operands.iter().enumerate() {
         if index >= inst.operands.len() {
             // The call omitted trailing defaulted arguments, so the registry's defaults are
@@ -3625,6 +3642,86 @@ fn lower_file_builtin(ctx: &mut FnCtx, inst: &Instruction, file: FileBuiltin) ->
     }
     ctx.fb
         .ins(&format!("call {}", file.helper), "WASI-backed file builtin");
+    if let Some(handle) = closed_box {
+        // A negative payload is the closed predicate, the same shape the native backend uses.
+        // The helper's result stays underneath on the stack; this only adds and removes its own.
+        ctx.emit_load_value(handle)?;
+        ctx.fb.ins("i32.const 8", "the resource payload word");
+        ctx.fb.ins("i32.add", "");
+        ctx.fb.ins("i64.const -1", "closed sentinel");
+        ctx.fb.ins("i64.store", "mark the handle closed for get_resource_type");
+    }
+    store_result(ctx, inst)
+}
+
+/// Validates `get_resource_type($handle)`.
+///
+/// A stream reaches this the same two ways the file builtins accept: a boxed cell carrying the
+/// fd as a resource payload, or a predefined `STDOUT`/`STDERR`/`STDIN` that IS the fd. Matched
+/// on the DECLARED type, since `codegen_repr()` folds every resource to `Int` and the whole
+/// point here is to tell a stream from an ordinary integer.
+fn get_resource_type_shape_issue(function: &Function, call: &Instruction) -> Option<String> {
+    let [operand] = call.operands.as_slice() else {
+        return Some(format!(
+            "get_resource_type takes one handle, got {}",
+            call.operands.len()
+        ));
+    };
+    let Some(value) = function.value(*operand) else {
+        return Some("operand is missing from the value table".to_string());
+    };
+    let boxed = value.ir_type == IrType::Heap(IrHeapKind::Mixed);
+    let predefined =
+        value.ir_type == IrType::I64 && matches!(value.php_type, PhpType::Resource(_));
+    if !boxed && !predefined {
+        return Some(format!(
+            "operand {:?}/{:?} is not a stream handle",
+            value.ir_type, value.php_type
+        ));
+    }
+    (call.result_type != IrType::Str)
+        .then(|| format!("result {:?} must be a string", call.result_type))
+}
+
+/// Lowers `get_resource_type($handle)`.
+///
+/// php-src answers `stream` while a handle is open and `Unknown` once it has been closed —
+/// measured on 8.5.6, and the native backend agrees. The closed predicate is the SIGN of the
+/// box's payload word, which `fclose` stamps above; both names are ordinary string literals, so
+/// the branch is two `select`s rather than a runtime helper.
+fn lower_get_resource_type(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let value = operand(inst, 0)?;
+    let (stream_ptr, stream_len) = ctx.default_str_literal("stream")?;
+    let (unknown_ptr, unknown_len) = ctx.default_str_literal("Unknown")?;
+    let boxed = ctx
+        .function
+        .value(value)
+        .is_some_and(|value| value.ir_type == IrType::Heap(IrHeapKind::Mixed));
+    if !boxed {
+        // `STDIN`/`STDOUT`/`STDERR` arrive as the fd itself, and `__rt_fclose` deliberately
+        // refuses to close those, so such a handle is never in the closed state.
+        ctx.fb
+            .ins(&format!("i32.const {stream_ptr}"), "a predefined stream is always open");
+        ctx.fb.ins(&format!("i64.const {stream_len}"), "its length");
+        return store_result(ctx, inst);
+    }
+    let closed = ctx.fresh_temp(super::wat::ValType::I32);
+    ctx.emit_load_value(value)?;
+    ctx.fb.ins("i32.const 8", "the resource payload word");
+    ctx.fb.ins("i32.add", "");
+    ctx.fb.ins("i64.load", "the fd, or the closed sentinel");
+    ctx.fb.ins("i64.const 0", "");
+    ctx.fb.ins("i64.lt_s", "negative means fclose has run");
+    ctx.fb.ins(&format!("local.set {closed}"), "remember the verdict");
+    // `select` yields its FIRST operand when the condition is true, so the closed name leads.
+    ctx.fb.ins(&format!("i32.const {unknown_ptr}"), "closed name");
+    ctx.fb.ins(&format!("i32.const {stream_ptr}"), "open name");
+    ctx.fb.ins(&format!("local.get {closed}"), "");
+    ctx.fb.ins("select", "the type name");
+    ctx.fb.ins(&format!("i64.const {unknown_len}"), "closed length");
+    ctx.fb.ins(&format!("i64.const {stream_len}"), "open length");
+    ctx.fb.ins(&format!("local.get {closed}"), "");
+    ctx.fb.ins("select", "its length");
     store_result(ctx, inst)
 }
 
@@ -3646,6 +3743,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::Fseek
             | RuntimeFnId::StreamGetContents
             | RuntimeFnId::StreamCopyToStream
+            | RuntimeFnId::GetResourceType
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
             | RuntimeFnId::Fclose
@@ -3865,6 +3963,9 @@ pub(super) fn direct_builtin_shape_issue(
                 format!("{target:?} takes exactly one string, got {}", call.operands.len())
             }));
     }
+    if target == RuntimeFnId::GetResourceType {
+        return get_resource_type_shape_issue(function, call);
+    }
     let [operand] = call.operands.as_slice() else {
         return Some(format!(
             "expected one operand, got {}",
@@ -3968,8 +4069,11 @@ pub(super) fn lower_direct_builtin(
     inst: &Instruction,
     target: RuntimeFnId,
 ) -> Result<()> {
+    if target == RuntimeFnId::GetResourceType {
+        return lower_get_resource_type(ctx, inst);
+    }
     if let Some(helper) = file_builtin_helper(target) {
-        return lower_file_builtin(ctx, inst, helper);
+        return lower_file_builtin(ctx, inst, helper, target);
     }
     if target == RuntimeFnId::Count {
         return lower_count(ctx, inst);

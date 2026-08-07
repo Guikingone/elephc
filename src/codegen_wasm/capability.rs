@@ -6999,6 +6999,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Fseek
         | RuntimeFnId::StreamGetContents
         | RuntimeFnId::StreamCopyToStream
+        | RuntimeFnId::GetResourceType
         | RuntimeFnId::FileExists
         | RuntimeFnId::Unlink
         | RuntimeFnId::FileGetContents
@@ -7414,7 +7415,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Unserialize
         | RuntimeFnId::Usleep
         | RuntimeFnId::GetResourceId
-        | RuntimeFnId::GetResourceType
         | RuntimeFnId::IsCallable
         | RuntimeFnId::IsFinite
         | RuntimeFnId::IsInfinite
