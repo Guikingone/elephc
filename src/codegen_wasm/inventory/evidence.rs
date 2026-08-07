@@ -51,6 +51,7 @@ pub(super) fn op_source_producers(op: Op) -> &'static [&'static str] {
         Op::AliasLocalRefCell => &["reference assignment (`$a =& $b`)"],
         Op::ReleaseLocalRefCell => &["scope exit for a referenced local"],
         Op::LoadGlobal => &["superglobal/global variable read"],
+        Op::StoreGlobal => &["top-level `const` and `global $x` assignment"],
         Op::IAdd | Op::ICheckedAdd => &["integer `+`"],
         Op::ISub | Op::ICheckedSub => &["integer `-`"],
         Op::IMul | Op::ICheckedMul => &["integer `*`"],
@@ -182,6 +183,7 @@ fn op_tests(op: Op) -> &'static [&'static str] {
             &["codegen_wasm::tests::ref_cell_alias_string_store_e2e"]
         }
         Op::LoadGlobal => &["codegen_wasm::tests::argc_reports_argument_count"],
+        Op::StoreGlobal => &["codegen_wasm::statics::tests::global_slots_are_placed_by_name"],
         Op::IAdd | Op::ISub | Op::IMul | Op::IBitAnd | Op::ISDiv | Op::ISMod => {
             &["codegen_wasm::tests::int_arithmetic_invokes_correctly"]
         }
@@ -357,6 +359,7 @@ fn op_lowerer(op: Op) -> &'static str {
         Op::IsNull => "codegen_wasm::inst::lower_is_null",
         Op::Call => "codegen_wasm::inst::lower_call",
         Op::LoadGlobal => "codegen_wasm::inst::lower_load_global",
+        Op::StoreGlobal => "codegen_wasm::inst::lower_store_global",
         Op::RuntimeCall => "codegen_wasm::inst::lower_runtime_call",
         Op::LanguageConstructCall => "codegen_wasm::inst::lower_language_construct_call",
         Op::EchoValue | Op::PrintValue => "codegen_wasm::inst::lower_echo",
@@ -442,6 +445,7 @@ pub(super) fn op_evidence_group(op: Op) -> &'static str {
         | Op::AliasLocalRefCell
         | Op::ReleaseLocalRefCell => "transfer_refcell",
         Op::LoadGlobal => "transfer_global_load",
+        Op::StoreGlobal => "transfer_global_load",
         Op::IAdd
         | Op::ISub
         | Op::IMul

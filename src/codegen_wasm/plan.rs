@@ -429,7 +429,10 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
     // compile-time constants. The initial bytes come from the literal defaults, which is
     // why no initializer has to run: a string default carries its LITERAL's address, and
     // the refcount helpers already no-op below the heap.
-    let (static_slots, cursor) = super::statics::plan_static_slots(&mut wm, module, &default_strings, cursor);
+    let (mut static_slots, cursor) = super::statics::plan_static_slots(&mut wm, module, &default_strings, cursor);
+    // PHP globals share that map — a `const` at top level and a `global $x` both lower to
+    // `store_global`, and their storage has the same 16-byte shape a static property uses.
+    let cursor = super::statics::plan_global_slots(module, &mut static_slots, cursor);
 
     let fcc_entries = closures::collect_fcc_free_function_entries(module);
 

@@ -104,6 +104,7 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IsNull => lower_is_null(ctx, &inst),
         Op::Call => lower_call(ctx, &inst),
         Op::LoadGlobal => lower_load_global(ctx, &inst),
+        Op::StoreGlobal => lower_store_global(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
         Op::LanguageConstructCall => lower_language_construct_call(ctx, &inst),
         Op::EchoValue | Op::PrintValue => lower_echo(ctx, &inst),
@@ -2415,8 +2416,127 @@ fn lower_load_global(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
                 inst.result.ok_or_else(|| WasmError::Unsupported("load_global argv without result".to_string()))?,
             )
         }
-        other => Err(WasmError::Unsupported(format!("global ${}", other))),
+        other => {
+            let slot = ctx
+                .static_slots
+                .get(&super::statics::global_slot_key(other))
+                .ok_or_else(|| WasmError::Unsupported(format!("global ${}", other)))?;
+            let (address, php_type) = (slot.address, slot.php_type.codegen_repr());
+            emit_global_slot_read(ctx, address, &php_type)?;
+            let result = inst.result.ok_or_else(|| {
+                WasmError::Unsupported("load_global without a result".to_string())
+            })?;
+            let ir_type = ctx.function.value(result).map(|value| value.ir_type);
+            transfer::emit_store_stack_value_into_value(
+                ctx,
+                ir_type.unwrap_or(IrType::I64),
+                php_type,
+                result,
+            )
+        }
     }
+}
+
+/// Pushes a global's stored words, in the same shape a static property's slot uses.
+fn emit_global_slot_read(ctx: &mut FnCtx, address: u32, php_type: &PhpType) -> Result<()> {
+    match php_type {
+        PhpType::Int | PhpType::Bool | PhpType::False => {
+            ctx.fb.ins(
+                &format!("(i64.load offset={address} (i32.const 0))"),
+                "global value",
+            );
+        }
+        PhpType::Float => {
+            ctx.fb.ins(
+                &format!("(f64.load offset={address} (i32.const 0))"),
+                "global value (float)",
+            );
+        }
+        PhpType::Str => {
+            ctx.fb.ins(
+                &format!("(i32.wrap_i64 (i64.load offset={address} (i32.const 0)))"),
+                "global string pointer",
+            );
+            ctx.fb.ins(
+                &format!("(i64.load offset={} (i32.const 0))", address + 8),
+                "global string length",
+            );
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "global of type {other:?} on wasm32-wasi"
+            )))
+        }
+    }
+    Ok(())
+}
+
+/// Lowers `Op::StoreGlobal`, writing a global's words into its slot.
+///
+/// A top-level `const NAME = …` lowers to this, as does an assignment through `global $x`. Only
+/// non-heap values are admitted: a heap global would have to own its payload across the whole
+/// program, and the slot has no place to record that it does.
+fn lower_store_global(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let Some(Immediate::GlobalName(data_id)) = inst.immediate else {
+        return Err(WasmError::Unsupported(
+            "store_global without a name".to_string(),
+        ));
+    };
+    let name = ctx
+        .module
+        .data
+        .global_names
+        .get(data_id.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| {
+            WasmError::Unsupported(format!("store_global: unknown name {:?}", data_id))
+        })?;
+    let slot = ctx
+        .static_slots
+        .get(&super::statics::global_slot_key(&name))
+        .ok_or_else(|| WasmError::Unsupported(format!("global ${} has no slot", name)))?;
+    let (address, php_type) = (slot.address, slot.php_type.codegen_repr());
+    let value = operand(inst, 0)?;
+    match php_type {
+        PhpType::Int | PhpType::Bool | PhpType::False => {
+            ctx.fb.ins("i32.const 0", "slot base");
+            ctx.emit_load_value(value)?;
+            ctx.fb
+                .ins(&format!("i64.store offset={address}"), "store global");
+        }
+        PhpType::Float => {
+            ctx.fb.ins("i32.const 0", "slot base");
+            ctx.emit_load_value(value)?;
+            ctx.fb
+                .ins(&format!("f64.store offset={address}"), "store global (float)");
+        }
+        PhpType::Str => {
+            // The pointer and the length are two separate words, and the value pushes them in
+            // that order, so the length is stored first while it is on top.
+            let ptr = ctx.fresh_temp(super::wat::ValType::I32);
+            let len = ctx.fresh_temp(super::wat::ValType::I64);
+            ctx.emit_load_value(value)?;
+            ctx.fb.ins(&format!("local.set {len}"), "global string length");
+            ctx.fb.ins(&format!("local.set {ptr}"), "global string pointer");
+            ctx.fb.ins("i32.const 0", "slot base");
+            ctx.fb
+                .ins(&format!("(i64.extend_i32_u (local.get {ptr}))"), "pointer");
+            ctx.fb
+                .ins(&format!("i64.store offset={address}"), "store global pointer");
+            ctx.fb.ins("i32.const 0", "slot base");
+            ctx.fb.ins(&format!("local.get {len}"), "length");
+            ctx.fb.ins(
+                &format!("i64.store offset={}", address + 8),
+                "store global length",
+            );
+        }
+        other => {
+            return Err(WasmError::Unsupported(format!(
+                "global of type {other:?} on wasm32-wasi"
+            )))
+        }
+    }
+    Ok(())
 }
 
 /// Lowers a compiler-resident language construct by dispatching on its name.

@@ -450,6 +450,7 @@ fn check_instruction_shape(
         ),
         Op::LoadLocal | Op::StoreLocal => local_transfer_shape_issue(function, inst),
         Op::LoadGlobal => load_global_shape_issue(module, inst),
+        Op::StoreGlobal => store_global_shape_issue(module, function, inst),
         Op::StoreRefCell => store_ref_cell_shape_issue(function, inst),
         Op::Move | Op::Borrow | Op::Acquire => forward_transfer_shape_issue(function, inst),
         Op::UnsetLocal => unset_owned_temp_shape_issue(function, inst),
@@ -1244,6 +1245,41 @@ fn local_transfer_shape_issue(function: &Function, inst: &Instruction) -> Option
 }
 
 /// Admits only `$argc` and `$argv` with the exact source shapes built by WASI.
+/// Validates `Op::StoreGlobal`, which a top-level `const NAME = …` and an assignment through
+/// `global $x` both lower to.
+///
+/// `argc`/`argv` are answered by WASI helpers rather than storage, so they have no slot to write
+/// and stay refused — PHP would let a program assign them, and silently dropping that write
+/// would be worse than not compiling it.
+fn store_global_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
+    let Some(Immediate::GlobalName(name)) = inst.immediate else {
+        return Some("global store requires a GlobalName immediate".to_string());
+    };
+    let Some(name) = module.data.global_names.get(name.as_raw() as usize) else {
+        return Some("global store references an unknown name".to_string());
+    };
+    if name == "argc" || name == "argv" {
+        return Some(format!("global ${name} is answered by WASI, not stored"));
+    }
+    let Some(value) = inst
+        .operands
+        .first()
+        .and_then(|operand| function.value(*operand))
+    else {
+        return Some(format!("global ${name} store has no value operand"));
+    };
+    match value.php_type.codegen_repr() {
+        PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str => None,
+        other => Some(format!(
+            "global ${name} of type {other:?} has no slot shape on this target"
+        )),
+    }
+}
+
 fn load_global_shape_issue(module: &Module, inst: &Instruction) -> Option<String> {
     let Some(Immediate::GlobalName(name)) = inst.immediate else {
         return Some("global load requires a GlobalName immediate".to_string());
@@ -1260,7 +1296,19 @@ fn load_global_shape_issue(module: &Module, inst: &Instruction) -> Option<String
             IrType::Heap(IrHeapKind::Array),
             PhpType::Array(Box::new(PhpType::Str)),
         ),
-        _ => return Some(format!("global ${name} is not implemented by the WASI runtime")),
+        // Every other global gets a 16-byte slot, exactly like a static property. Only the
+        // shapes a slot can hold are admitted: a heap global would have to own its payload for
+        // the whole program and the slot has nowhere to record that it does.
+        _ => {
+            return match inst.result_php_type.codegen_repr() {
+                PhpType::Int | PhpType::Bool | PhpType::False | PhpType::Float | PhpType::Str => {
+                    None
+                }
+                other => Some(format!(
+                    "global ${name} of type {other:?} has no slot shape on this target"
+                )),
+            }
+        }
     };
     value_transfer_shape_issue(
         source_ir,
@@ -7605,6 +7653,7 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         | Op::AliasLocalRefCell
         | Op::ReleaseLocalRefCell
         | Op::LoadGlobal
+        | Op::StoreGlobal
         // The `@` operator: a suppression depth the `__rt_warn_*` helpers consult.
         | Op::ErrorSuppressBegin
         | Op::ErrorSuppressEnd
@@ -7717,7 +7766,6 @@ pub(super) fn op_is_supported(op: Op) -> bool {
         Op::ConstEnumCase
         | Op::LoadCalledClassId
         | Op::DataAddr
-        | Op::StoreGlobal
         | Op::LoadStaticLocal
         | Op::StoreStaticLocal
         | Op::InitStaticLocal

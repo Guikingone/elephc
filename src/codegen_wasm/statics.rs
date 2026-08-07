@@ -218,6 +218,69 @@ fn slot_bytes(
 /// the addresses it sees are therefore placeholders. Only the KEY SET and the slot types
 /// matter to it — which property resolves, and whether its type has a slot shape — and
 /// those are identical either way.
+/// Keys a PHP GLOBAL's slot inside the same map the static properties use.
+///
+/// The `::` in a static-property key is a legal PHP class/property separator, so a plain global
+/// name could never be confused with one — but the prefix makes that explicit rather than
+/// relying on it, and keeps both kinds in one map so no extra plumbing threads a second one
+/// through every function lowering.
+pub(super) fn global_slot_key(name: &str) -> String {
+    format!("global ${name}")
+}
+
+/// Reserves one 16-byte slot per PHP global the module reads or writes, and returns the cursor.
+///
+/// `argc`/`argv` are answered by WASI helpers rather than storage, so they get no slot. Every
+/// other name is sized like a static property: an int or float is one word, a string is a
+/// pointer and a length. The TYPE comes from the instructions themselves — a store's operand or
+/// a load's result — since the checker gives a global one type across the module.
+pub(super) fn plan_global_slots(
+    module: &Module,
+    slots: &mut StaticSlots,
+    mut cursor: u32,
+) -> u32 {
+    cursor = (cursor + 7) & !7;
+    let mut named: Vec<(String, PhpType)> = Vec::new();
+    for function in module.functions.iter().chain(module.class_methods.iter()) {
+        for inst in &function.instructions {
+            let Some(crate::ir::Immediate::GlobalName(data_id)) = inst.immediate else {
+                continue;
+            };
+            if !matches!(inst.op, crate::ir::Op::LoadGlobal | crate::ir::Op::StoreGlobal) {
+                continue;
+            }
+            let Some(name) = module.data.global_names.get(data_id.as_raw() as usize) else {
+                continue;
+            };
+            if name == "argc" || name == "argv" || named.iter().any(|(seen, _)| seen == name) {
+                continue;
+            }
+            let php_type = if inst.op == crate::ir::Op::StoreGlobal {
+                inst.operands
+                    .first()
+                    .and_then(|value| function.value(*value))
+                    .map(|value| value.php_type.clone())
+            } else {
+                Some(inst.result_php_type.clone())
+            };
+            let Some(php_type) = php_type else { continue };
+            named.push((name.clone(), php_type));
+        }
+    }
+    named.sort_by(|(left, _), (right, _)| left.cmp(right));
+    for (name, php_type) in named {
+        slots.insert(
+            global_slot_key(&name),
+            StaticSlot {
+                address: cursor,
+                php_type,
+            },
+        );
+        cursor += 16;
+    }
+    cursor
+}
+
 pub(super) fn plan_static_slots_for_audit(module: &Module) -> Option<StaticSlots> {
     let mut probe = WatModule::new();
     Some(plan_static_slots(&mut probe, module, &HashMap::new(), 0).0)
@@ -330,6 +393,62 @@ mod tests {
     /// An inherited static is ONE storage: PHP has `Child::$n` and `Parent::$n` name the same
     /// slot, so `Op::LoadStaticProperty` on either must resolve to the same address. Keying the
     /// placement by the USE-SITE class instead would give two slots that silently diverge.
+    /// A PHP global gets its own 16-byte slot, keyed by name, and `argc`/`argv` get none —
+    /// those are answered by WASI helpers, so a slot for them would be storage nothing reads.
+    #[test]
+    fn global_slots_are_placed_by_name() {
+        for op in [crate::ir::Op::LoadGlobal, crate::ir::Op::StoreGlobal] {
+            assert!(
+                super::super::capability::op_is_supported(op),
+                "{op:?} must stay admitted for these slots to serve a lowering"
+            );
+        }
+
+        let mut module = crate::ir::Module::new(Target::wasm());
+        let greeting = module.data.intern_global_name("GREETING");
+        let argc = module.data.intern_global_name("argc");
+        let mut function =
+            crate::ir::Function::new("main".to_string(), crate::ir::IrType::Void, PhpType::Void);
+        function.flags.is_main = true;
+        {
+            let mut builder = crate::ir::Builder::new(&mut function);
+            let entry = builder.create_named_block("entry", Vec::new());
+            builder.set_entry(entry);
+            builder.position_at_end(entry);
+            let text = builder.emit_const_str(crate::ir::DataId::from_raw(0));
+            let _ = builder.emit(
+                crate::ir::Op::StoreGlobal,
+                vec![text],
+                Some(crate::ir::Immediate::GlobalName(greeting)),
+                crate::ir::IrType::Void,
+                PhpType::Void,
+                crate::ir::Ownership::NonHeap,
+            );
+            let _ = builder.emit(
+                crate::ir::Op::LoadGlobal,
+                Vec::new(),
+                Some(crate::ir::Immediate::GlobalName(argc)),
+                crate::ir::IrType::I64,
+                PhpType::Int,
+                crate::ir::Ownership::NonHeap,
+            );
+            builder.terminate(crate::ir::Terminator::Return { value: None });
+        }
+        module.add_function(function);
+
+        let mut slots: StaticSlots = HashMap::new();
+        let end = plan_global_slots(&module, &mut slots, 64);
+        assert!(
+            slots.contains_key(&global_slot_key("GREETING")),
+            "a stored global needs storage: {slots:?}"
+        );
+        assert!(
+            !slots.contains_key(&global_slot_key("argc")),
+            "argc is answered by WASI and must not take a slot"
+        );
+        assert_eq!(end, 64 + 16, "exactly one 16-byte slot was reserved");
+    }
+
     #[test]
     fn inherited_statics_share_one_slot() {
         // This placement is what `Op::LoadStaticProperty` and `Op::StoreStaticProperty` read;
