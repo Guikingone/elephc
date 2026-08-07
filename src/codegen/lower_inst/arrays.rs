@@ -1377,6 +1377,31 @@ fn lower_array_push_aarch64(
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the string append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
         }
+        // A NULLABLE SCALAR ARRIVES AS A UNION, NOT AS `TaggedScalar`. `raw_value_php_type`
+        // answers `int|null` for a `?int`, while its RUNTIME representation is the tagged
+        // immediate word — `codegen_repr()` says `TaggedScalar` for both the value and the
+        // element. The two arms above match the SPELLING `TaggedScalar`, so a `?int`
+        // returned from a function fell through to the refcounted arm below and
+        // `__rt_array_push_refcounted` dereferenced the tagged word as a heap pointer:
+        // `[maybe_int(1)]` crashed in `ldur x10, [x1, #-0x8]`, and `[maybe_int(0)]`
+        // printed the raw null sentinel as `int(9223372036854775806)`.
+        ref other
+            if other.codegen_repr() == PhpType::TaggedScalar
+                && elem_ty.codegen_repr() == PhpType::TaggedScalar =>
+        {
+            lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
+        }
+        ref other
+            if other.codegen_repr() == PhpType::TaggedScalar
+                && elem_ty.codegen_repr() == PhpType::Int =>
+        {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            ctx.emitter.instruction("mov x1, x0");                              // pass the nullable integer payload after PHP null-to-zero coercion
+            ctx.load_value_to_reg(array, "x9")?;
+            ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
+        }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
@@ -1454,6 +1479,25 @@ fn lower_array_push_x86_64(
             ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the string append helper
             abi::emit_call_label(ctx.emitter, "__rt_array_push_str");
+        }
+        // See the AArch64 counterpart: a `?int` arrives as the union `int|null`, whose
+        // representation is the tagged word, so it must never reach the refcounted arm.
+        ref other
+            if other.codegen_repr() == PhpType::TaggedScalar
+                && elem_ty.codegen_repr() == PhpType::TaggedScalar =>
+        {
+            lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
+        }
+        ref other
+            if other.codegen_repr() == PhpType::TaggedScalar
+                && elem_ty.codegen_repr() == PhpType::Int =>
+        {
+            ctx.load_value_to_result(value)?;
+            crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
+            ctx.load_value_to_reg(array, "r11")?;
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the nullable integer payload after PHP null-to-zero coercion
+            ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
+            abi::emit_call_label(ctx.emitter, "__rt_array_push_int");
         }
         other if other.is_refcounted() => {
             ctx.load_value_to_reg(array, "r11")?;
