@@ -2507,6 +2507,20 @@ const RT_FMT_STR: &str = r#"(func $__rt_fmt_str (param $ptr i32) (param $len i64
 /// Names are matched case-insensitively and with any leading `\` stripped, which is how PHP
 /// resolves a class name written as a string.
 fn class_exists_answer(module: &Module, target: RuntimeFnId, name: &str) -> Option<bool> {
+    // `function_exists` asks the same closed-world question of a different namespace, and it
+    // has one more source of truth: a name the program never declares can still exist, because
+    // the compiler provides it. Both are settled here.
+    if target == RuntimeFnId::FunctionExists {
+        let declared: Vec<&String> = module.functions.iter().map(|f| &f.name).collect();
+        if name_is_declared(&declared, name) {
+            return Some(true);
+        }
+        let wanted = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+        return Some(
+            crate::builtins::registry::names()
+                .any(|name| crate::names::php_symbol_key(name) == wanted),
+        );
+    }
     let declared: Vec<&String> = match target {
         RuntimeFnId::ClassExists => module.class_infos.keys().collect(),
         RuntimeFnId::InterfaceExists => module.interface_infos.keys().collect(),
@@ -3817,6 +3831,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::InterfaceExists
             | RuntimeFnId::TraitExists
             | RuntimeFnId::EnumExists
+            | RuntimeFnId::FunctionExists
             | RuntimeFnId::InArray
             | RuntimeFnId::ArrayReverse
             | RuntimeFnId::ArraySum
@@ -3904,6 +3919,7 @@ pub(super) fn direct_builtin_shape_issue(
             | RuntimeFnId::InterfaceExists
             | RuntimeFnId::TraitExists
             | RuntimeFnId::EnumExists
+            | RuntimeFnId::FunctionExists
     ) {
         return class_exists_shape_issue(module, function, call, target);
     }
@@ -4151,6 +4167,7 @@ pub(super) fn lower_direct_builtin(
             | RuntimeFnId::InterfaceExists
             | RuntimeFnId::TraitExists
             | RuntimeFnId::EnumExists
+            | RuntimeFnId::FunctionExists
     ) {
         return lower_class_exists(ctx, inst, target);
     }

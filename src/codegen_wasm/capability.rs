@@ -7215,6 +7215,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::InterfaceExists
         | RuntimeFnId::TraitExists
         | RuntimeFnId::EnumExists
+        | RuntimeFnId::FunctionExists
         | RuntimeFnId::Readline
         | RuntimeFnId::Fopen
         | RuntimeFnId::Fwrite
@@ -7339,7 +7340,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::ClassImplements
         | RuntimeFnId::ClassParents
         | RuntimeFnId::ClassUses
-        | RuntimeFnId::FunctionExists
         | RuntimeFnId::GetDeclaredClasses
         | RuntimeFnId::GetDeclaredInterfaces
         | RuntimeFnId::GetDeclaredTraits

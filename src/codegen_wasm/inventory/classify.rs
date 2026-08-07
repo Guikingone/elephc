@@ -231,7 +231,8 @@ pub(super) fn runtime_fn_supported_evidence(id: RuntimeFnId) -> Option<Supported
         RuntimeFnId::ClassExists
         | RuntimeFnId::InterfaceExists
         | RuntimeFnId::TraitExists
-        | RuntimeFnId::EnumExists => (
+        | RuntimeFnId::EnumExists
+        | RuntimeFnId::FunctionExists => (
             "codegen_wasm::builtins",
             "codegen_wasm::builtins::lower_class_exists",
             &[
