@@ -66,6 +66,7 @@ pub(super) fn emit_array_runtime(wm: &mut WatModule) {
     wm.add_raw_func(RT_ARRAY_APPEND_FROM);
     wm.add_raw_func(RT_ARRAY_UNION);
     wm.add_raw_func(RT_ARRAY_MERGE);
+    wm.add_raw_func(RT_ARRAY_INDEX_KEYS_MIXED);
     wm.add_raw_func(RT_ARRAY_INDEX_KEYS);
     wm.add_raw_func(RT_ARRAY_REVERSE_INT);
     wm.add_raw_func(RT_ARRAY_SUM_INT);
@@ -94,6 +95,28 @@ const RT_ARRAY_NEW: &str = r#"(func $__rt_array_new (param $capacity i64) (param
   (i64.store (i32.add (local.get $arr) (i32.const 8)) (local.get $capacity))    ;; capacity
   (i64.store (i32.add (local.get $arr) (i32.const 16)) (local.get $elem_size))  ;; elem_size
   (local.get $arr))                                                              ;; return the new array pointer
+"#;
+
+/// `__rt_array_index_keys_mixed`: the same positions, but as BOXED cells.
+///
+/// `ArrayIterator::__construct` calls `array_keys($array)` on an `array<mixed>` and stores the
+/// result somewhere typed the same way, so the keys have to be Mixed cells rather than the raw
+/// i64 slots `array<int>` uses. Writing 8-byte ints into a 16-byte-strided array reads back as
+/// a denormal float, which is why the two cannot share one helper.
+const RT_ARRAY_INDEX_KEYS_MIXED: &str = r#"(func $__rt_array_index_keys_mixed (param $array i32) (result i32)
+  (local $len i64)
+  (local $new i32)
+  (local $i i64)
+  (local.set $len (i64.load (local.get $array)))
+  (local.set $new (call $__rt_array_new (local.get $len) (i64.const 16)))  ;; cell-strided
+  (local.set $i (i64.const 0))
+  (block $end (loop $fill
+    (br_if $end (i64.ge_s (local.get $i) (local.get $len)))
+    (local.set $new (call $__rt_array_push_mixed (local.get $new)
+      (call $__rt_mixed_from_value (i64.const 0) (local.get $i) (i64.const 0))))
+    (local.set $i (i64.add (local.get $i) (i64.const 1)))
+    (br $fill)))
+  (local.get $new))
 "#;
 
 /// `__rt_array_index_keys`: builds `[0, 1, ..., n-1]` for an indexed array of length `n`.

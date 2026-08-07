@@ -4474,7 +4474,12 @@ fn indexed_array_result_shape_issue(
         && matches!(value.php_type.codegen_repr(), PhpType::AssocArray { .. })
         && matches!(
             call.result_php_type.codegen_repr(),
-            PhpType::Array(element) if matches!(*element, PhpType::Int | PhpType::Str)
+            // `Mixed` joins the two for `array_keys`: a hash keyed by BOTH kinds projects to
+            // `array<mixed>`, and `__rt_hash_keys_mixed` boxes each key by its own kind rather
+            // than forcing one width on both.
+            PhpType::Array(element)
+                if matches!(*element, PhpType::Int | PhpType::Str)
+                    || (target == RuntimeFnId::ArrayKeys && matches!(*element, PhpType::Mixed))
         );
     // An INDEXED operand of ANY element type is admitted, which the `array<int>`-only gate used
     // to turn away. Neither helper reads an element: `__rt_array_index_keys` builds `[0..n-1]`
@@ -4504,6 +4509,15 @@ fn indexed_array_result_shape_issue(
         PhpType::Array(element)
             if matches!(*element, PhpType::Int | PhpType::Never)
                 || (hash_projection && matches!(*element, PhpType::Str))
+                // Positions boxed into cells, for a list the checker types `array<mixed>`.
+                || (indexed_source
+                    && target == RuntimeFnId::ArrayKeys
+                    && matches!(*element, PhpType::Mixed))
+                // A hash with keys of BOTH kinds projects to `array<mixed>`, which
+                // `__rt_hash_keys_mixed` produces by boxing each key by its own kind.
+                || (hash_projection
+                    && target == RuntimeFnId::ArrayKeys
+                    && matches!(*element, PhpType::Mixed))
                 || (indexed_source
                     && target == RuntimeFnId::ArrayValues
                     && source_element.as_ref() == Some(&*element))
@@ -4529,12 +4543,18 @@ fn lower_array_keys(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
         // A hash's keys are real keys, not positions, and they carry their own storage.
         let helper = match element_php_type(&inst.result_php_type) {
             Some(PhpType::Str) => "call $__rt_hash_keys_str",
+            // Keys of BOTH kinds: each is boxed by its own, rather than forced to one.
+            Some(PhpType::Mixed) => "call $__rt_hash_keys_mixed",
             _ => "call $__rt_hash_keys_int",
         };
         ctx.fb.ins(helper, "the hash's keys, in insertion order");
     } else {
-        ctx.fb
-            .ins("call $__rt_array_index_keys", "keys of a list are its positions");
+        let helper = match element_php_type(&inst.result_php_type) {
+            // A list stored as `array<mixed>` wants its positions BOXED, not as raw i64 slots.
+            Some(PhpType::Mixed) => "call $__rt_array_index_keys_mixed",
+            _ => "call $__rt_array_index_keys",
+        };
+        ctx.fb.ins(helper, "keys of a list are its positions");
     }
     store_result(ctx, inst)
 }
@@ -8297,7 +8317,10 @@ mod tests {
                 None,
                 "array_keys over an array<{element:?}> answers its positions"
             );
-            // ...and claiming the ELEMENT type for those keys is not.
+            // ...and claiming the ELEMENT type for those keys is not — except for `mixed`,
+            // which is not a claim about the element at all but about the STORAGE: a list the
+            // checker types `array<mixed>` wants its positions in Mixed cells, which
+            // `__rt_array_index_keys_mixed` builds. `ArrayIterator::__construct` is that case.
             let mistyped = call_with(
                 RuntimeFnId::ArrayKeys,
                 IrType::Heap(IrHeapKind::Array),
@@ -8307,6 +8330,7 @@ mod tests {
             );
             assert!(
                 element == PhpType::Int
+                    || element == PhpType::Mixed
                     || verdict(&mistyped, RuntimeFnId::ArrayKeys).is_some(),
                 "array_keys never answers an array<{element:?}>"
             );

@@ -270,6 +270,39 @@ const RT_HASH_PROJECTIONS: &str = r#"(func $__rt_hash_keys_int (param $hash i32)
       (i64.load (i32.add (local.get $entry) (i32.const 16)))))               ;; key_hi = length
     (br $next)))
   (local.get $arr))
+(func $__rt_hash_keys_mixed (param $hash i32) (result i32)
+  ;; A hash whose keys are BOTH integers and strings: the checker types `array_keys` on it
+  ;; `array<mixed>`, so each key is boxed by its own kind rather than forced to one. `key_hi`
+  ;; is -1 for an integer key and the LENGTH for a string one, which is the same marker
+  ;; `__rt_hash_key_hash` reads. The string is persisted before boxing, as `__rt_array_push_str`
+  ;; does, so the result does not borrow bytes the hash owns and may free.
+  (local $arr i32) (local $cur i64) (local $more i64) (local $entry i32)
+  (local $khi i64) (local $kp i32) (local $kl i64) (local $cell i32)
+  (local.set $arr (call $__rt_array_new (i64.load (local.get $hash)) (i64.const 16)))
+  (local.set $cur (i64.const -2))
+  (block $done (loop $next
+    (call $__rt_hash_iter_next (local.get $hash) (local.get $cur))
+    (local.set $more)
+    (local.set $cur)
+    (br_if $done (i64.eqz (local.get $more)))
+    (local.set $entry (i32.add (i32.add (local.get $hash) (i32.const 40))
+                               (i32.wrap_i64 (i64.mul (local.get $cur) (i64.const 72)))))
+    (local.set $khi (i64.load (i32.add (local.get $entry) (i32.const 16))))
+    (if (i64.eq (local.get $khi) (i64.const -1))
+      (then
+        (local.set $cell (call $__rt_mixed_from_value (i64.const 0)
+          (i64.load (i32.add (local.get $entry) (i32.const 8))) (i64.const 0))))
+      (else
+        (call $__rt_str_persist
+          (i32.wrap_i64 (i64.load (i32.add (local.get $entry) (i32.const 8))))
+          (local.get $khi))
+        (local.set $kl)                                          ;; persist returns (ptr, len)
+        (local.set $kp)
+        (local.set $cell (call $__rt_mixed_from_value (i64.const 1)
+          (i64.extend_i32_u (local.get $kp)) (local.get $kl)))))
+    (local.set $arr (call $__rt_array_push_mixed (local.get $arr) (local.get $cell)))
+    (br $next)))
+  (local.get $arr))
 (func $__rt_hash_values_int (param $hash i32) (result i32)
   (local $arr i32) (local $cur i64) (local $more i64) (local $entry i32)
   (local.set $arr (call $__rt_array_new (i64.load (local.get $hash)) (i64.const 8)))
