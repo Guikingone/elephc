@@ -1146,7 +1146,13 @@ fn lower_array_push_aarch64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_aarch64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool => {
+        // `False` joins the boolean arm rather than falling through to the unsupported
+        // catch-all: it is PHP's `false` PSEUDO-TYPE, which `codegen_repr()` already
+        // represents as `Bool` and stores in the same one-word slot. A homogeneous
+        // literal narrows to it — `implode(',', [false, false])` refused to compile
+        // with `array_push for PHP type False` while `[true, false]`, which widens to
+        // `Bool`, compiled fine.
+        PhpType::Int | PhpType::Bool | PhpType::False => {
             ctx.load_value_to_reg(value, "x1")?;
             ctx.load_value_to_reg(array, "x9")?;
             ctx.emitter.instruction("mov x0, x9");                              // pass the indexed-array receiver to the append helper
@@ -1223,7 +1229,8 @@ fn lower_array_push_x86_64(
         PhpType::TaggedScalar if elem_ty.codegen_repr() == PhpType::TaggedScalar => {
             lower_array_push_tagged_scalar_x86_64(ctx, array, value)?;
         }
-        PhpType::Int | PhpType::Bool => {
+        // `False` joins the boolean arm here too; see the AArch64 counterpart.
+        PhpType::Int | PhpType::Bool | PhpType::False => {
             ctx.load_value_to_reg(array, "r11")?;
             ctx.load_value_to_reg(value, "rsi")?;
             ctx.emitter.instruction("mov rdi, r11");                            // pass the indexed-array receiver to the append helper
