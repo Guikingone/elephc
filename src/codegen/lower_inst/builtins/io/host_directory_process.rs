@@ -189,6 +189,12 @@ pub(crate) fn lower_getservbyport(
 /// Lowers `opendir(path)` and boxes the directory stream as `resource|false`.
 pub(crate) fn lower_opendir(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "opendir", 1)?;
+    // PHP creates the request default stream context on the FIRST stream open of any
+    // kind, not only on `fopen`: after `opendir(".")` the directory handle is id 5 and
+    // `stream_context_get_default()` answers 4, so the context was minted first. Doing
+    // it here keeps directory handles on PHP's numbering instead of letting them take
+    // the id the context owns.
+    emit_request_default_stream_context_handle(ctx);
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "opendir path")?;
     abi::emit_call_label(ctx.emitter, "__rt_opendir");

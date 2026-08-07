@@ -268,14 +268,20 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // object is `#1`, so the pool starts at 1 and handle 0 is reserved to mean
     // "this block never acquired a handle".
     out.push_str(".globl _obj_handle_next\n_obj_handle_next:\n    .quad 1\n");
-    // `_resource_id_next` is the never-used PHP RESOURCE id cursor. It starts at 5,
-    // not at 1, and that number is measured rather than chosen: under PHP 8.5.6 CLI
-    // the three standard streams occupy ids 1..3 (`get_resource_id(STDIN|STDOUT|STDERR)`
-    // returns 1, 2, 3), id 4 is consumed by the SAPI before user code runs, and the
-    // first resource a script opens is therefore id 5 — identically for `php file.php`
-    // and for `php -r`. elephc already renders STDIN/STDOUT/STDERR as 1/2/3, so
-    // starting user resources at 5 reproduces reference numbering end to end.
-    out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 5\n");
+    // `_resource_id_next` is the never-reused PHP RESOURCE id cursor. It starts at 4,
+    // and that number is measured rather than chosen: under PHP 8.5.6 CLI the three
+    // standard streams occupy ids 1..3 (`get_resource_id(STDIN|STDOUT|STDERR)` returns
+    // 1, 2, 3) and id 4 is the REQUEST DEFAULT STREAM CONTEXT — not, as this comment
+    // previously assumed, an opaque resource the SAPI consumes. That is directly
+    // observable: `$d = opendir("."); var_dump(get_resource_id($d));` prints 5 while a
+    // following `stream_context_get_default()` prints 4, so the context was created
+    // BEFORE the stream, by the stream open itself. Two calls to
+    // `stream_context_get_default()` both answer 4, so it is created once and retained.
+    //
+    // The cursor therefore seeds at 4 and the default context takes it, leaving 5 for
+    // the first stream a script opens. Seeding at 5 instead made the context consume 5
+    // and shifted every user resource by one.
+    out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 4\n");
     // Gate 1 opaque resource registry. The slot array itself is allocated lazily
     // from elephc's target-independent runtime heap. Handles contain only a
     // generation and one-based slot index; no OS descriptor is PHP-visible.

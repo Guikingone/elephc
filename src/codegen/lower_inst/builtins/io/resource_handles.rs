@@ -66,6 +66,31 @@ pub(in crate::codegen::lower_inst::builtins) fn load_stream_fd_to_result(
     Ok(())
 }
 
+/// Loads a generic resource payload without interpreting it as a stream-registry handle.
+///
+/// Internal resource-backed objects such as `HashContext` still store a native
+/// pointer in a tag-9 Mixed payload. They must use this path instead of resolving
+/// that payload through the stream registry, which would reject them as non-streams.
+pub(in crate::codegen::lower_inst::builtins) fn load_resource_payload_to_result(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    function_name: &str,
+) -> Result<()> {
+    let raw_ty = ctx.raw_value_php_type(value)?;
+    ctx.load_value_to_result(value)?;
+    match raw_ty {
+        PhpType::Resource(_) => Ok(()),
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_unbox_stream_or_type_error(ctx, function_name);
+            Ok(())
+        }
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} resource argument PHP type {:?}",
+            function_name, other
+        ))),
+    }
+}
+
 /// Loads and validates an open stream while leaving its opaque handle in the result register.
 pub(super) fn load_open_stream_handle_to_result(
     ctx: &mut FunctionContext<'_>,

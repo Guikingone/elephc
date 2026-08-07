@@ -93,6 +93,7 @@ use close_crypto_arch::*;
 use stream_read_helpers::*;
 use context_result_helpers::*;
 use stream_context::*;
+use fopen_core::emit_request_default_stream_context_handle;
 use resource_handles::*;
 use seek_hash_arch::*;
 use boxing_helpers::*;
@@ -173,5 +174,7 @@ pub(crate) use stat_ops::{
     lower_is_writeable, lower_is_executable, lower_is_link,
 };
 pub(super) use boxing_helpers::box_owned_string_or_false_result;
-pub(super) use resource_handles::{load_stream_fd_to_result, load_stream_handle_to_result};
+pub(super) use resource_handles::{
+    load_resource_payload_to_result, load_stream_fd_to_result, load_stream_handle_to_result,
+};
 pub(super) use string_validation::load_string_to_result;

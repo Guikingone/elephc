@@ -317,7 +317,7 @@ fn finish_fopen_context_scope(ctx: &mut FunctionContext<'_>) {
 }
 
 /// Lazily creates the request-default context and leaves its global-owned handle in the result.
-fn emit_request_default_stream_context_handle(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_request_default_stream_context_handle(ctx: &mut FunctionContext<'_>) {
     let ready = ctx.next_label("fopen_default_context_ready");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
