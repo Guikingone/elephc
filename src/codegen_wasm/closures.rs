@@ -408,7 +408,10 @@ pub(super) fn collect_fcc_free_function_entries(module: &Module) -> Vec<String> 
             let Some(name) = module.data.strings.get(data_id.as_raw() as usize) else {
                 continue;
             };
-            if is_user_free_function_target(module, name) && !entries.iter().any(|n| n == name) {
+            if (is_user_free_function_target(module, name)
+                || is_user_static_method_target(module, name))
+                && !entries.iter().any(|n| n == name)
+            {
                 entries.push(name.clone());
             }
         }
@@ -445,7 +448,39 @@ fn fcc_target_function<'a>(module: &'a Module, name: &str) -> Option<&'a Functio
     module
         .functions
         .iter()
+        .chain(module.class_methods.iter())
         .find(|f| crate::names::php_symbol_key(f.name.trim_start_matches('\\')) == key)
+}
+
+/// Returns the class id a `Class::method(...)` callable must forward, when the target is a
+/// STATIC method rather than a free function.
+///
+/// A static body carries the called-class id as its FIRST parameter, which no caller writes
+/// and the argument array therefore never holds. The wrapper pushes it as a constant, exactly
+/// as an ordinary `C::m()` call site does.
+pub(super) fn fcc_hidden_class_id(module: &Module, name: &str) -> Option<i64> {
+    let (class_name, _) = name.trim_start_matches('\\').split_once("::")?;
+    let key = crate::names::php_symbol_key(class_name);
+    module
+        .class_infos
+        .iter()
+        .find(|(candidate, _)| {
+            crate::names::php_symbol_key(candidate.trim_start_matches('\\')) == key
+        })
+        .map(|(_, info)| info.class_id as i64)
+}
+
+/// Whether `name` targets a STATIC method this module compiles, spelled `Class::method`.
+pub(super) fn is_user_static_method_target(module: &Module, name: &str) -> bool {
+    if !name.contains("::") {
+        return false;
+    }
+    let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    module
+        .class_methods
+        .iter()
+        .any(|f| crate::names::php_symbol_key(f.name.trim_start_matches('\\')) == key)
+        && fcc_hidden_class_id(module, name).is_some()
 }
 
 /// Lowers `Op::FirstClassCallableNew` whose target is a no-capture user free
@@ -1144,7 +1179,8 @@ pub(super) fn emit_closure_dispatch(
             WasmError::Unsupported(format!("first-class callable: no body for {}", name))
         })?;
         let wrapper_symbol = fcc_wrapper_symbol(name);
-        let wat = build_fcc_wrapper(&wrapper_symbol, target)?;
+        let wat =
+            build_fcc_wrapper(&wrapper_symbol, target, fcc_hidden_class_id(module, name))?;
         wm.add_raw_func(&wat);
         arms.push((
             entry_index,
@@ -1497,7 +1533,11 @@ const RT_ARRAY_WALK_CALLABLE: &str = r#"(func $__rt_array_walk_callable (param $
 /// A by-ref or variadic param is rejected with a clean diagnostic: the FCC arg buffer
 /// carries Mixed cells, not ref-cell pointers, and the variadic split has no wrapper
 /// support yet, so those FCC shapes are deferred rather than miscompiled.
-fn build_fcc_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
+fn build_fcc_wrapper(
+    wrapper_symbol: &str,
+    f: &Function,
+    hidden_class_id: Option<i64>,
+) -> Result<String> {
     let body_symbol = function_symbol(f);
     for p in &f.params {
         if p.by_ref || p.variadic {
@@ -1516,7 +1556,10 @@ fn build_fcc_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     wat.push_str("  (local $ub_tag i64) (local $ub_lo i64) (local $ub_hi i64)\n");
     wat.push_str("  (local $rb_i64 i64) (local $rb_f64 f64) (local $rb_ptr i32) (local $rb_len i64)\n");
     wat.push_str("  (local $args_len i64) (local $args_capacity i64) (local $args_size i32)\n");
-    let required_count = i64::try_from(f.params.len()).map_err(|_| {
+    // A static body's first parameter is the called-class id, which the caller never
+    // writes, so it is neither counted nor read from the argument array.
+    let forwarded = usize::from(hidden_class_id.is_some());
+    let required_count = i64::try_from(f.params.len() - forwarded).map_err(|_| {
         WasmError::Unsupported(format!(
             "first-class callable {} parameter count exceeds i64",
             f.name
@@ -1525,7 +1568,10 @@ fn build_fcc_wrapper(wrapper_symbol: &str, f: &Function) -> Result<String> {
     append_arg_array_guard(&mut wat, required_count);
 
     // Unbox each parameter from the arg buffer and push it for the body call.
-    for (i, p) in f.params.iter().enumerate() {
+    if let Some(class_id) = hidden_class_id {
+        wat.push_str(&format!("  (i64.const {class_id}) ;; called_class_id\n"));
+    }
+    for (i, p) in f.params.iter().skip(forwarded).enumerate() {
         let slot_off = 24 + i * 16;
         wat.push_str(&format!(
             "  ;; unbox arg {} (param {} : {:?}) from arg slot +{}\n",
@@ -2125,7 +2171,7 @@ mod tests {
             by_ref: false,
             variadic: false,
         });
-        let wat = build_fcc_wrapper("guarded_wrapper", &function).expect("wrapper WAT");
+        let wat = build_fcc_wrapper("guarded_wrapper", &function, None).expect("wrapper WAT");
         let length_guard = wat
             .find("i64.lt_u (local.get $args_len) (i64.const 1)")
             .expect("argument-count guard");
@@ -2155,7 +2201,7 @@ mod tests {
     #[test]
     fn callable_wrapper_accepts_the_empty_unstamped_mixed_buffer_shape() {
         let function = Function::new("empty".to_string(), IrType::Void, PhpType::Void);
-        let wat = build_fcc_wrapper("empty_wrapper", &function).expect("wrapper WAT");
+        let wat = build_fcc_wrapper("empty_wrapper", &function, None).expect("wrapper WAT");
 
         assert!(
             wat.contains("i64.ne (local.get $args_len) (i64.const 0)"),

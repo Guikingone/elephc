@@ -802,14 +802,23 @@ fn first_class_callable_new_shape_issue(
         return Some("missing callable-name Data immediate".to_string());
     };
     let key = crate::names::php_symbol_key(name.trim_start_matches('\\'));
+    // `Class::method(...)` names a STATIC method, whose body lives with the class methods. Its
+    // wrapper forwards the called-class id the body takes as a hidden first parameter, so the
+    // only extra requirement is that the class is one this module compiles.
     let matches: Vec<&Function> = module
         .functions
         .iter()
+        .chain(module.class_methods.iter())
         .filter(|function| {
             !function.flags.is_main
                 && crate::names::php_symbol_key(function.name.trim_start_matches('\\')) == key
         })
         .collect();
+    if name.contains("::") && super::closures::fcc_hidden_class_id(module, &name).is_none() {
+        return Some(format!(
+            "first-class callable target {name:?} names a class this module does not compile"
+        ));
+    }
     let function = match matches.as_slice() {
         [function] => *function,
         [] => return Some(format!("free-function callable target {name:?} is missing")),
