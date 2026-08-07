@@ -236,12 +236,130 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
     store_if_result(ctx, inst)
 }
 
+/// Selects what an indexed-array element read does with the payload it loads.
+#[derive(Clone, Copy)]
+enum ArrayGetMode {
+    /// Plain rvalue read: the result carries a caller reference, so refcounted payloads are
+    /// increfed on the way out.
+    Retaining,
+    /// Copy-on-write fetch for a by-reference `foreach` source: the element is separated from
+    /// any co-owner through `helper`, the separated container is published back into the parent
+    /// slot, and the result is handed back BORROWED — the parent slot owns it, the reader does
+    /// not.
+    ForWrite {
+        /// Runtime COW helper matching the element's container kind.
+        helper: &'static str,
+    },
+    /// Nested-write fetch for a boxed Mixed slot: retain the owning cell so the later write can
+    /// publish a replacement back into the parent container.
+    MixedForWrite,
+}
+
 /// Lowers an indexed-array element read with PHP null-sentinel fallback on misses.
 pub(super) fn lower_array_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     warn_on_missing: bool,
-    for_write: bool,
+) -> Result<()> {
+    lower_array_get_in_mode(ctx, inst, warn_on_missing, ArrayGetMode::Retaining)
+}
+
+/// Lowers `ArrayGetForWrite`: the same element read as `array_get`, missing-key warning and
+/// null-container sentinel fallback included, but the element is copy-on-write separated and
+/// returned without a caller reference.
+///
+/// A by-reference `foreach` mutates the container it iterates in place, and `iter_start` gets
+/// there through `__rt_array_ensure_unique`, which copies whenever the source is shared. The
+/// plain `array_get` read hands the loop the parent's container PLUS a reference of its own, so
+/// the element sat at refcount 2, the loop copied it, wrote into the copy and dropped it: every
+/// write was lost (issue #580).
+///
+/// Simply skipping the retain is not enough, and is in fact worse: `__rt_array_ensure_unique`
+/// CONSUMES one reference from the source when it splits, so on a genuinely shared element that
+/// decrement would come out of the parent's own reference and leave the parent slot dangling.
+/// This op therefore does the splits itself — the receiver first, then the element — publishing
+/// each back into the slot it came from, exactly as PHP separates `$a` and then `$a[0]` before
+/// iterating it by reference. What reaches the loop is unique, so `iter_start`'s own
+/// `ensure_unique` is a no-op and the writes land in the container the parent holds.
+///
+/// Boxed `Mixed` elements use the nested-write ownership contract from issue #555 instead: the
+/// stored cell is retained and returned so later write-back can publish any replacement into the
+/// parent. Statically typed array/hash elements use the copy-on-write path from issue #580.
+pub(super) fn lower_array_get_for_write(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let array = expect_operand(inst, 0)?;
+    let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
+    require_array_get_result(&elem_ty, inst)?;
+    if matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed) {
+        return lower_array_get_in_mode(ctx, inst, true, ArrayGetMode::MixedForWrite);
+    }
+    let helper = array_get_for_write_cow_helper(&elem_ty).ok_or_else(|| {
+        CodegenIrError::unsupported(format!(
+            "array_get_for_write element PHP type {:?}",
+            elem_ty
+        ))
+    })?;
+    separate_get_for_write_receiver(ctx, array, "__rt_array_ensure_unique")?;
+    lower_array_get_in_mode(ctx, inst, true, ArrayGetMode::ForWrite { helper })
+}
+
+/// Separates the receiver itself before its element slot is rewritten.
+///
+/// PHP separates `$a` on the way to separating `$a[0]`, and so does elephc's element WRITE path:
+/// `$a[0] = ...` splits the receiver inside `__rt_array_set_*` and stores the unique pointer back
+/// to the source local. Fetch-for-write publishes a new element pointer into the receiver's
+/// payload, so it owes the same guarantee — otherwise `$b = $a; foreach ($a[0] as &$v)` would
+/// mutate storage `$b` still observes.
+///
+/// Only receivers that came from a local (or a global mirrored through one) are separated here:
+/// the split returns a NEW container, and without a slot to publish it to the caller would keep
+/// reading the old one. A chained receiver needs no split at this point anyway — the lowering
+/// walks `$a[0][0]` down to its base local and fetches every level for write on the way back up,
+/// so an inner level always hands the next one a container that is already unique.
+///
+/// `helper` selects the copy-on-write split matching the receiver's own container kind:
+/// `__rt_array_ensure_unique` for an indexed receiver, `__rt_hash_ensure_unique` for a hash one.
+pub(super) fn separate_get_for_write_receiver(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    helper: &str,
+) -> Result<()> {
+    let Some(slot) = source_load_local_slot(ctx, array)? else {
+        return Ok(());
+    };
+    let arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, arg_reg)?;
+    abi::emit_call_label(ctx.emitter, helper);
+    ctx.store_result_value(array)?;
+    ctx.store_value_to_local(slot, array)?;
+    ctx.writeback_global_array_source(array)
+}
+
+/// Returns the copy-on-write helper that separates an element of this type, if there is one.
+///
+/// Only the two container shapes need — and survive — the split: an indexed array and a hash,
+/// each with its own clone helper. Everything else is rejected. `Mixed` in particular is not a
+/// single container to separate: its slot can hold an invoker ref-cell marker whose read
+/// materializes a freshly boxed value instead of the slot's own storage.
+///
+/// Shared with the hash receiver path: what selects the helper is the ELEMENT's container kind,
+/// which is independent of whether the receiver holding it is indexed or associative.
+pub(super) fn array_get_for_write_cow_helper(elem_ty: &PhpType) -> Option<&'static str> {
+    match elem_ty.codegen_repr() {
+        PhpType::Array(_) => Some("__rt_array_ensure_unique"),
+        PhpType::AssocArray { .. } => Some("__rt_hash_ensure_unique"),
+        _ => None,
+    }
+}
+
+/// Lowers an indexed-array element read under the requested ownership mode.
+fn lower_array_get_in_mode(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    warn_on_missing: bool,
+    mode: ArrayGetMode,
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let index = expect_operand(inst, 1)?;
@@ -255,16 +373,30 @@ pub(super) fn lower_array_get(
             array,
             index,
             warn_on_missing,
-            for_write,
+            matches!(mode, ArrayGetMode::MixedForWrite),
         );
     }
     match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            lower_array_get_aarch64(ctx, inst, array, index, &elem_ty, &result_ty, warn_on_missing)
-        }
-        Arch::X86_64 => {
-            lower_array_get_x86_64(ctx, inst, array, index, &elem_ty, &result_ty, warn_on_missing)
-        }
+        Arch::AArch64 => lower_array_get_aarch64(
+            ctx,
+            inst,
+            array,
+            index,
+            &elem_ty,
+            &result_ty,
+            warn_on_missing,
+            mode,
+        ),
+        Arch::X86_64 => lower_array_get_x86_64(
+            ctx,
+            inst,
+            array,
+            index,
+            &elem_ty,
+            &result_ty,
+            warn_on_missing,
+            mode,
+        ),
     }
 }
 
@@ -686,6 +818,7 @@ fn lower_array_get_aarch64(
     elem_ty: &PhpType,
     result_ty: &PhpType,
     warn_on_missing: bool,
+    mode: ArrayGetMode,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -750,7 +883,7 @@ fn lower_array_get_aarch64(
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
     ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));       // compare the requested offset against the indexed-array length
     ctx.emitter.instruction(&format!("b.ge {}", null_label));                   // out-of-range indexed-array offsets read as null
-    emit_array_get_in_bounds_aarch64(ctx, array_reg, result_reg, elem_ty, result_ty)?;
+    emit_array_get_in_bounds_aarch64(ctx, array_reg, result_reg, elem_ty, result_ty, mode)?;
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the null fallback after a successful indexed-array read
 
     // -- promoted to hash storage: read through the hash, materializing the SAME representation
@@ -834,6 +967,7 @@ fn lower_array_get_x86_64(
     elem_ty: &PhpType,
     result_ty: &PhpType,
     warn_on_missing: bool,
+    mode: ArrayGetMode,
 ) -> Result<()> {
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
@@ -890,7 +1024,7 @@ fn lower_array_get_x86_64(
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
     ctx.emitter.instruction(&format!("cmp {}, {}", result_reg, len_reg));       // compare the requested offset against the indexed-array length
     ctx.emitter.instruction(&format!("jge {}", null_label));                    // out-of-range indexed-array offsets read as null
-    emit_array_get_in_bounds_x86_64(ctx, array_reg, result_reg, elem_ty, result_ty)?;
+    emit_array_get_in_bounds_x86_64(ctx, array_reg, result_reg, elem_ty, result_ty, mode)?;
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the null fallback after a successful indexed-array read
 
     // -- promoted to hash storage: read through the hash, materializing the SAME representation
@@ -973,7 +1107,12 @@ fn emit_array_get_in_bounds_aarch64(
     index_reg: &str,
     elem_ty: &PhpType,
     result_ty: &PhpType,
+    mode: ArrayGetMode,
 ) -> Result<()> {
+    if let ArrayGetMode::ForWrite { helper } = mode {
+        emit_array_get_for_write_in_bounds_aarch64(ctx, array_reg, index_reg, helper);
+        return Ok(());
+    }
     match elem_ty {
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
@@ -1035,7 +1174,12 @@ fn emit_array_get_in_bounds_x86_64(
     index_reg: &str,
     elem_ty: &PhpType,
     result_ty: &PhpType,
+    mode: ArrayGetMode,
 ) -> Result<()> {
+    if let ArrayGetMode::ForWrite { helper } = mode {
+        emit_array_get_for_write_in_bounds_x86_64(ctx, array_reg, index_reg, helper);
+        return Ok(());
+    }
     match elem_ty {
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, index_reg, 0x7fff_ffff_ffff_fffe);
@@ -1088,6 +1232,51 @@ fn emit_array_get_in_bounds_x86_64(
         }
     }
     Ok(())
+}
+
+/// Emits the in-bounds copy-on-write element fetch for AArch64.
+///
+/// Computes the element slot address, separates the container it holds through `helper`, and
+/// stores the (possibly new) pointer straight back into that slot. The store is unconditional
+/// because the helper returns the original pointer untouched whenever no split was needed, and
+/// it is what keeps the refcounts balanced on the split path: the `ensure_unique` helpers drop
+/// one reference from the shared original, and the slot it came from is exactly the owner giving
+/// that reference up, taking the fresh clone in exchange.
+///
+/// The slot address is spilled across the call because both scratch registers used here are
+/// caller-saved. Result: the unique element pointer in the integer result register, BORROWED —
+/// the parent slot owns it.
+fn emit_array_get_for_write_in_bounds_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array_reg: &str,
+    index_reg: &str,
+    helper: &str,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.emitter.instruction(&format!("add {}, {}, #24", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+    ctx.emitter.instruction(&format!("add {}, {}, {}, lsl #3", array_reg, array_reg, index_reg)); // address the selected element slot within the payload
+    abi::emit_push_reg(ctx.emitter, array_reg);                                // preserve the element slot address across the copy-on-write helper call
+    abi::emit_load_from_address(ctx.emitter, result_reg, array_reg, 0);
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_pop_reg(ctx.emitter, array_reg);                                 // restore the element slot address after the copy-on-write helper call
+    abi::emit_store_to_address(ctx.emitter, result_reg, array_reg, 0);
+}
+
+/// Emits the in-bounds copy-on-write element fetch for x86_64. Mirrors the AArch64 shape.
+fn emit_array_get_for_write_in_bounds_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array_reg: &str,
+    index_reg: &str,
+    helper: &str,
+) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    ctx.emitter.instruction(&format!("lea {}, [{} + 24]", array_reg, array_reg)); // skip the indexed-array header to reach element payloads
+    ctx.emitter.instruction(&format!("lea {}, [{} + {} * 8]", array_reg, array_reg, index_reg)); // address the selected element slot within the payload
+    abi::emit_push_reg(ctx.emitter, array_reg);                                // preserve the element slot address across the copy-on-write helper call
+    abi::emit_load_from_address(ctx.emitter, "rdi", array_reg, 0);
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_pop_reg(ctx.emitter, array_reg);                                 // restore the element slot address after the copy-on-write helper call
+    abi::emit_store_to_address(ctx.emitter, result_reg, array_reg, 0);
 }
 
 /// Copies a loaded Mixed slot into a fresh zval cell, dereferencing ref-cell markers first.

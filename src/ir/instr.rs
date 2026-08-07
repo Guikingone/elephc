@@ -340,13 +340,13 @@ pub enum Op {
     HashLen,
     ArrayGet,
     ArrayGetSilent,
-    /// Reads a boxed Mixed element for an imminent nested write, retaining the stored cell so the
-    /// writer can publish copy-on-write replacements back into the owning array slot.
+    /// Prepares an indexed element for mutation: boxed Mixed reads retain the owning cell, while
+    /// typed container reads copy-on-write separate and republish the child in its parent slot.
     ArrayGetForWrite,
     HashGet,
     HashGetSilent,
-    /// Reads a boxed Mixed value for an imminent nested write, retaining the stored cell so the
-    /// writer can publish replacements back into the owning hash entry.
+    /// Prepares an associative element for mutation: boxed Mixed reads retain the owning cell,
+    /// while typed container reads copy-on-write separate and republish the child in its entry.
     HashGetForWrite,
     ArrayIsset,
     HashIsset,
@@ -640,8 +640,12 @@ impl Op {
             }
             ArrayGetSilent | HashGetSilent | ArrayIsset | HashIsset => E::READS_HEAP,
             ArrayGet | HashGet => E::READS_HEAP | E::MAY_WARN,
+            // Not a pure read despite the name: the copy-on-write split rewrites the receiver's
+            // element slot (and the receiver's own local slot), so it must never be treated as
+            // reorderable or redundant against the plain reads around it.
             ArrayGetForWrite | HashGetForWrite => {
-                E::READS_HEAP | E::MAY_FATAL | E::MAY_WARN | E::REFCOUNT_OP
+                E::READS_HEAP | E::WRITES_HEAP | E::WRITES_LOCAL | E::ALLOC_HEAP
+                    | E::REFCOUNT_OP | E::MAY_WARN | E::MAY_FATAL
             }
             StrPersist | ArrayEnsureUnique | HashEnsureUnique | ArrayCloneShallow
             | HashCloneShallow | ObjectCloneShallow => {

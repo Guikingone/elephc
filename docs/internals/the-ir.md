@@ -314,6 +314,7 @@ Ownership operations:
 | Op | Operand | Result | Effects | Lowering |
 |---|---|---|---|---|
 | `Acquire` | refcounted/string/callable value | `Void` or retained value alias | `REFCOUNT_OP`, maybe `WRITES_HEAP` | `__rt_incref`, string persist/retain, callable descriptor retain if added |
+| `Acquire` + `Bool` immediate | same | same | same | same; the immediate marks a *lifetime pin* and only opts the pair out of acquire/release cancellation |
 | `Release` | owned value | `Void` | `REFCOUNT_OP`, maybe `WRITES_HEAP`, debug may fatal | `__rt_decref_any`, `__rt_heap_free_safe`, callable descriptor release |
 | `Move` | any value | same type | pure validator operation | no machine instruction |
 | `Borrow` | value with live owner | same type | pure validator operation | no machine instruction |
@@ -542,8 +543,8 @@ across a reset point.
 | `ArrayLen`, `HashLen` | container | `I64` | `reads_heap` |
 | `ArrayGet` | array, index | element type | `reads_heap`, `may_warn`, maybe `may_fatal` |
 | `HashGet` | hash, key | value type | `reads_heap`, `may_warn`, maybe `may_fatal` |
-| `ArrayGetForWrite` | array, index | aliased boxed `Mixed` | `reads_heap`, `refcount_op`, `may_warn`, maybe `may_fatal` |
-| `HashGetForWrite` | hash, key | aliased boxed `Mixed` | `reads_heap`, `refcount_op`, `may_warn`, maybe `may_fatal` |
+| `ArrayGetForWrite` | array, index (`I64`) | retained boxed `Mixed` cell or typed **borrowed** element | `reads_heap`, `writes_heap`, `writes_local`, `alloc_heap`, `refcount_op`, `may_warn`, maybe `may_fatal` |
+| `HashGetForWrite` | hash, key | retained boxed `Mixed` cell or typed **borrowed** value | `reads_heap`, `writes_heap`, `writes_local`, `alloc_heap`, `refcount_op`, `may_warn`, maybe `may_fatal` |
 | `ArraySet` | array, index, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `HashSet` | hash, key, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
 | `ArrayPush`, `HashAppend` | container, value | `Void` | `writes_heap`, maybe `alloc_heap`, `refcount_op` |
@@ -558,11 +559,11 @@ across a reset point.
 Ordinary `ArrayGet`/`HashGet` reads of boxed `Mixed` values materialize an independent zval cell,
 preserving PHP value semantics. Resource payloads are the intentional exception: the read retains
 the existing resource cell so aliases share the cursor and close/destructor lifetime, as PHP
-resources do. Nested assignments use the explicit `*GetForWrite` operations for
-their parent read instead: the root container is COW-normalized and stored back first, then the
-selected cell is detached into that unique owner when an outer alias still shares it. Typed entries
-are promoted to boxed storage in place. The following `RuntimeCall` writer can therefore publish
-copy-on-write replacements back into the owning slot without making ordinary reads alias.
+resources do. Nested assignments use the explicit `*GetForWrite` operations with a `Mixed` result
+for their parent read instead: the root container is COW-normalized and stored back first, then the
+selected stored cell is returned with a retained reference. Typed entries are promoted to boxed
+storage in place. The following `RuntimeCall` writer can therefore publish copy-on-write
+replacements back into the owning slot without making ordinary reads alias.
 The dynamic `MixedArrayGetForWrite` equivalent additionally COW-normalizes a runtime indexed array
 or associative hash, republishes a possibly split container in its cloned owning Mixed cell, and
 detaches the selected zval; the ordinary dynamic read clones that cell without mutating storage.
@@ -570,6 +571,44 @@ detaches the selected zval; the ordinary dynamic read clones that cell without m
 All mutating operations must preserve copy-on-write. The builder emits
 `ArrayEnsureUnique`/`HashEnsureUnique` before mutation unless prior ownership
 proofs make it unnecessary.
+
+With a typed result, `ArrayGetForWrite` and `HashGetForWrite` are also the read
+side of that rule for a container element that is about to be mutated through an
+alias — today, the source of a by-reference `foreach` (issue #580). Unlike the
+`Mixed` form, the typed form takes no reference for the caller; it separates the
+receiver, then splits the element from any co-owner and stores the separated
+container back into the receiver's element slot, so the result is owned by the
+parent and unique. That is
+what lets `foreach ($a[0] as &$v)` and `foreach ($h['a'] as &$v)` write through
+to their sources: the plain retaining read left the element shared, and
+`IterStart`'s own copy-on-write split then gave the loop a private copy to mutate
+and discard.
+
+The two differ only in how they address the element slot. `ArrayGetForWrite`
+scales an integer key into the indexed payload, so it requires an `I64` key.
+`HashGetForWrite` cannot compute an address, so it takes the matching entry's
+address from `__rt_hash_get` (returned in `x4` on AArch64, `r8` on x86_64, null
+on a miss) and splits the container that entry holds; string and integer keys are
+both fine, since the lookup normalizes them. Both require an array or hash
+element, each split with its own runtime helper, and both keep the plain read's
+missing-key warning and null-container sentinel. Every other shape — a `Mixed`
+element in particular, whose read can materialize a fresh box instead of the
+slot's own storage — keeps the retaining read. The receiver split only happens
+for a receiver that came from a local slot, since the new container has to be
+published somewhere.
+
+Because the result is borrowed, the parent's element slot is its only owner, and
+the loop body can drop that parent (`$a = []`, `unset($a)`) while the iterator is
+still running. The by-reference `foreach` therefore takes a **lifetime pin** on
+the source — an `Acquire` marked with a `Bool(true)` immediate — emitted *after*
+`IterStart`, and releases it on every exit: the loop's own exit block for normal
+termination and `break`, and `emit_innermost_loop_cleanups` for `break N`,
+`return`, and `throw`. The ordering is load-bearing in both directions. Earlier
+than `IterStart` and the extra reference makes that instruction's
+`__rt_array_ensure_unique` split, handing the loop the private copy this whole
+mechanism exists to avoid; later than the last exit and the element outlives the
+program's need for it. PHP gets the same effect for free: its by-reference
+`foreach` holds a reference to the iterated array itself.
 
 ### Iterables, SPL, and Foreach
 
@@ -994,7 +1033,11 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   scalar slots are not aliased.
 - **Paired acquire/release cancellation** — an `acquire` whose result is used
   exactly once, by its `release`, drops both. The single-use guard makes this
-  refcount-neutral on every path regardless of distance between the two ops.
+  refcount-neutral on every path regardless of distance between the two ops. An
+  `acquire` carrying an immediate is a **lifetime pin** and is exempt: its result
+  is deliberately never read, because the reference exists so the value survives
+  an interval in which another owner may release it, and that raised refcount is
+  exactly what the program observes.
 - **String-literal concat folding** — `str_concat(const_str a, const_str b)`
   interns `a ++ b` into the data pool and becomes a single `const_str` marked
   `persistent` so cleanup never frees the literal. Nested concats converge across

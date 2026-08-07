@@ -36,6 +36,37 @@ pub(crate) fn acquire_if_refcounted(
     value
 }
 
+/// Emits an acquire that is marked as a lifetime pin: a reference taken purely so the value
+/// outlives an interval, not so it can be read through the acquired result.
+///
+/// The `Immediate::Bool(true)` marker is what tells the paired acquire/release peephole to leave
+/// this pair alone. That peephole cancels an `Acquire` whose only use is its `Release` on the
+/// premise that the raised refcount in between is unobservable — true for a value nobody else
+/// touches, false by construction here: the whole point of a pin is that something inside the
+/// interval may drop the other owner, and cancelling the pair would hand that interval freed
+/// storage (issue #580).
+///
+/// Returns the operand unchanged when its type carries no runtime lifetime state, so callers can
+/// detect "nothing was pinned" by comparing value ids.
+pub(crate) fn acquire_lifetime_pin_if_refcounted(
+    ctx: &mut LoweringContext<'_, '_>,
+    value: LoweredValue,
+    span: Option<Span>,
+) -> LoweredValue {
+    let php_type = ctx.builder.value_php_type(value.value);
+    if Ownership::php_type_needs_lifetime_tracking(&php_type) {
+        return ctx.emit_value(
+            Op::Acquire,
+            vec![value.value],
+            Some(crate::ir::Immediate::Bool(true)),
+            php_type,
+            Op::Acquire.default_effects(),
+            span,
+        );
+    }
+    value
+}
+
 /// Emits a type-gated release; the backend filters the value's ownership state.
 pub(crate) fn release_if_owned(ctx: &mut LoweringContext<'_, '_>, value: LoweredValue, span: Option<Span>) {
     let php_type = ctx.builder.value_php_type(value.value);

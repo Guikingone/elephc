@@ -200,6 +200,7 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_htmlspecialchars` | HTML escape | `x1`/`x2` | `x1`/`x2` |
 | `__rt_html_entity_decode` | Decode HTML entities | `x1`/`x2` | `x1`/`x2` |
 | `__rt_rawurlencode` | URL encode (RFC 3986) | `x1`/`x2` | `x1`/`x2` |
+| `__rt_parse_url` | Parse URL bytes and select an array/string/int/null/false result | `x1`/`x2` + component in `x3` | `x0` (Mixed ptr) |
 | `__rt_stripslashes` | Remove escape backslashes | `x1`/`x2` | `x1`/`x2` |
 | `__rt_ucwords` | Uppercase first letter of each word | `x1`/`x2` | `x1`/`x2` |
 | `__rt_str_ireplace` | Case-insensitive replace | search + replace + subject | `x1`/`x2` |
@@ -572,6 +573,7 @@ The first table covers the file/filesystem core; the subsections after it cover 
 | `__rt_fnmatch` | Match shell-style path globs with PHP/libc-compatible flag bits for the selected target |
 | `__rt_realpath` | Canonicalize an existing path, returning a null pointer on failure so codegen can box PHP `false` |
 | `__rt_pathinfo_str` / `__rt_pathinfo_array` | Return one `pathinfo()` component for component flags, or build the associative-array `PATHINFO_ALL` shape |
+| `__rt_parse_url` | Scan PHP-compatible URL components, persist strings, and box either a selected component or a Mixed-valued associative hash |
 | `__rt_chmod` / `__rt_chown` / `__rt_lchown` / name-resolving variants | File ownership and mode modification helpers, including symlink-aware ownership updates |
 | `__rt_lookup_passwd_uid` / `__rt_lookup_group_gid` | Resolve local user/group names by scanning `/etc/passwd` and `/etc/group` without calling NSS, so static Linux binaries do not require glibc NSS modules at runtime |
 | `__rt_umask` / `__rt_ftruncate` | Process umask and file truncation helpers |
@@ -982,7 +984,7 @@ Additionally, the runtime emits static data tables:
 - `_fiber_class_id`, `_fiber_error_class_id` — per-program class ids used by Fiber object cleanup and `FiberError` construction
 - `_generator_class_id` — per-program class id used to recognize Generator frames during object deep-free
 - `_php_uname_mode_len_msg`, `_php_uname_mode_value_msg` — fatal `php_uname()` argument diagnostics for invalid mode strings
-- `_filetype_*`, `_stat_key_*`, `_dirname_*`, `_pathinfo_key_*`, `_tmpfile_template` — file metadata, path, stat-array, and temporary-file lookup strings used by I/O helpers
+- `_filetype_*`, `_stat_key_*`, `_dirname_*`, `_pathinfo_key_*`, `_parse_url_*`, `_tmpfile_template` — file metadata, path, URL-component, stat-array, and temporary-file lookup strings used by runtime helpers
 - `_locale_utf8_name`, `_locale_env_name` — locale selectors used by runtime helpers that need host locale fallback
 - `_json_true`, `_json_false`, `_json_null` — JSON keyword strings used by `__rt_json_encode_bool` and `__rt_json_encode_null`
 - `_json_int_max_str`, `_json_int_min_str` — decimal threshold strings used by `JSON_BIGINT_AS_STRING` overflow detection without wrapping through integer parsing

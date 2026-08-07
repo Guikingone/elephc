@@ -240,6 +240,45 @@ fn multi_use_acquire_is_not_cancelled() {
     assert!(validate_function(&function).is_ok());
 }
 
+/// An acquire carrying the lifetime-pin marker is not cancelled even though its only use is its
+/// release: the pin exists so the value survives an interval in which another owner may drop it
+/// (a by-reference `foreach` over an array element whose body replaces the parent, issue #580),
+/// so the raised refcount in between is exactly what the program observes.
+#[test]
+fn lifetime_pin_acquire_release_pair_is_not_cancelled() {
+    let mut function = Function::new("acq_pin".to_string(), IrType::Str, PhpType::Str);
+    {
+        let mut builder = Builder::new(&mut function);
+        let entry = builder.create_named_block("entry", vec![]);
+        builder.set_entry(entry);
+        builder.position_at_end(entry);
+        let x = builder.emit_const_str(DataId::from_raw(0));
+        let pinned = builder
+            .emit(
+                Op::Acquire,
+                vec![x],
+                Some(Immediate::Bool(true)),
+                IrType::Str,
+                PhpType::Str,
+                Ownership::Owned,
+            )
+            .expect("acquire result");
+        builder.emit(
+            Op::Release,
+            vec![pinned],
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+        );
+        builder.terminate(Terminator::Return { value: Some(x) });
+    }
+    assert!(!run_peephole(&mut function), "a lifetime pin must not cancel");
+    assert_eq!(function.instructions[1].op, Op::Acquire, "the pin acquire is preserved");
+    assert_eq!(function.instructions[2].op, Op::Release, "the pin release is preserved");
+    assert!(validate_function(&function).is_ok());
+}
+
 // --- redundant load / store --------------------------------------------------
 
 /// Adds a scalar `PhpLocal` slot to the function under construction.
