@@ -8523,8 +8523,44 @@ fn lower_stream_socket_enable_crypto_attach_aarch64(
     ctx.emitter.instruction("ldr x9, [x9]");                                    // load the mutual-TLS attach function pointer
     ctx.emitter.instruction(&format!("b {}", do_attach));                       // call the selected attach function
     ctx.emitter.label(&plain_attach);
+    // ssl.verify_peer = false selects the non-verifying attach, mirroring how
+    // https:// already picks its insecure connect variant. Without this the
+    // context option was ignored and a self-signed peer was always rejected.
+    let insecure_attach = ctx.next_label("ssec_insecure_attach");
+    let verifying_attach = ctx.next_label("ssec_verifying_attach");
+    // The attach arguments are already materialized in x0-x6 at this point, and
+    // the option lookup clobbers x0-x5, so they are saved across the probe.
+    ctx.emitter.instruction("stp x0, x1, [sp, #-16]!");
+    ctx.emitter.instruction("stp x2, x3, [sp, #-16]!");
+    ctx.emitter.instruction("stp x4, x5, [sp, #-16]!");
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    // verify_peer is normally set with a PHP bool, so the int/bool reader is the
+    // right one; the string reader missed it entirely and left verification on.
+    ctx.emitter.instruction("str xzr, [sp, #0]");                               // out value default
+    abi::emit_symbol_address(ctx.emitter, "x0", "_ssl_key_str");
+    ctx.emitter.instruction("mov x1, #3");                                      // strlen("ssl")
+    abi::emit_symbol_address(ctx.emitter, "x2", "_ssl_verify_peer_key_str");
+    ctx.emitter.instruction("mov x3, #11");                                     // strlen("verify_peer")
+    ctx.emitter.instruction("add x4, sp, #0");                                  // out value address
+    abi::emit_call_label(ctx.emitter, "__rt_get_int_context_option");
+    ctx.emitter.instruction(&format!("cbz x0, {}", verifying_attach));          // option absent: keep verifying
+    ctx.emitter.instruction("ldr x9, [sp, #0]");                                // verify_peer value
+    ctx.emitter.instruction(&format!("cbz x9, {}", insecure_attach));           // false/0 disables verification
+    ctx.emitter.label(&verifying_attach);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("ldp x4, x5, [sp], #16");                           // restore the attach arguments
+    ctx.emitter.instruction("ldp x2, x3, [sp], #16");
+    ctx.emitter.instruction("ldp x0, x1, [sp], #16");
     abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_attach_fd_fn");
     ctx.emitter.instruction("ldr x9, [x9]");                                    // load the default TLS attach function pointer
+    ctx.emitter.instruction(&format!("b {}", do_attach));
+    ctx.emitter.label(&insecure_attach);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("ldp x4, x5, [sp], #16");                           // restore the attach arguments
+    ctx.emitter.instruction("ldp x2, x3, [sp], #16");
+    ctx.emitter.instruction("ldp x0, x1, [sp], #16");
+    abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_attach_fd_insecure_fn");
+    ctx.emitter.instruction("ldr x9, [x9]");                                    // load the non-verifying attach function pointer
     ctx.emitter.label(&do_attach);
     ctx.emitter.instruction("blr x9");                                          // attach TLS to the fd and return a session handle
     ctx.emitter.instruction("ldr x10, [sp, #64]");                              // reload fd before releasing the spill storage

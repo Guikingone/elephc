@@ -617,6 +617,35 @@ pub unsafe extern "C" fn elephc_tls_attach_fd(
     peer_name_ptr: *const u8,
     peer_name_len: usize,
 ) -> i64 {
+    attach_fd_inner(fd, peer_name_ptr, peer_name_len, shared_client_config())
+}
+
+/// Variant of `elephc_tls_attach_fd` that skips certificate verification, for
+/// streams whose context sets `ssl.verify_peer` to false.
+///
+/// # Safety
+/// `peer_name_ptr` must point to `peer_name_len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_tls_attach_fd_insecure(
+    fd: i32,
+    peer_name_ptr: *const u8,
+    peer_name_len: usize,
+) -> i64 {
+    attach_fd_inner(fd, peer_name_ptr, peer_name_len, insecure_client_config())
+}
+
+/// Shared body for the verifying and non-verifying attach entry points.
+///
+/// The handshake is driven to completion here rather than left for the first
+/// read: PHP's `stream_socket_enable_crypto()` reports handshake failure through
+/// its return value, so deferring it made a rejected certificate look like a
+/// successful attach that then read zero bytes.
+unsafe fn attach_fd_inner(
+    fd: i32,
+    peer_name_ptr: *const u8,
+    peer_name_len: usize,
+    config: Arc<ClientConfig>,
+) -> i64 {
     if fd < 0 || peer_name_ptr.is_null() || peer_name_len == 0 {
         return -1;
     }
@@ -637,13 +666,22 @@ pub unsafe extern "C" fn elephc_tls_attach_fd(
         return -1;
     }
     let sock = TcpStream::from_raw_fd(dup_fd);
-    let conn = match ClientConnection::new(shared_client_config(), server_name) {
+    let mut conn = match ClientConnection::new(config, server_name) {
         Ok(c) => c,
         Err(_) => {
             // sock drops here and closes the dup'd fd.
             return -1;
         }
     };
+    let mut sock = sock;
+    // Drive the handshake now so a rejected certificate is reported to the
+    // caller instead of surfacing later as an empty read.
+    while conn.is_handshaking() {
+        match conn.complete_io(&mut sock) {
+            Ok(_) => {}
+            Err(_) => return -1,
+        }
+    }
     let id = next_handle_id();
     handles()
         .lock()

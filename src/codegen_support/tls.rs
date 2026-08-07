@@ -26,6 +26,10 @@ pub(crate) fn publish_tls_function_pointers(emitter: &mut Emitter) {
         ("elephc_tls_close", "_elephc_tls_close_fn"),
         ("elephc_tls_attach_fd", "_elephc_tls_attach_fd_fn"),
         (
+            "elephc_tls_attach_fd_insecure",
+            "_elephc_tls_attach_fd_insecure_fn",
+        ),
+        (
             "elephc_tls_attach_fd_client_cert",
             "_elephc_tls_attach_fd_client_cert_fn",
         ),

@@ -64,6 +64,24 @@ pub fn emit_get_string_context_option(emitter: &mut Emitter) {
     // -- load top-level options hash; bail when null --
     abi::emit_symbol_address(emitter, "x9", "_stream_context_options");
     emitter.instruction("ldr x0, [x9]");                                        // load runtime value
+    // The active bridge is only published inside an fopen scope. Outside one —
+    // stream_socket_client() followed by stream_socket_enable_crypto(), for
+    // instance — the request default context still applies, so fall back to it
+    // rather than reporting every option missing.
+    emitter.instruction("cbnz x0, __rt_gsco_have_options");                     // an explicit scope wins
+    // An explicit but EMPTY context must mask the default, so the fallback only
+    // applies when no scope is active at all. The options pointer is null in both
+    // cases; the active-handle slot is what tells them apart.
+    abi::emit_symbol_address(emitter, "x9", "_stream_current_context_handle");
+    emitter.instruction("ldr x9, [x9]");                                        // handle of the active context scope
+    emitter.instruction(&format!("cbnz x9, __rt_gsco_have_options"));           // a scope is active: its emptiness is meaningful
+    abi::emit_symbol_address(emitter, "x9", "_stream_default_context_handle");
+    emitter.instruction("ldr x0, [x9]");                                        // request-default context handle
+    emitter.instruction("cbz x0, __rt_gsco_miss");                              // no default context was ever created
+    emitter.instruction("bl __rt_context_state");                               // resolve its ContextState
+    emitter.instruction("cbz x0, __rt_gsco_miss");                              // a closed default context has no options
+    emitter.instruction("ldr x0, [x0, #0]");                                    // CONTEXT_OPTIONS_OFFSET
+    emitter.label("__rt_gsco_have_options");
     emitter.instruction("cbz x0, __rt_gsco_miss");                              // branch when the checked value is zero or equal
 
     // -- hash_get(top, wrapper) → value_lo = sub-hash on hit --

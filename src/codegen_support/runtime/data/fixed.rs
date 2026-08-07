@@ -542,6 +542,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // late-binding pattern as the other tls fn slots so non-TLS programs
     // do not pull in elephc-tls at link time.
     out.push_str(".comm _elephc_tls_attach_fd_fn, 8, 3\n");
+    // Non-verifying attach, selected when the stream context sets
+    // ssl.verify_peer to false.
+    out.push_str(".comm _elephc_tls_attach_fd_insecure_fn, 8, 3\n");
     // _elephc_tls_attach_fd_client_cert_fn / _elephc_tls_connect_client_cert_fn:
     // mutual-TLS variants dispatched when the stream context carries both
     // ssl.local_cert and ssl.local_pk. The attach variant is used by
