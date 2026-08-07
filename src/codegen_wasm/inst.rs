@@ -4120,6 +4120,47 @@ fn lower_gc_collect(ctx: &mut FnCtx) -> Result<()> {
 fn lower_loose_eq(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
     let left = operand(inst, 0)?;
     let right = operand(inst, 1)?;
+    // A BOXED operand compares through php-src's `zend_compare`, never through a conversion:
+    // `10 == "abc"` is FALSE because PHP renders the long and compares the bytes. Gated on the
+    // IR type rather than the representation, since an array and an object are pointers too.
+    let cell = |value: crate::ir::ValueId| -> bool {
+        ctx.function.value(value).is_some_and(|v| {
+            v.ir_type == IrType::Heap(IrHeapKind::Mixed) && v.php_type.codegen_repr() == PhpType::Mixed
+        })
+    };
+    // Only a genuine INT: against a PHP bool, PHP converts both sides to bool first, which is a
+    // different rule and stays refused.
+    let plain_int = |value: crate::ir::ValueId| -> bool {
+        ctx.function
+            .value(value)
+            .is_some_and(|v| v.ir_type == IrType::I64 && v.php_type.codegen_repr() == PhpType::Int)
+    };
+    let boxed_comparison = if cell(left) && cell(right) {
+        ctx.emit_load_value(left)?;
+        ctx.emit_load_value(right)?;
+        Some("call $__rt_mixed_cmp_mixed")
+    } else if cell(left) && plain_int(right) {
+        ctx.emit_load_value(left)?;
+        ctx.emit_load_value(right)?;
+        Some("call $__rt_mixed_cmp_i64")
+    } else if plain_int(left) && cell(right) {
+        // Equality is symmetric, so the box may take the helper's first position.
+        ctx.emit_load_value(right)?;
+        ctx.emit_load_value(left)?;
+        Some("call $__rt_mixed_cmp_i64")
+    } else {
+        None
+    };
+    if let Some(call) = boxed_comparison {
+        ctx.fb.ins(call, "php-src's comparison of a boxed value");
+        ctx.fb.ins("i64.eqz", "equal is a three-way answer of zero");
+        ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        if inst.op == Op::LooseNotEq {
+            ctx.fb.ins("i64.eqz", "!= is the negation of ==");
+            ctx.fb.ins("i64.extend_i32_u", "PHP booleans are i64 here");
+        }
+        return store_result(ctx, inst);
+    }
     let lhs = ctx.value_repr(left)?.clone();
     let rhs = ctx.value_repr(right)?.clone();
     match (&lhs, &rhs) {

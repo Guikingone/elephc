@@ -461,7 +461,7 @@ fn check_instruction_shape(
         Op::ArraySet => array_store_shape_issue(function, inst, 2, false),
         Op::ArrayPush => array_store_shape_issue(function, inst, 1, true),
         Op::ArrayToMixed => array_to_mixed_shape_issue(function, inst),
-        Op::LooseEq | Op::LooseNotEq => loose_eq_shape_issue(function, inst),
+        Op::LooseEq | Op::LooseNotEq => loose_eq_shape_issue(module, function, inst),
         Op::IterStart => iter_start_shape_issue(module, function, inst),
         Op::IncludeOnceMark => include_once_mark_shape_issue(module),
         Op::IterCurrentValueRef => iter_current_value_ref_shape_issue(function, inst),
@@ -2409,7 +2409,11 @@ fn strict_compare_shape_issue(function: &Function, inst: &Instruction) -> Option
 /// PHP 8's `==` table is much wider than this: anything involving a Mixed cell, an array, an
 /// object, or a bool against a number needs rules this backend has not measured yet, and answering
 /// those by guessing would be a silently wrong answer rather than a refusal.
-fn loose_eq_shape_issue(function: &Function, inst: &Instruction) -> Option<String> {
+fn loose_eq_shape_issue(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> Option<String> {
     let [left, right] = inst.operands.as_slice() else {
         return Some(format!(
             "loose comparison takes two operands, got {}",
@@ -2437,6 +2441,15 @@ fn loose_eq_shape_issue(function: &Function, inst: &Instruction) -> Option<Strin
         ((IrType::Str, PhpType::Str), (IrType::Str, PhpType::Str)) => true,
         ((IrType::I64, PhpType::Int), (IrType::F64, PhpType::Float)) => true,
         ((IrType::F64, PhpType::Float), (IrType::I64, PhpType::Int)) => true,
+        // A BOXED operand goes through php-src's `zend_compare`, which the two comparison
+        // helpers implement. Against a concrete side only a genuine INT is admitted: a PHP bool
+        // makes BOTH sides booleans, a different rule. These can reach php's own failure for an
+        // object, so they are command-module rules like every other diagnosing one.
+        ((IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed), (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed))
+        | ((IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed), (IrType::I64, PhpType::Int))
+        | ((IrType::I64, PhpType::Int), (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)) => {
+            module.functions.iter().any(|candidate| candidate.flags.is_main)
+        }
         _ => false,
     };
     if !admitted {
@@ -8094,13 +8107,25 @@ mod tests {
 
     /// `Op::LooseEq` admits only the operand pairs whose rule was MEASURED against php-src.
     ///
-    /// PHP 8's `==` table is much wider than what is lowered: a bool against a number casts the
-    /// number to bool, a Mixed cell dispatches on its tag, and arrays compare element-wise.
-    /// Answering those by guessing would be a silently wrong answer rather than a refusal, so the
-    /// gate keeps them out.
+    /// PHP 8's `==` table is much wider than the plain word comparisons: a bool against a number
+    /// casts the number to bool, and arrays compare element-wise. Answering those by guessing
+    /// would be a silently wrong answer rather than a refusal, so the gate keeps them out.
+    ///
+    /// A Mixed cell is no longer among them: `__rt_mixed_cmp_mixed` and `__rt_mixed_cmp_i64`
+    /// carry php-src's `zend_compare`, validated against `scripts/php_compare_model.py`. A cell
+    /// against a PHP BOOL still is, because that rule converts both sides to booleans.
     #[test]
     fn loose_equality_admits_only_measured_pairs() {
-        let probe_op = |op: Op, left: (IrType, PhpType), right: (IrType, PhpType)| {
+        let probe_op = |op: Op,
+                        left: (IrType, PhpType),
+                        right: (IrType, PhpType),
+                        command: bool| {
+            let mut module = Module::new(Target::wasm());
+            if command {
+                let mut main = Function::new("main".to_string(), IrType::Void, PhpType::Void);
+                main.flags.is_main = true;
+                module.add_function(main);
+            }
             let mut function =
                 Function::new("probe".to_string(), IrType::Void, PhpType::Void);
             {
@@ -8133,12 +8158,12 @@ mod tests {
                 .last()
                 .expect("the probe emitted a comparison")
                 .clone();
-            loose_eq_shape_issue(&function, &inst)
+            loose_eq_shape_issue(&module, &function, &inst)
         };
         // `!=` is the same gate negated, so both opcodes go through the same predicate.
         let probe = |left: (IrType, PhpType), right: (IrType, PhpType)| {
-            let eq = probe_op(Op::LooseEq, left.clone(), right.clone());
-            let ne = probe_op(Op::LooseNotEq, left, right);
+            let eq = probe_op(Op::LooseEq, left.clone(), right.clone(), true);
+            let ne = probe_op(Op::LooseNotEq, left, right, true);
             assert_eq!(eq.is_some(), ne.is_some(), "== and != must gate alike");
             eq
         };
@@ -8163,14 +8188,21 @@ mod tests {
         // comparing the two words.
         assert!(probe(boolean.clone(), int.clone()).is_some());
         assert!(probe(int.clone(), boolean.clone()).is_some());
-        // A string against a number, and anything boxed, still need their measured tables.
+        // A string against a number still needs its measured table.
         assert!(probe(string.clone(), int.clone()).is_some());
         assert!(probe(float.clone(), string.clone()).is_some());
-        assert!(probe(
-            (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed),
-            (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed)
-        )
-        .is_some());
+
+        // A BOXED operand is now answered by php-src's own `zend_compare`, against another box
+        // or against a genuine int.
+        let cell = (IrType::Heap(IrHeapKind::Mixed), PhpType::Mixed);
+        assert_eq!(probe(cell.clone(), cell.clone()), None);
+        assert_eq!(probe(cell.clone(), int.clone()), None);
+        assert_eq!(probe(int.clone(), cell.clone()), None);
+        // ...but NOT against a PHP bool, which makes both sides booleans instead.
+        assert!(probe(cell.clone(), boolean.clone()).is_some());
+        assert!(probe(boolean.clone(), cell.clone()).is_some());
+        // The comparison can warn, so a module with no command entry point still refuses.
+        assert!(probe_op(Op::LooseEq, cell.clone(), cell.clone(), false).is_some());
     }
 
     /// Runs the production capability-and-planning gate for executable output.
