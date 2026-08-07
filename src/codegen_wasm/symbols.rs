@@ -21,6 +21,27 @@ pub(super) fn user_function_symbol(name: &str) -> String {
 }
 
 /// Returns the internal symbol for a PHP class method.
+/// Names the mutable global recording whether `define("NAME", …)` has already run.
+///
+/// One flag per distinct constant name, so the duplicate answer is decided at RUNTIME and stays
+/// correct under any control flow — a compile-time "is this the first `define` in program order"
+/// analysis would be unsound the moment one sits inside a branch or a loop.
+///
+/// Shared by the planner that declares the global and the lowering that reads it, so the two
+/// cannot drift. PHP constant names are `[A-Za-z0-9_]` plus `\` for namespaced ones; anything
+/// outside that becomes `_` so the result is always a legal WAT identifier.
+pub(super) fn define_flag_symbol(constant_name: &str) -> String {
+    let mut symbol = String::from("__define_");
+    for byte in constant_name.chars() {
+        if byte.is_ascii_alphanumeric() || byte == '_' {
+            symbol.push(byte);
+        } else {
+            symbol.push('_');
+        }
+    }
+    symbol
+}
+
 pub(super) fn method_symbol(qualified_name: &str) -> String {
     format!("fn_m_{}", mangle_fqn(qualified_name))
 }

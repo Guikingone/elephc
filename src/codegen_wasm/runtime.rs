@@ -218,6 +218,16 @@ const WARN_OFFSET_ON_TYPE_FLOAT: &[u8] =
 const WARN_FOPEN_FAILED: &[u8] = b"Warning: fopen(): Failed to open stream\n";
 const WARN_FILE_GET_CONTENTS_FAILED: &[u8] =
     b"Warning: file_get_contents(): Failed to open stream\n";
+/// A duplicate `define()`. php-src NAMES the constant — `Warning: Constant X already defined` —
+/// which the native backend does not; the name is available here, so php's wording is used.
+///
+/// 8.3 added the deprecation clause, measured on 8.5.6. Both suffixes are laid out and the
+/// emitter picks by profile, the same way the offset-on-null warning does, so the data layout
+/// does not depend on the target version.
+const WARN_CONSTANT_DEFINED_PREFIX: &[u8] = b"Warning: Constant ";
+const WARN_CONSTANT_DEFINED_SUFFIX: &[u8] = b" already defined\n";
+const WARN_CONSTANT_DEFINED_SUFFIX_PHP9: &[u8] =
+    b" already defined, this will be an error in PHP 9\n";
 const WARN_UNINIT_STRING_OFFSET: &[u8] = b"Warning: Uninitialized string offset ";
 /// The newline closing that warning, in this emitter's own data group.
 const WARN_OFFSET_NEWLINE: &[u8] = b"\n";
@@ -318,7 +328,10 @@ pub(super) const COMMAND_DATA_END: u32 = COMMAND_DATA_BASE
     + WARN_OFFSET_ON_TYPE_INT.len() as u32
     + WARN_OFFSET_ON_TYPE_FLOAT.len() as u32
     + WARN_FOPEN_FAILED.len() as u32
-    + WARN_FILE_GET_CONTENTS_FAILED.len() as u32;
+    + WARN_FILE_GET_CONTENTS_FAILED.len() as u32
+    + WARN_CONSTANT_DEFINED_PREFIX.len() as u32
+    + WARN_CONSTANT_DEFINED_SUFFIX.len() as u32
+    + WARN_CONSTANT_DEFINED_SUFFIX_PHP9.len() as u32;
 
 /// Name of the mutable global holding the `@` suppression DEPTH.
 pub(super) const DIAG_SUPPRESS_GLOBAL: &str = "__diag_suppress";
@@ -355,6 +368,28 @@ pub(super) fn emit_common_runtime(wm: &mut WatModule) {
 ///
 /// Only WARNINGS consult it. PHP 8 no longer lets `@` swallow a fatal error, so
 /// the `__rt_fail_*` helpers deliberately keep writing and exiting.
+/// Emits the warning a duplicate `define()` produces.
+///
+/// Measured on php-src 8.5.6: `Warning: Constant NAME already defined`, and the call answers
+/// false. `@define(...)` silences it, which is why this opens with the suppression guard like
+/// every other `__rt_warn_*` helper.
+fn emit_constant_redefinition_warning(wm: &mut WatModule, offsets: &[(u32, u32)]) {
+    debug_assert_eq!(offsets.len(), 3);
+    let (prefix_ptr, prefix_len) = offsets[0];
+    let php82 = matches!(
+        crate::codegen_support::compile_php_version(),
+        crate::web_prelude::PhpVersion::Php82
+    );
+    let (suffix_ptr, suffix_len) = if php82 { offsets[1] } else { offsets[2] };
+    wm.add_raw_func(&format!(
+        r#"(func $__rt_warn_constant_already_defined (param $name_ptr i32) (param $name_len i32)
+  (if (global.get $__diag_suppress) (then (return)))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {prefix_ptr}) (i32.const {prefix_len}))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (local.get $name_ptr) (local.get $name_len))
+  (call $__rt_wasi_write_or_fail (i32.const 2) (i32.const {suffix_ptr}) (i32.const {suffix_len})))"#
+    ));
+}
+
 fn emit_diag_suppression_runtime(wm: &mut WatModule) {
     wm.add_global(Global {
         name: DIAG_SUPPRESS_GLOBAL.to_string(),
@@ -648,6 +683,10 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         WARN_FOREACH_NON_ITERABLE_SUFFIX,
         ERR_OPERAND_TYPES_PREFIX,
         ERR_OPERAND_TYPES_SPACE,
+        // Appended LAST for the same reason as every group above it.
+        WARN_CONSTANT_DEFINED_PREFIX,
+        WARN_CONSTANT_DEFINED_SUFFIX,
+        WARN_CONSTANT_DEFINED_SUFFIX_PHP9,
     ];
     let mut offsets = Vec::with_capacity(fixed_messages.len());
     let mut cursor = COMMAND_DATA_BASE;
@@ -709,6 +748,7 @@ fn emit_failure_runtime(wm: &mut WatModule) {
         &method_offsets[2..11],
     );
     emit_foreach_warning_runtime(wm, &warning_offsets[53..55]);
+    emit_constant_redefinition_warning(wm, &warning_offsets[57..60]);
     emit_arithmetic_coercion_runtime(
         wm,
         &warning_offsets[55..57],

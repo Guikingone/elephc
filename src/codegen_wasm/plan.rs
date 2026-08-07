@@ -200,6 +200,44 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // `define("NAME", …)` answers false and warns for a duplicate, so each distinct name needs a
+    // flag global and its bytes addressable for the warning that names it. Collected in one pass
+    // over the module so the planner and the lowering agree on both.
+    let mut define_names: Vec<String> = Vec::new();
+    for function in module.functions.iter().chain(module.class_methods.iter()) {
+        for inst in &function.instructions {
+            if !matches!(
+                inst.immediate.as_ref(),
+                Some(crate::ir::Immediate::RuntimeCall(
+                    crate::ir::RuntimeCallTarget::Function(crate::ir::RuntimeFnId::Define)
+                        | crate::ir::RuntimeCallTarget::ProfiledFunction {
+                            target: crate::ir::RuntimeFnId::Define,
+                            ..
+                        }
+                ))
+            ) {
+                continue;
+            }
+            let Some(name) = super::capability::define_constant_name(module, function, inst) else {
+                continue;
+            };
+            if !define_names.iter().any(|seen| seen == name) {
+                define_names.push(name.to_string());
+            }
+        }
+    }
+    for name in &define_names {
+        if !layout_values.iter().any(|value| value == name) {
+            layout_values.push(name.clone());
+        }
+        wm.add_global(wat::Global {
+            name: super::symbols::define_flag_symbol(name),
+            ty: wat::ValType::I32,
+            mutable: true,
+            init: 0,
+        });
+    }
+
     // `$obj[$key]` on an `ArrayAccess` implementor dispatches to `offsetGet`, but a program that
     // only ever writes the subscript never MENTIONS that name, so it is absent from the module
     // string table. The null-receiver check names the method it was about to call, so lay the

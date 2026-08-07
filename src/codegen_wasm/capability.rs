@@ -6063,6 +6063,34 @@ fn mixed_array_read_is_supported(module: &Module, function: &Function, call: &In
     operand_ir(2) == Some(IrType::I64)
 }
 
+/// Returns the LITERAL constant name a `define()` call names, when it has one.
+///
+/// Only a literal is admitted: the duplicate flag is a per-name global, and a computed name
+/// would have no global to read. php-src allows `define($computed, …)`, so this is a coverage
+/// limit rather than a semantic one.
+pub(super) fn define_constant_name<'a>(
+    module: &'a Module,
+    function: &Function,
+    call: &Instruction,
+) -> Option<&'a str> {
+    let name_value = *call.operands.first()?;
+    let defining = function
+        .instructions
+        .iter()
+        .find(|inst| inst.result == Some(name_value))?;
+    if defining.op != Op::ConstStr {
+        return None;
+    }
+    let Some(Immediate::Data(data_id)) = defining.immediate else {
+        return None;
+    };
+    module
+        .data
+        .strings
+        .get(data_id.as_raw() as usize)
+        .map(String::as_str)
+}
+
 /// Returns true when an untyped `Op::RuntimeCall` is `$obj[$key]` on an `ArrayAccess` receiver.
 ///
 /// Same three operands and result as the boxed `$mixed[$key]` read above; the RECEIVER is what
@@ -7030,6 +7058,7 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::StreamGetContents
         | RuntimeFnId::StreamCopyToStream
         | RuntimeFnId::GetResourceType
+        | RuntimeFnId::Define
         | RuntimeFnId::FileExists
         | RuntimeFnId::Unlink
         | RuntimeFnId::FileGetContents
@@ -7409,7 +7438,6 @@ pub(super) fn runtime_function_is_supported(target: RuntimeFnId) -> bool {
         | RuntimeFnId::Date
         | RuntimeFnId::DateDefaultTimezoneGet
         | RuntimeFnId::DateDefaultTimezoneSet
-        | RuntimeFnId::Define
         | RuntimeFnId::Defined
         | RuntimeFnId::Exec
         | RuntimeFnId::ExtensionLoaded

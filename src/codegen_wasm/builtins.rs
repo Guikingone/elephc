@@ -3654,6 +3654,63 @@ fn lower_file_builtin(
     store_result(ctx, inst)
 }
 
+/// Validates `define("NAME", $value)`.
+///
+/// The name must be a LITERAL, because the duplicate flag is a global named after it. The value
+/// is unconstrained: the constant's VALUE is settled by the prescan's constant table, and what
+/// runs here decides only whether this call is the first one, which is what PHP answers.
+fn define_shape_issue(module: &Module, function: &Function, call: &Instruction) -> Option<String> {
+    if call.operands.len() != 2 {
+        return Some(format!(
+            "define takes a name and a value, got {} operands",
+            call.operands.len()
+        ));
+    }
+    if super::capability::define_constant_name(module, function, call).is_none() {
+        return Some("define needs a literal constant name".to_string());
+    }
+    (call.result_type != IrType::I64)
+        .then(|| format!("define answers a bool, not {:?}", call.result_type))
+}
+
+/// Lowers `define("NAME", $value)` to its per-name flag.
+///
+/// php-src answers true the first time and false — after `Warning: Constant NAME already
+/// defined` — for every later call. The flag is a module global rather than a compile-time
+/// count, so a `define` inside a branch or a loop still answers correctly.
+///
+/// The VALUE operand is evaluated for its side effects and dropped: which value the constant
+/// carries is settled by the prescan's constant table, exactly as every read of the constant
+/// already resolves.
+fn lower_define(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let name = super::capability::define_constant_name(ctx.module, ctx.function, inst)
+        .ok_or_else(|| WasmError::Unsupported("define needs a literal name".to_string()))?
+        .to_string();
+    let flag = super::symbols::define_flag_symbol(&name);
+    let (name_ptr, name_len) = ctx.default_str_literal(&name)?;
+    // Evaluate and discard the value: PHP runs the expression whether or not the name is taken.
+    let value = operand(inst, 1)?;
+    ctx.emit_load_value(value)?;
+    let value_words = super::values::WasmRepr::val_types(
+        ctx.function
+            .value(value)
+            .map(|v| v.ir_type)
+            .unwrap_or(IrType::I64),
+    )
+    .len();
+    for _ in 0..value_words {
+        ctx.fb.ins("drop", "define ignores the value here");
+    }
+    ctx.fb.ins(&format!("global.get ${flag}"), "already defined?");
+    ctx.fb.ins(
+        &format!(
+            "(if (result i64) (then (call $__rt_warn_constant_already_defined (i32.const {name_ptr}) (i32.const {name_len})) (i64.const 0)) (else (global.set ${flag} (i32.const 1)) (i64.const 1)))"
+        ),
+        "first define answers true; a duplicate warns and answers false",
+    );
+    store_result(ctx, inst)
+}
+
 /// Validates `get_resource_type($handle)`.
 ///
 /// A stream reaches this the same two ways the file builtins accept: a boxed cell carrying the
@@ -3744,6 +3801,7 @@ pub(super) fn is_direct_builtin(target: RuntimeFnId) -> bool {
             | RuntimeFnId::StreamGetContents
             | RuntimeFnId::StreamCopyToStream
             | RuntimeFnId::GetResourceType
+            | RuntimeFnId::Define
             | RuntimeFnId::Fwrite
             | RuntimeFnId::Fread
             | RuntimeFnId::Fclose
@@ -3966,6 +4024,9 @@ pub(super) fn direct_builtin_shape_issue(
     if target == RuntimeFnId::GetResourceType {
         return get_resource_type_shape_issue(function, call);
     }
+    if target == RuntimeFnId::Define {
+        return define_shape_issue(module, function, call);
+    }
     let [operand] = call.operands.as_slice() else {
         return Some(format!(
             "expected one operand, got {}",
@@ -4071,6 +4132,9 @@ pub(super) fn lower_direct_builtin(
 ) -> Result<()> {
     if target == RuntimeFnId::GetResourceType {
         return lower_get_resource_type(ctx, inst);
+    }
+    if target == RuntimeFnId::Define {
+        return lower_define(ctx, inst);
     }
     if let Some(helper) = file_builtin_helper(target) {
         return lower_file_builtin(ctx, inst, helper, target);
