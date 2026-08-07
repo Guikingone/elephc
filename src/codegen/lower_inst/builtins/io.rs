@@ -4140,7 +4140,7 @@ fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("cmp x0, x10");                             // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("b.lo {}", wrapper_label));        // stream wrapper backends through the userspace read loop
             ctx.emitter.label(&native_label);
-            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // hand __rt_fpassthru the opaque handle
             abi::emit_call_label(ctx.emitter, "__rt_fpassthru");
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the wrapper read loop after native streaming
             ctx.emitter.label(&wrapper_label);
@@ -4184,7 +4184,7 @@ fn emit_fpassthru_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("cmp rax, r10");                            // is the backend above the wrapper range?
             ctx.emitter.instruction(&format!("jb {}", wrapper_label));          // stream wrapper backends through the userspace read loop
             ctx.emitter.label(&native_label);
-            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // hand __rt_fpassthru the opaque handle
             abi::emit_call_label(ctx.emitter, "__rt_fpassthru");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the wrapper read loop after native streaming
             ctx.emitter.label(&wrapper_label);

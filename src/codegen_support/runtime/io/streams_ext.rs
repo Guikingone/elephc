@@ -60,7 +60,11 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     //   sp+32  : 1024-byte read buffer
     // ================================================================
     let buf_size = 1024usize;
-    let buf_off = 32usize;
+    // The saved slot keeps the opaque handle for __rt_stream_eof_set; read(2)
+    // needs the resolved descriptor, so it gets its own slot rather than
+    // overloading one value as both.
+    let stream_fd_off = 32usize;
+    let buf_off = 40usize;
     let frame_size = ((buf_off + buf_size) + 15) & !15;
     let save_off = 0usize;
 
@@ -148,11 +152,13 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction(&format!("sub sp, sp, #{}", frame_size));               // allocate frame + read buffer
     emitter.instruction(&format!("stp x29, x30, [sp, #{}]", save_off));         // save frame pointer and return address (low offset for imm range)
     emitter.instruction("mov x29, sp");                                         // establish new frame pointer
-    emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save fd
+    emitter.instruction(&format!("str x0, [sp, #{}]", fd_off));                 // save the opaque stream handle
     emitter.instruction(&format!("str xzr, [sp, #{}]", total_off));             // total bytes = 0
+    emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor once
+    emitter.instruction(&format!("str x0, [sp, #{}]", stream_fd_off));          // save the descriptor for the read loop
 
     emitter.label("__rt_fpassthru_loop");
-    emitter.instruction(&format!("ldr x0, [sp, #{}]", fd_off));                 // reload fd
+    emitter.instruction(&format!("ldr x0, [sp, #{}]", stream_fd_off));          // reload the backend descriptor
     emitter.instruction(&format!("add x1, sp, #{}", buf_off));                  // buffer pointer
     emitter.instruction(&format!("mov x2, #{}", buf_size));                     // chunk size
     emitter.syscall(3);                                                         // read(fd, buf, count)
@@ -360,12 +366,18 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_fpassthru");
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish stable frame base
-    emitter.instruction(&format!("sub rsp, {}", buf_size + 16));                // reserve frame for buffer + counter
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save fd
+    emitter.instruction(&format!("sub rsp, {}", buf_size + 32));                // reserve frame for buffer, counter, and descriptor
+    // [rbp - 8] keeps the opaque handle for __rt_stream_eof_set; read(2) needs the
+    // resolved descriptor, so it gets its own slot rather than overloading one
+    // value as both.
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], 0");                         // total bytes copied = 0
+    emitter.instruction("mov rdi, rax");                                        // resolve the backend descriptor once
+    emitter.instruction("call __rt_stream_fd");
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the descriptor for the read loop
 
     emitter.label("__rt_fpassthru_loop_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // fd
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // backend descriptor
     emitter.instruction(&format!("lea rsi, [rbp - {}]", buf_size + 16));        // buffer
     emitter.instruction(&format!("mov rdx, {}", buf_size));                     // count
     emitter.instruction("call read");                                           // libc read
