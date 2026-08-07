@@ -1060,6 +1060,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _pathinfo_key_basename\n_pathinfo_key_basename:\n    .ascii \"basename\"\n");
     out.push_str(".globl _pathinfo_key_extension\n_pathinfo_key_extension:\n    .ascii \"extension\"\n");
     out.push_str(".globl _pathinfo_key_filename\n_pathinfo_key_filename:\n    .ascii \"filename\"\n");
+    out.push_str(".globl _parse_url_key_scheme\n_parse_url_key_scheme:\n    .ascii \"scheme\"\n");
+    out.push_str(".globl _parse_url_key_host\n_parse_url_key_host:\n    .ascii \"host\"\n");
+    out.push_str(".globl _parse_url_key_port\n_parse_url_key_port:\n    .ascii \"port\"\n");
+    out.push_str(".globl _parse_url_key_user\n_parse_url_key_user:\n    .ascii \"user\"\n");
+    out.push_str(".globl _parse_url_key_pass\n_parse_url_key_pass:\n    .ascii \"pass\"\n");
+    out.push_str(".globl _parse_url_key_path\n_parse_url_key_path:\n    .ascii \"path\"\n");
+    out.push_str(".globl _parse_url_key_query\n_parse_url_key_query:\n    .ascii \"query\"\n");
+    out.push_str(".globl _parse_url_key_fragment\n_parse_url_key_fragment:\n    .ascii \"fragment\"\n");
+    out.push_str(&format!(
+        ".globl _parse_url_component_error_prefix\n_parse_url_component_error_prefix:\n    .ascii {:?}\n",
+        "parse_url(): Argument #2 ($component) must be a valid URL component identifier, "
+    ));
+    out.push_str(".globl _parse_url_component_error_suffix\n_parse_url_component_error_suffix:\n    .ascii \" given\"\n");
     out.push_str(".globl _meta_key_timed_out\n_meta_key_timed_out:\n    .ascii \"timed_out\"\n");
     out.push_str(".globl _meta_key_blocked\n_meta_key_blocked:\n    .ascii \"blocked\"\n");
     out.push_str(".globl _meta_key_eof\n_meta_key_eof:\n    .ascii \"eof\"\n");

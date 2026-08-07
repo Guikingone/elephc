@@ -131,6 +131,9 @@ pub(super) fn lower(
         RuntimeFnId::Strstr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_strstr(ctx, inst)
         }),
+        RuntimeFnId::ParseUrl => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_parse_url(ctx, inst)
+        }),
         RuntimeFnId::Substr => Some({
             crate::codegen::lower_inst::builtins::strings::lower_substr(ctx, inst)
         }),

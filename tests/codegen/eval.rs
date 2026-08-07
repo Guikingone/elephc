@@ -7829,6 +7829,31 @@ echo ":"; echo function_exists("pathinfo"); echo defined("PATHINFO_ALL");');
     );
 }
 
+/// Verifies eval `parse_url()` supports array/component shapes, constants, callables, and errors.
+#[test]
+fn test_eval_dispatches_parse_url_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$info = parse_url("https://user:pass@example.com:8080/path?q=1#frag");
+echo $info["scheme"] . "|" . $info["host"] . "|" . $info["port"] . "|" . $info["path"] . ":";
+echo parse_url("http://[::1]:80/", PHP_URL_HOST) . ":";
+echo parse_url("http://host: 80", PHP_URL_PORT) . ":";
+echo parse_url("http://host:\t80", PHP_URL_PORT) . ":";
+echo parse_url(url: "http://host", component: PHP_URL_PORT) === null ? "missing" : "bad"; echo ":";
+echo parse_url("http://") === false ? "false" : "bad"; echo ":";
+echo count(parse_url("/path", -2)); echo ":";
+echo call_user_func("parse_url", "//callable/path", PHP_URL_HOST); echo ":";
+echo call_user_func_array("parse_url", ["url" => "mailto:a@b", "component" => PHP_URL_PATH]); echo ":";
+try { parse_url("x", 8); } catch (ValueError $error) { echo $error->getMessage(); }
+echo ":"; echo function_exists("parse_url"); echo defined("PHP_URL_FRAGMENT");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "https|example.com|8080|/path:[::1]:80:80:missing:false:1:callable:a@b:parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given:11"
+    );
+}
+
 /// Verifies eval local filesystem builtins read, write, stat, delete, and dispatch.
 #[test]
 fn test_eval_dispatches_filesystem_builtin_calls() {
