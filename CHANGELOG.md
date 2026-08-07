@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Fixed by-reference `foreach` over indexed and associative array elements silently discarding mutations or stopping early when the parent was replaced (issue #580).
 
 ## [0.26.3] - 2026-08-05
 - Added tagless `.lfc` source files with per-file PHP/LFC classification across entry points, includes, and autoload; LFC always enables elephc extensions, while `--strict-php` remains PHP-only and now composes with `--define`, callable dispatch, and `eval()`.
