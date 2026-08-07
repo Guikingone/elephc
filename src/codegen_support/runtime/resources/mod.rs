@@ -68,6 +68,50 @@ mod tests {
         }
     }
 
+    /// Verifies process-exit teardown hands the slot array to `__rt_heap_free` in the
+    /// register that helper actually reads.
+    ///
+    /// `__rt_heap_free` takes its operand in the integer RESULT register — `x0` on
+    /// AArch64, `rax` on x86_64 (`heap_free.rs` opens with `test rax, rax`) — NOT in the
+    /// SysV first-argument register. The x86_64 teardown loaded the pointer into `rdi`,
+    /// so the free path walked the heap list off whatever `rax` happened to hold and
+    /// **every CLI program on linux-x86_64 segfaulted at exit**, after printing correct
+    /// output. AArch64 could not show it: there the operand register and the first
+    /// argument register are both `x0`.
+    ///
+    /// Pinned per target for that exact reason — a single-target assertion is what let
+    /// this ship.
+    #[test]
+    fn registry_teardown_passes_the_slot_array_in_the_heap_free_operand_register() {
+        for (target, expected) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "ldr x0, [x9]",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "mov rax, QWORD PTR [r9]",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_resource_runtime(&mut emitter);
+            let asm = emitter.output();
+            let body = &asm[asm
+                .find("__rt_resource_registry_teardown:")
+                .expect("teardown label")..];
+            let body = &body[..body.find("ret").map(|i| i + 3).unwrap_or(body.len())];
+            assert!(
+                body.contains(expected),
+                "{target:?} must load the slot array with `{expected}` before heap_free:\n{body}"
+            );
+            assert!(
+                !body.contains("mov rdi, QWORD PTR [r9]"),
+                "{target:?} passed the slot array in the SysV argument register, which \
+                 `__rt_heap_free` never reads:\n{body}"
+            );
+        }
+    }
+
     /// Verifies the request-default context is created ONCE and owns its state.
     ///
     /// PHP mints resource id 4 for the request's default stream context at the first

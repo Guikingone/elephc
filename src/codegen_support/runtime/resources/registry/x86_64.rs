@@ -700,14 +700,23 @@ fn emit_registry_request_reset(emitter: &mut Emitter) {
 /// one slot array across requests and must only run the request reset; the CLI epilogue
 /// runs this afterwards so the array does not show up as a leaked block under
 /// `--heap-debug` in every program, stream-using or not.
+///
+/// THE POINTER GOES IN `rax`. `__rt_heap_free` reads its operand from the x86_64
+/// integer RESULT register (`heap_free.rs` opens with `test rax, rax`), not from the
+/// SysV first-argument register. Passing it in `rdi` handed the free path whatever
+/// `rax` happened to hold, which walked the heap free list off a garbage pointer and
+/// segfaulted EVERY CLI program on linux-x86_64 — after it had already printed its
+/// output, since the CLI epilogue runs this last. macOS and Linux AArch64 were
+/// unaffected because their operand register and their first-argument register are the
+/// same `x0`, which is exactly why a local suite could not see it.
 fn emit_registry_teardown(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: release the opaque resource registry at process exit ---");
     emitter.label_global("__rt_resource_registry_teardown");
     emitter.instruction("sub rsp, 8");                                          // realign the stack for the heap-free call
     abi::emit_symbol_address(emitter, "r9", "_resource_registry_ptr");
-    emitter.instruction("mov rdi, QWORD PTR [r9]");                             // load the dynamic slot-array pointer
-    emitter.instruction("test rdi, rdi");                                       // has the registry ever been initialized?
+    emitter.instruction("mov rax, QWORD PTR [r9]");                             // load the dynamic slot-array pointer into heap_free's operand register
+    emitter.instruction("test rax, rax");                                       // has the registry ever been initialized?
     emitter.instruction("jz __rt_resource_registry_teardown_done");             // an uninitialized registry owns no storage
     emitter.instruction("mov QWORD PTR [r9], 0");                               // clear the pointer before freeing it
     emitter.instruction("call __rt_heap_free");                                 // release the dynamic registry slot array
