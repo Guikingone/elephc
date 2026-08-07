@@ -67,6 +67,7 @@ mod opendir_glob;
 mod socket_scheme;
 mod format_sockaddr;
 mod data_stream;
+mod builtin_filter_id;
 mod stream_filter;
 mod fsockopen;
 mod ftp;
@@ -191,6 +192,7 @@ pub(crate) use format_sockaddr::{
     emit_format_sockaddr_in, emit_format_sockaddr_in6, emit_format_sockaddr_unix,
 };
 pub(crate) use data_stream::emit_data_stream;
+pub(crate) use builtin_filter_id::{emit_builtin_filter_id, emit_builtin_filter_table};
 pub(crate) use stream_filter::emit_apply_stream_filter;
 pub(crate) use fsockopen::emit_fsockopen;
 pub(crate) use ftp::emit_ftp;

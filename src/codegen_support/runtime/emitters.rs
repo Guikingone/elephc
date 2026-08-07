@@ -417,6 +417,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_format_sockaddr_unix(emitter);
     io::emit_data_stream(emitter);
     io::emit_apply_stream_filter(emitter);
+    io::emit_builtin_filter_id(emitter);
     io::emit_ftp(emitter);
     io::emit_http(emitter);
     io::emit_https(emitter);
