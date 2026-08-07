@@ -3933,7 +3933,7 @@ pub(super) fn direct_builtin_shape_issue(
         return array_fold_shape_issue(function, call, target);
     }
     if matches!(target, RuntimeFnId::Max | RuntimeFnId::Min | RuntimeFnId::Intdiv) {
-        return int_pair_shape_issue(function, call, target);
+        return int_pair_shape_issue(module, function, call, target);
     }
     if target == RuntimeFnId::ArrayFill {
         return array_fill_shape_issue(function, call);
@@ -4644,6 +4644,7 @@ fn lower_array_fold(ctx: &mut FnCtx, inst: &Instruction, target: RuntimeFnId) ->
 /// PHP's `max`/`min` are variadic and compare across types; only the two-integer form is served
 /// here, where the comparison is a plain signed ordering with no juggling.
 fn int_pair_shape_issue(
+    module: &Module,
     function: &Function,
     call: &Instruction,
     target: RuntimeFnId,
@@ -4654,10 +4655,19 @@ fn int_pair_shape_issue(
             call.operands.len()
         ));
     };
-    for operand in [left, right] {
+    for (index, operand) in [left, right].into_iter().enumerate() {
         let Some(value) = function.value(*operand) else {
             return Some("operand is missing from the value table".to_string());
         };
+        // A BOXED operand is coerced at the call the way php-src converts one at a declared
+        // `int` parameter — truncating a float after a Deprecated, converting a numeric string,
+        // and raising a TypeError for anything with no conversion. That needs the diagnostics,
+        // so it is a command-module rule like every other one that can warn.
+        if super::capability::runtime_call_int_operand_coercion(function, call, index).is_some()
+            && module.functions.iter().any(|candidate| candidate.flags.is_main)
+        {
+            continue;
+        }
         if value.ir_type != IrType::I64 || value.php_type.codegen_repr() != PhpType::Int {
             return Some(format!(
                 "expected an int operand, got {:?}/{:?}",
@@ -4905,7 +4915,7 @@ fn lower_substr(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
 /// truncates a float after a `Deprecated`, converts a wholly numeric string, turns `null` into 0
 /// after a different `Deprecated` naming the parameter, and raises a `TypeError` for everything
 /// with no conversion at all.
-fn emit_int_operand(ctx: &mut FnCtx, inst: &Instruction, index: usize) -> Result<()> {
+pub(super) fn emit_int_operand(ctx: &mut FnCtx, inst: &Instruction, index: usize) -> Result<()> {
     let Some((name, parameter, position)) =
         super::capability::runtime_call_int_operand_coercion(ctx.function, inst, index)
     else {

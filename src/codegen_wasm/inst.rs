@@ -846,9 +846,11 @@ fn capture_int_operands(
     lhs: &str,
     rhs: &str,
 ) -> Result<()> {
-    ctx.emit_load_value(operand(inst, 0)?)?;
+    // A BOXED operand is coerced PHP's way at a declared `int` parameter; a concrete one is
+    // loaded unchanged, which is what this does for every non-RuntimeCall user of the helper.
+    super::builtins::emit_int_operand(ctx, inst, 0)?;
     ctx.fb.ins(&format!("local.set {}", lhs), "capture integer lhs");
-    ctx.emit_load_value(operand(inst, 1)?)?;
+    super::builtins::emit_int_operand(ctx, inst, 1)?;
     ctx.fb.ins(&format!("local.set {}", rhs), "capture integer rhs");
     Ok(())
 }
