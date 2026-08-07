@@ -4538,6 +4538,12 @@ fn property_get_shape_issue(
         .enumerate()
         .find(|(_, (name, _))| name == property)
     else {
+        // An undeclared property on a class with `__get` is not storage at all: PHP calls the
+        // magic accessor. The lowering dispatches to it, so this is admitted before the
+        // storage question is asked.
+        if magic_get_dispatch_is_supported(module, function, inst) {
+            return None;
+        }
         if !class_info.allow_dynamic_properties
             && !class_name
                 .trim_start_matches('\\')
@@ -6114,6 +6120,65 @@ fn mixed_array_read_is_supported(module: &Module, function: &Function, call: &In
         return false;
     }
     operand_ir(2) == Some(IrType::I64)
+}
+
+/// Returns true when a property read must dispatch to the class's `__get`.
+///
+/// PHP calls `__get($name)` when a property is not declared on the receiver, so this is a method
+/// call wearing a property read's shape — the same situation `$obj[$key]` is in for `offsetGet`.
+/// Admitted only for an exactly-known receiver class whose `__get` this module can call, and
+/// only when the read produces a boxed result, which is what a `mixed` return needs.
+pub(super) fn magic_get_dispatch_is_supported(
+    module: &Module,
+    function: &Function,
+    inst: &Instruction,
+) -> bool {
+    let Some(receiver) = inst.operands.first() else {
+        return false;
+    };
+    let Some(receiver_value) = function.value(*receiver) else {
+        return false;
+    };
+    if receiver_value.ir_type != IrType::Heap(IrHeapKind::Object) {
+        return false;
+    }
+    let PhpType::Object(class_name) = receiver_value.php_type.codegen_repr() else {
+        return false;
+    };
+    let Some(class_info) = module.class_infos.get(&class_name) else {
+        return false;
+    };
+    // A DECLARED property is ordinary storage; `__get` only runs for one that is not.
+    let Some(property) = data_string(module, inst) else {
+        return false;
+    };
+    if class_info.properties.iter().any(|(name, _)| name == property) {
+        return false;
+    }
+    if !class_info.methods.contains_key("__get") {
+        return false;
+    }
+    // The checker types the READ as whatever `__get` returns — `Str` here, not Mixed — so the
+    // two must agree exactly, or the call's result would be stored through the wrong shape.
+    let implementation = class_info
+        .method_impl_classes
+        .get("__get")
+        .cloned()
+        .unwrap_or(class_name);
+    module
+        .class_methods
+        .iter()
+        .find(|body| body.name == format!("{implementation}::__get"))
+        .is_some_and(|body| {
+            // The name is passed as a literal unless the parameter is declared `mixed`, in which
+            // case the lowering boxes it. Any other parameter shape has no conversion here.
+            let name_shape = body.params.get(1).map(|parameter| parameter.ir_type);
+            body.return_type == inst.result_type
+                && matches!(
+                    name_shape,
+                    Some(IrType::Str | IrType::Heap(IrHeapKind::Mixed))
+                )
+        })
 }
 
 /// Returns true when an untyped `Op::RuntimeCall` is `$obj[$key] = $value` on an `ArrayAccess`

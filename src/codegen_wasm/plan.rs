@@ -200,6 +200,24 @@ pub(super) fn plan_module(module: &Module, emit: Emit) -> Result<LoweredWasmPlan
             }
         }
     }
+    // A read of an UNDECLARED property dispatches to `__get`, and the null-receiver check names
+    // the method it was about to call. The name is a backend constant no PHP source mentions.
+    if module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .any(|function| {
+            function.instructions.iter().any(|inst| {
+                inst.op == crate::ir::Op::PropGet
+                    && super::capability::magic_get_dispatch_is_supported(module, function, inst)
+            })
+        })
+    {
+        if !layout_values.iter().any(|value| value == "__get") {
+            layout_values.push("__get".to_string());
+        }
+    }
+
     // `define("NAME", …)` answers false and warns for a duplicate, so each distinct name needs a
     // flag global and its bytes addressable for the warning that names it. Collected in one pass
     // over the module so the planner and the lowering agree on both.

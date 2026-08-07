@@ -141,6 +141,11 @@ pub(super) fn lower_instruction(ctx: &mut FnCtx, inst_id: InstId) -> Result<()> 
         Op::IterCurrentValue => lower_iter_current_value(ctx, &inst),
         Op::IterEnd => Ok(()),
         Op::ObjectNew => super::objects::lower_object_new(ctx, &inst),
+        Op::PropGet
+            if super::capability::magic_get_dispatch_is_supported(ctx.module, ctx.function, &inst) =>
+        {
+            super::methods::lower_magic_property_get(ctx, &inst)
+        }
         Op::PropGet => super::objects::lower_prop_get(ctx, &inst),
         Op::PropSet => super::objects::lower_prop_set(ctx, &inst),
         Op::MethodCall => super::methods::lower_method_call(ctx, &inst),

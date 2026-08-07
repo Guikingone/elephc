@@ -352,6 +352,95 @@ pub(super) fn lower_array_access_set(ctx: &mut FnCtx, inst: &Instruction) -> Res
     lower_array_access(ctx, inst, false)
 }
 
+/// Lowers a read of an UNDECLARED property to the class's `__get($name)`.
+///
+/// PHP does not read storage here at all — it calls the magic accessor with the property name
+/// as a string. The name is already interned, since the source spells it, but `__get` itself is
+/// laid out by `plan_module` for the null-receiver check, exactly as `offsetGet` is.
+pub(super) fn lower_magic_property_get(ctx: &mut FnCtx, inst: &Instruction) -> Result<()> {
+    let receiver = operand(inst, 0)?;
+    let receiver_ty = ctx.value_php_type(receiver)?;
+    let class_name = exact_static_object_class(&receiver_ty).ok_or_else(|| {
+        WasmError::Unsupported(format!("__get on receiver {:?}", receiver_ty))
+    })?;
+    let property = ctx
+        .module
+        .data
+        .strings
+        .get(data_immediate(inst)?.as_raw() as usize)
+        .cloned()
+        .ok_or_else(|| WasmError::Unsupported("__get without a property name".to_string()))?;
+    let (name_ptr, name_len) = ctx.str_literal(data_immediate(inst)?)?;
+    let method_key = php_symbol_key("__get");
+    let ci = ctx
+        .module
+        .class_infos
+        .get(&class_name)
+        .ok_or_else(|| WasmError::Unsupported(format!("unknown class {}", class_name)))?;
+    let dynamic =
+        ci.vtable_slots.contains_key(&method_key) && !ci.final_methods.contains(&method_key);
+    let impl_class = ci
+        .method_impl_classes
+        .get(&method_key)
+        .cloned()
+        .unwrap_or_else(|| class_name.clone());
+    let (method_ptr, method_len) = ctx.default_str_literal("__get")?;
+    emit_null_receiver_check(ctx, receiver, method_ptr, method_len)?;
+    let callee_symbol = if dynamic {
+        let introducer = resolve_vtable_introducer(ctx, &class_name, &method_key)?;
+        method_dispatch_symbol(&introducer, &method_key)
+    } else {
+        method_symbol(&format!("{}::__get", impl_class))
+    };
+    // `__get($name)` with an untyped parameter is inferred `string`, so the literal is passed
+    // as a pointer and a length; only a parameter actually declared `mixed` needs a box.
+    let name_is_mixed = ctx
+        .module
+        .class_methods
+        .iter()
+        .find(|body| body.name == format!("{}::__get", impl_class))
+        .and_then(|body| body.params.get(1))
+        .is_some_and(|parameter| parameter.ir_type == IrType::Heap(IrHeapKind::Mixed));
+    let cell = name_is_mixed.then(|| ctx.fresh_temp(super::wat::ValType::I32));
+    if let Some(cell) = &cell {
+        ctx.fb.ins(
+            &format!("(call $__rt_mixed_from_value (i64.const 1) (i64.extend_i32_u (i32.const {name_ptr})) (i64.const {name_len}))"),
+            "the property name, boxed for `mixed $name`",
+        );
+        ctx.fb.ins(&format!("local.set {}", cell), "hold the name box");
+    }
+    ctx.emit_load_value(receiver)?;
+    match &cell {
+        Some(cell) => ctx.fb.ins(&format!("local.get {}", cell), "the property name"),
+        None => {
+            ctx.fb
+                .ins(&format!("i32.const {name_ptr}"), "property name pointer");
+            ctx.fb
+                .ins(&format!("i64.const {name_len}"), "property name length");
+        }
+    }
+    ctx.fb.ins(
+        &format!("call ${}", callee_symbol),
+        &format!(
+            "{}::__get(\"{}\") ({})",
+            class_name,
+            property,
+            if dynamic { "dispatch" } else { "direct" }
+        ),
+    );
+    let result = inst
+        .result
+        .ok_or_else(|| WasmError::Unsupported("__get has no result".to_string()))?;
+    ctx.emit_store_value(result)?;
+    if let Some(cell) = &cell {
+        ctx.fb.ins(
+            &format!("(call $__rt_decref_any (local.get {}))", cell),
+            "release the name box",
+        );
+    }
+    Ok(())
+}
+
 fn lower_array_access(ctx: &mut FnCtx, inst: &Instruction, is_read: bool) -> Result<()> {
     let method_name = if is_read { "offsetGet" } else { "offsetSet" };
     let receiver = operand(inst, 0)?;
