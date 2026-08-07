@@ -291,6 +291,12 @@ pub(super) fn emit_innermost_loop_cleanups(ctx: &mut LoweringContext<'_, '_>, co
         if let Some(cleanup) = frame.cleanup {
             crate::ir_lower::ownership::release_if_owned(ctx, cleanup.value, Some(cleanup.span));
         }
+        // A by-reference `foreach` over an element source holds a lifetime reference on the
+        // element for the whole loop; leaving through `break N`, `return`, or `throw` never
+        // reaches the exit block that would drop it, so drop it here (issue #580).
+        if let Some(pin) = frame.source_pin {
+            crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
+        }
     }
 }
 
@@ -335,4 +341,3 @@ pub(super) fn pop_finally_frame_if_active(ctx: &mut LoweringContext<'_, '_>, dep
         ctx.finally_stack.pop();
     }
 }
-

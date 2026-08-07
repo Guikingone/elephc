@@ -22,7 +22,8 @@ use crate::ir_lower::effects_lookup;
 use crate::ir_lower::expr::{
     array_access_element_result_type, coerce_container_to_mixed_payload, coerce_to_int_at_span,
     index_expr_key_type, lower_array_access_from_lowered_receiver,
-    lower_callable_array_for_assignment, lower_array_literal_with_expected_type,
+    lower_by_ref_foreach_element_source, lower_callable_array_for_assignment,
+    lower_array_literal_with_expected_type,
     lower_closure_for_assignment, lower_expr,
     reflection_arg_array_binding_for_expr, reflection_class_binding_for_expr,
     reflection_function_binding_for_expr, reflection_method_binding_for_expr,

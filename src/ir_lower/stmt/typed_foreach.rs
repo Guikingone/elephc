@@ -87,7 +87,8 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
-    let source = lower_expr(ctx, array);
+    let (source, source_is_borrowed_element) =
+        lower_foreach_source(ctx, array, value_by_ref);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
@@ -113,6 +114,15 @@ pub(super) fn lower_foreach(
         Op::IterStart.default_effects(),
         Some(array.span),
     );
+    // Take the loop's own lifetime reference on a borrowed element source, AFTER `IterStart`.
+    // The order is the whole point: `IterStart` splits a by-reference source through
+    // `__rt_array_ensure_unique`, so a pin taken before it would put the element back at
+    // refcount 2 and hand the loop a private copy — the very miscompile issue #580 fixes.
+    // Taken here, the split has already happened and the iterator has already captured the
+    // pointer, so the pin only keeps that storage alive.
+    let source_pin = source_is_borrowed_element
+        .then(|| pin_by_ref_foreach_element_source(ctx, source, array.span))
+        .flatten();
     if let Some(key_var) = key_var {
         initialize_foreach_mixed_local_if_needed(ctx, key_var, key_needs_null_init, array.span);
     }
@@ -174,6 +184,7 @@ pub(super) fn lower_foreach(
         break_block: exit,
         continue_block: header,
         cleanup,
+        source_pin,
     });
     if let Some(key_var) = key_var {
         let key = ctx.emit_value(
@@ -223,6 +234,75 @@ pub(super) fn lower_foreach(
     if ctx.value_is_owning_temporary(source) {
         crate::ir_lower::ownership::release_if_owned(ctx, source, Some(array.span));
     }
+    // Normal termination is the exit this block IS, so the pin is dropped here. Every other way
+    // out — `break`, `break N`, `return`, `throw` — skips this block and is covered by
+    // `emit_innermost_loop_cleanups` through the loop frame instead.
+    if let Some(pin) = source_pin {
+        crate::ir_lower::ownership::release_if_owned(ctx, pin.value, Some(pin.span));
+    }
+}
+
+/// Lowers the `foreach` source expression under the loop's binding mode.
+///
+/// A by-value loop iterates a copy, so it keeps the ordinary retaining read: the extra
+/// reference is what makes `__rt_array_ensure_unique` copy, and copying is precisely the
+/// semantics. A by-reference loop mutates the source in place, so an array-element source is
+/// fetched for writing instead — otherwise the read's own reference makes the runtime copy the
+/// element, and every write lands in a copy the loop then drops (issue #580).
+///
+/// Returns the lowered source together with whether it came back borrowed from the
+/// fetch-for-write path, which is what tells the caller the loop still owes it a lifetime
+/// reference of its own.
+fn lower_foreach_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    array: &Expr,
+    value_by_ref: bool,
+) -> (LoweredValue, bool) {
+    if value_by_ref {
+        if let ExprKind::ArrayAccess {
+            array: receiver,
+            index,
+        } = &array.kind
+        {
+            let source = lower_by_ref_foreach_element_source(ctx, receiver, index, array);
+            let is_borrowed_element =
+                ctx.builder.value_ownership(source.value) == Ownership::Borrowed;
+            return (source, is_borrowed_element);
+        }
+    }
+    (lower_expr(ctx, array), false)
+}
+
+/// Takes the by-reference loop's own lifetime reference on a borrowed element source.
+///
+/// `Op::ArrayGetForWrite` hands back the parent's element without a reference of its own: the
+/// parent's element slot is the only owner. That is exactly what makes the writes land in the
+/// parent — and exactly what leaves the iterator holding a dangling pointer as soon as the body
+/// drops that parent (`$a = []`, `unset($a)`, a reassignment through an alias). PHP does not
+/// have this problem because its by-reference `foreach` holds a reference to the iterated array
+/// itself, so the array outlives the variable it came from.
+///
+/// Must be called AFTER `Op::IterStart`: that instruction runs `__rt_array_ensure_unique` on a
+/// by-reference source, and an extra reference held across it would make the split fire and give
+/// the loop a private copy to write into.
+///
+/// Returns `None` when the source type carries no runtime lifetime state, in which case there is
+/// nothing to pin and nothing to release.
+fn pin_by_ref_foreach_element_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> Option<LoopCleanup> {
+    let pin =
+        crate::ir_lower::ownership::acquire_lifetime_pin_if_refcounted(ctx, source, Some(span));
+    if pin.value == source.value {
+        return None;
+    }
+    // The acquire result is the loop's own reference, so pin it `Owned` explicitly instead of
+    // leaving it at the `MaybeOwned` default: the cleanup paths below release through
+    // `release_if_owned`, which the backend filters on this very state.
+    ctx.builder.set_value_ownership(pin.value, Ownership::Owned);
+    Some(LoopCleanup { value: pin, span })
 }
 
 /// Returns the by-value foreach local type when Phase 04 can keep a concrete element.
@@ -269,4 +349,3 @@ pub(super) fn initialize_foreach_mixed_local_if_needed(
     let boxed = ctx.box_value_as_mixed(null, PhpType::Mixed, Some(span));
     ctx.store_foreach_initializer_local_only(name, boxed, PhpType::Mixed, Some(span));
 }
-

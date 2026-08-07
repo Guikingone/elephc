@@ -8,6 +8,9 @@
 //! Key details:
 //! - Hash writes may copy-on-write or grow the table, so the returned pointer is
 //!   written back to the source SSA slot and local slot.
+//! - `HashGetForWrite` is a lookup that also WRITES: it separates the container the
+//!   matching entry holds and republishes it into that entry's value slot, whose
+//!   address comes from `__rt_hash_get`'s entry-address output (issue #580).
 
 use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
@@ -126,6 +129,129 @@ pub(super) fn lower_hash_get(
             lower_hash_get_x86_64(ctx, inst, hash, key, &value_ty, &result_ty, warn_on_missing)
         }
     }
+}
+
+/// Lowers `HashGetForWrite`: the same lookup as `hash_get`, missing-key warning and
+/// null-container sentinel fallback included, but the found element is copy-on-write separated
+/// in place and returned without a caller reference.
+///
+/// This is the hash-receiver counterpart of `arrays::lower_array_get_for_write`, and it exists
+/// for the same reason (issue #580): a by-reference `foreach` mutates the container it iterates,
+/// `iter_start` reaches that through the ensure-unique helpers, and the plain `hash_get` read
+/// hands the loop the parent's container PLUS a reference of its own — refcount 2, so the loop
+/// copied, wrote into the copy and dropped it.
+///
+/// The two receiver kinds differ only in how the element slot is addressed. An indexed receiver
+/// computes it with pointer arithmetic; a hash entry has to be probed for, so the address comes
+/// from `__rt_hash_get`'s entry-address output (`x4` / `r8`), which the probe already builds.
+/// Everything downstream is identical: split the container the slot holds, store the unique
+/// pointer straight back into that slot, hand the result out BORROWED — the entry owns it.
+pub(super) fn lower_hash_get_for_write(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    let hash = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let value_ty = assoc_value_type(&ctx.value_php_type(hash)?, inst)?;
+    let helper = super::arrays::array_get_for_write_cow_helper(&value_ty).ok_or_else(|| {
+        CodegenIrError::unsupported(format!("hash_get_for_write value PHP type {:?}", value_ty))
+    })?;
+    super::arrays::separate_get_for_write_receiver(ctx, hash, "__rt_hash_ensure_unique")?;
+    let result_ty = inst.result_php_type.codegen_repr();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_hash_get_for_write_aarch64(ctx, inst, hash, key, &result_ty, helper),
+        Arch::X86_64 => lower_hash_get_for_write_x86_64(ctx, inst, hash, key, &result_ty, helper),
+    }
+}
+
+/// Lowers the copy-on-write hash element fetch for AArch64 targets.
+///
+/// `__rt_hash_get` leaves the matching entry address in `x4` (0 on a miss), so the split works
+/// straight on the entry's value slot at `+24`. The slot address is spilled across the helper
+/// call because `x4` is caller-saved. The unconditional store back is what keeps the refcounts
+/// balanced: the ensure-unique helpers drop one reference from a shared original, and the entry
+/// is exactly the owner giving that reference up in exchange for the fresh clone.
+fn lower_hash_get_for_write_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    hash: ValueId,
+    key: ValueId,
+    result_ty: &PhpType,
+    helper: &str,
+) -> Result<()> {
+    materialize_hash_key_aarch64(ctx, key)?;
+    ctx.load_value_to_reg(hash, "x0")?;
+    let miss = ctx.next_label("hash_get_fw_miss");
+    let null_receiver = ctx.next_label("hash_get_fw_null_recv");
+    let fallback = ctx.next_label("hash_get_fw_fallback");
+    let done = ctx.next_label("hash_get_fw_done");
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        "x0",
+        "x9",
+        &null_receiver,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction(&format!("cbz x0, {}", miss));                      // branch to the null fallback when the associative lookup misses
+    ctx.emitter.instruction("add x4, x4, #24");                                 // address the matching entry's value slot
+    abi::emit_push_reg(ctx.emitter, "x4");                                       // preserve the entry value-slot address across the copy-on-write helper call
+    abi::emit_load_from_address(ctx.emitter, "x0", "x4", 0);
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_pop_reg(ctx.emitter, "x4");                                        // restore the entry value-slot address after the copy-on-write helper call
+    abi::emit_store_to_address(ctx.emitter, "x0", "x4", 0);
+    ctx.emitter.instruction(&format!("b {}", done));                            // skip the miss fallback after separating the hash element
+    ctx.emitter.label(&miss);
+    emit_undefined_hash_key_warning_aarch64(ctx, key)?;
+    abi::emit_jump(ctx.emitter, &fallback);
+    ctx.emitter.label(&null_receiver);
+    super::arrays::emit_array_offset_on_null_warning(ctx);
+    ctx.emitter.label(&fallback);
+    emit_hash_get_miss(ctx, result_ty, false);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers the copy-on-write hash element fetch for x86_64 targets. Mirrors the AArch64 shape,
+/// reading the matching entry address from `__rt_hash_get`'s `r8` output.
+fn lower_hash_get_for_write_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    hash: ValueId,
+    key: ValueId,
+    result_ty: &PhpType,
+    helper: &str,
+) -> Result<()> {
+    materialize_hash_key_x86_64(ctx, key)?;
+    ctx.load_value_to_reg(hash, "rdi")?;
+    let miss = ctx.next_label("hash_get_fw_miss");
+    let null_receiver = ctx.next_label("hash_get_fw_null_recv");
+    let fallback = ctx.next_label("hash_get_fw_fallback");
+    let done = ctx.next_label("hash_get_fw_done");
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        "rdi",
+        "r9",
+        &null_receiver,
+    );
+    abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+    ctx.emitter.instruction("test rax, rax");                                   // check whether the associative lookup found a matching key
+    ctx.emitter.instruction(&format!("jz {}", miss));                           // branch to the null fallback when the associative lookup misses
+    ctx.emitter.instruction("add r8, 24");                                      // address the matching entry's value slot
+    abi::emit_push_reg(ctx.emitter, "r8");                                       // preserve the entry value-slot address across the copy-on-write helper call
+    abi::emit_load_from_address(ctx.emitter, "rdi", "r8", 0);
+    abi::emit_call_label(ctx.emitter, helper);
+    abi::emit_pop_reg(ctx.emitter, "r8");                                        // restore the entry value-slot address after the copy-on-write helper call
+    abi::emit_store_to_address(ctx.emitter, "rax", "r8", 0);
+    ctx.emitter.instruction(&format!("jmp {}", done));                          // skip the miss fallback after separating the hash element
+    ctx.emitter.label(&miss);
+    emit_undefined_hash_key_warning_x86_64(ctx, key)?;
+    abi::emit_jump(ctx.emitter, &fallback);
+    ctx.emitter.label(&null_receiver);
+    super::arrays::emit_array_offset_on_null_warning(ctx);
+    ctx.emitter.label(&fallback);
+    emit_hash_get_miss(ctx, result_ty, false);
+    ctx.emitter.label(&done);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers an associative-array insert/update through the shared hash runtime helper.

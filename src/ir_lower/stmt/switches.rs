@@ -184,6 +184,7 @@ pub(super) fn lower_switch_bodies(
         break_block: exit,
         continue_block: exit,
         cleanup: None,
+        source_pin: None,
     });
     for index in 0..=cases.len() {
         if default.is_some() && default_index == index {
@@ -261,4 +262,3 @@ pub(super) fn switch_next_body_block(
 pub(super) fn span_is_before(span: Span, pivot: Span) -> bool {
     span.line < pivot.line || (span.line == pivot.line && span.col < pivot.col)
 }
-
