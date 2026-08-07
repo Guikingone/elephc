@@ -56,6 +56,8 @@ mod span;
 mod strict_php;
 mod string_bytes;
 mod superglobals;
+#[allow(dead_code)]
+mod synthetic_class;
 mod termination;
 mod timings;
 #[allow(dead_code, unused_imports)]

@@ -82,6 +82,8 @@ pub mod strict_php;
 mod string_bytes;
 /// Canonical HTTP-request superglobal set and shared type helper.
 pub mod superglobals;
+/// Rust builder for the synthetic PHP class surfaces the compiler injects itself.
+pub mod synthetic_class;
 /// Termination and exit handling.
 pub mod termination;
 /// Tree-shaking skeleton harvest (class hierarchy + method tables + free functions).
