@@ -184,6 +184,13 @@ crates. The end-to-end wiring is CLI (`src/cli.rs`, `with_crates`) → pipeline
 (`src/pipeline.rs`: force-link + prelude forcing) → linker
 (`src/linker.rs`: `forced_whole_archive`).
 
+`--with-regex` is the explicit non-bridge exception: it enables
+`RuntimeFeatures::regex` for opaque dynamic eval source, resolves the managed
+`pcre2` package, and registers its shim callbacks with Magician. Static regex
+use still auto-detects the same feature. Merely declaring `pcre2` does not link
+it, and dynamic eval without the capability leaves regex builtins unavailable
+at runtime.
+
 ### Codegen layout
 
 - `src/ir_lower/` is the active high-level lowering layer. Add PHP-visible semantics there.

@@ -21,6 +21,15 @@ impl EvalStreamResources {
     /// the base is added on the way out. Payloads are never reused: a closed eval
     /// stream's payload is not handed to the next one, which is what makes the
     /// runtime registry mint the NEXT id for it, exactly as PHP does.
+    ///
+    /// A PAYLOAD IS NOT A PHP RESOURCE ID, AND NOT EVERY PAYLOAD BECOMES ONE. Hash
+    /// contexts are numbered from this same counter because they need a table slot, but
+    /// PHP 8's `hash_init()` returns a `HashContext` OBJECT that consumes nothing from
+    /// the resource counter. `hash_init`/`hash_copy` therefore box their key through
+    /// `RuntimeValueOps::hash_context` (resource kind 5, id-less and destructor-less)
+    /// rather than `RuntimeValueOps::resource`, so this counter advancing does not move
+    /// the id the next `fopen()` reports. Every other opener here is a genuine PHP
+    /// resource and must keep binding an id.
     pub(super) fn take_next_id(&mut self) -> i64 {
         let id = self.next_id;
         self.next_id += 1;

@@ -115,31 +115,40 @@ fn eval_var_dump_append_value(
             Ok(())
         }
         EVAL_TAG_RESOURCE => {
-            eval_var_dump_append_resource(value, values, depth, is_reference, output)
+            eval_var_dump_append_resource(value, context, values, depth, is_reference, output)
         }
         _ => Err(EvalStatus::RuntimeFatal),
     }
 }
 
-/// Appends one `var_dump()` resource line carrying its PHP resource id.
+/// Appends one `var_dump()` resource line carrying its PHP resource id and type name.
 ///
 /// The id is the runtime registry's, reached through the same `(int)` coercion
 /// `get_resource_id()` uses, NOT the eval-local payload: those are different
 /// numbers by construction (see `crate::stream_resources`). This line used to be
 /// the constant `resource(0) of type (stream)`, so every eval `var_dump()` of a
 /// stream printed the same wrong number regardless of how many were open.
+///
+/// The type name is likewise computed rather than baked in: PHP 8.5.6 renames a CLOSED
+/// resource to `Unknown`, and `eval_resource_type_name` reads that state from whichever
+/// of the two close representations applies (see
+/// `crate::interpreter::builtins::scalars::eval_resource_is_closed`).
 fn eval_var_dump_append_resource(
     value: RuntimeCellHandle,
+    context: &mut ElephcEvalContext,
     values: &mut impl RuntimeValueOps,
     depth: usize,
     is_reference: bool,
     output: &mut Vec<u8>,
 ) -> Result<(), EvalStatus> {
+    let type_name = eval_resource_type_name(value, context, values)?;
     let id = values.cast_int(value)?;
     eval_var_dump_append_prefix(depth, is_reference, output);
     output.extend_from_slice(b"resource(");
     output.extend_from_slice(&values.string_bytes(id)?);
-    output.extend_from_slice(b") of type (stream)\n");
+    output.extend_from_slice(b") of type (");
+    output.extend_from_slice(type_name.as_bytes());
+    output.extend_from_slice(b")\n");
     Ok(())
 }
 

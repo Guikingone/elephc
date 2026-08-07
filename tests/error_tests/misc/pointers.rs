@@ -9,6 +9,24 @@
 
 use super::*;
 
+/// Verifies `zval_unpack()` requires exactly one pointer argument.
+#[test]
+fn test_error_zval_unpack_wrong_args() {
+    expect_error("<?php zval_unpack();", "zval_unpack() takes exactly 1 argument");
+}
+
+/// Verifies `zval_type()` requires exactly one pointer argument.
+#[test]
+fn test_error_zval_type_wrong_args() {
+    expect_error("<?php zval_type();", "zval_type() takes exactly 1 argument");
+}
+
+/// Verifies `zval_free()` requires exactly one pointer argument.
+#[test]
+fn test_error_zval_free_wrong_args() {
+    expect_error("<?php zval_free();", "zval_free() takes exactly 1 argument");
+}
+
 /// Tests that `ptr()` with no arguments produces "ptr() takes exactly 1 argument".
 #[test]
 fn test_error_ptr_no_args() {

@@ -79,7 +79,7 @@ Codegen always produces two compiler-owned artifacts:
 
 The linker may also add optional bridge staticlibs as a third class of input.
 For example, dynamic eval links `libelephc_magician.a`; fully AOT literal eval
-does not. Bridge archives are discovered and linked by `src/linker.rs` rather
+does not. Bridge archives are discovered and linked by `src/linker/` rather
 than emitted by the assembly backend.
 
 Runtime feature selection is derived from the EIR module plus CLI-owned modes

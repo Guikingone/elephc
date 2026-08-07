@@ -532,6 +532,8 @@ pub(crate) fn emit_runtime_data_user(
     }
     out.push_str(".p2align 3\n");
     emit_static_callable_method_data(&mut out, &sorted_classes);
+    out.push_str(".p2align 3\n");
+    emit_script_source_file_data(&mut out, source_path);
     if emit_eval_reflection_metadata {
         out.push_str(".p2align 3\n");
         emit_eval_reflection_source_file_data(&mut out, source_path);
@@ -1088,6 +1090,24 @@ fn emit_name_lookup_data(
         out.push_str(&format!("    .quad {}_{}\n", label_prefix, idx));
         out.push_str(&format!("    .quad {}\n", name.len()));
     }
+}
+
+/// Emits the compiled script's canonical path, read by `Throwable::getFile()` and by the
+/// ` in <file>:<line>` suffix of `__rt_report_uncaught_exception`.
+///
+/// Emitted UNCONDITIONALLY, unlike [`emit_eval_reflection_source_file_data`], because an
+/// uncaught exception can end any program whether or not it uses eval. The bytes are the same
+/// canonicalized string `crate::magic_constants::file_pass` bakes for `__FILE__`, so a program
+/// that mentions `__FILE__` already carries them; a length of zero means the module had no source
+/// path (a synthesized or in-memory module) and the readers fall back to omitting the location
+/// rather than printing an empty filename.
+fn emit_script_source_file_data(out: &mut String, source_path: Option<&str>) {
+    let source_path = source_path.unwrap_or("");
+    out.push_str(".globl _script_source_file\n_script_source_file:\n");
+    out.push_str(&format!("    .ascii \"{}\"\n", escaped_ascii(source_path)));
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _script_source_file_len\n_script_source_file_len:\n");
+    out.push_str(&format!("    .quad {}\n", source_path.len()));
 }
 
 /// Emits the source filename used by eval Reflection source-location hooks.

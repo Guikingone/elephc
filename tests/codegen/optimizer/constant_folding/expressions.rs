@@ -38,7 +38,7 @@ fn test_constant_folding_pow_removes_pow_call_from_user_assembly() {
         compile_source_to_asm_with_options("<?php echo 2 ** 3;", &dir, 8_388_608, false, false);
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "constant-folded pow expression should not leave a pow call in user assembly:\n{}",
         user_asm
     );
@@ -134,7 +134,7 @@ fn test_constant_folding_ternary_removes_pow_call_from_user_assembly() {
     );
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "constant-folded ternary should not leave a pow call in user assembly:\n{}",
         user_asm
     );

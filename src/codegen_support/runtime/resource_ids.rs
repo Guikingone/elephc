@@ -9,12 +9,17 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()`.
 //! - `__rt_mixed_from_value`'s tag-9 arm (bind-if-absent, so EVERY boxed resource
 //!   gets an id in box order even from creation sites this module never sees) — with
-//!   ONE deliberate exclusion, resource kind 2. That kind is the raw incremental-hash
-//!   context held inside a `HashContext` OBJECT (see `crate::hash_prelude`), and PHP 8
-//!   counts such a context in the OBJECT handle space, not this one. Binding an id to it
-//!   would shift every later `fopen()` by one and make `resource(N)` disagree with PHP
-//!   for programs that merely hash. `__rt_hash_init` / `__rt_hash_copy` correspondingly
-//!   no longer mint at creation.
+//!   TWO deliberate exclusions, resource kinds 2 and 5. Both are the raw incremental-hash
+//!   context that PHP 8 hands back from `hash_init()` as a `HashContext` OBJECT (see
+//!   `crate::hash_prelude`), and PHP counts such a context in the OBJECT handle space,
+//!   not this one. Binding an id to it would shift every later `fopen()` by one and make
+//!   `resource(N)` disagree with PHP for programs that merely hash. Kind 2 is the HOST
+//!   context, so `__rt_hash_init` / `__rt_hash_copy` correspondingly no longer mint at
+//!   creation. Kind 5 is the same context reached from inside `eval()`, boxed by
+//!   `__elephc_eval_value_hash_context`; without it, `eval('hash_init("md5"); ...')`
+//!   burned a shared-counter id and every host resource created afterwards reported one
+//!   too high, even though the eval interpreter's OTHER resources must keep consuming
+//!   ids (see the shared-registry note below).
 //! - The descriptor-boxing helpers in `crate::codegen::lower_inst::builtins::io`
 //!   (mint-and-overwrite at the moment the underlying descriptor is created).
 //! - Every display site: `emit_var_dump_resource`, the two
@@ -38,6 +43,17 @@
 //!   many resources the program created before it, never on an address. ASLR can
 //!   move `_heap_buf` and the C allocator's arena freely without moving a printed
 //!   id.
+//! - A NEGATIVE PAYLOAD IS A CLOSED HANDLE THAT CARRIES ITS OWN ID. `fclose`,
+//!   `pclose` and `closedir` stamp `-id` into the Mixed box's low payload word
+//!   (`apply_resource_release_sentinel` in `crate::codegen::lower_inst::builtins::io`)
+//!   so scope cleanup cannot close a descriptor twice. php-src does not disturb
+//!   `zend_resource.handle` on close, so under 8.5.6 `fclose($r); echo "$r";` still
+//!   prints `Resource id #5` and `get_resource_id($r)` still answers 5. Answering
+//!   `-payload` here reproduces that and, just as importantly, does NOT mint: the
+//!   bare `-1` sentinel this replaced missed the table on every display, minted a
+//!   fresh id, and shifted the next `fopen()` by one. No real payload can be
+//!   negative — descriptors are small positives, `DIR*`/`FILE*`/HashContext handles
+//!   are userspace addresses, and `EVAL_RESOURCE_PAYLOAD_BASE` is `1 << 62`.
 //! - IDS ARE NEVER REUSED, unlike object handles. php-src's `zend_resource`
 //!   handles come from a monotonically increasing list index, so closing a stream
 //!   and opening another gives the second one the NEXT id, not the first one's.
@@ -191,10 +207,15 @@ fn emit_resource_id_of_aarch64(emitter: &mut Emitter) {
     emitter.instruction("stp x11, x12, [sp, #16]");                             // preserve the table-address scratch pair
     emitter.instruction("stp x13, x14, [sp, #32]");                             // preserve the cursor and slot-index scratch pair
 
+    emitter.instruction("tbnz x0, #63, __rt_resource_id_of_closed");            // a negative payload is a closed handle carrying its own id
     emitter.instruction(&format!("cmp x0, #{}", STD_STREAM_MAX_PAYLOAD));       // is this one of the standard stream descriptors?
     emitter.instruction("b.hi __rt_resource_id_of_lookup");                     // ordinary resources consult the table
     emitter.instruction("add x0, x0, #1");                                      // STDIN/STDOUT/STDERR render as PHP's fixed 1/2/3
     emitter.instruction("b __rt_resource_id_of_done");                          // done without touching the table
+
+    emitter.label("__rt_resource_id_of_closed");
+    emitter.instruction("neg x0, x0");                                          // recover the id an explicit close preserved in the sentinel
+    emitter.instruction("b __rt_resource_id_of_done");                          // closed handles never consult or mint into the table
 
     emitter.label("__rt_resource_id_of_lookup");
     emit_resource_id_hash_aarch64(emitter, "x9", "x0");
@@ -343,10 +364,16 @@ fn emit_resource_id_of_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push r10");                                            // preserve the loaded-word scratch
     emitter.instruction("push r11");                                            // preserve the id-cursor scratch
 
+    emitter.instruction("test rax, rax");                                       // a negative payload is a closed handle carrying its own id
+    emitter.instruction("js __rt_resource_id_of_closed_x86");                   // recover it directly instead of probing the table
     emitter.instruction(&format!("cmp rax, {}", STD_STREAM_MAX_PAYLOAD));       // is this one of the standard stream descriptors?
     emitter.instruction("ja __rt_resource_id_of_lookup_x86");                   // ordinary resources consult the table
     emitter.instruction("add rax, 1");                                          // STDIN/STDOUT/STDERR render as PHP's fixed 1/2/3
     emitter.instruction("jmp __rt_resource_id_of_done_x86");                    // done without touching the table
+
+    emitter.label("__rt_resource_id_of_closed_x86");
+    emitter.instruction("neg rax");                                             // recover the id an explicit close preserved in the sentinel
+    emitter.instruction("jmp __rt_resource_id_of_done_x86");                    // closed handles never consult or mint into the table
 
     emitter.label("__rt_resource_id_of_lookup_x86");
     emit_resource_id_hash_x86_64(emitter, "rcx", "rax");
@@ -434,6 +461,72 @@ mod tests {
             let asm = emitter.output();
             assert!(asm.contains("__rt_resource_id_mint:"), "{target:?}");
             assert!(asm.contains("__rt_resource_id_of:"), "{target:?}");
+        }
+    }
+
+    /// Pins the AArch64 closed-handle arm of `__rt_resource_id_of`: a payload with bit
+    /// 63 set is a `-id` sentinel stamped by `fclose`/`pclose`/`closedir`, and must be
+    /// negated back into the id it carries.
+    ///
+    /// php-src leaves `zend_resource.handle` alone on close, so under 8.5.6
+    /// `fclose($r); echo "$r";` still prints `Resource id #5` and
+    /// `get_resource_id($r)` still answers 5. The bare `-1` sentinel this replaced had
+    /// no such arm: every display of a closed handle missed the table, minted, printed
+    /// `Resource id #6` and shifted the next `fopen()` to 7.
+    #[test]
+    fn aarch64_reports_the_id_a_closed_handle_carries() {
+        let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+        emit_resource_ids(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("tbnz x0, #63, __rt_resource_id_of_closed"), "{asm}");
+        assert!(asm.contains("__rt_resource_id_of_closed:\n"), "{asm}");
+        assert!(asm.contains("neg x0, x0"), "{asm}");
+    }
+
+    /// Pins the same closed-handle arm on x86_64, so the two targets cannot drift.
+    #[test]
+    fn x86_64_reports_the_id_a_closed_handle_carries() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_resource_ids(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("js __rt_resource_id_of_closed_x86"), "{asm}");
+        assert!(asm.contains("__rt_resource_id_of_closed_x86:\n"), "{asm}");
+        assert!(asm.contains("neg rax"), "{asm}");
+    }
+
+    /// The closed-handle arm must reach the epilogue WITHOUT probing or minting: it may
+    /// not read `_resource_id_next`, or a program that merely displays a closed handle
+    /// would still steal the id the next `fopen()` is owed.
+    #[test]
+    fn the_closed_handle_arm_never_mints_on_either_target() {
+        for (target, label, end) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "__rt_resource_id_of_closed:\n",
+                "__rt_resource_id_of_lookup:\n",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "__rt_resource_id_of_closed_x86:\n",
+                "__rt_resource_id_of_lookup_x86:\n",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_resource_ids(&mut emitter);
+            let asm = emitter.output();
+            let arm = asm
+                .split(label)
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing closed arm for {target:?}:\n{asm}"));
+            let arm = arm.split(end).next().expect("closed arm precedes the lookup");
+            assert!(
+                !arm.contains("_resource_id_next"),
+                "closed handles must not mint a fresh id ({target:?}):\n{arm}"
+            );
+            assert!(
+                !arm.contains("_resource_id_keys") && !arm.contains("_resource_id_vals"),
+                "closed handles must not probe the table ({target:?}):\n{arm}"
+            );
         }
     }
 

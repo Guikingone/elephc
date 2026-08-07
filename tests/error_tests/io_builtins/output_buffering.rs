@@ -12,6 +12,54 @@
 
 use super::*;
 
+/// Verifies `ob_clean()` rejects arguments.
+#[test]
+fn test_error_ob_clean_wrong_args() {
+    expect_error("<?php ob_clean(1);", "ob_clean() takes no arguments");
+}
+
+/// Verifies `ob_end_clean()` rejects arguments.
+#[test]
+fn test_error_ob_end_clean_wrong_args() {
+    expect_error(
+        "<?php ob_end_clean(1);",
+        "ob_end_clean() takes no arguments",
+    );
+}
+
+/// Verifies `ob_flush()` rejects arguments.
+#[test]
+fn test_error_ob_flush_wrong_args() {
+    expect_error("<?php ob_flush(1);", "ob_flush() takes no arguments");
+}
+
+/// Verifies `ob_get_flush()` rejects arguments.
+#[test]
+fn test_error_ob_get_flush_wrong_args() {
+    expect_error(
+        "<?php ob_get_flush(1);",
+        "ob_get_flush() takes no arguments",
+    );
+}
+
+/// Verifies `ob_get_length()` rejects arguments.
+#[test]
+fn test_error_ob_get_length_wrong_args() {
+    expect_error(
+        "<?php ob_get_length(1);",
+        "ob_get_length() takes no arguments",
+    );
+}
+
+/// Verifies `ob_list_handlers()` rejects arguments.
+#[test]
+fn test_error_ob_list_handlers_wrong_args() {
+    expect_error(
+        "<?php ob_list_handlers(1);",
+        "ob_list_handlers() takes no arguments",
+    );
+}
+
 /// Verifies `ob_get_contents()` rejects any arguments with an arity error.
 #[test]
 fn test_error_ob_get_contents_wrong_args() {

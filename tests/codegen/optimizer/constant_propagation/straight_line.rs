@@ -27,7 +27,7 @@ echo $x ** $y;
     );
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "constant-propagated pow expression should not leave a pow call in user assembly:\n{}",
         user_asm
     );
@@ -107,7 +107,7 @@ echo $base ** 3;
     );
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "merged if constants should let pow disappear from user assembly:\n{}",
         user_asm
     );
@@ -142,7 +142,7 @@ echo $base ** 3;
     );
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "uniform ternary assignment should let pow disappear from user assembly:\n{}",
         user_asm
     );
@@ -180,7 +180,7 @@ echo $base ** 3;
     );
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "uniform match assignment should let pow disappear from user assembly:\n{}",
         user_asm
     );
@@ -219,7 +219,7 @@ echo $base ** 3;
     );
 
     assert!(
-        !user_asm.contains("pow"),
+        !asm_without_embedded_script_path(&user_asm).contains("pow"),
         "known match subject should fold before assignment propagation:\n{}",
         user_asm
     );

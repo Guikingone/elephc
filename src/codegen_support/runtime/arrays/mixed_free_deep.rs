@@ -7,12 +7,27 @@
 //!
 //! Key details:
 //! - Deep free helpers recursively release owned child storage and must match the heap kind/tag layout exactly.
-//! - Tag 9 (resource) releases registry-owned kinds 1, 3, 4, and 9 through
-//!   `__rt_resource_release`; the registry owns the backend-specific destructor and
-//!   rejects stale opaque handles.
-//! - Kind 2 remains the legacy raw HashContext and still releases directly through
-//!   `__rt_hash_ctx_free`. Kind 0 and unknown kinds are not registry-owned yet and
-//!   retain their previous no-destructor behavior.
+//! - Tag 9 (resource) dispatches to a kind-specific destructor stored in the high payload word:
+//!   kind 0 = generic/unknown (no destructor), kind 1 = native stream fd (close),
+//!   kind 2 = HashContext (elephc_crypto_free), kind 3 = popen pipe (__rt_pclose,
+//!   closes the FILE* and reaps the child), kind 4 = opendir stream (__rt_closedir).
+//! - KIND 5 IS RESERVED AND MUST NEVER GAIN AN ARM HERE. It is the eval-owned inert
+//!   hash-context handle boxed by `__elephc_eval_value_hash_context`, and its low
+//!   payload word is NOT a pointer: it is a key into
+//!   `elephc_magician::stream_resources::EvalStreamResources` offset by
+//!   `EVAL_RESOURCE_PAYLOAD_BASE` (`1 << 62`). The real `elephc_crypto` handle behind
+//!   it is owned by `EvalHashContext` and released by its `Drop`, so freeing anything
+//!   from here would be a double free of the context and a wild free of the key. Kind 5
+//!   deliberately falls off the end of the ladder into `__rt_mixed_free_deep_box`.
+//!   A future resource kind must therefore take 6 or higher.
+//! - Each fd-backed kind skips handles >= 0x40000000: synthetic wrapper handles and
+//!   the -1 sentinel written into the low payload word by an explicit close (see #4)
+//!   so an already-released descriptor is never closed twice.
+//! - SINCE THE REGISTRY LANDED: tag 9 releases registry-owned kinds 1, 3, 4 and 9
+//!   through `__rt_resource_release`, which owns the backend-specific destructor and
+//!   rejects stale opaque handles. Kind 2 remains the legacy raw HashContext and still
+//!   releases directly through `__rt_hash_ctx_free`. The kind-5 reservation below still
+//!   holds: it must never gain an arm here.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;

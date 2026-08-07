@@ -1,6 +1,6 @@
 //! Purpose:
-//! Provides the binary entry point for the elephc compiler.
-//! Wires CLI parsing to the ordered compile pipeline without owning compiler logic.
+//! Provides the binary entry point for the compiler and native dependency commands.
+//! Wires top-level dispatch to the appropriate orchestration layer.
 //!
 //! Called from:
 //! - The operating system when running the `elephc` executable.
@@ -26,17 +26,23 @@ mod ir;
 mod ir_lower;
 #[allow(dead_code, unused_imports)]
 mod ir_passes;
-mod lexer;
+#[allow(dead_code)]
+mod link_plan;
+mod link_planning;
 mod linker;
+mod lexer;
 mod list_id_prelude;
 mod magic_constants;
 mod name_resolver;
+#[allow(dead_code, unused_imports)]
+mod native_deps;
 mod names;
 mod opcache;
 mod opcache_prelude;
 mod optimize;
 mod parser;
 mod pdo_prelude;
+mod php_profile;
 mod pipeline;
 mod progress;
 mod resolver;
@@ -58,30 +64,57 @@ mod web_prelude;
 
 /// Entry point for the `elephc` binary.
 ///
-/// Collects command-line arguments, parses them into a `Config`, and delegates
-/// to the compile pipeline. Exits via `std::process::exit` if compilation fails
-/// (the pipeline handles fatal error reporting internally).
+/// Collects command-line arguments, parses the top-level command, and delegates
+/// to either compilation or explicit native-dependency orchestration.
 ///
 /// # Inputs
 /// - `std::env::args()`: OS-provided arguments, where `args[0]` is the program name.
 ///
 /// # Outputs
-/// - Returns `()` on successful compilation (pipeline handles output binary creation).
-/// - Never returns on fatal error (calls `std::process::exit` internally).
+/// - Returns `()` when the selected command succeeds without an explicit exit.
+/// - Never returns on fatal errors or unhealthy native diagnostics.
 ///
 /// # Side effects
-/// - Reads source files and writes the compiled binary alongside the source.
-/// - Emits warnings/errors to stderr, including the OPcache `--ini` quantity diagnostics
-///   ([`emit_ini_override_warnings`]).
+/// - Compile commands read source files and write outputs alongside the source.
+/// - Mutating native commands may update project files and the durable native cache.
+/// - Emits warnings/errors to stderr, including OPcache `--ini` quantity diagnostics
+///   ([`emit_ini_override_warnings`]) for compile commands.
 /// - May create temporary files during assembly and linking.
 fn main() {
     let args: Vec<String> = std::env::args().collect();
     if cli::wants_mascotte(&args) {
         cli::print_mascotte();
     }
-    let config = cli::parse_args(&args);
-    emit_ini_override_warnings(&config);
-    pipeline::compile(config);
+    match cli::parse_args(&args) {
+        cli::Command::Compile(config) => {
+            emit_ini_override_warnings(&config);
+            pipeline::compile(config);
+        }
+        cli::Command::Native(command) => run_native(command),
+    }
+}
+
+/// Executes a parsed native command and maps its captured output to process streams/status.
+fn run_native(command: native_deps::NativeCommand) {
+    let cwd = match std::env::current_dir() {
+        Ok(cwd) => cwd,
+        Err(error) => {
+            eprintln!("failed to read current directory: {error}");
+            std::process::exit(1);
+        }
+    };
+    match native_deps::run_native_command(&command, &cwd) {
+        Ok(output) => {
+            print!("{}", output.stdout);
+            if output.exit_code != 0 {
+                std::process::exit(output.exit_code);
+            }
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(1);
+        }
+    }
 }
 
 /// Prints the startup diagnostics reference PHP would emit for the `--ini` overrides this

@@ -77,24 +77,28 @@ mod tests {
     use super::*;
     use crate::span::Span;
 
+    /// Verifies diagnostics include both a filename and a concrete source position.
     #[test]
     fn format_diagnostic_file_line_col() {
         let msg = format_diagnostic("error", &Some("a.php".to_string()), Span::new(3, 5), "bad");
         assert_eq!(msg, "error[a.php:3:5]: bad");
     }
 
+    /// Verifies diagnostics retain a filename when no line or column is available.
     #[test]
     fn format_diagnostic_file_only() {
         let msg = format_diagnostic("error", &Some("a.php".to_string()), Span::new(0, 0), "bad");
         assert_eq!(msg, "error[a.php]: bad");
     }
 
+    /// Verifies diagnostics retain a source position when no filename is available.
     #[test]
     fn format_diagnostic_line_col_only() {
         let msg = format_diagnostic("warning", &None, Span::new(3, 5), "bad");
         assert_eq!(msg, "warning[3:5]: bad");
     }
 
+    /// Verifies diagnostics omit the location brackets when no location is available.
     #[test]
     fn format_diagnostic_no_location() {
         let msg = format_diagnostic("warning", &None, Span::new(0, 0), "bad");

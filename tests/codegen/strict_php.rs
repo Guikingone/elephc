@@ -22,7 +22,7 @@ fn compile_strict_cli_and_run(source: &str) -> String {
     fs::write(&php_path, source).unwrap();
 
     let compile_out = elephc_cli_command(&dir)
-        .arg("--strict-php")
+        .args(["--strict-php"])
         .arg(&php_path)
         .output()
         .expect("failed to run elephc CLI");

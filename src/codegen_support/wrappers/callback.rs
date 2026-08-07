@@ -182,8 +182,7 @@ fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
         match (emitter.target.arch, ty) {
             (Arch::AArch64, PhpType::Float) => {
                 let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
-                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16));
-                // spill the incoming float callback argument before loading captures
+                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16)); // spill the incoming float callback argument before loading captures
             }
             (Arch::AArch64, PhpType::Str) => {
                 let ptr_reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
@@ -197,8 +196,7 @@ fn spill_visible_args(emitter: &mut Emitter, visible_arg_types: &[PhpType]) {
             }
             (Arch::AArch64, _) => {
                 let reg = abi::int_arg_reg_name(emitter.target, assignment.start_reg);
-                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16));
-                // spill the incoming scalar callback argument before loading captures
+                emitter.instruction(&format!("str {}, [sp, #{}]", reg, idx * 16)); // spill the incoming scalar callback argument before loading captures
             }
             (Arch::X86_64, PhpType::Float) => {
                 let reg = abi::float_arg_reg_name(emitter.target, assignment.start_reg);
@@ -233,20 +231,17 @@ fn spill_captures(
         match (emitter.target.arch, ty) {
             (Arch::AArch64, PhpType::Float) => {
                 emitter.instruction(&format!("ldr d0, [{}, #{}]", env_reg, env_offset)); // load a captured float from the callback environment
-                emitter.instruction(&format!("str d0, [sp, #{}]", arg_idx * 16));
-                // spill the captured float for the final closure call
+                emitter.instruction(&format!("str d0, [sp, #{}]", arg_idx * 16)); // spill the captured float for the final closure call
             }
             (Arch::AArch64, PhpType::Str) => {
                 emitter.instruction(&format!("ldr x9, [{}, #{}]", env_reg, env_offset)); // load the captured string pointer from the callback environment
                 emitter.instruction(&format!("ldr x10, [{}, #{}]", env_reg, env_offset + 8)); // load the captured string length from the callback environment
-                emitter.instruction(&format!("stp x9, x10, [sp, #{}]", arg_idx * 16));
-                // spill the captured string pair for the final closure call
+                emitter.instruction(&format!("stp x9, x10, [sp, #{}]", arg_idx * 16)); // spill the captured string pair for the final closure call
             }
             (Arch::AArch64, PhpType::Void | PhpType::Never) => {}
             (Arch::AArch64, _) => {
                 emitter.instruction(&format!("ldr x9, [{}, #{}]", env_reg, env_offset)); // load a captured scalar/pointer from the callback environment
-                emitter.instruction(&format!("str x9, [sp, #{}]", arg_idx * 16));
-                // spill the captured scalar/pointer for the final closure call
+                emitter.instruction(&format!("str x9, [sp, #{}]", arg_idx * 16)); // spill the captured scalar/pointer for the final closure call
             }
             (Arch::X86_64, PhpType::Float) => {
                 emitter.instruction(&format!(

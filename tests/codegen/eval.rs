@@ -55,6 +55,146 @@ fn assert_scope_eir_aot_without_bridge(
     );
 }
 
+/// Verifies dynamic eval compiles and runs without any native project or PCRE2 artifact.
+#[test]
+fn test_dynamic_eval_without_regex_needs_no_native_project() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_without_native_project");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1 ? $argv[1] : 'echo "eval-ok";';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    let compile_stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        compile.status.success(),
+        "dynamic eval without regex should compile without a native project:\n{compile_stderr}"
+    );
+    assert!(
+        compile_stderr.contains("dynamic eval was compiled without optional regex support")
+            && compile_stderr.contains("elephc --with-regex <source-file>"),
+        "compile output should contain the regex capability reminder:\n{compile_stderr}"
+    );
+    assert!(
+        !compile_stderr.contains("native project error"),
+        "eval-only compilation must not resolve managed PCRE2:\n{compile_stderr}"
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run dynamic eval fixture");
+    assert!(
+        run.status.success(),
+        "dynamic eval fixture failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "eval-ok");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies unavailable dynamic regex calls compile but fail only when executed.
+#[test]
+fn test_dynamic_eval_regex_without_capability_fails_at_runtime() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_regex_without_capability");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1
+    ? $argv[1]
+    : 'echo function_exists("preg_match") ? "available" : "missing"; preg_match("/a/", "a");';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    assert!(
+        compile.status.success(),
+        "opaque dynamic regex usage should not fail compilation:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run dynamic eval regex fixture");
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(!run.status.success(), "missing regex capability should fail at runtime");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "missing");
+    assert!(
+        stderr.contains("Fatal error: eval() runtime failed"),
+        "runtime failure should use the eval fatal diagnostic:\n{stderr}"
+    );
+    assert_no_rust_panic_leaked(&stderr);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--with-regex` registers managed PCRE2 for dynamic eval builtin dispatch.
+#[test]
+fn test_dynamic_eval_with_regex_uses_managed_provider() {
+    let dir = make_cli_test_dir("elephc_dynamic_eval_with_regex");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+$code = $argc > 1
+    ? $argv[1]
+    : '$ok = preg_match("/([a-z]+)([0-9]+)/", "id42", $matches); echo (function_exists("preg_match") ? "yes" : "no") . ":" . $ok . ":" . $matches[1] . ":" . $matches[2];';
+eval($code);
+"#,
+    )
+    .unwrap();
+
+    let compile = elephc_cli_command_with_managed_pcre2(&dir)
+        .args(["--quiet", "--with-regex", "main.php"])
+        .output()
+        .expect("failed to invoke elephc CLI");
+    let compile_stderr = String::from_utf8_lossy(&compile.stderr);
+    assert!(
+        compile.status.success(),
+        "dynamic eval with managed regex should compile:\n{compile_stderr}"
+    );
+    assert!(
+        !compile_stderr.contains("dynamic eval was compiled without optional regex support"),
+        "explicit regex capability should suppress the reminder:\n{compile_stderr}"
+    );
+
+    let run = Command::new(dir.join("main"))
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run managed dynamic eval regex fixture");
+    assert!(
+        run.status.success(),
+        "managed dynamic eval regex fixture failed:\n{}",
+        String::from_utf8_lossy(&run.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "yes:1:id:42");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a statically detected regex call also exposes the provider to dynamic eval.
+#[test]
+fn test_static_regex_detection_enables_dynamic_eval_regex() {
+    let out = compile_and_run(
+        r#"<?php
+echo preg_match("/a/", "cat") . ":";
+$code = $argc > 1 ? $argv[1] : 'echo preg_match("/b/", "cab");';
+eval($code);
+"#,
+    );
+    assert_eq!(out, "1:1");
+}
+
 /// Verifies `eval` is resolved as a language construct, not a PHP-visible callable function.
 #[test]
 fn test_eval_is_not_function_exists_or_callable() {
@@ -5296,17 +5436,39 @@ echo $items["name"];
     assert_eq!(out, "Ada");
 }
 
-/// Verifies nested eval calls reuse the materialized caller scope.
+/// Verifies a nested `eval()` INTERPOLATES its double-quoted fragment, refusing what PHP refuses.
+///
+/// This previously asserted `5`, which reference PHP 8.5.6 NEVER produces. It passed only because
+/// the magician's lexer had no interpolation scanner, so `"$x = $x + 4;"` reached the inner
+/// `eval()` literally and assigned in the shared scope. Once the interpreter learned to
+/// interpolate, `$x` became its VALUE and the inner fragment reads `1 = 1 + 4;` — an assignment to
+/// a literal. Measured with `php -d xdebug.mode=off` on this exact source:
+///
+/// ```text
+/// Parse error: syntax error, unexpected token "=" in …(3) : eval()'d code(1) : eval()'d code on line 1
+/// ```
+///
+/// PHP's stdout is EMPTY — an `E_PARSE` inside `eval()` halts the script, so the trailing
+/// `echo $x` never runs. elephc halts the same way, so the two agree on both the refusal and the
+/// absence of output; only the diagnostic wording differs.
+///
+/// Nested-eval SCOPE SHARING itself is unaffected and still covered: see
+/// `test_eval_nested_interpolates_scalar_into_inner_fragment`, where the inner fragment reads the
+/// outer `$v`, and `test_eval_nested_eval_return_value_is_expression_result` just below.
 #[test]
 fn test_eval_nested_eval_uses_same_scope() {
-    let out = compile_and_run(
+    let err = compile_and_run_expect_failure(
         r#"<?php
 $x = 1;
 eval('eval("$x = $x + 4;");');
 echo $x;
 "#,
     );
-    assert_eq!(out, "5");
+    assert!(
+        err.contains("Parse error: eval() fragment is invalid"),
+        "the interpolated fragment assigns to a literal and must be refused, as reference PHP \
+         refuses it; stderr was: {err}"
+    );
 }
 
 /// Verifies a nested eval return is the value of the inner eval expression.
@@ -7030,10 +7192,9 @@ echo function_exists("sys_get_temp_dir");');
 "#,
     );
     // `phpversion()` reports the PHP LANGUAGE version, not elephc's package version. The eval
-    // interpreter is a separate crate with no access to `--php-version`, so it reports the
-    // default profile (8.5) — identical to native here, since this program compiles with the
-    // default profile. See `EVAL_PHP_VERSION` in the magician for the documented divergence
-    // when `--php-version` is not 8.5.
+    // interpreter cannot read `--php-version` itself, so the compiler forwards the profile to
+    // it; this program compiles with the default, hence 8.5.0. `eval_follows_a_non_default_profile`
+    // in `php_version_surface_tests` is where the forwarding itself is measured.
     assert_eq!(out, "time:8.5.0:/tmp:cwd:call-time:8.5.0:call-cwd:/tmp:1111");
 }
 
@@ -7440,7 +7601,7 @@ echo ":"; echo function_exists("stream_resolve_include_path");');
 /// Verifies eval regex builtins handle captures, replacement, callbacks, and splitting.
 #[test]
 fn test_eval_dispatches_preg_builtin_calls() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$ok = preg_match("/([a-z]+)([0-9]+)/", "id42", $matches);
 echo $ok . ":" . count($matches) . ":" . $matches[0] . ":" . $matches[1] . ":" . $matches[2] . ":";
@@ -7512,7 +7673,7 @@ echo function_exists("preg_match") && function_exists("preg_match_all") && funct
 /// Verifies eval `preg_replace_callback()` accepts general callable forms.
 #[test]
 fn test_eval_preg_replace_callback_accepts_general_callables() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 echo eval('class EvalPregCallbackBox {
     public $prefix = "";
@@ -7536,7 +7697,7 @@ return preg_replace_callback("/[m]/", $static, "mm");');
 /// Verifies dynamic eval preg callables write by-reference `$matches` arrays.
 #[test]
 fn test_eval_dynamic_preg_callables_write_matches_by_ref() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$match = "preg_match";
 $ok = $match("/([a-z]+)([0-9]+)/", "id42", $matches);
@@ -7555,7 +7716,7 @@ echo $okAgain . ":" . $firstClassMatches[0];');
 /// Verifies named eval preg calls write by-reference `$matches` arrays.
 #[test]
 fn test_eval_named_preg_calls_write_matches_by_ref() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$named = [];
 $ok = preg_match(pattern: "/([a-z]+)([0-9]+)/", subject: "id42", matches: $named);
@@ -7572,7 +7733,7 @@ echo preg_match(pattern: "/x/", subject: "x", flags: PREG_OFFSET_CAPTURE);');
 /// Verifies eval `call_user_func*()` warns for by-value regex `$matches` outputs.
 #[test]
 fn test_eval_call_user_func_regex_ref_like_builtin_args_warn_and_use_value_copy() {
-    let out = compile_and_run_capture(
+    let out = compile_and_run_capture_with_regex(
         r#"<?php
 eval('$matches = ["old"];
 echo call_user_func("preg_match", "/x/", "x", $matches) . ":" . $matches[0] . "|";
@@ -9172,7 +9333,9 @@ fn test_eval_bridge_failure_paths_do_not_leak_rust_panics() {
                 "$callback = new EvalPanicBoundaryPlainCallback(); ",
                 "call_user_func($callback);');"
             ),
-            "Fatal error: uncaught exception",
+            // Prefix only: this row pins THAT the eval boundary raises a fatal, not which
+            // Throwable the invoker synthesizes for a non-callable object.
+            "Fatal error: Uncaught ",
         ),
     ] {
         let err = compile_and_run_expect_failure(source);
@@ -15196,7 +15359,7 @@ echo $box->hidden();');
 "#,
     );
     assert!(
-        err.contains("Fatal error: uncaught exception"),
+        err.contains("Fatal error: Uncaught "),
         "stderr did not contain uncaught throwable diagnostic: {err}"
     );
 }
@@ -28476,10 +28639,34 @@ try {
     assert_eq!(out, "caught:dyn boom");
 }
 
-/// Verifies Throwable objects thrown by nested eval calls keep the original catch target.
+/// Verifies a nested `eval()` INTERPOLATES its double-quoted fragment, as reference PHP does.
+///
+/// This test previously asserted `caught:nested boom`, which reference PHP 8.5.6 NEVER produces.
+/// It passed only because the magician's lexer had no interpolation scanner: `"throw $e;"` reached
+/// the inner `eval()` with `$e` still literal, so the inner fragment parsed as a plain `throw $e;`
+/// and the exception crossed the caller's `try`. Once the interpreter learned to interpolate, the
+/// old expectation became unreachable — the test was pinning the absence of a feature.
+///
+/// What reference PHP actually does, measured with `php -d xdebug.mode=off` on this exact source:
+///
+/// ```text
+/// Parse error: syntax error, unexpected token ":" in …(4) : eval()'d code(1) : eval()'d code on line 1
+/// ```
+///
+/// `$e` is an `Exception`, so interpolating it calls `__toString()` and the inner fragment becomes
+/// `throw Exception: nested boom in /path…;` — a syntax error. Neither `bad` nor `caught:` is ever
+/// printed. That the fragment is REFUSED is the behaviour worth pinning.
+///
+/// The failure MODE still differs and is a pre-existing divergence, not one this change
+/// introduced: reference PHP reports a recoverable parse error and continues, while elephc treats
+/// an unparseable eval fragment as fatal (the same `Fatal error: eval() runtime failed` every
+/// other invalid-fragment test in this file asserts). Only WHICH fragments are invalid moved here.
+///
+/// The scalar case is the positive half and is verified separately: `eval('eval("echo $v + 1;");')`
+/// with `$v = 41` prints `42` in both, so interpolation reaches nested fragments correctly.
 #[test]
 fn test_eval_nested_throw_crosses_caller_try_catch() {
-    let out = compile_and_run(
+    let err = compile_and_run_expect_failure(
         r#"<?php
 $e = new Exception("nested boom");
 try {
@@ -28490,7 +28677,30 @@ try {
 }
 "#,
     );
-    assert_eq!(out, "caught:nested boom");
+    assert!(
+        err.contains("Fatal error: eval() runtime failed"),
+        "an interpolated Exception makes the inner fragment unparseable, as it does in reference \
+         PHP; stderr was: {err}"
+    );
+}
+
+/// Verifies nested `eval()` interpolation of a SCALAR, the positive half of the case above.
+///
+/// `eval('eval("echo $v + 1;");')` with `$v = 41` prints `42` under reference PHP 8.5.6, proving
+/// the outer fragment's double-quoted string is interpolated before the inner `eval()` sees it.
+/// Before the interpreter grew an interpolation scanner this printed nothing useful, because the
+/// inner fragment received the literal text `echo $v + 1;` and resolved `$v` itself — which
+/// happens to agree here, so only a case where interpolation CHANGES the parse (the Exception
+/// above) could tell the two models apart. Both are pinned so neither can regress alone.
+#[test]
+fn test_eval_nested_interpolates_scalar_into_inner_fragment() {
+    let out = compile_and_run(
+        r#"<?php
+$v = 41;
+eval('eval("echo $v + 1;");');
+"#,
+    );
+    assert_eq!(out, "42");
 }
 
 /// Verifies eval-internal try/catch consumes a thrown Throwable before returning.

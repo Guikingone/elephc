@@ -13965,9 +13965,9 @@
     "lowering": {
       "checker_file": null,
       "checker_line": null,
-      "codegen_file": "src/codegen/lower_inst/builtins.rs",
+      "codegen_file": "src/codegen/lower_inst/builtins/count_empty.rs",
       "codegen_function": "lower_empty",
-      "codegen_line": 1519,
+      "codegen_line": 88,
       "notes": [
         "Lowers `empty()` for concrete scalar and array-like operands."
       ],
@@ -20634,7 +20634,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -29096,7 +29096,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -31711,7 +31711,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -52628,7 +52628,7 @@
       },
       "ownership": {
         "argument_indexes": [],
-        "kind": "may_alias_arguments"
+        "kind": "fresh"
       },
       "requirements": {
         "kind": "static",
@@ -54062,7 +54062,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 48,
+      "codegen_line": 49,
       "notes": [
         "Rejects `unset()` calls that were not converted into direct EIR unbind operations."
       ],

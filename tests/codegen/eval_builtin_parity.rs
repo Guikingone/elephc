@@ -10,7 +10,9 @@
 
 use std::fmt::Write;
 
-use crate::support::{compile_and_run, compile_and_run_capture};
+use crate::support::{
+    compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
+};
 
 const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_all",
@@ -122,7 +124,7 @@ fn test_eval_function_exists_covers_static_builtin_catalog() {
     fragment.push_str("return \"ok\";");
 
     let source = format!("<?php\necho eval({});\n", php_single_quoted_literal(&fragment));
-    let out = compile_and_run(&source);
+    let out = compile_and_run_with_regex(&source);
 
     assert_eq!(out, "ok");
 }
@@ -177,7 +179,7 @@ eval($source);
 /// Verifies eval preg builtins use PCRE2 features that Rust regex did not support.
 #[test]
 fn test_eval_preg_uses_pcre2_lookaround_semantics() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('echo preg_match("/foo(?=bar)/", "foobar");
 echo ":";
@@ -284,7 +286,7 @@ echo gettype(EvalStringBuiltinRefBridgeBox::$typed) . ":" . EvalStringBuiltinRef
 /// Verifies eval `call_user_func_array()` preserves named ref-like builtin targets.
 #[test]
 fn test_eval_call_user_func_array_ref_like_builtins_write_back_named_aliases() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$matches = [];
 echo call_user_func_array(
@@ -307,7 +309,7 @@ foreach ($items as $key => $value) {
 /// Verifies eval first-class and Closure builtin callables preserve ref-like parameters.
 #[test]
 fn test_eval_ref_like_builtin_closures_write_back_aliases() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$sort = sort(...);
 $items = [3, 1, 2];
@@ -339,7 +341,7 @@ foreach ($assoc as $key => $entry) {
 /// Verifies eval `call_user_func()` keeps ref-like builtin Closure args by value.
 #[test]
 fn test_eval_call_user_func_ref_like_builtin_closures_use_by_value_args() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$sort = sort(...);
 $items = [3, 1, 2];
@@ -368,7 +370,7 @@ echo call_user_func($push, $front, "b") . ":" . implode(",", $front);');
 /// Verifies eval `call_user_func_array()` keeps non-reference builtin Closure args by value.
 #[test]
 fn test_eval_call_user_func_array_ref_like_builtin_closures_keep_non_ref_args_by_value() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$sort = sort(...);
 $items = [3, 1, 2];
@@ -402,7 +404,7 @@ echo call_user_func_array($push, $pushArgs) . ":" .
 /// Verifies additional eval ref-like builtin callables write back through Closure dispatch.
 #[test]
 fn test_eval_ref_like_builtin_closures_write_back_extended_aliases() {
-    let out = compile_and_run(
+    let out = compile_and_run_with_regex(
         r#"<?php
 eval('$push = Closure::fromCallable("array_push");
 $items = [1];
@@ -439,7 +441,7 @@ echo ":" . implode(",", $matches[0]) . ":" . implode(",", $matches[1]);');
 /// Verifies ref-like builtin callbacks preserve writeback through AOT callable parameters.
 #[test]
 fn test_eval_ref_like_builtin_callables_pass_to_aot_callable_params() {
-    let out = compile_and_run_capture(
+    let out = compile_and_run_capture_with_regex(
         r#"<?php
 class EvalRefLikeBuiltinCallableBridge {
     public string $value = "";

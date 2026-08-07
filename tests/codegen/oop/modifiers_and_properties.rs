@@ -233,8 +233,21 @@ try { echo $c->x; } catch (\Exception $e) { echo "caught"; }
 echo "end";
 "#,
     );
-    assert!(err.contains("uncaught"), "{err}");
+    // Asserting the CLASS is what this test is actually about: the `catch (\Exception $e)` must
+    // not match because an uninitialized typed property raises an `Error`. The previous
+    // assertion only looked for the word "uncaught", so a fatal of any class would have passed —
+    // including the very `Exception` the test exists to rule out.
+    //
+    // Byte-identical to reference PHP 8.5.6 up to its ` in <file>:<line>` suffix, which elephc
+    // cannot emit (see issue #660).
+    assert!(
+        err.contains(
+            "Fatal error: Uncaught Error: Typed property C::$x must not be accessed before initialization"
+        ),
+        "{err}"
+    );
 }
+/// Verifies a typed static property assigned zero remains distinguishable from uninitialized.
 #[test]
 fn test_typed_static_property_initialized_to_zero_reads_normally() {
     let out = compile_and_run(

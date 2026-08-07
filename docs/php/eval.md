@@ -76,8 +76,31 @@ elephc example.php
 See [`examples/eval/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval)
 for the broad feature showcase and
 [`examples/eval-globals/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval-globals)
-for global-scope synchronization. The implementation boundary is documented in
+for global-scope synchronization. Dynamic regex opt-in is shown in
+[`examples/eval_regex/`](https://github.com/illegalstudio/elephc/tree/main/examples/eval_regex).
+The implementation boundary is documented in
 [Eval Runtime Architecture](../internals/eval-runtime.md).
+
+## Optional regex capability
+
+Dynamic eval source is opaque to compile-time feature detection. Merely linking
+Magician therefore does not link PCRE2 or expose `preg_*` inside evaluated code.
+A program without the capability still compiles; `function_exists("preg_match")`
+returns `false` inside dynamic eval and a call fails at runtime.
+
+If evaluated source may use regex, declare the managed package and explicitly
+enable the capability:
+
+```bash
+elephc native add pcre2
+elephc --with-regex example.php
+```
+
+The compiler prints a post-compilation reminder when a binary contains dynamic
+eval without regex support. Static source that visibly uses `preg_*`,
+`mb_ereg_match()`, `RegexIterator`, or `RecursiveRegexIterator` continues to
+auto-detect regex and makes the same provider available to dynamic eval. Merely
+declaring PCRE2 in `elephc.toml` never forces it into a binary.
 
 ## Scope behavior
 
@@ -873,13 +896,18 @@ Eval predefined constants include `PHP_EOL`, `PHP_OS`, `DIRECTORY_SEPARATOR`,
 `PREG_*` / `JSON_*` constants. `defined()` sees these names, including an
 optional leading `\`, and `define()` cannot replace them.
 
-The eval interpreter is a separate crate with no access to `--php-version` or
-`--web`, so the version surface reports the DEFAULT profile: `PHP_VERSION`
-`"8.5.0"`, `PHP_VERSION_ID` `80500`, `PHP_SAPI` `"cli"`, `phpversion()`
-`"8.5.0"`. On a default-profile CLI binary that is identical to the compiled
-surface; a binary compiled `--php-version 8.2` or `--web` reports its own
-profile natively while `eval()` still reports the default. This is the same
-documented divergence `opcache_reset()` has in eval.
+The eval interpreter is a separate crate that cannot read `--php-version`
+itself, so the compiler forwards the profile to it: generated code sets it
+before every eval dispatch, exactly as it forwards `--strict-php`. A binary
+compiled `--php-version 8.2` therefore reports `PHP_VERSION` `"8.2.0"`,
+`PHP_VERSION_ID` `80200` and `phpversion()` `"8.2.0"` from inside `eval()`, the
+same values it reports natively. `PHP_MAJOR_VERSION`, `PHP_RELEASE_VERSION` and
+`PHP_EXTRA_VERSION` are invariant across the maintained profiles (`8`, `0` and
+the empty string), so they need no forwarding.
+
+`PHP_SAPI` is the one part of the surface that still diverges: it moves with
+`--web` rather than with the version, and eval reports `"cli"` inside a `--web`
+binary whose native `PHP_SAPI` is `"cli-server"`.
 
 ## Builtins available through eval
 
@@ -956,10 +984,11 @@ PHP's by-value callback behavior: the return value is computed from the
 supplied array, a by-reference warning is emitted where PHP would emit one, and
 the caller's original array is not mutated.
 
-Eval regex dispatch uses PCRE2 through the POSIX wrapper for common PCRE-style
-delimited patterns. It strips PHP delimiters, supports the `i`, `m`, `s`, `u`,
-and `U` modifiers, supports common capture array shapes and replacement
-references, and supports `PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_DELIM_CAPTURE`, and
+When the optional regex capability is enabled, eval dispatch uses PCRE2 through
+the managed POSIX-wrapper shim for common PCRE-style delimited patterns. It
+strips PHP delimiters, supports the `i`, `m`, `s`, `u`, and `U` modifiers,
+supports common capture array shapes and replacement references, and supports
+`PREG_SPLIT_NO_EMPTY`, `PREG_SPLIT_DELIM_CAPTURE`, and
 `PREG_SPLIT_OFFSET_CAPTURE`. Patterns, delimiters, modifiers, or subject bytes
 that the eval bridge cannot pass through this wrapper fail as eval runtime
 fatals. Native non-eval regex codegen remains PCRE2-backed as documented in

@@ -1,18 +1,23 @@
 //! Purpose:
-//! Owns command-line argument parsing for compiler options and target selection.
-//! Converts user flags into a single configuration object for the compile pipeline.
+//! Owns exact top-level command dispatch plus compiler-option parsing and target selection.
+//! Keeps `elephc native` isolated while preserving every legacy compile invocation.
 //!
 //! Called from:
 //! - `crate::main()` before invoking `crate::pipeline::compile()`.
 //!
 //! Key details:
-//! - Exits immediately on invalid CLI state so later compiler stages receive normalized options.
+//! - Only an exact `args[1] == "native"` selects native dependency commands.
+//! - Exits immediately on invalid CLI state so later stages receive normalized options.
 
 use std::collections::HashSet;
 use std::process;
 
 pub(crate) use crate::codegen::Emit;
 use crate::codegen::platform::Target;
+use crate::native_deps::{native_help, parse_native_args, NativeCommand, NativeParseOutcome};
+
+/// Non-bridge runtime capabilities accepted by `--with-<name>`.
+const RUNTIME_CAPABILITY_FLAGS: &[&str] = &["regex"];
 
 /// Short usage line shown after every parameter error, alongside the `--help` hint.
 /// The full categorized reference lives in `HELP`.
@@ -96,23 +101,24 @@ Target:
 
 Codegen:
   --heap-size=BYTES       Fixed heap size in bytes (default: 8388608)
-  --null-repr=MODE        sentinel (default) | tagged
+  --null-repr=MODE        tagged (default) | sentinel
   --regalloc=MODE         linear (default) | stack
   --ir-opt=on|off         EIR optimization passes (default: on; --no-ir-opt is an alias for --ir-opt=off)
   --gc-stats              Print GC statistics at exit
   --heap-debug            Enable heap debug instrumentation
   --define SYMBOL         Define a symbol for `ifdef` conditional compilation
   --ini KEY=VALUE         Bake an INI directive override (repeatable; opcache.* honored)
+  --strict-opcache        Throw when opcache_invalidate() targets AOT-frozen code
 
 Linking:
   --link LIB, -l LIB      Extra library to link
   --link-path DIR, -L DIR Extra library search path
   --framework NAME        macOS framework to link
-  --with-CRATE            Force-link a bridge crate (pdo, tls, crypto, phar, tz, image, web, eval)
+  --with-NAME             Force an optional capability (pdo, tls, crypto, phar, tz, image, web, eval, regex)
 
 Diagnostics:
-  --timings               Report per-phase compile timings to stderr
-  --quiet, -q             Disable the live spinner and colorized output
+  --timings               Show a per-phase timing table on stderr
+  --quiet, -q             Disable progress lines and colorized output
   --source-map            Emit a .map source map alongside the assembly
   --debug-info            Embed DWARF line info for debuggers
 
@@ -128,6 +134,13 @@ pub(crate) struct CliConfig {
     pub(crate) heap_size: usize,
     pub(crate) gc_stats: bool,
     pub(crate) heap_debug: bool,
+    /// Opt-in: make the one documented OPcache divergence (D5) LOUD instead of silent.
+    ///
+    /// Code compiled into the binary cannot be evicted, so `opcache_invalidate()` on a
+    /// manifest member can never do what the caller is asking for. Off (the default) it
+    /// reports success exactly as reference PHP does; on, it throws so a program that
+    /// RELIES on invalidation fails loudly rather than silently running stale code.
+    pub(crate) strict_opcache: bool,
     pub(crate) emit_ir: bool,
     pub(crate) null_repr: crate::codegen::NullRepr,
     pub(crate) emit_asm: bool,
@@ -142,6 +155,9 @@ pub(crate) struct CliConfig {
     /// PHP compatibility profile used by version-dependent language/runtime
     /// surfaces. Session behavior under `--web` currently consumes it.
     pub(crate) php_version: crate::web_prelude::PhpVersion,
+    /// Where [`Self::php_version`] came from, so the compiler can distinguish a profile the
+    /// user chose from one it assumed. Reported by `php_profile::report`.
+    pub(crate) php_version_provenance: crate::php_profile::Provenance,
     pub(crate) extra_link_libs: Vec<String>,
     pub(crate) extra_link_paths: Vec<String>,
     pub(crate) extra_frameworks: Vec<String>,
@@ -150,13 +166,13 @@ pub(crate) struct CliConfig {
     /// `packed class`, `extern`, `ifdef`, extension builtins) become compile errors.
     pub(crate) strict_php: bool,
     pub(crate) web: bool,
-    /// Bridge crates the user force-enabled with `--with-<crate>` (short flag
-    /// names such as `"pdo"`). Each one force-links the matching staticlib and,
-    /// for crates with a PHP-surface prelude, forces that prelude's injection so
-    /// the API is available even when feature auto-detection would not trigger.
+    /// Optional capabilities the user force-enabled with `--with-<name>` (short
+    /// names such as `"pdo"` or `"regex"`). Bridge names force-link their
+    /// staticlib; runtime capabilities enable their helper/native requirements.
+    /// Crates with a PHP-surface prelude also force that prelude's injection.
     /// `--with-web` is folded into `web` instead, since it aliases `--web`.
     pub(crate) with_crates: HashSet<String>,
-    /// Suppresses the live spinner and bridge-library "Linking" event lines,
+    /// Suppresses live/completed progress and bridge-library "Linking" event lines,
     /// forcing plain output regardless of whether stderr is a terminal.
     /// Errors, warnings, and the final success line are unaffected.
     pub(crate) quiet: bool,
@@ -169,8 +185,35 @@ pub(crate) struct CliConfig {
     pub(crate) ini_overrides: Vec<(String, String)>,
 }
 
-/// Parse command-line arguments into a CliConfig struct.
-pub(crate) fn parse_args(args: &[String]) -> CliConfig {
+/// A fully parsed top-level invocation of either the compiler or native package manager.
+pub(crate) enum Command {
+    /// The existing PHP compilation command and all of its normalized options.
+    Compile(CliConfig),
+    /// One validated `elephc native` subcommand.
+    Native(NativeCommand),
+}
+
+/// Parses the exact top-level `native` selector before falling back to legacy compilation.
+pub(crate) fn parse_args(args: &[String]) -> Command {
+    if args.get(1).map(String::as_str) != Some("native") {
+        return Command::Compile(parse_compile_args(args));
+    }
+
+    match parse_native_args(&args[2..]) {
+        Ok(NativeParseOutcome::Command(command)) => Command::Native(command),
+        Ok(NativeParseOutcome::Help(help)) => {
+            print!("{help}");
+            process::exit(0);
+        }
+        Err(error) => {
+            eprintln!("{error}\n\n{}", native_help());
+            process::exit(1);
+        }
+    }
+}
+
+/// Parses legacy compilation arguments into a normalized configuration.
+fn parse_compile_args(args: &[String]) -> CliConfig {
     if args.len() < 2 {
         fail("no source file given");
     }
@@ -182,6 +225,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut heap_size: usize = 8_388_608; // 8MB default
     let mut gc_stats = false;
     let mut heap_debug = false;
+    let mut strict_opcache = false;
     let mut emit_ir = false;
     let mut emit_asm = false;
     let mut emit = Emit::Executable;
@@ -192,6 +236,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     let mut filename_arg = None;
     let mut target = Target::detect_host();
     let mut php_version = crate::web_prelude::PhpVersion::default();
+    let mut php_version_provenance = crate::php_profile::Provenance::Default;
     let mut extra_link_libs: Vec<String> = Vec::new();
     let mut extra_link_paths: Vec<String> = Vec::new();
     let mut extra_frameworks: Vec<String> = Vec::new();
@@ -234,12 +279,16 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         } else if arg == "--php-version" {
             i += 1;
             php_version = parse_required_php_version(args, i);
+            php_version_provenance = crate::php_profile::Provenance::Flag;
         } else if let Some(value) = arg.strip_prefix("--php-version=") {
             php_version = parse_php_version(value);
+            php_version_provenance = crate::php_profile::Provenance::Flag;
         } else if arg == "--gc-stats" {
             gc_stats = true;
         } else if arg == "--heap-debug" {
             heap_debug = true;
+        } else if arg == "--strict-opcache" {
+            strict_opcache = true;
         } else if arg == "--emit-ir" {
             emit_ir = true;
         } else if arg == "--emit-asm" {
@@ -322,18 +371,18 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
             web = true;
         } else if let Some(name) = arg.strip_prefix("--with-") {
             // `--with-web` aliases the full `--web` mode (it owns the program
-            // entry point); every other known crate is recorded for force-link
-            // and prelude forcing. An unknown crate name is a hard error so a
-            // typo never silently no-ops.
+            // entry point); every other known bridge or runtime capability is
+            // recorded for pipeline forcing. An unknown name is a hard error
+            // so a typo never silently no-ops.
             if name == "web" {
                 web = true;
-            } else if crate::linker::bridge_lib_for_flag(name).is_some() {
+            } else if with_flag_is_known(name) {
                 with_crates.insert(name.to_string());
             } else {
                 fail(&format!(
-                    "Unknown crate for --with-{}: expected one of: {}",
+                    "Unknown capability for --with-{}: expected one of: {}",
                     name,
-                    crate::linker::crate_flag_names().join(", ")
+                    with_flag_names().join(", ")
                 ));
             }
         } else if arg.starts_with("--") {
@@ -364,11 +413,28 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
     if web && emit_ir {
         fail("--web cannot be combined with --emit-ir");
     }
+
+    // With no explicit `--php-version`, take the profile the project already declares. Every
+    // source is optional at every level, so a lone `.php` file still resolves to the default
+    // without needing a manifest — see `php_profile::resolve`.
+    if php_version_provenance == crate::php_profile::Provenance::Default {
+        let resolved = crate::php_profile::resolve::resolve(std::path::Path::new(&filename));
+        php_version = resolved.profile;
+        php_version_provenance = resolved.provenance;
+        // Emitted here rather than carried into the config: these report how the ANSWER was
+        // reached (a clamped pin, an unreadable manifest), so they belong with the decision
+        // and are silent whenever it was unambiguous.
+        for note in resolved.notes {
+            eprintln!("  note: {note}");
+        }
+    }
+
     CliConfig {
         filename,
         heap_size,
         gc_stats,
         heap_debug,
+        strict_opcache,
         emit_ir,
         null_repr,
         emit_asm,
@@ -381,6 +447,7 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         ir_opt,
         target,
         php_version,
+        php_version_provenance,
         extra_link_libs,
         extra_link_paths,
         extra_frameworks,
@@ -391,6 +458,20 @@ pub(crate) fn parse_args(args: &[String]) -> CliConfig {
         quiet,
         ini_overrides,
     }
+}
+
+/// Returns whether a `--with-<name>` suffix selects a bridge or runtime capability.
+fn with_flag_is_known(name: &str) -> bool {
+    crate::linker::bridge_lib_for_flag(name).is_some()
+        || RUNTIME_CAPABILITY_FLAGS.contains(&name)
+}
+
+/// Returns accepted `--with-<name>` suffixes in stable help/error order.
+fn with_flag_names() -> Vec<&'static str> {
+    crate::linker::crate_flag_names()
+        .into_iter()
+        .chain(RUNTIME_CAPABILITY_FLAGS.iter().copied())
+        .collect()
 }
 
 /// Parses a single `--ini KEY=VALUE` assignment into a `(key, value)` pair, splitting on the
@@ -545,6 +626,14 @@ fn fail(message: &str) -> ! {
 mod tests {
     use super::*;
 
+    /// Extracts the compile configuration returned for a legacy invocation.
+    fn compile_config(args: &[String]) -> CliConfig {
+        let Command::Compile(config) = parse_args(args) else {
+            panic!("expected compile command");
+        };
+        config
+    }
+
     /// Verifies an empty `--define` symbol is rejected, matching the `--define=` form,
     /// so the two spellings no longer behave inconsistently.
     #[test]
@@ -594,7 +683,7 @@ mod tests {
     #[test]
     fn web_flag_sets_web() {
         let args = vec!["elephc".into(), "--web".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.web);
     }
 
@@ -602,7 +691,7 @@ mod tests {
     #[test]
     fn no_web_flag_defaults_off() {
         let args = vec!["elephc".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(!config.web);
     }
 
@@ -630,15 +719,15 @@ mod tests {
             "--php-version=8.4".into(),
             "app.php".into(),
         ];
-        assert_eq!(parse_args(&split).php_version, crate::web_prelude::PhpVersion::Php83);
-        assert_eq!(parse_args(&equals).php_version, crate::web_prelude::PhpVersion::Php84);
+        assert_eq!(compile_config(&split).php_version, crate::web_prelude::PhpVersion::Php83);
+        assert_eq!(compile_config(&equals).php_version, crate::web_prelude::PhpVersion::Php84);
     }
 
     /// Verifies the compatibility profile defaults to the newest maintained PHP minor.
     #[test]
     fn php_version_defaults_to_85() {
         let args = vec!["elephc".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert_eq!(config.php_version, crate::web_prelude::PhpVersion::Php85);
     }
 
@@ -647,12 +736,25 @@ mod tests {
     #[test]
     fn with_pdo_records_forced_crate() {
         let args = vec!["elephc".into(), "--with-pdo".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.with_crates.contains("pdo"));
         assert!(!config.web);
     }
 
-    /// Verifies multiple `--with-<crate>` flags accumulate into the forced set.
+    /// Verifies `--with-regex` records the dynamic-code regex capability without web mode.
+    #[test]
+    fn with_regex_records_runtime_capability() {
+        let args = vec![
+            "elephc".into(),
+            "--with-regex".into(),
+            "app.php".into(),
+        ];
+        let config = compile_config(&args);
+        assert!(config.with_crates.contains("regex"));
+        assert!(!config.web);
+    }
+
+    /// Verifies multiple `--with-<name>` flags accumulate into the forced set.
     #[test]
     fn multiple_with_crates_accumulate() {
         let args = vec![
@@ -661,7 +763,7 @@ mod tests {
             "--with-tls".into(),
             "app.php".into(),
         ];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.with_crates.contains("pdo"));
         assert!(config.with_crates.contains("tls"));
     }
@@ -671,7 +773,7 @@ mod tests {
     #[test]
     fn with_web_aliases_web_mode() {
         let args = vec!["elephc".into(), "--with-web".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.web);
         assert!(config.with_crates.is_empty());
     }
@@ -680,7 +782,7 @@ mod tests {
     #[test]
     fn no_with_flag_defaults_empty() {
         let args = vec!["elephc".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.with_crates.is_empty());
     }
 
@@ -717,7 +819,7 @@ mod tests {
             "--ini=opcache.jit=tracing".into(),
             "app.php".into(),
         ];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert_eq!(
             config.ini_overrides,
             vec![
@@ -726,7 +828,7 @@ mod tests {
             ]
         );
 
-        let no_ini = parse_args(&["elephc".into(), "app.php".into()]);
+        let no_ini = compile_config(&["elephc".into(), "app.php".into()]);
         assert!(no_ini.ini_overrides.is_empty());
     }
 
@@ -734,7 +836,7 @@ mod tests {
     #[test]
     fn strict_php_flag_sets_strict() {
         let args = vec!["elephc".into(), "--strict-php".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.strict_php);
     }
 
@@ -742,7 +844,7 @@ mod tests {
     #[test]
     fn no_strict_php_flag_defaults_off() {
         let args = vec!["elephc".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(!config.strict_php);
     }
 
@@ -756,7 +858,7 @@ mod tests {
             "FEATURE".into(),
             "app.lfc".into(),
         ];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.strict_php);
         assert!(config.defines.contains("FEATURE"));
     }
@@ -765,7 +867,7 @@ mod tests {
     #[test]
     fn quiet_flag_sets_quiet() {
         let args = vec!["elephc".into(), "--quiet".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.quiet);
     }
 
@@ -773,7 +875,7 @@ mod tests {
     #[test]
     fn short_quiet_flag_sets_quiet() {
         let args = vec!["elephc".into(), "-q".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(config.quiet);
     }
 
@@ -781,7 +883,7 @@ mod tests {
     #[test]
     fn quiet_defaults_to_false() {
         let args = vec!["elephc".into(), "app.php".into()];
-        let config = parse_args(&args);
+        let config = compile_config(&args);
         assert!(!config.quiet);
     }
 
@@ -839,5 +941,21 @@ mod tests {
         assert!(msg.starts_with("error: Unknown flag: --bogus"));
         assert!(msg.contains(USAGE));
         assert!(msg.contains("Run 'elephc --help' for more information."));
+    }
+
+    /// Verifies only an exact first positional `native` selects the package command family.
+    #[test]
+    fn exact_first_native_token_selects_native_command() {
+        let args = vec!["elephc".into(), "native".into(), "list".into()];
+        assert!(matches!(
+            parse_args(&args),
+            Command::Native(NativeCommand::List { .. })
+        ));
+
+        let explicit_source = vec!["elephc".into(), "./native".into()];
+        let Command::Compile(config) = parse_args(&explicit_source) else {
+            panic!("explicit source path must remain a compile command");
+        };
+        assert_eq!(config.filename, "./native");
     }
 }

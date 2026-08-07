@@ -489,6 +489,7 @@ pub enum Op {
     FunctionVariantDispatch,
     Acquire,
     Release,
+    ReleaseUnlessAliases,
     GcCollect,
     Move,
     Borrow,
@@ -676,6 +677,7 @@ impl Op {
                     | E::WRITES_HEAP
             }
             Acquire | Release | EnsureOwned => E::REFCOUNT_OP | E::WRITES_HEAP,
+            ReleaseUnlessAliases => E::REFCOUNT_OP | E::WRITES_HEAP | E::READS_HEAP,
             GcCollect => E::READS_HEAP | E::WRITES_HEAP | E::REFCOUNT_OP,
             ClassConstant => E::MAY_DEOPT,
         }
@@ -948,6 +950,7 @@ impl Op {
             FunctionVariantDispatch => "function_variant_dispatch",
             Acquire => "acquire",
             Release => "release",
+            ReleaseUnlessAliases => "release_unless_aliases",
             GcCollect => "gc_collect",
             Move => "move",
             Borrow => "borrow",

@@ -4204,6 +4204,92 @@ echo $sum, "\n";
     );
 }
 
+// --- Issue #619: runtime alias disambiguation for suppressed argument releases ---
+//
+// `ReturnArgAlias::Parameters` is a MAY summary — a union over branches — so a callee that
+// returns its parameter only conditionally still reports that parameter as possibly returned.
+// The caller therefore suppresses the argument release on *every* path, which is correct on
+// the branch that hands the box back (issue #604) and leaks one block per call on the branches
+// that do not. The suppression site now emits a conditional release instead: after the call,
+// compare the returned payload against the argument payload and release the argument when they
+// differ. These tests pin both directions — the alias path must not double-release, and the
+// non-alias path must not leak.
+
+/// Regression test for issue #619: a conditional-return callee taking the NON-aliasing branch
+/// must release the suppressed argument box. Before the fix this leaked one boxed `$i + 1` per
+/// call (20 blocks / 800 bytes) while still printing the right answer.
+#[test]
+fn test_conditional_return_callee_non_alias_path_releases_arg() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe($i + 1, 0); $sum = $sum + $r; }
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "140\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the non-aliasing return path to release the suppressed argument box, got: {}",
+        out.stderr
+    );
+}
+
+/// Documents the container half of issue #619, which the conditional release deliberately does
+/// NOT cover: a fresh `[$i]` handed to a callee that drops it still leaks one container per
+/// call, through the long-standing `may_alias` suppression for array arguments.
+///
+/// The disambiguation compares two payloads as single pointers, which is only valid when both
+/// sides are boxed `Mixed`. Here the argument is a bare container while the result is a `Mixed`
+/// box that would *wrap* it, so the pointers differ even on the aliasing branch — comparing them
+/// would release a container the result owns and abort with `bad refcount`. Covering this shape
+/// needs the comparison to reach through the box to its payload field.
+///
+/// The assertion pins the current leak on purpose, so that the restriction stays deliberate and
+/// this test turns red the day the container path is covered.
+#[test]
+fn test_conditional_return_callee_container_arg_still_leaks_on_non_alias_path() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$n = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe([$i], 0); $n = $n + 1; }
+echo $n, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "20\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: live_blocks="),
+        "expected the container argument to still leak on the non-alias path, got: {}",
+        out.stderr
+    );
+}
+
+/// Regression test for issue #619: both branches exercised in one program. The conditional
+/// release must fire per call on the runtime path actually taken — releasing on the aliasing
+/// iterations would double-free (the #604 crash), skipping it on the others leaks.
+#[test]
+fn test_conditional_return_callee_mixed_paths_stay_balanced() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function maybe($x, $c) { if ($c) { return $x; } return 7; }
+$sum = 0;
+for ($i = 0; $i < 20; $i++) { $r = maybe($i + 1, $i % 2); $sum = $sum + $r; }
+echo $sum, "\n";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "180\n");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected alternating alias/non-alias paths to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
 /// Regression test for #601: `implode()` over an indexed array held in a boxed
 /// `mixed` cell must release the persisted string produced when each boxed element
 /// is cast to a string. The ternary widens the two literal arms to a boxed mixed

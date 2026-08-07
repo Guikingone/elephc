@@ -64,6 +64,62 @@ fn compile_web_with_flags(dir: &Path, source: &str, stem: &str, flags: &[&str]) 
     dir.join(stem)
 }
 
+
+/// A spawned web server, stopped completely when it is killed OR dropped.
+///
+/// # Why this exists
+///
+/// `Child::kill` sends SIGKILL. The `--web` binary is a PREFORK server, so the parent dies
+/// instantly without reaping anything and its worker is orphaned, still holding the port. A
+/// test that looked perfectly green therefore leaked one process per server it started, and a
+/// full run of this file starts dozens.
+///
+/// The teardown here asks the parent to terminate first (SIGTERM, which it can act on), then
+/// sweeps anything still listening on this server's address. The address comes from
+/// `free_port`, so it is unique to this server and the sweep can never reach another test's —
+/// or another session's — process.
+///
+/// [`Drop`] runs the same teardown, which is the half an explicit call cannot cover: a failing
+/// assertion panics straight past every `child.kill()` below, and that is exactly the path on
+/// which a leak goes unnoticed.
+struct ServerHandle {
+    /// The spawned parent process.
+    child: std::process::Child,
+    /// The `host:port` this server listens on, used to sweep its workers.
+    addr: String,
+}
+
+impl ServerHandle {
+    /// Stops the server and every worker it forked. Idempotent.
+    fn shutdown(&mut self) {
+        let _ = Command::new("kill").arg(self.child.id().to_string()).status();
+        std::thread::sleep(Duration::from_millis(100));
+        let _ = Command::new("pkill")
+            .arg("-f")
+            .arg(format!("--listen {}", self.addr))
+            .status();
+        let _ = self.child.kill();
+    }
+
+    /// Stops the server. Named `kill` so every call site below reads unchanged.
+    fn kill(&mut self) -> std::io::Result<()> {
+        self.shutdown();
+        Ok(())
+    }
+
+    /// Reaps the parent process.
+    fn wait(&mut self) -> std::io::Result<std::process::ExitStatus> {
+        self.child.wait()
+    }
+}
+
+impl Drop for ServerHandle {
+    /// Guarantees teardown even when a test panics before reaching its `kill()`.
+    fn drop(&mut self) {
+        self.shutdown();
+    }
+}
+
 /// Picks an ephemeral localhost port by binding :0 and releasing it.
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -83,7 +139,7 @@ fn wait_until_ready(addr: &str) {
 }
 
 /// Spawns the server binary on `addr`, waits until it accepts connections.
-fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
+fn spawn_server(bin: &Path, addr: &str, workers: &str) -> ServerHandle {
     let child = Command::new(bin)
         .arg("--listen")
         .arg(addr)
@@ -92,7 +148,10 @@ fn spawn_server(bin: &Path, addr: &str, workers: &str) -> std::process::Child {
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Spawns the server binary with extra environment variables set on the server
@@ -103,7 +162,7 @@ fn spawn_server_with_env(
     addr: &str,
     workers: &str,
     env: &[(&str, &str)],
-) -> std::process::Child {
+) -> ServerHandle {
     let mut cmd = Command::new(bin);
     cmd.arg("--listen").arg(addr).arg("--workers").arg(workers);
     for (k, v) in env {
@@ -111,11 +170,14 @@ fn spawn_server_with_env(
     }
     let child = cmd.spawn().expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Spawns the server with stderr redirected to a file for diagnostic assertions.
-fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> std::process::Child {
+fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> ServerHandle {
     let stderr = fs::File::create(stderr_path).expect("failed to create server stderr capture");
     let child = Command::new(bin)
         .arg("--listen")
@@ -126,7 +188,10 @@ fn spawn_server_with_stderr(bin: &Path, addr: &str, stderr_path: &Path) -> std::
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Sends one HTTP/1.1 GET and returns the full raw response text.
@@ -1223,7 +1288,7 @@ fn spawn_server_stderr_to_file(
     addr: &str,
     workers: &str,
     stderr_file: &Path,
-) -> std::process::Child {
+) -> ServerHandle {
     let f = fs::File::create(stderr_file).unwrap();
     let child = Command::new(bin)
         .arg("--listen")
@@ -1234,7 +1299,10 @@ fn spawn_server_stderr_to_file(
         .spawn()
         .expect("failed to spawn web server");
     wait_until_ready(addr);
-    child
+    ServerHandle {
+        child,
+        addr: addr.to_string(),
+    }
 }
 
 /// Verifies `error_log($msg, 3, $file)` appends each message verbatim to the

@@ -58,8 +58,8 @@ recovers array/typed returns from the home file's `check` hook and applies
 resolved are still emitted, but the internals page notes that no dedicated
 lowering was found.
 
-The 8 PHP language constructs that stay checker-resident
-(`isset`/`unset`/`empty`/`exit`/`die`/`buffer_len`/`buffer_free`/`buffer_new`)
+The 6 PHP language constructs that stay checker-resident
+(`isset`/`unset`/`empty`/`exit`/`die`/`buffer_new`)
 are not in the registry; they are added from a hand-curated table
 (`LANGUAGE_CONSTRUCTS`) in `extract.py`.
 

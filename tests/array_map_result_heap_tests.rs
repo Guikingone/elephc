@@ -5,6 +5,14 @@
 //! it (the uniform callable invoker's return boxing, `emit_boxed_invoker_return` in
 //! `src/codegen/runtime_callable_invoker.rs`).
 //!
+//! Called from:
+//! - `cargo test` through Rust's test harness.
+//!
+//! Key details:
+//! - Heap-debug assertions distinguish container ownership from callback-result ownership.
+//! - Fixtures use integer inputs so the separate descriptor string-argument leak does not
+//!   obscure the regressions pinned here.
+//!
 //! THE DEFECT THESE PIN. `array_map`'s EIR result slot is `Heap(Mixed)`, on purpose: a string or
 //! descriptor callback picks its result ABI at runtime, so the slot cannot be the concrete
 //! container type (see `eir_result_type` in `src/builtins/array/array_map.rs` — narrowing it

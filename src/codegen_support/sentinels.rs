@@ -19,6 +19,10 @@
 //! - x86_64 heap headers carry `X86_64_HEAP_MAGIC_HI32` ("ELPH") in the high 32 bits. Every
 //!   stamp must go through `x86_64_heap_kind_word`; every magic check must compare against
 //!   `X86_64_HEAP_MAGIC_HI32`. Local copies of either constant are forbidden.
+//! - The compact Throwable payload's creation-line slot lives here for the same reason as the
+//!   heap-header word: it is written by a dozen emitters across `codegen` and read by the runtime
+//!   emitters in `codegen_support::runtime`, which cannot see `codegen`. Every allocator of that
+//!   payload must write the slot, since `__rt_heap_alloc` recycles blocks without zeroing them.
 
 use std::cell::Cell;
 
@@ -94,13 +98,11 @@ pub(crate) fn emit_tagged_scalar_null(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
             super::abi::emit_load_int_immediate(emitter, "x0", NULL_SENTINEL);
-            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL));
-            // runtime tag 8 marks the tagged scalar as PHP null
+            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_NULL)); // runtime tag 8 marks the tagged scalar as PHP null
         }
         Arch::X86_64 => {
             super::abi::emit_load_int_immediate(emitter, "rax", NULL_SENTINEL);
-            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL));
-            // runtime tag 8 marks the tagged scalar as PHP null
+            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_NULL)); // runtime tag 8 marks the tagged scalar as PHP null
         }
     }
 }
@@ -110,12 +112,10 @@ pub(crate) fn emit_tagged_scalar_null(emitter: &mut Emitter) {
 pub(crate) fn emit_tagged_scalar_from_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_INT));
-            // runtime tag 0 marks the tagged scalar payload as an int
+            emitter.instruction(&format!("mov x1, #{}", TAGGED_SCALAR_TAG_INT)); // runtime tag 0 marks the tagged scalar payload as an int
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_INT));
-            // runtime tag 0 marks the tagged scalar payload as an int
+            emitter.instruction(&format!("mov rdx, {}", TAGGED_SCALAR_TAG_INT)); // runtime tag 0 marks the tagged scalar payload as an int
         }
     }
 }
@@ -222,10 +222,10 @@ pub(crate) fn emit_float_null_sentinel(emitter: &mut Emitter) {
     super::abi::emit_load_int_immediate(emitter, scratch, NULL_SENTINEL);
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction(&format!("fmov d0, {}", scratch));               // reinterpret the in-band null sentinel word as the float miss marker
+            emitter.instruction(&format!("fmov d0, {}", scratch));              // reinterpret the in-band null sentinel word as the float miss marker
         }
         Arch::X86_64 => {
-            emitter.instruction(&format!("movq xmm0, {}", scratch));             // reinterpret the in-band null sentinel word as the float miss marker
+            emitter.instruction(&format!("movq xmm0, {}", scratch));            // reinterpret the in-band null sentinel word as the float miss marker
         }
     }
 }
@@ -236,10 +236,10 @@ pub(crate) fn emit_float_null_sentinel(emitter: &mut Emitter) {
 pub(crate) fn emit_float_result_bits_to_int_result(emitter: &mut Emitter) {
     match emitter.target.arch {
         Arch::AArch64 => {
-            emitter.instruction("fmov x0, d0");                                  // move the float payload bits where the sentinel comparison can see them
+            emitter.instruction("fmov x0, d0");                                 // move the float payload bits where the sentinel comparison can see them
         }
         Arch::X86_64 => {
-            emitter.instruction("movq rax, xmm0");                               // move the float payload bits where the sentinel comparison can see them
+            emitter.instruction("movq rax, xmm0");                              // move the float payload bits where the sentinel comparison can see them
         }
     }
 }
@@ -262,6 +262,40 @@ pub(crate) const X86_64_HEAP_MAGIC_HI32: u64 = 0x454C5048;
 /// a silent no-op (issue #482).
 pub(crate) fn x86_64_heap_kind_word(low_bits: u32) -> u64 {
     (X86_64_HEAP_MAGIC_HI32 << 32) | u64::from(low_bits)
+}
+
+/// Byte offset of the creation line inside the 56-byte compact Throwable payload.
+///
+/// The payload is `class_id@0`, `message ptr@8`, `message len@16`, `code@24`, `previous@40`;
+/// offset 32 was the one word never written, so the line fits without growing the allocation or
+/// disturbing any existing reader.
+///
+/// PHP records the line where a Throwable is CONSTRUCTED, so every emitter that allocates this
+/// payload must write the slot — `__rt_heap_alloc` recycles blocks without zeroing them, and an
+/// unwritten slot hands `Throwable::getLine()` the previous owner's bytes. Emitters that cannot
+/// know the line write `0`, which the readers treat as "origin unknown" and omit.
+///
+/// Read by `Throwable::getLine()` in `lower_inst.rs` and by `__rt_report_uncaught_exception`.
+pub(crate) const THROWABLE_CREATION_LINE_OFFSET: u64 = 32;
+
+/// Clears the creation-line slot of a freshly allocated Throwable payload in `payload_reg`.
+///
+/// For the emitters that synthesize a Throwable with no user `new` behind it — an
+/// `ArithmeticError` from a division, a `ValueError` from a clamp, a `TypeError` from an argument
+/// check — there is no source line to record, and PHP would report the internal call site rather
+/// than anything these emitters know. Writing zero says "unknown" explicitly; leaving the slot
+/// untouched would let recycled heap bytes read back as a plausible-looking line number.
+pub(crate) fn emit_throwable_creation_line_unknown(emitter: &mut Emitter, payload_reg: &str) {
+    match emitter.target.arch {
+        Arch::AArch64 => emitter.instruction(&format!(
+            "str xzr, [{}, #{}]",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        )), // no user `new` behind this Throwable: the creation line is unknown
+        Arch::X86_64 => emitter.instruction(&format!(
+            "mov QWORD PTR [{} + {}], 0",
+            payload_reg, THROWABLE_CREATION_LINE_OFFSET
+        )), // no user `new` behind this Throwable: the creation line is unknown
+    }
 }
 
 #[cfg(test)]

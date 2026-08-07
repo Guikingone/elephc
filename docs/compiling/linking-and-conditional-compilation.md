@@ -10,8 +10,46 @@ which compile-time branches are taken.
 
 ## Linking native libraries
 
-When a program calls into C libraries through [extern/FFI](../beyond-php/extern.md),
-those libraries must be linked into the binary.
+When a program calls into C libraries through
+[extern/FFI](../beyond-php/extern.md), those libraries must be linked into the
+binary. Raw link flags, managed native packages, Composer source, Rust bridge
+crates, runtime capabilities, and toolchains are distinct mechanisms:
+
+| Mechanism | Use it for | Do not use it for |
+|---|---|---|
+| `elephc native` | Reviewed runtime/builtin-oriented C packages with exact source, lock, recipe, and cached static outputs | Arbitrary FFI libraries, PHP packages, Rust crates, or tool installation |
+| Composer/autoload | PHP source dependencies resolved ahead of time | C archives or Rust bridges |
+| Auto-detected bridge / `--with-NAME` | Optional Elephc Rust `staticlib` implementations and explicit runtime capabilities | Catalogued C sources themselves |
+| User/OS toolchain | `cc`, `ar`, `ranlib`, assembler, linker, Make, SDK, and cross tools | Project dependency locking |
+
+Raw `extern` linking is a separate user-supplied workflow layered onto the
+linker. In particular, DOOM and the SDL examples require a user-installed SDL
+plus `extern` and `--link`/`--link-path`; SDL is **not** installed or versioned
+by `elephc native`.
+
+### Managed native packages
+
+Curated C/C++ dependencies are declared and installed with `elephc native`, not
+with raw linker flags. During a final link, the compiler resolves logical
+requirements against the nearest project's `elephc.toml`, deterministic
+`elephc.lock`, and verified target/toolchain cache receipt. It passes exact
+static archive paths to the linker; compilation never downloads or builds them.
+
+The current catalog contains PCRE2 10.47 and zlib 1.3.2. Regex use links PCRE2's
+managed archives in the fixed shim/POSIX/8-bit order and has no production
+system-library fallback:
+
+```bash
+elephc native add pcre2
+elephc app.php
+```
+
+Declaring PCRE2 does not force it into a program that does not use regex. Exact
+managed archives remain compatible with Linux's static-link preference. zlib is
+the second exact pure-C recipe; it is available for curated runtime/builtin
+integration, not an automatic replacement for arbitrary `extern "z"` and `-lz`
+workflows. See [Native dependencies](native-dependencies.md) for the full
+workflow.
 
 ### `--link` / `-l`
 
@@ -43,9 +81,11 @@ elephc app.php --framework Cocoa --framework Metal
 
 `extern "libname" { ... }` blocks in source add their own `-l` flags
 automatically; the flags above are for libraries not already named in the source.
+They do not override or satisfy a missing managed-package requirement such as
+PCRE2.
 See [FFI & Extern](../beyond-php/extern.md).
 
-## Bridge crates and `--with-CRATE`
+## Bridge crates and `--with-NAME`
 
 Some optional features are implemented as Rust *bridge crates* (`staticlib`
 archives) that elephc links into the program: `pdo` (database access), `tls`
@@ -80,10 +120,31 @@ detected automatically. See [Eval](../php/eval.md) for language semantics and
 [Eval Runtime Architecture](../internals/eval-runtime.md) for the AOT/fallback
 decision and scope ABI.
 
+`--with-regex` is a runtime-capability flag rather than a Rust bridge flag.
+Dynamic eval source cannot be inspected for feature use, so the flag requests
+the ordinary regex runtime and managed PCRE2 archives, then registers that
+provider with Magician:
+
+```bash
+elephc native add pcre2
+elephc --with-regex app.php
+```
+
+Without it, dynamic eval still compiles and runs non-regex code, but `preg_*`
+names are unavailable there and calls fail at runtime. A statically visible
+regex use enables the same provider automatically. Declaring PCRE2 without
+either trigger does not link it.
+
 `--with-web` is an alias for [`--web`](../beyond-php/web.md) (the full server
-mode, which owns the program entry point). An unknown crate name is rejected with
-the list of valid crates. Forcing a crate increases binary size, since the whole
-archive is included.
+mode, which owns the program entry point). An unknown capability name is
+rejected with the list of valid names. Forcing a bridge increases binary size,
+since the whole archive is included.
+
+Bridge crates are Elephc's optional Rust workspace components. They are not
+installed or versioned by `elephc native`. Runtime-capability flags may require
+a separately declared managed package, as `--with-regex` requires `pcre2`;
+the flag itself does not install it. Composer dependencies are PHP source
+handled by the compile-time autoload pipeline and remain separate.
 
 ## Heap size
 

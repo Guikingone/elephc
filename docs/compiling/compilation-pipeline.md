@@ -27,10 +27,14 @@ Physical source (.php or .lfc)
   -> tz-prelude         inject the timezone-introspection prelude when used
   -> list-id-prelude    inject the DateTimeZone identifier-list prelude when used
   -> var-export-prelude inject the var_export prelude when used
+  -> opcache-prelude    inject the OPcache API prelude when used
   -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
+  -> hash-prelude       inject the incremental-hashing prelude when used
   -> web-prelude        inject the web runtime prelude with --web
+  -> version-prelude    inject referenced PHP version-surface helpers
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
+  -> opcache-manifest-bake complete the OPcache script manifest after autoloading
   -> opt-fold           AST constant folding
   -> typecheck          Type checker / warnings
   -> exports-scan       collect #[Export] functions (cdylib)
@@ -65,12 +69,14 @@ Physical source (.php or .lfc)
 - **conditional compilation** — `ifdef` branches are resolved using the symbols
   passed with [`--define`](linking-and-conditional-compilation.md#conditional-compilation).
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
-  resolved, declarations are discovered, demand-loaded PHP preludes for PDO,
+  resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  and image processing are injected only when referenced, the web runtime
-  prelude is injected with `--web`, and namespace/`use` rules rewrite
-  references to fully-qualified names. Autoloading is wired in around these
-  steps.
+  OPcache, image processing, incremental hashing, and PHP version helpers are
+  injected only when referenced. The web runtime prelude is injected with
+  `--web`, and namespace/`use` rules rewrite references to fully-qualified
+  names. Autoloading is wired in around these steps; after autoload insertion,
+  **opcache-manifest-bake** replaces the preliminary OPcache script manifest
+  with the complete entry/include/autoload file set before constant folding.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
   validates types and emits warnings.
 
@@ -102,14 +108,20 @@ behind a flag.
 - **runtime-cache** — the hand-written runtime is assembled once and cached in
   `~/.cache/elephc/`, then reused across compiles. See
   [The Runtime](../internals/the-runtime.md).
-- **codegen-ir** — EIR is lowered to target assembly through the default backend.
+- **codegen** — EIR is lowered to target assembly through the default backend.
   See [The Code Generator](../internals/the-codegen.md).
 
 ## Tail: assemble and link
 
-The generated assembly is written out, assembled into an object file, and linked
-together with the cached runtime object (and any
-[extra libraries](linking-and-conditional-compilation.md)) into the final binary.
+The generated assembly is written out and assembled into an object file. Only
+on a final-link path, logical [managed native
+requirements](native-dependencies.md) are resolved read-only from the project
+lock and verified cache receipts. Those exact archives, the cached runtime
+object, bridge inputs, and any [extra
+libraries](linking-and-conditional-compilation.md) become one typed ordered link
+plan for the final binary. This resolution does not install or repair packages
+and is folded into the untimed setup immediately before the `assemble`/`link`
+timing labels.
 
 ## Inspecting intermediate stages
 

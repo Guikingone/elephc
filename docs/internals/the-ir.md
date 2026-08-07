@@ -611,7 +611,7 @@ closure bodies lower as normal `Function` values.
 | `PipeCall` | value, callable | callable return | evaluates value before callable invocation |
 
 Call argument rules are not reimplemented in each opcode. EIR lowering consumes
-the shared semantic planner in `src/types/call_args.rs` and preserves the
+the shared semantic planner in `src/types/call_args/` and preserves the
 observable order:
 
 1. Evaluate arguments in PHP source order.
@@ -678,9 +678,12 @@ outside PHP's heap.
 | `GeneratorYieldFrom` | iterable | yielded values | iterator/generator effects |
 | `GeneratorReturn` | value | `Void` | writes generator return state |
 
-`Yield` and `YieldFrom` are not emitted through the normal expression result
-path today. EIR must model them through generator state-machine lowering rather
-than ordinary expression instructions.
+`Yield` and `YieldFrom` are ordinary EIR instructions inside a generator body.
+The backend emits that body as a normal Mixed-returning function on a dedicated
+stackful coroutine stack. `GeneratorYield` records the boxed key/value and calls
+`__rt_gen_suspend`; resuming supplies the instruction result. `GeneratorYieldFrom`
+drives a generator delegate through `__rt_gen_delegate`, while array delegation
+is expanded into an iterator loop during EIR lowering.
 
 ### Include and Resolver Artifacts
 
@@ -1339,8 +1342,8 @@ instructions, but they must be represented in metadata or consumed by lowering.
 | `ScopedConstantAccess` | Resolve class constant or enum case metadata; emit scalar/object result. |
 | `NewScopedObject` | Allocate `self`, `parent`, or late-static object and call constructor. |
 | `MagicConstant` | Must not reach EIR; validator rejects it because magic constants are lowered earlier. |
-| `Yield` | Lower through generator state-machine path; emits `GeneratorYield`/`GeneratorSuspend`. |
-| `YieldFrom` | Lower iterable forwarding through generator state-machine path. |
+| `Yield` | Emit `GeneratorYield`; codegen records the key/value and suspends the stackful coroutine through `__rt_gen_suspend`. |
+| `YieldFrom` | Emit `GeneratorYieldFrom` for generator delegation; array delegation is expanded into an iterator loop that re-yields each entry. |
 
 ### Binary Operators
 

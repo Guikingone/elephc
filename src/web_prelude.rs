@@ -38,15 +38,35 @@ pub enum PhpVersion {
 }
 
 impl PhpVersion {
-    /// Parses one of the maintained `major.minor` spellings.
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "8.2" => Some(Self::Php82),
-            "8.3" => Some(Self::Php83),
-            "8.4" => Some(Self::Php84),
-            "8.5" => Some(Self::Php85),
-            _ => None,
+    /// Every maintained profile, oldest first.
+    ///
+    /// This is the set `--php-version` ranges over, and therefore the set any claim about
+    /// "profile-independent behavior" quantifies over. Adding a profile here is what makes
+    /// `php_profile::sensitivity`'s invariance guards re-check themselves against it.
+    pub const ALL: &'static [Self] = &[Self::Php82, Self::Php83, Self::Php84, Self::Php85];
+
+    /// Returns the `major.minor` spelling `--php-version` accepts for this profile.
+    ///
+    /// This is the profile's NAME, not a version string: `PHP_VERSION` reports `8.5.0` where
+    /// this reports `8.5` (see [`Self::version_string`] for the patch-is-zero rule).
+    pub const fn spelling(self) -> &'static str {
+        match self {
+            Self::Php82 => "8.2",
+            Self::Php83 => "8.3",
+            Self::Php84 => "8.4",
+            Self::Php85 => "8.5",
         }
+    }
+
+    /// Parses one of the maintained `major.minor` spellings.
+    ///
+    /// Derived from [`Self::ALL`] rather than a second hand-written list, so a new profile is
+    /// accepted by the CLI the moment it joins the set.
+    pub fn parse(value: &str) -> Option<Self> {
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|profile| profile.spelling() == value)
     }
 
     /// Returns PHP's numeric `PHP_VERSION_ID` representation for this profile.

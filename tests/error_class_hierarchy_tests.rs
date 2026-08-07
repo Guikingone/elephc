@@ -523,12 +523,14 @@ fn user_subclass_of_a_new_error_class_is_catchable_by_its_builtin_ancestors() {
 /// An UNCAUGHT builtin Error must produce the SAME fatal shape elephc already produces for
 /// an uncaught `Exception`.
 ///
-/// elephc's userland-`throw` unwinder emits a generic `Fatal error: uncaught exception` and
-/// exits non-zero — it does NOT reproduce reference PHP's
-/// `PHP Fatal error:  Uncaught TypeError: msg in file:line` with a stack trace. That gap is
-/// PRE-EXISTING and identical for `Exception`; the requirement here was to match the shape
-/// elephc already has, so the `Exception` row is the control that proves the new classes did
-/// not regress or fork it.
+/// The unwinder now NAMES the class and its message — `Fatal error: Uncaught TypeError: boom` —
+/// so each row asserts its own class rather than one generic string. That is what this test
+/// originally wanted: its earlier revision asserted a shared `Fatal error: uncaught exception`
+/// precisely because no class name was available, which meant a row could have thrown the WRONG
+/// class and still passed. The `Exception` row stays as the control.
+///
+/// Reference PHP additionally appends ` in <file>:<line>` and a stack trace; elephc emits
+/// everything up to that suffix, so these assert a prefix (see issue #660).
 #[test]
 fn uncaught_new_error_classes_use_the_existing_uncaught_fatal_shape() {
     for (stem, class) in [
@@ -542,8 +544,8 @@ fn uncaught_new_error_classes_use_the_existing_uncaught_fatal_shape() {
         let src = format!("<?php throw new \\{}('boom');", class);
         let out = run_binary_expecting_fatal(&compile(&dir, &src, "app"));
         assert!(
-            out.contains("Fatal error: uncaught exception"),
-            "uncaught {class} must use elephc's established uncaught-fatal shape, got: {out:?}"
+            out.contains(&format!("Fatal error: Uncaught {class}: boom")),
+            "uncaught {class} must name its own class and message, got: {out:?}"
         );
     }
 }

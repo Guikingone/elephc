@@ -869,3 +869,302 @@ echo "still running\n";
          still running\n",
     );
 }
+
+/// Verifies every PHP string context for an OPEN resource renders `Resource id #N`.
+///
+/// Captured from PHP 8.5.6 (`php -d xdebug.mode=off`) running this exact program.
+///
+/// Only the last line ever worked: `print`/`echo` of a bare resource is lowered to
+/// `__rt_resource_write_stdout`, which produces no VALUE. Every form that needs a
+/// string value went through `__rt_mixed_cast_string`, which had no tag-9 arm and so
+/// fell through to its null/unsupported tail — all four printed the EMPTY string. The
+/// resource arm added to that helper is what makes the five agree.
+#[test]
+fn every_string_context_renders_an_open_resource_like_php() {
+    let source = r#"<?php
+$r = fopen("first.txt", "r");
+echo "interp:$r\n";
+echo "concat:" . $r . "\n";
+echo "cast:" . (string) $r . "\n";
+echo "strval:" . strval($r) . "\n";
+echo "print:";
+print $r;
+echo "\n";
+"#;
+    assert_program_output(
+        "elephc_res_str_open",
+        source,
+        "interp:Resource id #5\nconcat:Resource id #5\ncast:Resource id #5\n\
+         strval:Resource id #5\nprint:Resource id #5\n",
+    );
+}
+
+/// Verifies a CLOSED resource keeps rendering its ORIGINAL id, and keeps it out of the
+/// next `fopen()`'s way.
+///
+/// Captured from PHP 8.5.6 running this exact program: php-src does not disturb
+/// `zend_resource.handle` when a resource is closed, so the closed handle still prints
+/// `Resource id #5`, `get_resource_id()` still answers 5, and the next stream is 6.
+///
+/// elephc's `fclose` stamps a release sentinel into the Mixed box so scope cleanup
+/// cannot close the descriptor twice. That sentinel used to be a bare `-1`, which
+/// erased the only key the resource-id registry had: every display of the closed
+/// handle missed the table, MINTED a fresh id, printed `Resource id #6`, and left the
+/// next `fopen()` at 7. The sentinel now carries the id as `-id`.
+#[test]
+fn a_closed_resource_keeps_the_id_it_was_created_with() {
+    let source = r#"<?php
+$r = fopen("first.txt", "r");
+fclose($r);
+echo "interp:$r\n";
+echo "concat:" . $r . "\n";
+echo "cast:" . (string) $r . "\n";
+echo "strval:" . strval($r) . "\n";
+echo "print:";
+print $r;
+echo "\n";
+echo "id:", get_resource_id($r), "\n";
+$s = fopen("second.txt", "r");
+echo "next:", get_resource_id($s), "\n";
+"#;
+    assert_program_output(
+        "elephc_res_str_closed",
+        source,
+        "interp:Resource id #5\nconcat:Resource id #5\ncast:Resource id #5\n\
+         strval:Resource id #5\nprint:Resource id #5\nid:5\nnext:6\n",
+    );
+}
+
+/// Verifies the rendered resource string behaves like any other PHP string once it is
+/// produced: joinable, searchable, measurable, and safe to hold in an array.
+///
+/// Captured from PHP 8.5.6 running this exact program. `implode()` is the load-bearing
+/// case for OWNERSHIP: it is the ONLY caller that releases what `__rt_mixed_cast_string`
+/// returns, through `__rt_heap_free`. The resource arm returns BORROWED `_concat_buf`
+/// scratch, which that helper ignores because it lies outside the live heap — so this
+/// program must neither leak nor free storage it does not own. `str_replace` and
+/// `strtoupper` additionally prove the returned bytes survive a second pass over the
+/// concat buffer instead of being overwritten by the next formatter.
+#[test]
+fn a_rendered_resource_string_survives_normal_string_operations() {
+    let source = r#"<?php
+$r = fopen("first.txt", "r");
+$a = [$r, $r];
+echo implode(",", $a), "\n";
+echo str_replace("id #", "ID#", "$r"), "\n";
+echo strlen("$r"), "\n";
+echo strtoupper((string) $r), "\n";
+$m = ["k" => $r];
+echo $m["k"] . "!", "\n";
+"#;
+    assert_program_output(
+        "elephc_res_str_ctx",
+        source,
+        "Resource id #5,Resource id #5\nResource ID#5\n14\nRESOURCE ID #5\nResource id #5!\n",
+    );
+}
+
+/// Verifies a CLOSED resource renders its PHP type as `Unknown`, for all three closers.
+///
+/// Captured from PHP 8.5.6 running this exact program with `php -d xdebug.mode=off`; the
+/// expectation below is that capture byte for byte. PHP renames a closed resource to
+/// `Unknown` in BOTH `var_dump()` and `get_resource_type()`, and it does so identically
+/// for `fclose`, `pclose` and `closedir` — measured, not assumed: `opendir()` under 8.5
+/// reports the OPEN type `stream` (not `dir`), and all three collapse to the one name.
+///
+/// elephc baked the type name in as a compile-time literal at both display sites, so a
+/// closed handle kept advertising `stream` forever. The name now comes from
+/// `__rt_resource_type_name`, which reads the close state out of the sign bit of the
+/// native payload — the same `-id` sentinel `fclose`/`pclose`/`closedir` already stamp.
+///
+/// The last three lines are the REGRESSION GUARD for the id fix this must not disturb:
+/// the closed handles keep ids 5, 6 and 7, `get_resource_id()` still answers 5 for the
+/// closed stream, and the fourth `fopen()` still gets 8 rather than reusing 5.
+#[test]
+fn a_closed_resource_reports_the_type_unknown_for_every_closer() {
+    let source = r#"<?php
+$s = fopen("first.txt", "r");
+var_dump($s);
+var_dump(get_resource_type($s));
+fclose($s);
+var_dump($s);
+var_dump(get_resource_type($s));
+var_dump(get_resource_id($s));
+
+$p = popen("exit 0", "r");
+var_dump($p);
+var_dump(get_resource_type($p));
+pclose($p);
+var_dump($p);
+var_dump(get_resource_type($p));
+
+$d = opendir(".");
+var_dump($d);
+var_dump(get_resource_type($d));
+closedir($d);
+var_dump($d);
+var_dump(get_resource_type($d));
+
+$next = fopen("first.txt", "r");
+var_dump($next);
+var_dump(get_resource_type($next));
+fclose($next);
+"#;
+    assert_program_output(
+        "elephc_res_type_closed",
+        source,
+        "resource(5) of type (stream)\nstring(6) \"stream\"\n\
+         resource(5) of type (Unknown)\nstring(7) \"Unknown\"\nint(5)\n\
+         resource(6) of type (stream)\nstring(6) \"stream\"\n\
+         resource(6) of type (Unknown)\nstring(7) \"Unknown\"\n\
+         resource(7) of type (stream)\nstring(6) \"stream\"\n\
+         resource(7) of type (Unknown)\nstring(7) \"Unknown\"\n\
+         resource(8) of type (stream)\nstring(6) \"stream\"\n",
+    );
+}
+
+/// The type-name resolution must not allocate, retain or free anything.
+///
+/// Both names are persistent `.data` literals (`_resource_type_stream` and
+/// `_resource_type_unknown`), so the `release` the EIR already emits against a
+/// `get_resource_type()` result stays the no-op it has always been against a `.data`
+/// pointer. Returning a runtime-allocated string instead would be the double-free vector,
+/// and `--heap-debug` is the instrument that would see it: the loop below opens, reads the
+/// type, closes, and reads it again many times over.
+#[test]
+fn resolving_a_resource_type_name_allocates_nothing() {
+    let source = r#"<?php
+$n = 0;
+for ($i = 0; $i < 64; $i++) {
+    $r = fopen("first.txt", "r");
+    $n += strlen(get_resource_type($r));
+    fclose($r);
+    $n += strlen(get_resource_type($r));
+}
+echo $n, "\n";
+"#;
+    let dir = make_test_dir("elephc_res_type_heap");
+    write_fixture_files(&dir);
+    let bin = compile(&dir, source, "elephc_res_type_heap", &["--heap-debug"]);
+    let output = Command::new(&bin)
+        .current_dir(&dir)
+        .output()
+        .expect("failed to run compiled binary");
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
+    assert!(
+        output.status.success(),
+        "compiled binary exited non-zero ({:?}):\n{stderr}",
+        output.status.code()
+    );
+    // 64 open reads of "stream" (6) plus 64 closed reads of "Unknown" (7).
+    assert_eq!(stdout, "832\n", "program stdout diverged:\n{stderr}");
+    assert!(
+        stderr.contains("live_blocks=0"),
+        "heap blocks leaked:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("leak summary: clean"),
+        "heap summary is not clean:\n{stderr}"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Returns the assembly slice between two labels, including the start and excluding the end.
+fn asm_between_labels<'a>(asm: &'a str, start_label: &str, end_label: &str) -> &'a str {
+    let start = asm
+        .find(start_label)
+        .unwrap_or_else(|| panic!("missing start label {start_label}"));
+    let tail = &asm[start..];
+    let end = tail
+        .find(end_label)
+        .unwrap_or_else(|| panic!("missing end label {end_label} after {start_label}"));
+    &tail[..end]
+}
+
+/// Asserts that every assembly needle appears in the provided order.
+fn assert_asm_contains_ordered(asm: &str, needles: &[&str]) {
+    let mut cursor = 0;
+    for needle in needles {
+        let relative = asm[cursor..].find(needle).unwrap_or_else(|| {
+            panic!("missing assembly line `{needle}` after byte {cursor}:\n{asm}")
+        });
+        cursor += relative + needle.len();
+    }
+}
+
+/// Pins `__rt_resource_type_name` inside the REAL generated runtime, on both targets.
+///
+/// The end-to-end tests above can only run on the host, and `--emit-asm --target
+/// linux-x86_64` cannot complete on an aarch64 host (the runtime cache is assembled with
+/// the host `as`, which rejects `xor eax, eax`). Generating the runtime text directly is
+/// therefore the mechanism that gives the x86_64 body real coverage here, and it proves
+/// something the emitter unit tests cannot: that the helper is actually REGISTERED in
+/// `emit_runtime` and that the two literals it names exist in the data section.
+#[test]
+fn the_runtime_defines_the_resource_type_name_helper_on_both_targets() {
+    for (target_name, closed_label, open_needles, closed_needles, end_label) in [
+        (
+            "macos-aarch64",
+            "L__rt_resource_type_name_closed:",
+            vec![
+                "tbnz x0, #63, L__rt_resource_type_name_closed",
+                "adrp x1, _resource_type_stream@PAGE",
+                "add x1, x1, _resource_type_stream@PAGEOFF",
+                "mov x2, #6",
+                "ret",
+            ],
+            vec![
+                "adrp x1, _resource_type_unknown@PAGE",
+                "add x1, x1, _resource_type_unknown@PAGEOFF",
+                "mov x2, #7",
+                "ret",
+            ],
+            "__rt_resource_write_stdout",
+        ),
+        (
+            "linux-x86_64",
+            "__rt_resource_type_name_closed_x86:",
+            vec![
+                "test rax, rax",
+                "js __rt_resource_type_name_closed_x86",
+                "lea rax, [rip + _resource_type_stream]",
+                "mov rdx, 6",
+                "ret",
+            ],
+            vec![
+                "lea rax, [rip + _resource_type_unknown]",
+                "mov rdx, 7",
+                "ret",
+            ],
+            "__rt_resource_write_stdout",
+        ),
+    ] {
+        let target = elephc::codegen::platform::Target::parse(target_name).expect("valid target");
+        let runtime_asm = elephc::codegen::generate_runtime_with_features(
+            8_388_608,
+            target,
+            elephc::codegen::RuntimeFeatures::none(),
+        );
+        let open_arm = asm_between_labels(&runtime_asm, "__rt_resource_type_name:", closed_label);
+        assert_asm_contains_ordered(open_arm, &open_needles);
+        assert!(
+            !open_arm.contains("_resource_type_unknown"),
+            "the open arm must not name the closed literal ({target_name}):\n{open_arm}"
+        );
+        let closed_arm = asm_between_labels(&runtime_asm, closed_label, end_label);
+        assert_asm_contains_ordered(closed_arm, &closed_needles);
+        assert!(
+            !closed_arm.contains("_resource_type_stream"),
+            "the closed arm must not name the open literal ({target_name}):\n{closed_arm}"
+        );
+        assert!(
+            runtime_asm.contains("_resource_type_stream:\n    .ascii \"stream\""),
+            "the open type-name literal must exist ({target_name})"
+        );
+        assert!(
+            runtime_asm.contains("_resource_type_unknown:\n    .ascii \"Unknown\""),
+            "the closed type-name literal must exist ({target_name})"
+        );
+    }
+}

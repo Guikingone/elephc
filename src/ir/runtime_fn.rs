@@ -1030,7 +1030,21 @@ impl RuntimeFnId {
                 | RuntimeFnId::Explode
                 | RuntimeFnId::Fgetcsv
                 | RuntimeFnId::FileGetContents
+                // `getcwd()` takes NO arguments, so its result cannot alias one by
+                // construction; `__rt_getcwd` copies the kernel's buffer out through
+                // `__rt_str_persist`. The default `MayAliasArguments` bucket made
+                // `value_is_scratch_string` treat that owned block as concat scratch and skip
+                // its release, leaking one block per call — measured unbounded, 10 calls left
+                // 10 live blocks, so a `--web` worker calling it per request grows forever.
+                | RuntimeFnId::Getcwd
                 | RuntimeFnId::IteratorToArray
+                // `json_encode()` builds its text in fresh storage and persists it; the result
+                // is new bytes, never a slice of the encoded value. Same leak shape as the
+                // three siblings already documented below.
+                | RuntimeFnId::JsonEncode
+                // `microtime()` formats into fresh storage from the clock; it has no string
+                // argument to alias. Its float mode is non-heap and unaffected.
+                | RuntimeFnId::Microtime
                 | RuntimeFnId::ObGetClean
                 | RuntimeFnId::ObGetContents
                 | RuntimeFnId::ObGetFlush
@@ -1058,6 +1072,13 @@ impl RuntimeFnId {
                 // temporary alive for the boxed result's whole lifetime, which leaked one
                 // block per iteration for `strstr($h, $cond ? "a" : "b")` in a loop.
                 | RuntimeFnId::Strstr
+                // `tempnam(directory, prefix)` returns the generated path that `mkstemp()`
+                // wrote into a buffer `__rt_tempnam` allocated itself, then copied out with
+                // `__rt_str_persist` — it is neither of its two argument strings. This was the
+                // declared debt; measuring it showed the leak is PER CALL, not the reported
+                // constant 48 bytes, and that `sys_get_temp_dir()` and `tmpfile()` — named
+                // alongside it in that report — are both clean.
+                | RuntimeFnId::Tempnam
                 | RuntimeFnId::ZvalUnpack
         ) {
             BuiltinResultOwnership::Fresh
