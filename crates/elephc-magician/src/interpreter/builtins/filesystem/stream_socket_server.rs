@@ -10,7 +10,15 @@
 eval_builtin! {
     name: "stream_socket_server",
     area: Filesystem,
-    params: [address],
+    params: [
+        address,
+        error_code: by_ref = EvalBuiltinDefaultValue::Null,
+        error_message: by_ref = EvalBuiltinDefaultValue::Null,
+        flags = EvalBuiltinDefaultValue::Int(12),
+        context = EvalBuiltinDefaultValue::Null,
+        peername = EvalBuiltinDefaultValue::Null
+    ],
+    by_ref: [error_code, error_message],
     direct: Filesystem,
     values: Filesystem,
 }

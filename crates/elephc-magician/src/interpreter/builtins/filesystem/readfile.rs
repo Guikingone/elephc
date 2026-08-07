@@ -10,7 +10,11 @@
 eval_builtin! {
     name: "readfile",
     area: Filesystem,
-    params: [filename],
+    params: [
+        filename,
+        use_include_path = EvalBuiltinDefaultValue::Bool(false),
+        context = EvalBuiltinDefaultValue::Null
+    ],
     direct: Filesystem,
     values: Filesystem,
 }
