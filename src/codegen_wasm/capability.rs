@@ -5315,6 +5315,26 @@ fn property_write_shape_issue(
     {
         return None;
     }
+    // An object slot holds a POINTER, whatever the class, so a genuine subtype stores into it
+    // unchanged: `public Iterator $it;` assigned a `RecursiveIterator` implementor is ordinary
+    // PHP. What is checked is that the source really is one — by extension or interface — not
+    // that the two names match, which turned away every interface-typed property.
+    let object_subtype = match (&source_repr, property_type) {
+        (PhpType::Object(source_class), PhpType::Object(slot_class)) => {
+            source_class == slot_class
+                || class_extends(module, source_class, slot_class)
+                || class_implements_interface(module, source_class, slot_class)
+                // The SOURCE may itself be an interface — `RecursiveIterator` assigned into an
+                // `Iterator` slot is interface-to-interface, and neither class walk sees it
+                // because an interface has no entry in `class_infos`.
+                || (module.interface_infos.contains_key(source_class)
+                    && interface_extends(module, source_class, slot_class))
+        }
+        _ => false,
+    };
+    if object_subtype && transfer::validate_storage_pair(source_ir, source_php).is_ok() {
+        return None;
+    }
     if &source_repr != property_type
         || transfer::validate_storage_pair(source_ir, source_php).is_err()
     {
@@ -5575,6 +5595,22 @@ pub(super) fn class_implements_interface(
             return true;
         }
         current = class_info.parent.clone();
+    }
+    false
+}
+
+/// Returns whether `class_name` transitively extends `ancestor`.
+pub(super) fn class_extends(module: &Module, class_name: &str, ancestor: &str) -> bool {
+    let mut current = module.class_infos.get(class_name).and_then(|c| c.parent.clone());
+    let mut visited = HashSet::new();
+    while let Some(name) = current {
+        if name == ancestor {
+            return true;
+        }
+        if !visited.insert(name.clone()) {
+            return false;
+        }
+        current = module.class_infos.get(&name).and_then(|c| c.parent.clone());
     }
     false
 }
