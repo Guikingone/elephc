@@ -188,6 +188,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     NumberFormat,
     /// Dispatches `ord(...)`.
     Ord,
+    /// Dispatches `parse_url(...)`.
+    ParseUrl,
     /// Dispatches `pi()`.
     Pi,
     /// Dispatches `pow(...)`.
@@ -441,6 +443,7 @@ impl EvalDirectHook {
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
             Self::Ord => eval_builtin_ord(args, context, scope, values),
+            Self::ParseUrl => eval_builtin_parse_url(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
             Self::Printf => eval_builtin_printf(args, context, scope, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),

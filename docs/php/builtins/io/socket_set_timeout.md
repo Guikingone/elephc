@@ -23,7 +23,7 @@ Set timeout period on a socket stream (alias of stream_set_timeout).
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/socket_set_timeout.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/socket_set_timeout.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

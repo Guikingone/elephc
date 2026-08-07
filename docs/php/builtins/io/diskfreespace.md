@@ -21,7 +21,7 @@ Returns available space in filesystem or disk partition (alias of disk_free_spac
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/diskfreespace.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/diskfreespace.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

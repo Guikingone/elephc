@@ -22,7 +22,7 @@ Set blocking mode on a socket stream (alias of stream_set_blocking).
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/socket_set_block.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/socket_set_block.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

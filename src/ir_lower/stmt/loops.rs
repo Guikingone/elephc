@@ -39,6 +39,7 @@ pub(super) fn lower_while(
         break_block: exit,
         continue_block: header,
         cleanup: None,
+        source_pin: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -65,6 +66,7 @@ pub(super) fn lower_do_while(
         break_block: exit,
         continue_block: cond_block,
         cleanup: None,
+        source_pin: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -132,6 +134,7 @@ pub(super) fn lower_for(
         break_block: exit,
         continue_block: update_block,
         cleanup: None,
+        source_pin: None,
     });
     lower_block(ctx, body);
     ctx.loop_stack.pop();
@@ -145,4 +148,3 @@ pub(super) fn lower_for(
     ctx.builder.position_at_end(exit);
     ctx.clear_static_callable_locals();
 }
-

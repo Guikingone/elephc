@@ -23,7 +23,7 @@ Register a URL wrapper implemented as a PHP class (alias of stream_wrapper_regis
 ## Availability
 
 - **Compiled (AOT)**: supported by the Elephc code generator.
-- **`eval()` (magician interpreter)**: not available inside eval'd code.
+- **`eval()` (magician interpreter)**: supported — declarative interpreter builtin ([`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_register_wrapper.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_register_wrapper.rs)).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 

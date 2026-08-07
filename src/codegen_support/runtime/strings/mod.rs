@@ -81,6 +81,7 @@ mod trim_mask;
 mod resource_to_string;
 mod resource_type_name;
 mod resource_write_stdout;
+mod parse_url;
 
 pub use itoa::emit_itoa;
 /// Emit integer-to-string conversion helper.
@@ -226,3 +227,5 @@ pub use resource_to_string::emit_resource_to_string;
 pub use resource_type_name::emit_resource_type_name;
 /// Emit the resource type-name resolver (`stream` when open, `Unknown` once closed).
 pub use resource_write_stdout::emit_resource_write_stdout;
+/// Emit the PHP-compatible URL component scanner.
+pub use parse_url::emit_parse_url;

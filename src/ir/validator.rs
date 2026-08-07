@@ -500,6 +500,23 @@ fn validate_opcode_rules(
         | ArrayGetMixedKeySilent => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Array, "Heap(Array)")
         }
+        // The fetch-for-write element read is emitted from exactly one site (a by-reference
+        // `foreach` source, issue #580) and writes the copy-on-write split back into the
+        // receiver's element slot, so its operand shape is pinned tighter than the shared read
+        // arm above: an indexed receiver and an already int-coerced key, never a runtime-tagged
+        // one.
+        ArrayGetForWrite => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;
+            check_operand_type(function, inst_id, inst, 1, IrType::I64, "I64")
+        }
+        // The hash counterpart of the fetch-for-write read, emitted from the same single site.
+        // Its key stays in whatever form `hash_get` accepts (string or integer) rather than being
+        // int-coerced, because the hash lookup normalizes the key itself.
+        HashGetForWrite => {
+            check_count(inst_id, inst, 2, "2")?;
+            check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Hash), "Heap(Hash)")
+        }
         LoadArrayElemRefCell => {
             check_count(inst_id, inst, 2, "2")?;
             check_operand_type(function, inst_id, inst, 0, IrType::Heap(IrHeapKind::Array), "Heap(Array)")?;

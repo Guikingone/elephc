@@ -168,7 +168,7 @@ sidebar:
 | [`umask()`](./builtins/filesystem/umask.md) | `(int $mask = null): int` | `int` | ✓ | ✓ |
 | [`unlink()`](./builtins/filesystem/unlink.md) | `(string $filename): bool` | `bool` | ✓ | ✓ |
 | [`closedir()`](./builtins/io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
-| [`diskfreespace()`](./builtins/io/diskfreespace.md) | `(string $directory): float` | `float` | ✓ | — |
+| [`diskfreespace()`](./builtins/io/diskfreespace.md) | `(string $directory): float` | `float` | ✓ | ✓ |
 | [`fclose()`](./builtins/io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fdatasync()`](./builtins/io/fdatasync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`feof()`](./builtins/io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
@@ -217,12 +217,12 @@ sidebar:
 | [`readdir()`](./builtins/io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./builtins/io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`rewinddir()`](./builtins/io/rewinddir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
-| [`set_file_buffer()`](./builtins/io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | — |
-| [`set_socket_blocking()`](./builtins/io/set_socket_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | — |
-| [`socket_get_status()`](./builtins/io/socket_get_status.md) | `(mixed $stream): mixed` | `mixed` | ✓ | — |
-| [`socket_set_block()`](./builtins/io/socket_set_block.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | — |
-| [`socket_set_blocking()`](./builtins/io/socket_set_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | — |
-| [`socket_set_timeout()`](./builtins/io/socket_set_timeout.md) | `(mixed $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | — |
+| [`set_file_buffer()`](./builtins/io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | ✓ |
+| [`set_socket_blocking()`](./builtins/io/set_socket_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
+| [`socket_get_status()`](./builtins/io/socket_get_status.md) | `(mixed $stream): mixed` | `mixed` | ✓ | ✓ |
+| [`socket_set_block()`](./builtins/io/socket_set_block.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
+| [`socket_set_blocking()`](./builtins/io/socket_set_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
+| [`socket_set_timeout()`](./builtins/io/socket_set_timeout.md) | `(mixed $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_bucket_make_writeable()`](./builtins/io/stream_bucket_make_writeable.md) | `(mixed $brigade): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_bucket_new()`](./builtins/io/stream_bucket_new.md) | `(resource $stream, string $buffer): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_context_create()`](./builtins/io/stream_context_create.md) | `(array $options = null, array $params = null): mixed` | `mixed` | ✓ | ✓ |
@@ -243,7 +243,7 @@ sidebar:
 | [`stream_get_wrappers()`](./builtins/io/stream_get_wrappers.md) | `(): array` | `array` | ✓ | ✓ |
 | [`stream_is_local()`](./builtins/io/stream_is_local.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_isatty()`](./builtins/io/stream_isatty.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
-| [`stream_register_wrapper()`](./builtins/io/stream_register_wrapper.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | — |
+| [`stream_register_wrapper()`](./builtins/io/stream_register_wrapper.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_resolve_include_path()`](./builtins/io/stream_resolve_include_path.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_select()`](./builtins/io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int` | `int` | ✓ | ✓ |
 | [`stream_set_blocking()`](./builtins/io/stream_set_blocking.md) | `(resource $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
@@ -413,6 +413,7 @@ sidebar:
 | [`nl2br()`](./builtins/string/nl2br.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`number_format()`](./builtins/string/number_format.md) | `(float $num, int $decimals = 0, string $decimal_separator = '.', string $thousands_separator = ','): string` | `string` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
+| [`parse_url()`](./builtins/string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`rawurldecode()`](./builtins/string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./builtins/string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |

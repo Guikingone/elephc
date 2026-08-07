@@ -10,7 +10,7 @@ sidebar:
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`closedir()`](./io/closedir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
-| [`diskfreespace()`](./io/diskfreespace.md) | `(string $directory): float` | `float` | ✓ | — |
+| [`diskfreespace()`](./io/diskfreespace.md) | `(string $directory): float` | `float` | ✓ | ✓ |
 | [`fclose()`](./io/fclose.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fdatasync()`](./io/fdatasync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`feof()`](./io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
@@ -59,12 +59,12 @@ sidebar:
 | [`readdir()`](./io/readdir.md) | `(resource $dir_handle): mixed` | `mixed` | ✓ | ✓ |
 | [`rewind()`](./io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`rewinddir()`](./io/rewinddir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
-| [`set_file_buffer()`](./io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | — |
-| [`set_socket_blocking()`](./io/set_socket_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | — |
-| [`socket_get_status()`](./io/socket_get_status.md) | `(mixed $stream): mixed` | `mixed` | ✓ | — |
-| [`socket_set_block()`](./io/socket_set_block.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | — |
-| [`socket_set_blocking()`](./io/socket_set_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | — |
-| [`socket_set_timeout()`](./io/socket_set_timeout.md) | `(mixed $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | — |
+| [`set_file_buffer()`](./io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | ✓ |
+| [`set_socket_blocking()`](./io/set_socket_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
+| [`socket_get_status()`](./io/socket_get_status.md) | `(mixed $stream): mixed` | `mixed` | ✓ | ✓ |
+| [`socket_set_block()`](./io/socket_set_block.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
+| [`socket_set_blocking()`](./io/socket_set_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
+| [`socket_set_timeout()`](./io/socket_set_timeout.md) | `(mixed $stream, int $seconds, int $microseconds = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_bucket_make_writeable()`](./io/stream_bucket_make_writeable.md) | `(mixed $brigade): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_bucket_new()`](./io/stream_bucket_new.md) | `(resource $stream, string $buffer): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_context_create()`](./io/stream_context_create.md) | `(array $options = null, array $params = null): mixed` | `mixed` | ✓ | ✓ |
@@ -85,7 +85,7 @@ sidebar:
 | [`stream_get_wrappers()`](./io/stream_get_wrappers.md) | `(): array` | `array` | ✓ | ✓ |
 | [`stream_is_local()`](./io/stream_is_local.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`stream_isatty()`](./io/stream_isatty.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
-| [`stream_register_wrapper()`](./io/stream_register_wrapper.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | — |
+| [`stream_register_wrapper()`](./io/stream_register_wrapper.md) | `(string $protocol, string $class, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`stream_resolve_include_path()`](./io/stream_resolve_include_path.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_select()`](./io/stream_select.md) | `(array $read, array $write, array $except, int $seconds, int $microseconds = 0): int` | `int` | ✓ | ✓ |
 | [`stream_set_blocking()`](./io/stream_set_blocking.md) | `(resource $stream, bool $enable): bool` | `bool` | ✓ | ✓ |

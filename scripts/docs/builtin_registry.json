@@ -13841,8 +13841,24 @@
     "canonical_name": "diskfreespace",
     "description": "Returns available space in filesystem or disk partition (alias of disk_free_space).",
     "eval": {
-      "kind": "none",
-      "supported": false
+      "area": "filesystem",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/diskfreespace.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "directory",
+          "optional": false
+        }
+      ],
+      "required_param_count": 1,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "in_catalog": true,
@@ -15347,6 +15363,18 @@
           "default": "\",\"",
           "name": "separator",
           "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\\"\"",
+          "name": "enclosure",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\\\\"",
+          "name": "escape",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -15834,6 +15862,30 @@
           "default": null,
           "name": "filename",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "use_include_path",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "offset",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -15982,6 +16034,18 @@
           "default": null,
           "name": "data",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true
         }
       ],
       "required_param_count": 2,
@@ -18142,6 +18206,18 @@
           "by_ref": false,
           "default": "\"\\\"\"",
           "name": "enclosure",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\\\\"",
+          "name": "escape",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "\"\\n\"",
+          "name": "eol",
           "optional": true
         }
       ],
@@ -34280,6 +34356,119 @@
     "sub_area": "String"
   },
   {
+    "area": "String",
+    "canonical_name": "parse_url",
+    "description": "Parses a URL and returns its components.",
+    "eval": {
+      "area": "string",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/string/parse_url.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "url",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "component",
+          "optional": true
+        }
+      ],
+      "required_param_count": 1,
+      "supported": true,
+      "variadic": null
+    },
+    "eval_only": false,
+    "in_catalog": true,
+    "is_extension": false,
+    "is_internal": false,
+    "lowering": {
+      "checker_file": null,
+      "checker_line": null,
+      "codegen_file": "src/builtins/semantics.rs",
+      "codegen_function": "lower_registry_call",
+      "codegen_line": 423,
+      "notes": [
+        "Uses the `runtime_call` strategy from the single-source builtin descriptor.",
+        "Emits the typed EIR target `runtime.parse_url` through `BuiltinLoweringContext`.",
+        "The backend resolves that typed target through `src/codegen/lower_inst/runtime_calls.rs`; PHP builtin names do not participate in dispatch."
+      ],
+      "runtime_helpers": [],
+      "sig_arm": null,
+      "sig_file": "src/builtins/string/parse_url.rs",
+      "sig_line": null
+    },
+    "name": "parse_url",
+    "semantics": {
+      "argument_lowering": "standard",
+      "callable": {
+        "kind": "static_only",
+        "reason": "typed backend operation has no runtime-selected wrapper contract"
+      },
+      "effects": {
+        "kind": "static",
+        "names": [
+          "may_throw"
+        ]
+      },
+      "lowering": {
+        "kind": "runtime_call",
+        "target": "parse_url"
+      },
+      "ownership": {
+        "argument_indexes": [],
+        "kind": "fresh"
+      },
+      "requirements": {
+        "kind": "static",
+        "values": []
+      },
+      "result_type": "checked",
+      "runtime_functions": [
+        "parse_url"
+      ],
+      "target_strategy": "runtime_call",
+      "target_support": [
+        "macos-aarch64",
+        "linux-aarch64",
+        "linux-x86_64"
+      ],
+      "validation": {
+        "kind": "checker_hook",
+        "lazy": false
+      }
+    },
+    "sig": {
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "url",
+          "optional": false,
+          "type": "string"
+        },
+        {
+          "by_ref": false,
+          "default": "-1",
+          "name": "component",
+          "optional": true,
+          "type": "int"
+        }
+      ],
+      "return_type": "mixed",
+      "variadic": null
+    },
+    "slug": "parse_url",
+    "sub_area": "String"
+  },
+  {
     "area": "Process",
     "canonical_name": "passthru",
     "description": "Executes an external program and passes its output directly.",
@@ -39083,6 +39272,18 @@
           "default": null,
           "name": "filename",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "false",
+          "name": "use_include_path",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -40761,8 +40962,30 @@
     "canonical_name": "set_file_buffer",
     "description": "Sets file buffering on the given stream (alias of stream_set_write_buffer).",
     "eval": {
-      "kind": "none",
-      "supported": false
+      "area": "filesystem",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/set_file_buffer.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "stream",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "size",
+          "optional": false
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "in_catalog": true,
@@ -40866,8 +41089,30 @@
     "canonical_name": "set_socket_blocking",
     "description": "Set blocking mode on a socket stream (alias of stream_set_blocking).",
     "eval": {
-      "kind": "none",
-      "supported": false
+      "area": "filesystem",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/set_socket_blocking.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "stream",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "enable",
+          "optional": false
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "in_catalog": true,
@@ -41734,8 +41979,24 @@
     "canonical_name": "socket_get_status",
     "description": "Retrieves header/meta data from streams/file pointers (alias of stream_get_meta_data).",
     "eval": {
-      "kind": "none",
-      "supported": false
+      "area": "filesystem",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/socket_get_status.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "stream",
+          "optional": false
+        }
+      ],
+      "required_param_count": 1,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "in_catalog": true,
@@ -41832,8 +42093,30 @@
     "canonical_name": "socket_set_block",
     "description": "Set blocking mode on a socket stream (alias of stream_set_blocking).",
     "eval": {
-      "kind": "none",
-      "supported": false
+      "area": "filesystem",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/socket_set_block.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "stream",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "enable",
+          "optional": false
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "in_catalog": true,
@@ -41937,8 +42220,30 @@
     "canonical_name": "socket_set_blocking",
     "description": "Set blocking mode on a socket stream (alias of stream_set_blocking).",
     "eval": {
-      "kind": "none",
-      "supported": false
+      "area": "filesystem",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/socket_set_blocking.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "stream",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "enable",
+          "optional": false
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "in_catalog": true,
@@ -42042,8 +42347,36 @@
     "canonical_name": "socket_set_timeout",
     "description": "Set timeout period on a socket stream (alias of stream_set_timeout).",
     "eval": {
-      "kind": "none",
-      "supported": false
+      "area": "filesystem",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/socket_set_timeout.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "stream",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "seconds",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "microseconds",
+          "optional": true
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "in_catalog": true,
@@ -47863,8 +48196,36 @@
     "canonical_name": "stream_register_wrapper",
     "description": "Register a URL wrapper implemented as a PHP class (alias of stream_wrapper_register).",
     "eval": {
-      "kind": "none",
-      "supported": false
+      "area": "filesystem",
+      "home_file": "crates/elephc-magician/src/interpreter/builtins/filesystem/stream_register_wrapper.rs",
+      "hooks": [
+        "direct",
+        "values"
+      ],
+      "kind": "registry",
+      "params": [
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "protocol",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": null,
+          "name": "class",
+          "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "0",
+          "name": "flags",
+          "optional": true
+        }
+      ],
+      "required_param_count": 2,
+      "supported": true,
+      "variadic": null
     },
     "eval_only": false,
     "in_catalog": true,
@@ -49057,6 +49418,42 @@
           "default": null,
           "name": "address",
           "optional": false
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "error_code",
+          "optional": true
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "error_message",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "timeout",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "1",
+          "name": "flags",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "peername",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -49948,6 +50345,36 @@
           "default": null,
           "name": "address",
           "optional": false
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "error_code",
+          "optional": true
+        },
+        {
+          "by_ref": true,
+          "default": "null",
+          "name": "error_message",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "12",
+          "name": "flags",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "peername",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -54062,7 +54489,7 @@
       "checker_line": null,
       "codegen_file": "src/codegen/lower_inst/builtins/types.rs",
       "codegen_function": "lower_unset_builtin",
-      "codegen_line": 49,
+      "codegen_line": 47,
       "notes": [
         "Rejects `unset()` calls that were not converted into direct EIR unbind operations."
       ],

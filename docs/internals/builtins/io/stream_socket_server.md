@@ -51,6 +51,7 @@ function stream_socket_server(string $address, int $error_code = null, int $erro
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/filesystem/stream_socket_server.rs) (`eval_builtin!`)
 - **Dispatch hooks**: `direct`, `values`
+- **By-reference parameters**: `$error_code`, `$error_message`.
 
 ## Cross-references
 
