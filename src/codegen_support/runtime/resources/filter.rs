@@ -36,12 +36,14 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_create_aarch64(emitter);
             emit_filter_link_aarch64(emitter);
             emit_filter_unlink_aarch64(emitter);
+            emit_filter_apply_chain_aarch64(emitter);
         }
         Arch::X86_64 => {
             emit_filter_state_x86_64(emitter);
             emit_filter_create_x86_64(emitter);
             emit_filter_link_x86_64(emitter);
             emit_filter_unlink_x86_64(emitter);
+            emit_filter_apply_chain_x86_64(emitter);
         }
     }
 }
@@ -293,6 +295,114 @@ fn emit_filter_unlink_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the unlink frame
     emitter.instruction("ret");                                                 // return to the caller
+}
+
+/// `__rt_stream_apply_filter_chain(stream, buf, len, head_offset) -> len` (AArch64).
+///
+/// Walks one direction's chain and applies every node to the buffer in order.
+/// Built-in nodes reuse `__rt_apply_stream_filter`, which transforms in place and
+/// returns the (possibly changed) length, so length-changing filters such as
+/// `convert.base64-encode` thread through the chain correctly.
+///
+/// Input:  x0 = stream handle, x1 = buffer, x2 = length, x3 = chain-head offset.
+/// Output: x2 = resulting length; the buffer pointer is preserved in x1.
+fn emit_filter_apply_chain_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: apply a stream filter chain ---");
+    emitter.label_global("__rt_stream_apply_filter_chain");
+    // Frame: [0]=buffer [8]=length [16]=node handle
+    emitter.instruction("sub sp, sp, #48");                                     // reserve the chain-walk frame
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    emitter.instruction("str x1, [sp, #0]");                                    // preserve the buffer pointer
+    emitter.instruction("str x2, [sp, #8]");                                    // preserve the current length
+    emitter.instruction("mov x9, x3");                                          // keep the chain-head offset
+
+    emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
+    emitter.instruction("cbz x0, __rt_apply_chain_done");                       // no live stream: pass the buffer through
+    emitter.instruction("add x0, x0, x9");                                      // address of the chain head slot
+    emitter.instruction("ldr x10, [x0]");                                       // head filter handle
+    emitter.instruction("str x10, [sp, #16]");                                  // preserve the walk cursor
+
+    emitter.label("__rt_apply_chain_loop");
+    emitter.instruction("ldr x10, [sp, #16]");                                  // reload the current node handle
+    emitter.instruction("cbz x10, __rt_apply_chain_done");                      // end of chain
+    emitter.instruction("mov x0, x10");                                         // resolve the node state
+    emitter.instruction("bl __rt_filter_state");
+    emitter.instruction("cbz x0, __rt_apply_chain_done");                       // a stale node ends the chain
+
+    // -- advance the cursor before dispatching: the filter call clobbers scratch --
+    emitter.instruction(&format!("ldr x11, [x0, #{FILTER_NEXT_OFFSET}]"));      // next node handle
+    emitter.instruction("str x11, [sp, #16]");                                  // store the updated cursor
+    emitter.instruction(&format!("ldr x12, [x0, #{FILTER_BUILTIN_ID_OFFSET}]")); // built-in filter id
+    emitter.instruction("cbz x12, __rt_apply_chain_loop");                      // user filters are applied by the bucket path
+
+    emitter.instruction("ldr x1, [sp, #0]");                                    // buffer pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // current length
+    emitter.instruction("mov x3, x12");                                         // built-in filter id
+    emitter.instruction("bl __rt_apply_stream_filter");                         // transform in place; x2 = new length
+    emitter.instruction("str x2, [sp, #8]");                                    // carry the new length to the next node
+    emitter.instruction("b __rt_apply_chain_loop");                             // continue down the chain
+
+    emitter.label("__rt_apply_chain_done");
+    emitter.instruction("ldr x1, [sp, #0]");                                    // restore the buffer pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // resulting length
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the chain-walk frame
+    emitter.instruction("ret");                                                 // return the filtered buffer/length pair
+}
+
+/// x86_64 variant of [`emit_filter_apply_chain_aarch64`].
+///
+/// Input:  rdi = stream handle, rax = buffer, rdx = length, rsi = chain-head offset.
+/// Output: rdx = resulting length; rax = buffer pointer.
+fn emit_filter_apply_chain_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: apply a stream filter chain ---");
+    emitter.label_global("__rt_stream_apply_filter_chain");
+    // Frame: [-8]=buffer [-16]=length [-24]=node handle [-32]=head offset
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the chain-walk frame
+    emitter.instruction("sub rsp, 48");                                         // reserve spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the buffer pointer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the current length
+    emitter.instruction("mov QWORD PTR [rbp - 32], rsi");                       // preserve the chain-head offset
+
+    emitter.instruction("call __rt_stream_state");                              // resolve the owning stream state
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_apply_chain_done_x");                          // no live stream: pass the buffer through
+    emitter.instruction("add rax, QWORD PTR [rbp - 32]");                       // address of the chain head slot
+    emitter.instruction("mov r10, QWORD PTR [rax]");                            // head filter handle
+    emitter.instruction("mov QWORD PTR [rbp - 24], r10");                       // preserve the walk cursor
+
+    emitter.label("__rt_apply_chain_loop_x");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the current node handle
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_apply_chain_done_x");                          // end of chain
+    emitter.instruction("mov rdi, r10");                                        // resolve the node state
+    emitter.instruction("call __rt_filter_state");
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_apply_chain_done_x");                          // a stale node ends the chain
+
+    // -- advance the cursor before dispatching: the filter call clobbers scratch --
+    emitter.instruction(&format!("mov r11, QWORD PTR [rax + {FILTER_NEXT_OFFSET}]")); // next node handle
+    emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // store the updated cursor
+    emitter.instruction(&format!("mov r11, QWORD PTR [rax + {FILTER_BUILTIN_ID_OFFSET}]")); // built-in filter id
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_apply_chain_loop_x");                          // user filters are applied by the bucket path
+
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // buffer pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // current length
+    emitter.instruction("mov rcx, r11");                                        // built-in filter id
+    emitter.instruction("call __rt_apply_stream_filter");                       // transform in place; rdx = new length
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // carry the new length to the next node
+    emitter.instruction("jmp __rt_apply_chain_loop_x");                         // continue down the chain
+
+    emitter.label("__rt_apply_chain_done_x");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // restore the buffer pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // resulting length
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return the filtered buffer/length pair
 }
 
 /// x86_64 variant of [`emit_filter_state_aarch64`].
