@@ -25,6 +25,7 @@ use crate::codegen_support::runtime::resources::layout::{
     FILTER_OBJECT_OFFSET, FILTER_PARAMS_OFFSET, FILTER_PREV_OFFSET, FILTER_STATE_SIZE,
     FILTER_STREAM_HANDLE_OFFSET, RESOURCE_KIND_FILTER, RESOURCE_STATUS_LIVE,
     SLOT_KIND_OFFSET, SLOT_STATE_PTR_OFFSET, SLOT_STATUS_OFFSET,
+    STREAM_WRITE_FILTER_HEAD_OFFSET,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -37,6 +38,7 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_link_aarch64(emitter);
             emit_filter_unlink_aarch64(emitter);
             emit_filter_apply_chain_aarch64(emitter);
+            emit_fwrite_filtered_aarch64(emitter);
         }
         Arch::X86_64 => {
             emit_filter_state_x86_64(emitter);
@@ -44,6 +46,7 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_link_x86_64(emitter);
             emit_filter_unlink_x86_64(emitter);
             emit_filter_apply_chain_x86_64(emitter);
+            emit_fwrite_filtered_x86_64(emitter);
         }
     }
 }
@@ -316,10 +319,14 @@ fn emit_filter_apply_chain_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
     emitter.instruction("str x1, [sp, #0]");                                    // preserve the buffer pointer
     emitter.instruction("str x2, [sp, #8]");                                    // preserve the current length
-    emitter.instruction("mov x9, x3");                                          // keep the chain-head offset
+    // The offset must live in the frame, not a register: x9 is caller-saved and
+    // __rt_stream_state clobbers it, which silently turned the chain-head address
+    // into garbage and made every attached filter look absent.
+    emitter.instruction("str x3, [sp, #24]");                                   // preserve the chain-head offset
 
     emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
     emitter.instruction("cbz x0, __rt_apply_chain_done");                       // no live stream: pass the buffer through
+    emitter.instruction("ldr x9, [sp, #24]");                                   // reload the chain-head offset
     emitter.instruction("add x0, x0, x9");                                      // address of the chain head slot
     emitter.instruction("ldr x10, [x0]");                                       // head filter handle
     emitter.instruction("str x10, [sp, #16]");                                  // preserve the walk cursor
@@ -403,6 +410,179 @@ fn emit_filter_apply_chain_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // resulting length
     emitter.instruction("leave");                                               // restore rbp + rsp
     emitter.instruction("ret");                                                 // return the filtered buffer/length pair
+}
+
+/// `__rt_fwrite_filtered(stream, ptr, len) -> written` (AArch64).
+///
+/// Applies the write chain to a private copy of the payload and hands the result
+/// to `__rt_fwrite`. The copy matters: the payload is a PHP string that may be
+/// shared, so the in-place filters must never touch it.
+///
+/// A stream with an empty write chain skips the copy entirely and tail-calls
+/// `__rt_fwrite`, so unfiltered writes keep their original cost.
+///
+/// The scratch is sized `2 * len + 64` because the length-changing built-ins
+/// (`convert.base64-encode`, `convert.quoted-printable-encode`) expand their
+/// input; the old path instead capped the payload at a 64 KiB static buffer and
+/// silently wrote oversized payloads unfiltered.
+///
+/// Returns the number of payload bytes consumed, which is what PHP's `fwrite()`
+/// reports for a filtered stream — not the post-filter byte count.
+fn emit_fwrite_filtered_aarch64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: fwrite through the write filter chain ---");
+    emitter.label_global("__rt_fwrite_filtered");
+    // Frame: [0]=stream handle [8]=payload ptr [16]=payload len [24]=scratch
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the filtered-write frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #0]");                                    // preserve the opaque stream handle
+    emitter.instruction("str x1, [sp, #8]");                                    // preserve the payload pointer
+    emitter.instruction("str x2, [sp, #16]");                                   // preserve the payload length
+
+    // -- fast path: no write filters attached --
+    emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
+    emitter.instruction("cbz x0, __rt_fwrite_filtered_direct");                 // no live stream: let __rt_fwrite report the error
+    emitter.instruction(&format!(
+        "ldr x9, [x0, #{STREAM_WRITE_FILTER_HEAD_OFFSET}]"
+    ));                                                                         // write-chain head
+    emitter.instruction("cbz x9, __rt_fwrite_filtered_direct");                 // empty chain: write the payload untouched
+
+    // -- allocate a private, growth-tolerant copy of the payload --
+    emitter.instruction("ldr x2, [sp, #16]");                                   // payload length
+    emitter.instruction("lsl x0, x2, #1");                                      // 2 * len leaves room for expanding filters
+    emitter.instruction("add x0, x0, #64");                                     // plus a small fixed margin
+    emitter.instruction("bl __rt_heap_alloc");                                  // x0 = scratch buffer
+    emitter.instruction("cbz x0, __rt_fwrite_filtered_direct");                 // out of heap: fall back to an unfiltered write
+    emitter.instruction("str x0, [sp, #24]");                                   // preserve the scratch pointer
+
+    emitter.instruction("ldr x1, [sp, #8]");                                    // payload pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // payload length
+    emitter.instruction("mov x3, #0");                                          // copy cursor
+    emitter.label("__rt_fwrite_filtered_copy");
+    emitter.instruction("cmp x3, x2");                                          // copied every byte?
+    emitter.instruction("b.ge __rt_fwrite_filtered_copied");
+    emitter.instruction("ldrb w4, [x1, x3]");                                   // load one payload byte
+    emitter.instruction("strb w4, [x0, x3]");                                   // store it into the scratch
+    emitter.instruction("add x3, x3, #1");                                      // advance the cursor
+    emitter.instruction("b __rt_fwrite_filtered_copy");
+    emitter.label("__rt_fwrite_filtered_copied");
+
+    // -- run the chain over the copy --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle
+    emitter.instruction("ldr x1, [sp, #24]");                                   // scratch buffer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // payload length
+    emitter.instruction(&format!("mov x3, #{STREAM_WRITE_FILTER_HEAD_OFFSET}")); // select the write chain
+    emitter.instruction("bl __rt_stream_apply_filter_chain");                   // x1/x2 <- filtered buffer and length
+
+    // -- write the filtered bytes through the regular descriptor path --
+    emitter.instruction("mov x1, x2");                                          // filtered length becomes the write length
+    emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle
+    emitter.instruction("str x1, [sp, #32]");                                   // stash the filtered length across the resolve
+    emitter.instruction("bl __rt_stream_fd");                                   // x0 = backend descriptor
+    emitter.instruction("ldr x1, [sp, #24]");                                   // filtered buffer
+    emitter.instruction("ldr x2, [sp, #32]");                                   // filtered length
+    emitter.instruction("bl __rt_fwrite");                                      // perform the descriptor write
+
+    // -- release the scratch and report the consumed payload length --
+    emitter.instruction("ldr x0, [sp, #24]");                                   // scratch pointer
+    emitter.instruction("bl __rt_heap_free");                                   // the copy never escapes this helper
+    emitter.instruction("ldr x0, [sp, #16]");                                   // PHP reports payload bytes consumed
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the filtered-write frame
+    emitter.instruction("ret");                                                 // return the consumed byte count
+
+    emitter.label("__rt_fwrite_filtered_direct");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle
+    emitter.instruction("bl __rt_stream_fd");                                   // x0 = backend descriptor
+    emitter.instruction("ldr x1, [sp, #8]");                                    // original payload pointer
+    emitter.instruction("ldr x2, [sp, #16]");                                   // original payload length
+    emitter.instruction("bl __rt_fwrite");                                      // unfiltered descriptor write
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the filtered-write frame
+    emitter.instruction("ret");                                                 // return __rt_fwrite's byte count
+}
+
+/// x86_64 variant of [`emit_fwrite_filtered_aarch64`].
+///
+/// Input:  rdi = stream handle, rsi = payload pointer, rdx = payload length.
+/// Output: rax = payload bytes consumed.
+fn emit_fwrite_filtered_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: fwrite through the write filter chain ---");
+    emitter.label_global("__rt_fwrite_filtered");
+    // Frame: [-8]=stream handle [-16]=payload ptr [-24]=payload len
+    //        [-32]=scratch [-40]=filtered len
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the filtered-write frame
+    emitter.instruction("sub rsp, 48");                                         // reserve spill slots
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the opaque stream handle
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the payload pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // preserve the payload length
+
+    // -- fast path: no write filters attached --
+    emitter.instruction("call __rt_stream_state");                              // resolve the owning stream state
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fwrite_filtered_direct_x");                    // no live stream: let __rt_fwrite report the error
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [rax + {STREAM_WRITE_FILTER_HEAD_OFFSET}]"
+    ));                                                                         // write-chain head
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_fwrite_filtered_direct_x");                    // empty chain: write the payload untouched
+
+    // -- allocate a private, growth-tolerant copy of the payload --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // payload length
+    emitter.instruction("shl rax, 1");                                          // 2 * len leaves room for expanding filters
+    emitter.instruction("add rax, 64");                                         // plus a small fixed margin
+    emitter.instruction("call __rt_heap_alloc");                                // rax = scratch buffer
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fwrite_filtered_direct_x");                    // out of heap: fall back to an unfiltered write
+    emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the scratch pointer
+
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // payload pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length
+    emitter.instruction("xor rcx, rcx");                                        // copy cursor
+    emitter.label("__rt_fwrite_filtered_copy_x");
+    emitter.instruction("cmp rcx, rdx");                                        // copied every byte?
+    emitter.instruction("jge __rt_fwrite_filtered_copied_x");
+    emitter.instruction("mov r8b, BYTE PTR [rsi + rcx]");                       // load one payload byte
+    emitter.instruction("mov BYTE PTR [rax + rcx], r8b");                       // store it into the scratch
+    emitter.instruction("add rcx, 1");                                          // advance the cursor
+    emitter.instruction("jmp __rt_fwrite_filtered_copy_x");
+    emitter.label("__rt_fwrite_filtered_copied_x");
+
+    // -- run the chain over the copy --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // scratch buffer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length
+    emitter.instruction(&format!("mov rsi, {STREAM_WRITE_FILTER_HEAD_OFFSET}")); // select the write chain
+    emitter.instruction("call __rt_stream_apply_filter_chain");                 // rax/rdx <- filtered buffer and length
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // stash the filtered length
+
+    // -- write the filtered bytes through the regular descriptor path --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle
+    emitter.instruction("call __rt_stream_fd");                                 // rax = backend descriptor
+    emitter.instruction("mov rdi, rax");                                        // descriptor argument
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // filtered buffer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // filtered length
+    emitter.instruction("call __rt_fwrite");                                    // perform the descriptor write
+
+    // -- release the scratch and report the consumed payload length --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // scratch pointer
+    emitter.instruction("call __rt_heap_free");                                 // the copy never escapes this helper
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // PHP reports payload bytes consumed
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return the consumed byte count
+
+    emitter.label("__rt_fwrite_filtered_direct_x");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle
+    emitter.instruction("call __rt_stream_fd");                                 // rax = backend descriptor
+    emitter.instruction("mov rdi, rax");                                        // descriptor argument
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // original payload pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // original payload length
+    emitter.instruction("call __rt_fwrite");                                    // unfiltered descriptor write
+    emitter.instruction("leave");                                               // restore rbp + rsp
+    emitter.instruction("ret");                                                 // return __rt_fwrite's byte count
 }
 
 /// x86_64 variant of [`emit_filter_state_aarch64`].

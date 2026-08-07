@@ -35,7 +35,7 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #80");                                     // allocate locals plus saved frame pointer and return address
     emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the source file descriptor
+    emitter.instruction("str x0, [sp, #0]");                                    // save the opaque stream handle
     emitter.instruction("str x1, [sp, #48]");                                   // save the state-owned read-loop chunk size
 
     // -- record the start of the result inside the concat buffer --
@@ -49,10 +49,17 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
 
     // -- read 4096-byte chunks through fread until EOF --
     emitter.label("__rt_stream_get_contents_loop");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source file descriptor
+    // The slot holds the opaque handle: __rt_fread and __rt_feof both need it, and
+    // passing a descriptor here silently defeated the filter chain because
+    // __rt_stream_state could not resolve it. Only this range probe wants the
+    // descriptor, so resolve it here rather than storing one.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
+    emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor for the range probe
+    emitter.instruction("mov x14, x0");                                         // keep the descriptor for the comparison
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the handle for __rt_feof
     emitter.instruction("mov w11, #0x4000");                                    // high half of USER_WRAPPER_FD_BASE
     emitter.instruction("lsl w11, w11, #16");                                   // form 0x40000000
-    emitter.instruction("cmp x0, x11");                                         // synthetic user-wrapper fd?
+    emitter.instruction("cmp x14, x11");                                        // synthetic user-wrapper fd?
     emitter.instruction("b.lt __rt_stream_get_contents_after_feof");            // normal fd: skip wrapper EOF dispatch
     emitter.instruction("bl __rt_feof");                                        // wrapper: check stream_eof before reading
     emitter.instruction("cbnz x0, __rt_stream_get_contents_done");              // wrapper EOF means no extra stream_read call
@@ -62,7 +69,7 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, x9");                                    // compact append offset = start + total
     emit_symbol_address(emitter, "x13", "_concat_off");
     emitter.instruction("str x12, [x13]");                                      // make __rt_fread append at the compact tail
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for __rt_fread
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle for __rt_fread
     // -- read with the chunk size carried by the authoritative StreamState --
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload the state-owned read-loop chunk size
     emitter.instruction("cbnz x1, __rt_stream_get_contents_chunk_loaded");      // preserve an explicitly configured chunk size
@@ -127,7 +134,7 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #96");                                     // allocate locals plus chunk state and saved caller frame
     emitter.instruction("stp x29, x30, [sp, #80]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #80");                                    // establish the helper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the source descriptor
+    emitter.instruction("str x0, [sp, #0]");                                    // save the opaque stream handle
     emitter.instruction("str x1, [sp, #8]");                                    // save the requested byte cap
     emitter.instruction("str x2, [sp, #64]");                                   // save the state-owned read-loop chunk size
     emit_symbol_address(emitter, "x9", "_concat_off");
@@ -143,10 +150,14 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #8]");                                   // requested byte cap
     emitter.instruction("cmp x9, x10");                                         // has the result reached the requested cap?
     emitter.instruction("b.ge __rt_stream_get_contents_bounded_done");          // stop once the cap is filled
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the source descriptor
+    // The slot holds the opaque handle; only this range probe wants a descriptor.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
+    emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor for the range probe
+    emitter.instruction("mov x14, x0");                                         // keep the descriptor for the comparison
+    emitter.instruction("ldr x0, [sp, #0]");                                    // restore the handle for __rt_feof
     emitter.instruction("mov w11, #0x4000");                                    // high half of USER_WRAPPER_FD_BASE
     emitter.instruction("lsl w11, w11, #16");                                   // form 0x40000000
-    emitter.instruction("cmp x0, x11");                                         // synthetic user-wrapper fd?
+    emitter.instruction("cmp x14, x11");                                        // synthetic user-wrapper fd?
     emitter.instruction("b.lt __rt_stream_get_contents_bounded_after_feof");    // normal fd: skip wrapper EOF dispatch
     emitter.instruction("bl __rt_feof");                                        // wrapper: check stream_eof before reading
     emitter.instruction("cbnz x0, __rt_stream_get_contents_bounded_done");      // wrapper EOF means no extra stream_read call
@@ -170,7 +181,7 @@ fn emit_stream_get_contents_bounded_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, x9");                                    // compact append offset = start + total
     emit_symbol_address(emitter, "x13", "_concat_off");
     emitter.instruction("str x12, [x13]");                                      // make __rt_fread append at the compact tail
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload fd for __rt_fread
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle for __rt_fread
     emitter.instruction("bl __rt_fread");                                       // x1=chunk ptr, x2=chunk len
     emitter.instruction("cbz x2, __rt_stream_get_contents_bounded_release_done"); // empty read stops the bounded loop
     emitter.instruction("ldr x9, [sp, #32]");                                   // running result length
@@ -225,7 +236,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
     emitter.instruction("sub rsp, 64");                                         // reserve aligned locals for read-all accumulation
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source file descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 56], rsi");                       // save the state-owned read-loop chunk size
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer offset
     emitter.instruction("mov QWORD PTR [rbp - 16], r10");                       // save the result start offset
@@ -235,9 +246,16 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // initialize the running byte total to zero
 
     emitter.label("__rt_stream_get_contents_loop_x86");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source file descriptor
+    // The slot holds the opaque handle: __rt_fread and __rt_feof both need it, and
+    // passing a descriptor here silently defeated the filter chain because
+    // __rt_stream_state could not resolve it. Only this range probe wants the
+    // descriptor, so resolve it here rather than storing one.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor for the range probe
+    emitter.instruction("mov r14, rax");                                        // keep the descriptor for the comparison
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the handle for __rt_feof
     emitter.instruction("mov r10d, 0x40000000");                                // USER_WRAPPER_FD_BASE
-    emitter.instruction("cmp rdi, r10");                                        // synthetic user-wrapper fd?
+    emitter.instruction("cmp r14, r10");                                        // synthetic user-wrapper fd?
     emitter.instruction("jl __rt_stream_get_contents_after_feof_x86");          // normal fd: skip wrapper EOF dispatch
     emitter.instruction("call __rt_feof");                                      // wrapper: check stream_eof before reading
     emitter.instruction("test rax, rax");                                       // did stream_eof report true?
@@ -247,7 +265,7 @@ fn emit_stream_get_contents_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                       // result start offset
     emitter.instruction("add r11, r8");                                         // compact append offset = start + total
     abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // make __rt_fread append at the compact tail
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle for __rt_fread
     // -- read with the chunk size carried by the authoritative StreamState --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 56]");                       // reload the state-owned read-loop chunk size
     emitter.instruction("test rsi, rsi");                                       // was a custom chunk size supplied?
@@ -310,7 +328,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("sub rsp, 64");                                         // reserve aligned locals for bounded accumulation
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the source descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested byte cap
     emitter.instruction("mov QWORD PTR [rbp - 64], rdx");                       // save the state-owned read-loop chunk size
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // snapshot the concat-buffer start offset
@@ -325,9 +343,13 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r9, QWORD PTR [rbp - 16]");                        // requested byte cap
     emitter.instruction("cmp r8, r9");                                          // has the result reached the requested cap?
     emitter.instruction("jge __rt_stream_get_contents_bounded_done_x86");       // stop once the cap is filled
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the source descriptor
+    // The slot holds the opaque handle; only this range probe wants a descriptor.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor for the range probe
+    emitter.instruction("mov r14, rax");                                        // keep the descriptor for the comparison
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // restore the handle for __rt_feof
     emitter.instruction("mov r10d, 0x40000000");                                // USER_WRAPPER_FD_BASE
-    emitter.instruction("cmp rdi, r10");                                        // synthetic user-wrapper fd?
+    emitter.instruction("cmp r14, r10");                                        // synthetic user-wrapper fd?
     emitter.instruction("jl __rt_stream_get_contents_bounded_after_feof_x86");  // normal fd: skip wrapper EOF dispatch
     emitter.instruction("call __rt_feof");                                      // wrapper: check stream_eof before reading
     emitter.instruction("test rax, rax");                                       // did stream_eof report true?
@@ -348,7 +370,7 @@ fn emit_stream_get_contents_bounded_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // result start offset
     emitter.instruction("add r11, r8");                                         // compact append offset = start + total
     abi::emit_store_reg_to_symbol(emitter, "r11", "_concat_off", 0);            // make __rt_fread append at the compact tail
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd for __rt_fread
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle for __rt_fread
     emitter.instruction("call __rt_fread");                                     // rax=chunk ptr, rdx=chunk len
     emitter.instruction("test rdx, rdx");                                       // empty chunk?
     emitter.instruction("jz __rt_stream_get_contents_bounded_release_done_x86"); // empty read stops the bounded loop

@@ -146,6 +146,19 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // return string start pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // return actual bytes read as length
 
+    // -- apply the attached read filter chain to the bytes just read --
+    // The chain is an arbitrarily long linked list rooted in StreamState, so this
+    // replaces the old two-slot table that silently dropped a third filter.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
+    emitter.instruction(&format!(
+        "mov x3, #{}",
+        crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET
+    ));                                                                         // select the read-direction chain
+    emitter.instruction("bl __rt_stream_apply_filter_chain");                   // x1/x2 <- filtered buffer and length
+
+    // Legacy per-descriptor slots still serve the filter families not yet moved
+    // onto the chain (user filters, zlib/bzip2/iconv). A filter lives in exactly
+    // one mechanism, so running both is correct for the duration of the migration.
     // -- apply attached read filters to the bytes just read (2-slot chain) --
     //    Slot 0 = _stream_read_filters[fd], slot 1 = _stream_read_filters[fd+256]
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the file descriptor
@@ -174,6 +187,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fread_ret");                                    // common epilogue
     emitter.label("__rt_fread_builtin_slot1");
     emitter.instruction("bl __rt_apply_stream_filter");                         // transform in place
+
 
     // -- restore frame and return --
     emitter.label("__rt_fread_ret");
@@ -272,6 +286,19 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fread_publish_x86");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // return the successful byte count in the string-length register
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer in the x86_64 elephc string-pointer result register
+    // -- apply the attached read filter chain to the bytes just read --
+    // The chain is an arbitrarily long linked list rooted in StreamState, so this
+    // replaces the old two-slot table that silently dropped a third filter.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction(&format!(
+        "mov rsi, {}",
+        crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET
+    ));                                                                         // select the read-direction chain
+    emitter.instruction("call __rt_stream_apply_filter_chain");                 // rax/rdx <- filtered buffer and length
+
+    // Legacy per-descriptor slots still serve the filter families not yet moved
+    // onto the chain (user filters, zlib/bzip2/iconv). A filter lives in exactly
+    // one mechanism, so running both is correct for the duration of the migration.
     // -- apply attached read filters (2-slot chain) --
     //    Slot 0 = _stream_read_filters[fd], slot 1 = _stream_read_filters[fd+256]
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload the file descriptor

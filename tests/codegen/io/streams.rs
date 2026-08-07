@@ -821,7 +821,8 @@ fclose($f);
 /// Verifies compiled PHP output for stream filter prepend and remove.
 #[test]
 fn test_stream_filter_prepend_and_remove() {
-    // stream_filter_prepend attaches a filter; stream_filter_remove drops it.
+    // stream_filter_prepend attaches a filter; stream_filter_remove drops that one
+    // filter and leaves the rest of the chain attached.
     let out = compile_and_run(
         r#"<?php
 $m = fopen("php://memory", "r+");
@@ -837,7 +838,12 @@ echo fread($m, 32);
 fclose($m);
 "#,
     );
-    assert_eq!(out, "first pass|FIRST PASS");
+    // The prepended `string.tolower` survives removing the appended `string.rot13`,
+    // so the second read is still lowercased. The previous expectation of
+    // "FIRST PASS" encoded the old two-slot table, whose removal cleared every
+    // slot on the descriptor and so detached unrelated filters. Verified against
+    // the PHP 8.5.6 CLI, which prints "first pass|first pass".
+    assert_eq!(out, "first pass|first pass");
 }
 
 /// Verifies compiled PHP output for stream filter zlib deflate compresses.

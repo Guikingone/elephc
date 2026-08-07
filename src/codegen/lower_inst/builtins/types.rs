@@ -555,6 +555,7 @@ pub(crate) fn lower_get_resource_type(
     let value = expect_operand(inst, 0)?;
     emit_resource_kind_if_open(ctx, value)?;
     let context_label = ctx.next_label("resource_type_context");
+    let filter_label = ctx.next_label("resource_type_filter");
     let unknown_label = ctx.next_label("resource_type_unknown");
     let done_label = ctx.next_label("resource_type_done");
     match ctx.emitter.target.arch {
@@ -562,12 +563,16 @@ pub(crate) fn lower_get_resource_type(
             ctx.emitter.instruction(&format!("cbz x0, {}", unknown_label));     // stale or closed resources have PHP type Unknown
             ctx.emitter.instruction("cmp x0, #2");                              // registry kind 2 identifies stream contexts
             ctx.emitter.instruction(&format!("b.eq {}", context_label));        // contexts use PHP's stream-context resource label
+            ctx.emitter.instruction("cmp x0, #3");                              // registry kind 3 identifies stream filters
+            ctx.emitter.instruction(&format!("b.eq {}", filter_label));         // filters use PHP's "stream filter" resource label
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // did the handle resolve to a live registry entry?
             ctx.emitter.instruction(&format!("jz {}", unknown_label));          // stale or closed resources have PHP type Unknown
             ctx.emitter.instruction("cmp rax, 2");                              // registry kind 2 identifies stream contexts
             ctx.emitter.instruction(&format!("je {}", context_label));          // contexts use PHP's stream-context resource label
+            ctx.emitter.instruction("cmp rax, 3");                              // registry kind 3 identifies stream filters
+            ctx.emitter.instruction(&format!("je {}", filter_label));           // filters use PHP's "stream filter" resource label
         }
     }
     emit_string_result(ctx, b"stream");
@@ -578,6 +583,12 @@ pub(crate) fn lower_get_resource_type(
         Arch::X86_64 => {
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the context and unknown labels for live streams
         }
+    }
+    ctx.emitter.label(&filter_label);
+    emit_string_result(ctx, b"stream filter");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction(&format!("b {}", done_label)),
+        Arch::X86_64 => ctx.emitter.instruction(&format!("jmp {}", done_label)),
     }
     ctx.emitter.label(&context_label);
     emit_string_result(ctx, b"stream-context");

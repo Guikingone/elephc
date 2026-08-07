@@ -15,6 +15,7 @@ use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::codegen_support::runtime::resources::layout::{
     CONTEXT_NOTIFIER_OFFSET, CONTEXT_OPTIONS_OFFSET, STREAM_BACKEND_AUX_OFFSET,
+    STREAM_READ_FILTER_HEAD_OFFSET, STREAM_WRITE_FILTER_HEAD_OFFSET,
     STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_POPEN, STREAM_OWNERSHIP_FLAGS_OFFSET,
     STREAM_STATE_FLAG_IS_URL,
 };
@@ -1975,7 +1976,7 @@ pub(crate) fn lower_stream_get_contents(
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_chunk_size");
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
-    load_stream_fd_to_result(ctx, stream, "stream_get_contents")?;
+    load_open_stream_handle_to_result(ctx, stream, "stream_get_contents")?;
     if inst.operands.len() == 1 {
         match ctx.emitter.target.arch {
             Arch::AArch64 => {
@@ -2230,12 +2231,9 @@ pub(crate) fn lower_stream_filter_attach(
     name: &str,
 ) -> Result<()> {
     ensure_arg_count_between(inst, name, 2, 4)?;
-    // -- for prepend: shift the current slot-0 filter to slot 1 before attaching --
-    if name == "stream_filter_prepend" {
-        let stream = expect_operand(inst, 0)?;
-        let mode = inst.operands.get(2).copied();
-        emit_filter_prepend_shift(ctx, stream, mode)?;
-    }
+    // Ordering is the chain's job now: prepend inserts at the head instead of
+    // shuffling two fixed table slots, so a third filter no longer falls off.
+    let prepend = name == "stream_filter_prepend";
     let filter = expect_operand(inst, 1)?;
     if let Some(filter_name) = optional_const_string_operand(ctx, filter)? {
         if filter_name == "zlib.deflate" {
@@ -2254,7 +2252,7 @@ pub(crate) fn lower_stream_filter_attach(
             return lower_iconv_stream_filter_attach(ctx, inst, spec);
         }
         if let Some(id) = stream_filter_id(&filter_name) {
-            return lower_builtin_stream_filter_attach(ctx, inst, id);
+            return lower_builtin_stream_filter_attach(ctx, inst, id, prepend);
         }
     }
     lower_user_stream_filter_attach(ctx, inst)
@@ -2631,12 +2629,95 @@ fn emit_iconv_write_transform_for_current_fd(
 }
 
 /// Lowers `stream_filter_remove(filter)` and clears both direction tables for the fd.
+
+/// Boxes an opaque filter handle as a PHP resource value.
+///
+/// The payload is the registry handle, so `stream_filter_remove()` can resolve
+/// the node again and `is_resource()` observes the registry lifetime.
+fn emit_boxed_filter_handle(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // resource payload = the filter handle
+            // The high word is the registry-ownership marker, not padding: only the
+            // marked values make is_resource()/get_resource_type() consult the
+            // registry. Leaving it zero routed them down the legacy branch, which
+            // answers "stream" and "open" unconditionally.
+            ctx.emitter.instruction("mov x2, #1");                              // registry-owned resource marker
+            ctx.emitter.instruction("mov x0, #9");                              // runtime tag 9 = resource
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // resource payload = the filter handle
+            // The high word is the registry-ownership marker, not padding: only the
+            // marked values make is_resource()/get_resource_type() consult the
+            // registry. Leaving it zero routed them down the legacy branch, which
+            // answers "stream" and "open" unconditionally.
+            ctx.emitter.instruction("mov esi, 1");                              // registry-owned resource marker
+            ctx.emitter.instruction("mov eax, 9");                              // runtime tag 9 = resource
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+}
+
+/// Lowers `stream_filter_remove(resource)`.
 pub(crate) fn lower_stream_filter_remove(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "stream_filter_remove", 1)?;
     let filter = expect_operand(inst, 0)?;
+    // A chain node resolves as a filter resource. Anything else is still a legacy
+    // per-descriptor filter, so the previous teardown stays reachable until the
+    // remaining families move over.
+    let legacy = ctx.next_label("sfr_legacy");
+    let done = ctx.next_label("sfr_done");
+    load_stream_handle_to_result(ctx, filter, "stream_filter_remove")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the candidate handle
+            abi::emit_call_label(ctx.emitter, "__rt_filter_state");
+            ctx.emitter.instruction(&format!("cbz x0, {}", legacy));            // not a chain filter: use the legacy teardown
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
+            ctx.emitter.instruction(&format!("mov x1, #{STREAM_READ_FILTER_HEAD_OFFSET}"));
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the read chain
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
+            ctx.emitter.instruction(&format!("mov x1, #{STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the write chain
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // publish Closed so is_resource() reports false
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");         // drop the reference stream_filter_append() handed out
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            ctx.emitter.instruction("mov x0, #1");                              // stream_filter_remove() reports success
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&legacy);
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the candidate for the legacy path
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // preserve the candidate handle
+            ctx.emitter.instruction("mov rdi, rax");                            // pass it to the filter-state probe
+            abi::emit_call_label(ctx.emitter, "__rt_filter_state");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", legacy));                 // not a chain filter: use the legacy teardown
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
+            ctx.emitter.instruction(&format!("mov rsi, {STREAM_READ_FILTER_HEAD_OFFSET}"));
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the read chain
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
+            ctx.emitter.instruction(&format!("mov rsi, {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the write chain
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // publish Closed so is_resource() reports false
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");         // drop the reference stream_filter_append() handed out
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+            ctx.emitter.instruction("mov eax, 1");                              // stream_filter_remove() reports success
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&legacy);
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // reload the candidate for the legacy path
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
+        }
+    }
     load_stream_fd_to_result(ctx, filter, "stream_filter_remove")?;
     if matches!(ctx.emitter.target.arch, Arch::X86_64) {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the descriptor to the user-filter teardown helper
@@ -2664,6 +2745,7 @@ pub(crate) fn lower_stream_filter_remove(
             ctx.emitter.instruction("mov eax, 1");                              // return true after removing the filter state
         }
     }
+    ctx.emitter.label(&done);
     store_if_result(ctx, inst)
 }
 
@@ -3627,20 +3709,20 @@ pub(crate) fn lower_fwrite(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     super::ensure_arg_count(inst, "fwrite", 2)?;
     let stream = expect_operand(inst, 0)?;
     let data = expect_operand(inst, 1)?;
-    load_stream_fd_to_result(ctx, stream, "fwrite")?;
+    load_open_stream_handle_to_result(ctx, stream, "fwrite")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_push_reg(ctx.emitter, "x0");
             load_string_to_result(ctx, data, "fwrite data")?;
             abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_call_label(ctx.emitter, "__rt_fwrite");
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
         }
         Arch::X86_64 => {
             abi::emit_push_reg(ctx.emitter, "rax");
             load_string_to_result(ctx, data, "fwrite data")?;
             abi::emit_pop_reg(ctx.emitter, "rdi");
             ctx.emitter.instruction("mov rsi, rax");                            // pass the string pointer to the runtime fwrite helper
-            abi::emit_call_label(ctx.emitter, "__rt_fwrite");
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
         }
     }
     store_if_result(ctx, inst)
@@ -3652,7 +3734,7 @@ pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     let stream = expect_operand(inst, 0)?;
     let format = expect_operand(inst, 1)?;
     let spec_cats = super::strings::sprintf_spec_cats_for_format(ctx, format)?;
-    load_stream_fd_to_result(ctx, stream, "fprintf")?;
+    load_open_stream_handle_to_result(ctx, stream, "fprintf")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     for index in (2..inst.operands.len()).rev() {
         let value = expect_operand(inst, index)?;
@@ -3678,7 +3760,7 @@ pub(crate) fn lower_fprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             abi::emit_pop_reg(ctx.emitter, "rdi");
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_fwrite");
+    abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
     store_if_result(ctx, inst)
 }
 
@@ -3688,7 +3770,7 @@ pub(crate) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     let stream = expect_operand(inst, 0)?;
     let format = expect_operand(inst, 1)?;
     let values = expect_operand(inst, 2)?;
-    load_stream_fd_to_result(ctx, stream, "vfprintf")?;
+    load_open_stream_handle_to_result(ctx, stream, "vfprintf")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #32");                         // reserve fd and format scratch storage
@@ -3699,7 +3781,7 @@ pub(crate) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             ctx.emitter.instruction("ldp x1, x2, [sp, #8]");                    // restore the format pointer and length
             abi::emit_call_label(ctx.emitter, "__rt_vsprintf");
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the destination descriptor
-            abi::emit_call_label(ctx.emitter, "__rt_fwrite");
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
             ctx.emitter.instruction("add sp, sp, #32");                         // release vfprintf scratch storage
         }
         Arch::X86_64 => {
@@ -3715,7 +3797,7 @@ pub(crate) fn lower_vfprintf(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
             abi::emit_call_label(ctx.emitter, "__rt_vsprintf");
             ctx.emitter.instruction("mov rsi, rax");                            // pass the formatted string pointer to fwrite
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the destination descriptor
-            abi::emit_call_label(ctx.emitter, "__rt_fwrite");
+            abi::emit_call_label(ctx.emitter, "__rt_fwrite_filtered");
             ctx.emitter.instruction("add rsp, 32");                             // release vfprintf scratch storage
         }
     }
@@ -7617,78 +7699,106 @@ fn lower_builtin_stream_filter_attach(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     filter_id: u8,
+    prepend: bool,
 ) -> Result<()> {
     let stream = expect_operand(inst, 0)?;
-    load_stream_fd_to_result(ctx, stream, "stream_filter_append")?;
+    load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     materialize_stream_filter_mode(ctx, inst)?;
-    let skip_read = ctx.next_label("sf_skip_read");
-    let skip_write = ctx.next_label("sf_skip_write");
+    emit_attach_filter_node(ctx, filter_id, prepend);
+    // Box the registry handle itself. `emit_boxed_stream_resource` mints a fresh
+    // display id, which the legacy design could afford because its "filter
+    // resource" was really the stream descriptor; a chain node has to be findable
+    // again by `stream_filter_remove()`.
+    emit_boxed_filter_handle(ctx);
+    store_if_result(ctx, inst)
+}
+
+/// Creates a filter node and links it into the direction chains the mode selects.
+///
+/// On entry the stream handle is on the stack and the mode bits are in the int
+/// result register. On exit the new filter handle is in the result register, ready
+/// to be boxed as the resource `stream_filter_append()` returns.
+///
+/// A node attached with `STREAM_FILTER_ALL` is linked into both chains, which is
+/// why the direction bits are stored on the node rather than inferred from which
+/// list it sits in.
+fn emit_attach_filter_node(ctx: &mut FunctionContext<'_>, filter_id: u8, prepend: bool) {
+    let skip_read = ctx.next_label("sf_chain_skip_read");
+    let skip_write = ctx.next_label("sf_chain_skip_write");
+    let prepend_flag = i64::from(prepend);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_pop_reg(ctx.emitter, "x1");
-            ctx.emitter.instruction("tst x0, #1");                              // test whether STREAM_FILTER_READ is enabled
-            ctx.emitter.instruction(&format!("b.eq {}", skip_read));            // skip the read-filter table when the read bit is clear
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
-            ctx.emitter.instruction(&format!("mov w10, #{}", filter_id));       // materialize the built-in stream-filter id
-            // -- append logic: write to slot 0 if empty, else slot 1 (fd+256) --
-            let slot1_read = ctx.next_label("sf_slot1_read");
-            ctx.emitter.instruction("ldrb w11, [x9, x1]");                      // check if slot 0 is occupied
-            ctx.emitter.instruction(&format!("cbnz w11, {}", slot1_read));      // slot 0 taken → write to slot 1
-            ctx.emitter.instruction("strb w10, [x9, x1]");                      // slot 0 is free → write here
-            ctx.emitter.instruction(&format!("b {}", skip_read));               // done with read filter
-            ctx.emitter.label(&slot1_read);
-            ctx.emitter.instruction("add x12, x1, #256");                       // fd+256 (slot 1)
-            ctx.emitter.instruction("strb w10, [x9, x12]");                     // write to slot 1
+            abi::emit_pop_reg(ctx.emitter, "x4");                               // recover the owning stream handle
+            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            ctx.emitter.instruction("str x4, [sp, #0]");                        // preserve the stream handle across the calls
+            ctx.emitter.instruction("str x0, [sp, #8]");                        // preserve the requested direction bits
+            ctx.emitter.instruction("mov x2, x0");                              // direction bits
+            ctx.emitter.instruction(&format!("mov x0, #{filter_id}"));          // built-in filter id
+            ctx.emitter.instruction("mov x1, #0");                              // built-ins carry no user-filter object
+            ctx.emitter.instruction("mov x3, #0");                              // built-ins retain no params value
+            abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // x0 = the new filter handle
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the filter handle
+
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // direction bits
+            ctx.emitter.instruction("tst x9, #1");                              // is STREAM_FILTER_READ set?
+            ctx.emitter.instruction(&format!("b.eq {}", skip_read));
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // owning stream handle
+            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // filter handle
+            ctx.emitter.instruction(&format!("mov x2, #{STREAM_READ_FILTER_HEAD_OFFSET}"));
+            ctx.emitter.instruction(&format!("mov x3, #{prepend_flag}"));       // prepend selects head insertion
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
             ctx.emitter.label(&skip_read);
-            ctx.emitter.instruction("tst x0, #2");                              // test whether STREAM_FILTER_WRITE is enabled
-            ctx.emitter.instruction(&format!("b.eq {}", skip_write));           // skip the write-filter table when the write bit is clear
-            abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
-            ctx.emitter.instruction(&format!("mov w10, #{}", filter_id));       // materialize the built-in stream-filter id
-            let slot1_write = ctx.next_label("sf_slot1_write");
-            ctx.emitter.instruction("ldrb w11, [x9, x1]");                      // check if slot 0 is occupied
-            ctx.emitter.instruction(&format!("cbnz w11, {}", slot1_write));     // slot 0 taken → write to slot 1
-            ctx.emitter.instruction("strb w10, [x9, x1]");                      // slot 0 is free → write here
-            ctx.emitter.instruction(&format!("b {}", skip_write));              // done with write filter
-            ctx.emitter.label(&slot1_write);
-            ctx.emitter.instruction("add x12, x1, #256");                       // fd+256 (slot 1)
-            ctx.emitter.instruction("strb w10, [x9, x12]");                     // write to slot 1
+
+            ctx.emitter.instruction("ldr x9, [sp, #8]");                        // direction bits
+            ctx.emitter.instruction("tst x9, #2");                              // is STREAM_FILTER_WRITE set?
+            ctx.emitter.instruction(&format!("b.eq {}", skip_write));
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // owning stream handle
+            ctx.emitter.instruction("ldr x1, [sp, #16]");                       // filter handle
+            ctx.emitter.instruction(&format!("mov x2, #{STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+            ctx.emitter.instruction(&format!("mov x3, #{prepend_flag}"));       // prepend selects head insertion
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
             ctx.emitter.label(&skip_write);
-            ctx.emitter.instruction("mov x0, x1");                              // move the descriptor into the resource payload register
+
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // return the filter handle
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
         Arch::X86_64 => {
-            abi::emit_pop_reg(ctx.emitter, "rcx");
-            ctx.emitter.instruction("test rax, 1");                             // test whether STREAM_FILTER_READ is enabled
-            ctx.emitter.instruction(&format!("jz {}", skip_read));              // skip the read-filter table when the read bit is clear
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters"); // read-filter table base
-            ctx.emitter.instruction(&format!("mov r10b, {}", filter_id));       // materialize the built-in stream-filter id (low byte)
-            let slot1_read = ctx.next_label("sf_slot1_read_x");
-            ctx.emitter.instruction("movzx r11d, BYTE PTR [r9 + rcx]");         // check if slot 0 is occupied
-            ctx.emitter.instruction(&format!("jnz {}", slot1_read));            // slot 0 taken → write to slot 1
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", filter_id)); // slot 0 is free → write here
-            ctx.emitter.instruction(&format!("jmp {}", skip_read));             // done with read filter
-            ctx.emitter.label(&slot1_read);
-            ctx.emitter.instruction("lea r11, [rcx + 256]");                    // fd+256 (slot 1)
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + r11], {}", filter_id)); // write to slot 1
+            abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the owning stream handle
+            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rcx");            // preserve the stream handle across the calls
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // preserve the requested direction bits
+            ctx.emitter.instruction("mov rdx, rax");                            // direction bits
+            ctx.emitter.instruction(&format!("mov rdi, {filter_id}"));          // built-in filter id
+            ctx.emitter.instruction("xor esi, esi");                            // built-ins carry no user-filter object
+            ctx.emitter.instruction("xor ecx, ecx");                            // built-ins retain no params value
+            abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // rax = the new filter handle
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the filter handle
+
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // direction bits
+            ctx.emitter.instruction("test r9, 1");                              // is STREAM_FILTER_READ set?
+            ctx.emitter.instruction(&format!("jz {}", skip_read));
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // owning stream handle
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // filter handle
+            ctx.emitter.instruction(&format!("mov rdx, {STREAM_READ_FILTER_HEAD_OFFSET}"));
+            ctx.emitter.instruction(&format!("mov rcx, {prepend_flag}"));       // prepend selects head insertion
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
             ctx.emitter.label(&skip_read);
-            ctx.emitter.instruction("test rax, 2");                             // test whether STREAM_FILTER_WRITE is enabled
-            ctx.emitter.instruction(&format!("jz {}", skip_write));             // skip the write-filter table when the write bit is clear
-            abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters"); // write-filter table base
-            ctx.emitter.instruction(&format!("mov r10b, {}", filter_id));       // materialize the built-in stream-filter id (low byte)
-            let slot1_write = ctx.next_label("sf_slot1_write_x");
-            ctx.emitter.instruction("movzx r11d, BYTE PTR [r9 + rcx]");         // check if slot 0 is occupied
-            ctx.emitter.instruction(&format!("jnz {}", slot1_write));           // slot 0 taken → write to slot 1
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + rcx], {}", filter_id)); // slot 0 is free → write here
-            ctx.emitter.instruction(&format!("jmp {}", skip_write));            // done with write filter
-            ctx.emitter.label(&slot1_write);
-            ctx.emitter.instruction("lea r11, [rcx + 256]");                    // fd+256 (slot 1)
-            ctx.emitter.instruction(&format!("mov BYTE PTR [r9 + r11], {}", filter_id)); // write to slot 1
+
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp + 8]");             // direction bits
+            ctx.emitter.instruction("test r9, 2");                              // is STREAM_FILTER_WRITE set?
+            ctx.emitter.instruction(&format!("jz {}", skip_write));
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // owning stream handle
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 16]");           // filter handle
+            ctx.emitter.instruction(&format!("mov rdx, {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
+            ctx.emitter.instruction(&format!("mov rcx, {prepend_flag}"));       // prepend selects head insertion
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_link");
             ctx.emitter.label(&skip_write);
-            ctx.emitter.instruction("mov rax, rcx");                            // move the descriptor into the resource payload register
+
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // return the filter handle
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
         }
     }
-    emit_boxed_stream_resource(ctx);
-    store_if_result(ctx, inst)
 }
 
 /// Materializes the stream-filter mode operand, defaulting to STREAM_FILTER_ALL.
@@ -10777,92 +10887,4 @@ fn emit_stash_connect_host_after_boxed_stashed(ctx: &mut FunctionContext<'_>) {
         }
     }
     ctx.emitter.label(&done_label);
-}
-
-/// Shifts the current slot-0 filter to slot 1 for a `stream_filter_prepend` call.
-///
-/// Reads `_stream_read_filters[fd]` (slot 0) and stores it at
-/// `_stream_read_filters[fd+256]` (slot 1) when the mode includes READ (bit 0).
-/// Does the same for `_stream_write_filters` when the mode includes WRITE (bit 1).
-/// The mode defaults to STREAM_FILTER_ALL (3) when not provided. The fd is
-/// unboxed from the stream resource argument.
-fn emit_filter_prepend_shift(
-    ctx: &mut FunctionContext<'_>,
-    stream: ValueId,
-    mode: Option<ValueId>,
-) -> Result<()> {
-    // Determine the mode bits: default 3 (READ|WRITE), or evaluate the arg.
-    let do_read = match mode {
-        None => true,
-        Some(v) => {
-            if let Some(m) = optional_const_i64_operand(ctx, v)? {
-                (m & 1) != 0
-            } else {
-                true // conservative: assume both directions
-            }
-        }
-    };
-    let do_write = match mode {
-        None => true,
-        Some(v) => {
-            if let Some(m) = optional_const_i64_operand(ctx, v)? {
-                (m & 2) != 0
-            } else {
-                true
-            }
-        }
-    };
-    if !do_read && !do_write {
-        return Ok(());
-    }
-    load_stream_fd_to_result(ctx, stream, "stream_filter_prepend")?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            // x0 = fd. Save it.
-            abi::emit_push_reg(ctx.emitter, "x0");
-            if do_read {
-                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
-                abi::emit_pop_reg(ctx.emitter, "x0");
-                abi::emit_push_reg(ctx.emitter, "x0");
-                ctx.emitter.instruction("ldrb w10, [x9, x0]");
-                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_read_filters");
-                ctx.emitter.instruction("add x11, x0, #256");
-                ctx.emitter.instruction("strb w10, [x9, x11]");
-            }
-            if do_write {
-                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
-                abi::emit_pop_reg(ctx.emitter, "x0");
-                abi::emit_push_reg(ctx.emitter, "x0");
-                ctx.emitter.instruction("ldrb w10, [x9, x0]");
-                abi::emit_symbol_address(ctx.emitter, "x9", "_stream_write_filters");
-                ctx.emitter.instruction("add x11, x0, #256");
-                ctx.emitter.instruction("strb w10, [x9, x11]");
-            }
-            abi::emit_pop_reg(ctx.emitter, "x0");
-        }
-        Arch::X86_64 => {
-            // rax = fd. Save it.
-            ctx.emitter.instruction("push rax");
-            if do_read {
-                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters");
-                ctx.emitter.instruction("pop rax");
-                ctx.emitter.instruction("push rax");
-                ctx.emitter.instruction("movzx r10d, BYTE PTR [r9 + rax]");
-                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_read_filters");
-                ctx.emitter.instruction("lea r11, [rax + 256]");
-                ctx.emitter.instruction("mov BYTE PTR [r9 + r11], r10b");
-            }
-            if do_write {
-                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters");
-                ctx.emitter.instruction("pop rax");
-                ctx.emitter.instruction("push rax");
-                ctx.emitter.instruction("movzx r10d, BYTE PTR [r9 + rax]");
-                abi::emit_symbol_address(ctx.emitter, "r9", "_stream_write_filters");
-                ctx.emitter.instruction("lea r11, [rax + 256]");
-                ctx.emitter.instruction("mov BYTE PTR [r9 + r11], r10b");
-            }
-            ctx.emitter.instruction("pop rax");
-        }
-    }
-    Ok(())
 }
