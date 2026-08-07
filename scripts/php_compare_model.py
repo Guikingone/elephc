@@ -6,7 +6,12 @@ the rules are not guessable: seven of them were found only by sweeping php itsel
 one silently flips a result rather than failing loudly. Writing the WAT against this model —
 rather than against intuition — is the same method that produced `__rt_mixed_cmp_i64`.
 
-Validated against `php -n` on 7844 ordered pairs: 3844 adversarial (every pair of a set built
+  8. Two DIFFERENT float-form strings that both overflow to INFINITY also fall back to the
+     bytes, though neither sets `oflow` — php never sets it for a float form. The first
+     sweep missed this: it carried `1e400` but no second overflowing float string, so the
+     pair could not be generated. Repo memory caught it, not the sweep.
+
+Validated against `php -n` on 8356 ordered pairs: 3844 adversarial (every pair of a set built
 from the i64 edges, 2^53, INF/NAN, and numeric-looking strings) and 4000 random.
 
 THE SEVEN RULES, each measured:
@@ -111,7 +116,13 @@ def compare(a, b):
             # php's `smart_strcmp` falls back to the BYTES only when an INTEGER-looking
             # string overflowed into a double and the doubles then tied: that is how
             # "…807" < "…808" survives, while "42" and " 42" stay equal.
-            if numeric == 0 and va != vb and (overflowed_int(va) or overflowed_int(vb)):
+            both_infinite = (
+                na[0] == "float" and nb[0] == "float"
+                and math.isinf(na[1]) and math.isinf(nb[1])
+            )
+            if numeric == 0 and va != vb and (
+                overflowed_int(va) or overflowed_int(vb) or both_infinite
+            ):
                 return sign((va > vb) - (va < vb))
             return numeric
         return sign((va > vb) - (va < vb))

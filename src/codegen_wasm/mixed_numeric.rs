@@ -430,8 +430,15 @@ fn rt_mixed_cmp_mixed() -> String {
           (local.set $tie (call $__rt_f64_threeway (local.get $fa) (local.get $fb)))
           ;; A numeric tie between an OVERFLOWED integer string and another number falls back
           ;; to the bytes; an ordinary decimal tie such as "1.5"/"1.50" does not.
+          ;; ...and equal INFINITIES do the same, though neither set `oflow`: php-src never
+          ;; sets it for a float form, however large. `"1e400" <=> "1e500"` is -1 on the bytes,
+          ;; and `"-1e400" <=> "-1e500"` is -1 too, so the fallback is a RAW byte compare
+          ;; rather than a sign-aware one.
           (if (i32.and (i64.eqz (local.get $tie))
-                (i32.or (local.get $oa) (local.get $ob)))
+                (i32.or (i32.or (local.get $oa) (local.get $ob))
+                  (i32.and
+                    (f64.eq (f64.abs (local.get $fa)) (f64.const inf))
+                    (f64.eq (f64.abs (local.get $fb)) (f64.const inf)))))
             (then (return (call $__rt_i64_threeway
               (call $__rt_str_cmp (i32.wrap_i64 (local.get $la)) (local.get $ha)
                 (i32.wrap_i64 (local.get $lb)) (local.get $hb) (i32.const 0))
