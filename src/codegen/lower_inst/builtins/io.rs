@@ -2255,7 +2255,7 @@ pub(crate) fn lower_stream_filter_attach(
             return lower_builtin_stream_filter_attach(ctx, inst, id, prepend);
         }
     }
-    lower_user_stream_filter_attach(ctx, inst)
+    lower_user_stream_filter_attach(ctx, inst, prepend)
 }
 
 /// Lowers `stream_filter_append($stream, "zlib.deflate", ...)`.
@@ -7705,7 +7705,7 @@ fn lower_builtin_stream_filter_attach(
     load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     materialize_stream_filter_mode(ctx, inst)?;
-    emit_attach_filter_node(ctx, filter_id, prepend);
+    emit_attach_filter_node(ctx, Some(filter_id), prepend);
     // Box the registry handle itself. `emit_boxed_stream_resource` mints a fresh
     // display id, which the legacy design could afford because its "filter
     // resource" was really the stream descriptor; a chain node has to be findable
@@ -7723,7 +7723,7 @@ fn lower_builtin_stream_filter_attach(
 /// A node attached with `STREAM_FILTER_ALL` is linked into both chains, which is
 /// why the direction bits are stored on the node rather than inferred from which
 /// list it sits in.
-fn emit_attach_filter_node(ctx: &mut FunctionContext<'_>, filter_id: u8, prepend: bool) {
+fn emit_attach_filter_node(ctx: &mut FunctionContext<'_>, filter_id: Option<u8>, prepend: bool) {
     let skip_read = ctx.next_label("sf_chain_skip_read");
     let skip_write = ctx.next_label("sf_chain_skip_write");
     let prepend_flag = i64::from(prepend);
@@ -7734,7 +7734,12 @@ fn emit_attach_filter_node(ctx: &mut FunctionContext<'_>, filter_id: u8, prepend
             ctx.emitter.instruction("str x4, [sp, #0]");                        // preserve the stream handle across the calls
             ctx.emitter.instruction("str x0, [sp, #8]");                        // preserve the requested direction bits
             ctx.emitter.instruction("mov x2, x0");                              // direction bits
-            ctx.emitter.instruction(&format!("mov x0, #{filter_id}"));          // built-in filter id
+            match filter_id {
+                // A literal name resolves at compile time; a dynamic one arrives in
+                // x9 from __rt_builtin_filter_id.
+                Some(id) => ctx.emitter.instruction(&format!("mov x0, #{id}")),  // built-in filter id
+                None => ctx.emitter.instruction("mov x0, x9"),                   // run-time resolved filter id
+            }
             ctx.emitter.instruction("mov x1, #0");                              // built-ins carry no user-filter object
             ctx.emitter.instruction("mov x3, #0");                              // built-ins retain no params value
             abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // x0 = the new filter handle
@@ -7769,7 +7774,12 @@ fn emit_attach_filter_node(ctx: &mut FunctionContext<'_>, filter_id: u8, prepend
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rcx");            // preserve the stream handle across the calls
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // preserve the requested direction bits
             ctx.emitter.instruction("mov rdx, rax");                            // direction bits
-            ctx.emitter.instruction(&format!("mov rdi, {filter_id}"));          // built-in filter id
+            match filter_id {
+                // A literal name resolves at compile time; a dynamic one arrives in
+                // r13 from __rt_builtin_filter_id.
+                Some(id) => ctx.emitter.instruction(&format!("mov rdi, {id}")),  // built-in filter id
+                None => ctx.emitter.instruction("mov rdi, r13"),                 // run-time resolved filter id
+            }
             ctx.emitter.instruction("xor esi, esi");                            // built-ins carry no user-filter object
             ctx.emitter.instruction("xor ecx, ecx");                            // built-ins retain no params value
             abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // rax = the new filter handle
@@ -7840,6 +7850,66 @@ fn materialize_stream_filter_params(
 
 /// Attaches a user-defined stream filter through the runtime registry.
 fn lower_user_stream_filter_attach(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
+) -> Result<()> {
+    let stream = expect_operand(inst, 0)?;
+    let filter = expect_operand(inst, 1)?;
+    // A dynamic name may still be a built-in. Resolving it here keeps such
+    // filters on the chain instead of the legacy per-descriptor slots, which hold
+    // only 256 descriptors.
+    let user_path = ctx.next_label("sfa_user_path");
+    let attached = ctx.next_label("sfa_attached");
+    load_string_to_result(ctx, filter, "stream_filter_append filter")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // name pointer
+            ctx.emitter.instruction("mov x1, x2");                              // name length
+            abi::emit_call_label(ctx.emitter, "__rt_builtin_filter_id");
+            ctx.emitter.instruction(&format!("cbz x0, {}", user_path));         // not a built-in: use the user-filter path
+            ctx.emitter.instruction("str x0, [sp, #-16]!");                     // preserve the resolved id across the operand loads
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // name pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // name length
+            abi::emit_call_label(ctx.emitter, "__rt_builtin_filter_id");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", user_path));              // not a built-in: use the user-filter path
+            ctx.emitter.instruction("push rax");                                // preserve the resolved id across the operand loads
+        }
+    }
+    load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_stream_filter_mode(ctx, inst)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // The node creator reads the run-time id from x9 and pops the handle itself.
+            ctx.emitter.instruction("ldr x9, [sp, #16]");                       // resolved id, below the pushed handle
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r13, QWORD PTR [rsp + 8]");            // resolved id, below the pushed handle
+        }
+    }
+    emit_attach_filter_node(ctx, None, prepend);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("add sp, sp, #16");                         // drop the preserved id
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("add rsp, 8");                              // drop the preserved id
+        }
+    }
+    emit_boxed_filter_handle(ctx);
+    abi::emit_jump(ctx.emitter, &attached);
+    ctx.emitter.label(&user_path);
+    lower_user_stream_filter_attach_legacy(ctx, inst)?;
+    ctx.emitter.label(&attached);
+    return Ok(());
+}
+
+/// Attaches a user-registered filter through the legacy per-descriptor slots.
+fn lower_user_stream_filter_attach_legacy(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
