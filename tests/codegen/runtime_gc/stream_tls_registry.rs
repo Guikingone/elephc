@@ -134,6 +134,13 @@ fn serve_tls_probe_connection(
 ) -> Result<(), String> {
     use std::io::{Read, Write};
 
+    // The listener is nonblocking so the accept loop can honour its deadline. On
+    // BSD/macOS the socket returned by accept() inherits O_NONBLOCK, which
+    // set_read_timeout does not clear, so the handshake read below fails with
+    // WouldBlock before a single byte arrives. Linux does not inherit the flag,
+    // which is why this only ever showed up here.
+    tcp.set_nonblocking(false)
+        .map_err(|error| format!("connection {index}: clear nonblocking: {error}"))?;
     tcp.set_read_timeout(Some(TLS_PROBE_IO_TIMEOUT))
         .map_err(|error| format!("connection {index}: set read timeout: {error}"))?;
     tcp.set_write_timeout(Some(TLS_PROBE_IO_TIMEOUT))
