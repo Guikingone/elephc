@@ -12,6 +12,9 @@
 //!   reads share one I/O dispatch path.
 
 use crate::codegen_support::abi::emit_symbol_address;
+
+/// Initial capacity of the read-all accumulator; it doubles as needed.
+const ACCUMULATOR_INITIAL_BYTES: u64 = 65536;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
@@ -32,20 +35,29 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_get_contents");
 
     // -- set up stack frame --
-    emitter.instruction("sub sp, sp, #80");                                     // allocate locals plus saved frame pointer and return address
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
+    // Frame: [0]=handle [8]=accumulator capacity [16]=accumulator pointer
+    //        [24]=total [32]=chunk ptr [40]=chunk len [48]=chunk size
+    //        [56]=saved _concat_off [64]=growth scratch [96]=x29/x30
+    emitter.instruction("sub sp, sp, #112");                                    // allocate locals plus saved frame pointer and return address
+    emitter.instruction("stp x29, x30, [sp, #96]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #96");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // save the opaque stream handle
     emitter.instruction("str x1, [sp, #48]");                                   // save the state-owned read-loop chunk size
 
-    // -- record the start of the result inside the concat buffer --
+    // -- accumulate into a growable heap buffer, not the shared concat buffer --
+    // The result used to be built inside `_concat_buf`, which caps at 64 KiB, so
+    // reading a larger stream truncated it. Each chunk still lands in the shared
+    // buffer (bounded by __rt_fread) and is copied straight out, so the shared
+    // offset is restored to where it started.
     emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load the current concat-buffer offset
-    emitter.instruction("str x10, [sp, #8]");                                   // save the result start offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x12, x11, x10");                                   // compute the result start pointer
-    emitter.instruction("str x12, [sp, #16]");                                  // save the result start pointer
+    emitter.instruction("ldr x10, [x9]");                                       // current shared-buffer offset
+    emitter.instruction("str x10, [sp, #56]");                                  // remember it for every chunk and for restore
     emitter.instruction("str xzr, [sp, #24]");                                  // initialize the running byte total to zero
+    emitter.instruction(&format!("mov x0, #{ACCUMULATOR_INITIAL_BYTES}"));      // initial accumulator capacity
+    emitter.instruction("str x0, [sp, #8]");                                    // publish the capacity
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the accumulator
+    emitter.instruction("str x0, [sp, #16]");                                   // publish the accumulator pointer
+    emitter.instruction("cbz x0, __rt_stream_get_contents_done");               // heap exhausted: return an empty result
 
     // -- read 4096-byte chunks through fread until EOF --
     emitter.label("__rt_stream_get_contents_loop");
@@ -64,11 +76,11 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_feof");                                        // wrapper: check stream_eof before reading
     emitter.instruction("cbnz x0, __rt_stream_get_contents_done");              // wrapper EOF means no extra stream_read call
     emitter.label("__rt_stream_get_contents_after_feof");
-    emitter.instruction("ldr x9, [sp, #24]");                                   // running result length
-    emitter.instruction("ldr x12, [sp, #8]");                                   // result start offset
-    emitter.instruction("add x12, x12, x9");                                    // compact append offset = start + total
+    // Each chunk is copied out immediately, so every read may reuse the same
+    // shared-buffer position instead of walking the offset forward.
+    emitter.instruction("ldr x12, [sp, #56]");                                  // the position this helper started from
     emit_symbol_address(emitter, "x13", "_concat_off");
-    emitter.instruction("str x12, [x13]");                                      // make __rt_fread append at the compact tail
+    emitter.instruction("str x12, [x13]");                                      // make __rt_fread write there
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle for __rt_fread
     // -- read with the chunk size carried by the authoritative StreamState --
     emitter.instruction("ldr x1, [sp, #48]");                                   // reload the state-owned read-loop chunk size
@@ -80,11 +92,44 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("cbz x2, __rt_stream_get_contents_release_done");       // empty read stops the read-all loop
     emitter.instruction("str x1, [sp, #32]");                                   // save chunk pointer across the copy
     emitter.instruction("str x2, [sp, #40]");                                   // save chunk length across the copy
-    emitter.instruction("ldr x9, [sp, #24]");                                   // reload running result length after __rt_fread
-    emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("ldr x12, [sp, #8]");                                   // result start offset
-    emitter.instruction("add x11, x11, x12");                                   // result base pointer
-    emitter.instruction("add x11, x11, x9");                                    // destination = result base + total
+    // -- grow the accumulator until this chunk fits --
+    emitter.instruction("ldr x9, [sp, #24]");                                   // running total
+    emitter.instruction("ldr x10, [sp, #40]");                                  // chunk length
+    emitter.instruction("add x9, x9, x10");                                     // bytes needed after this chunk
+    emitter.instruction("ldr x11, [sp, #8]");                                   // current capacity
+    emitter.instruction("cmp x9, x11");
+    emitter.instruction("b.le __rt_stream_get_contents_have_cap");              // it already fits
+    emitter.label("__rt_stream_get_contents_grow");
+    emitter.instruction("lsl x11, x11, #1");                                    // double the capacity
+    emitter.instruction("cmp x9, x11");
+    emitter.instruction("b.gt __rt_stream_get_contents_grow");                  // keep doubling until it fits
+    emitter.instruction("str x11, [sp, #8]");                                   // publish the new capacity
+    emitter.instruction("mov x0, x11");
+    emitter.instruction("bl __rt_heap_alloc");                                  // allocate the larger accumulator
+    emitter.instruction("cbz x0, __rt_stream_get_contents_done");               // heap exhausted: return what was read
+    emitter.instruction("str x0, [sp, #64]");                                   // stash the new accumulator
+    emitter.instruction("ldr x12, [sp, #16]");                                  // old accumulator
+    emitter.instruction("ldr x13, [sp, #24]");                                  // bytes already accumulated
+    emitter.instruction("mov x14, #0");                                         // copy cursor
+    emitter.label("__rt_stream_get_contents_regrow_copy");
+    emitter.instruction("cmp x14, x13");
+    emitter.instruction("b.ge __rt_stream_get_contents_regrown");
+    emitter.instruction("ldrb w15, [x12, x14]");
+    emitter.instruction("strb w15, [x0, x14]");
+    emitter.instruction("add x14, x14, #1");
+    emitter.instruction("b __rt_stream_get_contents_regrow_copy");
+    emitter.label("__rt_stream_get_contents_regrown");
+    emitter.instruction("ldr x0, [sp, #16]");                                   // old accumulator
+    emitter.instruction("bl __rt_heap_free");                                   // it never escaped this helper
+    emitter.instruction("ldr x0, [sp, #64]");                                   // the grown accumulator
+    emitter.instruction("str x0, [sp, #16]");                                   // becomes the live one
+    emitter.label("__rt_stream_get_contents_have_cap");
+
+    emitter.instruction("ldr x1, [sp, #32]");                                   // chunk pointer
+    emitter.instruction("ldr x2, [sp, #40]");                                   // chunk length
+    emitter.instruction("ldr x9, [sp, #24]");                                   // running total
+    emitter.instruction("ldr x11, [sp, #16]");                                  // accumulator base
+    emitter.instruction("add x11, x11, x9");                                    // destination = accumulator + total
     emitter.instruction("mov x12, #0");                                         // byte-copy index
     emitter.label("__rt_stream_get_contents_copy");
     emitter.instruction("cmp x12, x2");                                         // copied this whole chunk?
@@ -98,10 +143,6 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #40]");                                  // copied chunk length
     emitter.instruction("add x9, x9, x10");                                     // include the copied chunk in the total
     emitter.instruction("str x9, [sp, #24]");                                   // store the updated result length
-    emitter.instruction("ldr x12, [sp, #8]");                                   // result start offset
-    emitter.instruction("add x12, x12, x9");                                    // compact tail offset after this chunk
-    emit_symbol_address(emitter, "x13", "_concat_off");
-    emitter.instruction("str x12, [x13]");                                      // publish the compacted concat-buffer tail
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the chunk pointer
     emitter.instruction("bl __rt_decref_any");                                  // release owned wrapper/filter chunks; concat slices are ignored
     emitter.instruction("b __rt_stream_get_contents_loop");                     // read the next chunk
@@ -111,11 +152,28 @@ pub fn emit_stream_get_contents(emitter: &mut Emitter) {
     emitter.instruction("mov x0, x1");                                          // final empty chunk pointer
     emitter.instruction("bl __rt_decref_any");                                  // release it if it is heap-backed
     emitter.label("__rt_stream_get_contents_done");
-    emitter.instruction("ldr x1, [sp, #16]");                                   // return the result start pointer
-    emitter.instruction("ldr x2, [sp, #24]");                                   // return the accumulated result length
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // release the helper frame
-    emitter.instruction("ret");                                                 // return the accumulated string slice
+    // Restore the shared offset this helper borrowed, then hand back an owned
+    // copy so the accumulator can be released here.
+    emitter.instruction("ldr x12, [sp, #56]");
+    emit_symbol_address(emitter, "x13", "_concat_off");
+    emitter.instruction("str x12, [x13]");                                      // shared buffer is left as it was found
+    emitter.instruction("ldr x1, [sp, #16]");                                   // accumulator pointer
+    emitter.instruction("cbz x1, __rt_stream_get_contents_empty");              // allocation failed: return an empty slice
+    emitter.instruction("ldr x2, [sp, #24]");                                   // accumulated length
+    emitter.instruction("bl __rt_str_persist");                                 // x1 = owned copy of the result
+    emitter.instruction("str x1, [sp, #64]");                                   // hold it across the free
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the accumulator itself
+    emitter.instruction("bl __rt_heap_free");                                   // release the scratch accumulation buffer
+    emitter.instruction("ldr x1, [sp, #64]");                                   // owned result pointer
+    emitter.instruction("ldr x2, [sp, #24]");                                   // owned result length
+    emitter.instruction("b __rt_stream_get_contents_ret");
+    emitter.label("__rt_stream_get_contents_empty");
+    emitter.instruction("mov x1, #0");
+    emitter.instruction("mov x2, #0");
+    emitter.label("__rt_stream_get_contents_ret");
+    emitter.instruction("ldp x29, x30, [sp, #96]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #112");                                    // release the helper frame
+    emitter.instruction("ret");                                                 // return the accumulated string
 
     emit_stream_get_contents_bounded_aarch64(emitter);
 }
