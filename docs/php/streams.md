@@ -199,11 +199,11 @@ its TLS 1.2/1.3 policy internally.
 |---|---|---|
 | `stream_context_create()` | `stream_context_create(array $options = [], array $params = []): resource` | Create a stream-context resource and persist `$options` in the single global context slot. A literal `['notification' => <closure>]` in `$params` is captured for HTTP notification callbacks. |
 | `stream_context_get_default()` | `stream_context_get_default(array $options = []): resource` | Return the default context resource. The optional arg is evaluated for side effects; v1 does not apply it. |
-| `stream_context_set_default()` | `stream_context_set_default(array $options): resource` | Return the default context resource. v1 evaluates `$options` for side effects but does not yet walk and persist the array; use `stream_context_set_option(stream_context_get_default(), ...)` when code needs options stored. |
+| `stream_context_set_default()` | `stream_context_set_default(array $options): resource` | Merge `$options` into the request's default context and return it. Later opens without an explicit context read them. |
 | `stream_context_set_option()` | `stream_context_set_option(resource $context, ...): bool` | Accepts PHP's two forms: `(ctx, options_array)` replaces the persisted options hash, while `(ctx, wrapper, option, value)` sets one nested option. In the four-arg form, values are stored as strings in v1. |
 | `stream_context_set_params()` | `stream_context_set_params(resource $context, array $params): bool` | Captures a literal `notification` closure or first-class callable into the global notification slot and returns `true`. |
 | `stream_context_get_options()` | `stream_context_get_options(resource $context): array` | Return the persisted options hash, or an empty hash when no context has been created. |
-| `stream_context_get_params()` | `stream_context_get_params(resource $context): array` | v1 stub: returns an empty associative array. |
+| `stream_context_get_params()` | `stream_context_get_params(resource $context): array` | Return the context's `options` (and `notification` when one is set). |
 | `stream_resolve_include_path()` | `stream_resolve_include_path(string $filename): string\|false` | elephc has no runtime `include_path`, so this is equivalent to `realpath($filename)`: canonical path on success, `false` otherwise. |
 
 Active stream-context consumers:
@@ -219,8 +219,10 @@ Active stream-context consumers:
   is checked against; without it the connection host is used, and a host that is an
   IP address means no SNI is sent at all.
 
-v1 has one active context slot. Creating or setting a context overwrites the
-global options used by subsequent consumers.
+Contexts are independent values: creating or modifying one does not disturb another.
+`fopen()`, `file_get_contents()` and `readfile()` publish their own `$context` for the
+duration of the call and restore the previous one, so a context passed to one call
+cannot leak into the next.
 
 ## Notification callbacks
 
