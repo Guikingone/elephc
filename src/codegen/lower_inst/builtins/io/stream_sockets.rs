@@ -212,10 +212,18 @@ pub(crate) fn lower_stream_socket_enable_crypto(
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbnz x0, {}", enable_label));     // enable=true enters the TLS attach path
             ctx.emitter.instruction("ldr x0, [sp]");                            // reload the stashed descriptor for TLS teardown
+            emit_tls_session_present_flag(ctx);                                 // probe before the teardown clears the slot
+            abi::emit_push_reg(ctx.emitter, "x0");                              // stash the flag across the teardown
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the descriptor under the stashed flag
             emit_tls_session_teardown_for_current_fd(ctx);
+            abi::emit_pop_reg(ctx.emitter, "x9");                               // recover the flag
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
-            ctx.emitter.instruction("mov x0, #1");                              // disabling crypto succeeds even when no session exists
+            // A stream that really had a session answers false: php-src shuts it down
+            // and still falls through to `return -1`. One that never had crypto answers
+            // true, through the NOTIMPL `default:` arm. See emit_tls_session_present_flag.
+            ctx.emitter.instruction("cmp x9, #0");
+            ctx.emitter.instruction("cset x0, eq");                             // no session → true, torn-down session → false
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the TLS attach path
             ctx.emitter.label(&enable_label);
             lower_stream_socket_enable_crypto_attach_aarch64(ctx, &done_label);
@@ -224,10 +232,18 @@ pub(crate) fn lower_stream_socket_enable_crypto(
             ctx.emitter.instruction("test rax, rax");                           // did the caller request TLS enablement?
             ctx.emitter.instruction(&format!("jnz {}", enable_label));          // enable=true enters the TLS attach path
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the stashed descriptor for TLS teardown
+            emit_tls_session_present_flag(ctx);                                 // probe before the teardown clears the slot
+            abi::emit_push_reg(ctx.emitter, "rax");                             // stash the flag across the teardown
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the descriptor under the stashed flag
             emit_tls_session_teardown_for_current_fd(ctx);
+            abi::emit_pop_reg(ctx.emitter, "r10");                              // recover the flag
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
-            ctx.emitter.instruction("mov eax, 1");                              // disabling crypto succeeds even when no session exists
+            // See the AArch64 counterpart: a torn-down session answers false, a stream
+            // that never had crypto answers true.
+            ctx.emitter.instruction("test r10, r10");
+            ctx.emitter.instruction("sete al");                                 // no session → true, torn-down session → false
+            ctx.emitter.instruction("movzx rax, al");
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the TLS attach path
             ctx.emitter.label(&enable_label);
             lower_stream_socket_enable_crypto_attach_x86_64(ctx, &done_label);

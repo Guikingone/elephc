@@ -10,6 +10,48 @@
 use super::*;
 
 /// Tears down the TLS session attached to the current fd result, if one exists.
+/// Leaves 1 in the int result register when the descriptor has a live TLS session.
+///
+/// `stream_socket_enable_crypto($s, false)` answers on this and nothing else. php-src
+/// runs the openssl handler only for a stream that is actually SSL-active: that handler
+/// shuts the session down and falls through to `return -1`, which `RETURN_FALSE`s. A
+/// stream with no crypto support never reaches it — `php_stream_set_option` reports
+/// NOTIMPL, which lands on the `default:` arm and `RETURN_TRUE`s. So a disable on a
+/// plain `php://memory` handle is true and a disable on a live TLS socket is false.
+///
+/// The probe has to run BEFORE the teardown, which clears the slot it reads.
+pub(super) fn emit_tls_session_present_flag(ctx: &mut FunctionContext<'_>) {
+    let absent = ctx.next_label("tls_session_absent");
+    let done = ctx.next_label("tls_session_probe_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #256");                            // the transitional TLS side table has 256 descriptor slots
+            ctx.emitter.instruction(&format!("b.hs {}", absent));               // high descriptors cannot have a table-backed session
+            abi::emit_symbol_address(ctx.emitter, "x9", "_tls_sessions");
+            ctx.emitter.instruction("ldr x9, [x9, x0, lsl #3]");                // the TLS session handle for this descriptor
+            ctx.emitter.instruction("cmp x9, #0");
+            ctx.emitter.instruction("cset x0, ne");                             // 1 when a session is attached
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&absent);
+            ctx.emitter.instruction("mov x0, #0");                              // no slot to consult: no session
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 256");                            // the transitional TLS side table has 256 descriptor slots
+            ctx.emitter.instruction(&format!("jae {}", absent));                // high descriptors cannot have a table-backed session
+            abi::emit_symbol_address(ctx.emitter, "r9", "_tls_sessions");       // TLS session table base
+            ctx.emitter.instruction("mov r9, QWORD PTR [r9 + rax*8]");          // the TLS session handle for this descriptor
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction("setne al");                                // 1 when a session is attached
+            ctx.emitter.instruction("movzx rax, al");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&absent);
+            ctx.emitter.instruction("xor eax, eax");                            // no slot to consult: no session
+            ctx.emitter.label(&done);
+        }
+    }
+}
+
 pub(super) fn emit_tls_session_teardown_for_current_fd(ctx: &mut FunctionContext<'_>) {
     let skip = ctx.next_label("tls_teardown_skip");
     match ctx.emitter.target.arch {
