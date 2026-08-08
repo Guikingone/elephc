@@ -257,6 +257,11 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
 
     // -- record state per direction bit --
     emitter.instruction("ldr x4, [sp, #0]");                                    // reload fd
+    // A NEGATIVE DESCRIPTOR MEANS "NODE MODE". The caller wants the instance for a
+    // filter chain node and must NOT also see it registered in the per-descriptor
+    // tables: the runtime's rule is that a filter lives in exactly one mechanism, so
+    // registering both would apply it twice on every read and write.
+    emitter.instruction("tbnz x4, #63, __rt_sfau_node_mode");                   // node mode: hand back the instance, register nothing
     emitter.instruction("ldr x5, [sp, #8]");                                    // reload mode
     emitter.instruction("ldr x6, [sp, #24]");                                   // reload resolved id (u8 in the low byte)
     abi::emit_symbol_address(emitter, "x10", "_user_filter_instances");
@@ -284,6 +289,12 @@ pub fn emit_stream_filter_attach_user(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_sfau_node_mode");
+    emitter.instruction("ldr x0, [sp, #32]");                                   // the created instance, for the caller's chain node
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // non-zero instance doubles as the success flag
 
     // -- built-in fallback: stamp the descriptor slots with the built-in id --
     emitter.label("__rt_sfau_try_builtin");
@@ -402,6 +413,10 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
 
     // -- record state per direction bit --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload fd
+    // See the AArch64 counterpart: a negative descriptor means the caller wants the
+    // instance for a chain node and no per-descriptor registration.
+    emitter.instruction("test rdi, rdi");                                       // node mode is signalled by a negative descriptor
+    emitter.instruction("js __rt_sfau_node_mode_x86");                          // hand back the instance, register nothing
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload mode
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // reload resolved id (u8 in the low byte)
     abi::emit_symbol_address(emitter, "r9", "_user_filter_instances");          // instances table base
@@ -431,6 +446,12 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 48");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
+
+    emitter.label("__rt_sfau_node_mode_x86");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the created instance, for the caller's chain node
+    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // non-zero instance doubles as the success flag
 
     // -- built-in fallback: stamp the descriptor slots with the built-in id --
     emitter.label("__rt_sfau_try_builtin_x86");
