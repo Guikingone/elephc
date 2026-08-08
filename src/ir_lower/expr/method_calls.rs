@@ -132,6 +132,7 @@ pub(super) fn lower_method_call(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_call_argument_signature(ctx, object_expr, object.value, dispatch_method);
+    promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
@@ -144,11 +145,12 @@ pub(super) fn lower_method_call(
         Some(expr.span),
     );
     let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
-    release_owned_call_arg_temporaries(
+    release_owned_call_arg_temporaries_with_signature(
         ctx,
         &arg_values,
         Some(call.value),
         &return_alias,
+        sig.as_ref(),
         expr.span,
     );
     release_owning_receiver_temporary(ctx, object, expr.span);
@@ -315,4 +317,3 @@ pub(super) fn lower_nullable_regular_method_call(
     ctx.builder.position_at_end(merge);
     take_owned_temp(ctx, &temp_name, expr.span)
 }
-

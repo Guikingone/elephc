@@ -48,7 +48,7 @@ pub(super) fn dynamic_new_candidates(
             continue;
         }
         if let Some(candidate) =
-            dynamic_new_candidate(ctx, class_name, class_info, arg_count, inst)?
+            dynamic_new_candidate(ctx, class_name, class_info, Some(arg_count), inst)?
         {
             candidates.push(candidate);
         }
@@ -83,20 +83,22 @@ pub(super) fn dynamic_new_candidate(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     class_info: &ClassInfo,
-    arg_count: usize,
+    arg_count: Option<usize>,
     inst: &Instruction,
 ) -> Result<Option<DynamicNewCandidate>> {
-    if let Some(candidate) =
-        spl_runtime_storage_dynamic_new_candidate(class_name, class_info, arg_count)
-    {
-        return Ok(Some(candidate));
+    if let Some(arg_count) = arg_count {
+        if let Some(candidate) =
+            spl_runtime_storage_dynamic_new_candidate(class_name, class_info, arg_count)
+        {
+            return Ok(Some(candidate));
+        }
     }
     if class_interfaces_require_missing_method_symbols(ctx, class_name, class_info) {
         return Ok(None);
     }
     let constructor_key = php_symbol_key("__construct");
     let constructor_impl = if let Some(constructor) = class_info.methods.get(&constructor_key) {
-        if constructor.params.len() != arg_count {
+        if arg_count.is_some_and(|arg_count| constructor.params.len() != arg_count) {
             return Ok(None);
         }
         let impl_class = class_info
@@ -116,8 +118,9 @@ pub(super) fn dynamic_new_candidate(
             impl_class,
             param_types,
             ref_params: constructor.ref_params.clone(),
+            sig: constructor.clone(),
         })
-    } else if arg_count == 0 {
+    } else if arg_count.is_none_or(|arg_count| arg_count == 0) {
         None
     } else {
         return Ok(None);

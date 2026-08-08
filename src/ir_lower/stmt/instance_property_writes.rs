@@ -48,6 +48,13 @@ pub(super) fn lower_property_assign(
         value_expr,
         span,
     );
+    // Property slots use their declared/inferred storage representation. In particular, an
+    // untyped property widened to Mixed needs a boxed cell even when this assignment is scalar.
+    let property_ty = object_property_type(ctx, object.value, property);
+    let value = match property_ty {
+        Some(ty) => coerce_typed_assign_value(ctx, value, &ty, span),
+        None => value,
+    };
     if magic_set_receiver_has_method(ctx, object.value, property) {
         lower_magic_property_set(ctx, object.value, property, value, span);
         return;
@@ -204,4 +211,3 @@ pub(super) fn contextualize_property_array_assignment(
         Some(span),
     )
 }
-

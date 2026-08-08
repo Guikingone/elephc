@@ -25,43 +25,47 @@ pub(super) fn load_property_store_value_to_result(
     }
     if can_store_boxed_value_for_mixed_property(&value_ty, slot_ty) {
         ctx.load_value_to_result(value)?;
+        // Transfer an unreleased owning box into the property; retain borrowed values and
+        // temporaries whose explicit EIR cleanup still owns the source reference.
         if !ctx.value_can_own_mixed_box_source(value)? {
             abi::emit_incref_if_refcounted(ctx.emitter, &value_ty);
         }
         return Ok(());
     }
     if can_convert_indexed_array_to_mixed_property(&value_ty, slot_ty) {
-        let PhpType::Array(source_elem) = ctx.load_value_to_result(value)?.codegen_repr() else {
+        let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
+        let PhpType::Array(source_elem) = &loaded_ty else {
             return Err(CodegenIrError::unsupported(format!(
                 "property array widening from PHP type {:?}",
                 value_ty
             )));
         };
+        // Give the conversion helper an owned candidate. Its COW split consumes that retain
+        // while leaving the SSA source untouched, and the returned unique array transfers
+        // directly into the property slot.
+        abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
         emit_loaded_indexed_array_to_mixed(ctx, &source_elem.codegen_repr());
-        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Array(Box::new(PhpType::Mixed)));
         return Ok(());
     }
     if can_store_assoc_array_as_mixed_property(&value_ty, slot_ty) {
+        let loaded_ty = ctx.load_value_to_result(value)?.codegen_repr();
         let PhpType::AssocArray {
-            key: source_key,
             value: source_value,
-        } = ctx.load_value_to_result(value)?.codegen_repr()
+            ..
+        } = &loaded_ty
         else {
             return Err(CodegenIrError::unsupported(format!(
                 "property associative-array widening from PHP type {:?}",
                 value_ty
             )));
         };
+        // Retain before a possible COW conversion so `PropSet` never consumes the SSA source.
+        // The retained value itself is the property owner when the hash already stores Mixed
+        // entries.
+        abi::emit_incref_if_refcounted(ctx.emitter, &loaded_ty);
         if source_value.codegen_repr() != PhpType::Mixed {
             emit_loaded_assoc_array_to_mixed(ctx);
         }
-        abi::emit_incref_if_refcounted(
-            ctx.emitter,
-            &PhpType::AssocArray {
-                key: source_key,
-                value: Box::new(PhpType::Mixed),
-            },
-        );
         return Ok(());
     }
     if can_store_value_as_tagged_scalar_property(&value_ty, slot_ty) {

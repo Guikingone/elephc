@@ -193,6 +193,14 @@ pub(super) fn lower_mixed_box(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     store_if_result(ctx, inst)
 }
 
+/// Clones a boxed Mixed zval cell so later mutation cannot rewrite an aliased source cell.
+pub(super) fn lower_mixed_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_clone");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers an invoker-only by-reference argument marker for descriptor calls.
 pub(super) fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
@@ -215,4 +223,3 @@ pub(super) fn lower_invoker_ref_arg(ctx: &mut FunctionContext<'_>, inst: &Instru
     emit_box_runtime_payload_as_mixed(ctx.emitter, marker_tag_reg, ref_cell_reg, source_tag_reg);
     store_if_result(ctx, inst)
 }
-

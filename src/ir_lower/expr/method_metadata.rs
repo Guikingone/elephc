@@ -30,6 +30,52 @@ pub(super) fn method_signature(
     None
 }
 
+/// Promotes the writable destination used by PDOStatement binding methods to a durable Mixed cell.
+pub(super) fn promote_pdo_binding_ref_argument(
+    ctx: &mut LoweringContext<'_, '_>,
+    object: crate::ir::ValueId,
+    method: &str,
+    args: &[Expr],
+) {
+    if !type_may_be_pdo_statement(ctx, &ctx.builder.value_php_type(object)) {
+        return;
+    }
+    let parameter_name = match php_symbol_key(method).as_str() {
+        "bindparam" => "variable",
+        "bindcolumn" => "var",
+        _ => return,
+    };
+    let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+    let argument = expanded_args
+        .iter()
+        .enumerate()
+        .find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if name == parameter_name => Some(value.as_ref()),
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 1 => Some(arg),
+            _ => None,
+        });
+    let Some(Expr {
+        kind: ExprKind::Variable(name),
+        span,
+    }) = argument
+    else {
+        return;
+    };
+    ctx.promote_local_mixed_ref_cell(name, Some(*span));
+}
+
+/// Returns whether a receiver type can dispatch to PDOStatement binding methods.
+fn type_may_be_pdo_statement(ctx: &LoweringContext<'_, '_>, ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class) => class_extends_class(ctx, class, "PDOStatement"),
+        PhpType::Union(members) => members
+            .iter()
+            .any(|member| type_may_be_pdo_statement(ctx, member)),
+        _ => false,
+    }
+}
+
 /// Returns the conservative return-to-argument alias summary for a method dispatch.
 ///
 /// A non-final receiver type includes every closed-world descendant implementation,
@@ -219,4 +265,3 @@ pub(super) fn dynamic_method_receiver_needs_mixed_fallback(php_type: &PhpType) -
         _ => false,
     }
 }
-

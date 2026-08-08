@@ -94,6 +94,47 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
     }
 }
 
+/// Verifies PDO Tier-D callback adapters are emitted under `pdo_udf` on both targets.
+#[test]
+fn test_runtime_emits_pdo_call_collation_when_pdo_udf() {
+    for (platform, arch) in [
+        (Platform::MacOS, Arch::AArch64),
+        (Platform::Linux, Arch::X86_64),
+    ] {
+        let mut emitter = Emitter::new(Target::new(platform, arch));
+        emit_runtime(&mut emitter, RuntimeFeatures::all());
+        let asm = emitter.output();
+        for sym in [
+            "__rt_pdo_call_collation",
+            "__rt_pdo_call_scalar",
+            "__rt_pdo_call_agg_step",
+            "__rt_pdo_call_agg_final",
+        ] {
+            assert!(
+                asm.contains(&format!(".globl {}\n", sym)),
+                "pdo_udf runtime missing {} for {:?}/{:?}",
+                sym,
+                platform,
+                arch
+            );
+        }
+    }
+}
+
+/// Verifies PDO Tier-D adapters are omitted when `pdo_udf` is not requested.
+#[test]
+fn test_runtime_omits_pdo_call_collation_without_pdo_udf() {
+    let mut emitter = Emitter::new(Target::new(Platform::MacOS, Arch::AArch64));
+    emit_runtime(&mut emitter, RuntimeFeatures::none());
+    let asm = emitter.output();
+    assert!(!asm.contains("__rt_pdo_call_collation:"));
+    assert!(!asm.contains(".globl __rt_pdo_call_collation\n"));
+    assert!(!asm.contains("__rt_pdo_call_scalar:"));
+    assert!(!asm.contains(".globl __rt_pdo_call_scalar\n"));
+    assert!(!asm.contains(".globl __rt_pdo_call_agg_step\n"));
+    assert!(!asm.contains(".globl __rt_pdo_call_agg_final\n"));
+}
+
 /// Verifies the full macOS AArch64 runtime still assembles once per-symbol
 /// dead stripping is enabled. The real codegen path renames internal labels
 /// to `L`-locals and appends a `.subsections_via_symbols` footer; under that

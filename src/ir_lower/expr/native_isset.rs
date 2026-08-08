@@ -80,7 +80,7 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
     match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
             let mut index_value = lower_expr(ctx, index);
-            let index_ty = index_expr_key_type(ctx, index);
+            let index_ty = isset_index_expr_key_type(ctx, index, index_value.value);
             if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
                 ctx.emit_value(
@@ -92,14 +92,13 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                     Some(expr.span),
                 )
             } else {
-                // String or mixed key on indexed storage: read through the
-                // mixed-key runtime path and check if the result is null.
+                // `isset()` is a silent probe even when the key is absent.
                 let read_value = ctx.emit_value(
-                    Op::ArrayGetMixedKey,
+                    Op::ArrayGetMixedKeySilent,
                     vec![array_value.value, index_value.value],
                     None,
                     PhpType::Mixed,
-                    Op::ArrayGetMixedKey.default_effects(),
+                    Op::ArrayGetMixedKeySilent.default_effects(),
                     Some(expr.span),
                 );
                 let is_null = ctx.emit_value(
@@ -108,6 +107,11 @@ pub(super) fn lower_native_isset_offset_probe_from_value(
                     None,
                     PhpType::Bool,
                     Op::IsNull.default_effects(),
+                    Some(expr.span),
+                );
+                crate::ir_lower::ownership::release_if_owned(
+                    ctx,
+                    read_value,
                     Some(expr.span),
                 );
                 let zero = ctx.emit_value(
@@ -365,4 +369,3 @@ pub(super) fn lower_nullable_magic_property_isset(
     ctx.builder.position_at_end(merge);
     ctx.load_local(&temp_name, Some(arg.span))
 }
-

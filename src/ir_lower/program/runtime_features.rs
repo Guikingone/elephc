@@ -16,6 +16,7 @@ pub(in crate::ir_lower) fn include_lowered_runtime_features(module: &mut Module)
     module.required_runtime_features.mb_strlen |= features.mb_strlen;
     module.required_runtime_features.phar_archive |= features.phar_archive;
     module.required_runtime_features.descriptor_invoker |= features.descriptor_invoker;
+    module.required_runtime_features.pdo_udf |= features.pdo_udf;
     module.required_runtime_features.eval_bridge |= features.eval_bridge;
     module.required_runtime_features.eval_scope |= features.eval_scope;
 }
@@ -66,6 +67,9 @@ pub(super) fn lowered_runtime_features(module: &Module) -> RuntimeFeatures {
                 }
                 Op::ExprCall | Op::CallableDescriptorInvoke => {
                     features.descriptor_invoker = true;
+                }
+                Op::PdoAdapterAddr => {
+                    features.pdo_udf = true;
                 }
                 _ => {}
             }
@@ -365,4 +369,3 @@ pub(super) fn eval_literal_static_method_supported_by_module(
     };
     crate::eval_aot::static_function_signature_supported(signature, args)
 }
-

@@ -365,7 +365,7 @@ mod tests {
     /// names the constant that must join the table.
     #[test]
     fn constants_absent_from_the_table_are_invariant() {
-        let profiles = PhpVersion::ALL;
+        let profiles = PhpVersion::MAINTAINED;
         let first = profiles[0];
         for profile in profiles {
             assert_eq!(
@@ -391,14 +391,20 @@ mod tests {
     #[test]
     fn constants_present_in_the_table_really_vary() {
         let distinct_strings: std::collections::HashSet<_> =
-            PhpVersion::ALL.iter().map(|p| p.version_string()).collect();
+            PhpVersion::MAINTAINED
+                .iter()
+                .map(|p| p.version_string())
+                .collect();
         let distinct_ids: std::collections::HashSet<_> =
-            PhpVersion::ALL.iter().map(|p| p.version_id()).collect();
+            PhpVersion::MAINTAINED
+                .iter()
+                .map(|p| p.version_id())
+                .collect();
         let distinct_minors: std::collections::HashSet<_> =
-            PhpVersion::ALL.iter().map(|p| p.minor()).collect();
-        assert_eq!(distinct_strings.len(), PhpVersion::ALL.len());
-        assert_eq!(distinct_ids.len(), PhpVersion::ALL.len());
-        assert_eq!(distinct_minors.len(), PhpVersion::ALL.len());
+            PhpVersion::MAINTAINED.iter().map(|p| p.minor()).collect();
+        assert_eq!(distinct_strings.len(), PhpVersion::MAINTAINED.len());
+        assert_eq!(distinct_ids.len(), PhpVersion::MAINTAINED.len());
+        assert_eq!(distinct_minors.len(), PhpVersion::MAINTAINED.len());
     }
 
     /// Every name `eval` is matched on is itself a table entry.

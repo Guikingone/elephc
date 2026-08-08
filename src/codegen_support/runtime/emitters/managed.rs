@@ -66,6 +66,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_hash_count(emitter);
     arrays::emit_hash_free_deep(emitter);
     arrays::emit_array_key_exists(emitter);
+    arrays::emit_array_key_exists_mixed_key(emitter);
     arrays::emit_undefined_array_key_warning(emitter);
     arrays::emit_array_search(emitter);
     arrays::emit_in_array_mixed_int(emitter);
@@ -145,6 +146,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_gc_note_child_ref(emitter);
     arrays::emit_gc_mark_reachable(emitter);
     arrays::emit_gc_collect_cycles(emitter);
+    arrays::emit_mixed_clone(emitter);
     arrays::emit_mixed_from_value(emitter);
     arrays::emit_mixed_abs(emitter);
     arrays::emit_mixed_instanceof(emitter);
@@ -162,6 +164,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     arrays::emit_mixed_numeric_binops(emitter);
     arrays::emit_int_checked_binops(emitter);
     arrays::emit_mixed_strict_eq(emitter);
+    arrays::emit_array_strict_eq(emitter);
     arrays::emit_mixed_unbox(emitter);
     arrays::emit_mixed_write_stdout(emitter);
     arrays::emit_object_free_deep(emitter);

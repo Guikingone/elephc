@@ -16,7 +16,7 @@ builtin! {
     name: "fwrite",
     area: Io,
     params: [stream: Mixed, data: Str],
-    returns: Int,
+    returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fwrite,
@@ -25,7 +25,7 @@ builtin! {
     php_manual: "function.fwrite",
 }
 
-/// Validates the stream argument is a stream resource and returns `Int`.
+/// Validates the stream argument and returns PHP's `int|false` result union.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -33,5 +33,7 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(PhpType::Int)
+    Ok(cx
+        .checker
+        .normalize_union_type(vec![PhpType::Int, PhpType::Bool]))
 }

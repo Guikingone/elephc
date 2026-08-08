@@ -212,8 +212,18 @@ pub(super) fn lower_array_access_from_value(
     let mut index_value = lower_expr(ctx, index);
     let op = match array_value.ir_type {
         IrType::Heap(IrHeapKind::Array) => {
-            let index_ty = index_expr_key_type(ctx, index);
-            if index_ty == PhpType::Int {
+            let index_ty = lowered_index_expr_key_type(ctx, index, index_value.value);
+            // A genuinely boxed Mixed key is materialized by array codegen. Do not coerce it
+            // here: string keys would become integer zero, while checked integer loop counters
+            // use I64 and therefore still take the ordinary coercion path below.
+            let index_is_mixed = matches!(index_value.ir_type, IrType::Heap(IrHeapKind::Mixed));
+            if index_is_mixed {
+                if warn_on_missing {
+                    Op::ArrayGet
+                } else {
+                    Op::ArrayGetSilent
+                }
+            } else if index_ty == PhpType::Int {
                 index_value = coerce_to_int_at_span(ctx, index_value, Some(index.span));
                 if warn_on_missing {
                     Op::ArrayGet
@@ -345,6 +355,41 @@ pub(crate) fn lower_array_access_from_lowered_receiver(
 pub(crate) fn index_expr_key_type(_ctx: &LoweringContext<'_, '_>, index: &Expr) -> PhpType {
     let ty = infer_expr_type_syntactic(index);
     normalized_array_key_type(index, ty)
+}
+
+/// Refines a read key's syntactic type from its lowered SSA value when it is definitely a string.
+pub(super) fn lowered_index_expr_key_type(
+    ctx: &LoweringContext<'_, '_>,
+    index: &Expr,
+    index_value: ValueId,
+) -> PhpType {
+    let syntactic = index_expr_key_type(ctx, index);
+    if syntactic == PhpType::Int && ctx.builder.value_php_type(index_value) == PhpType::Str {
+        return normalized_array_key_type(index, PhpType::Str);
+    }
+    syntactic
+}
+
+/// Refines an `isset` key from its lowered value, including boxed Mixed keys.
+pub(super) fn isset_index_expr_key_type(
+    ctx: &LoweringContext<'_, '_>,
+    index: &Expr,
+    index_value: ValueId,
+) -> PhpType {
+    let syntactic = index_expr_key_type(ctx, index);
+    if syntactic != PhpType::Int {
+        return syntactic;
+    }
+    let lowered = ctx.builder.value_php_type(index_value);
+    if matches!(lowered.codegen_repr(), PhpType::TaggedScalar) {
+        return syntactic;
+    }
+    match lowered {
+        ty @ (PhpType::Str | PhpType::Mixed | PhpType::Union(_)) => {
+            normalized_array_key_type(index, ty)
+        }
+        _ => syntactic,
+    }
 }
 
 /// Returns the best PHP result type for a lowered array/string/hash access.

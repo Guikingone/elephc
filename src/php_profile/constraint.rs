@@ -260,7 +260,7 @@ fn parse(constraint: &str) -> Option<Vec<Vec<Clause>>> {
 /// tested against.
 pub fn newest_admitted(constraint: &str) -> Option<PhpVersion> {
     let alternatives = parse(constraint)?;
-    PhpVersion::ALL
+    PhpVersion::MAINTAINED
         .iter()
         .rev()
         .copied()

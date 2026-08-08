@@ -141,9 +141,23 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     inst: &Instruction,
 ) -> Result<()> {
     let class_name_value = expect_operand(inst, 0)?;
-    let constructor_args = inst.operands.get(1..).ok_or_else(|| {
-        CodegenIrError::invalid_module("dynamic_object_new_mixed missing class operand")
-    })?;
+    let uses_runtime_arg_container = matches!(inst.immediate, Some(Immediate::Bool(true)));
+    let constructor_arg_container = if uses_runtime_arg_container {
+        Some(*inst.operands.get(1).ok_or_else(|| {
+            CodegenIrError::invalid_module(
+                "dynamic_object_new_mixed missing runtime constructor argument container",
+            )
+        })?)
+    } else {
+        None
+    };
+    let constructor_args = if uses_runtime_arg_container {
+        &inst.operands[0..0]
+    } else {
+        inst.operands.get(1..).ok_or_else(|| {
+            CodegenIrError::invalid_module("dynamic_object_new_mixed missing class operand")
+        })?
+    };
     let result = inst.result.ok_or_else(|| {
         CodegenIrError::invalid_module("dynamic_object_new_mixed missing result value")
     })?;
@@ -156,7 +170,11 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
     abi::emit_push_result_value(ctx.emitter, &PhpType::Str);
 
     let fallback_label = ctx.next_label("dynamic_new_mixed_fallback");
-    let candidates = dynamic_new_mixed_candidates(ctx, constructor_args.len(), inst)?;
+    let candidates = dynamic_new_mixed_candidates(
+        ctx,
+        (!uses_runtime_arg_container).then_some(constructor_args.len()),
+        inst,
+    )?;
     let case_labels = candidates
         .iter()
         .map(|candidate| {
@@ -174,6 +192,7 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_object_new_mixed(
             ctx,
             candidate,
             constructor_args,
+            constructor_arg_container,
             class_name_value,
             result,
         )?;

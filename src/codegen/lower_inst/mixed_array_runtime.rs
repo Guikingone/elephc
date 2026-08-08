@@ -18,7 +18,9 @@ pub(super) fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &In
         (PhpType::Mixed | PhpType::Union(_), PhpType::Void) => {
             lower_mixed_cell_runtime_assign(ctx, inst)
         }
-        (PhpType::Mixed | PhpType::Union(_), _) => lower_mixed_array_runtime_get(ctx, inst),
+        (PhpType::Mixed | PhpType::Union(_), _) => {
+            lower_mixed_array_runtime_get(ctx, inst, false)
+        }
         (PhpType::AssocArray { .. }, PhpType::Void) => hashes::lower_hash_append(ctx, inst),
         (other, _) => Err(CodegenIrError::unsupported(format!(
             "runtime_call with receiver PHP type {:?} returning PHP type {:?}",
@@ -28,7 +30,11 @@ pub(super) fn lower_binary_runtime_call(ctx: &mut FunctionContext<'_>, inst: &In
 }
 
 /// Lowers `$mixed[$key]` through the shared boxed Mixed array/hash/stdClass reader.
-pub(super) fn lower_mixed_array_runtime_get(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+pub(super) fn lower_mixed_array_runtime_get(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    for_write: bool,
+) -> Result<()> {
     let receiver = expect_operand(inst, 0)?;
     let key = expect_operand(inst, 1)?;
     let warn_on_missing = expect_operand(inst, 2)?;
@@ -44,7 +50,14 @@ pub(super) fn lower_mixed_array_runtime_get(ctx: &mut FunctionContext<'_>, inst:
             ctx.load_value_to_reg(receiver, "rdi")?;
         }
     }
-    abi::emit_call_label(ctx.emitter, "__rt_mixed_array_get");
+    abi::emit_call_label(
+        ctx.emitter,
+        if for_write {
+            "__rt_mixed_array_get_for_write"
+        } else {
+            "__rt_mixed_array_get"
+        },
+    );
     cast_loaded_mixed_pointer_to_result(ctx, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
@@ -179,4 +192,3 @@ pub(super) fn lower_mixed_array_runtime_set_x86_64(
     abi::emit_call_label(ctx.emitter, "__rt_mixed_array_set");
     Ok(())
 }
-

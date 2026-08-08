@@ -70,6 +70,16 @@ pub(super) fn coerce_typed_assign_value(
     }
     match target_ty {
         PhpType::Mixed => ctx.box_value_as_mixed(value, PhpType::Mixed, Some(span)),
+        target @ (PhpType::Callable | PhpType::Object(_)) if source_ty == PhpType::Mixed => {
+            ctx.emit_value(
+                Op::MixedUnbox,
+                vec![value.value],
+                None,
+                target,
+                Op::MixedUnbox.default_effects(),
+                Some(span),
+            )
+        }
         _ => value,
     }
 }

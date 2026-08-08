@@ -47,7 +47,7 @@ pub(super) fn emit_generic_dynamic_new_class_string(
 /// Returns AOT dynamic-new candidates in stable class-id order.
 pub(super) fn dynamic_new_mixed_candidates(
     ctx: &FunctionContext<'_>,
-    arg_count: usize,
+    arg_count: Option<usize>,
     inst: &Instruction,
 ) -> Result<Vec<DynamicNewCandidate>> {
     let mut candidates = Vec::new();
@@ -260,10 +260,11 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
     ctx: &mut FunctionContext<'_>,
     candidate: &DynamicNewCandidate,
     constructor_args: &[ValueId],
+    constructor_arg_container: Option<ValueId>,
     dummy_receiver_operand: ValueId,
     result: ValueId,
 ) -> Result<()> {
-    if candidate.class_name == "SplFixedArray" {
+    if candidate.class_name == "SplFixedArray" && constructor_arg_container.is_none() {
         return emit_dynamic_new_mixed_spl_fixed_array_candidate(
             ctx,
             candidate.class_id,
@@ -271,7 +272,9 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
             result,
         );
     }
-    if is_spl_doubly_linked_list_family(&candidate.class_name) {
+    if is_spl_doubly_linked_list_family(&candidate.class_name)
+        && constructor_arg_container.is_none()
+    {
         return emit_dynamic_new_mixed_spl_dll_candidate(ctx, candidate.class_id, result);
     }
     emit_object_allocation(
@@ -290,17 +293,29 @@ pub(super) fn emit_dynamic_new_mixed_candidate(
         emit_property_default(ctx, object_base_reg, default)?;
     }
     if let Some(constructor) = &candidate.constructor_impl {
-        emit_dynamic_new_mixed_constructor_call(
-            ctx,
-            candidate,
-            constructor,
-            constructor_args,
-            dummy_receiver_operand,
-        )?;
+        if let Some(arg_container) = constructor_arg_container {
+            emit_dynamic_new_mixed_constructor_container_call(
+                ctx,
+                candidate,
+                constructor,
+                arg_container,
+            )?;
+        } else {
+            emit_dynamic_new_mixed_constructor_call(
+                ctx,
+                candidate,
+                constructor,
+                constructor_args,
+                dummy_receiver_operand,
+            )?;
+        }
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(candidate.class_name.clone()));
+    emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::Object(candidate.class_name.clone()),
+    );
     ctx.store_result_value(result)
 }
 
@@ -327,7 +342,10 @@ pub(super) fn emit_dynamic_new_without_constructor_mixed_candidate(
     }
     abi::emit_load_temporary_stack_slot(ctx.emitter, object_reg, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(candidate.class_name.clone()));
+    emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::Object(candidate.class_name.clone()),
+    );
     ctx.store_result_value(result)
 }
 
@@ -362,7 +380,10 @@ pub(super) fn emit_dynamic_new_mixed_spl_fixed_array_candidate(
         abi::emit_load_int_immediate(ctx.emitter, abi::int_arg_reg_name(ctx.emitter.target, 1), 0);
     }
     abi::emit_call_label(ctx.emitter, "__rt_spl_fixed_new");
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object("SplFixedArray".to_string()));
+    emit_box_current_owned_value_as_mixed(
+        ctx.emitter,
+        &PhpType::Object("SplFixedArray".to_string()),
+    );
     ctx.store_result_value(result)
 }
 
@@ -378,7 +399,7 @@ pub(super) fn emit_dynamic_new_mixed_spl_dll_candidate(
         class_id as i64,
     );
     abi::emit_call_label(ctx.emitter, "__rt_spl_dll_new");
-    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
+    emit_box_current_owned_value_as_mixed(ctx.emitter, &PhpType::Object(String::new()));
     ctx.store_result_value(result)
 }
 
@@ -419,6 +440,74 @@ pub(super) fn emit_dynamic_new_mixed_constructor_call(
     abi::emit_release_temporary_stack(ctx.emitter, caller_stack_pad_bytes);
     abi::emit_release_temporary_stack(ctx.emitter, call_args.overflow_bytes);
     emit_ref_arg_writebacks(ctx, &call_args.ref_writebacks)
+}
+
+/// Invokes a selected dynamic constructor through its uniform descriptor invoker when PHP
+/// supplied named arguments or one or more spread arrays.
+pub(super) fn emit_dynamic_new_mixed_constructor_container_call(
+    ctx: &mut FunctionContext<'_>,
+    candidate: &DynamicNewCandidate,
+    constructor: &ConstructorCallTarget,
+    arg_container: ValueId,
+) -> Result<()> {
+    let receiver_ty = PhpType::Object(candidate.class_name.clone());
+    let captures = vec![("receiver".to_string(), receiver_ty.clone(), false)];
+    let constructor_key = php_symbol_key("__construct");
+    let entry_label = emit_instance_method_descriptor_entry_wrapper(
+        ctx,
+        &constructor.impl_class,
+        &constructor_key,
+        &constructor.sig,
+    )?;
+    let invoker_label = emit_runtime_callable_invoker_inline(ctx, &constructor.sig, &captures);
+    let php_name = format!("{}::__construct", candidate.class_name);
+    let descriptor_label = callable_descriptor::static_descriptor_with_optional_invoker_meta(
+        ctx.data,
+        &entry_label,
+        Some(&php_name),
+        callable_descriptor::CALLABLE_DESC_KIND_FIRST_CLASS,
+        Some(&constructor.sig),
+        &captures,
+        &[],
+        callable_descriptor::CallableDescriptorInvocation::method(
+            callable_descriptor::CallableDescriptorShape::InstanceMethod,
+            Some(candidate.class_name.clone()),
+            "__construct",
+        ),
+        Some(&invoker_label),
+    );
+
+    let result_reg = abi::int_result_reg(ctx.emitter).to_string();
+    let descriptor_reg = abi::nested_call_reg(ctx.emitter).to_string();
+    let total_bytes = callable_descriptor::CALLABLE_DESC_RUNTIME_CAPTURE_OFFSET + 16;
+    abi::emit_load_temporary_stack_slot(ctx.emitter, &result_reg, 0);
+    abi::emit_incref_if_refcounted(ctx.emitter, &receiver_ty);
+    abi::emit_push_reg(ctx.emitter, &result_reg);
+    abi::emit_load_int_immediate(ctx.emitter, &result_reg, total_bytes as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_heap_alloc");
+    ctx.emitter
+        .instruction(&format!("mov {}, {}", descriptor_reg, result_reg)); // preserve the runtime constructor descriptor while copying its static header
+    callable_descriptor::emit_copy_static_descriptor_to_runtime(
+        ctx.emitter,
+        &descriptor_reg,
+        &descriptor_label,
+    );
+    abi::emit_pop_reg(ctx.emitter, &result_reg);
+    callable_descriptor::emit_store_current_result_to_runtime_capture(
+        ctx.emitter,
+        &descriptor_reg,
+        0,
+        &receiver_ty,
+    );
+    callables::emit_descriptor_reg_invoker_mixed_result_with_arg_container(
+        ctx,
+        &descriptor_reg,
+        arg_container,
+        "dynamic_constructor",
+        true,
+    )?;
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    Ok(())
 }
 
 /// Invokes the runtime class-name registry fallback and boxes a matched object as Mixed.
