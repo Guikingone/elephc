@@ -5,12 +5,14 @@
 //! - `cargo test` through Rust's test harness.
 //!
 //! Key details:
-//! - Submodules group focused fixtures for expressions, pruning.
+//! - Submodules group focused fixtures for expressions, PHP equivalence, pipes, and pruning.
 
 use super::*;
 
 #[path = "constant_folding/expressions.rs"]
 mod expressions;
+#[path = "constant_folding/php_equivalence.rs"]
+mod php_equivalence;
 #[path = "constant_folding/pipes.rs"]
 mod pipes;
 #[path = "constant_folding/pruning.rs"]

@@ -20,6 +20,7 @@ use crate::codegen::runtime_value_tag;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::ir::{Function, LocalKind, Module};
+use crate::names::join_php_symbol;
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -898,7 +899,7 @@ fn emit_aarch64_uninitialized_property_get_guard(
     }
     let initialized_label = format!(
         "{}_initialized",
-        label_fragment(&slot_body_label_raw(slot, "get"))
+        slot_body_label_raw(slot, "get")
     );
     emitter.instruction("ldr x10, [sp, #16]");                                  // reload the unboxed object pointer for marker inspection
     emitter.instruction(&format!("ldr x11, [x10, #{}]", slot.offset + 8));      // load the typed-property initialization marker
@@ -921,7 +922,7 @@ fn emit_x86_64_uninitialized_property_get_guard(
     }
     let initialized_label = format!(
         "{}_initialized_x",
-        label_fragment(&slot_body_label_raw(slot, "get"))
+        slot_body_label_raw(slot, "get")
     );
     emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // reload the unboxed object pointer for marker inspection
     emitter.instruction(&format!("mov rax, QWORD PTR [r10 + {}]", slot.offset + 8)); // load the typed-property initialization marker
@@ -968,11 +969,11 @@ fn emit_aarch64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = format!(
                 "{}_mixed_null",
-                label_fragment(&slot_body_label_raw(slot, "get"))
+                slot_body_label_raw(slot, "get")
             );
             let done_label = format!(
                 "{}_mixed_done",
-                label_fragment(&slot_body_label_raw(slot, "get"))
+                slot_body_label_raw(slot, "get")
             );
             emitter.instruction(&format!("ldr x0, [x9, #{}]", slot.offset));    // load the stored Mixed property cell
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null property storage reads as PHP null
@@ -1019,8 +1020,8 @@ fn emit_x86_64_box_property_slot(emitter: &mut Emitter, slot: &EvalPropertySlot)
             emit_box_current_value_as_mixed(emitter, &PhpType::TaggedScalar);
         }
         PhpType::Mixed | PhpType::Union(_) => {
-            let null_label = format!("{}_mixed_null_x", label_fragment(&slot_body_label_raw(slot, "get")));
-            let done_label = format!("{}_mixed_done_x", label_fragment(&slot_body_label_raw(slot, "get")));
+            let null_label = format!("{}_mixed_null_x", slot_body_label_raw(slot, "get"));
+            let done_label = format!("{}_mixed_done_x", slot_body_label_raw(slot, "get"));
             emitter.instruction(&format!("mov rax, QWORD PTR [r11 + {}]", slot.offset)); // load the stored Mixed property cell
             emitter.instruction("test rax, rax");                               // check whether the property storage is initialized
             emitter.instruction(&format!("jz {}", null_label));                 // null property storage reads as PHP null
@@ -1175,11 +1176,11 @@ fn emit_aarch64_clear_scalar_property_marker(emitter: &mut Emitter, slot: &EvalP
 fn emit_aarch64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     let null_label = format!(
         "{}_tagged_scalar_null",
-        label_fragment(&slot_body_label_raw(slot, "set"))
+        slot_body_label_raw(slot, "set")
     );
     let done_label = format!(
         "{}_tagged_scalar_done",
-        label_fragment(&slot_body_label_raw(slot, "set"))
+        slot_body_label_raw(slot, "set")
     );
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the boxed eval value for nullable-int inspection
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the assigned value tag and payload words
@@ -1305,11 +1306,11 @@ fn emit_x86_64_store_object_property_slot(
 fn emit_x86_64_store_tagged_scalar_property(emitter: &mut Emitter, slot: &EvalPropertySlot) {
     let null_label = format!(
         "{}_tagged_scalar_null_x",
-        label_fragment(&slot_body_label_raw(slot, "set"))
+        slot_body_label_raw(slot, "set")
     );
     let done_label = format!(
         "{}_tagged_scalar_done_x",
-        label_fragment(&slot_body_label_raw(slot, "set"))
+        slot_body_label_raw(slot, "set")
     );
     emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload the boxed eval value for nullable-int inspection
     emitter.instruction("call __rt_mixed_unbox");                               // expose the assigned value tag and payload words
@@ -1359,13 +1360,13 @@ fn slot_scope_ok_label(module: &Module, slot: &EvalPropertySlot, mode: &str) -> 
 }
 
 /// Returns the architecture-independent body label stem for a property slot.
+///
+/// `mode` is a compiler-controlled literal and becomes part of the fixed prefix; the PHP names
+/// go through `join_php_symbol()` so slots differing only in underscore placement stay distinct.
 fn slot_body_label_raw(slot: &EvalPropertySlot, mode: &str) -> String {
-    format!(
-        "__elephc_eval_property_{}_{}_{}_{}",
-        mode,
-        label_fragment(&slot.class_name),
-        label_fragment(&slot.declaring_class),
-        label_fragment(&slot.property)
+    join_php_symbol(
+        &format!("__elephc_eval_property_{}", mode),
+        &[&slot.class_name, &slot.declaring_class, &slot.property],
     )
 }
 
@@ -1425,13 +1426,6 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-/// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {

@@ -15,6 +15,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = constants::lower_static_defined_call(ctx, name, args, expr) {
         return value;
     }
+    if let Some(value) = constants::lower_static_constant_call(ctx, name, args, expr) {
+        return value;
+    }
     let canonical = name.as_str();
     if let Some(value) = lower_lazy_isset(ctx, canonical, args, expr) {
         return value;
@@ -32,6 +35,13 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     if let Some(value) = lower_dynamic_call_user_func_array(ctx, canonical, args, expr) {
+        return value;
+    }
+    // A mutating builtin whose by-reference array argument is a property, static property, or
+    // container element is rewritten to `$tmp = <place>; f($tmp, ...); <place> = $tmp;` before
+    // any builtin fast path runs, so the rewritten call reaches the local-variable
+    // by-reference lowering that actually stores the copy-on-write result back.
+    if let Some(value) = ref_place_args::lower_builtin_ref_place_call(ctx, name, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
@@ -52,6 +62,9 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
         return value;
     }
     if let Some(value) = lower_static_array_push(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_array_internal_pointer(ctx, canonical, args, expr) {
         return value;
     }
     if let Some(value) = lower_static_is_callable(ctx, canonical, args, expr) {
@@ -263,12 +276,43 @@ pub(super) fn emit_builtin_call_value(
 }
 
 /// Resolves a migrated registry builtin's result type from the same descriptor as the checker.
+///
+/// Used for a builtin lowered at its own call site, so the checker's per-span result type is
+/// authoritative and is passed through to the resolver.
 pub(super) fn registry_builtin_result_type(
     ctx: &LoweringContext<'_, '_>,
     name: &str,
     args: &[Expr],
     operands: &[crate::ir::ValueId],
     span: Span,
+) -> Option<PhpType> {
+    // Synthetic builtin-class and prelude AST nodes share the dummy 0:0
+    // span, so the checker map cannot identify an individual call there.
+    // Use the typed runtime target's representation-safe fallback instead
+    // of accepting whichever synthetic call last occupied that key.
+    let checked = if span.line != 0 {
+        ctx.builtin_call_types
+            .get(&span)
+            .map(|checked| normalize_value_php_type(checked.clone()))
+    } else {
+        None
+    };
+    resolve_registry_builtin_result_type(ctx, name, args, operands, span, checked)
+}
+
+/// Resolves a registry builtin's result type from its descriptor, its lowered operands, and the
+/// checker's result type for this very call when one is available.
+///
+/// `checked` must be `None` whenever the caller cannot prove the checker examined *this* builtin
+/// at `span`; the resolver then derives a representation-safe type from the typed runtime target
+/// instead of trusting a type that may describe a different call.
+pub(super) fn resolve_registry_builtin_result_type(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    args: &[Expr],
+    operands: &[crate::ir::ValueId],
+    span: Span,
+    checked: Option<PhpType>,
 ) -> Option<PhpType> {
     let def = crate::builtins::registry::lookup(name)?;
     let arg_types = operands
@@ -283,21 +327,21 @@ pub(super) fn registry_builtin_result_type(
     };
     let resolved = match def.spec.semantics.result_type {
         crate::builtins::semantics::BuiltinResultType::Checked => {
-            // Synthetic builtin-class and prelude AST nodes share the dummy 0:0
-            // span, so the checker map cannot identify an individual call there.
-            // Use the typed runtime target's representation-safe fallback instead
-            // of accepting whichever synthetic call last occupied that key.
-            if span.line != 0 {
-                if let Some(checked) = ctx.builtin_call_types.get(&span) {
-                    return Some(normalize_value_php_type(checked.clone()));
-                }
-            }
             let crate::builtins::semantics::BuiltinLowering::Runtime(
                 crate::ir::RuntimeCallTarget::Function(target),
             ) = def.spec.semantics.lowering
             else {
-                return None;
+                return checked;
             };
+            // The checker types an untyped user-function parameter from its call sites, while EIR
+            // gives it the dynamic boxed-Mixed ABI contract, so a checked type can describe a
+            // narrower element layout than the operands actually carry. A runtime target that
+            // copies an argument's layout rejects such a type and re-derives its own.
+            if let Some(checked) = checked {
+                if target.checked_result_type_fits_operands(&arg_types, &checked) {
+                    return Some(checked);
+                }
+            }
             target.fallback_result_type(&arg_types, &def.return_type)
         }
         crate::builtins::semantics::BuiltinResultType::Declared => def.return_type.clone(),

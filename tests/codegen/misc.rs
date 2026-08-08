@@ -478,3 +478,60 @@ echo label(5) . "|" . label(-1);
     );
     assert_eq!(out, "positive|zero or negative");
 }
+
+/// Verifies `constant()` returns the value of a `define()`d or `const`-declared global
+/// constant with the constant's own PHP type.
+#[test]
+fn test_constant_returns_defined_values() {
+    let out = compile_and_run(
+        r#"<?php
+define("FOO", 42);
+define("BAR", "hello");
+define("BAZ", 3.5);
+define("QUX", true);
+const CC = 7;
+echo constant("FOO"), "|", constant("BAR"), "|", constant("BAZ"), "|", var_export(constant("QUX"), true), "|", constant("CC");
+"#,
+    );
+    assert_eq!(out, "42|hello|3.5|true|7");
+}
+
+/// Verifies `constant()` resolves case-insensitively, namespaced, by named argument, and with
+/// a leading `\` on the constant NAME itself (PHP looks the global table up either way).
+#[test]
+fn test_constant_case_insensitive_namespaced_and_named_args() {
+    let out = compile_and_run(
+        r#"<?php
+define("N", 5);
+echo CONSTANT("N"), "|", \constant("N"), "|", constant(name: "N"), "|", constant("\\N");
+"#,
+    );
+    assert_eq!(out, "5|5|5|5");
+}
+
+/// Verifies `constant()` keeps the referenced constant's PHP type rather than widening to
+/// `mixed`, including for the predefined constant surface.
+#[test]
+fn test_constant_preserves_constant_type() {
+    let out = compile_and_run(
+        r#"<?php
+define("V", 9);
+echo gettype(constant("V")), "|", gettype(constant("PHP_EOL")), "|", gettype(constant("M_PI")), "|", constant("PHP_INT_MAX");
+"#,
+    );
+    assert_eq!(out, "integer|string|double|9223372036854775807");
+}
+
+/// Verifies `constant()` inside a namespace performs a GLOBAL lookup, so the unqualified and
+/// the `\`-qualified call agree.
+#[test]
+fn test_constant_inside_namespace_is_a_global_lookup() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App;
+define("APP_X", 11);
+echo constant("APP_X"), "|", \constant("APP_X");
+"#,
+    );
+    assert_eq!(out, "11|11");
+}

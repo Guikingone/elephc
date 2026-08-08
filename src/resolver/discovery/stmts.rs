@@ -44,7 +44,7 @@ pub(super) fn discover_stmts(
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
     for stmt in stmts {
-        let _source_mode = crate::source::scoped_parse_mode(stmt.source_mode);
+        let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
         discover_stmt(stmt, base_dir, loaded_paths, include_chain, state, output)?;
     }
     Ok(())

@@ -402,6 +402,7 @@ impl Checker {
         let saved_eval_barrier_active = self.eval_barrier_active;
         let saved_break_continue_depth = self.break_continue_depth;
         let saved_finally_break_continue_bases = self.finally_break_continue_bases.clone();
+        let saved_null_probe_scope_is_top_level = self.null_probe_scope_is_top_level;
 
         self.active_ref_params = ref_param_names.into_iter().collect();
         self.active_globals.clear();
@@ -410,6 +411,9 @@ impl Checker {
         self.eval_barrier_active = false;
         self.break_continue_depth = 0;
         self.finally_break_continue_bases.clear();
+        // A function/method/closure body is not the scope whose environment becomes
+        // `global_env`, so null-probe roots found here must not be deferred against it.
+        self.null_probe_scope_is_top_level = false;
 
         let result = f(self);
 
@@ -420,6 +424,7 @@ impl Checker {
         self.eval_barrier_active = saved_eval_barrier_active;
         self.break_continue_depth = saved_break_continue_depth;
         self.finally_break_continue_bases = saved_finally_break_continue_bases;
+        self.null_probe_scope_is_top_level = saved_null_probe_scope_is_top_level;
 
         result
     }

@@ -310,18 +310,34 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
             | "ucwords" | "str_pad" | "implode" | "sprintf" | "vsprintf" | "nl2br" | "wordwrap" | "md5"
             | "sha1" | "hash" | "substr_replace" | "addslashes" | "stripslashes"
             | "htmlspecialchars" | "htmlentities" | "html_entity_decode" | "urlencode" | "urldecode"
-            | "base64_encode" | "base64_decode" | "bin2hex" | "hex2bin" | "number_format"
+            | "base64_encode" | "bin2hex" | "hex2bin" | "number_format"
             | "date" | "json_encode" | "json_decode" | "json_last_error_msg" | "gettype"
-            | "str_word_count" | "chunk_split" => PhpType::Str,
-            "strpos" | "strrpos" | "array_search" | "grapheme_strrev" | "fileatime"
+            | "chunk_split" | "quotemeta" | "base_convert"
+            // `join` is `implode`'s alias, and dechex/decbin/decoct render integers as
+            // strings. Without these arms an array literal such as `[dechex($n)]` would take
+            // the `_ => PhpType::Int` fallback below, type the element `int`, and read the
+            // string result registers as an integer — `["a"]` came out as `[0]`.
+            | "join" | "dechex" | "decbin" | "decoct" => PhpType::Str,
+            "strpos" | "strrpos" | "stripos" | "strripos"
+            | "array_search" | "grapheme_strrev" | "fileatime"
             | "filectime" | "fileperms" | "fileowner" | "filegroup" | "fileinode"
             | "filetype" | "stat" | "lstat" | "fstat" | "fgetc" | "readfile"
-            | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp" => {
+            | "readlink" | "stream_get_contents" | "stream_copy_to_stream" | "clamp"
+            // hexdec/bindec/octdec return `int|float`, whose shared codegen representation
+            // is `Mixed`; the boxed cell must not be read back as a raw integer.
+            | "hexdec" | "bindec" | "octdec"
+            // `base64_decode()` returns `string|false` because `$strict = true` rejects a
+            // character outside the Base64 alphabet with `false`. Its representation is the
+            // same boxed `Mixed` cell, so it must not be read back as a string pair.
+            | "base64_decode" => {
                 PhpType::Mixed
             }
             "fopen" | "tmpfile" => PhpType::Union(vec![PhpType::stream_resource(), PhpType::False]),
             "strlen" | "ord" | "count" | "intval" | "abs" | "intdiv" | "printf"
-            | "rand" | "time" | "fpassthru" | "linkinfo" => PhpType::Int,
+            | "rand" | "time" | "fpassthru" | "linkinfo"
+            // Listed explicitly rather than left to the `_ => PhpType::Int` fallback, so a
+            // future change to that fallback cannot silently retype them.
+            | "substr_count" | "strncmp" | "strncasecmp" => PhpType::Int,
             "floatval" | "floor" | "ceil" | "round" | "sqrt" | "pow" | "fmod" | "sin" | "cos"
             | "tan" | "asin" | "acos" | "atan" | "atan2" | "sinh" | "cosh" | "tanh" | "log"
             | "log2" | "log10" | "exp" | "hypot" | "pi" | "deg2rad" | "rad2deg" => PhpType::Float,
@@ -462,7 +478,20 @@ pub fn infer_expr_type_syntactic(expr: &Expr) -> PhpType {
                     PhpType::Int
                 }
             }
-            BinOp::Div | BinOp::Pow => PhpType::Float,
+            BinOp::Div => PhpType::Float,
+            BinOp::Pow => {
+                // PHP's `**` keeps an integer result when both operands are ints, the
+                // exponent is non-negative and the value fits; otherwise it is a float.
+                let lt = infer_expr_type_syntactic(left);
+                let rt = infer_expr_type_syntactic(right);
+                if lt == PhpType::Float || rt == PhpType::Float {
+                    PhpType::Float
+                } else if let Some(ty) = checked_literal_int_arithmetic_type(op, left, right) {
+                    ty
+                } else {
+                    PhpType::Mixed
+                }
+            }
             BinOp::Eq
             | BinOp::NotEq
             | BinOp::Lt
@@ -490,9 +519,45 @@ fn checked_literal_int_arithmetic_type(op: &BinOp, left: &Expr, right: &Expr) ->
         BinOp::Add => lhs.checked_add(rhs).is_some(),
         BinOp::Sub => lhs.checked_sub(rhs).is_some(),
         BinOp::Mul => lhs.checked_mul(rhs).is_some(),
+        BinOp::Pow => int_pow_result_fits(lhs, rhs),
         _ => return None,
     };
     Some(if fits { PhpType::Int } else { PhpType::Float })
+}
+
+/// Returns whether PHP's `int ** int` keeps an integer result for these literals.
+///
+/// Mirrors `zend_pow_function_base` (and `crate::optimize::fold::ops::try_fold_int_pow`):
+/// a negative exponent is always a double, `exp == 0` and `base == 0` answer immediately,
+/// and otherwise the square-and-multiply loop reports the first `i64` multiplication that
+/// would overflow — the exact point where PHP promotes the result to a double.
+fn int_pow_result_fits(base: i64, exponent: i64) -> bool {
+    if exponent < 0 {
+        return false;
+    }
+    if exponent == 0 || base == 0 {
+        return true;
+    }
+    let (mut accumulated, mut factor, mut remaining) = (1i64, base, exponent);
+    while remaining >= 1 {
+        if remaining % 2 == 1 {
+            remaining -= 1;
+            match accumulated.checked_mul(factor) {
+                Some(product) => accumulated = product,
+                None => return false,
+            }
+        } else {
+            remaining /= 2;
+            match factor.checked_mul(factor) {
+                Some(product) => factor = product,
+                None => return false,
+            }
+        }
+        if remaining == 0 {
+            return true;
+        }
+    }
+    true
 }
 
 /// Returns `true` when an integer arithmetic expression cannot overflow.

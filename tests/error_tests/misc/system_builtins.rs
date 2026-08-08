@@ -539,3 +539,45 @@ fn test_error_unserialize_non_string_data() {
         "unserialize() data argument must be string-compatible",
     );
 }
+
+/// Verifies `constant()` rejects an unknown constant at compile time.
+///
+/// Reference PHP raises `Error: Undefined constant "NOPE"` at runtime; an AOT binary has no
+/// constant table to look the name up in, so the diagnostic moves to compile time.
+#[test]
+fn test_error_constant_undefined_name() {
+    expect_error("<?php echo constant(\"NOPE\");", "Undefined constant: NOPE");
+}
+
+/// Verifies `constant()` rejects a runtime-computed name in AOT mode.
+#[test]
+fn test_error_constant_dynamic_name() {
+    expect_error(
+        "<?php define(\"FOO\", 1); $n = \"FOO\"; echo constant($n);",
+        "constant() first argument must be a string literal in AOT mode",
+    );
+}
+
+/// Verifies `constant()` rejects a class-constant name.
+#[test]
+fn test_error_constant_class_constant_name() {
+    expect_error(
+        "<?php class K { const A = 1; } echo constant(\"K::A\");",
+        "constant() class constants are not supported",
+    );
+}
+
+/// Verifies `constant()` rejects a missing argument.
+#[test]
+fn test_error_constant_wrong_args() {
+    expect_error("<?php echo constant();", "constant() takes exactly 1 argument");
+}
+
+/// Verifies `constant()` rejects excess positional arguments.
+#[test]
+fn test_error_constant_too_many_args() {
+    expect_error(
+        "<?php echo constant(\"PHP_EOL\", \"x\");",
+        "constant() takes exactly 1 argument",
+    );
+}

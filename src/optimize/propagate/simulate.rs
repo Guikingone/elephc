@@ -15,6 +15,9 @@ use super::*;
 /// Intersects multiple constant environments, retaining only variable assignments
 /// that are identical across every path. Returns an empty map if no paths are provided.
 ///
+/// Agreement is decided by `PropagatedValue::same_constant`, not `PartialEq`, so paths that
+/// assign `0.0` and `-0.0` do not merge: `echo` prints `0` for one and `-0` for the other.
+///
 /// - `paths`: Vector of constant environments from different control-flow paths
 /// - Returns: A merged environment where each variable must have the same value in all input paths
 pub(crate) fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantEnv {
@@ -24,7 +27,11 @@ pub(crate) fn merge_constant_env_paths(mut paths: Vec<ConstantEnv>) -> ConstantE
 
     first
         .into_iter()
-        .filter(|(name, value)| paths.iter().all(|path| path.get(name) == Some(value)))
+        .filter(|(name, value)| {
+            paths
+                .iter()
+                .all(|path| path.get(name).is_some_and(|known| known.same_constant(value)))
+        })
         .collect()
 }
 

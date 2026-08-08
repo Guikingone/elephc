@@ -71,6 +71,64 @@ impl<'f> Builder<'f> {
         block_id
     }
 
+    /// Seeds an integer local slot with a constant at the end of the function's entry block.
+    ///
+    /// This is the one sanctioned way to add function-wide slot initialization after the
+    /// entry block has been terminated. Ordinary `emit` refuses to append to a terminated
+    /// block, but a block's terminator is stored beside its instruction list rather than
+    /// inside it, so appending here still lands before the branch — and therefore
+    /// dominates every later use, which is exactly what a slot seed needs.
+    ///
+    /// Lowering needs it because a hidden slot can be discovered arbitrarily deep in the
+    /// body (the internal-array-pointer cursor is created at the first `key`/`next`/…
+    /// call) while its initial value must not be re-applied on every loop iteration.
+    ///
+    /// Both emitted instructions are `NonHeap`, so no ownership or cleanup bookkeeping is
+    /// disturbed by placing them out of lowering order.
+    pub fn seed_entry_int_local(&mut self, slot: LocalSlotId, value: i64) {
+        let entry = self.func.entry;
+        let block_index = entry.as_raw() as usize;
+
+        let const_inst = InstId::from_raw(self.func.instructions.len() as u32);
+        let const_value = ValueId::from_raw(self.func.values.len() as u32);
+        self.func.values.push(Value {
+            ir_type: IrType::I64,
+            php_type: PhpType::Int,
+            def: ValueDef::Instruction {
+                block: entry,
+                index: self.func.blocks[block_index].instructions.len() as u32,
+                inst: const_inst,
+            },
+            ownership: Ownership::NonHeap,
+        });
+        self.func.instructions.push(Instruction::new(
+            Op::ConstI64,
+            Vec::new(),
+            Some(Immediate::I64(value)),
+            Some(const_value),
+            IrType::I64,
+            PhpType::Int,
+            Ownership::NonHeap,
+            Op::ConstI64.default_effects(),
+            None,
+        ));
+        self.func.blocks[block_index].instructions.push(const_inst);
+
+        let store_inst = InstId::from_raw(self.func.instructions.len() as u32);
+        self.func.instructions.push(Instruction::new(
+            Op::StoreLocal,
+            vec![const_value],
+            Some(Immediate::LocalSlot(slot)),
+            None,
+            IrType::Void,
+            PhpType::Void,
+            Ownership::NonHeap,
+            Op::StoreLocal.default_effects(),
+            None,
+        ));
+        self.func.blocks[block_index].instructions.push(store_inst);
+    }
+
     /// Moves the insertion cursor to the end of a block.
     pub fn position_at_end(&mut self, block: BlockId) {
         self.assert_block_exists(block);

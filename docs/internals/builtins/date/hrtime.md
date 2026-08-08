@@ -2,7 +2,7 @@
 title: "hrtime() — internals"
 description: "Compiler internals for hrtime(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 98
+  order: 105
 ---
 
 ## `hrtime()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/hrtime.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/hrtime.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

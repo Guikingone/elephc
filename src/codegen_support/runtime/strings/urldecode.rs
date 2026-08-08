@@ -7,14 +7,18 @@
 //!
 //! Key details:
 //! - URL encoding helpers are emitted byte scanners that must preserve PHP escaping rules for supported encodings.
+//! - Decoding never grows the payload, so the source length is reserved through
+//!   `__rt_concat_reserve` before the first store; inputs beyond the 64 KiB concat scratch
+//!   buffer fall back to heap storage instead of running off the end of it.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Decodes URL-encoded byte sequences in a PHP byte-string.
 /// Input: x1=source pointer, x2=source length (ARM64). Output: x1=result pointer, x2=result length.
-/// Writes the decoded string into `_concat_buf` and advances `_concat_off`.
+/// Reserves the (never-exceeded) source length through `__rt_concat_reserve` — concat scratch
+/// while it fits, owned heap storage otherwise — and finishes through `__rt_concat_publish`.
+/// Clobbers every caller-saved register, because the reservation can reach `__rt_heap_alloc`.
 /// Dispatches to x86_64 or ARM64 implementation based on `emitter.target`.
 pub fn emit_urldecode(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -26,12 +30,16 @@ pub fn emit_urldecode(emitter: &mut Emitter) {
     emitter.comment("--- runtime: urldecode ---");
     emitter.label_global("__rt_urldecode");
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("mov x10, x9");                                         // save result start
+    // -- reserve the worst-case (unchanged-length) decoded result before writing anything --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed source string
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the reservation call
+    emitter.instruction("add x29, sp, #16");                                    // establish the urldecode helper frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length across the reservation call
+    emitter.instruction("mov x0, x2");                                          // percent decoding never grows the payload, so the source length bounds the result
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the decoded result
+    emitter.instruction("mov x9, x0");                                          // destination pointer
+    emitter.instruction("mov x10, x0");                                         // save result start
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
     emitter.instruction("mov x11, x2");                                         // remaining byte count
 
     emitter.label("__rt_urldecode_loop");
@@ -99,15 +107,17 @@ pub fn emit_urldecode(emitter: &mut Emitter) {
     emitter.label("__rt_urldecode_done");
     emitter.instruction("mov x1, x10");                                         // result pointer
     emitter.instruction("sub x2, x9, x10");                                     // result length
-    emitter.instruction("ldr x8, [x6]");                                        // reload offset
-    emitter.instruction("add x8, x8, x2");                                      // advance by result length
-    emitter.instruction("str x8, [x6]");                                        // store updated offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the urldecode helper frame
     emitter.instruction("ret");                                                 // return
 }
 
 /// x86_64 Linux implementation of URL decoding.
 /// Input: rax=source pointer, rdx=source length. Output: rax=result pointer, rdx=result length.
-/// Writes decoded bytes into `_concat_buf` at the current `_concat_off` offset, then advances `_concat_off`.
+/// Reserves the (never-exceeded) source length through `__rt_concat_reserve` and publishes the
+/// written length through `__rt_concat_publish`, so long inputs use owned heap storage instead
+/// of running off the end of the 64 KiB concat scratch buffer.
 /// Handles '+' → space substitution and '%XX' hex decoding (both uppercase and lowercase hex digits).
 /// Incomplete '%' escapes at end of input are copied literally.
 fn emit_urldecode_linux_x86_64(emitter: &mut Emitter) {
@@ -115,13 +125,17 @@ fn emit_urldecode_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: urldecode ---");
     emitter.label_global("__rt_urldecode");
 
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before decoding query-style percent-encoded bytes
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r11, [r10 + r9]");                                 // compute the concat-buffer destination pointer where the decoded string begins
-    emitter.instruction("mov r8, r11");                                         // preserve the concat-backed result start pointer for the returned string value after the loop mutates the destination cursor
-    emitter.instruction("mov rcx, rdx");                                        // seed the remaining source length counter from the borrowed percent-encoded input string length
-    emitter.instruction("mov rsi, rax");                                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the reservation and publish calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed source string
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the source pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed source pointer across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the borrowed source length across the reservation call
+    emitter.instruction("mov rax, rdx");                                        // percent decoding never grows the payload, so the source length bounds the result
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the decoded result
+    emitter.instruction("mov r11, rax");                                        // compute the destination pointer where the decoded string begins
+    emitter.instruction("mov r8, r11");                                         // preserve the result start pointer for the returned string value after the loop mutates the destination cursor
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // seed the remaining source length counter from the borrowed percent-encoded input string length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
 
     emitter.label("__rt_urldecode_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // stop once every source byte has been classified and copied or decoded into concat storage
@@ -191,11 +205,11 @@ fn emit_urldecode_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_urldecode_loop_linux_x86_64");                // continue decoding the remaining source bytes after one literal-byte copy
 
     emitter.label("__rt_urldecode_done_linux_x86_64");
-    emitter.instruction("mov rax, r8");                                         // return the concat-backed result start pointer after decoding the full input string
-    emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer destination cursor before computing the decoded string length
+    emitter.instruction("mov rax, r8");                                         // return the reserved result start pointer after decoding the full input string
+    emitter.instruction("mov rdx, r11");                                        // copy the final destination cursor before computing the decoded string length
     emitter.instruction("sub rdx, r8");                                         // compute the decoded string length as dest_end - dest_start for the returned x86_64 string value
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset before publishing the bytes that urldecode() appended
-    emitter.instruction("add rcx, rdx");                                        // advance the concat-buffer write offset by the produced decoded-string length
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset after finishing the urldecode() pass
-    emitter.instruction("ret");                                                 // return the concat-backed decoded string in the standard x86_64 string result registers
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 32");                                         // release the urldecode spill slots before returning the decoded string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the decoded string
+    emitter.instruction("ret");                                                 // return the decoded string in the standard x86_64 string result registers
 }

@@ -13,10 +13,18 @@ use crate::support::*;
 mod aggregates;
 #[path = "indexed/heterogeneous.rs"]
 mod heterogeneous;
+#[path = "indexed/pad_bounds.rs"]
+mod pad_bounds;
 #[path = "indexed/search_merge_union.rs"]
 mod search_merge_union;
+#[path = "indexed/slice_bounds.rs"]
+mod slice_bounds;
 #[path = "indexed/slice_stack_range.rs"]
 mod slice_stack_range;
+#[path = "indexed/splice_replacement.rs"]
+mod splice_replacement;
+#[path = "indexed/splice_strings.rs"]
+mod splice_strings;
 #[path = "indexed/set_ops.rs"]
 mod set_ops;
 #[path = "indexed/shape_transforms.rs"]

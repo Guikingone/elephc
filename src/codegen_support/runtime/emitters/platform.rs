@@ -185,6 +185,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_ob_get_status(emitter);
     io::emit_ob_list_handlers(emitter);
     io::emit_file_get_contents(emitter);
+    io::emit_file_get_contents_range(emitter);
     io::emit_file_put_contents(emitter);
     io::emit_file(emitter);
     io::emit_stat(emitter);

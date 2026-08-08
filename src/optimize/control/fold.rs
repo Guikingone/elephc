@@ -23,6 +23,7 @@ use super::*;
 pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
     let span = stmt.span;
     let source_mode = stmt.source_mode;
+    let strict_types = stmt.strict_types;
     let attributes = stmt.attributes.clone();
     let kind = match stmt.kind {
         StmtKind::Synthetic(stmts) => StmtKind::Synthetic(fold_block(stmts)),
@@ -356,6 +357,7 @@ pub(crate) fn fold_stmt(stmt: Stmt) -> Stmt {
         kind,
         span,
         source_mode,
+        strict_types,
         attributes,
     }
 }

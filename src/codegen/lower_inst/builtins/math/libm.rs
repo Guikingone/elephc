@@ -24,7 +24,7 @@ pub(crate) fn lower_unary_libm(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, name, 1)?;
+    super::super::ensure_arg_count(inst, name, 1)?;
     let value = expect_operand(inst, 0)?;
     super::load_numeric_as_float(ctx, value, name)?;
     ctx.emitter.bl_c(name);
@@ -93,7 +93,7 @@ fn lower_binary_libm(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, name, 2)?;
+    super::super::ensure_arg_count(inst, name, 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, name)?;
@@ -139,7 +139,7 @@ fn lower_angle_conversion(
     name: &str,
     factor: f64,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, name, 1)?;
+    super::super::ensure_arg_count(inst, name, 1)?;
     let value = expect_operand(inst, 0)?;
     super::load_numeric_as_float(ctx, value, name)?;
     let label = ctx.data.add_float(factor);

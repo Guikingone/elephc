@@ -10,6 +10,8 @@
 
 use super::*;
 
+mod switch_loose_comparison;
+
 /// Verifies that constant-false conditions in if/elseif chains are pruned,
 /// keeping only the first truthy branch (or the else body if all conditions
 /// are false). The else branch is selected when the second elseif condition

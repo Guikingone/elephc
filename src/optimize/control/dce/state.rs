@@ -92,9 +92,11 @@ impl GuardState {
     }
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 /// Records an exact constraint that a variable holds a specific literal value.
 /// `name` is the variable name; `value` is the known literal.
+///
+/// Not `Eq`: `GuardLiteral` equality is PHP's `===`, which is not reflexive for NAN.
 pub(super) struct ExactGuard {
     pub(super) name: String,
     pub(super) value: GuardLiteral,
@@ -110,15 +112,34 @@ pub(super) struct ConditionGuard {
     pub(super) names: Vec<String>,
 }
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 /// The set of literal values a guard can constrain a variable to.
 /// Used in `ExactGuard` to record variable = value constraints.
+///
+/// Guards are only ever produced by `===` / `!==` conditions, so equality on this type is
+/// PHP's `===`: floats compare by IEEE value, which makes `0.0` and `-0.0` the same guard
+/// (PHP agrees: `0.0 === -0.0` is `true`) and makes NAN equal to nothing, not even itself.
+/// A bit-pattern comparison would get both of those backwards and let DCE prune a live branch.
 pub(super) enum GuardLiteral {
     Bool(bool),
     Null,
     Int(i64),
-    Float(u64),
+    Float(f64),
     String(String),
+}
+
+impl PartialEq for GuardLiteral {
+    /// Compares two guard literals with PHP's `===` semantics.
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (GuardLiteral::Bool(left), GuardLiteral::Bool(right)) => left == right,
+            (GuardLiteral::Null, GuardLiteral::Null) => true,
+            (GuardLiteral::Int(left), GuardLiteral::Int(right)) => left == right,
+            (GuardLiteral::Float(left), GuardLiteral::Float(right)) => left == right,
+            (GuardLiteral::String(left), GuardLiteral::String(right)) => left == right,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

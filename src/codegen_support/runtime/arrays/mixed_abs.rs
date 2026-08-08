@@ -44,10 +44,18 @@ pub fn emit_mixed_abs(emitter: &mut Emitter) {
     emitter.label("__rt_abs_mixed_int");
     emitter.instruction("cmp x1, #0");                                          // compare the integer payload against zero
     emitter.instruction("cneg x1, x1, lt");                                     // negate the integer only when it was negative
+    emitter.instruction("tbnz x1, #63, __rt_abs_mixed_int_overflow");           // only PHP_INT_MIN stays negative: PHP promotes that one to float
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = integer
     emitter.instruction("mov x2, #0");                                          // integer payloads do not use a high word
     emitter.instruction("bl __rt_mixed_from_value");                            // box the integer absolute value into a Mixed cell
     emitter.instruction("b __rt_abs_mixed_done");                               // return the boxed integer result
+
+    emitter.label("__rt_abs_mixed_int_overflow");
+    emitter.instruction("movz x1, #0x43e0, lsl #48");                           // 9223372036854775808.0 (2^63) as IEEE-754 bits
+    emitter.instruction("mov x0, #2");                                          // runtime tag 2 = float
+    emitter.instruction("mov x2, #0");                                          // float payloads do not use a high word
+    emitter.instruction("bl __rt_mixed_from_value");                            // box abs(PHP_INT_MIN) as the promoted float like PHP
+    emitter.instruction("b __rt_abs_mixed_done");                               // return the boxed float result
 
     emitter.label("__rt_abs_mixed_float");
     emitter.instruction("fmov d0, x1");                                         // move the unboxed float bits into the FP register file
@@ -91,10 +99,19 @@ fn emit_mixed_abs_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sar r10, 63");                                         // expand the sign bit into an all-zero or all-one mask
     emitter.instruction("xor rdi, r10");                                        // flip the payload bits when the integer was negative
     emitter.instruction("sub rdi, r10");                                        // subtract the sign mask to finish the two's-complement absolute value
+    emitter.instruction("test rdi, rdi");                                       // inspect the sign of the computed magnitude
+    emitter.instruction("js __rt_abs_mixed_int_overflow_x86");                  // only PHP_INT_MIN stays negative: PHP promotes that one to float
     emitter.instruction("xor rsi, rsi");                                        // integer payloads do not use a high word
     emitter.instruction("mov rax, 0");                                          // runtime tag 0 = integer
     emitter.instruction("call __rt_mixed_from_value");                          // box the integer absolute value into a Mixed cell
     emitter.instruction("jmp __rt_abs_mixed_done_x86");                         // return the boxed integer result
+
+    emitter.label("__rt_abs_mixed_int_overflow_x86");
+    emitter.instruction("mov rdi, 0x43e0000000000000");                         // 9223372036854775808.0 (2^63) as IEEE-754 bits
+    emitter.instruction("xor rsi, rsi");                                        // float payloads do not use a high word
+    emitter.instruction("mov rax, 2");                                          // runtime tag 2 = float
+    emitter.instruction("call __rt_mixed_from_value");                          // box abs(PHP_INT_MIN) as the promoted float like PHP
+    emitter.instruction("jmp __rt_abs_mixed_done_x86");                         // return the boxed float result
 
     emitter.label("__rt_abs_mixed_float_x86");
     emitter.instruction("mov r11, 0x7fffffffffffffff");                         // materialize a mask that clears the IEEE-754 sign bit

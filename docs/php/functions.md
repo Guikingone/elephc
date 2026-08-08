@@ -34,6 +34,8 @@ function repeat(string $label, int $count): string {
 - Typed parameters can use default values
 - Function, method, constructor, closure, and arrow-function parameter hints are checked
 - Function, method, closure, and arrow-function return type hints are checked
+- Arguments are bound to declared scalar parameters using PHP's default (coercive) rules where elephc can reproduce them exactly — `takesString(42)` passes `"42"`, `takesInt(5.0)` passes `5`. Conversions PHP decides at run time with a `Deprecated:` notice or a `TypeError` are compile errors instead. A file that opens with `declare(strict_types=1)` switches to PHP's strict binding, where only an exact type match and the `int`→`float` widening are accepted; see [Types → Parameter type coercion](./types.md#parameter-type-coercion) and [Types → Strict types](./types.md#strict-types) for the full tables
+- A `callable` parameter accepts a compile-time-constant callable string (`"strtoupper"`, `"Formatter::wrap"`) as well as closures and first-class callables; see [Types → Callable strings](./types.md#callable-strings)
 - Variadic parameters may carry a type hint (`function f(int ...$xs)`), including on methods, closures, and arrow functions; every argument collected into the variadic is checked against the declared element type, just like a regular typed parameter. An untyped variadic accepts heterogeneous arguments.
 - Non-`void` declared return types must return a value on every reachable path; `throw`, `exit()`/`die()`, and infinite loops count as non-returning paths
 - Bare `return;` is valid only for `void` returns; use `return null;` for nullable return types
@@ -41,6 +43,7 @@ function repeat(string $label, int $count): string {
 - Callable variables and `callable` parameters whose concrete target is known only through a runtime descriptor can also use named arguments, named-after-spread calls, and positional prefixes before indexed spreads; descriptor metadata applies parameter names, defaults, variadics, and by-reference flags at invocation time
 - Argument expressions are evaluated in PHP source order, then codegen normalizes the resulting values into ABI parameter order
 - Named arguments can follow spread arguments, as in `foo(...$args, suffix: "!")`; positional arguments cannot follow either named arguments or spread arguments
+- Argument unpacking cannot follow a named argument: `foo(c: 9, ...$args)` is a compile-time error ("cannot use argument unpacking after named arguments"), matching PHP's fatal. The rule is syntactic, so it applies whatever the unpacked array contains — including a static string-keyed literal such as `foo(c: 9, ...["a" => 1])` — and on every call surface, including calls whose target is only known at run time. Back-to-back spreads (`foo(...$a, ...$b)`) and a string-keyed spread on its own (`foo(...["a" => 1])`) stay legal.
 - Associative-array unpacking maps string keys to named arguments (`foo(...["name" => "Ada"])`) and keeps numeric keys positional. Variable associative-array spreads can satisfy any parameter by string key, including parameters after explicit named arguments. Duplicate static string keys use PHP's last-wins behavior before argument planning.
 - A positional spread into a variadic function fills regular parameters first; only excess spread elements are collected into the variadic parameter. If a spread is too short to fill required parameters, the call fails instead of reading beyond the array payload.
 - User-defined variadic functions collect unknown named arguments into the variadic parameter using string keys
@@ -56,6 +59,27 @@ function factorial($n) {
 }
 echo factorial(10); // 3628800
 ```
+
+Recursion depth is bounded by the real call stack, and running off the end is
+reported instead of crashing. Every compiled function checks the stack pointer
+against the measured stack floor on entry; when it is exhausted the program
+writes
+
+```
+Fatal error: Maximum call stack size reached. Infinite recursion?
+```
+
+to stderr and exits with status 255 — the same class of controlled diagnostic
+PHP 8.3+ produces for runaway recursion, and the same exit status PHP uses for
+an uncaught fatal error.
+
+The floor comes from `getrlimit(RLIMIT_STACK)` minus a small reserve, so the
+usable depth follows the process stack limit: roughly 50 000 frames of a small
+function on a default 8 MiB stack. Function bodies that run on a coroutine
+stack — generator bodies and `Fiber` callables — get a floor derived from that
+coroutine's own 256 KiB stack instead, which is roughly 1 400 frames of the same
+function. Deepen `ulimit -s` if a legitimately deep algorithm needs more room on
+the main stack.
 
 ## Default parameter values
 
@@ -487,6 +511,54 @@ A type hint on the variadic constrains its elements: `function sum(int ...$nums)
 collects integers into `$nums`, and every argument passed to the variadic is checked
 against the declared element type, so passing an argument of the wrong type is
 rejected. An untyped variadic (`...$nums`) accepts heterogeneous arguments.
+
+## Argument introspection
+
+`func_num_args()`, `func_get_args()` and `func_get_arg($position)` read the arguments the
+current call actually received, including the surplus positional arguments PHP allows past
+a function's declared parameter list:
+
+```php
+<?php
+function log_all() {
+    echo func_num_args(), ": ";
+    foreach (func_get_args() as $arg) {
+        echo $arg, " ";
+    }
+}
+log_all("a", "b", "c"); // 3: a b c
+
+function first_extra($label) {
+    return func_get_arg(1);
+}
+echo first_extra("label", "extra"); // extra
+```
+
+They work in functions, methods (instance and static), closures and arrow functions, and
+report the *current* values of the declared parameters, so a parameter the body reassigned
+— or wrote through by reference — is reflected in `func_get_args()`, exactly as in PHP. An
+out-of-range or negative position throws `ValueError` with PHP's message.
+
+elephc implements these constructs by giving the function a hidden variadic parameter that
+collects the surplus arguments, which constrains where they can be used. They are rejected,
+with a diagnostic naming the reason, when:
+
+- the call is outside any function (PHP raises the same "must be called from a function
+  context" error at runtime);
+- the function declares a parameter with a default value — the hidden variadic cannot tell
+  a passed argument from a defaulted one;
+- the function already declares its own variadic parameter — read that parameter instead;
+- the method overrides a parent method or implements an interface method — the inherited
+  signature has no slot for the collected arguments;
+- the call is dynamic (`func_num_args(...)`, `$f = "func_num_args"; $f()`), which PHP also
+  rejects with "Cannot call func_num_args() dynamically".
+
+Surplus *positional* arguments are only accepted by functions that use one of these three
+constructs; every other function keeps elephc's compile-time arity check. Surplus *named*
+arguments stay rejected either way, matching PHP.
+
+Because the three constructs are rewritten by the compiler rather than dispatched as
+builtin calls, `function_exists()` reports `false` for them, where PHP reports `true`.
 
 ## Spread operator
 

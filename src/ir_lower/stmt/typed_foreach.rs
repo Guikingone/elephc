@@ -97,8 +97,12 @@ pub(super) fn lower_foreach(
     // Apply the checker-computed loop header contract before lowering the source expression so
     // an iterated-and-mutated array is loaded with its stable payload representation.
     apply_loop_storage_contracts(ctx, loop_span, Some(array.span));
-    let (source, source_is_borrowed_element) =
-        lower_foreach_source(ctx, array, value_by_ref);
+    let (source, source_is_borrowed_element) = lower_foreach_source(ctx, array, value_by_ref);
+    // Orthogonal to the borrowed-element pin taken after `IterStart` below: that one keeps a
+    // by-reference hash element's storage alive, this one takes the loop's reference on an
+    // object source. A borrowed element is never an object, so `retain_object_foreach_source`
+    // returns it untouched and `source_is_borrowed_element` still describes `source`.
+    let source = retain_object_foreach_source(ctx, source, array.span);
     let source_php_ty = ctx.builder.value_php_type(source.value);
     let source_ty = source_php_ty.codegen_repr();
     let key_needs_null_init = key_var.is_some_and(|name| !ctx.local_slots.contains_key(name));
@@ -358,4 +362,44 @@ pub(super) fn initialize_foreach_mixed_local_if_needed(
     let null = emit_null_value(ctx, Some(span));
     let boxed = ctx.box_value_as_mixed(null, PhpType::Mixed, Some(span));
     ctx.store_foreach_initializer_local_only(name, boxed, PhpType::Mixed, Some(span));
+}
+
+/// Takes the loop's own reference on an object `foreach` source.
+///
+/// Iterating an object — a user `Iterator`/`IteratorAggregate`, or a `Generator` —
+/// must keep it alive for the whole loop even when the body drops every other
+/// owner (`foreach ($it as $v) { unset($it); }`), so the loop needs a reference of
+/// its own. `Op::IterStart` used to take that reference with a bare backend
+/// `incref` that nothing ever balanced, leaking the object and everything it owned
+/// once per loop. It is taken here instead, as an `Op::Acquire` whose result is an
+/// owning temporary: the loop's exit block and its `LoopCleanup` (early `return`,
+/// multi-level `break`) already release such a value exactly once.
+///
+/// The reference the *lowered source expression* carried is dropped right away
+/// under the pre-existing "owning temporary" rule, so a fresh
+/// `foreach (make_iter() as $v)` temporary is still released exactly once — just
+/// before the loop rather than after it, which the acquire above makes safe.
+///
+/// Non-object sources are returned untouched: the iterator aliases an array or
+/// hash source, so retaining one would change its refcount and therefore its
+/// copy-on-write behaviour inside the loop body.
+fn retain_object_foreach_source(
+    ctx: &mut LoweringContext<'_, '_>,
+    source: LoweredValue,
+    span: Span,
+) -> LoweredValue {
+    if !matches!(
+        ctx.builder.value_php_type(source.value).codegen_repr(),
+        PhpType::Object(_)
+    ) {
+        return source;
+    }
+    let retained = crate::ir_lower::ownership::acquire_if_refcounted(ctx, source, Some(span));
+    if retained.value == source.value {
+        return source;
+    }
+    if ctx.value_is_owning_temporary(source) {
+        crate::ir_lower::ownership::release_if_owned(ctx, source, Some(span));
+    }
+    retained
 }

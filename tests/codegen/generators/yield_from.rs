@@ -323,3 +323,47 @@ foreach (combined() as $v) { echo $v; echo " "; }
     );
     assert_eq!(out, "0 1 2 10 11 ");
 }
+
+/// Verifies `yield from` accepts an *associative* array literal, mixing an
+/// explicit integer key with a string key. The desugared iterator loop already
+/// handled hash storage; only the checker's `yield from` gate rejected the
+/// literal, so this compiles and forwards both keys verbatim.
+#[test]
+fn test_generator_yield_from_assoc_array_literal() {
+    let out = compile_and_run(
+        r#"<?php
+function g() { yield from [5 => "x", "s" => "y"]; }
+foreach (g() as $k => $v) { echo "$k=$v "; }
+"#,
+    );
+    assert_eq!(out, "5=x s=y ");
+}
+
+/// Verifies a keyed literal whose key is a *computed* expression, delegated
+/// between two ordinary yields. The forwarded keys must not advance the outer
+/// generator's implicit-key counter: the bare `yield "b"` after the delegation
+/// still gets key 1, not 31.
+#[test]
+fn test_generator_yield_from_computed_key_literal_keeps_outer_counter() {
+    let out = compile_and_run(
+        r#"<?php
+function g(int $i) { yield "a"; yield from [$i * 10 => "L", "k" => "M"]; yield "b"; }
+foreach (g(3) as $k => $v) { echo "$k=$v "; }
+"#,
+    );
+    assert_eq!(out, "0=a 30=L k=M 1=b ");
+}
+
+/// Verifies `yield from` over a local variable holding an associative array,
+/// not just a literal. The delegated string keys pass through and the following
+/// bare `yield` resumes the outer auto-key at 0.
+#[test]
+fn test_generator_yield_from_assoc_array_variable() {
+    let out = compile_and_run(
+        r#"<?php
+function g() { $rows = ["p" => 1, "q" => 2]; yield from $rows; yield 3; }
+foreach (g() as $k => $v) { echo "$k=$v "; }
+"#,
+    );
+    assert_eq!(out, "p=1 q=2 0=3 ");
+}

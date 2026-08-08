@@ -2,7 +2,7 @@
 title: "symlink()"
 description: "Creates a symbolic link."
 sidebar:
-  order: 152
+  order: 159
 ---
 
 ## symlink()

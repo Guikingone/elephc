@@ -7,14 +7,19 @@
 //!
 //! Key details:
 //! - I/O helpers bridge PHP strings, resources, descriptors, and libc calls while returning runtime arrays or pointer/length strings.
+//! - The destination window is reserved through `__rt_concat_reserve` for the FULL requested
+//!   read length before the syscall, so an attacker-sized `fread($f, 100000)` lands in owned
+//!   heap storage instead of running past the 64 KiB concat scratch into the stream-handle,
+//!   exception and heap globals that follow it in BSS.
 
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::abi;
 
 /// Emits the `__rt_fread` runtime helper for reading bytes from a file descriptor.
 ///
-/// On ARM64: reads into the concat buffer, updates `_concat_off`, sets `_eof_flags[fd]` on EOF,
-/// and returns (pointer, byte_count) in x1:x2.
+/// On ARM64: reads into storage reserved by `__rt_concat_reserve`, publishes the bytes read
+/// through `__rt_concat_publish`, sets `_eof_flags[fd]` on EOF, and returns
+/// (pointer, byte_count) in x1:x2.
 ///
 /// On x86_64: same semantics but uses libc `read()` and returns (pointer, byte_count) in rax:rdx.
 ///
@@ -23,11 +28,12 @@ use crate::codegen_support::abi;
 /// - x1/rsi: number of bytes to read
 ///
 /// # Outputs
-/// - x1/x86_64 rax: pointer to bytes in concat buffer (borrowed, not owned)
+/// - x1/x86_64 rax: pointer to the bytes read. Concat-scratch-backed (borrowed) when the
+///   requested length still fits the shared 64 KiB buffer, heap-backed otherwise.
 /// - x2/rdx: actual bytes read (0 on EOF/error)
 ///
 /// # Side effects
-/// - Advances `_concat_off` by actual bytes read.
+/// - Advances `_concat_off` by the actual bytes read, but only for scratch-backed results.
 /// - Sets `_eof_flags[fd] = 1` when the stream is exhausted.
 pub fn emit_fread(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
@@ -56,11 +62,19 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save file descriptor
     emitter.instruction("str x1, [sp, #8]");                                    // save requested read length
 
-    // -- get concat_buf write position --
+    // -- reserve a destination sized for the whole requested read --
+    emitter.instruction("cmp x1, #1");                                          // does the caller actually request at least one byte?
+    emitter.instruction("b.lt __rt_fread_dest_scratch");                        // non-positive requests write nothing, so keep the current scratch tail
+    emitter.instruction("mov x0, x1");                                          // request storage for the full requested read length
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage for the incoming bytes
+    emitter.instruction("mov x12, x0");                                         // destination pointer for the read
+    emitter.instruction("b __rt_fread_dest_ready");                             // the destination window is reserved
+    emitter.label("__rt_fread_dest_scratch");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
     emitter.instruction("ldr x10, [x9]");                                       // load current write offset
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
     emitter.instruction("add x12, x11, x10");                                   // compute write pointer: buf + offset
+    emitter.label("__rt_fread_dest_ready");
     emitter.instruction("str x12, [sp, #16]");                                  // save start pointer for return value
 
     // -- TLS dispatch: route through elephc_tls_read when fd has an
@@ -70,7 +84,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
     emitter.instruction("cbz x14, __rt_fread_do_syscall");                      // no TLS attached → fall through to read syscall
     emitter.instruction("mov x0, x14");                                         // handle as first arg
-    emitter.instruction("mov x1, x12");                                         // buf ptr
+    emitter.instruction("ldr x1, [sp, #16]");                                   // buf ptr
     emitter.instruction("ldr x2, [sp, #8]");                                    // len
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_tls_read_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load elephc_tls_read entry pointer
@@ -83,7 +97,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.label("__rt_fread_do_syscall");
     // -- perform read syscall --
     emitter.instruction("ldr x0, [sp, #0]");                                    // fd for read syscall
-    emitter.instruction("mov x1, x12");                                         // buffer pointer for read
+    emitter.instruction("ldr x1, [sp, #16]");                                   // buffer pointer for read
     emitter.instruction("ldr x2, [sp, #8]");                                    // number of bytes to read
     emitter.syscall(3);
     if emitter.platform.needs_cmp_before_error_branch() {
@@ -100,12 +114,11 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fread_mark_eof");                               // mark the stream as exhausted after a read failure
     emitter.label("__rt_fread_read_ok");
 
-    // -- update concat_off by actual bytes read --
+    // -- publish the bytes actually read into the reserved destination --
     emitter.instruction("str x0, [sp, #24]");                                   // save actual bytes read
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.instruction("add x10, x10, x0");                                    // advance offset by bytes read
-    emitter.instruction("str x10, [x9]");                                       // store updated offset
+    emitter.instruction("ldr x1, [sp, #16]");                                   // reload the reserved destination pointer
+    emitter.instruction("mov x2, x0");                                          // pass the number of bytes actually read
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed reads
 
     // -- set eof flag if read returned 0 --
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload bytes read
@@ -168,10 +181,18 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the file descriptor across the concat-buffer address computation and libc read() call
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested byte count across the concat-buffer address computation and libc read() call
+    emitter.instruction("cmp rsi, 1");                                          // does the caller actually request at least one byte?
+    emitter.instruction("jl __rt_fread_dest_scratch_x86");                      // non-positive requests write nothing, so keep the current scratch tail
+    emitter.instruction("mov rax, rsi");                                        // request storage for the full requested read length
+    emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the incoming bytes
+    emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the reserved destination pointer for the final elephc string result
+    emitter.instruction("jmp __rt_fread_dest_ready_x86");                       // the destination window is reserved
+    emitter.label("__rt_fread_dest_scratch_x86");
     abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // load the current concat-buffer absolute offset before appending the fread() result
     abi::emit_symbol_address(emitter, "r11", "_concat_buf");                    // materialize the concat-buffer base address once for the x86_64 fread() helper
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the concat-buffer start pointer for the final elephc string result
+    emitter.label("__rt_fread_dest_ready_x86");
 
     // -- TLS dispatch: route through elephc_tls_read when fd has an
     //    attached session (Phase 11 B3). --
@@ -199,11 +220,9 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fread_eof_x86");                              // zero-byte read means real EOF
 
     emitter.label("__rt_fread_read_ok_x86");
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_concat_off", 0);             // reload the previous concat-buffer absolute offset before publishing the fread() append
-    emitter.instruction("add r10, rax");                                        // advance the concat-buffer offset by the number of bytes libc read() returned
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_concat_off", 0);            // publish the updated concat-buffer offset for later string appenders
     emitter.instruction("mov rdx, rax");                                        // return the successful byte count in the x86_64 elephc string-length result register
-    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer in the x86_64 elephc string-pointer result register
+    emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the reserved start pointer in the x86_64 elephc string-pointer result register
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed reads
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload the file descriptor for the read-filter lookup
     abi::emit_symbol_address(emitter, "r11", "_stream_read_filters");           // materialize the read-filter table base
     emitter.instruction("movzx ecx, BYTE PTR [r11 + r10]");                     // read filter id for this descriptor

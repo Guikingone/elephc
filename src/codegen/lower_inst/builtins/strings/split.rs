@@ -50,15 +50,201 @@ impl SplitStringTempCleanups {
     }
 }
 /// Lowers `explode(delimiter, string)` into the shared string-array splitter helper.
+/// Lowers `dechex()`/`decbin()`/`decoct()` through the shared unsigned base renderer.
+///
+/// The three builtins differ only in the constant base handed to `__rt_dec_to_base`, which
+/// reads its input as unsigned — that is what makes `dechex(-1)` render `"ffffffffffffffff"`
+/// instead of a signed value.
+pub(crate) fn lower_dec_to_base(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    base: i64,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 1 arg, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    load_as_int(ctx, expect_operand(inst, 0)?, name)?;
+    let base_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    abi::emit_load_int_immediate(ctx.emitter, base_reg, base);
+    abi::emit_call_label(ctx.emitter, "__rt_dec_to_base");
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `hexdec()`/`bindec()`/`octdec()` through the shared base-digit parser.
+///
+/// The three builtins differ only in the constant base handed to `__rt_base_to_number`.
+/// That helper reports whether its answer stayed an integer or widened to a float, and this
+/// lowering boxes the selected arm into the `int|float` union's `Mixed` representation.
+pub(crate) fn lower_base_to_number(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    base: i64,
+) -> Result<()> {
+    if inst.operands.len() != 1 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 1 arg, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    let subject = expect_operand(inst, 0)?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_value_as_string_to_regs(ctx, subject, name, "x1", "x2")?;
+            abi::emit_load_int_immediate(ctx.emitter, "x3", base);
+        }
+        Arch::X86_64 => {
+            load_value_as_string_to_regs(ctx, subject, name, "rax", "rdx")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the subject pointer as the first SysV argument
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the subject length before the base overwrites rdx
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", base);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_base_to_number");
+    box_base_to_number_result(ctx, name);
+    store_if_result(ctx, inst)
+}
+
+/// Boxes `__rt_base_to_number`'s integer-or-float answer as PHP's `int|float` union.
+///
+/// The helper reports its arm in the integer result register: zero selects the integer
+/// payload it left alongside it, one selects the float payload in the float result register.
+fn box_base_to_number_result(ctx: &mut FunctionContext<'_>, name: &str) {
+    let float_label = ctx.next_label(&format!("{}_float", name));
+    let done_label = ctx.next_label(&format!("{}_done", name));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {}", float_label));      // a widened result is boxed from the float register instead
+            ctx.emitter.instruction("mov x2, xzr");                             // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #0");                              // runtime tag 0 = integer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip float boxing after producing the integer result
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction("fmov x1, d0");                             // move the widened float bits into the mixed helper payload register
+            ctx.emitter.instruction("mov x2, xzr");                             // float mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #2");                              // runtime tag 2 = float
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // did the parse stay inside PHP's integer range?
+            ctx.emitter.instruction(&format!("jnz {}", float_label));           // a widened result is boxed from the float register instead
+            ctx.emitter.instruction("mov rdi, rdx");                            // move the parsed integer into the mixed helper payload register
+            ctx.emitter.instruction("xor esi, esi");                            // integer mixed payloads do not use a high word
+            ctx.emitter.instruction("xor eax, eax");                            // runtime tag 0 = integer
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip float boxing after producing the integer result
+            ctx.emitter.label(&float_label);
+            ctx.emitter.instruction("movq rdi, xmm0");                          // move the widened float bits into the mixed helper payload register
+            ctx.emitter.instruction("xor esi, esi");                            // float mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 2");                              // runtime tag 2 = float
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
+/// Lowers `strncmp()`/`strncasecmp()`, which compare only the first `$length` bytes.
+///
+/// `$length` is screened before the helper runs because reference PHP raises a catchable
+/// `ValueError` for a negative value; the runtime helpers therefore treat their bound as
+/// unsigned. `name` selects the php-src wording of that diagnostic.
+pub(crate) fn lower_length_limited_compare(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    name: &str,
+    runtime_label: &str,
+) -> Result<()> {
+    if inst.operands.len() != 3 {
+        return Err(CodegenIrError::invalid_module(format!(
+            "{} expected 3 args, got {}",
+            name,
+            inst.operands.len()
+        )));
+    }
+    let length_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            load_value_as_string_to_regs(ctx, expect_operand(inst, 0)?, name, "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the first string while materializing the remaining arguments
+            load_value_as_string_to_regs(ctx, expect_operand(inst, 1)?, name, "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the second string while materializing the compare length
+            load_as_int(ctx, expect_operand(inst, 2)?, name)?;
+            ctx.emitter.instruction("mov x5, x0");                              // pass the requested compare length as the fifth runtime argument
+            ctx.emitter.instruction("ldp x3, x4, [sp], #16");                   // restore the second string into the secondary runtime string argument
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the first string into the primary runtime string argument
+            "x5"
+        }
+        Arch::X86_64 => {
+            load_value_as_string_to_regs(ctx, expect_operand(inst, 0)?, name, "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_value_as_string_to_regs(ctx, expect_operand(inst, 1)?, name, "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            load_as_int(ctx, expect_operand(inst, 2)?, name)?;
+            ctx.emitter.instruction("mov r8, rax");                             // pass the requested compare length as the fifth SysV argument
+            abi::emit_pop_reg_pair(ctx.emitter, "rdx", "rcx");
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            "r8"
+        }
+    };
+    let message = if name == "strncasecmp" {
+        STRNCASECMP_NEGATIVE_LENGTH_MESSAGE
+    } else {
+        STRNCMP_NEGATIVE_LENGTH_MESSAGE
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 0),
+        message,
+    );
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `explode(separator, string, limit?)` into the shared string-array splitter helper.
 pub(crate) fn lower_explode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let cleanups = plan_split_string_temp_cleanups(ctx, inst)?;
     if !cleanups.is_empty() {
         abi::emit_reserve_temporary_stack(ctx.emitter, cleanups.bytes);
     }
     load_split_pair_args(ctx, inst, "explode", &cleanups)?;
+    emit_explode_separator_guard(ctx, &cleanups);
     abi::emit_call_label(ctx.emitter, "__rt_explode");
     emit_split_string_temp_cleanups(ctx, &cleanups);
     store_if_result(ctx, inst)
+}
+
+/// Rejects the empty `explode()` separator reference PHP refuses to split on.
+///
+/// A zero-length separator matches at every position, so the pre-guard splitter advanced its
+/// cursor by zero bytes and pushed empty segments until the heap was exhausted. The guard
+/// runs after argument materialization, so any owned string temporaries are released on the
+/// throwing path before the unwinder takes over.
+fn emit_explode_separator_guard(
+    ctx: &mut FunctionContext<'_>,
+    cleanups: &SplitStringTempCleanups,
+) {
+    let ok_label = ctx.next_label("explode_separator_ok");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x2, {}", ok_label));         // a non-empty separator can split the subject
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdx, rdx");                           // is the separator zero-length?
+            ctx.emitter.instruction(&format!("jnz {}", ok_label));              // a non-empty separator can split the subject
+        }
+    }
+    emit_split_string_temp_cleanups(ctx, cleanups);
+    super::super::exceptions::emit_value_error(ctx, EXPLODE_EMPTY_SEPARATOR_MESSAGE);
+    ctx.emitter.label(&ok_label);
 }
 
 /// Lowers `sscanf(string, format)` into the shared scanner helper.
@@ -86,44 +272,63 @@ pub(crate) fn lower_str_split(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         Arch::AArch64 => lower_str_split_aarch64(ctx, inst)?,
         Arch::X86_64 => lower_str_split_x86_64(ctx, inst)?,
     }
+    // `__rt_str_split` advances its cursor by the chunk length, so a zero length spins
+    // forever pushing empty chunks until the heap is exhausted and a negative one walks
+    // the cursor backwards off the string. Reference PHP rejects both up front.
+    let length_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x3",
+        Arch::X86_64 => "rdi",
+    };
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 1),
+        STR_SPLIT_NON_POSITIVE_LENGTH_MESSAGE,
+    );
     abi::emit_call_label(ctx.emitter, "__rt_str_split");
     store_if_result(ctx, inst)
 }
 
-/// Lowers `implode(glue, array)` by selecting the string or integer array helper.
+/// Lowers `implode(glue, array)` / `join(array)` by selecting the array-element helper.
+///
+/// The typed target is shared by both PHP names, so the operand roles are derived from the
+/// argument count rather than the source spelling: a single operand is the ARRAY and the glue
+/// is the empty string (`join(["a","b"]) === "ab"`), while two operands keep the ordinary
+/// `(glue, array)` order. The reversed PHP 7 order was removed in PHP 8.0 and is not accepted.
 pub(crate) fn lower_implode(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    if inst.operands.len() != 2 {
+    if inst.operands.is_empty() || inst.operands.len() > 2 {
         return Err(CodegenIrError::invalid_module(format!(
-            "implode expected 2 args, got {}",
+            "implode expected 1 or 2 args, got {}",
             inst.operands.len()
         )));
     }
-    let runtime_label = implode_runtime_label(ctx, inst)?;
+    let array_index = inst.operands.len() - 1;
+    let runtime_label = implode_runtime_label(ctx, inst, array_index)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_implode_aarch64(ctx, inst)?,
-        Arch::X86_64 => lower_implode_x86_64(ctx, inst)?,
+        Arch::AArch64 => lower_implode_aarch64(ctx, inst, array_index)?,
+        Arch::X86_64 => lower_implode_x86_64(ctx, inst, array_index)?,
     }
     abi::emit_call_label(ctx.emitter, runtime_label);
     store_if_result(ctx, inst)
 }
-/// Materializes delimiter/payload string pairs for split-style array helpers.
+/// Materializes delimiter/payload string pairs plus the optional `$limit` for `explode()`.
 pub(super) fn load_split_pair_args(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
     cleanups: &SplitStringTempCleanups,
 ) -> Result<()> {
-    if inst.operands.len() != 2 {
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
-            "{} expected 2 args, got {}",
+            "{} expected 2 or 3 args, got {}",
             name,
             inst.operands.len()
         )));
     }
     match ctx.emitter.target.arch {
-        Arch::AArch64 => load_split_pair_args_aarch64(ctx, inst, name, cleanups),
-        Arch::X86_64 => load_split_pair_args_x86_64(ctx, inst, name, cleanups),
+        Arch::AArch64 => load_split_pair_args_aarch64(ctx, inst, name, cleanups)?,
+        Arch::X86_64 => load_split_pair_args_x86_64(ctx, inst, name, cleanups)?,
     }
+    load_split_limit_arg(ctx, inst, name)
 }
 
 /// Materializes AArch64 delimiter and subject strings for `explode()`.
@@ -329,8 +534,15 @@ pub(super) fn materialize_str_split_length_x86_64(
 }
 
 /// Returns the runtime helper label required for an `implode()` array operand.
-pub(super) fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instruction) -> Result<&'static str> {
-    let array = expect_operand(inst, 1)?;
+///
+/// `array_index` is 1 for the ordinary `(glue, array)` call and 0 for the single-argument
+/// `join($array)` form, whose only operand is the array itself.
+pub(super) fn implode_runtime_label(
+    ctx: &FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<&'static str> {
+    let array = expect_operand(inst, array_index)?;
     match ctx.value_php_type(array)? {
         PhpType::Array(elem_ty) => match elem_ty.codegen_repr() {
             // PHP stringifies bool elements as "1"/"" — NOT as the "1"/"0" that
@@ -338,7 +550,13 @@ pub(super) fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instructio
             // own renderer. `PhpType::False` reaches this arm as `Bool` through `codegen_repr`.
             PhpType::Bool => Ok("__rt_implode_bool"),
             PhpType::Int => Ok("__rt_implode_int"),
-            PhpType::Str | PhpType::Mixed | PhpType::Never => Ok("__rt_implode"),
+            // An empty array literal carries an uninhabited element type (`Never`, or
+            // `Void` once it has gone through `codegen_repr`). Neither renderer can ever
+            // dereference an element, so the generic string helper is the safe choice and
+            // keeps `implode("", [])` / `join([])` from being rejected at lowering time.
+            PhpType::Str | PhpType::Mixed | PhpType::Never | PhpType::Void => {
+                Ok("__rt_implode")
+            }
             other => Err(CodegenIrError::unsupported(format!(
                 "implode array element PHP type {:?}",
                 other
@@ -353,10 +571,23 @@ pub(super) fn implode_runtime_label(ctx: &FunctionContext<'_>, inst: &Instructio
 }
 
 /// Materializes AArch64 glue and array arguments for `implode()`.
-pub(super) fn lower_implode_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let glue = expect_string_operand(ctx, inst, 0, "implode")?;
-    let array = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(glue, "x1", "x2")?;
+///
+/// `array_index` is 0 for the single-argument `join($array)` form, which joins with an empty
+/// separator, and 1 for the ordinary `(glue, array)` call.
+pub(super) fn lower_implode_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<()> {
+    let array = expect_operand(inst, array_index)?;
+    if array_index == 0 {
+        let (label, _) = ctx.data.add_string(b"");
+        abi::emit_symbol_address(ctx.emitter, "x1", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "x2", 0);
+    } else {
+        let glue = expect_operand(inst, 0)?;
+        load_value_as_string_to_regs(ctx, glue, "implode", "x1", "x2")?;
+    }
     ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                         // preserve the glue string while materializing the array argument
     load_implode_array_aarch64(ctx, array)?;
     ctx.emitter.instruction("mov x3, x0");                                      // pass the indexed array pointer as the third implode argument
@@ -365,10 +596,23 @@ pub(super) fn lower_implode_aarch64(ctx: &mut FunctionContext<'_>, inst: &Instru
 }
 
 /// Materializes x86_64 glue and array arguments for `implode()`.
-pub(super) fn lower_implode_x86_64(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    let glue = expect_string_operand(ctx, inst, 0, "implode")?;
-    let array = expect_operand(inst, 1)?;
-    ctx.load_string_value_to_regs(glue, "rax", "rdx")?;
+///
+/// `array_index` follows the same convention as the AArch64 emitter: 0 selects the
+/// single-argument `join($array)` form with an empty separator, 1 the `(glue, array)` call.
+pub(super) fn lower_implode_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array_index: usize,
+) -> Result<()> {
+    let array = expect_operand(inst, array_index)?;
+    if array_index == 0 {
+        let (label, _) = ctx.data.add_string(b"");
+        abi::emit_symbol_address(ctx.emitter, "rax", &label);
+        abi::emit_load_int_immediate(ctx.emitter, "rdx", 0);
+    } else {
+        let glue = expect_operand(inst, 0)?;
+        load_value_as_string_to_regs(ctx, glue, "implode", "rax", "rdx")?;
+    }
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_implode_array_x86_64(ctx, array)?;
     ctx.emitter.instruction("mov rdx, rax");                                    // pass the indexed array pointer as the third implode argument

@@ -11,6 +11,7 @@ use crate::errors::CompileError;
 use crate::parser::ast::{Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::null_probe::null_probe_env;
 use super::super::Checker;
 
 /// Type-checks compiler-resident PHP language constructs.
@@ -55,7 +56,10 @@ pub(super) fn check(
             if args.len() != 1 {
                 return Err(CompileError::new(span, "empty() takes exactly 1 argument"));
             }
-            checker.infer_type(&args[0], env)?;
+            // `empty($never)` is legal PHP and answers `true`; the tolerated root is bound
+            // to `null` for the operand only (see `null_probe`).
+            let probed = null_probe_env(checker, &args[0], env);
+            checker.infer_null_probe_operand(&args[0], probed.as_ref().unwrap_or(env))?;
             Ok(PhpType::Bool)
         }
         "unset" => {
@@ -81,16 +85,22 @@ pub(super) fn check(
 }
 
 /// Type-checks one `isset()` operand without forcing an observable property read.
+///
+/// A never-declared chain root is bound to `null` for the duration of the operand (see
+/// [`null_probe_env`]): probing storage that may not exist is exactly what `isset()` is for, and
+/// PHP answers `false` rather than warning.
 fn check_isset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    let probed = null_probe_env(checker, arg, env);
+    let env = probed.as_ref().unwrap_or(env);
     if let ExprKind::PropertyAccess { object, .. }
     | ExprKind::NullsafePropertyAccess { object, .. } = &arg.kind
     {
-        let object_ty = checker.infer_type(object, env)?;
+        let object_ty = checker.infer_null_probe_operand(object, env)?;
         if isset_object_receiver_type(checker, &object_ty) {
             return Ok(());
         }
     }
-    checker.infer_type(arg, env).map(|_| ())
+    checker.infer_null_probe_operand(arg, env).map(|_| ())
 }
 
 /// Returns whether an `isset()` receiver can use non-reading property semantics.
@@ -106,16 +116,21 @@ fn isset_object_receiver_type(checker: &Checker, ty: &PhpType) -> bool {
 }
 
 /// Type-checks one `unset()` operand while preserving PHP's non-reading property semantics.
+///
+/// Like `isset()`, `unset()` accepts a never-declared chain root (PHP's `unset($never)`
+/// is a silent no-op), so the root is bound to `null` for the operand.
 fn check_unset_arg(checker: &mut Checker, arg: &Expr, env: &TypeEnv) -> Result<(), CompileError> {
+    let probed = null_probe_env(checker, arg, env);
+    let env = probed.as_ref().unwrap_or(env);
     if let ExprKind::PropertyAccess { object, property }
     | ExprKind::NullsafePropertyAccess { object, property } = &arg.kind
     {
-        let object_ty = checker.infer_type(object, env)?;
+        let object_ty = checker.infer_null_probe_operand(object, env)?;
         if unset_object_property_probe_is_valid(checker, &object_ty, property, arg)? {
             return Ok(());
         }
     }
-    checker.infer_type(arg, env).map(|_| ())
+    checker.infer_null_probe_operand(arg, env).map(|_| ())
 }
 
 /// Returns true when `unset($object->property)` can be checked without reading the property.

@@ -182,12 +182,21 @@ fn test_error_bitwise_not_string() {
     );
 }
 
-/// Tests that the spaceship operator `<=>` with string operands rejects them
-/// with the "Spaceship operator requires numeric operands" error.
+/// Tests that the spaceship operator `<=>` with *runtime* string operands is rejected with
+/// the "Spaceship operator requires numeric operands" error.
+///
+/// The operands are locals rather than literals on purpose. Constant folding runs before type
+/// checking, and it evaluates a literal `"a" <=> "b"` to PHP's answer (`-1`), so the folded
+/// form never reaches the checker and compiles. That is deliberate — PHP defines string
+/// comparison, so folding it is PHP-correct — but it leaves the checker gate in
+/// `types::checker::inference::ops` as the only thing rejecting the non-constant form.
+/// Lifting that gate (and giving the runtime a string comparison path) is issue #507, which
+/// covers `<`, `<=`, `>`, `>=` and this operator alike. Until then this test pins the live
+/// contract: constant-foldable string comparisons compile, everything else is refused.
 #[test]
 fn test_error_spaceship_string() {
     expect_error(
-        r#"<?php echo "a" <=> "b";"#,
+        r#"<?php $x = "a"; $y = "b"; echo $x <=> $y;"#,
         "Spaceship operator requires numeric operands",
     );
 }

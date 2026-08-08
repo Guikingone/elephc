@@ -35,7 +35,14 @@ Supported forms: `use Foo\Bar;`, `use Foo\Bar as Baz;`, `use function`, `use con
 ## Name resolution rules
 - Unqualified class names honor `use` aliases, otherwise resolve relative to current namespace
 - Functions/constants: `use function`/`use const` aliases first, then current namespace, then global fallback
-- Fully-qualified `\Lib\Tool` always refers to global canonical name
+- Qualified names (containing `\` but not starting with one) have their **first segment** expanded
+  through the class/namespace import table — the plain `use` table — whether the name denotes a
+  class, a function, or a constant. With `use App\Math as M;`, all of `M\double(5)`,
+  `new M\Thing()`, `M\Thing::method()`, `$x instanceof M\Thing` and `M\FOO` resolve into
+  `App\Math`. Only the first segment is substituted, and `use function` / `use const` aliases do
+  not participate (they apply to unqualified names only), matching PHP
+- Fully-qualified `\Lib\Tool` always refers to global canonical name; a leading `\` suppresses
+  alias expansion, so `\M\double()` is *not* rewritten
 - Included files keep their own namespace and imports; an include cannot inherit the caller's namespace scope
 
 ## Case sensitivity
@@ -480,6 +487,15 @@ define("PI", 3.14159);
 | `FNM_PATHNAME` | int | Target-specific libc/PHP value |
 | `FNM_PERIOD` | int | 4 |
 | `FNM_CASEFOLD` | int | 16 |
+| `STR_PAD_RIGHT` | int | 1 — `str_pad()`'s default padding mode |
+| `STR_PAD_LEFT` | int | 0 |
+| `STR_PAD_BOTH` | int | 2 |
+| `COUNT_NORMAL` | int | 0 — `count()`'s default mode |
+| `COUNT_RECURSIVE` | int | 1 |
+| `PHP_ROUND_HALF_UP` | int | 1 — `round()`'s default mode |
+| `PHP_ROUND_HALF_DOWN` | int | 2 |
+| `PHP_ROUND_HALF_EVEN` | int | 3 |
+| `PHP_ROUND_HALF_ODD` | int | 4 |
 
 ## Superglobals
 

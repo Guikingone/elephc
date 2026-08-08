@@ -42,6 +42,7 @@ pub mod class_get_attributes;
 pub mod date;
 pub mod date_default_timezone_get;
 pub mod date_default_timezone_set;
+pub mod constant;
 pub mod define;
 pub mod defined;
 pub mod exec;

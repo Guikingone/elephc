@@ -228,10 +228,18 @@ fn array_map_over_bool_returning_builtin_renders_php_style() {
 /// array's element type. The probe passes `$mapped[0]` — an `int[]` mapped through a
 /// `bool`-returning callback — into a `string` parameter: the diagnostic must name `Bool`.
 /// Before the fix it named `Int`, i.e. the input element type leaked through the map.
+///
+/// The probe declares `strict_types=1` because bool → string is a legal *coercive* binding:
+/// reference PHP accepts it and prints `string(1) "1"`, so under the default mode there is no
+/// error left to read the element type out of. Strict mode is where PHP throws
+/// `TypeError: ... must be of type string, bool given` — verified against php 8.4 — and it is
+/// therefore the only probe that still observes the element type through a diagnostic.
+/// The sibling `..._follows_a_string_callback` test needs no such directive: its `"n1"` is a
+/// non-numeric string, which PHP rejects for an `int` parameter in both modes.
 #[test]
 fn array_map_result_element_type_is_the_callback_return_type() {
     let dir = make_test_dir("array_result_map_elemty");
-    let src = "<?php \
+    let src = "<?php declare(strict_types=1); \
         function is_pos(int $n): bool { return $n > 0; } \
         function want_string(string $s): string { return $s; } \
         $mapped = array_map('is_pos', [1, 0]); \

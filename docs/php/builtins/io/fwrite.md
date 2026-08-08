@@ -2,7 +2,7 @@
 title: "fwrite()"
 description: "Binary-safe file write."
 sidebar:
-  order: 182
+  order: 189
 ---
 
 ## fwrite()

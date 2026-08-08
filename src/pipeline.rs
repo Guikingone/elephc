@@ -23,7 +23,7 @@ use crate::span::Span;
 use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
-    autoload, codegen, debug_info, errors, exports, ir, ir_lower, ir_passes, lexer,
+    autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower, ir_passes, lexer,
     linker, list_id_prelude, name_resolver, opcache_prelude, optimize, parser, pdo_prelude,
     resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
 };
@@ -317,6 +317,25 @@ pub(crate) fn compile(config: CliConfig) {
             }
         };
     timings.record_since("autoload-run", phase_started);
+
+    // Desugar PHP's argument-introspection constructs (`func_num_args`, `func_get_args`,
+    // `func_get_arg`) into plain PHP: every function scope that uses one gains the hidden
+    // `mixed ...$__elephc_func_args` parameter, so the surplus positional arguments PHP
+    // allows are collected by the existing variadic machinery. Runs after `autoload::run`
+    // so autoloaded declarations are covered too — which means call names are already
+    // resolved here and are matched on their unqualified last segment — and before the AST
+    // optimizer and the checker, which then only ever see ordinary PHP.
+    crate::progress::phase("func-args");
+    let phase_started = Instant::now();
+    let ast = match func_args::desugar(ast) {
+        Ok(desugared) => desugared,
+        Err(e) => {
+            crate::progress::clear();
+            errors::report(&e);
+            process::exit(1);
+        }
+    };
+    timings.record_since("func-args", phase_started);
 
     // Complete the OPcache script manifest now that all three groups exist, and re-render the
     // manifest-dependent functions injected above against it. This is a pure substitution of

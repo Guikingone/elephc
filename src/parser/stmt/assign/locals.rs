@@ -63,6 +63,15 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
         return Err(CompileError::new(span, "Invalid increment target"));
     }
 
+    // `++$this->n;`, `++$obj->n;`, and `++$a[0];` target storage the simple local path
+    // cannot name. Statement position discards the operator's value, so they lower
+    // through the same read-modify-write shape as their postfix spellings.
+    if starts_complex_incdec_target(tokens, *pos) {
+        let lhs_expr = crate::parser::expr::parse_expr(tokens, pos)?;
+        expect_semicolon(tokens, pos)?;
+        return super::postfix::lower_postfix_incdec_assignment(lhs_expr, is_increment, span);
+    }
+
     let name = match tokens.get(*pos).map(|(t, _)| t) {
         Some(Token::Variable(n)) => n.clone(),
         _ => {
@@ -83,6 +92,23 @@ pub(in crate::parser::stmt) fn parse_incdec_stmt(
     };
     let expr = Expr::new(kind, span);
     Ok(Stmt::new(StmtKind::ExprStmt(expr), span))
+}
+
+/// Returns true when the tokens after a prefix `++`/`--` name a property, array element,
+/// or `$this` member rather than a plain local variable.
+///
+/// `$this` always continues into a member access, and a variable is only a complex target
+/// when it is followed by `->`, `?->`, or `[`. Everything else keeps the plain
+/// `PreIncrement`/`PreDecrement` local path.
+fn starts_complex_incdec_target(tokens: &[SpannedToken], pos: usize) -> bool {
+    match tokens.get(pos).map(|(token, _)| token) {
+        Some(Token::This) => true,
+        Some(Token::Variable(_)) => matches!(
+            tokens.get(pos + 1).map(|(token, _)| token),
+            Some(Token::Arrow) | Some(Token::QuestionArrow) | Some(Token::LBracket)
+        ),
+        _ => false,
+    }
 }
 
 /// Parses a `global $var, ...;` declaration statement.

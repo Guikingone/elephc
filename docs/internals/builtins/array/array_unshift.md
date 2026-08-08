@@ -2,7 +2,7 @@
 title: "array_unshift() — internals"
 description: "Compiler internals for array_unshift(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 43
+  order: 44
 ---
 
 ## `array_unshift()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_unshift.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_unshift.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -105,6 +105,11 @@ pub(super) fn lower_builtin_call_args(
         {
             lower_user_value_sort_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice
+            if !args.iter().any(is_spread_arg) =>
+        {
+            lower_array_splice_args(ctx, sig, args)
+        }
         _ if !crate::types::call_args::has_named_args(args)
             && !args.iter().any(is_spread_arg) =>
         {

@@ -43,8 +43,16 @@ pub(super) fn emit_property_load(
         PhpType::TaggedScalar => {
             let int_reg = abi::int_result_reg(ctx.emitter);
             let tag_reg = crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter);
-            abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
-            abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+            // Mixed-receiver dispatch hands the object pointer in the integer result register,
+            // so loading the payload first would overwrite the base before the tag word is read
+            // and the second load would dereference the payload. Same guard as the `Str` arm.
+            if base_reg == int_reg {
+                abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+                abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
+            } else {
+                abi::emit_load_from_address(ctx.emitter, int_reg, base_reg, slot.offset);
+                abi::emit_load_from_address(ctx.emitter, tag_reg, base_reg, slot.offset + 8);
+            }
         }
         ty if is_pointer_sized_property_type(&ty) => {
             let int_reg = abi::int_result_reg(ctx.emitter);

@@ -36,6 +36,11 @@ fn parse_c_type(tokens: &[SpannedToken], pos: &mut usize) -> Result<CType, Compi
                 "void" => Ok(CType::Void),
                 "callable" => Ok(CType::Callable),
                 "ptr" => {
+                    // `ptr<>` lexes as the single `<>` token (PHP's `!=` alias), so the
+                    // empty type list is recognized here to keep the diagnostic accurate.
+                    if *pos < tokens.len() && tokens[*pos].0 == Token::LessGreater {
+                        return Err(CompileError::new(span, "Expected type name after 'ptr<'"));
+                    }
                     // Check for ptr<TypeName>
                     if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
                         *pos += 1; // consume <

@@ -599,7 +599,7 @@ pub fn emit_var_dump_emit_float_line(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // ftoa(d0) → x1=ptr, x2=len
-    emitter.instruction("bl __rt_ftoa");                                        // call runtime helper
+    emitter.instruction("bl __rt_ftoa_repr");                                   // render at serialize_precision=-1 (var_dump layout)
     emitter.instruction("bl __rt_vd_write");                                    // write x1/x2 through the ob/web-aware stdout sink (register-preserving)
 
     // Emit ")\n"
@@ -629,7 +629,7 @@ fn emit_var_dump_emit_float_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
     emitter.instruction("movsd xmm0, QWORD PTR [rbp - 8]");                     // reload xmm0 for ftoa
-    emitter.instruction("call __rt_ftoa");                                      // rax=ptr, rdx=len
+    emitter.instruction("call __rt_ftoa_repr");                                 // serialize_precision=-1 layout: rax=ptr, rdx=len
     emitter.instruction("mov rsi, rax");                                        // prepare SysV call argument
     emitter.instruction("call __rt_vd_write");                                  // write rsi/rdx through the ob/web-aware stdout sink (register-preserving)
 
@@ -1064,6 +1064,16 @@ pub fn emit_var_dump_value(emitter: &mut Emitter) {
     emitter.label("__rt_vd_val_obj");
     emitter.instruction("ldr x0, [sp, #0]");                                    // nested object pointer
     emitter.instruction("cbz x0, __rt_vd_val_null");                            // defensive: a null instance renders NULL
+    // PHP renders an enum case as `enum(E::C)`, never as an object body, so the
+    // enum test happens before anything object-shaped is written.
+    emitter.instruction("bl __rt_obj_enum_name_offset");                        // x0 = enum `name` slot offset, or -1 for a plain class
+    emitter.instruction("cmp x0, #0");                                          // is this instance an enum case?
+    emitter.instruction("b.lt __rt_vd_val_obj_plain");                          // a plain class falls through to the object body
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the enum instance pointer
+    emitter.instruction("bl __rt_var_dump_emit_enum_line");                     // emit `<indent>enum(E::C)\n`
+    emitter.instruction("b __rt_vd_val_done");                                  // value rendered
+    emitter.label("__rt_vd_val_obj_plain");
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
     emitter.instruction("bl __rt_vd_seen_find");                                // is this object already on the walk stack?
     emitter.instruction("cbnz x0, __rt_vd_val_recursion");                      // PHP renders a revisited object as *RECURSION*
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the object pointer
@@ -1179,6 +1189,16 @@ fn emit_var_dump_value_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // nested object pointer
     emitter.instruction("test rdi, rdi");                                       // defensive null-instance check
     emitter.instruction("jz __rt_vd_val_null_x86");                             // a null instance renders NULL
+    // PHP renders an enum case as `enum(E::C)`, never as an object body, so the
+    // enum test happens before anything object-shaped is written.
+    emitter.instruction("call __rt_obj_enum_name_offset");                      // rax = enum `name` slot offset, or -1 for a plain class
+    emitter.instruction("cmp rax, 0");                                          // is this instance an enum case?
+    emitter.instruction("jl __rt_vd_val_obj_plain_x86");                        // a plain class falls through to the object body
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the enum instance pointer
+    emitter.instruction("call __rt_var_dump_emit_enum_line");                   // emit `<indent>enum(E::C)\n`
+    emitter.instruction("jmp __rt_vd_val_done_x86");                            // value rendered
+    emitter.label("__rt_vd_val_obj_plain_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the object pointer
     emitter.instruction("call __rt_vd_seen_find");                              // is this object already on the walk stack?
     emitter.instruction("test rax, rax");                                       // did the guard report a revisit?
     emitter.instruction("jnz __rt_vd_val_recursion_x86");                       // PHP renders a revisited object as *RECURSION*

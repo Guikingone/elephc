@@ -7,9 +7,14 @@
 //!
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - `capacity * 64` is validated before the allocation request. `array_fill()` with a non-zero start
+//!   routes a caller-supplied count straight into this capacity, and an unchecked product wraps to a
+//!   tiny block whose entry-zeroing loop then runs off the heap.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::data::ARRAY_ALLOC_SIZE_MSG;
 
 
 /// hash_new: create a new hash table on the heap.
@@ -19,6 +24,11 @@ use crate::codegen_support::platform::Arch;
 /// Layout: [count:8][capacity:8][value_type:8][head:8][tail:8][entries...]
 ///         where each entry is 64 bytes:
 ///         [occupied:8][key_ptr:8][key_len:8][value_lo:8][value_hi:8][value_tag:8][prev:8][next:8]
+///
+/// # Size validation
+/// Negative capacities are clamped to an empty entries region, and any `capacity * 64 + 40` that
+/// does not fit in a non-negative machine word terminates the process through
+/// `__rt_hash_cap_overflow`.
 pub fn emit_hash_new(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_new_linux_x86_64(emitter);
@@ -29,6 +39,17 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.comment("--- runtime: hash_new ---");
     emitter.label_global("__rt_hash_new");
 
+    // -- validate the requested allocation size before touching the heap --
+    emitter.instruction("cmp x0, #0");                                          // is the requested capacity negative?
+    emitter.instruction("csel x10, x0, xzr, ge");                               // clamp negative capacities to an empty entries region
+    emitter.instruction("mov x9, #64");                                         // entry size = 64 bytes with per-entry tags and insertion-order links
+    emitter.instruction("umulh x11, x10, x9");                                  // x11 = high 64 bits of capacity * 64
+    emitter.instruction("cbnz x11, __rt_hash_cap_overflow");                    // reject entry regions that do not fit in one machine word
+    emitter.instruction("mul x10, x10, x9");                                    // x10 = low 64 bits of capacity * 64 = entries region size
+    emitter.instruction("adds x10, x10, #40");                                  // x10 = entries region plus the 40-byte hash header
+    emitter.instruction("b.hs __rt_hash_cap_overflow");                         // reject totals that carried out of the machine word
+    emitter.instruction("tbnz x10, #63, __rt_hash_cap_overflow");               // reject totals the signed heap-size check would read as negative
+
     // -- set up stack frame, save arguments --
     emitter.instruction("sub sp, sp, #32");                                     // allocate 32 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address
@@ -36,10 +57,8 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save capacity to stack
     emitter.instruction("str x1, [sp, #8]");                                    // save value_type to stack
 
-    // -- calculate total size: 40 + capacity * 64 --
-    emitter.instruction("mov x9, #64");                                         // entry size = 64 bytes with per-entry tags and insertion-order links
-    emitter.instruction("mul x2, x0, x9");                                      // x2 = capacity * 64 = entries region size
-    emitter.instruction("add x0, x2, #40");                                     // x0 = total size (40-byte header + entries)
+    // -- allocate the validated total size: 40-byte header + capacity * 64 --
+    emitter.instruction("mov x0, x10");                                         // x0 = validated total size (40-byte header + entries)
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate memory, x0 = pointer to hash table
     emitter.instruction("mov x9, #3");                                          // heap kind 3 = associative array / hash table
     emitter.instruction("mov x10, #0x8000");                                    // bit 15 marks heap containers that participate in copy-on-write
@@ -74,6 +93,15 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return with x0 = hash table pointer
+
+    // -- fatal error: requested hash size cannot be represented --
+    emitter.label("__rt_hash_cap_overflow");
+    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    abi::emit_symbol_address(emitter, "x1", "_arr_cap_err_msg");
+    emitter.instruction(&format!("mov x2, #{}", ARRAY_ALLOC_SIZE_MSG.len()));   // pass the exact array-size diagnostic byte count
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #1");                                          // exit code 1
+    emitter.syscall(1);
 }
 
 /// x86_64 Linux variant of `emit_hash_new` using the System V AMD64 ABI.
@@ -81,6 +109,11 @@ pub fn emit_hash_new(emitter: &mut Emitter) {
 ///         (0=int, 1=str, 2=float, 3=bool, 4=array, 5=assoc, 6=object, 7=mixed, 8=null)
 /// Output: rax=pointer to hash table
 /// Layout: [count:8][capacity:8][value_type:8][head:8][tail:8][entries...] — identical to ARM64.
+///
+/// # Size validation
+/// Mirrors the ARM64 guard: negative capacities are clamped to an empty entries region and any
+/// `capacity * 64 + 40` that does not fit in a non-negative machine word terminates the process
+/// through `__rt_hash_cap_overflow`.
 fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_new ---");
@@ -91,9 +124,13 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("sub rsp, 16");                                         // reserve local slots for capacity and value_type across the malloc call
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the requested hash capacity across the allocator call
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the requested runtime value_type across the allocator call
-    emitter.instruction("mov rax, rdi");                                        // copy the capacity into a scratch register before scaling it by the entry size
+    emitter.instruction("xor rax, rax");                                        // default the sizing operand to an empty entries region
+    emitter.instruction("test rdi, rdi");                                       // is the requested capacity strictly positive?
+    emitter.instruction("cmovg rax, rdi");                                      // clamp negative capacities to an empty entries region
     emitter.instruction("imul rax, 64");                                        // compute the total bytes needed for the 64-byte hash entry array
+    emitter.instruction("jo __rt_hash_cap_overflow");                           // reject entry regions that do not fit in one machine word
     emitter.instruction("add rax, 40");                                         // include the fixed 40-byte hash header in the allocation size
+    emitter.instruction("jo __rt_hash_cap_overflow");                           // reject totals the signed heap-size accounting would read as negative
     emitter.instruction("call __rt_heap_alloc");                                // allocate the hash-table storage through the shared x86_64 heap wrapper
     emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(0x8003))); // materialize the copy-on-write hash-table heap kind word with the x86_64 heap marker
     emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the allocated payload as an associative-array heap object in the uniform header
@@ -110,8 +147,8 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the requested capacity to determine how many entry headers to clear
 
     emitter.label("__rt_hash_new_zero");
-    emitter.instruction("test r11, r11");                                       // stop clearing once every entry slot in the requested capacity has been visited
-    emitter.instruction("je __rt_hash_new_done");                               // skip the zeroing loop entirely for a zero-capacity hash table
+    emitter.instruction("cmp r11, 0");                                          // stop clearing once every entry slot in the requested capacity has been visited
+    emitter.instruction("jle __rt_hash_new_done");                              // skip the zeroing loop for empty and negative capacities, matching the signed ARM64 guard
     emitter.instruction("mov QWORD PTR [r10], 0");                              // clear the occupied/tombstone marker for the current hash entry slot
     emitter.instruction("add r10, 64");                                         // advance the entry cursor to the next hash slot in the entries region
     emitter.instruction("sub r11, 1");                                          // decrement the number of remaining hash entry headers to clear
@@ -121,4 +158,15 @@ fn emit_hash_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 16");                                         // release the temporary capacity and value-type spill slots
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the hash-table pointer
     emitter.instruction("ret");                                                 // return the newly allocated hash-table pointer in rax
+
+    // -- fatal error: requested hash size cannot be represented --
+    emitter.label("__rt_hash_cap_overflow");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr for the hash-size fatal error message
+    abi::emit_symbol_address(emitter, "rsi", "_arr_cap_err_msg");
+    emitter.instruction(&format!("mov edx, {}", ARRAY_ALLOC_SIZE_MSG.len()));   // pass the exact array-size diagnostic byte count
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");                                             // print the fatal hash-size message to stderr
+    emitter.instruction("mov edi, 1");                                          // exit code 1 for an unrepresentable hash size
+    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("syscall");                                             // terminate the process after reporting the hash-size failure
 }

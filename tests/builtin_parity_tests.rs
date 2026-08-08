@@ -59,7 +59,17 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_udiff",
     "array_uintersect",
     "array_walk_recursive",
+    "bindec",
+    "decbin",
+    "dechex",
+    "decoct",
+    "hexdec",
+    "join",
+    "octdec",
     "serialize",
+    "strncasecmp",
+    "strncmp",
+    "substr_count",
     "unserialize",
     "zval_free",
     "zval_pack",
@@ -68,9 +78,12 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
 ];
 
 /// Eval supports these PHP optional parameters before the static backend does.
+///
+/// `array_splice` left this list when the static backend gained PHP's `$replacement`
+/// parameter, so both sides now declare the same four-parameter signature and the exact
+/// shape comparison below applies to it.
 const EVAL_SIGNATURE_EXTENSION_BUILTINS: &[&str] = &[
     "array_reverse",
-    "array_splice",
     "nl2br",
     "preg_match",
     "print_r",

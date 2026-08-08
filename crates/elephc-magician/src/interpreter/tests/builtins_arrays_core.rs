@@ -609,3 +609,104 @@ return function_exists("usort") && function_exists("uasort") && function_exists(
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval internal array pointer builtins read and move the cursor like PHP.
+#[test]
+fn execute_program_dispatches_array_pointer_builtins() {
+    let program = parse_fragment(
+        br#"$a = [1, 2, 3];
+echo key($a) . ":" . current($a) . ":";
+echo next($a) . ":" . key($a) . ":";
+echo prev($a) . ":" . key($a) . ":";
+echo prev($a) . ":";
+echo (key($a) === null ? "NULL" : "K") . ":";
+echo (current($a) === false ? "FALSE" : "C") . ":";
+echo next($a) . ":";
+echo (key($a) === null ? "NULL" : "K") . ":";
+echo reset($a) . ":" . key($a) . ":";
+echo end($a) . ":" . key($a) . ":";
+echo next($a) . ":";
+echo (key($a) === null ? "NULL" : "K") . ":";
+echo prev($a) . ":";
+echo (key($a) === null ? "NULL" : "K") . ":";
+return function_exists("key") && function_exists("current") && function_exists("next")
+    && function_exists("prev") && function_exists("reset") && function_exists("end");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "0:1:2:1:1:0::NULL:FALSE::NULL:1:0:3:2::NULL::NULL:");
+    assert!(values.warnings.is_empty());
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies eval internal array pointers survive foreach and follow assoc key order.
+#[test]
+fn execute_program_array_pointer_builtins_track_assoc_empty_and_replaced_arrays() {
+    let program = parse_fragment(
+        br#"$b = ["x" => 1, "y" => 2];
+echo key($b) . ":" . current($b) . ":";
+echo next($b) . ":" . key($b) . ":";
+foreach ($b as $k => $v) { echo $k . $v; }
+echo ":" . key($b) . ":";
+echo current(array: $b) . ":" . key(array: $b) . ":";
+echo (next(array: $b) === false ? "FALSE" : "N") . ":" . (key($b) === null ? "NULL" : "K") . ":";
+$e = [];
+echo (key($e) === null ? "NULL" : "K") . ":";
+echo (current($e) === false ? "FALSE" : "C") . ":";
+echo (reset($e) === false ? "FALSE" : "R") . ":";
+echo (end($e) === false ? "FALSE" : "E") . ":";
+echo (next($e) === false ? "FALSE" : "N") . ":";
+echo (prev($e) === false ? "FALSE" : "P") . ":";
+$c = [1, 2, 3];
+next($c);
+$c = [4, 5, 6];
+echo key($c) . ":" . current($c) . ":";
+return function_exists("reset");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "x:1:2:y:x1y2:y:2:y:FALSE:NULL:NULL:FALSE:FALSE:FALSE:FALSE:FALSE:0:4:"
+    );
+    assert!(values.warnings.is_empty());
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
+/// Verifies eval internal array pointer movers warn and skip writeback on by-value calls.
+#[test]
+fn execute_program_array_pointer_builtins_warn_on_by_value_calls() {
+    let program = parse_fragment(
+        br#"$d = [1, 2, 3];
+next($d);
+echo call_user_func("next", $d) . ":" . key($d) . ":";
+echo call_user_func("key", $d) . ":" . call_user_func("current", $d) . ":";
+echo call_user_func_array("reset", [$d]) . ":" . key($d) . ":";
+echo call_user_func("end", $d) . ":" . key($d) . ":";
+$f = "next";
+echo $f($d) . ":" . key($d) . ":";
+return function_exists("prev");"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(values.output, "3:1:1:2:1:1:3:1:3:2:");
+    assert_eq!(
+        values.warnings,
+        vec![
+            "next(): Argument #1 ($array) must be passed by reference, value given",
+            "reset(): Argument #1 ($array) must be passed by reference, value given",
+            "end(): Argument #1 ($array) must be passed by reference, value given",
+        ]
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}
