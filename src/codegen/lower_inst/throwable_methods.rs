@@ -10,12 +10,32 @@
 use super::*;
 
 /// Returns true when a direct method call can be satisfied from the compact Throwable payload.
+///
+/// PDOException and its subclasses keep `getCode()` and `getPrevious()` on their PHP
+/// implementations because those values live outside the compiler-owned base payload.
 pub(super) fn is_throwable_standard_method_call(
     ctx: &FunctionContext<'_>,
     class_name: &str,
     method_name: &str,
 ) -> bool {
-    is_throwable_standard_method_key(&php_symbol_key(method_name))
+    let method_key = php_symbol_key(method_name);
+    let mut current = Some(class_name.trim_start_matches('\\'));
+    let mut pdo_exception_receiver = false;
+    while let Some(name) = current {
+        if name == "PDOException" {
+            pdo_exception_receiver = true;
+            break;
+        }
+        current = ctx
+            .module
+            .class_infos
+            .get(name)
+            .and_then(|info| info.parent.as_deref());
+    }
+    if pdo_exception_receiver && matches!(method_key.as_str(), "getcode" | "getprevious") {
+        return false;
+    }
+    is_throwable_standard_method_key(&method_key)
         && is_throwable_like_class(ctx, class_name)
 }
 
@@ -304,4 +324,3 @@ pub(super) fn lower_throwable_get_previous(
         Ok(object_ty)
     }
 }
-

@@ -44,7 +44,7 @@ fn compile_source_to_asm_with_options_and_regex(
     heap_debug: bool,
     with_regex: bool,
 ) -> (String, String, TestLinkRequirements) {
-    compile_source_to_asm_with_defines_repr_and_regex(
+    compile_source_to_asm_with_defines_repr_regex_and_php_version(
         source,
         dir,
         &HashSet::new(),
@@ -53,6 +53,7 @@ fn compile_source_to_asm_with_options_and_regex(
         heap_debug,
         default_null_repr(),
         with_regex,
+        elephc::php_version::PhpVersion::default(),
     )
 }
 
@@ -103,7 +104,7 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
 ) -> (String, String, TestLinkRequirements) {
-    compile_source_to_asm_with_defines_repr_and_regex(
+    compile_source_to_asm_with_defines_repr_regex_and_php_version(
         source,
         dir,
         defines,
@@ -112,12 +113,38 @@ pub(crate) fn compile_source_to_asm_with_defines_repr(
         heap_debug,
         null_repr,
         false,
+        elephc::php_version::PhpVersion::default(),
     )
 }
 
-/// Runs the full fixture pipeline and optionally force-enables the runtime regex capability.
+/// Runs the full fixture pipeline for an explicit PHP compatibility version.
 #[allow(clippy::too_many_arguments)]
-fn compile_source_to_asm_with_defines_repr_and_regex(
+pub(crate) fn compile_source_to_asm_with_defines_repr_and_php_version(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    php_version: elephc::php_version::PhpVersion,
+) -> (String, String, TestLinkRequirements) {
+    compile_source_to_asm_with_defines_repr_regex_and_php_version(
+        source,
+        dir,
+        defines,
+        heap_size,
+        gc_stats,
+        heap_debug,
+        null_repr,
+        false,
+        php_version,
+    )
+}
+
+/// Runs the full fixture pipeline with explicit regex and PHP-version settings.
+#[allow(clippy::too_many_arguments)]
+fn compile_source_to_asm_with_defines_repr_regex_and_php_version(
     source: &str,
     dir: &Path,
     defines: &HashSet<String>,
@@ -126,6 +153,7 @@ fn compile_source_to_asm_with_defines_repr_and_regex(
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
     with_regex: bool,
+    php_version: elephc::php_version::PhpVersion,
 ) -> (String, String, TestLinkRequirements) {
     let (user_asm, runtime_asm, link_requirements) = try_compile_source_to_asm_with_defines_repr(
         source, dir, defines, heap_size, gc_stats, heap_debug, null_repr, with_regex,
@@ -193,7 +221,8 @@ fn try_compile_source_to_asm_with_defines_repr(
     elephc::codegen::set_autoload_rule_count(autoload_registry.rule_count());
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
-    let resolved = elephc::pdo_prelude::inject_if_used(resolved, false);
+    let resolved =
+        elephc::pdo_prelude::inject_if_used_for_version(resolved, false, php_version);
     let resolved = elephc::tz_prelude::inject_if_used(resolved, false);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved);
@@ -277,25 +306,29 @@ fn ir_opt_enabled_for_codegen_fixture() -> bool {
     }
 }
 
-// Injects an exit harness into user assembly before the final `ret` instruction.
-// Rewrites macOS-style syscall sequence to Linux-style syscall sequence if needed,
-// then patches the assembly in-place using a target-specific needle. Panics if the
-// needle is not found (indicates a codegen emit change that broke the harness injection).
-/// Injects main exit harness into the compiler metadata registry.
-pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
-    let needle = match (target().platform, target().arch) {
+/// Returns the process-exit epilogue emitted for a supported test target.
+fn main_exit_needle(target: Target) -> &'static str {
+    match (target.platform, target.arch) {
         (Platform::MacOS, Arch::AArch64) => "    mov x0, #0\n    mov x16, #1\n    svc #0x80",
-        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #93\n    svc #0",
-        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 60\n    syscall",
+        (Platform::Linux, Arch::AArch64) => "    mov x0, #0\n    mov x8, #94\n    svc #0",
+        (Platform::Linux, Arch::X86_64) => "    mov edi, 0\n    mov eax, 231\n    syscall",
         (_, Arch::AArch64) => panic!(
             "main exit harness is not implemented yet for target {}",
-            target()
+            target
         ),
         (_, Arch::X86_64) => panic!(
             "main exit harness is not implemented yet for target {}",
-            target()
+            target
         ),
-    };
+    }
+}
+
+/// Injects an exit harness before the target's final process-exit epilogue.
+///
+/// Transforms macOS-dialect harness assembly for Linux and panics when codegen no
+/// longer emits the expected target-specific epilogue.
+pub(crate) fn inject_main_exit_harness(asm: &str, harness: &str) -> String {
+    let needle = main_exit_needle(target());
     // Harness strings are written in macOS assembly dialect; transform for Linux if needed
     let harness = target().transform_assembly(harness);
     let replacement = format!("{harness}\n{needle}");
@@ -583,6 +616,73 @@ pub(crate) fn compile_and_run_with_regex(source: &str) -> String {
     compile_and_run_with_heap_size_and_optional_regex(source, 8_388_608, true)
 }
 
+/// Compiles and runs PHP source with an isolated `PHPRC` file containing `ini`.
+pub(crate) fn compile_and_run_with_php_ini(source: &str, ini: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_php_ini_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+    let ini_path = dir.join("php.ini");
+    fs::write(&ini_path, ini).unwrap();
+
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_options(source, &dir, 8_388_608, false, false);
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run_with_env(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+        &[("PHPRC", ini_path.as_os_str())],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
+/// Compiles and runs PHP source with an explicit PHP compatibility version.
+pub(crate) fn compile_and_run_with_php_version(
+    source: &str,
+    php_version: elephc::php_version::PhpVersion,
+) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_test_php_version_{}_{:?}_{}",
+        pid, tid, id
+    ));
+    fs::create_dir_all(&dir).unwrap();
+
+    let (user_asm, runtime_asm, requirements) =
+        compile_source_to_asm_with_defines_repr_and_php_version(
+            source,
+            &dir,
+            &HashSet::new(),
+            8_388_608,
+            false,
+            false,
+            default_null_repr(),
+            php_version,
+        );
+    let runtime_obj = runtime_obj_for_asm(&runtime_asm);
+    let output = assemble_and_run(
+        &user_asm,
+        &runtime_obj,
+        &dir,
+        &requirements,
+        &default_link_paths(),
+        &[],
+    );
+    let _ = fs::remove_dir_all(&dir);
+    output
+}
+
 /// Compiles and runs a PHP source with the legacy sentinel null representation forced on,
 /// regardless of `ELEPHC_NULL_REPR`. Used by the sentinel opt-out guard tests.
 pub(crate) fn compile_and_run_sentinel(source: &str) -> String {
@@ -672,4 +772,26 @@ pub(crate) fn asm_without_embedded_script_path(user_asm: &str) -> String {
         out.push(line);
     }
     out.join("\n")
+}
+
+#[cfg(test)]
+mod exit_harness_tests {
+    use super::*;
+
+    /// Verifies each supported target uses the process-wide exit epilogue emitted by codegen.
+    #[test]
+    fn main_exit_needles_match_supported_target_abis() {
+        assert_eq!(
+            main_exit_needle(Target::new(Platform::MacOS, Arch::AArch64)),
+            "    mov x0, #0\n    mov x16, #1\n    svc #0x80"
+        );
+        assert_eq!(
+            main_exit_needle(Target::new(Platform::Linux, Arch::AArch64)),
+            "    mov x0, #0\n    mov x8, #94\n    svc #0"
+        );
+        assert_eq!(
+            main_exit_needle(Target::new(Platform::Linux, Arch::X86_64)),
+            "    mov edi, 0\n    mov eax, 231\n    syscall"
+        );
+    }
 }

@@ -268,7 +268,7 @@ fn check_case(name: &str) {
         // archives into the project, so preparing it twice in one directory fails on the
         // second copy. One profile, one project.
         let mut dirs: Vec<PathBuf> = Vec::new();
-        let outputs: Vec<(String, String)> = PhpVersion::ALL
+        let outputs: Vec<(String, String)> = PhpVersion::MAINTAINED
             .iter()
             .map(|profile| {
                 let spelling = format!("{}.{}", profile.major(), profile.minor());

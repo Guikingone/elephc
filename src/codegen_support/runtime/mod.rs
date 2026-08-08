@@ -27,6 +27,8 @@ mod io;
 /// The shared PHP `float`→`int` conversion (`__rt_php_float_to_int`).
 mod numeric;
 mod objects;
+/// PDO Tier-D callback adapters (`__rt_pdo_*`) re-entering compiled-PHP callables.
+mod pdo;
 mod pointers;
 mod resource_ids;
 /// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).

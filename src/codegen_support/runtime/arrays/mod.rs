@@ -45,6 +45,7 @@ mod array_intersect_refcounted;
 mod array_intersect_key;
 mod array_is_list;
 mod array_key_exists;
+mod array_key_exists_mixed_key;
 mod array_map;
 mod array_map_mixed;
 mod array_map_str;
@@ -84,6 +85,7 @@ mod array_splice;
 mod array_splice_insert;
 mod array_splice_refcounted;
 mod array_splice_str;
+mod array_strict_eq;
 mod array_sum;
 mod array_sum_mixed;
 mod array_to_hash;
@@ -150,6 +152,7 @@ mod nan_bool_coercion_warning;
 mod iterable_unsupported_kind;
 mod iterable_write_stdout;
 mod mixed_abs;
+mod mixed_clone;
 mod mixed_from_value;
 mod mixed_instanceof;
 mod mixed_cast_bool;
@@ -254,6 +257,8 @@ pub use array_intersect_key::emit_array_intersect_key;
 pub use array_is_list::emit_array_is_list;
 /// Emit array key existence check helper.
 pub use array_key_exists::emit_array_key_exists;
+/// Emit the storage-kind-dispatching presence-only array key existence helper.
+pub use array_key_exists_mixed_key::emit_array_key_exists_mixed_key;
 /// Emit array map helper.
 pub use array_map::emit_array_map;
 /// Emit mixed-result array map helper.
@@ -333,6 +338,8 @@ pub use array_splice_insert::{
 /// Emit array splice helper.
 pub use array_splice_refcounted::emit_array_splice_refcounted;
 pub use array_splice_str::{emit_array_splice_insert_str, emit_array_splice_str};
+/// Emit deep array strict-equality (`===`) helper.
+pub use array_strict_eq::emit_array_strict_eq;
 /// Emit refcounted array splice helper.
 pub use array_sum::emit_array_sum;
 /// Emit array sum helper.
@@ -453,6 +460,8 @@ pub use natsort::emit_natsort;
 pub use min_max_container::{emit_min_max_hash, emit_min_max_mixed, emit_min_max_str};
 /// Emit the single-array `min()` / `max()` reductions for Mixed, string, and hash containers.
 pub use mixed_abs::emit_mixed_abs;
+/// Emit a resource-aware owned Mixed value read.
+pub use mixed_clone::emit_mixed_clone;
 pub use mixed_from_value::emit_mixed_from_value;
 /// Emit Mixed from value conversion helper.
 pub use mixed_instanceof::emit_mixed_instanceof;

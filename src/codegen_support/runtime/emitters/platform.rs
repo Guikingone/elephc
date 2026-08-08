@@ -7,7 +7,7 @@
 //! Key details:
 //! - Preserves the dependency order among stream, output-buffering, pointer, zval, and fiber helpers.
 
-use super::super::{fibers, io, pointers, zval};
+use super::super::{fibers, io, pdo, pointers, zval};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
 
@@ -233,6 +233,15 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     zval::emit_zval_type(emitter);
     zval::emit_zval_free_array(emitter);
     zval::emit_zval_free(emitter);
+
+    // PDO Tier-D callback adapters. Emitted only when a PDO callback registration is reachable;
+    // placed after arrays/heap/mixed and zval so adapters can call their shared helpers.
+    if features.pdo_udf {
+        pdo::emit_pdo_call_collation(emitter);
+        pdo::emit_pdo_call_scalar(emitter);
+        pdo::emit_pdo_call_agg_step(emitter);
+        pdo::emit_pdo_call_agg_final(emitter);
+    }
 
     // Fiber runtime functions (cooperative coroutines)
     fibers::emit_fiber_alloc_stack(emitter);

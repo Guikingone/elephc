@@ -3021,6 +3021,84 @@ echo $bag->items[0];
     );
 }
 
+/// Ensures widening a typed array into a generic `array` property preserves the
+/// caller's source owner while transferring the unique converted clone to the property.
+#[test]
+fn test_property_array_widening_preserves_source_and_cow_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class ArrayWideningBag {
+    public array $items = [];
+}
+
+$source = [11, 22];
+$bag = new ArrayWideningBag();
+$bag->items = $source;
+echo $source[0], ",", $source[1];
+echo "|", $bag->items[0], ",", $bag->items[1];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "11,22|11,22");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected property widening ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Ensures associative-array widening follows the same non-consuming property
+/// store contract while converting typed values to boxed `Mixed` entries.
+#[test]
+fn test_property_assoc_array_widening_preserves_source_ownership() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+class AssocArrayWideningBag {
+    public array $items = [];
+}
+
+$source = ["left" => 11, "right" => 22];
+$bag = new AssocArrayWideningBag();
+$bag->items = $source;
+echo $source["left"], ",", $source["right"];
+echo "|", $bag->items["left"], ",", $bag->items["right"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "11,22|11,22");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected associative property widening ownership to stay balanced, got: {}",
+        out.stderr
+    );
+}
+
+/// Ensures releasing a temporary zero-property aggregate from a reused larger
+/// heap block cannot invalidate a `Mixed` foreach key that is still live.
+#[test]
+fn test_iterator_aggregate_array_keys_survive_source_release() {
+    let out = compile_and_run(
+        r#"<?php
+$first = new ArrayObject(["left" => "L"]);
+foreach ($first as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+
+class RetainedKeyAggregate implements IteratorAggregate {
+    public function getIterator(): Traversable {
+        return new ArrayIterator(["base" => "B"]);
+    }
+}
+
+$iterator = new IteratorIterator(new RetainedKeyAggregate());
+foreach ($iterator as $key => $value) {
+    echo $key, "=", $value;
+}
+"#,
+    );
+    assert_eq!(out, "left=L;base=B");
+}
+
 /// Verifies a nullsafe property read releases an owning nullable call result on
 /// both branches. In particular, a boxed null receiver must not leak when `?->`
 /// short-circuits before the property read.
@@ -4237,20 +4315,13 @@ echo $sum, "\n";
     );
 }
 
-/// Documents the container half of issue #619, which the conditional release deliberately does
-/// NOT cover: a fresh `[$i]` handed to a callee that drops it still leaks one container per
-/// call, through the long-standing `may_alias` suppression for array arguments.
+/// Verifies a fresh container passed by value is released when the callee returns a non-alias.
 ///
-/// The disambiguation compares two payloads as single pointers, which is only valid when both
-/// sides are boxed `Mixed`. Here the argument is a bare container while the result is a `Mixed`
-/// box that would *wrap* it, so the pointers differ even on the aliasing branch — comparing them
-/// would release a container the result owns and abort with `bad refcount`. Covering this shape
-/// needs the comparison to reach through the box to its payload field.
-///
-/// The assertion pins the current leak on purpose, so that the restriction stays deliberate and
-/// this test turns red the day the container path is covered.
+/// User-code callees privatize by-value containers before execution, so their result cannot
+/// retain the caller's original temporary. The caller may therefore release that temporary
+/// without the payload-level alias guard required for builtin and extern calls.
 #[test]
-fn test_conditional_return_callee_container_arg_still_leaks_on_non_alias_path() {
+fn test_conditional_return_callee_container_arg_releases_on_non_alias_path() {
     let out = compile_and_run_with_heap_debug(
         r#"<?php
 function maybe($x, $c) { if ($c) { return $x; } return 7; }
@@ -4262,8 +4333,8 @@ echo $n, "\n";
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "20\n");
     assert!(
-        out.stderr.contains("HEAP DEBUG: leak summary: live_blocks="),
-        "expected the container argument to still leak on the non-alias path, got: {}",
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "expected the container argument to be released on the non-alias path, got: {}",
         out.stderr
     );
 }

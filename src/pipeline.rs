@@ -142,7 +142,15 @@ pub(crate) fn compile(config: CliConfig) {
     // Runs after include resolution so PDO usage inside includes is detected.
     crate::progress::phase("pdo-prelude");
     let phase_started = Instant::now();
-    let ast = pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"));
+    let ast = if php_version == crate::web_prelude::PhpVersion::default() {
+        pdo_prelude::inject_if_used(ast, with_crates.contains("pdo"))
+    } else {
+        pdo_prelude::inject_if_used_for_version(
+            ast,
+            with_crates.contains("pdo"),
+            php_version,
+        )
+    };
     timings.record_since("pdo-prelude", phase_started);
 
     // Inject the timezone-introspection prelude (extern block + array marshalling,

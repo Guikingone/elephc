@@ -250,6 +250,9 @@ enum ArrayGetMode {
         /// Runtime COW helper matching the element's container kind.
         helper: &'static str,
     },
+    /// Nested-write fetch for a boxed Mixed slot: retain the owning cell so the later write can
+    /// publish a replacement back into the parent container.
+    MixedForWrite,
 }
 
 /// Lowers an indexed-array element read with PHP null-sentinel fallback on misses.
@@ -279,14 +282,19 @@ pub(super) fn lower_array_get(
 /// iterating it by reference. What reaches the loop is unique, so `iter_start`'s own
 /// `ensure_unique` is a no-op and the writes land in the container the parent holds.
 ///
-/// Not to be confused with `RuntimeCallTarget::ArrayFetchForWrite`, which serves the same
-/// purpose for boxed `Mixed` containers (issue #555); this is the statically-typed indexed path.
+/// Boxed `Mixed` elements use the nested-write ownership contract from issue #555 instead: the
+/// stored cell is retained and returned so later write-back can publish any replacement into the
+/// parent. Statically typed array/hash elements use the copy-on-write path from issue #580.
 pub(super) fn lower_array_get_for_write(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
+    require_array_get_result(&elem_ty, inst)?;
+    if matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed) {
+        return lower_array_get_in_mode(ctx, inst, true, ArrayGetMode::MixedForWrite);
+    }
     let helper = array_get_for_write_cow_helper(&elem_ty).ok_or_else(|| {
         CodegenIrError::unsupported(format!(
             "array_get_for_write element PHP type {:?}",
@@ -358,6 +366,16 @@ fn lower_array_get_in_mode(
     let elem_ty = indexed_array_element_type(&ctx.value_php_type(array)?, inst)?;
     require_array_get_result(&elem_ty, inst)?;
     let result_ty = inst.result_php_type.codegen_repr();
+    if matches!(result_ty, PhpType::Mixed) {
+        return lower_array_get_runtime_mixed(
+            ctx,
+            inst,
+            array,
+            index,
+            warn_on_missing,
+            matches!(mode, ArrayGetMode::MixedForWrite),
+        );
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_get_aarch64(
             ctx,
@@ -605,20 +623,35 @@ pub(super) fn lower_array_get_mixed_key(
             key_ty
         )));
     }
+    lower_array_get_runtime_mixed(ctx, inst, array, key, warn_on_missing, false)
+}
+
+/// Reads an indexed-or-promoted array through its runtime storage metadata and returns a fresh
+/// boxed Mixed cell, preserving typed slots when control-flow has widened only the static type.
+fn lower_array_get_runtime_mixed(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+    key: ValueId,
+    warn_on_missing: bool,
+    for_write: bool,
+) -> Result<()> {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             super::hashes::materialize_hash_key_aarch64(ctx, key)?;
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             ctx.load_value_to_reg(array, "x0")?;
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
-            abi::emit_load_int_immediate(ctx.emitter, "x3", if warn_on_missing { 1 } else { 0 });
+            let flags = i64::from(warn_on_missing) | (i64::from(for_write) << 1);
+            abi::emit_load_int_immediate(ctx.emitter, "x3", flags);
         }
         Arch::X86_64 => {
             super::hashes::materialize_hash_key_x86_64(ctx, key)?;
             abi::emit_push_reg_pair(ctx.emitter, "rsi", "rdx");
             ctx.load_value_to_reg(array, "rdi")?;
             abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");
-            abi::emit_load_int_immediate(ctx.emitter, "rcx", if warn_on_missing { 1 } else { 0 });
+            let flags = i64::from(warn_on_missing) | (i64::from(for_write) << 1);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", flags);
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_array_get_mixed_key");
@@ -641,6 +674,12 @@ fn lower_array_set_mixed_key_aarch64(
     }
     abi::emit_push_reg(ctx.emitter, "x0");
     ctx.load_value_to_reg(array, "x0")?;
+    // Hand the helper an OWNED reference, mirroring `Op::ArrayToHash`. Its promote paths abandon
+    // the source indexed array for a freshly built hash and must release it; without this acquire
+    // the helper would be releasing the caller's only reference — a use-after-free. With it, the
+    // ledger closes: the in-place paths hand the `+1` back inside the returned pointer, the promote
+    // paths consume it, and `store_local` then releases whatever the slot held before.
+    abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
     ctx.load_value_to_reg(key, "x1")?;
     abi::emit_pop_reg(ctx.emitter, "x2");
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
@@ -662,7 +701,12 @@ fn lower_array_set_mixed_key_x86_64(
         box_value_for_mixed_container(ctx, value, value_ty)?;
     }
     abi::emit_push_reg(ctx.emitter, "rax");
-    ctx.load_value_to_reg(array, "rdi")?;
+    ctx.load_value_to_reg(array, "rax")?;
+    // See the AArch64 twin: the helper is handed an OWNED reference so its promote paths can
+    // release the source array they abandon. `emit_incref_if_refcounted` retains the pointer in the
+    // int-result register, so the array is loaded there first and moved into the ABI register after.
+    abi::emit_incref_if_refcounted(ctx.emitter, &ctx.value_php_type(array)?);
+    ctx.emitter.instruction("mov rdi, rax");                                    // publish the retained array as the helper's first argument
     ctx.load_value_to_reg(key, "rsi")?;
     abi::emit_pop_reg(ctx.emitter, "rdx");
     abi::emit_call_label(ctx.emitter, "__rt_array_set_mixed_key");
@@ -779,20 +823,61 @@ fn lower_array_get_aarch64(
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    ctx.load_value_to_reg(index, result_reg)?;
-    ctx.load_value_to_reg(array, array_reg)?;
     let null_label = ctx.next_label("array_get_null");
     let null_receiver_label = ctx.next_label("array_get_null_recv");
     let fallback_label = ctx.next_label("array_get_fallback");
     let done_label = ctx.next_label("array_get_done");
+    let promoted_label = ctx.next_label("array_get_promoted");
 
-    // -- guard the receiver: a missed outer read carries a null/sentinel container --
+    // An `Array(_)`-typed local can be backed by HASH storage at runtime: a mixed-key write
+    // promotes the storage kind while the checker only promotes the STATIC type to `AssocArray` at
+    // a provably string-keyed write. The packed payload walk below is only valid on kind-2 storage
+    // — on a hash it bounds-checks the index against the header's live-entry count and then reads
+    // the header's own fields as if they were elements, which SEGFAULTED. Dispatch on the runtime
+    // kind, exactly as the `isset` probe and `__rt_array_get_mixed_key` already do.
+    // An array with no element type has no elements to read, and the hash-value materializer has no
+    // representation to produce for `Void`/`Never`, so such a receiver keeps the packed-only path:
+    // every read of it is a miss either way.
+    let elem_is_empty = matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never);
+    // The promoted read is emitted speculatively, so it must be *representable* for every element
+    // type it is emitted for — an unsupported one fails the compile instead of sitting unreached.
+    // `?int` (`TaggedScalar`) has no hash representation on either side of the lookup, so an array
+    // of them can never be hash-backed and the packed-only path stays correct.
+    let can_read_promoted = !elem_is_empty && super::hashes::hash_get_supports_value_type(elem_ty);
+    // Gate on the IR type, NOT the PHP type: `Op::IChecked*` — what `$i++` lowers to — reports a
+    // PHP type of `Mixed` while its runtime value is a RAW INTEGER. Unboxing that as a cell pointer
+    // reads garbage, and every read through an incremented loop counter silently returned nothing.
+    let index_is_mixed_key = matches!(
+        ctx.value_ir_type(index)?,
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+    );
+    ctx.load_value_to_reg(array, array_reg)?;
+    // -- guard the receiver before reading its storage-kind metadata --
     crate::codegen::sentinels::emit_branch_if_null_container(
         ctx.emitter,
         array_reg,
         len_reg,
         &null_receiver_label,
     );
+    if can_read_promoted {
+        ctx.emitter.instruction(&format!("ldr {}, [{}, #-8]", len_reg, array_reg)); // load the storage-kind metadata word from the array header
+        ctx.emitter.instruction(&format!("and {}, {}, #0xff", len_reg, len_reg)); // isolate the low byte holding the storage kind
+        ctx.emitter.instruction(&format!("cmp {}, #3", len_reg));               // kind 3 = storage was promoted to a hash at runtime
+        ctx.emitter.instruction(&format!("b.eq {}", promoted_label));           // a promoted array has no packed payload to index into
+    }
+
+    // A `Mixed` key arrives as a boxed cell, not an integer. Materialize it into the normalized
+    // (key_lo, key_hi) pair — which also applies PHP's numeric-string rule — and reject a genuine
+    // string key outright: packed storage never holds one.
+    if index_is_mixed_key {
+        super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+        ctx.emitter.instruction("cmn x2, #1");                                  // key_hi == -1 marks an integer key
+        ctx.emitter.instruction(&format!("b.ne {}", null_label));               // a string key never exists in packed storage
+        ctx.emitter.instruction(&format!("mov {}, x1", result_reg));            // adopt the normalized integer key as the offset
+    } else {
+        ctx.load_value_to_reg(index, result_reg)?;
+    }
+    ctx.load_value_to_reg(array, array_reg)?;
     ctx.emitter.instruction(&format!("cmp {}, #0", result_reg));                // check whether the indexed-array offset is negative
     ctx.emitter.instruction(&format!("b.lt {}", null_label));                   // negative indexed-array offsets read as null
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -800,6 +885,19 @@ fn lower_array_get_aarch64(
     ctx.emitter.instruction(&format!("b.ge {}", null_label));                   // out-of-range indexed-array offsets read as null
     emit_array_get_in_bounds_aarch64(ctx, array_reg, result_reg, elem_ty, result_ty, mode)?;
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the null fallback after a successful indexed-array read
+
+    // -- promoted to hash storage: read through the hash, materializing the SAME representation
+    //    the packed path produces, so the op's result type is unchanged --
+    if can_read_promoted {
+        ctx.emitter.label(&promoted_label);
+        super::hashes::materialize_hash_key_aarch64(ctx, index)?;
+        ctx.load_value_to_reg(array, "x0")?;
+        abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        ctx.emitter.instruction(&format!("cbz x0, {}", null_label));            // a missing key falls through to the shared null/warning path
+        super::hashes::emit_hash_get_success_aarch64(ctx, elem_ty, result_ty, false)?;
+        ctx.emitter.instruction(&format!("b {}", done_label));                  // skip the null fallback after a promoted-hash read
+    }
+
     ctx.emitter.label(&null_label);
     if warn_on_missing {
         emit_undefined_array_key_warning(ctx);
@@ -874,20 +972,53 @@ fn lower_array_get_x86_64(
     let array_reg = abi::symbol_scratch_reg(ctx.emitter);
     let len_reg = abi::secondary_scratch_reg(ctx.emitter);
     let result_reg = abi::int_result_reg(ctx.emitter);
-    ctx.load_value_to_reg(array, array_reg)?;
-    ctx.load_value_to_reg(index, result_reg)?;
     let null_label = ctx.next_label("array_get_null");
     let null_receiver_label = ctx.next_label("array_get_null_recv");
     let fallback_label = ctx.next_label("array_get_fallback");
     let done_label = ctx.next_label("array_get_done");
+    let promoted_label = ctx.next_label("array_get_promoted");
 
-    // -- guard the receiver: a missed outer read carries a null/sentinel container --
+    // Storage-kind guarded exactly like the AArch64 twin: an `Array(_)`-typed local can be
+    // hash-backed at runtime, and walking its packed payload then reads the hash header's own
+    // fields as elements.
+    // See the AArch64 twin: an array with no element type keeps the packed-only path.
+    let elem_is_empty = matches!(elem_ty.codegen_repr(), PhpType::Void | PhpType::Never);
+    // See the AArch64 twin: the promoted read is emitted speculatively, so an element type the hash
+    // path cannot materialize (`?int` — `TaggedScalar`) fails the compile rather than sitting
+    // unreached. Such an array can never be hash-backed, so the packed-only path stays correct.
+    let can_read_promoted = !elem_is_empty && super::hashes::hash_get_supports_value_type(elem_ty);
+    // Gate on the IR type, NOT the PHP type: `Op::IChecked*` — what `$i++` lowers to — reports a
+    // PHP type of `Mixed` while its runtime value is a RAW INTEGER. Unboxing that as a cell pointer
+    // reads garbage, and every read through an incremented loop counter silently returned nothing.
+    let index_is_mixed_key = matches!(
+        ctx.value_ir_type(index)?,
+        crate::ir::IrType::Heap(crate::ir::IrHeapKind::Mixed)
+    );
+    ctx.load_value_to_reg(array, array_reg)?;
+    // -- guard the receiver before reading its storage-kind metadata --
     crate::codegen::sentinels::emit_branch_if_null_container(
         ctx.emitter,
         array_reg,
         len_reg,
         &null_receiver_label,
     );
+    if can_read_promoted {
+        ctx.emitter.instruction(&format!("mov {}, QWORD PTR [{} - 8]", len_reg, array_reg)); // load the storage-kind metadata word from the array header
+        ctx.emitter.instruction(&format!("and {}, 0xff", len_reg));             // isolate the low byte holding the storage kind
+        ctx.emitter.instruction(&format!("cmp {}, 3", len_reg));                // kind 3 = storage was promoted to a hash at runtime
+        ctx.emitter.instruction(&format!("je {}", promoted_label));             // a promoted array has no packed payload to index into
+    }
+
+    // See the AArch64 twin: a `Mixed` key is materialized, not loaded as an integer.
+    if index_is_mixed_key {
+        super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+        ctx.emitter.instruction("cmp rdx, -1");                                 // key_hi == -1 marks an integer key
+        ctx.emitter.instruction(&format!("jne {}", null_label));                // a string key never exists in packed storage
+        ctx.emitter.instruction(&format!("mov {}, rsi", result_reg));           // adopt the normalized integer key as the offset
+    } else {
+        ctx.load_value_to_reg(index, result_reg)?;
+    }
+    ctx.load_value_to_reg(array, array_reg)?;
     ctx.emitter.instruction(&format!("cmp {}, 0", result_reg));                 // check whether the indexed-array offset is negative
     ctx.emitter.instruction(&format!("jl {}", null_label));                     // negative indexed-array offsets read as null
     abi::emit_load_from_address(ctx.emitter, len_reg, array_reg, 0);
@@ -895,6 +1026,20 @@ fn lower_array_get_x86_64(
     ctx.emitter.instruction(&format!("jge {}", null_label));                    // out-of-range indexed-array offsets read as null
     emit_array_get_in_bounds_x86_64(ctx, array_reg, result_reg, elem_ty, result_ty, mode)?;
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the null fallback after a successful indexed-array read
+
+    // -- promoted to hash storage: read through the hash, materializing the SAME representation
+    //    the packed path produces, so the op's result type is unchanged --
+    if can_read_promoted {
+        ctx.emitter.label(&promoted_label);
+        super::hashes::materialize_hash_key_x86_64(ctx, index)?;
+        ctx.load_value_to_reg(array, "rdi")?;
+        abi::emit_call_label(ctx.emitter, "__rt_hash_get");
+        ctx.emitter.instruction("test rax, rax");                               // did the promoted hash storage hold the key?
+        ctx.emitter.instruction(&format!("jz {}", null_label));                 // a missing key falls through to the shared null/warning path
+        super::hashes::emit_hash_get_success_x86_64(ctx, elem_ty, result_ty, false)?;
+        ctx.emitter.instruction(&format!("jmp {}", done_label));                // skip the null fallback after a promoted-hash read
+    }
+
     ctx.emitter.label(&null_label);
     if warn_on_missing {
         emit_undefined_array_key_warning(ctx);
@@ -1134,7 +1279,7 @@ fn emit_array_get_for_write_in_bounds_x86_64(
     abi::emit_store_to_address(ctx.emitter, result_reg, array_reg, 0);
 }
 
-/// Dereferences descriptor-style ref-cell markers loaded from Mixed array slots.
+/// Copies a loaded Mixed slot into a fresh zval cell, dereferencing ref-cell markers first.
 fn emit_mixed_array_get_deref_invoker_ref_cell(
     ctx: &mut FunctionContext<'_>,
     mixed_reg: &str,
@@ -1155,7 +1300,11 @@ fn emit_mixed_array_get_deref_invoker_ref_cell(
     }
     abi::emit_load_from_address(ctx.emitter, tag_reg, mixed_reg, 0);
     emit_branch_if_invoker_ref_cell_tag(ctx, tag_reg, &ref_label);
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rdx");                                // adapt the unboxed high payload word to the boxing helper ABI
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
     abi::emit_jump(ctx.emitter, &done_label);
 
     ctx.emitter.label(&ref_label);
@@ -1210,7 +1359,11 @@ fn emit_box_loaded_invoker_ref_cell_value_as_mixed(
     ctx.emitter.label(&mixed_cell_label);
     let result_reg = abi::int_result_reg(ctx.emitter);
     abi::emit_reg_move(ctx.emitter, result_reg, lo_reg);
-    abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rsi, rdx");                                // adapt the unboxed high payload word to the boxing helper ABI
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
 
     ctx.emitter.label(&done_label);
 }
@@ -2284,4 +2437,117 @@ fn expect_capacity(inst: &Instruction) -> Result<u32> {
             inst.op.name()
         ))),
     }
+}
+
+/// Lowers `Op::SlotDetach` — writes PHP null into `container[key]`, releasing whatever was there.
+///
+/// This is the nested-append lowering's ownership hand-off. After the bucket has been read into
+/// the append temporary, it is owned twice (the container slot and the temporary), which would
+/// make the upcoming push copy-on-write clone it. Nulling the slot drops the count back to one,
+/// so the push mutates in place; the write-back that follows re-publishes the bucket into the
+/// same slot. It cannot free the bucket: it only ever runs after the read has taken its
+/// reference, so the count it decrements is at least two.
+///
+/// No new runtime helper and no new ABI knowledge: the two storage kinds go through the very
+/// call sites `lower_hash_set` and `lower_array_set` already use, with a null payload
+/// substituted for the value. `__rt_hash_set` may grow or rehash the table, and
+/// `__rt_array_set_refcounted` may copy-on-write split the array, so both return a possibly-new
+/// container pointer — which the receiver write-back below republishes.
+pub(super) fn lower_slot_detach(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let container = expect_operand(inst, 0)?;
+    let key = expect_operand(inst, 1)?;
+    let container_ty = ctx.value_php_type(container)?.codegen_repr();
+    let source_local = source_load_local_slot(ctx, container)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, container)?;
+    }
+    match container_ty {
+        PhpType::AssocArray { .. } => match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_slot_detach_hash_aarch64(ctx, container, key)?,
+            Arch::X86_64 => lower_slot_detach_hash_x86_64(ctx, container, key)?,
+        },
+        PhpType::Array(_) => match ctx.emitter.target.arch {
+            Arch::AArch64 => lower_slot_detach_indexed_aarch64(ctx, container, key)?,
+            Arch::X86_64 => lower_slot_detach_indexed_x86_64(ctx, container, key)?,
+        },
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "slot_detach container PHP type {:?}",
+                other
+            )));
+        }
+    }
+    ctx.store_result_value(container)?;
+    if let Some(slot) = source_local {
+        ctx.store_value_to_local(slot, container)?;
+    }
+    ctx.writeback_global_array_source(container)?;
+    Ok(())
+}
+
+/// Emits the AArch64 hash-storage slot detach: `__rt_hash_set(table, key, null)`.
+///
+/// Mirrors `lower_hash_set_aarch64`'s call sequence exactly, minus the value materialization:
+/// PHP null is the `(value_lo = 0, value_hi = 0, value_tag = 8)` triple. The key is
+/// materialized before the table is loaded because key normalization may call a helper, which
+/// would clobber `x0`.
+fn lower_slot_detach_hash_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    super::hashes::materialize_hash_key_aarch64(ctx, key)?;
+    ctx.load_value_to_reg(hash, "x0")?;
+    ctx.emitter.instruction("mov x3, xzr");                                     // value_lo = 0 (PHP null has no payload)
+    ctx.emitter.instruction("mov x4, xzr");                                     // value_hi = 0
+    abi::emit_load_int_immediate(ctx.emitter, "x5", 8);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    Ok(())
+}
+
+/// Emits the x86_64 hash-storage slot detach: `__rt_hash_set(table, key, null)`.
+///
+/// `__rt_hash_set`'s SysV ABI is `rdi = table, rsi = key_lo, rdx = key_hi, rcx = value_lo,
+/// r8 = value_hi, r9 = value_tag -> rax = table`.
+fn lower_slot_detach_hash_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    hash: ValueId,
+    key: ValueId,
+) -> Result<()> {
+    super::hashes::materialize_hash_key_x86_64(ctx, key)?;
+    ctx.load_value_to_reg(hash, "rdi")?;
+    ctx.emitter.instruction("xor ecx, ecx");                                    // value_lo = 0 (PHP null has no payload)
+    ctx.emitter.instruction("xor r8d, r8d");                                    // value_hi = 0
+    abi::emit_load_int_immediate(ctx.emitter, "r9", 8);
+    abi::emit_call_label(ctx.emitter, "__rt_hash_set");
+    Ok(())
+}
+
+/// Emits the AArch64 indexed-storage slot detach: `__rt_array_set_refcounted(array, index, 0)`.
+///
+/// A null payload makes the helper skip its element-type stamp and its retain (an incref of a
+/// null pointer is a no-op), while still releasing the element it overwrites.
+fn lower_slot_detach_indexed_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, "x0")?;
+    ctx.load_value_to_reg(index, "x1")?;
+    ctx.emitter.instruction("mov x2, xzr");                                     // payload = null: release the old element, store nothing
+    abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
+    Ok(())
+}
+
+/// Emits the x86_64 indexed-storage slot detach: `__rt_array_set_refcounted(array, index, 0)`.
+fn lower_slot_detach_indexed_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    array: ValueId,
+    index: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_reg(array, "rdi")?;
+    ctx.load_value_to_reg(index, "rsi")?;
+    ctx.emitter.instruction("xor edx, edx");                                    // payload = null: release the old element, store nothing
+    abi::emit_call_label(ctx.emitter, "__rt_array_set_refcounted");
+    Ok(())
 }

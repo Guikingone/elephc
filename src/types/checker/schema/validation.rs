@@ -324,6 +324,22 @@ pub(crate) fn declared_return_type_compatible(
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
 }
 
+/// Returns true for PDO's internal SQLSTATE-aware widening of `Exception::getCode()`.
+pub(crate) fn is_pdo_exception_get_code_contract(
+    class_name: &str,
+    method_name: &str,
+    return_type: &PhpType,
+) -> bool {
+    let PhpType::Union(types) = return_type else {
+        return false;
+    };
+    class_name.trim_start_matches('\\') == "PDOException"
+        && php_symbol_key(method_name) == "getcode"
+        && types.len() == 2
+        && types.contains(&PhpType::Str)
+        && types.contains(&PhpType::Int)
+}
+
 /// Checks a preserved late-static parent/interface return against a child declaration.
 ///
 /// A concrete class name cannot replace `static`: that would become unsound for further
@@ -398,7 +414,11 @@ pub(crate) fn validate_override_signature(
         class_name,
         method.span,
     )?;
-    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+    let return_compatible = is_pdo_exception_get_code_contract(
+        class_name,
+        &method.name,
+        &child_sig.return_type,
+    ) || late_static_compatible.unwrap_or_else(|| {
         declared_return_type_compatible(
             checker,
             &parent_sig.return_type,

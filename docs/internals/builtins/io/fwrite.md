@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/fwrite.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/fwrite.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:515](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L515) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function fwrite(resource $stream, string $data): int
+function fwrite(resource $stream, string $data): mixed
 ```
 
 ## What the type checker enforces

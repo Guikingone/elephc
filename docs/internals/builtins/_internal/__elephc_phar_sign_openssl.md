@@ -2,7 +2,7 @@
 title: "__elephc_phar_sign_openssl() — internals"
 description: "Compiler internals for __elephc_phar_sign_openssl(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 513
+  order: 522
 ---
 
 ## `__elephc_phar_sign_openssl()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_sign_openssl.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_sign_openssl.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:515](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L515) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -347,6 +347,19 @@ pub(super) fn emit_unbox_mixed_to_owned_refcounted_result(ctx: &mut FunctionCont
     abi::emit_incref_if_refcounted(ctx.emitter, result_ty);
 }
 
+/// Unboxes a guarded Mixed value into an owned concrete heap representation.
+///
+/// Flow-sensitive checking proves the value has the requested type before this op is emitted;
+/// the runtime helper extracts its payload and this result takes its own reference so retaining
+/// stores and later cleanup have a balanced ownership ledger.
+pub(super) fn lower_mixed_unbox(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let value = expect_operand(inst, 0)?;
+    load_value_to_first_int_arg(ctx, value)?;
+    let result_ty = inst.result_php_type.codegen_repr();
+    emit_unbox_mixed_to_owned_refcounted_result(ctx, &result_ty);
+    store_if_result(ctx, inst)
+}
+
 /// Stores an unboxed scalar Mixed payload back through the original by-reference source.
 pub(super) fn store_current_scalar_result_to_ref_source(
     ctx: &mut FunctionContext<'_>,

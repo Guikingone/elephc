@@ -2,7 +2,7 @@
 title: "__elephc_phar_decompress_archive() — internals"
 description: "Compiler internals for __elephc_phar_decompress_archive(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 499
+  order: 508
 ---
 
 ## `__elephc_phar_decompress_archive()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_decompress_archive.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_decompress_archive.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:515](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L515) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -158,7 +158,6 @@ fn render_macos_command(
         paths.bin.as_os_str().to_owned(),
         paths.object.as_os_str().to_owned(),
         paths.runtime.as_os_str().to_owned(),
-        OsString::from("-lSystem"),
         OsString::from("-syslibroot"),
         OsString::from(sdk.path),
         OsString::from("-platform_version"),
@@ -174,6 +173,9 @@ fn render_macos_command(
         }
     }
     append_link_inputs(&mut args, plan, Platform::MacOS);
+    // FreeTDS also exports `dbopen`; keeping native dependencies before libSystem
+    // prevents ld64 from binding PDO_DBLIB to Berkeley DB's incompatible symbol.
+    args.push(OsString::from("-lSystem"));
     append_frameworks(&mut args, plan);
 
     RenderedCommand {

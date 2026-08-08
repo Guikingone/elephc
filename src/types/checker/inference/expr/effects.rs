@@ -15,7 +15,7 @@ use crate::types::{PhpType, TypeEnv};
 
 use super::super::super::null_probe;
 use super::super::super::Checker;
-use super::merge_null_coalesce_result_type;
+use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
 
 impl Checker {
     /// Infers the type of an expression while tracking assignment effects through the environment.
@@ -104,6 +104,7 @@ impl Checker {
                 if matches!(op, BinOp::And | BinOp::Or) {
                     let mut right_env = env.clone();
                     self.infer_type_with_assignment_effects(right, &mut right_env)?;
+                    merge_array_storage_effects(env, &right_env);
                     Ok(PhpType::Bool)
                 } else {
                     self.infer_type_with_assignment_effects(right, env)?;
@@ -121,7 +122,10 @@ impl Checker {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
                     let mut default_env = env.clone();
-                    self.infer_type_with_assignment_effects(default, &mut default_env)?
+                    let default_ty =
+                        self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
+                    default_ty
                 };
                 let non_null_value = if Self::union_contains_void(&value_ty) {
                     self.strip_void_from_union(&value_ty)
@@ -140,6 +144,7 @@ impl Checker {
                 } else {
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
                 }
                 // Result type comes from the Mixed-aware short-ternary merge in `infer_type`.
                 self.infer_type(expr, env)
@@ -160,10 +165,12 @@ impl Checker {
                     then_env.insert(guard.var.clone(), guard.then_ty);
                     else_env.insert(guard.var, guard.else_ty);
                 }
-                self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
-                self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
-                // Result type comes from the Mixed-aware ternary merge in `infer_type`.
-                self.infer_type(expr, env)
+                let then_ty = self.infer_type_with_assignment_effects(then_expr, &mut then_env)?;
+                merge_array_storage_effects(env, &then_env);
+                merge_array_storage_effects(&mut else_env, &then_env);
+                let else_ty = self.infer_type_with_assignment_effects(else_expr, &mut else_env)?;
+                merge_array_storage_effects(env, &else_env);
+                Ok(merge_match_arm_result_type(self, then_ty, else_ty))
             }
             ExprKind::ArrayLiteral(elems) => {
                 for elem in elems {
@@ -190,10 +197,12 @@ impl Checker {
                         self.infer_type_with_assignment_effects(condition, &mut arm_env)?;
                     }
                     self.infer_type_with_assignment_effects(result, &mut arm_env)?;
+                    merge_array_storage_effects(env, &arm_env);
                 }
                 if let Some(default) = default {
                     let mut default_env = env.clone();
                     self.infer_type_with_assignment_effects(default, &mut default_env)?;
+                    merge_array_storage_effects(env, &default_env);
                 }
                 // Result type comes from the Mixed-aware match merge in `infer_type`
                 // (assignment effects must not reintroduce the Str-absorbing syntactic join).
@@ -343,10 +352,19 @@ impl Checker {
                 self.infer_type_with_assignment_effects(property, env)?;
                 self.infer_type(expr, env)
             }
-            ExprKind::MethodCall { object, args, .. }
-            | ExprKind::NullsafeMethodCall { object, args, .. } => {
+            ExprKind::MethodCall {
+                object,
+                method,
+                args,
+            }
+            | ExprKind::NullsafeMethodCall {
+                object,
+                method,
+                args,
+            } => {
                 self.infer_type_with_assignment_effects(object, env)?;
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
+                self.promote_pdo_binding_ref_storage(object, method, &expanded_args, env)?;
                 for arg in &expanded_args {
                     self.infer_type_with_assignment_effects(arg, env)?;
                 }
@@ -435,6 +453,40 @@ impl Checker {
             .is_some_and(callable_target_is_preg_replace_callback)
     }
 
+    /// Widens PDO binding destinations before by-reference signature validation.
+    fn promote_pdo_binding_ref_storage(
+        &mut self,
+        object: &Expr,
+        method: &str,
+        args: &[Expr],
+        env: &mut TypeEnv,
+    ) -> Result<(), CompileError> {
+        let object_ty = self.infer_type(object, env)?;
+        if !type_may_be_pdo_statement(&object_ty) {
+            return Ok(());
+        }
+        let parameter_name = match crate::names::php_symbol_key(method).as_str() {
+            "bindparam" => "variable",
+            "bindcolumn" => "var",
+            _ => return Ok(()),
+        };
+        let argument = args.iter().enumerate().find_map(|(index, arg)| match &arg.kind {
+            ExprKind::NamedArg { name, value } if name == parameter_name => Some(value.as_ref()),
+            ExprKind::NamedArg { .. } => None,
+            _ if index == 1 => Some(arg),
+            _ => None,
+        });
+        let Some(Expr {
+            kind: ExprKind::Variable(name),
+            ..
+        }) = argument
+        else {
+            return Ok(());
+        };
+        env.insert(name.clone(), PhpType::Mixed);
+        Ok(())
+    }
+
     /// Marks the active statement stream as having crossed eval and widens local facts.
     fn mark_eval_barrier(&mut self, env: &mut TypeEnv) {
         self.eval_barrier_active = true;
@@ -449,6 +501,29 @@ impl Checker {
             self.callable_array_targets.remove(&name);
             self.first_class_callable_targets.remove(&name);
         }
+    }
+}
+
+/// Returns whether a receiver type may contain a PDOStatement instance.
+fn type_may_be_pdo_statement(ty: &PhpType) -> bool {
+    match ty {
+        PhpType::Object(class) => class.trim_start_matches('\\') == "PDOStatement",
+        PhpType::Union(members) => members.iter().any(type_may_be_pdo_statement),
+        _ => false,
+    }
+}
+
+/// Merges array layout conversions from a conditional expression arm into its outer environment.
+fn merge_array_storage_effects(env: &mut TypeEnv, branch_env: &TypeEnv) {
+    let converted = branch_env
+        .iter()
+        .filter_map(|(name, branch_ty)| {
+            let converted = crate::types::array_storage_conversion(env.get(name), branch_ty)?;
+            Some((name.clone(), converted))
+        })
+        .collect::<Vec<_>>();
+    for (name, converted) in converted {
+        env.insert(name, converted);
     }
 }
 

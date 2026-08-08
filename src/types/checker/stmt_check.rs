@@ -53,6 +53,9 @@ impl Checker {
     ) -> Result<(), CompileError> {
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => {
+                if self.check_empty_indexed_nested_append(stmts, env)? {
+                    return Ok(());
+                }
                 for stmt in stmts {
                     self.check_stmt(stmt, env)?;
                 }

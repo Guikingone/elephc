@@ -21,23 +21,27 @@ use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::sentinels::THROWABLE_CREATION_LINE_OFFSET;
 use crate::codegen::{
-    abi, callable_descriptor, emit_box_current_value_as_mixed, runtime_value_tag,
+    abi, callable_descriptor, emit_box_current_owned_value_as_mixed,
+    emit_box_current_value_as_mixed, runtime_value_tag,
 };
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
 use crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names;
 use crate::names::{label_fragment, method_symbol, php_symbol_key};
+use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
 use super::super::context::FunctionContext;
 use super::{
     builtins, callables, cast_loaded_mixed_pointer_to_result, direct_call_stack_pad_bytes,
     expect_data,
-    coerce_loaded_value_to_tagged_scalar, emit_loaded_assoc_array_to_mixed,
+    coerce_loaded_value_to_tagged_scalar, emit_instance_method_descriptor_entry_wrapper,
+    emit_loaded_assoc_array_to_mixed,
     emit_loaded_indexed_array_to_mixed, emit_mixed_string_for_persistent_store,
     emit_ref_arg_writebacks, expect_operand, iterators, load_value_to_first_int_arg,
     materialize_method_call_args_with_receiver_reg_and_refs, resolve_method_call_target,
-    property_values, store_if_result, store_method_call_result,
+    emit_runtime_callable_invoker_inline, property_values, store_if_result,
+    store_method_call_result,
 };
 use crate::codegen::fibers;
 use crate::codegen::literal_defaults::{
@@ -99,6 +103,7 @@ struct ConstructorCallTarget {
     impl_class: String,
     param_types: Vec<PhpType>,
     ref_params: Vec<bool>,
+    sig: crate::types::FunctionSig,
 }
 
 
@@ -109,6 +114,7 @@ mod throwable_new;
 mod fiber_dynamic_entry;
 mod dynamic_mixed_candidates;
 mod dynamic_factory;
+mod dynamic_pdo;
 mod property_defaults;
 mod known_property_reads;
 mod mixed_property_reads;
@@ -141,6 +147,8 @@ use fiber_dynamic_entry::*;
 use dynamic_mixed_candidates::*;
 #[allow(unused_imports)]
 use dynamic_factory::*;
+#[allow(unused_imports)]
+pub(in crate::codegen::lower_inst) use dynamic_pdo::*;
 #[allow(unused_imports)]
 use property_defaults::*;
 #[allow(unused_imports)]

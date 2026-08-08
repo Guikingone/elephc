@@ -6,7 +6,7 @@
 //! - `crate::types::checker::stmt_check::control_flow` when checking `StmtKind::If`.
 //!
 //! Key details:
-//! - Recognizes `is_int`/`is_float`/`is_string`/`is_bool($var)` (and aliases), `is_null`,
+//! - Recognizes scalar, null, array, and callable `is_*($var)` predicates (and aliases),
 //!   `$var instanceof Class`, `=== null` / `=== false` and their `!==` forms, and single-operand
 //!   `isset(...)`. `!==` and `isset` are self-negating guards, which combine with a leading `!`
 //!   the same way two negations cancel. Narrowing is applied to each clause in an if/elseif*/else
@@ -51,6 +51,24 @@ pub(crate) struct GuardNarrowing {
     pub else_ty: PhpType,
 }
 
+/// Describes an exact guard type or the element-agnostic array family.
+enum GuardTarget {
+    /// An exact scalar, null, callable, or object target.
+    Exact(PhpType),
+    /// Any indexed or associative array, regardless of its element types.
+    AnyArray,
+}
+
+impl GuardTarget {
+    /// Returns the conservative type used when the current type has no matching union member.
+    fn fallback_type(&self) -> PhpType {
+        match self {
+            Self::Exact(ty) => ty.clone(),
+            Self::AnyArray => PhpType::Mixed,
+        }
+    }
+}
+
 impl Checker {
     /// Detects a type-predicate guard in an `if`/ternary condition and computes the then/else
     /// narrowing for the guarded binding against the current environment. Handles the scalar
@@ -65,13 +83,14 @@ impl Checker {
         condition: &Expr,
         env: &TypeEnv,
     ) -> Result<Option<GuardNarrowing>, CompileError> {
-        let (cond, negated) = match &condition.kind {
+        let (cond, prefix_negated) = match &condition.kind {
             ExprKind::Not(inner) => (inner.as_ref(), true),
             _ => (condition, false),
         };
-        let Some((receiver, target, guard_negates)) = guard_receiver_and_type(cond) else {
+        let Some((receiver, target, comparison_negated)) = guard_receiver_and_target(cond) else {
             return Ok(None);
         };
+        let negated = prefix_negated ^ comparison_negated;
         let Some(key) = self.guard_env_key(receiver) else {
             return Ok(None);
         };
@@ -105,8 +124,8 @@ impl Checker {
         let matched = self.narrow_to(&current, &target);
         let complement = self.narrow_complement(&current, &target);
         // `!` on the condition and a self-negating guard (`isset(...)`, `!== null`) each swap the
-        // branches, so two negations cancel out.
-        let (then_ty, else_ty) = if negated != guard_negates {
+        // branches, so two negations cancel out — `negated` is already that XOR.
+        let (then_ty, else_ty) = if negated {
             (complement, matched)
         } else {
             (matched, complement)
@@ -233,7 +252,7 @@ impl Checker {
         let Ok(declared) = self.infer_type(&place, env) else {
             return;
         };
-        let non_null = self.narrow_complement(&declared, &PhpType::Void);
+        let non_null = self.narrow_complement(&declared, &GuardTarget::Exact(PhpType::Void));
         env.insert(key, non_null);
     }
 
@@ -280,29 +299,28 @@ impl Checker {
     }
 
     /// Narrows `current` to the guard-true type. Inside the branch the guard guarantees the target,
-    /// so `Mixed` and any incompatible concrete type become `target`; a `Union` keeps only its
-    /// matching members (falling back to `target` if none match); a concrete type already matching
-    /// the guard is kept as-is (preserving a more specific class for `instanceof`).
-    fn narrow_to(&self, current: &PhpType, target: &PhpType) -> PhpType {
+    /// so `Mixed` and incompatible concrete types use the target fallback; a `Union` keeps matching
+    /// members; a concrete match is preserved, including its array element or object class type.
+    fn narrow_to(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
                     members.iter().filter(|m| guard_matches(m, target)).cloned().collect();
                 if kept.is_empty() {
-                    target.clone()
+                    target.fallback_type()
                 } else {
                     self.normalize_union_type(kept)
                 }
             }
             _ if guard_matches(current, target) => current.clone(),
-            _ => target.clone(),
+            _ => target.fallback_type(),
         }
     }
 
     /// Narrows `current` to the subset incompatible with `target` (the guard-false type): a `Union`
     /// drops its matching members, while `Mixed` and concrete types are returned unchanged (the
     /// complement of `Mixed` is not representable). An empty result falls back to `current`.
-    fn narrow_complement(&self, current: &PhpType, target: &PhpType) -> PhpType {
+    fn narrow_complement(&self, current: &PhpType, target: &GuardTarget) -> PhpType {
         match current {
             PhpType::Union(members) => {
                 let kept: Vec<PhpType> =
@@ -371,31 +389,36 @@ fn is_guard_receiver_shape(kind: &ExprKind) -> bool {
     )
 }
 
-/// Extracts the guarded receiver, the target type, and whether the guard is self-negating
-/// from a (syntactically non-negated) guard expression.
+/// Extracts the guarded receiver, the target, and whether the guard is self-negating from a
+/// (syntactically non-negated) guard expression.
 ///
-/// Recognizes the scalar `is_*` predicates, `is_null`, `instanceof <Name>`, `=== false` /
-/// `=== null`, their `!==` counterparts, and single-operand `isset()`. The third tuple element
-/// is `true` for guards that are true when the target does NOT match (`isset`, `!==`), so
-/// `guard_narrowing` can combine it with a leading `!`. The receiver may be any expression
-/// here — `guard_env_key` decides which receivers narrowing can actually key.
-fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
+/// Recognizes the scalar `is_*` predicates, `is_null`, `is_array`, `is_callable`,
+/// `instanceof <Name>`, `=== false` / `=== null`, their `!==` counterparts, and single-operand
+/// `isset()`. The third tuple element is `true` for guards that are true when the target does
+/// NOT match (`isset`, `!==`), so `guard_narrowing` can combine it with a leading `!`. The
+/// receiver may be any expression here — `guard_env_key` decides which receivers narrowing can
+/// actually key.
+fn guard_receiver_and_target(cond: &Expr) -> Option<(&Expr, GuardTarget, bool)> {
     match &cond.kind {
         ExprKind::FunctionCall { name, args } if args.len() == 1 => {
+            // `php_symbol_key` rather than a plain lowercase: it also folds the leading `\` and
+            // the namespace qualification, so `\is_int($x)` and `Ns\is_int($x)` narrow too.
             let target = match php_symbol_key(name.trim_start_matches('\\')).as_str() {
-                "is_int" | "is_integer" | "is_long" => PhpType::Int,
-                "is_float" | "is_double" | "is_real" => PhpType::Float,
-                "is_string" => PhpType::Str,
-                "is_bool" => PhpType::Bool,
+                "is_int" | "is_integer" | "is_long" => GuardTarget::Exact(PhpType::Int),
+                "is_float" | "is_double" | "is_real" => GuardTarget::Exact(PhpType::Float),
+                "is_string" => GuardTarget::Exact(PhpType::Str),
+                "is_bool" => GuardTarget::Exact(PhpType::Bool),
                 // `is_null($x)`: same narrowing as `$x === null` — elephc models a `?T` value's
                 // null as Void, so the complement strips it (`if (is_null($x)) { throw; }` leaves
                 // ?int as int on the fall-through path).
-                "is_null" => PhpType::Void,
+                "is_null" => GuardTarget::Exact(PhpType::Void),
+                "is_callable" => GuardTarget::Exact(PhpType::Callable),
+                "is_array" => GuardTarget::AnyArray,
                 // `isset($x)` is the exact negation of `$x === null` for a keyable place: true
                 // exactly when the storage holds a non-null value. This is what makes
                 // `if (!isset(self::$inst)) { self::$inst = new S(); }` narrow.
                 "isset" if is_guard_receiver_shape(&args[0].kind) => {
-                    return Some((&args[0], PhpType::Void, true))
+                    return Some((&args[0], GuardTarget::Exact(PhpType::Void), true))
                 }
                 _ => return None,
             };
@@ -405,7 +428,11 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
             let InstanceOfTarget::Name(class) = target else {
                 return None;
             };
-            Some((value, PhpType::Object(class.as_str().to_string()), false))
+            Some((
+                value,
+                GuardTarget::Exact(PhpType::Object(class.as_str().to_string())),
+                false,
+            ))
         }
         // `$var === false` / `false === $var`: narrow to the literal False subtype in the
         // then-branch; the else-branch strips only that member (e.g. int|false → int) while a full
@@ -418,6 +445,9 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
             right,
         } => {
             let negates = matches!(op, BinOp::StrictNotEq);
+            // `is_guard_receiver_shape` rather than an inline `Variable | PropertyAccess`
+            // match: it also accepts a static property, which is what lets the singleton
+            // shape `if (self::$inst === null) { self::$inst = new S(); }` narrow.
             let (receiver, lit) = if is_guard_receiver_shape(&left.kind) {
                 (left.as_ref(), &right.kind)
             } else if is_guard_receiver_shape(&right.kind) {
@@ -426,10 +456,12 @@ fn guard_receiver_and_type(cond: &Expr) -> Option<(&Expr, PhpType, bool)> {
                 return None;
             };
             match lit {
-                ExprKind::BoolLiteral(false) => Some((receiver, PhpType::False, negates)),
+                ExprKind::BoolLiteral(false) => {
+                    Some((receiver, GuardTarget::Exact(PhpType::False), negates))
+                }
                 // `$x === null`: strip the null-ish member (elephc models a `?T` value's null as
                 // Void), e.g. `?self` / self|null → self after `if ($x === null) { throw; }`.
-                ExprKind::Null => Some((receiver, PhpType::Void, negates)),
+                ExprKind::Null => Some((receiver, GuardTarget::Exact(PhpType::Void), negates)),
                 _ => None,
             }
         }
@@ -450,12 +482,16 @@ fn type_is_definitely_non_null(ty: &PhpType) -> bool {
 }
 
 /// Returns true when a union member is compatible with a guard target, used to keep (then) or drop
-/// (else) members. Scalar targets require an exact variant match; an `Object` target matches an
-/// object member with the same class name (inheritance-aware narrowing is left for the future).
-fn guard_matches(member: &PhpType, target: &PhpType) -> bool {
-    match (member, target) {
-        (PhpType::Object(member_class), PhpType::Object(target_class)) => member_class == target_class,
-        (PhpType::False, PhpType::Bool) => true,
-        _ => member == target,
+/// (else) members. Exact targets require a matching variant; an `Object` target matches an object
+/// member with the same class name (inheritance-aware narrowing is left for the future), and
+/// `AnyArray` matches either array shape.
+fn guard_matches(member: &PhpType, target: &GuardTarget) -> bool {
+    match target {
+        GuardTarget::AnyArray => matches!(member, PhpType::Array(_) | PhpType::AssocArray { .. }),
+        GuardTarget::Exact(PhpType::Object(target_class)) => {
+            matches!(member, PhpType::Object(member_class) if member_class == target_class)
+        }
+        GuardTarget::Exact(PhpType::Bool) => matches!(member, PhpType::Bool | PhpType::False),
+        GuardTarget::Exact(target) => member == target,
     }
 }
