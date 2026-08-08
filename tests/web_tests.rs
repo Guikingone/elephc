@@ -272,6 +272,82 @@ fn web_reset_clears_static_property() {
     assert!(r2.ends_with("1"), "second response body: {:?}", r2);
 }
 
+/// Verifies a worker survives reading the wrapper registry after an earlier request
+/// registered one.
+///
+/// `stream_wrapper_register()` keeps its tables in the PHP arena, which the per-request
+/// reset wipes, but reaches them through process-lifetime pointers. Left dangling, the
+/// next `stream_get_wrappers()` read a garbage slot count and allocated until the heap
+/// was exhausted, killing the worker — the response simply never arrived.
+#[test]
+fn web_wrapper_registry_does_not_outlive_the_request_arena() {
+    let dir = make_test_dir("web_wrapper_registry_arena");
+    let src = r#"<?php
+class ArenaWrapper {
+    public $context;
+    public function stream_open($path, $mode, $options, &$openedPath): bool { return true; }
+    public function stream_close(): void {}
+}
+
+if (isset($_GET["register"])) {
+    stream_wrapper_register("arena.probe", "ArenaWrapper");
+    echo "registered";
+} else {
+    echo "wrappers=", (int) in_array("php", stream_get_wrappers(), true);
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?register=1");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("registered"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("wrappers=1"),
+        "reading the wrapper registry after a registration killed the worker: {:?}",
+        second
+    );
+    assert!(third.ends_with("wrappers=1"), "third response body: {:?}", third);
+}
+
+/// Verifies a worker survives a request that grows the resource registry past its
+/// static slots, and the one after it.
+///
+/// The registry starts in a static eight-slot block and grows onto the PHP arena. That
+/// block hid the defect for small requests; past eight resources the next request
+/// walked slots the arena reset had already reclaimed.
+#[test]
+fn web_resource_registry_growth_survives_the_request_arena() {
+    let dir = make_test_dir("web_resource_registry_growth");
+    let src = r#"<?php
+$streams = [];
+for ($i = 0; $i < 40; $i++) {
+    $streams[] = fopen("php://memory", "r+");
+}
+echo "opened=", count($streams);
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(first.ends_with("opened=40"), "first response body: {:?}", first);
+    assert!(
+        second.ends_with("opened=40"),
+        "a grown resource registry did not survive the request arena reset: {:?}",
+        second
+    );
+    assert!(third.ends_with("opened=40"), "third response body: {:?}", third);
+}
+
 /// Verifies request reset closes an abandoned user-wrapper resource exactly
 /// once before the next request runs in the same worker process.
 #[test]
