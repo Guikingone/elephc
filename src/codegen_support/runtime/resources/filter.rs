@@ -345,13 +345,27 @@ fn emit_filter_apply_chain_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("ldr x11, [x0, #{FILTER_NEXT_OFFSET}]"));      // next node handle
     emitter.instruction("str x11, [sp, #16]");                                  // store the updated cursor
     emitter.instruction(&format!("ldr x12, [x0, #{FILTER_BUILTIN_ID_OFFSET}]")); // built-in filter id
-    emitter.instruction("cbz x12, __rt_apply_chain_loop");                      // user filters are applied by the bucket path
+    emitter.instruction("cbz x12, __rt_apply_chain_user");                      // id 0 marks a user filter carried by this node
 
     emitter.instruction("ldr x1, [sp, #0]");                                    // buffer pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // current length
     emitter.instruction("mov x3, x12");                                         // built-in filter id
     emitter.instruction("bl __rt_apply_stream_filter");                         // transform in place; x2 = new length
     emitter.instruction("str x2, [sp, #8]");                                    // carry the new length to the next node
+    emitter.instruction("b __rt_apply_chain_loop");                             // continue down the chain
+
+    // A user filter runs from the node's own `php_user_filter`, through the same
+    // instance-keyed dispatch the per-descriptor path uses. Unlike a built-in, it may
+    // answer with a DIFFERENT buffer (its bucket brigade builds one), so both halves of
+    // the pair are carried forward, not just the length.
+    emitter.label("__rt_apply_chain_user");
+    emitter.instruction(&format!("ldr x0, [x0, #{FILTER_OBJECT_OFFSET}]"));     // the php_user_filter instance this node owns
+    emitter.instruction("cbz x0, __rt_apply_chain_loop");                       // a node without an instance is inert
+    emitter.instruction("ldr x1, [sp, #0]");                                    // buffer pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // current length
+    emitter.instruction("bl __rt_apply_user_filter_obj");                       // x1/x2 = the filtered pair
+    emitter.instruction("str x1, [sp, #0]");                                    // carry the possibly-relocated buffer
+    emitter.instruction("str x2, [sp, #8]");                                    // and its length
     emitter.instruction("b __rt_apply_chain_loop");                             // continue down the chain
 
     emitter.label("__rt_apply_chain_done");
@@ -399,13 +413,26 @@ fn emit_filter_apply_chain_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 24], r11");                       // store the updated cursor
     emitter.instruction(&format!("mov r11, QWORD PTR [rax + {FILTER_BUILTIN_ID_OFFSET}]")); // built-in filter id
     emitter.instruction("test r11, r11");
-    emitter.instruction("jz __rt_apply_chain_loop_x");                          // user filters are applied by the bucket path
+    emitter.instruction("jz __rt_apply_chain_user_x");                          // id 0 marks a user filter carried by this node
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // buffer pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // current length
     emitter.instruction("mov rcx, r11");                                        // built-in filter id
     emitter.instruction("call __rt_apply_stream_filter");                       // transform in place; rdx = new length
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // carry the new length to the next node
+    emitter.instruction("jmp __rt_apply_chain_loop_x");                         // continue down the chain
+
+    // See the AArch64 counterpart: a user filter runs from the node's own instance and
+    // may answer with a different buffer, so both halves of the pair are carried.
+    emitter.label("__rt_apply_chain_user_x");
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {FILTER_OBJECT_OFFSET}]")); // the php_user_filter instance this node owns
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_apply_chain_loop_x");                          // a node without an instance is inert
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // buffer pointer
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // current length
+    emitter.instruction("call __rt_apply_user_filter_obj");                     // rax/rdx = the filtered pair
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // carry the possibly-relocated buffer
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // and its length
     emitter.instruction("jmp __rt_apply_chain_loop_x");                         // continue down the chain
 
     emitter.label("__rt_apply_chain_done_x");

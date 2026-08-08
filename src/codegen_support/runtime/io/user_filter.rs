@@ -489,15 +489,23 @@ pub fn emit_apply_user_stream_filter(emitter: &mut Emitter) {
     emitter.comment("--- runtime: apply_user_stream_filter ---");
     emitter.label_global("__rt_apply_user_stream_filter");
 
-    emitter.instruction("sub sp, sp, #16");                                     // helper frame
-    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
-
     // -- look up the cached instance: _user_filter_instances[fd*2 + dir] --
     emitter.instruction("add x4, x0, x0");                                      // fd*2
     emitter.instruction("add x4, x4, x3");                                      // fd*2 + dir
     abi::emit_symbol_address(emitter, "x5", "_user_filter_instances");
     emitter.instruction("ldr x0, [x5, x4, lsl #3]");                            // obj = instances[slot] (loaded into the method's $this register)
+    emitter.instruction("b __rt_apply_user_filter_obj");                        // dispatch on the instance; x1/x2 already hold the buffer pair
+
+    // The instance-keyed half is its own entry point so a FILTER CHAIN NODE, which
+    // stores the `php_user_filter` in its state rather than in the per-descriptor
+    // table, can dispatch the very same way. The lookup above is a leaf sequence, so
+    // the branch here costs nothing and both callers share one dispatch body.
+    emitter.blank();
+    emitter.comment("--- runtime: apply_user_filter_obj (instance-keyed dispatch) ---");
+    emitter.label_global("__rt_apply_user_filter_obj");
+    emitter.instruction("sub sp, sp, #16");                                     // helper frame
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
     emitter.instruction("cbz x0, __rt_aufs_passthrough");                       // no instance attached → pass the buffer through unchanged
 
     // -- look up the filter() method pointer in the class's user-filter vtable --
@@ -550,15 +558,21 @@ fn emit_apply_user_stream_filter_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: apply_user_stream_filter ---");
     emitter.label_global("__rt_apply_user_stream_filter");
 
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-
     // -- look up the cached instance: _user_filter_instances[fd*2 + dir] --
     emitter.instruction("mov r9, rdi");                                         // fd
     emitter.instruction("add r9, r9");                                          // fd*2
     emitter.instruction("add r9, rcx");                                         // fd*2 + dir
     abi::emit_symbol_address(emitter, "r10", "_user_filter_instances");         // load runtime data address
     emitter.instruction("mov rdi, QWORD PTR [r10 + r9 * 8]");                   // obj = instances[slot] (loaded into the method's $this register)
+    emitter.instruction("jmp __rt_apply_user_filter_obj");                      // dispatch on the instance; the buffer pair is already in place
+
+    // See the AArch64 counterpart: the instance-keyed half is its own entry point so a
+    // filter chain node can dispatch the same way from its stored `php_user_filter`.
+    emitter.blank();
+    emitter.comment("--- runtime: apply_user_filter_obj (instance-keyed dispatch) ---");
+    emitter.label_global("__rt_apply_user_filter_obj");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
     emitter.instruction("test rdi, rdi");                                       // any instance attached?
     emitter.instruction("jz __rt_aufs_passthrough_x86");                        // no instance → pass the buffer through unchanged
 
