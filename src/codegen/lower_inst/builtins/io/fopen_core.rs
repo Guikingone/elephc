@@ -120,7 +120,11 @@ fn emit_dynamic_fopen_result(
 }
 
 /// Saves the active context bridges, selects and retains the fopen context, and publishes its state.
-fn begin_fopen_context_scope(
+///
+/// Shared with the path-based readers: any builtin taking a `$context` argument must
+/// publish it for the duration of its own call, or the wrapper reads whatever context
+/// happened to be published last.
+pub(super) fn begin_fopen_context_scope(
     ctx: &mut FunctionContext<'_>,
     explicit_context: Option<ValueId>,
 ) -> Result<()> {
@@ -261,7 +265,7 @@ fn begin_fopen_context_scope(
 }
 
 /// Restores the prior context bridges and transfers one retained owner to a successful stream.
-fn finish_fopen_context_scope(ctx: &mut FunctionContext<'_>) {
+pub(super) fn finish_fopen_context_scope(ctx: &mut FunctionContext<'_>) {
     let restore = ctx.next_label("fopen_context_restore");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

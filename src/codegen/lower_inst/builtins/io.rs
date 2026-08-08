@@ -93,7 +93,7 @@ use close_crypto_arch::*;
 use stream_read_helpers::*;
 use context_result_helpers::*;
 use stream_context::*;
-use fopen_core::emit_request_default_stream_context_handle;
+use fopen_core::{begin_fopen_context_scope, emit_request_default_stream_context_handle, finish_fopen_context_scope};
 use resource_handles::*;
 use seek_hash_arch::*;
 use boxing_helpers::*;

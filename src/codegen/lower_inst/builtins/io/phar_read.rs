@@ -33,9 +33,15 @@ pub(crate) fn lower_file_get_contents(
     if path_literal.is_none() {
         publish_dynamic_phar_function_pointers(ctx);
     }
+    // Publish the `$context` argument for the duration of the read, exactly as fopen
+    // does. Without this the wrapper read whatever context was published last, so
+    // `file_get_contents($url, false, $postContext)` still issued a GET.
+    let explicit_context = inst.operands.get(2).copied();
+    begin_fopen_context_scope(ctx, explicit_context)?;
     load_string_to_result(ctx, path, "file_get_contents filename")?;
     abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
     box_owned_string_or_false_result(ctx, "fgc");
+    finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)
 }
 

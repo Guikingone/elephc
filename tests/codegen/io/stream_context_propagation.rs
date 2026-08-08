@@ -96,6 +96,48 @@ echo stream_get_contents($nullStream);
     assert_eq!(out, "POST|PUT|GET|POST");
 }
 
+/// Verifies `file_get_contents()` honours the context passed to the call.
+///
+/// The path readers took their options from whichever context was published last
+/// instead of their own `$context` argument, so every request went out as a GET no
+/// matter what the caller built.
+#[test]
+fn test_file_get_contents_context_precedence_default_explicit_empty_and_null() {
+    let (server, port) = spawn_http_method_server(4);
+    let out = compile_and_run(
+        &r#"<?php
+stream_context_set_default(["http" => ["method" => "POST"]]);
+$explicit = stream_context_create(["http" => ["method" => "PUT"]]);
+$empty = stream_context_create();
+
+echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/default"), "|";
+echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/explicit", false, $explicit), "|";
+echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/empty", false, $empty), "|";
+echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/null", false, null);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    server.join().expect("context test: server join");
+    assert_eq!(out, "POST|PUT|GET|POST");
+}
+
+/// Verifies a context passed to one read does not leak into the next one.
+#[test]
+fn test_file_get_contents_context_does_not_leak_to_later_reads() {
+    let (server, port) = spawn_http_method_server(3);
+    let out = compile_and_run(
+        &r#"<?php
+$put = stream_context_create(["http" => ["method" => "PUT"]]);
+echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/a", false, $put), "|";
+echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/b"), "|";
+echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/c", false, $put);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    server.join().expect("context test: server join");
+    assert_eq!(out, "PUT|GET|PUT");
+}
+
 /// Verifies user wrappers receive the exact selected context in `$this->context`.
 #[test]
 fn test_fopen_user_wrapper_context_precedence_default_explicit_empty_and_null() {
