@@ -280,9 +280,14 @@ pub(crate) fn lower_hash_file(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 pub(crate) fn lower_readfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count_between(inst, "readfile", 1, 3)?;
     let path = expect_operand(inst, 0)?;
+    // Same reason as file_get_contents(): the wrapper reads its options from the
+    // published context, so a `$context` argument has to be published for this call.
+    let explicit_context = inst.operands.get(2).copied();
+    begin_fopen_context_scope(ctx, explicit_context)?;
     load_string_to_result(ctx, path, "readfile")?;
     emit_readfile_wrapper_dispatch(ctx);
     box_readfile_result(ctx);
+    finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)
 }
 

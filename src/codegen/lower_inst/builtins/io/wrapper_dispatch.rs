@@ -13,6 +13,7 @@ use super::*;
 pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
     let wrapper = ctx.next_label("readfile_wrapper");
     let after = ctx.next_label("readfile_after");
+    let url_failed = ctx.next_label("readfile_url_failed");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("sub sp, sp, #16");                         // reserve path scratch storage across the wrapper probe
@@ -25,6 +26,24 @@ pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("ldr x2, [sp, #8]");                        // restore the path length for the chosen readfile helper
             ctx.emitter.instruction(&format!("cbnz x0, {}", wrapper));          // registered wrapper schemes stream through the wrapper helper
             abi::emit_call_label(ctx.emitter, "__rt_readfile");
+            // A remote URL cannot be opened as a path, and `__rt_readfile` reports that
+            // with -2. Rather than duplicate its scheme matching, reuse the reader
+            // file_get_contents() already uses and stream what it returns. Only the
+            // already-failing case takes this branch, so ordinary files keep streaming
+            // instead of being buffered whole.
+            ctx.emitter.instruction("mov x9, #-2");                             // the open-failure sentinel
+            ctx.emitter.instruction("cmp x0, x9");
+            ctx.emitter.instruction(&format!("b.ne {}", after));                // a real read needs no fallback
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // restore the path pointer for the URL reader
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // restore the path length for the URL reader
+            abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
+            ctx.emitter.instruction(&format!("cbz x1, {}", url_failed));        // still unreadable: keep the -2 failure
+            ctx.emitter.instruction("str x2, [sp, #0]");                        // preserve the byte count across the write
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the bytes through the ob/web-aware sink
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // readfile() returns the byte count
+            ctx.emitter.instruction(&format!("b {}", after));
+            ctx.emitter.label(&url_failed);
+            ctx.emitter.instruction("mov x0, #-2");                             // restore the open-failure sentinel
             ctx.emitter.instruction(&format!("b {}", after));                   // skip the wrapper readfile helper after native streaming
             ctx.emitter.label(&wrapper);
             abi::emit_call_label(ctx.emitter, "__rt_readfile_wrapper");
@@ -43,6 +62,20 @@ pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the path length for the chosen readfile helper
             ctx.emitter.instruction(&format!("jnz {}", wrapper));               // registered wrapper schemes stream through the wrapper helper
             abi::emit_call_label(ctx.emitter, "__rt_readfile");
+            // See the AArch64 counterpart.
+            ctx.emitter.instruction("cmp rax, -2");                             // the open-failure sentinel
+            ctx.emitter.instruction(&format!("jne {}", after));                 // a real read needs no fallback
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the path pointer for the URL reader
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // restore the path length for the URL reader
+            abi::emit_call_label(ctx.emitter, "__rt_file_get_contents_maybe_url");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", url_failed));             // still unreadable: keep the -2 failure
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rdx");            // preserve the byte count across the write
+            abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the bytes through the ob/web-aware sink
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // readfile() returns the byte count
+            ctx.emitter.instruction(&format!("jmp {}", after));
+            ctx.emitter.label(&url_failed);
+            ctx.emitter.instruction("mov rax, -2");                             // restore the open-failure sentinel
             ctx.emitter.instruction(&format!("jmp {}", after));                 // skip the wrapper readfile helper after native streaming
             ctx.emitter.label(&wrapper);
             abi::emit_call_label(ctx.emitter, "__rt_readfile_wrapper");

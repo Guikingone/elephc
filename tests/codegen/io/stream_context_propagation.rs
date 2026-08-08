@@ -121,6 +121,27 @@ echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/null", false, null);
     assert_eq!(out, "POST|PUT|GET|POST");
 }
 
+/// Verifies `readfile()` reaches an http URL at all, and honours its `$context`.
+///
+/// `readfile()` only ever opened its argument as a filesystem path, so a URL produced
+/// an empty body and `false`. It now falls back to the URL reader on open failure,
+/// which leaves ordinary files on the streaming path.
+#[test]
+fn test_readfile_reads_http_urls_and_honours_its_context() {
+    let (server, port) = spawn_http_method_server(2);
+    let out = compile_and_run(
+        &r#"<?php
+$put = stream_context_create(["http" => ["method" => "PUT"]]);
+readfile("http://127.0.0.1:PHP_TEST_PORT/plain");
+echo "|";
+readfile("http://127.0.0.1:PHP_TEST_PORT/ctx", false, $put);
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    server.join().expect("context test: server join");
+    assert_eq!(out, "GET|PUT");
+}
+
 /// Verifies a context passed to one read does not leak into the next one.
 #[test]
 fn test_file_get_contents_context_does_not_leak_to_later_reads() {
