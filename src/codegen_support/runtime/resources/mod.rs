@@ -281,14 +281,59 @@ mod tests {
     }
 
     /// Verifies x86_64 calls the custom heap allocator with its size in `rax`.
+    ///
+    /// The registry's own 512-byte request is gone on purpose: the initial slot array is
+    /// now the static `_resource_registry_static_slots` reservation, so a program needs no
+    /// runtime heap before its first statement. What remains heap-allocated here is the
+    /// 320-byte StreamState and the grown slot array, and both must pass their size in the
+    /// operand register `__rt_heap_alloc` reads — passing it in `rdi` is precisely the slip
+    /// that made every linux-x86_64 program segfault at exit.
     #[test]
     fn x86_64_resource_allocations_use_heap_runtime_abi() {
         let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
         emit_resource_runtime(&mut emitter);
         let asm = emitter.output();
-        assert!(asm.contains("mov eax, 512"));
-        assert!(asm.contains("mov eax, 320"));
+        assert!(asm.contains("mov eax, 320"), "StreamState size must reach rax");
+        assert!(
+            asm.contains("shl rax, 6"),
+            "the grown slot array must size itself in rax"
+        );
         assert!(!asm.contains("mov edi, 512"));
         assert!(!asm.contains("mov edi, 320"));
+        assert!(
+            !asm.contains("mov eax, 512"),
+            "the registry must no longer request its initial slot array from the heap"
+        );
+    }
+
+    /// Verifies the initial slot array is static and never handed to `__rt_heap_free`.
+    ///
+    /// Allocating it in every program's prologue meant a program compiled with a small
+    /// `--heap-size` died at startup with `Fatal error: heap memory exhausted` — the two
+    /// 256-byte `runtime_gc::heap` harnesses could not run at all — and it was the block
+    /// reported as leaked in every stream-free program. Growth still moves to the heap, so
+    /// both the growth and teardown paths must recognize the static base and skip the free.
+    #[test]
+    fn the_initial_slot_array_is_static_and_never_freed() {
+        for (target, cmp) in [
+            (Target::new(Platform::MacOS, Arch::AArch64), "cmp x0, x9"),
+            (Target::new(Platform::Linux, Arch::X86_64), "cmp rax, r10"),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_resource_runtime(&mut emitter);
+            let asm = emitter.output();
+            assert!(
+                asm.contains("_resource_registry_static_slots"),
+                "{target:?} must seed the registry from the static reservation:\n{asm}"
+            );
+            let teardown = &asm[asm
+                .find("__rt_resource_registry_teardown:")
+                .expect("teardown label")..];
+            let teardown = &teardown[..teardown.find("ret").map(|i| i + 3).unwrap_or(teardown.len())];
+            assert!(
+                teardown.contains("_resource_registry_static_slots") && teardown.contains(cmp),
+                "{target:?} teardown must compare against the static base before freeing:\n{teardown}"
+            );
+        }
     }
 }

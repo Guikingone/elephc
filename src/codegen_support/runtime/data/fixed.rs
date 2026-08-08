@@ -282,9 +282,18 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // the first stream a script opens. Seeding at 5 instead made the context consume 5
     // and shifted every user resource by one.
     out.push_str(".globl _resource_id_next\n_resource_id_next:\n    .quad 4\n");
-    // Gate 1 opaque resource registry. The slot array itself is allocated lazily
-    // from elephc's target-independent runtime heap. Handles contain only a
-    // generation and one-based slot index; no OS descriptor is PHP-visible.
+    // Gate 1 opaque resource registry. Handles contain only a generation and a
+    // one-based slot index; no OS descriptor is PHP-visible.
+    //
+    // THE INITIAL SLOT ARRAY IS STATIC, NOT HEAP. Allocating it in every program's
+    // prologue cost 512 bytes of runtime heap before the first PHP statement ran, so a
+    // program compiled with a small `--heap-size` died at startup with
+    // `Fatal error: heap memory exhausted` — 256-byte harnesses could not run at all.
+    // Reserving it here costs nothing at run time, keeps `__rt_heap_alloc` untouched for
+    // the program's own allocations, and removes the block that used to be reported as
+    // leaked in every stream-free program. Growth still moves to the heap; the growth and
+    // teardown paths recognize this base and never hand it to `__rt_heap_free`.
+    out.push_str(".comm _resource_registry_static_slots, 512, 3\n");
     out.push_str(".comm _resource_registry_ptr, 8, 3\n");
     out.push_str(".comm _resource_registry_len, 8, 3\n");
     out.push_str(".comm _resource_registry_cap, 8, 3\n");

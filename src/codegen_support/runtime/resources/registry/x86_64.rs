@@ -51,14 +51,10 @@ fn emit_registry_init(emitter: &mut Emitter) {
     emitter.instruction("mov r11, QWORD PTR [r10]");                            // load the current dynamic slot-array pointer
     emitter.instruction("test r11, r11");                                       // has the registry already been initialized?
     emitter.instruction("jnz __rt_resource_registry_init_ready");               // reuse the existing dynamic registry
-    emitter.instruction(&format!(
-        "mov eax, {}",
-        INITIAL_REGISTRY_CAPACITY * RESOURCE_SLOT_SIZE
-    ));                                                                         // request the initial slot-array storage
-    emitter.instruction("call __rt_heap_alloc");                                // allocate the dynamic registry slot array
-    emitter.instruction("test rax, rax");                                       // did the heap provide registry storage?
-    emitter.instruction("jz __rt_resource_registry_init_fail");                 // report exhaustion without publishing partial globals
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the allocated slot-array pointer
+    // The initial slot array is the STATIC reservation, not a heap block: a program
+    // must not need runtime heap before its first statement (see `data::fixed`).
+    abi::emit_symbol_address(emitter, "rax", "_resource_registry_static_slots");
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the static slot-array base
     emitter.instruction("mov r10, rax");                                        // start zeroing at the first slot byte
     emitter.instruction(&format!(
         "mov ecx, {}",
@@ -218,8 +214,12 @@ fn emit_registry_grow(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "r10", "_resource_registry_cap");
     emitter.instruction("mov r11, QWORD PTR [rbp - 24]");                       // reload the replacement capacity
     emitter.instruction("mov QWORD PTR [r10], r11");                            // publish the replacement capacity
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // pass the superseded slot array to heap_free
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // reload the superseded slot array
+    abi::emit_symbol_address(emitter, "r10", "_resource_registry_static_slots");
+    emitter.instruction("cmp rax, r10");                                        // was the superseded array the STATIC reservation?
+    emitter.instruction("je __rt_resource_registry_grow_static_x86");           // the static base is not heap storage and must never be freed
     emitter.instruction("call __rt_heap_free");                                 // release the old dynamic slot array
+    emitter.label("__rt_resource_registry_grow_static_x86");
     emitter.instruction("mov eax, 1");                                          // report successful growth
     emitter.instruction("jmp __rt_resource_registry_grow_done");                // join the helper epilogue
     emitter.label("__rt_resource_registry_grow_fail");
@@ -718,8 +718,12 @@ fn emit_registry_teardown(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [r9]");                             // load the dynamic slot-array pointer into heap_free's operand register
     emitter.instruction("test rax, rax");                                       // has the registry ever been initialized?
     emitter.instruction("jz __rt_resource_registry_teardown_done");             // an uninitialized registry owns no storage
-    emitter.instruction("mov QWORD PTR [r9], 0");                               // clear the pointer before freeing it
-    emitter.instruction("call __rt_heap_free");                                 // release the dynamic registry slot array
+    emitter.instruction("mov QWORD PTR [r9], 0");                               // clear the pointer before releasing it
+    abi::emit_symbol_address(emitter, "r10", "_resource_registry_static_slots");
+    emitter.instruction("cmp rax, r10");                                        // is the registry still on its STATIC reservation?
+    emitter.instruction("je __rt_resource_registry_teardown_reset_x86");        // static storage is not heap storage: only the globals reset
+    emitter.instruction("call __rt_heap_free");                                 // release a grown, heap-allocated slot array
+    emitter.label("__rt_resource_registry_teardown_reset_x86");
     abi::emit_symbol_address(emitter, "r9", "_resource_registry_len");
     emitter.instruction("mov QWORD PTR [r9], 0");                               // no slots remain initialized
     abi::emit_symbol_address(emitter, "r9", "_resource_registry_cap");
