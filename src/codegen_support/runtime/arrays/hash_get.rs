@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - Hash helpers must normalize PHP keys and preserve bucket layout, ownership, and iteration conventions.
+//! - Besides the borrowed payload, the lookup returns the matching entry's ADDRESS
+//!   (`x4` / `r8`, null on a miss) so callers that must write the slot back can reach
+//!   it; the probe already computes that address (issue #580).
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -15,7 +18,15 @@ use crate::codegen_support::platform::Arch;
 /// Uses `__rt_hash_key_hash` to compute the initial slot and `__rt_hash_key_eq` for equality checks.
 /// Falls through to `__rt_hash_get_not_found` when the table is null, empty, or the key is absent.
 /// Input:  x0=hash_table_ptr, x1=key_lo, x2=key_hi (key_hi=-1 means integer key, otherwise string key with key_lo=ptr, key_hi=len)
-/// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag (PhpType tag; null tag on miss)
+/// Output: x0=found (1 or 0), x1=value_lo, x2=value_hi, x3=value_tag (PhpType tag; null tag on miss),
+///         x4=address of the matching entry (0 on miss)
+///
+/// The entry address is what lets a caller WRITE the slot back rather than only read it: the
+/// by-reference `foreach` element fetch separates the container the entry holds and republishes
+/// the unique pointer into `[x4, #24]` (issue #580). It costs one move on the found path because
+/// the probe has already computed the address. Both `x4` and the x86_64 mirror `r8` are
+/// caller-saved and were already clobbered by this helper's own probing and key comparisons, so
+/// exposing them adds no constraint on existing callers.
 pub fn emit_hash_get(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_get_linux_x86_64(emitter);
@@ -121,6 +132,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [x12, #24]");                                  // x1 = value_lo
     emitter.instruction("ldr x2, [x12, #32]");                                  // x2 = value_hi
     emitter.instruction("ldr x3, [x12, #40]");                                  // x3 = value_tag
+    emitter.instruction("mov x4, x12");                                         // x4 = matching entry address for write-back callers
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -131,6 +143,7 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #0");                                          // value_lo = 0
     emitter.instruction("mov x2, #0");                                          // value_hi = 0
     emitter.instruction("mov x3, #8");                                          // value_tag = null when lookup misses
+    emitter.instruction("mov x4, #0");                                          // no entry address to write back on a miss
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -138,7 +151,10 @@ pub fn emit_hash_get(emitter: &mut Emitter) {
 
 /// Emits the x86_64 Linux variant of `__rt_hash_get`.
 /// Uses SysV ABI: rdi=hash_table_ptr, rsi=key_lo, rdx=key_hi (key_hi=-1 means integer key, otherwise string key with rsi=ptr, rdx=len).
-/// Returns: rax=found (1 or 0), rdi=value_lo, rsi=value_hi, rcx=value_tag.
+/// Returns: rax=found (1 or 0), rdi=value_lo, rsi=value_hi, rcx=value_tag, r8=matching entry address (0 on miss).
+/// `r8` mirrors the AArch64 `x4` entry-address output used by the by-reference `foreach` element
+/// fetch (issue #580); the probe loop already builds the address there, so only the miss path
+/// needs an explicit clear.
 fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: hash_get ---");
@@ -220,7 +236,7 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, r11");                                         // copy the matching probe index before scaling it into a byte offset
     emitter.instruction("shl r8, 6");                                           // convert the matching probe index into a 64-byte entry offset
     emitter.instruction("add r8, r10");                                         // advance from the hash-table base pointer to the matching entry block
-    emitter.instruction("add r8, 40");                                          // skip the fixed 40-byte hash header to land on the matching entry
+    emitter.instruction("add r8, 40");                                          // skip the fixed 40-byte hash header to land on the matching entry, kept as the entry-address result
     emitter.instruction("mov rdi, QWORD PTR [r8 + 24]");                        // return the low payload word in the first borrowed-value result register
     emitter.instruction("mov rsi, QWORD PTR [r8 + 32]");                        // return the high payload word in the second borrowed-value result register
     emitter.instruction("mov rcx, QWORD PTR [r8 + 40]");                        // return the runtime value tag in the borrowed-value tag result register
@@ -234,6 +250,7 @@ fn emit_hash_get_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("xor edi, edi");                                        // clear the low payload word for the failed lookup path
     emitter.instruction("xor esi, esi");                                        // clear the high payload word for the failed lookup path
     emitter.instruction("mov ecx, 8");                                          // return runtime value tag 8 = null for failed hash lookups
+    emitter.instruction("xor r8d, r8d");                                        // no entry address to write back on a miss
     emitter.instruction("add rsp, 48");                                         // release the lookup spill slots before returning the failed lookup result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return the failed lookup result to generated code

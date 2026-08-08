@@ -13,6 +13,7 @@
 mod archive_dedup;
 mod bridges;
 mod command;
+mod pdo;
 mod sdk;
 
 use std::path::{Path, PathBuf};
@@ -67,6 +68,11 @@ pub(crate) fn bridges_in(
 /// Maps one bridge library name to its canonical PHP extension, when distinct.
 pub(crate) fn php_extension_for_lib(lib_name: &str) -> Option<&'static str> {
     bridges::php_extension_for_lib(lib_name)
+}
+
+/// Returns native libraries required by the selected optional PDO bridge profile.
+pub(crate) fn pdo_system_libraries() -> Vec<&'static str> {
+    pdo::system_libraries()
 }
 
 /// Invokes the target assembler for one generated assembly source file.

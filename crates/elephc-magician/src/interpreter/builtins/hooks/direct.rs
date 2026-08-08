@@ -190,6 +190,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     Openssl,
     /// Dispatches `ord(...)`.
     Ord,
+    /// Dispatches `parse_url(...)`.
+    ParseUrl,
     /// Dispatches `pi()`.
     Pi,
     /// Dispatches `pow(...)`.
@@ -446,6 +448,7 @@ impl EvalDirectHook {
                 eval_builtin_openssl_declared_call(name, args, context, scope, values)
             }
             Self::Ord => eval_builtin_ord(args, context, scope, values),
+            Self::ParseUrl => eval_builtin_parse_url(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),
             Self::Printf => eval_builtin_printf(args, context, scope, values),
             Self::Pow => eval_builtin_pow(args, context, scope, values),

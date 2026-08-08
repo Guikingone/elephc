@@ -409,6 +409,7 @@ pub enum RuntimeFnId {
     Md5,
     NumberFormat,
     Ord,
+    ParseUrl,
     Printf,
     Rtrim,
     Sha1,
@@ -737,7 +738,7 @@ impl RuntimeFnId {
             RuntimeFnId::Ucfirst |
             RuntimeFnId::Ucwords |
             RuntimeFnId::Wordwrap => crate::ir::Effects::empty(),
-            RuntimeFnId::Clamp => crate::ir::Effects::MAY_THROW,
+            RuntimeFnId::Clamp | RuntimeFnId::ParseUrl => crate::ir::Effects::MAY_THROW,
             RuntimeFnId::FunctionExists
             | RuntimeFnId::Defined
             | RuntimeFnId::JsonLastError
@@ -1066,6 +1067,7 @@ impl RuntimeFnId {
                 | RuntimeFnId::OpensslDecrypt
                 | RuntimeFnId::OpensslEncrypt
                 | RuntimeFnId::OpensslGetCipherMethods
+                | RuntimeFnId::ParseUrl
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
                 // copies those bytes out through `__rt_str_persist`, so every mode returns
@@ -1473,6 +1475,7 @@ impl RuntimeFnId {
             RuntimeFnId::Md5 => "md5",
             RuntimeFnId::NumberFormat => "number_format",
             RuntimeFnId::Ord => "ord",
+            RuntimeFnId::ParseUrl => "parse_url",
             RuntimeFnId::Printf => "printf",
             RuntimeFnId::Rtrim => "rtrim",
             RuntimeFnId::Sha1 => "sha1",

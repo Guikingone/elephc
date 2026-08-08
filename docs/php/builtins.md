@@ -190,7 +190,7 @@ sidebar:
 | [`fsync()`](./builtins/io/fsync.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`ftell()`](./builtins/io/ftell.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`ftruncate()`](./builtins/io/ftruncate.md) | `(resource $stream, int $size): bool` | `bool` | ✓ | ✓ |
-| [`fwrite()`](./builtins/io/fwrite.md) | `(resource $stream, string $data): int` | `int` | ✓ | ✓ |
+| [`fwrite()`](./builtins/io/fwrite.md) | `(resource $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyaddr()`](./builtins/io/gethostbyaddr.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`gethostbyname()`](./builtins/io/gethostbyname.md) | `(string $hostname): string` | `string` | ✓ | ✓ |
 | [`gethostname()`](./builtins/io/gethostname.md) | `(): string` | `string` | ✓ | ✓ |
@@ -409,6 +409,7 @@ sidebar:
 | [`openssl_encrypt()`](./builtins/string/openssl_encrypt.md) | `(string $data, string $cipher_algo, string $passphrase, int $options = 0, string $iv = '', mixed $tag = null, string $aad = '', int $tag_length = 16): mixed` | `mixed` | ✓ | ✓ |
 | [`openssl_get_cipher_methods()`](./builtins/string/openssl_get_cipher_methods.md) | `(bool $aliases = false): array` | `array` | ✓ | ✓ |
 | [`ord()`](./builtins/string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
+| [`parse_url()`](./builtins/string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./builtins/string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`rawurldecode()`](./builtins/string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./builtins/string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |

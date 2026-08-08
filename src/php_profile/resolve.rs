@@ -75,14 +75,14 @@ fn classify(raw: &str) -> Pin {
         return Pin::Unparsable;
     };
     let wanted = major * 10_000 + minor * 100;
-    if let Some(profile) = PhpVersion::ALL
+    if let Some(profile) = PhpVersion::MAINTAINED
         .iter()
         .copied()
         .find(|profile| profile.version_id() == wanted)
     {
         return Pin::Exact(profile);
     }
-    let oldest = PhpVersion::ALL[0];
+    let oldest = PhpVersion::MAINTAINED[0];
     if wanted < oldest.version_id() {
         Pin::TooOld
     } else {
@@ -92,8 +92,8 @@ fn classify(raw: &str) -> Pin {
 
 /// Turns a classified pin into a profile, recording a note when the answer had to be moved.
 fn apply(raw: &str, source: &str, notes: &mut Vec<String>) -> Option<PhpVersion> {
-    let oldest = PhpVersion::ALL[0];
-    let newest = PhpVersion::ALL[PhpVersion::ALL.len() - 1];
+    let oldest = PhpVersion::MAINTAINED[0];
+    let newest = PhpVersion::MAINTAINED[PhpVersion::MAINTAINED.len() - 1];
     match classify(raw) {
         Pin::Exact(profile) => Some(profile),
         Pin::TooOld => {
@@ -201,7 +201,7 @@ fn resolve_in(dir: &Path, notes: &mut Vec<String>) -> Option<(PhpVersion, Proven
     // inside one is a judgement call, and this makes the call only in the case where every
     // reasonable reading agrees: the project has explicitly ruled newer PHP out.
     if let Some(raw) = manifest.string_at(&["require", "php"]) {
-        let newest = PhpVersion::ALL[PhpVersion::ALL.len() - 1];
+        let newest = PhpVersion::MAINTAINED[PhpVersion::MAINTAINED.len() - 1];
         if let Some(admitted) = crate::php_profile::constraint::newest_admitted(raw) {
             if admitted.version_id() < newest.version_id() {
                 return Some((admitted, Provenance::ComposerRequire));
@@ -435,7 +435,7 @@ mod tests {
             r#"{"config":{"platform":{"php":"8.1.0"}}}"#,
         );
         let resolved = resolve(&dir.join("prog.php"));
-        assert_eq!(resolved.profile, PhpVersion::ALL[0]);
+        assert_eq!(resolved.profile, PhpVersion::MAINTAINED[0]);
         assert_eq!(resolved.notes.len(), 1);
         assert!(resolved.notes[0].contains("8.1.0"));
         let _ = std::fs::remove_dir_all(&dir);
@@ -448,7 +448,10 @@ mod tests {
         write(&dir, "prog.php", "<?php echo 1;");
         write(&dir, ".php-version", "9.0");
         let resolved = resolve(&dir.join("prog.php"));
-        assert_eq!(resolved.profile, PhpVersion::ALL[PhpVersion::ALL.len() - 1]);
+        assert_eq!(
+            resolved.profile,
+            PhpVersion::MAINTAINED[PhpVersion::MAINTAINED.len() - 1]
+        );
         assert_eq!(resolved.notes.len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }

@@ -193,6 +193,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     Openssl,
     /// Dispatches `ord(...)`.
     Ord,
+    /// Dispatches `parse_url(...)`.
+    ParseUrl,
     /// Dispatches `pi()`.
     Pi,
     /// Dispatches `pow(...)`.
@@ -487,6 +489,9 @@ impl EvalValuesHook {
                 eval_openssl_declared_values_result(name, evaluated_args, context, values)
             }
             Self::Ord => one_arg(evaluated_args, values, eval_ord_result),
+            Self::ParseUrl => {
+                eval_parse_url_declared_values_result(evaluated_args, context, values)
+            }
             Self::Pi => {
                 if !evaluated_args.is_empty() {
                     return Err(EvalStatus::RuntimeFatal);

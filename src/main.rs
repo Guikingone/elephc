@@ -41,6 +41,7 @@ mod opcache;
 mod opcache_prelude;
 mod optimize;
 mod parser;
+mod php_version;
 mod pdo_prelude;
 mod php_profile;
 mod pipeline;

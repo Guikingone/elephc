@@ -357,6 +357,42 @@ return function_exists("rawurldecode");"#,
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
 
+/// Verifies eval `parse_url()` arrays, component constants, callables, and `ValueError` behavior.
+#[test]
+fn execute_program_dispatches_parse_url_builtin() {
+    let program = parse_fragment(
+        br#"$all = parse_url("https://user:pass@example.com:8080/path?q=1#frag");
+echo $all["scheme"] . ":" . $all["host"] . ":" . $all["port"] . ":";
+echo $all["user"] . ":" . $all["pass"] . ":" . $all["path"] . ":";
+echo $all["query"] . ":" . $all["fragment"] . ":";
+echo parse_url("http://[::1]:80/", PHP_URL_HOST) . ":";
+echo parse_url(url: "http://host", component: PHP_URL_PORT) === null ? "missing" : "bad"; echo ":";
+echo parse_url("http://") === false ? "false" : "bad"; echo ":";
+echo count(parse_url("/path", -2)); echo ":";
+echo call_user_func("parse_url", "//callable/path", PHP_URL_HOST); echo ":";
+echo call_user_func_array("parse_url", ["url" => "mailto:a@b", "component" => PHP_URL_PATH]); echo ":";
+try {
+    parse_url("x", 8);
+} catch (ValueError $error) {
+    echo $error->getMessage();
+}
+echo ":"; echo function_exists("parse_url"); echo defined("PHP_URL_FRAGMENT");
+return PHP_URL_FRAGMENT;"#,
+    )
+    .expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "https:example.com:8080:user:pass:/path:q=1:frag:[::1]:missing:false:1:callable:a@b:\
+parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given:11"
+    );
+    assert_eq!(values.get(result), FakeValue::Int(EVAL_PHP_URL_FRAGMENT));
+}
+
 /// Verifies eval incremental hash context builtins use elephc-crypto state.
 #[test]
 fn execute_program_dispatches_hash_context_builtins() {

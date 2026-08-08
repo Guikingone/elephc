@@ -510,7 +510,7 @@ Minimum cases:
 ### Error tests
 
 ```text
-tests/error_tests/... 
+tests/error_tests/...
 ```
 
 - wrong arity;

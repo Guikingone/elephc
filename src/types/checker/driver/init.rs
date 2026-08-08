@@ -61,6 +61,18 @@ impl Checker {
         constants.insert("PATHINFO_EXTENSION".to_string(), PhpType::Int);
         constants.insert("PATHINFO_FILENAME".to_string(), PhpType::Int);
         constants.insert("PATHINFO_ALL".to_string(), PhpType::Int);
+        for name in [
+            "PHP_URL_SCHEME",
+            "PHP_URL_HOST",
+            "PHP_URL_PORT",
+            "PHP_URL_USER",
+            "PHP_URL_PASS",
+            "PHP_URL_PATH",
+            "PHP_URL_QUERY",
+            "PHP_URL_FRAGMENT",
+        ] {
+            constants.insert(name.to_string(), PhpType::Int);
+        }
         for (name, _value) in ENT_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }

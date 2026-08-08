@@ -498,7 +498,7 @@ fn parse_required_php_version(
     if index < args.len() {
         parse_php_version(&args[index])
     } else {
-        fail("Missing version after --php-version (expected 8.2, 8.3, 8.4, or 8.5)")
+        fail("Missing version after --php-version (expected 8.0 through 8.6)")
     }
 }
 
@@ -506,8 +506,9 @@ fn parse_required_php_version(
 fn parse_php_version(value: &str) -> crate::web_prelude::PhpVersion {
     crate::web_prelude::PhpVersion::parse(value).unwrap_or_else(|| {
         fail(&format!(
-            "Unsupported PHP version '{}': expected 8.2, 8.3, 8.4, or 8.5",
-            value
+            "Unsupported PHP version '{}': expected one of: {}",
+            value,
+            crate::web_prelude::PhpVersion::accepted_values()
         ))
     })
 }
@@ -698,11 +699,13 @@ mod tests {
     /// Verifies every maintained PHP minor maps to its exact compatibility profile.
     #[test]
     fn maintained_php_versions_parse() {
+        assert_eq!(parse_php_version("8.0").version_id(), 80000);
+        assert_eq!(parse_php_version("8.1").version_id(), 80100);
         assert_eq!(parse_php_version("8.2").version_id(), 80200);
         assert_eq!(parse_php_version("8.3").version_id(), 80300);
         assert_eq!(parse_php_version("8.4").version_id(), 80400);
         assert_eq!(parse_php_version("8.5").version_id(), 80500);
-        assert!(crate::web_prelude::PhpVersion::parse("8.1").is_none());
+        assert_eq!(parse_php_version("8.6").version_id(), 80600);
     }
 
     /// Verifies both CLI spellings store the selected PHP compatibility profile.

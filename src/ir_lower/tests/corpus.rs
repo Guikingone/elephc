@@ -42,15 +42,12 @@ fn lowers_examples_corpus() {
 }
 
 /// Returns all example `main.php` and `main.lfc` fixtures in deterministic order, excluding
-/// examples that only type-check once a feature prelude has been injected.
+/// examples that require a feature prelude or optional-driver build profile.
 ///
 /// The corpus lowers each fixture in plain (CLI) mode, which does not inject the
-/// feature preludes the pipeline adds during a real compile — the `--web` request
-/// prelude (`src/web_prelude.rs`) or the pay-for-use OPcache prelude
-/// (`src/opcache_prelude.rs`). Examples that rely on such a prelude — session
-/// functions, request superglobals, or the prelude-provided `opcache_*` functions —
-/// reference symbols that do not exist in plain CLI-mode lowering and legitimately
-/// fail type checking here, so they are skipped rather than treated as failures.
+/// feature preludes and optional PDO driver surfaces that the pipeline adds during a
+/// real compile. Those profiles have dedicated tests, so their examples are skipped
+/// rather than treated as failures in default-profile lowering.
 fn example_main_files(root: &Path) -> Vec<PathBuf> {
     let examples = root.join("examples");
     std::fs::read_dir(&examples)
@@ -62,15 +59,21 @@ fn example_main_files(root: &Path) -> Vec<PathBuf> {
                 .map(|name| directory.join(name))
                 .find(|path| path.exists())
         })
-        .filter(|path| !example_requires_prelude(path))
+        .filter(|path| !example_requires_non_default_profile(path))
         .collect()
 }
 
-/// Returns true when an example directory only compiles once the pipeline injects a
-/// feature prelude (the `--web` request prelude or the OPcache prelude) and must be
-/// skipped by the plain CLI-mode corpus lowering test.
-fn example_requires_prelude(main_php: &Path) -> bool {
-    const PRELUDE_ONLY_EXAMPLES: &[&str] = &[
+/// Returns true when an example needs a feature prelude or optional PDO driver profile.
+fn example_requires_non_default_profile(main_php: &Path) -> bool {
+    const NON_DEFAULT_PROFILE_EXAMPLES: &[&str] = &[
+        "pdo-cubrid",
+        "pdo-dblib",
+        "pdo-firebird",
+        "pdo-ibm",
+        "pdo-informix",
+        "pdo-oci",
+        "pdo-odbc",
+        "pdo-sqlsrv",
         "web-session",
         "web-session-trans-sid",
         "web-session-upload",
@@ -82,5 +85,5 @@ fn example_requires_prelude(main_php: &Path) -> bool {
         .parent()
         .and_then(|dir| dir.file_name())
         .and_then(|name| name.to_str())
-        .is_some_and(|name| PRELUDE_ONLY_EXAMPLES.contains(&name))
+        .is_some_and(|name| NON_DEFAULT_PROFILE_EXAMPLES.contains(&name))
 }

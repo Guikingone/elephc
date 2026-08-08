@@ -468,6 +468,14 @@ define("PI", 3.14159);
 | `PATHINFO_EXTENSION` | int | 4 |
 | `PATHINFO_FILENAME` | int | 8 |
 | `PATHINFO_ALL` | int | 15 |
+| `PHP_URL_SCHEME` | int | 0 |
+| `PHP_URL_HOST` | int | 1 |
+| `PHP_URL_PORT` | int | 2 |
+| `PHP_URL_USER` | int | 3 |
+| `PHP_URL_PASS` | int | 4 |
+| `PHP_URL_PATH` | int | 5 |
+| `PHP_URL_QUERY` | int | 6 |
+| `PHP_URL_FRAGMENT` | int | 7 |
 | `FNM_NOESCAPE` | int | Target-specific libc/PHP value |
 | `FNM_PATHNAME` | int | Target-specific libc/PHP value |
 | `FNM_PERIOD` | int | 4 |

@@ -20,6 +20,23 @@ pub(super) const EVAL_OPENSSL_ZERO_PADDING: i64 = 2;
 /// Prevents zero-padding short cipher keys in the OpenSSL compatibility builtins.
 pub(super) const EVAL_OPENSSL_DONT_ZERO_PAD_KEY: i64 = 4;
 
+/// `parse_url()` component selector for the scheme.
+pub(super) const EVAL_PHP_URL_SCHEME: i64 = 0;
+/// `parse_url()` component selector for the host.
+pub(super) const EVAL_PHP_URL_HOST: i64 = 1;
+/// `parse_url()` component selector for the port.
+pub(super) const EVAL_PHP_URL_PORT: i64 = 2;
+/// `parse_url()` component selector for the user name.
+pub(super) const EVAL_PHP_URL_USER: i64 = 3;
+/// `parse_url()` component selector for the password.
+pub(super) const EVAL_PHP_URL_PASS: i64 = 4;
+/// `parse_url()` component selector for the path.
+pub(super) const EVAL_PHP_URL_PATH: i64 = 5;
+/// `parse_url()` component selector for the query.
+pub(super) const EVAL_PHP_URL_QUERY: i64 = 6;
+/// `parse_url()` component selector for the fragment.
+pub(super) const EVAL_PHP_URL_FRAGMENT: i64 = 7;
+
 /// Hash algorithm names supported by eval `hash_algos()`, matching native runtime order.
 pub(super) const EVAL_HASH_ALGOS: &[&str] = &[
     "md2",

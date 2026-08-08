@@ -62,6 +62,7 @@ pub mod openssl_cipher_iv_length;
 pub mod openssl_decrypt;
 pub mod openssl_encrypt;
 pub mod openssl_get_cipher_methods;
+pub mod parse_url;
 pub mod printf;
 pub mod rawurldecode;
 pub mod rawurlencode;

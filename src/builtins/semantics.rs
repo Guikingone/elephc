@@ -396,6 +396,31 @@ pub const fn type_predicate_semantics(predicate: PhpTypePredicate) -> BuiltinSem
     }
 }
 
+/// Builds the shared descriptor for an internal compiler primitive lowered to one EIR operation.
+///
+/// Internal primitives are direct-call-only implementation details used by generated preludes.
+/// Callers provide the conservative effect and ownership contracts because those differ between
+/// pointer identities, fresh callable/object values, and constructor-invoking operations.
+pub const fn internal_eir_semantics(
+    lower: BuiltinLowerFn,
+    effects: Effects,
+    result_ownership: BuiltinResultOwnership,
+) -> BuiltinSemantics {
+    BuiltinSemantics {
+        validation: BuiltinValidation::SignatureOnly,
+        result_type: BuiltinResultType::Declared,
+        effects: BuiltinEffects::Static(effects),
+        result_ownership,
+        requirements: BuiltinRequirements::Static(&[]),
+        target_strategy: BuiltinTargetStrategy::EirPrimitive,
+        target_support: BuiltinTargetSupport::All,
+        runtime_functions: BuiltinRuntimeFunctions::None,
+        argument_lowering: BuiltinArgumentLowering::Standard,
+        callable: BuiltinCallablePolicy::StaticOnly("internal compiler primitive"),
+        lowering: BuiltinLowering::Eir(lower),
+    }
+}
+
 /// Returns the conservative effect contract of a runtime type predicate.
 fn type_predicate_effects(_input: &BuiltinSemanticInput<'_>) -> Effects {
     Op::TypePredicate.default_effects()

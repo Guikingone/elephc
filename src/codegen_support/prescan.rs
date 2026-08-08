@@ -130,6 +130,21 @@ pub(crate) fn collect_constants(
         "PATHINFO_ALL".to_string(),
         (ExprKind::IntLiteral(15), PhpType::Int),
     );
+    for (name, value) in [
+        ("PHP_URL_SCHEME", 0),
+        ("PHP_URL_HOST", 1),
+        ("PHP_URL_PORT", 2),
+        ("PHP_URL_USER", 3),
+        ("PHP_URL_PASS", 4),
+        ("PHP_URL_PATH", 5),
+        ("PHP_URL_QUERY", 6),
+        ("PHP_URL_FRAGMENT", 7),
+    ] {
+        constants.insert(
+            name.to_string(),
+            (ExprKind::IntLiteral(value), PhpType::Int),
+        );
+    }
     for (name, value) in ENT_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
