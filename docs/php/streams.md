@@ -46,6 +46,11 @@ A `php://stdout` (or `php://stdin`, `php://stderr`, `php://fd/N`) handle is a
 DUPLICATE of the descriptor, as in php-src, so `fclose()` on it closes only that
 copy and the program's own output keeps working.
 
+The table backing these ids costs no runtime heap: its first slots are reserved
+statically, so a program compiled with a small `--heap-size` still starts, and one
+that never opens a resource reports `allocs=0` under `--heap-debug`. Opening more
+resources than the initial reservation holds grows the table on the heap as usual.
+
 ## Basic stream I/O
 
 | Function | Signature | Description |
