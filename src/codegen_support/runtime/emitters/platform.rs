@@ -89,7 +89,6 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_apply_socket_server_opts(emitter);
     io::emit_socket_backlog(emitter);
     io::emit_apply_socket_bindto(emitter);
-    io::emit_get_ssl_peer_name(emitter);
     io::emit_http_build_request(emitter);
     io::emit_fread(emitter);
     io::emit_fwrite(emitter);

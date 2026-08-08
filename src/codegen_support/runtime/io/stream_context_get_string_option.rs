@@ -1,6 +1,7 @@
 //! Purpose:
 //! Emits the `__rt_get_string_context_option` runtime helper —
-//! generalized version of `__rt_get_ssl_peer_name`. Looks up
+//! generalized string-option reader — it replaced a dedicated `ssl.peer_name`
+//! helper that accepted only a raw string tag. Looks up
 //! `_stream_context_options[wrapper][option]` and returns the result
 //! when the value is a string. Used by consumers like
 //! `stream_socket_enable_crypto` (`ssl.peer_name`) and the http://

@@ -674,7 +674,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(
         ".globl _tls_peer_name_default\n_tls_peer_name_default:\n    .ascii \"localhost\"\n",
     );
-    // Key literals used by __rt_get_ssl_peer_name for the
+    // Key literals used by __rt_get_string_context_option for the
     // _stream_context_options["ssl"]["peer_name"] lookup.
     out.push_str(".globl _ssl_key_str\n_ssl_key_str:\n    .ascii \"ssl\"\n");
     out.push_str(
@@ -697,7 +697,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(
         ".globl _ssl_local_pk_key_str\n_ssl_local_pk_key_str:\n    .ascii \"local_pk\"\n",
     );
-    // (_ssl_peer_name_key_str is already defined above for stream_context_get_ssl_peer_name)
+    // (_ssl_peer_name_key_str is already defined above; the TLS attach path reads
+    // ssl.peer_name through __rt_get_string_context_option like every other string option)
     out.push_str(
         ".globl _ssl_allow_self_signed_key_str\n_ssl_allow_self_signed_key_str:\n    .ascii \"allow_self_signed\"\n",
     );

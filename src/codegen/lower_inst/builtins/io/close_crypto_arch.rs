@@ -204,9 +204,17 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_aarch64(
     let plain_attach = ctx.next_label("ssec_plain_attach");
     let do_attach = ctx.next_label("ssec_do_attach");
     ctx.emitter.instruction("sub sp, sp, #64");                                 // reserve peer-name and client-cert/key spill storage
-    ctx.emitter.instruction("add x0, sp, #0");                                  // pass peer-name out_ptr address
-    ctx.emitter.instruction("add x1, sp, #8");                                  // pass peer-name out_len address
-    abi::emit_call_label(ctx.emitter, "__rt_get_ssl_peer_name");
+    // `ssl.peer_name` is read through the same generic string-option helper that
+    // local_cert and local_pk use, rather than a dedicated one. The dedicated copy
+    // accepted only a raw string tag, but `stream_context_set_option()` stores a boxed
+    // Mixed cell — so it missed every time and the SNI went out as the connection host.
+    abi::emit_symbol_address(ctx.emitter, "x0", "_ssl_key_str");
+    ctx.emitter.instruction("mov x1, #3");                                      // strlen("ssl")
+    abi::emit_symbol_address(ctx.emitter, "x2", "_ssl_peer_name_key_str");
+    ctx.emitter.instruction("mov x3, #9");                                      // strlen("peer_name")
+    ctx.emitter.instruction("add x4, sp, #0");                                  // pass peer-name out_ptr address
+    ctx.emitter.instruction("add x5, sp, #8");                                  // pass peer-name out_len address
+    abi::emit_call_label(ctx.emitter, "__rt_get_string_context_option");
     ctx.emitter.instruction(&format!("cbnz x0, {}", peer_ok));                  // use ssl.peer_name when the context provides it
     ctx.emitter.instruction("ldr x0, [sp, #80]");                               // reload the opaque handle for connection-host lookup
     abi::emit_call_label(ctx.emitter, "__rt_stream_get_connect_host");
@@ -319,9 +327,15 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_x86_64(
     let plain_attach = ctx.next_label("ssec_plain_attach_x");
     let after_attach = ctx.next_label("ssec_after_attach_x");
     ctx.emitter.instruction("sub rsp, 64");                                     // reserve peer-name and client-cert/key spill storage
-    ctx.emitter.instruction("lea rdi, [rsp + 0]");                              // pass peer-name out_ptr address
-    ctx.emitter.instruction("lea rsi, [rsp + 8]");                              // pass peer-name out_len address
-    abi::emit_call_label(ctx.emitter, "__rt_get_ssl_peer_name");
+    // See the AArch64 counterpart: the generic string-option helper is the one that
+    // understands how `stream_context_set_option()` actually stores a value.
+    abi::emit_symbol_address(ctx.emitter, "rdi", "_ssl_key_str");
+    ctx.emitter.instruction("mov rsi, 3");                                      // strlen("ssl")
+    abi::emit_symbol_address(ctx.emitter, "rdx", "_ssl_peer_name_key_str");
+    ctx.emitter.instruction("mov rcx, 9");                                      // strlen("peer_name")
+    ctx.emitter.instruction("lea r8, [rsp + 0]");                               // pass peer-name out_ptr address
+    ctx.emitter.instruction("lea r9, [rsp + 8]");                               // pass peer-name out_len address
+    abi::emit_call_label(ctx.emitter, "__rt_get_string_context_option");
     ctx.emitter.instruction("test rax, rax");                                   // did the context provide ssl.peer_name?
     ctx.emitter.instruction(&format!("jnz {}", peer_ok));                       // use ssl.peer_name when present
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 80]");                   // reload the opaque handle for connection-host lookup

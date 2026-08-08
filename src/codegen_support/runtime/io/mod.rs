@@ -79,7 +79,6 @@ mod notification;
 mod stream_wrapper_register;
 mod stream_wrapper_unregister;
 mod http_build_request;
-mod stream_context_get_ssl_peer_name;
 mod apply_socket_opts;
 mod stream_context_get_int_option;
 mod stream_context_get_string_option;
@@ -208,7 +207,6 @@ pub(crate) use user_wrapper_table::{
 };
 pub(crate) use stream_wrapper_unregister::emit_stream_wrapper_unregister;
 pub(crate) use http_build_request::emit_http_build_request;
-pub(crate) use stream_context_get_ssl_peer_name::emit_get_ssl_peer_name;
 pub(crate) use apply_socket_opts::{
     emit_apply_socket_bindto, emit_apply_socket_client_opts, emit_apply_socket_server_opts,
 };
