@@ -121,6 +121,61 @@ echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/null", false, null);
     assert_eq!(out, "POST|PUT|GET|POST");
 }
 
+/// Starts a server that redirects once, then serves a body.
+fn spawn_http_redirect_once_server() -> (std::thread::JoinHandle<()>, u16) {
+    let listener =
+        std::net::TcpListener::bind(("127.0.0.1", 0)).expect("redirect test: bind port");
+    let port = listener
+        .local_addr()
+        .expect("redirect test: local address")
+        .port();
+    let handle = std::thread::spawn(move || {
+        for _ in 0..2 {
+            let Ok((mut socket, _)) = listener.accept() else {
+                return;
+            };
+            let _ = socket.set_read_timeout(Some(std::time::Duration::from_secs(5)));
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while socket.read(&mut byte).unwrap_or(0) == 1 {
+                request.push(byte[0]);
+                if request.ends_with(b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let response: Vec<u8> = if request.starts_with(b"GET /final") {
+                b"HTTP/1.0 200 OK\r\nContent-Length: 7\r\n\r\narrived".to_vec()
+            } else {
+                b"HTTP/1.0 302 Found\r\nLocation: /final\r\nContent-Length: 0\r\n\r\n".to_vec()
+            };
+            let _ = socket.write_all(&response);
+        }
+    });
+    (handle, port)
+}
+
+/// Verifies redirects are followed by default, and only an explicitly falsy
+/// `follow_location` turns that off.
+///
+/// PHP defaults `follow_location` to 1 and `max_redirects` to 20. Treating an absent
+/// option as "off" left every redirecting URL returning an empty body, and the option
+/// is normally written as an INT, which the string lookup could not see at all.
+#[test]
+fn test_http_follows_redirects_by_default_and_honours_follow_location() {
+    let (server, port) = spawn_http_redirect_once_server();
+    let out = compile_and_run(
+        &r#"<?php
+echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/start"), "|";
+$off = stream_context_create(["http" => ["follow_location" => 0]]);
+$body = @file_get_contents("http://127.0.0.1:PHP_TEST_PORT/start", false, $off);
+echo $body === "arrived" ? "followed" : "not-followed";
+"#
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    server.join().expect("redirect test: server join");
+    assert_eq!(out, "arrived|not-followed");
+}
+
 /// Verifies `file()` accepts PHP's full signature: flags and a context.
 ///
 /// It took a single argument, so `file($path, FILE_IGNORE_NEW_LINES)` did not compile

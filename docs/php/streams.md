@@ -104,7 +104,7 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 | `phar://` | Read or write PHAR entries. Literal reads happen at compile time and embed the entry in the binary; non-literal reads happen at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native PHAR gzip/bzip2 entries and ZIP deflate entries are decoded transparently. |
 | `ftp://` | Anonymous binary passive FTP read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. Credentials in the URL are ignored in v1. |
 | `ftps://` | Explicit FTP over TLS using `AUTH TLS`, with TLS on both control and data channels. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. |
-| `http://` | HTTP/1.0 `GET` read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. v1 does not follow redirects and buffers up to 1 MiB. |
+| `http://` | HTTP read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. Redirects are followed as PHP does — `follow_location` defaults to on and `max_redirects` to 20 — and a response buffers up to 1 MiB. |
 | `https://` | Same as `http://`, but over TLS through the `elephc-tls` static library. Programs using it auto-link `-lelephc_tls`; programs that do not use TLS pay no extra link cost. |
 | `compress.zlib://` | Read-only wrapper that opens the underlying file and applies `zlib.inflate`. |
 | `compress.bzip2://` | Read-only wrapper that opens the underlying file and decompresses it through libbz2. |

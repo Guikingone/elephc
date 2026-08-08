@@ -175,21 +175,39 @@ pub fn emit_http_build_request(emitter: &mut Emitter) {
     emitter.instruction("mov x14, #1");                                         // move runtime value between registers
     emitter.instruction("str x14, [x10]");                                      // truthy → ignore_errors = 1
     emitter.label("__rt_hbr_skip_ie_aarch64");
-    // max_redirects: parse the string as a base-10 unsigned int. If
-    // follow_location is unset OR max_redirects is missing, default to 0
-    // (which disables redirect-following). 0 also implicitly means
-    // "follow_location was off" — http_open just doesn't loop.
+    // max_redirects: parse the string as a base-10 unsigned int. A max_redirects of 0
+    // disables the loop in http_open.
+    //
+    // PHP's default is to FOLLOW: `follow_location` defaults to 1 and `max_redirects`
+    // to 20, so only an explicitly falsy `follow_location` turns redirects off. Treating
+    // an absent option as "off" left `file_get_contents()` returning an empty body for
+    // any URL that redirects.
     abi::emit_symbol_address(emitter, "x10", "_http_active_max_redirects");
-    emitter.instruction("str xzr, [x10]");                                      // default = 0 (no redirects)
-    // First check follow_location is truthy; if not, leave max_redirects at 0.
+    emitter.instruction("str xzr, [x10]");                                      // start at 0 and raise it below
+    // `follow_location => 0` is normally written as an INT, which the string lookup
+    // above cannot see, so consult the int reader before falling back to the string.
+    emitter.instruction("mov x14, #1");                                         // assume PHP's default of following
+    emitter.instruction("str x14, [sp, #232]");                                 // scratch: resolved follow_location
+    abi::emit_symbol_address(emitter, "x0", "_http_key_str");
+    emitter.instruction("mov x1, #4");                                          // strlen("http") = 4
+    abi::emit_symbol_address(emitter, "x2", "_http_follow_location_key_str");
+    emitter.instruction("mov x3, #15");                                         // strlen("follow_location") = 15
+    emitter.instruction("add x4, sp, #232");                                    // out_int_addr
+    emitter.instruction("bl __rt_get_int_context_option");                      // 1 = the option was an int/bool
+    emitter.instruction("cbnz x0, __rt_hbr_fl_resolved_aarch64");               // an int answer settles it
     emitter.instruction("ldr x11, [sp, #208]");                                 // follow_location_len
-    emitter.instruction("cbz x11, __rt_hbr_skip_mr_aarch64");                   // branch when the checked value is zero or equal
+    emitter.instruction("cbz x11, __rt_hbr_fl_resolved_aarch64");               // absent: PHP follows by default
     emitter.instruction("ldr x12, [sp, #200]");                                 // follow_location_ptr
     emitter.instruction("ldrb w13, [x12]");                                     // load runtime value
-    emitter.instruction("cmp w13, #48");                                        // '0' = falsy
-    emitter.instruction("b.eq __rt_hbr_skip_mr_aarch64");                       // branch when the checked value is zero or equal
-    // follow_location is truthy; now parse max_redirects (default 20 per PHP if
-    // follow_location is set but max_redirects is absent).
+    emitter.instruction("cmp w13, #48");                                        // "0" as a string = off
+    emitter.instruction("b.ne __rt_hbr_fl_resolved_aarch64");
+    emitter.instruction("str xzr, [sp, #232]");                                 // record the explicit off
+    emitter.label("__rt_hbr_fl_resolved_aarch64");
+    emitter.instruction("ldr x14, [sp, #232]");                                 // the resolved follow_location
+    emitter.instruction("cbz x14, __rt_hbr_skip_mr_aarch64");                   // falsy: no redirect loop
+    // follow_location is on; now parse max_redirects (PHP's default is 20 when the
+    // option is absent).
+    emitter.label("__rt_hbr_mr_parse_aarch64");
     emitter.instruction("mov x15, #20");                                        // PHP default cap
     emitter.instruction("ldr x11, [sp, #224]");                                 // max_redirects_len
     emitter.instruction("cbz x11, __rt_hbr_mr_store_aarch64");                  // branch when the checked value is zero or equal
@@ -210,7 +228,10 @@ pub fn emit_http_build_request(emitter: &mut Emitter) {
     emitter.instruction("add x16, x16, #1");                                    // advance runtime pointer or counter
     emitter.instruction("b __rt_hbr_mr_loop_aarch64");                          // continue at target label
     emitter.label("__rt_hbr_mr_store_aarch64");
-    emitter.instruction("str x15, [x10]");                                      // store runtime value
+    // Reload: the follow_location probe above is a CALL, so x10 no longer holds the
+    // symbol address it was given before it.
+    abi::emit_symbol_address(emitter, "x10", "_http_active_max_redirects");
+    emitter.instruction("str x15, [x10]");                                      // publish the redirect cap
     emitter.label("__rt_hbr_skip_mr_aarch64");
     // timeout: parse the seconds value as base-10 int. 0 disables.
     abi::emit_symbol_address(emitter, "x10", "_http_active_timeout_seconds");
@@ -541,18 +562,35 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("je __rt_hbr_skip_ie_x");                               // branch when the checked value is zero or equal
     emitter.instruction("mov QWORD PTR [r10], 1");                              // store runtime value
     emitter.label("__rt_hbr_skip_ie_x");
-    // max_redirects: only honored when follow_location is truthy. Parse the
-    // string value (digits), or default to PHP's 20.
+    // max_redirects: see the AArch64 counterpart. PHP FOLLOWS by default, so only an
+    // explicitly falsy follow_location disables the loop.
     abi::emit_symbol_address(emitter, "r10", "_http_active_max_redirects");     // load runtime data address
-    emitter.instruction("mov QWORD PTR [r10], 0");                              // store runtime value
+    emitter.instruction("mov QWORD PTR [r10], 0");                              // start at 0 and raise it below
+    // See the AArch64 counterpart: an int-valued follow_location is invisible to the
+    // string lookup, so ask the int reader first.
+    emitter.instruction("mov QWORD PTR [rbp - 240], 1");                        // assume PHP's default of following
+    abi::emit_symbol_address(emitter, "rdi", "_http_key_str");
+    emitter.instruction("mov rsi, 4");                                          // strlen("http") = 4
+    abi::emit_symbol_address(emitter, "rdx", "_http_follow_location_key_str");
+    emitter.instruction("mov rcx, 15");                                         // strlen("follow_location") = 15
+    emitter.instruction("lea r8, [rbp - 240]");                                 // out_int_addr
+    emitter.instruction("call __rt_get_int_context_option");                    // 1 = the option was an int/bool
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jnz __rt_hbr_fl_resolved_x");                          // an int answer settles it
     emitter.instruction("mov r11, QWORD PTR [rbp - 216]");                      // follow_location_len
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
-    emitter.instruction("jz __rt_hbr_skip_mr_x");                               // branch when the checked value is zero or equal
+    emitter.instruction("jz __rt_hbr_fl_resolved_x");                           // absent: PHP follows by default
     emitter.instruction("mov r12, QWORD PTR [rbp - 208]");                      // follow_location_ptr
     emitter.instruction("movzx eax, BYTE PTR [r12]");                           // load runtime value
-    emitter.instruction("cmp al, 48");                                          // '0' falsy
-    emitter.instruction("je __rt_hbr_skip_mr_x");                               // branch when the checked value is zero or equal
-    // follow_location truthy. Parse max_redirects, default 20.
+    emitter.instruction("cmp al, 48");                                          // "0" as a string = off
+    emitter.instruction("jne __rt_hbr_fl_resolved_x");
+    emitter.instruction("mov QWORD PTR [rbp - 240], 0");                        // record the explicit off
+    emitter.label("__rt_hbr_fl_resolved_x");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 240]");                      // the resolved follow_location
+    emitter.instruction("test r11, r11");
+    emitter.instruction("jz __rt_hbr_skip_mr_x");                               // falsy: no redirect loop
+    // follow_location on. Parse max_redirects, default 20.
+    emitter.label("__rt_hbr_mr_parse_x");
     emitter.instruction("mov r15, 20");                                         // move runtime value between registers
     emitter.instruction("mov r11, QWORD PTR [rbp - 232]");                      // max_redirects_len
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
@@ -573,7 +611,9 @@ fn emit_http_build_request_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("inc rcx");                                             // advance runtime pointer or counter
     emitter.instruction("jmp __rt_hbr_mr_loop_x");                              // continue at target label
     emitter.label("__rt_hbr_mr_store_x");
-    emitter.instruction("mov QWORD PTR [r10], r15");                            // store runtime value
+    // Reload: see the AArch64 counterpart — the probe is a call.
+    abi::emit_symbol_address(emitter, "r10", "_http_active_max_redirects");
+    emitter.instruction("mov QWORD PTR [r10], r15");                            // publish the redirect cap
     emitter.label("__rt_hbr_skip_mr_x");
     // timeout: parse seconds as base-10 int.
     abi::emit_symbol_address(emitter, "r10", "_http_active_timeout_seconds");   // load runtime data address
