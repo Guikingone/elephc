@@ -250,7 +250,7 @@ milestones, `$message`, `$message_code`, and `$bytes_max` are deferred.
 | `stream_get_filters()` | `stream_get_filters(): array` | Return built-in filters: `string.toupper`, `string.tolower`, `string.rot13`, `string.strip_tags`, `convert.base64-encode`, `convert.base64-decode`, `convert.quoted-printable-encode`, `convert.quoted-printable-decode`, `convert.iconv.*`, `dechunk`, `zlib.deflate`, `zlib.inflate`, `bzip2.compress`, and `bzip2.decompress`. User filters are not enumerated in v1. |
 | `stream_filter_append()` | `stream_filter_append(resource $stream, string $filtername, int $read_write = STREAM_FILTER_ALL, mixed $params = null): resource\|false` | Attach a built-in or user-registered filter. `STREAM_FILTER_READ`, `STREAM_FILTER_WRITE`, and `STREAM_FILTER_ALL` select directions. |
 | `stream_filter_prepend()` | `stream_filter_prepend(resource $stream, string $filtername, int $read_write = STREAM_FILTER_ALL, mixed $params = null): resource` | Same behavior as append in v1's one-filter-per-direction model. |
-| `stream_filter_remove()` | `stream_filter_remove(resource $filter): bool` | Remove the attached filter and return `true`. |
+| `stream_filter_remove()` | `stream_filter_remove(resource $filter): bool` | Detach the filter from its chain. The filter is flushed first with `$closing = true`; if that flush answers `PSFS_ERR_FATAL`, the filter stays attached and the call returns `false`. |
 | `stream_filter_register()` | `stream_filter_register(string $filter_name, string $class): bool` | Register a user filter class. Up to 128 registrations are stored; a literal class name is validated at compile time. |
 | `stream_bucket_new()` | `stream_bucket_new(resource $stream, string $data): object` | Create a stdClass-backed bucket with public `data` and `datalen` properties. |
 | `stream_bucket_make_writeable()` | `stream_bucket_make_writeable(resource $brigade): object\|null` | Pop the next bucket from a brigade. |
@@ -270,9 +270,12 @@ four-argument `filter($in, $out, &$consumed, $closing): int` bucket form.
 Classes may extend PHP's `php_user_filter` base class; the fourth
 `stream_filter_append`/`prepend` `$params` argument is available as
 `$this->params` before `onCreate()` runs. Optional `onCreate(): bool` and
-`onClose(): void` hooks are honored. v1 seeds one input bucket per dispatch;
-`PSFS_FEED_ME` does not request more input, and
-`PSFS_ERR_FATAL` does not propagate as a stream error.
+`onClose(): void` hooks are honored; `onClose()` fires exactly once, whether the
+filter is removed with `stream_filter_remove()` or carried off by `fclose()`.
+`$closing` is `false` on read and write dispatches and `true` on the single
+closing flush a removal performs. v1 seeds one input bucket per dispatch, so
+`PSFS_FEED_ME` does not request more input; `PSFS_ERR_FATAL` cancels a removal
+but does not otherwise propagate as a stream error.
 
 ## User stream wrappers
 
@@ -347,8 +350,11 @@ Closing a handle changes its reported type but not its id. After `fclose()`,
 which renames every closed resource that way regardless of what it was. The id
 `N` is unchanged, `get_resource_id()` still answers it, and `"$handle"` still
 renders `Resource id #N`, because php-src leaves `zend_resource.handle` alone on
-close. elephc still reports the single open type name `"stream"`; PHP's further
-names (`"stream-context"`, `"stream filter"`) are not distinguished yet.
+close. A resource held directly reports its own type name — `"stream"`,
+`"stream-context"` or `"stream filter"`. One that has travelled through an
+untyped parameter still reports `"stream"`: it survives the call as a resource
+with its id intact, but the kind it carries across that boundary is not
+distinguished yet.
 
 `stream_get_meta_data()` derives `eof`, `seekable`, `blocked`, and `mode` from
 the live descriptor. `wrapper_type` and `uri` are recorded per handle when the
