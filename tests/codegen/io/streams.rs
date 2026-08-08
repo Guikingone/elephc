@@ -5179,6 +5179,36 @@ fclose($m);
     assert_eq!(out, "8192|4096|2048");
 }
 
+/// Verifies `php_user_filter` declares the properties PHP declares.
+///
+/// Only `$params` existed, so the manual's own filter idiom — building an output bucket
+/// with `stream_bucket_new($this->stream, ...)` — did not compile at all.
+#[test]
+fn test_user_filter_base_class_declares_filtername_and_stream() {
+    let out = compile_and_run(
+        r#"<?php
+class PropProbeFilter extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $ob = stream_bucket_new($this->stream, strtoupper($b->data));
+            stream_bucket_append($out, $ob);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("prop.probe", "PropProbeFilter");
+$f = fopen("php://memory", "r+");
+fwrite($f, "hello");
+rewind($f);
+stream_filter_append($f, "prop.probe", STREAM_FILTER_READ);
+echo stream_get_contents($f);
+echo "|", var_export(property_exists("PropProbeFilter", "filtername"), true);
+"#,
+    );
+    assert_eq!(out, "HELLO|true");
+}
+
 /// Verifies compiled PHP output for user stream filter write transforms payload.
 #[test]
 fn test_user_stream_filter_write_transforms_payload() {

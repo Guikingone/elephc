@@ -274,13 +274,22 @@ User filters can implement either `filter(string $data): string` or PHP's
 four-argument `filter($in, $out, &$consumed, $closing): int` bucket form.
 Classes may extend PHP's `php_user_filter` base class; the fourth
 `stream_filter_append`/`prepend` `$params` argument is available as
-`$this->params` before `onCreate()` runs. Optional `onCreate(): bool` and
+`$this->params` before `onCreate()` runs. The base class also declares
+`$filtername` and `$stream`, so the manual's `stream_bucket_new($this->stream, …)`
+idiom compiles; neither is seeded with a value yet. Optional `onCreate(): bool` and
 `onClose(): void` hooks are honored; `onClose()` fires exactly once, whether the
 filter is removed with `stream_filter_remove()` or carried off by `fclose()`.
 `$closing` is `false` on read and write dispatches and `true` on the single
-closing flush a removal performs. v1 seeds one input bucket per dispatch, so
-`PSFS_FEED_ME` does not request more input; `PSFS_ERR_FATAL` cancels a removal
-but does not otherwise propagate as a stream error.
+closing flush a removal performs. `PSFS_ERR_FATAL` cancels a removal but does not
+otherwise propagate as a stream error.
+
+⚠️ **`PSFS_FEED_ME` currently passes the raw input through** instead of withholding it.
+A filter that buffers across dispatches — returning `PSFS_FEED_ME` until it has enough
+bytes — therefore leaks its unfiltered input to the caller: reading `abcdefghi` in
+three-byte chunks through such a filter yields `abc`, `ABCDEF`, `ghi` where PHP yields
+`ABC`, `DEF`, `GHI`. Filters that answer `PSFS_PASS_ON` on every dispatch are
+unaffected. The fix needs `PSFS_FEED_ME` to return nothing AND the read path to fetch
+more input and dispatch again, rather than reporting a short read to the caller.
 
 ## User stream wrappers
 
