@@ -38,9 +38,10 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+    emitter.instruction("str x0, [sp, #32]");                                   // preserve the file() flags across the read and the array pushes
 
     // -- read entire file contents --
-    emitter.instruction("bl __rt_file_get_contents");                           // read file, x1=ptr, x2=len
+    emitter.instruction("bl __rt_file_get_contents_maybe_url");                 // read the file OR the wrapper URL, x1=ptr, x2=len
     emitter.instruction("stp x1, x2, [sp, #0]");                                // save file data ptr and len on stack
 
     // -- create a new string array (capacity = 256 lines) --
@@ -68,11 +69,13 @@ pub fn emit_file(emitter: &mut Emitter) {
 
     // -- found newline: push this line to array --
     emitter.instruction("str x3, [sp, #24]");                                   // save scan pointer (push_str clobbers x3)
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
     emitter.instruction("sub x1, x3, x5");                                      // line start = current pos - line length
     emitter.instruction("mov x2, x5");                                          // line length (including \n)
+    emit_file_line_flags_aarch64(emitter, "__rt_file_scan_skip", "scan");               // apply FILE_IGNORE_NEW_LINES / FILE_SKIP_EMPTY_LINES
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
     emitter.instruction("bl __rt_array_push_str");                              // push line to array (x0 = possibly new array)
     emitter.instruction("str x0, [sp, #16]");                                   // update array pointer after possible growth
+    emitter.label("__rt_file_scan_skip");
     emitter.instruction("ldr x3, [sp, #24]");                                   // restore scan pointer
     emitter.instruction("mov x5, #0");                                          // reset line length for next line
 
@@ -84,9 +87,10 @@ pub fn emit_file(emitter: &mut Emitter) {
     // -- handle last line (no trailing newline) --
     emitter.label("__rt_file_last");
     emitter.instruction("cbz x5, __rt_file_ret");                               // if last line is empty, skip it
-    emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
     emitter.instruction("sub x1, x3, x5");                                      // line start = current pos - line length
     emitter.instruction("mov x2, x5");                                          // line length
+    emit_file_line_flags_aarch64(emitter, "__rt_file_ret", "last");                     // apply FILE_IGNORE_NEW_LINES / FILE_SKIP_EMPTY_LINES
+    emitter.instruction("ldr x0, [sp, #16]");                                   // reload array pointer
     emitter.instruction("bl __rt_array_push_str");                              // push last line to array
 
     // -- return array pointer --
@@ -97,6 +101,81 @@ pub fn emit_file(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
+}
+
+
+/// Applies `file()`'s line flags to the pending line before it is appended.
+///
+/// Input:  x1 = line start, x2 = line length (including its terminator), flags at
+///         `[sp, #32]`. Branches to `skip_label` when the line must be dropped.
+///
+/// `FILE_IGNORE_NEW_LINES` trims the terminator (and a preceding CR), and
+/// `FILE_SKIP_EMPTY_LINES` drops a line only once that trim leaves it empty — which is
+/// why the two flags together turn a blank line into nothing, while
+/// `FILE_SKIP_EMPTY_LINES` alone keeps it: without the trim a blank line still holds
+/// its newline and is not empty. Verified against php 8.5.6.
+fn emit_file_line_flags_aarch64(emitter: &mut Emitter, skip_label: &str, suffix: &str) {
+    let keep_newline = format!("__rt_file_keep_newline_{suffix}");
+    let no_cr = format!("__rt_file_no_cr_{suffix}");
+    let done = format!("__rt_file_flags_done_{suffix}");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // the file() flags
+    emitter.instruction("tst x9, #2");                                          // FILE_IGNORE_NEW_LINES
+    emitter.instruction(&format!("b.eq {}", keep_newline));
+    emitter.instruction(&format!("cbz x2, {}", keep_newline));                  // nothing to trim
+    emitter.instruction("sub x10, x2, #1");
+    emitter.instruction("ldrb w11, [x1, x10]");                                 // the line's last byte
+    emitter.instruction("cmp w11, #0x0A");
+    emitter.instruction(&format!("b.ne {}", keep_newline));
+    emitter.instruction("mov x2, x10");                                         // drop the line feed
+    emitter.instruction(&format!("cbz x2, {}", no_cr));
+    emitter.instruction("sub x10, x2, #1");
+    emitter.instruction("ldrb w11, [x1, x10]");
+    emitter.instruction("cmp w11, #0x0D");
+    emitter.instruction(&format!("b.ne {}", no_cr));
+    emitter.instruction("mov x2, x10");                                         // drop a preceding carriage return
+    emitter.label(&no_cr);
+    emitter.label(&keep_newline);
+    emitter.instruction("ldr x9, [sp, #32]");                                   // reload the flags after the trim
+    emitter.instruction("tst x9, #4");                                          // FILE_SKIP_EMPTY_LINES
+    emitter.instruction(&format!("b.eq {}", done));
+    emitter.instruction(&format!("cbz x2, {}", skip_label));                    // drop the now-empty line
+    emitter.label(&done);
+}
+
+/// x86_64 variant of [`emit_file_line_flags_aarch64`].
+///
+/// Input: rsi = line start, rdx = line length, flags at `[rbp - 40]`.
+fn emit_file_line_flags_x86_64(emitter: &mut Emitter, skip_label: &str, suffix: &str) {
+    let keep_newline = format!("__rt_file_keep_newline_x{suffix}");
+    let no_cr = format!("__rt_file_no_cr_x{suffix}");
+    let done = format!("__rt_file_flags_done_x{suffix}");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the file() flags
+    emitter.instruction("test rax, 2");                                         // FILE_IGNORE_NEW_LINES
+    emitter.instruction(&format!("jz {}", keep_newline));
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction(&format!("jz {}", keep_newline));                       // nothing to trim
+    emitter.instruction("mov r10, rdx");
+    emitter.instruction("sub r10, 1");
+    emitter.instruction("mov r11b, BYTE PTR [rsi + r10]");                      // the line's last byte
+    emitter.instruction("cmp r11b, 0x0A");
+    emitter.instruction(&format!("jne {}", keep_newline));
+    emitter.instruction("mov rdx, r10");                                        // drop the line feed
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction(&format!("jz {}", no_cr));
+    emitter.instruction("mov r10, rdx");
+    emitter.instruction("sub r10, 1");
+    emitter.instruction("mov r11b, BYTE PTR [rsi + r10]");
+    emitter.instruction("cmp r11b, 0x0D");
+    emitter.instruction(&format!("jne {}", no_cr));
+    emitter.instruction("mov rdx, r10");                                        // drop a preceding carriage return
+    emitter.label(&no_cr);
+    emitter.label(&keep_newline);
+    emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the flags after the trim
+    emitter.instruction("test rax, 4");                                         // FILE_SKIP_EMPTY_LINES
+    emitter.instruction(&format!("jz {}", done));
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction(&format!("jz {}", skip_label));                         // drop the now-empty line
+    emitter.label(&done);
 }
 
 /// Emits the x86_64 Linux variant of `__rt_file` using the System V AMD64 ABI.
@@ -119,8 +198,9 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while file() uses scan state and array spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the file payload, scan cursors, and result array pointer
     emitter.instruction("sub rsp, 64");                                         // reserve aligned spill slots for the file payload, line scan cursors, and result array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 40], rdi");                       // preserve the file() flags across the read and the array pushes
 
-    emitter.instruction("call __rt_file_get_contents");                         // read the full file payload into an owned elephc string before splitting it into lines
+    emitter.instruction("call __rt_file_get_contents_maybe_url");               // read the file OR the wrapper URL into an owned elephc string before splitting it into lines
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // preserve the owned file payload pointer across the later array allocation and line pushes
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // preserve the owned file payload length across the later array allocation and scan loop
 
@@ -145,11 +225,13 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_file_scan");                                  // continue scanning the current line until a terminating line-feed is found
 
     emitter.instruction("mov QWORD PTR [rbp - 32], r8");                        // preserve the active scan cursor because array_push_str() is free to clobber caller-saved registers
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the result array pointer into the x86_64 append-helper receiver register
     emitter.instruction("mov rsi, r9");                                         // pass the current line start pointer as the string payload argument to array_push_str()
     emitter.instruction("mov rdx, rcx");                                        // pass the completed line length, including the trailing newline, to array_push_str()
+    emit_file_line_flags_x86_64(emitter, "__rt_file_scan_skip_x", "scan");              // apply FILE_IGNORE_NEW_LINES / FILE_SKIP_EMPTY_LINES
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the result array pointer into the x86_64 append-helper receiver register
     emitter.instruction("call __rt_array_push_str");                            // append the completed line slice as an owned string in the result array
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the updated array pointer after array_push_str() handles possible growth
+    emitter.label("__rt_file_scan_skip_x");
     emitter.instruction("mov r8, QWORD PTR [rbp - 32]");                        // restore the active scan cursor after the append helper clobbers caller-saved registers
     emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // reload the full file payload length before rebuilding the end-of-buffer pointer
     emitter.instruction("mov r11, QWORD PTR [rbp - 8]");                        // reload the owned file payload base pointer before rebuilding the end-of-buffer pointer
@@ -161,9 +243,10 @@ fn emit_file_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_file_last");
     emitter.instruction("test rcx, rcx");                                       // detect whether the file ended with a partial line that still needs to be appended
     emitter.instruction("jz __rt_file_cleanup");                                // skip the final push when the file already ended exactly on a newline boundary
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the result array pointer into the x86_64 append-helper receiver register
     emitter.instruction("mov rsi, r9");                                         // pass the trailing line start pointer as the string payload argument to array_push_str()
     emitter.instruction("mov rdx, rcx");                                        // pass the trailing line length without a newline terminator to array_push_str()
+    emit_file_line_flags_x86_64(emitter, "__rt_file_cleanup", "last");                  // apply FILE_IGNORE_NEW_LINES / FILE_SKIP_EMPTY_LINES
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // reload the result array pointer into the x86_64 append-helper receiver register
     emitter.instruction("call __rt_array_push_str");                            // append the trailing partial line as an owned string in the result array
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the updated array pointer after appending the trailing partial line
 

@@ -18,7 +18,7 @@ fn test_error_rewind_wrong_args() {
 
 // Verifies fseek() rejects one argument (needs 2 or 3) — expects "takes 2 or 3 arguments".
 
-// Verifies file() rejects zero arguments — expects "takes exactly 1 argument".
+// Verifies file() rejects zero arguments — expects "takes 1 to 3 arguments".
 
 // Verifies readline() rejects two arguments (accepts 0 or 1) — expects "takes 0 or 1 arguments".
 
@@ -58,7 +58,7 @@ fn test_error_fseek_wrong_args() {
 /// Verifies the error diagnostic for file wrong args.
 #[test]
 fn test_error_file_wrong_args() {
-    expect_error("<?php file();", "file() takes exactly 1 argument");
+    expect_error("<?php file();", "file() takes 1 to 3 arguments");
 }
 
 /// Verifies the error diagnostic for readline wrong args.

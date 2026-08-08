@@ -121,6 +121,42 @@ echo file_get_contents("http://127.0.0.1:PHP_TEST_PORT/null", false, null);
     assert_eq!(out, "POST|PUT|GET|POST");
 }
 
+/// Verifies `file()` accepts PHP's full signature: flags and a context.
+///
+/// It took a single argument, so `file($path, FILE_IGNORE_NEW_LINES)` did not compile
+/// at all, and it read through the plain-file helper, so a URL never reached a wrapper.
+#[test]
+fn test_file_honours_line_flags_and_context() {
+    let (server, port) = spawn_http_method_server(1);
+    let dir = std::env::temp_dir().join(format!(
+        "elephc_file_flags_{}_{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&dir).expect("file() test: create directory");
+    let path = dir.join("lines.txt");
+    std::fs::write(&path, "a\n\nb\n\n").expect("file() test: write fixture");
+    let escaped = path.to_string_lossy().replace('\\', "\\\\");
+    let out = compile_and_run(
+        &r#"<?php
+$plain = file("PHP_TEST_PATH");
+$trimmed = file("PHP_TEST_PATH", FILE_IGNORE_NEW_LINES);
+$dense = file("PHP_TEST_PATH", FILE_IGNORE_NEW_LINES | FILE_SKIP_EMPTY_LINES);
+echo count($plain), ",", count($trimmed), ",", count($dense), "|";
+echo implode("/", $dense), "|";
+
+$put = stream_context_create(["http" => ["method" => "PUT"]]);
+$remote = file("http://127.0.0.1:PHP_TEST_PORT/", FILE_IGNORE_NEW_LINES, $put);
+echo $remote[0];
+"#
+        .replace("PHP_TEST_PATH", &escaped)
+        .replace("PHP_TEST_PORT", &port.to_string()),
+    );
+    server.join().expect("file() test: server join");
+    let _ = std::fs::remove_dir_all(&dir);
+    assert_eq!(out, "4,4,2|a/b|PUT");
+}
+
 /// Verifies `readfile()` reaches an http URL at all, and honours its `$context`.
 ///
 /// `readfile()` only ever opened its argument as a filesystem path, so a URL produced

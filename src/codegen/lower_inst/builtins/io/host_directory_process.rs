@@ -403,7 +403,32 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `file(path)` through the target-aware runtime line-array helper.
 pub(crate) fn lower_file(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_unary_path_array(ctx, inst, "file", "__rt_file")
+    super::super::ensure_arg_count_between(inst, "file", 1, 3)?;
+    let path = expect_operand(inst, 0)?;
+    // Publish `$context` for this read, like fopen()/file_get_contents()/readfile().
+    let explicit_context = inst.operands.get(2).copied();
+    begin_fopen_context_scope(ctx, explicit_context)?;
+    match inst.operands.get(1).copied() {
+        Some(flags) => {
+            ctx.load_value_to_result(flags)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            load_string_to_result(ctx, path, "file")?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => abi::emit_pop_reg(ctx.emitter, "x0"),
+                Arch::X86_64 => abi::emit_pop_reg(ctx.emitter, "rdi"),
+            }
+        }
+        None => {
+            load_string_to_result(ctx, path, "file")?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("mov x0, #0"),
+                Arch::X86_64 => ctx.emitter.instruction("xor edi, edi"),
+            }
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_file");
+    finish_fopen_context_scope(ctx);
+    store_if_result(ctx, inst)
 }
 
 /// Lowers `realpath(path)` and boxes the owned runtime string-or-false result.
