@@ -5179,6 +5179,58 @@ fclose($m);
     assert_eq!(out, "8192|4096|2048");
 }
 
+/// Pins PHP's `PSFS_FEED_ME` contract for a filter that buffers across dispatches.
+///
+/// IGNORED because elephc does not implement it yet, and the current behaviour is a
+/// SILENT one: `PSFS_FEED_ME` passes the RAW input through, so this filter leaks
+/// unfiltered bytes to the caller — `<abc><ABCDEF><ghi>` where php 8.5.6 answers
+/// `<ABC><DEF><GHI>`. A filter that returns PSFS_PASS_ON on every dispatch is
+/// unaffected, which is why the rest of the filter suite stays green.
+///
+/// Fixing it takes TWO changes that must land together:
+///   1. `PSFS_FEED_ME` must return nothing rather than the original input;
+///   2. `__rt_fread` must then fetch more input and dispatch again instead of
+///      reporting a short read — with (1) alone, `fread()` returns "" and every
+///      caller written as `if ($chunk === "") break;` stops early, turning a data
+///      LEAK into data LOSS.
+#[test]
+#[ignore = "PSFS_FEED_ME passes the raw input through; needs the fread re-read loop"]
+fn test_user_filter_psfs_feed_me_buffers_across_dispatches() {
+    let out = compile_and_run(
+        r#"<?php
+class FeedMeCollect extends php_user_filter {
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $this->buf .= $b->data;
+        }
+        if (strlen($this->buf) < 6) {
+            return PSFS_FEED_ME;
+        }
+        $ob = stream_bucket_new($this->stream, strtoupper($this->buf));
+        stream_bucket_append($out, $ob);
+        $this->buf = "";
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("feedme.collect", "FeedMeCollect");
+$f = fopen("php://memory", "r+");
+fwrite($f, "abcdefghi");
+rewind($f);
+stream_filter_append($f, "feedme.collect", STREAM_FILTER_READ);
+$out = "";
+while (!feof($f)) {
+    $chunk = fread($f, 3);
+    if ($chunk === "" || $chunk === false) { break; }
+    $out .= "<" . $chunk . ">";
+}
+echo $out;
+"#,
+    );
+    assert_eq!(out, "<ABC><DEF><GHI>");
+}
+
 /// Verifies `php_user_filter` declares the properties PHP declares.
 ///
 /// Only `$params` existed, so the manual's own filter idiom — building an output bucket
