@@ -156,7 +156,15 @@ fn compile_source_to_asm_with_defines_repr_regex_and_php_version(
     php_version: elephc::php_version::PhpVersion,
 ) -> (String, String, TestLinkRequirements) {
     let (user_asm, runtime_asm, link_requirements) = try_compile_source_to_asm_with_defines_repr(
-        source, dir, defines, heap_size, gc_stats, heap_debug, null_repr, with_regex,
+        source,
+        dir,
+        defines,
+        heap_size,
+        gc_stats,
+        heap_debug,
+        null_repr,
+        with_regex,
+        php_version,
     );
     (
         user_asm.expect("EIR backend codegen failed for codegen fixture"),
@@ -186,6 +194,7 @@ pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
         false,
         default_null_repr(),
         false,
+        elephc::php_version::PhpVersion::default(),
     );
     let _ = fs::remove_dir_all(&dir);
     match user_asm {
@@ -206,6 +215,7 @@ fn try_compile_source_to_asm_with_defines_repr(
     heap_debug: bool,
     null_repr: elephc::codegen::NullRepr,
     with_regex: bool,
+    php_version: elephc::php_version::PhpVersion,
 ) -> (
     std::result::Result<String, elephc::codegen::CodegenIrError>,
     String,
