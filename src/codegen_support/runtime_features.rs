@@ -61,6 +61,12 @@ pub struct RuntimeFeatures {
     /// tail-call `elephc_web_write` (a symbol only linked into `--web` binaries).
     /// Non-web runtimes must leave this false so they never reference that symbol.
     pub web: bool,
+    /// True when the program lowers a `__elephc_pdo_adapter_addr` call (the PDO
+    /// Tier-D prelude decomposing a callback into descriptor + adapter pointers),
+    /// which takes the address of a `__rt_pdo_*` adapter. Emitting the adapter under
+    /// this bit keeps the address-of reference resolvable without pulling the body
+    /// into non-PDO programs.
+    pub pdo_udf: bool,
 }
 
 impl RuntimeFeatures {
@@ -74,6 +80,7 @@ impl RuntimeFeatures {
             eval_bridge: false,
             eval_scope: false,
             web: false,
+            pdo_udf: false,
         }
     }
 
@@ -88,6 +95,7 @@ impl RuntimeFeatures {
             eval_bridge: true,
             eval_scope: true,
             web: true,
+            pdo_udf: true,
         }
     }
 }
@@ -1186,6 +1194,7 @@ mod tests {
             eval_bridge: false,
             eval_scope: false,
             web: false,
+            pdo_udf: false,
         })
         .iter()
         .any(|requirement| requirement == &LinkRequirement::Bridge("elephc_crypto")));

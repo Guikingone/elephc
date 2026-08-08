@@ -7,22 +7,29 @@
 //! Key details:
 //! - Injected downloader, recipe, and toolchain fixtures keep tests deterministic and network-free.
 
-use super::*;
 use std::cell::Cell;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::sync::{Arc, atomic::{AtomicUsize, Ordering}};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::super::cache::ArtifactKey;
+use crate::codegen_support::platform::Target;
+
+use super::{run_native_command_with, NativeRunOutput};
+use super::super::cache::{ArtifactKey, CacheLayout};
 use super::super::catalog::PackageVersion;
+use super::super::cli::{NativeCommand, NativeOptions};
+use super::super::download::Downloader;
+use super::super::error::{NativeError, NativeErrorKind};
+use super::super::lockfile::NativeLock;
+use super::super::manifest::ManifestDocument;
 use super::super::materialize::{
     assert_staging_contents, cleanup_stale_staging, materialize_package,
 };
 use super::super::receipt::{ArtifactReceipt, ReceiptIdentity};
-use super::super::recipe::RecipeRequest;
-use super::super::toolchain::NativeToolchain;
+use super::super::recipe::{RecipeRequest, RecipeRunner};
+use super::super::toolchain::{NativeToolchain, ToolchainProvider};
 
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 

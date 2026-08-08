@@ -87,6 +87,7 @@ fn compile_lfc_eval_project_and_run(
         eval_bridge: true,
         eval_scope: true,
         web: false,
+        pdo_udf: false,
     };
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(8_388_608, target(), runtime_features);

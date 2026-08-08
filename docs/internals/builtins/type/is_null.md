@@ -2,7 +2,7 @@
 title: "is_null() — internals"
 description: "Compiler internals for is_null(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 451
+  order: 452
 ---
 
 ## `is_null()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_null.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_null.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

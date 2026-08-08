@@ -342,6 +342,17 @@ impl BridgeStaticlib {
             }
         }
         if let Some(archive) = self.find_archive() {
+            if self.lib_name == "elephc_pdo"
+                && super::pdo::profile_selected()
+                && self.claim_rebuild_attempt()
+            {
+                if let Some(workspace) = self.find_workspace() {
+                    self.build_staticlib(&workspace);
+                    if let Some(rebuilt) = self.find_archive() {
+                        return self.validate_archive(rebuilt);
+                    }
+                }
+            }
             return self.validate_archive(self.refreshed_if_stale(archive));
         }
         if let Some(workspace) = self.find_workspace() {
@@ -487,6 +498,12 @@ impl BridgeStaticlib {
             .is_some_and(|directory| directory.file_name().is_some_and(|name| name == "release"));
         let mut command = Command::new("cargo");
         command.args(["build", "-p", self.crate_name]);
+        if self.lib_name == "elephc_pdo" {
+            let features = super::pdo::cargo_features();
+            if !features.is_empty() {
+                command.args(["--features", &features.join(",")]);
+            }
+        }
         if release {
             command.arg("--release");
         }

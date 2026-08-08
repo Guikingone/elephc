@@ -153,7 +153,10 @@ function run_http_server(int $port): void {
         while ($p < $active) {
             $rev_off = ($p + 1) * 8 + 6;
             if (peek16($pollfds, $rev_off) != 0) {
-                service_connection($slots[$poll_map[$p]]);
+                $conn = $slots[$poll_map[$p]];
+                if ($conn instanceof Connection) {
+                    service_connection($conn);
+                }
             }
             $p = $p + 1;
         }
