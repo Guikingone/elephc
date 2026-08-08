@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - String helpers scan or transform byte ranges and return target ABI pointer/length pairs for generated call sites.
+//! - The padded width is reserved through `__rt_concat_reserve` before the first store, so a
+//!   target length larger than the remaining 64 KiB concat scratch takes owned heap storage
+//!   and an impossible target length (e.g. `PHP_INT_MAX`) is a controlled fatal error instead
+//!   of a multi-exabyte write loop.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -14,6 +18,8 @@ use crate::codegen_support::platform::Arch;
 /// str_pad: pad a string to a target length.
 /// Input: x1/x2=input, x3/x4=pad_str, x5=target_len, x7=pad_type (0=left, 1=right, 2=both).
 /// Output: x1/x2=result.
+/// The destination comes from `__rt_concat_reserve` (concat scratch while the target width
+/// fits, owned heap storage otherwise) and is finished through `__rt_concat_publish`.
 pub fn emit_str_pad(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_pad_linux_x86_64(emitter);
@@ -35,12 +41,13 @@ pub fn emit_str_pad(emitter: &mut Emitter) {
     emitter.instruction("cmp x2, x5");                                          // compare input len with target
     emitter.instruction("b.ge __rt_str_pad_noop");                              // already long enough → return copy
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x12, x11, x10");                                   // destination pointer
+    // -- reserve exactly the requested padded width before writing anything --
+    emitter.instruction("mov x0, x5");                                          // the padded result is exactly the requested target width
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage for the padded result
+    emitter.instruction("mov x12, x0");                                         // destination pointer
     emitter.instruction("mov x13, x12");                                        // save result start
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the input string pointer and length after the reservation call
+    emitter.instruction("ldr x5, [sp, #32]");                                   // reload the requested target width after the reservation call
 
     emitter.instruction("sub x14, x5, x2");                                     // pad_needed = target - input_len
     emitter.instruction("ldr x7, [sp, #40]");                                   // reload pad_type
@@ -69,16 +76,16 @@ pub fn emit_str_pad(emitter: &mut Emitter) {
     emitter.label("__rt_str_pad_emit");
     // left padding
     emitter.instruction("mov x17, x15");                                        // left pad counter
-    emitter.instruction("mov x18, #0");                                         // pad string index
+    emitter.instruction("mov x9, #0");                                          // pad string index
     emitter.label("__rt_str_pad_lp");
     emitter.instruction("cbz x17, __rt_str_pad_input");                         // left padding done → copy input
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // reload pad string
-    emitter.instruction("ldrb w0, [x3, x18]");                                  // load pad char at index
+    emitter.instruction("ldrb w0, [x3, x9]");                                   // load pad char at index
     emitter.instruction("strb w0, [x12], #1");                                  // write to output
     emitter.instruction("sub x17, x17, #1");                                    // decrement left pad remaining
-    emitter.instruction("add x18, x18, #1");                                    // advance pad index
-    emitter.instruction("cmp x18, x4");                                         // wrap around if past pad string
-    emitter.instruction("csel x18, xzr, x18, ge");                              // reset to 0 if >= pad_len
+    emitter.instruction("add x9, x9, #1");                                      // advance pad index
+    emitter.instruction("cmp x9, x4");                                          // wrap around if past pad string
+    emitter.instruction("csel x9, xzr, x9, ge");                                // reset to 0 if >= pad_len
     emitter.instruction("b __rt_str_pad_lp");                                   // continue
 
     // copy input
@@ -95,25 +102,22 @@ pub fn emit_str_pad(emitter: &mut Emitter) {
     // right padding
     emitter.label("__rt_str_pad_rp");
     emitter.instruction("mov x17, x16");                                        // right pad counter
-    emitter.instruction("mov x18, #0");                                         // pad string index
+    emitter.instruction("mov x9, #0");                                          // pad string index
     emitter.label("__rt_str_pad_rp_loop");
     emitter.instruction("cbz x17, __rt_str_pad_done");                          // right padding done
     emitter.instruction("ldp x3, x4, [sp, #16]");                               // reload pad string
-    emitter.instruction("ldrb w0, [x3, x18]");                                  // load pad char
+    emitter.instruction("ldrb w0, [x3, x9]");                                   // load pad char
     emitter.instruction("strb w0, [x12], #1");                                  // write to output
     emitter.instruction("sub x17, x17, #1");                                    // decrement
-    emitter.instruction("add x18, x18, #1");                                    // advance pad index
-    emitter.instruction("cmp x18, x4");                                         // wrap around
-    emitter.instruction("csel x18, xzr, x18, ge");                              // reset to 0
+    emitter.instruction("add x9, x9, #1");                                      // advance pad index
+    emitter.instruction("cmp x9, x4");                                          // wrap around
+    emitter.instruction("csel x9, xzr, x9, ge");                                // reset to 0
     emitter.instruction("b __rt_str_pad_rp_loop");                              // continue
 
     emitter.label("__rt_str_pad_done");
     emitter.instruction("mov x1, x13");                                         // result pointer
     emitter.instruction("sub x2, x12, x13");                                    // result length
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    emitter.instruction("add x10, x10, x2");                                    // advance by result length
-    emitter.instruction("str x10, [x9]");                                       // store updated offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame
     emitter.instruction("add sp, sp, #64");                                     // deallocate
     emitter.instruction("ret");                                                 // return
@@ -129,7 +133,8 @@ pub fn emit_str_pad(emitter: &mut Emitter) {
 /// Uses the System V AMD64 ABI: rdi=input_ptr, rdx=input_len, rsi=pad_str_ptr,
 /// rcx=target_len, r8=pad_type (0=left, 1=right, 2=both).
 /// Output: rax=result_ptr, rdx=result_len.
-/// Writes the padded result into the concat-buffer and advances `_concat_off`.
+/// Writes the padded result into storage reserved by `__rt_concat_reserve` and finishes
+/// through `__rt_concat_publish`, which advances `_concat_off` only for scratch results.
 fn emit_str_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_pad ---");
@@ -145,12 +150,10 @@ fn emit_str_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r8");                        // preserve the requested pad type across the padding loops
     emitter.instruction("cmp rdx, rcx");                                        // does the input string already meet or exceed the requested target width?
     emitter.instruction("jge __rt_str_pad_noop_linux_x86_64");                  // return a copied input string immediately when no padding is required
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r9", "_concat_off");
-    emitter.instruction("mov r10, QWORD PTR [r9]");                             // load the current concat-buffer write offset before emitting the padded result
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r11", "_concat_buf");
-    emitter.instruction("lea r11, [r11 + r10]");                                // compute the concat-buffer destination pointer where the padded result begins
+    emitter.instruction("mov rax, rcx");                                        // the padded result is exactly the requested target width
+    emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the padded result
+    emitter.instruction("mov r11, rax");                                        // compute the destination pointer where the padded result begins
     emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // preserve the padded-result start pointer for the final string return pair
-    emitter.instruction("mov QWORD PTR [rbp - 64], r9");                        // preserve the concat-offset symbol address so the helper can publish the final write offset
     emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // reload the requested target length before computing the total number of pad bytes
     emitter.instruction("sub r10, QWORD PTR [rbp - 16]");                       // compute how many pad bytes are needed to reach the requested target width
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // reload the requested pad type before splitting the total pad budget
@@ -228,13 +231,10 @@ fn emit_str_pad_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_str_pad_right_loop_linux_x86_64");            // continue emitting the remaining right-padding bytes
 
     emitter.label("__rt_str_pad_done_linux_x86_64");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the concat-buffer start pointer of the padded string in the primary x86_64 string result register
-    emitter.instruction("mov rdx, r11");                                        // copy the concat-buffer end pointer so the final padded-string length can be derived
-    emitter.instruction("sub rdx, rax");                                        // derive the padded-string length from the concat-buffer start/end pointers
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // reload the concat-offset symbol address before publishing the new write position
-    emitter.instruction("mov r8, QWORD PTR [rcx]");                             // reload the old concat-buffer write offset before advancing it by the padded-string length
-    emitter.instruction("add r8, rdx");                                         // advance the concat-buffer write offset by the emitted padded-string length
-    emitter.instruction("mov QWORD PTR [rcx], r8");                             // publish the updated concat-buffer write offset after emitting the padded string
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the reserved start pointer of the padded string in the primary x86_64 string result register
+    emitter.instruction("mov rdx, r11");                                        // copy the destination end pointer so the final padded-string length can be derived
+    emitter.instruction("sub rdx, rax");                                        // derive the padded-string length from the destination start/end pointers
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("add rsp, 96");                                         // release the str_pad() spill slots before returning the padded string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
     emitter.instruction("ret");                                                 // return the padded string in the standard x86_64 string result registers

@@ -7,6 +7,9 @@
 //!
 //! Key details:
 //! - String helpers scan or transform byte ranges and return target ABI pointer/length pairs for generated call sites.
+//! - The result can never exceed `subject_len + replacement_len`, and that bound is reserved
+//!   through `__rt_concat_reserve` before the first store, so long subjects or replacements fall
+//!   back to heap storage instead of running off the end of the 64 KiB concat scratch buffer.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -27,8 +30,12 @@ use crate::codegen_support::platform::Arch;
 ///    tail-relative index; if still negative it is clamped to 0.
 /// 2. Expands length=-1 to "remaining bytes from offset". Clamps negative lengths to 0.
 /// 3. Clamps the slice end to subject_len.
-/// 4. Builds result in concat buffer as: prefix (subject[0..offset])
-///    + replacement + suffix (subject[slice_end..])
+/// 4. Builds the result in storage reserved through `__rt_concat_reserve` as:
+///    prefix (subject[0..offset]) + replacement + suffix (subject[slice_end..]),
+///    then publishes the written length through `__rt_concat_publish`.
+///
+/// Clobbers every caller-saved register, because the reservation can reach `__rt_heap_alloc`.
+/// A wrapped `subject_len + replacement_len` bound reports PHP's allocation-overflow fatal.
 pub fn emit_substr_replace(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_substr_replace_linux_x86_64(emitter);
@@ -38,9 +45,9 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: substr_replace ---");
     emitter.label_global("__rt_substr_replace");
-    emitter.instruction("sub sp, sp, #16");                                     // allocate stack frame
-    emitter.instruction("stp x29, x30, [sp]");                                  // save frame pointer and return address
-    emitter.instruction("mov x29, sp");                                         // set frame pointer
+    emitter.instruction("sub sp, sp, #64");                                     // allocate stack frame with spill slots for the clamped bounds and both input strings
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // set frame pointer
 
     // -- clamp offset --
     emitter.instruction("cmp x0, #0");                                          // check if offset is negative
@@ -63,12 +70,20 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
     emitter.instruction("cmp x8, x2");                                          // clamp end to string length
     emitter.instruction("csel x8, x2, x8, gt");                                 // min(end, len)
 
+    // -- reserve the exact upper bound (subject + replacement) before writing anything --
+    emitter.instruction("stp x0, x8, [sp, #0]");                                // save the clamped replacement offset and slice end across the reservation call
+    emitter.instruction("stp x1, x2, [sp, #16]");                               // save the subject pointer and length across the reservation call
+    emitter.instruction("stp x3, x4, [sp, #32]");                               // save the replacement pointer and length across the reservation call
+    emitter.instruction("adds x0, x2, x4");                                     // the result can never exceed subject length plus replacement length
+    emitter.instruction("b.cs __rt_subrepl_size_overflow");                     // reject a wrapped bound instead of reserving a too-small destination
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the replaced string
+    emitter.instruction("mov x12, x0");                                         // destination pointer
+    emitter.instruction("mov x13, x0");                                         // save result start
+    emitter.instruction("ldp x0, x8, [sp, #0]");                                // reload the clamped replacement offset and slice end
+    emitter.instruction("ldp x1, x2, [sp, #16]");                               // reload the subject pointer and length
+    emitter.instruction("ldp x3, x4, [sp, #32]");                               // reload the replacement pointer and length
+
     // -- build result: prefix + replacement + suffix --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x12, x11, x10");                                   // destination pointer
-    emitter.instruction("mov x13, x12");                                        // save result start
 
     // -- copy prefix: subject[0..offset] --
     emitter.instruction("mov x14, #0");                                         // copy index
@@ -105,12 +120,14 @@ pub fn emit_substr_replace(emitter: &mut Emitter) {
     emitter.label("__rt_subrepl_done");
     emitter.instruction("mov x1, x13");                                         // result pointer
     emitter.instruction("sub x2, x12, x13");                                    // result length
-    emitter.instruction("ldr x10, [x9]");                                       // reload current offset
-    emitter.instruction("add x10, x10, x2");                                    // advance by result length
-    emitter.instruction("str x10, [x9]");                                       // store updated offset
-    emitter.instruction("ldp x29, x30, [sp]");                                  // restore frame
-    emitter.instruction("add sp, sp, #16");                                     // deallocate
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame
+    emitter.instruction("add sp, sp, #64");                                     // deallocate
     emitter.instruction("ret");                                                 // return
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_subrepl_size_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
 /// Emits the x86_64 Linux variant of `__rt_substr_replace`.
@@ -164,12 +181,14 @@ fn emit_substr_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmovg r11, rcx");                                      // clamp the suffix start to the end of the subject string when the slice overruns
     emitter.instruction("mov QWORD PTR [rbp - 40], r9");                        // preserve the clamped replacement offset for the prefix copy loop
     emitter.instruction("mov QWORD PTR [rbp - 48], r11");                       // preserve the clamped suffix start for the suffix copy loop
-    crate::codegen_support::abi::emit_symbol_address(emitter, "rcx", "_concat_off");
-    emitter.instruction("mov r8, QWORD PTR [rcx]");                             // load the current concat-buffer write offset before emitting the replacement result
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r8, [r10 + r8]");                                  // compute the concat-buffer destination pointer where the replaced string begins
+
+    // -- reserve the exact upper bound (subject + replacement) before writing anything --
+    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // seed the reservation bound from the subject-string length
+    emitter.instruction("add rax, QWORD PTR [rbp - 32]");                       // the result can never exceed subject length plus replacement length
+    emitter.instruction("jc __rt_substr_replace_size_overflow_linux_x86_64");   // reject a wrapped bound instead of reserving a too-small destination
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the replaced string
+    emitter.instruction("mov r8, rax");                                         // compute the destination pointer where the replaced string begins
     emitter.instruction("mov QWORD PTR [rbp - 56], r8");                        // preserve the replaced-string start pointer for the final x86_64 string return pair
-    emitter.instruction("mov QWORD PTR [rbp - 64], rcx");                       // preserve the concat-offset symbol address so the helper can publish the new write position
     emitter.instruction("xor rcx, rcx");                                        // start the prefix copy loop from byte offset zero
 
     emitter.label("__rt_substr_replace_prefix_linux_x86_64");
@@ -209,14 +228,15 @@ fn emit_substr_replace_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_substr_replace_suffix_loop_linux_x86_64");    // continue copying suffix bytes until the subject-string end is reached
 
     emitter.label("__rt_substr_replace_done_linux_x86_64");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the concat-buffer start pointer of the replaced string in the primary x86_64 string result register
-    emitter.instruction("mov rdx, r8");                                         // copy the concat-buffer end pointer so the final replaced-string length can be derived
-    emitter.instruction("sub rdx, rax");                                        // derive the replaced-string length from the concat-buffer start/end pointers
-    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // reload the concat-offset symbol address before publishing the new write position
-    emitter.instruction("mov r9, QWORD PTR [rcx]");                             // reload the old concat-buffer write offset before advancing it by the replaced-string length
-    emitter.instruction("add r9, rdx");                                         // advance the concat-buffer write offset by the emitted replaced-string length
-    emitter.instruction("mov QWORD PTR [rcx], r9");                             // publish the updated concat-buffer write offset after emitting the replaced string
+    emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // return the reserved start pointer of the replaced string in the primary x86_64 string result register
+    emitter.instruction("mov rdx, r8");                                         // copy the destination end pointer so the final replaced-string length can be derived
+    emitter.instruction("sub rdx, rax");                                        // derive the replaced-string length from the destination start/end pointers
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("add rsp, 64");                                         // release the substr_replace() spill slots before returning the replaced string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to the caller
     emitter.instruction("ret");                                                 // return the replaced string in the standard x86_64 string result registers
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_substr_replace_size_overflow_linux_x86_64");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }

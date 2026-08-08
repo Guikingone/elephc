@@ -25,8 +25,14 @@
 //! - `json_support` holds shared helpers for the JSON/serialize check hooks.
 //! - Add `pub mod <name>;` here for every new system builtin home.
 
+pub mod __elephc_class_has_constructor;
 pub mod __elephc_gmmktime_raw;
+pub mod __elephc_initialize_pdo_statement;
+pub mod __elephc_invoke_pdo_statement_constructor;
 pub mod __elephc_mktime_raw;
+pub mod __elephc_new_without_constructor;
+pub mod __elephc_pdo_called_class_status;
+pub mod __elephc_pdo_statement_class_status;
 pub mod __elephc_strtotime_raw;
 pub mod attr_support;
 pub mod checkdate;
@@ -36,6 +42,7 @@ pub mod class_get_attributes;
 pub mod date;
 pub mod date_default_timezone_get;
 pub mod date_default_timezone_set;
+pub mod constant;
 pub mod define;
 pub mod defined;
 pub mod exec;

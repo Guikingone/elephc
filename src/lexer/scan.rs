@@ -247,6 +247,7 @@ fn scan_token(cursor: &mut Cursor) -> Result<Token, CompileError> {
                 if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::Spaceship) }
                 else { Ok(Token::LessEqual) }
             }
+            else if cursor.peek() == Some('>') { cursor.advance(); Ok(Token::LessGreater) }
             else { Ok(Token::Less) }
         }
         '>' => {

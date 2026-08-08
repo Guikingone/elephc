@@ -18,7 +18,7 @@ sidebar:
 | [`get_resource_id()`](./type/get_resource_id.md) | `(resource $resource): int` | `int` | ✓ | ✓ |
 | [`get_resource_type()`](./type/get_resource_type.md) | `(resource $resource): string` | `string` | ✓ | ✓ |
 | [`gettype()`](./type/gettype.md) | `(mixed $value): string` | `string` | ✓ | ✓ |
-| [`intval()`](./type/intval.md) | `(mixed $value): int` | `int` | ✓ | ✓ |
+| [`intval()`](./type/intval.md) | `(mixed $value, int $base = 10): int` | `int` | ✓ | ✓ |
 | [`is_array()`](./type/is_array.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_bool()`](./type/is_bool.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`is_callable()`](./type/is_callable.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |

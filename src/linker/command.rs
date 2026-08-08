@@ -17,6 +17,25 @@ use crate::codegen::platform::{Platform, Target};
 use crate::codegen::Emit;
 use crate::link_plan::{LinkItem, LinkOrigin, LinkPlan, LinuxLinkMode};
 
+/// ELF hardening options applied to every Linux output, in driver (`-Wl,`) form
+/// so they reach `ld` verbatim for both the GCC and Clang drivers.
+///
+/// - `noexecstack`: elephc assembles its objects with `as`, which never emits a
+///   `.note.GNU-stack` section, so GNU ld infers an **executable** stack
+///   (`PT_GNU_STACK` `RWE`) and warns that the inference is deprecated. Nothing
+///   elephc produces needs it: there is no JIT, and fiber stacks are `mmap`ed
+///   `PROT_READ|PROT_WRITE` with a `PROT_NONE` guard page
+///   (`codegen_support::runtime::fibers::alloc`).
+/// - `relro` + `now`: resolve relocations eagerly and remap the relocated head
+///   of the data segment read-only. This also covers the `-static-pie` output
+///   that default-PIE drivers already produce from `-static`, where the RELRO
+///   segment holds the self-relocated GOT.
+///
+/// None of the three can fail a link: `ld` accepts all of them for static,
+/// dynamic, and `-shared` outputs, and silently ignores the ones that do not
+/// apply to a given output kind.
+const LINUX_HARDENING_FLAGS: [&str; 3] = ["-Wl,-z,noexecstack", "-Wl,-z,relro", "-Wl,-z,now"];
+
 /// Paths for the final output and its two required input objects.
 pub(super) struct LinkPaths<'a> {
     /// Final executable or shared-library path.
@@ -139,7 +158,6 @@ fn render_macos_command(
         paths.bin.as_os_str().to_owned(),
         paths.object.as_os_str().to_owned(),
         paths.runtime.as_os_str().to_owned(),
-        OsString::from("-lSystem"),
         OsString::from("-syslibroot"),
         OsString::from(sdk.path),
         OsString::from("-platform_version"),
@@ -155,6 +173,9 @@ fn render_macos_command(
         }
     }
     append_link_inputs(&mut args, plan, Platform::MacOS);
+    // FreeTDS also exports `dbopen`; keeping native dependencies before libSystem
+    // prevents ld64 from binding PDO_DBLIB to Berkeley DB's incompatible symbol.
+    args.push(OsString::from("-lSystem"));
     append_frameworks(&mut args, plan);
 
     RenderedCommand {
@@ -176,6 +197,7 @@ fn render_linux_command(
         Emit::Executable => args.push(OsString::from("-Wl,--gc-sections")),
         Emit::Cdylib => args.push(OsString::from("-shared")),
     }
+    args.extend(LINUX_HARDENING_FLAGS.iter().copied().map(OsString::from));
     args.extend([
         OsString::from("-o"),
         paths.bin.as_os_str().to_owned(),
@@ -320,6 +342,20 @@ mod tests {
         .arguments_lossy()
     }
 
+    /// Renders one Linux shared-library command with no host probes.
+    fn render_linux_cdylib(plan: &LinkPlan) -> Vec<String> {
+        render_link_command(
+            Target::new(Platform::Linux, Arch::X86_64),
+            Emit::Cdylib,
+            paths(),
+            plan,
+            false,
+            None,
+            &[],
+        )
+        .arguments_lossy()
+    }
+
     /// Renders one macOS executable command with injected SDK and Homebrew paths.
     fn render_macos(plan: &LinkPlan) -> Vec<String> {
         render_link_command(
@@ -435,6 +471,59 @@ mod tests {
         )]));
         assert!(args.contains(&"-L/brew/lib".to_string()));
         assert!(args.contains(&"/cache/libelephc_pdo.a".to_string()));
+    }
+
+    /// Verifies every Linux output carries the ELF hardening options, on both
+    /// supported architectures, in static and dynamic mode, and for shared
+    /// libraries. Without `-z noexecstack` the assembler objects (which have no
+    /// `.note.GNU-stack`) make GNU ld mark the stack `RWE`.
+    #[test]
+    fn linux_outputs_carry_elf_hardening_flags() {
+        let static_plan = LinkPlan::from_items(vec![LinkItem::managed_archive("pcre2.a", "pcre2")]);
+        let dynamic_plan = LinkPlan::from_items(vec![LinkItem::named_user("sqlite3")]);
+        let aarch64 = render_link_command(
+            Target::new(Platform::Linux, Arch::AArch64),
+            Emit::Executable,
+            paths(),
+            &static_plan,
+            false,
+            None,
+            &[],
+        )
+        .arguments_lossy();
+
+        let commands = [
+            render_linux(&static_plan),
+            render_linux(&dynamic_plan),
+            render_linux_cdylib(&dynamic_plan),
+            aarch64,
+        ];
+        for args in commands {
+            for flag in LINUX_HARDENING_FLAGS {
+                assert!(
+                    args.contains(&flag.to_string()),
+                    "missing {flag} in Linux link command: {args:?}"
+                );
+            }
+        }
+    }
+
+    /// Verifies macOS link commands stay free of the ELF-only hardening options:
+    /// `ld64` rejects `-z` entirely, and macOS binaries are already PIE with a
+    /// platform-enforced non-executable stack.
+    #[test]
+    fn macos_command_omits_elf_hardening_flags() {
+        let args = render_macos(&LinkPlan::from_items(vec![LinkItem::named_extern("pcre2-8")]));
+        for flag in LINUX_HARDENING_FLAGS {
+            assert!(
+                !args.contains(&flag.to_string()),
+                "macOS link command must not carry {flag}: {args:?}"
+            );
+        }
+        assert!(
+            !args.iter().any(|argument| argument.contains("-z")),
+            "macOS link command must not carry any -z option: {args:?}"
+        );
     }
 
     /// Verifies the test fixture uses ordinary path values accepted by all hosts.

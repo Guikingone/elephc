@@ -118,20 +118,12 @@ pub(super) fn lower_iter_start(ctx: &mut FunctionContext<'_>, inst: &Instruction
         initialize_dynamic_iterable_iterator(ctx, offset, by_ref, source)?;
         return Ok(());
     }
-    if let IteratorSourceKind::Object {
-        class_name,
-        aggregate_class_name: None,
-    } = &source_kind
-    {
-        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object(class_name.clone()));
-    }
-    if let IteratorSourceKind::Interface {
-        interface_name,
-        aggregate_class_name: None,
-    } = &source_kind
-    {
-        abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Object(interface_name.clone()));
-    }
+    // -- the loop's reference on an object source is taken by EIR lowering, not here --
+    // `IterStart` used to `incref` an `Object`/`Interface` source so the object stayed
+    // alive for the whole loop, but nothing ever emitted the matching `decref`: every
+    // `foreach` over an Iterator (a `Generator` included) leaked the object and every
+    // heap block it owned. `lower_foreach` now wraps a borrowed object source in an
+    // `Op::Acquire`, which the loop's existing exit/`LoopCleanup` release paths balance.
     let initial_cursor = match &source_kind {
         IteratorSourceKind::Indexed { .. } => -1,
         IteratorSourceKind::Hash => 0,

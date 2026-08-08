@@ -17,9 +17,11 @@ use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::PhpType;
 
 /// Seeds the constant map with built-in PHP constants and user-defined constants.
@@ -129,6 +131,21 @@ pub(crate) fn collect_constants(
         "PATHINFO_ALL".to_string(),
         (ExprKind::IntLiteral(15), PhpType::Int),
     );
+    for (name, value) in [
+        ("PHP_URL_SCHEME", 0),
+        ("PHP_URL_HOST", 1),
+        ("PHP_URL_PORT", 2),
+        ("PHP_URL_USER", 3),
+        ("PHP_URL_PASS", 4),
+        ("PHP_URL_PATH", 5),
+        ("PHP_URL_QUERY", 6),
+        ("PHP_URL_FRAGMENT", 7),
+    ] {
+        constants.insert(
+            name.to_string(),
+            (ExprKind::IntLiteral(value), PhpType::Int),
+        );
+    }
     for (name, value) in ENT_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
@@ -190,7 +207,19 @@ pub(crate) fn collect_constants(
             (ExprKind::IntLiteral(*value), PhpType::Int),
         );
     }
+    for (name, value) in STRING_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
     for (name, value) in JSON_INT_CONSTANTS {
+        constants.insert(
+            (*name).to_string(),
+            (ExprKind::IntLiteral(*value), PhpType::Int),
+        );
+    }
+    for (name, value) in MATH_INT_CONSTANTS {
         constants.insert(
             (*name).to_string(),
             (ExprKind::IntLiteral(*value), PhpType::Int),

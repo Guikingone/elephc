@@ -314,6 +314,9 @@ PARAM_TYPES: Dict[str, List[Optional[ParamSpec]]] = {
     "str_repeat": ["string", "int"],
     "str_pad": ["string", "int", "string", "int"],
     "str_split": ["string", "int"],
+    # `$from` is `array|string` in reference PHP; the registry records the coarse `Mixed`
+    # that covers both call shapes.
+    "strtr": ["string", "array|string", "string"],
     "str_contains": ["string", "string"],
     "str_starts_with": ["string", "string"],
     "str_ends_with": ["string", "string"],
@@ -1252,6 +1255,10 @@ RETURN_TYPE_OVERRIDES: Dict[str, str] = {
     "uasort": "bool",
     "uksort": "bool",
     "usort": "bool",
+    # `$format`/`$mode` select the result shape at run time in reference PHP; the registry
+    # records the coarse `Mixed` that covers both shapes for the whole arity.
+    "str_word_count": "array|int",
+    "count_chars": "array|string",
     # Other concrete return types confirmed by PHP reflection.
     "class_alias": "bool",
     "define": "bool",

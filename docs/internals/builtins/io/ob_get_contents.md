@@ -2,7 +2,7 @@
 title: "ob_get_contents() — internals"
 description: "Compiler internals for ob_get_contents(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 196
+  order: 203
 ---
 
 ## `ob_get_contents()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_contents.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_contents.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:423](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L423) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

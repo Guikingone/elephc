@@ -9,6 +9,9 @@
 //! Key details:
 //! - Phase 04 stores every SSA value in a stack slot and reloads result registers at use sites.
 //! - The context delegates target-specific movement to `crate::codegen::abi`.
+//! - Local labels carry a module-unique trailing id from `SharedCodegenState::next_label_id()`.
+//!   The readable part is `crate::names::label_fragment()`, which is intentionally lossy, so the
+//!   id — not the fragment — is what keeps two similarly named functions from colliding.
 
 use std::collections::{HashMap, HashSet};
 
@@ -21,6 +24,7 @@ use crate::ir::{
     ValueDef, ValueId,
 };
 use crate::ir_passes::Allocation;
+use crate::names::label_fragment;
 use crate::types::PhpType;
 
 use super::callable_reachability::CallableReachabilityAnalysis;
@@ -63,7 +67,7 @@ pub(crate) struct FunctionContext<'a> {
     pub(super) gc_stats: bool,
     pub(super) heap_debug: bool,
     pub(super) epilogue_label: Option<String>,
-    label_counter: usize,
+    block_labels: Vec<String>,
 }
 
 impl<'a> FunctionContext<'a> {
@@ -81,6 +85,20 @@ impl<'a> FunctionContext<'a> {
         epilogue_label: Option<String>,
     ) -> Self {
         let callable_reachability = CallableReachabilityAnalysis::new(module, function);
+        let function_fragment = label_fragment(&function.name);
+        // Indexed by raw block id, matching `Function::block()`'s positional lookup.
+        let block_labels = function
+            .blocks
+            .iter()
+            .map(|block| {
+                format!(
+                    "_eir_{}_{}_{}",
+                    function_fragment,
+                    label_fragment(&block.name),
+                    shared.next_label_id()
+                )
+            })
+            .collect();
         Self {
             module,
             function,
@@ -105,20 +123,22 @@ impl<'a> FunctionContext<'a> {
             gc_stats,
             heap_debug,
             epilogue_label,
-            label_counter: 0,
+            block_labels,
         }
     }
 
-    /// Returns a unique local label with a readable prefix.
+    /// Returns a module-unique local label carrying a readable but lossy prefix.
+    ///
+    /// Uniqueness comes solely from the module-wide trailing id: `label_fragment()` collapses
+    /// every non-alphanumeric byte, so `a_b` and `aéb` share a readable prefix and only the id
+    /// keeps their labels apart.
     pub(super) fn next_label(&mut self, prefix: &str) -> String {
-        let label = format!(
+        format!(
             "_eir_{}_{}_{}",
             label_fragment(&self.function.name),
             label_fragment(prefix),
-            self.label_counter
-        );
-        self.label_counter += 1;
-        label
+            self.shared.next_label_id()
+        )
     }
 
     /// Emits an unconditional target-aware branch to one local assembly label.
@@ -180,18 +200,16 @@ impl<'a> FunctionContext<'a> {
         Ok(())
     }
 
-    /// Returns the assembly label for a non-entry EIR block.
-    pub(super) fn block_label(&self, block_name: &str, raw: u32) -> String {
-        format!("_eir_{}_{}_{}", label_fragment(&self.function.name), label_fragment(block_name), raw)
-    }
-
-    /// Returns the assembly label for a block id.
+    /// Returns the assembly label reserved for one EIR block.
+    ///
+    /// Block labels are minted once per block in `new()` from the module-wide label counter
+    /// rather than derived from the block name, which is not unique across functions. Lookup is
+    /// positional on the raw block id, exactly like `crate::ir::Function::block()`.
     pub(super) fn block_label_for_id(&self, block: BlockId) -> Result<String> {
-        let block = self
-            .function
-            .block(block)
-            .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))?;
-        Ok(self.block_label(&block.name, block.id.as_raw()))
+        self.block_labels
+            .get(block.as_raw() as usize)
+            .cloned()
+            .ok_or_else(|| CodegenIrError::missing_entry("block", block.as_raw()))
     }
 
     /// Returns a module function by PHP name using PHP's case-insensitive lookup.
@@ -239,6 +257,19 @@ impl<'a> FunctionContext<'a> {
         self.function
             .value(value)
             .map(|metadata| metadata.php_type.codegen_repr())
+            .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
+    }
+
+    /// Returns a function value's IR storage type.
+    ///
+    /// This is the ONLY reliable way to tell whether a value is a genuinely boxed `Mixed` CELL.
+    /// The PHP type lies here: `Op::IChecked*` (which is what `$i++` lowers to) reports a PHP type
+    /// of `Mixed` while its runtime value is a RAW INTEGER, not a heap cell. Unboxing that as a
+    /// pointer reads garbage.
+    pub(super) fn value_ir_type(&self, value: ValueId) -> Result<crate::ir::IrType> {
+        self.function
+            .value(value)
+            .map(|metadata| metadata.ir_type)
             .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))
     }
 
@@ -1070,12 +1101,4 @@ fn emit_mixed_result_as_tagged_scalar(emitter: &mut Emitter) {
             emitter.instruction("mov rdx, r10");                                // place the unboxed Mixed tag into the tagged-scalar tag register
         }
     }
-}
-
-/// Converts arbitrary names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
 }

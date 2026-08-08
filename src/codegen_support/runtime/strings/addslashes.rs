@@ -7,10 +7,12 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - The worst-case `2 * len` escaped result is reserved through `__rt_concat_reserve` before
+//!   the first store, so long inputs fall back to heap storage instead of running off the end
+//!   of the 64 KiB concat scratch buffer.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits the `__rt_addslashes` runtime helper for PHP's `addslashes()`.
 ///
@@ -21,14 +23,16 @@ use crate::codegen_support::abi;
 /// ## ARM64 ABI (default)
 /// - Input: `x1` = source string pointer, `x2` = source string length
 /// - Output: `x1` = result string pointer, `x2` = result string length
-/// - Uses the concat buffer (`_concat_buf` / `_concat_off`) for output storage
-/// - Clobbers: `x8`-`x13`
+/// - Reserves the worst-case `2 * len` expansion through `__rt_concat_reserve` (concat scratch
+///   while it fits, owned heap storage otherwise) and finishes through `__rt_concat_publish`.
 ///
 /// ## x86_64 Linux ABI
 /// - Input: `rax` = source string pointer, `rdx` = source string length
 /// - Output: `rax` = result string pointer, `rdx` = result string length
-/// - Uses the concat buffer (`_concat_buf` / `_concat_off`) for output storage
-/// - Clobbers: `r8`-`r11`, `rcx`
+/// - Same reservation contract as the ARM64 path.
+///
+/// Both paths clobber every caller-saved register, because the reservation can reach
+/// `__rt_heap_alloc`, and a wrapped `2 * len` product reports PHP's allocation-overflow fatal.
 pub fn emit_addslashes(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_addslashes_linux_x86_64(emitter);
@@ -39,12 +43,17 @@ pub fn emit_addslashes(emitter: &mut Emitter) {
     emitter.comment("--- runtime: addslashes ---");
     emitter.label_global("__rt_addslashes");
 
-    // -- set up concat_buf destination --
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("mov x10, x9");                                         // save result start
+    // -- reserve the worst-case two-bytes-per-input-byte escaped result before writing anything --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed source string
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the reservation call
+    emitter.instruction("add x29, sp, #16");                                    // establish the addslashes helper frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length across the reservation call
+    emitter.instruction("adds x0, x2, x2");                                     // compute the worst-case escaped result size and record unsigned wrap
+    emitter.instruction("b.cs __rt_addslashes_size_overflow");                  // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the escaped result
+    emitter.instruction("mov x9, x0");                                          // destination pointer
+    emitter.instruction("mov x10, x0");                                         // save result start
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
     emitter.instruction("mov x11, x2");                                         // remaining byte count
 
     emitter.label("__rt_addslashes_loop");
@@ -71,26 +80,40 @@ pub fn emit_addslashes(emitter: &mut Emitter) {
     emitter.label("__rt_addslashes_done");
     emitter.instruction("mov x1, x10");                                         // result pointer
     emitter.instruction("sub x2, x9, x10");                                     // result length
-    emitter.instruction("ldr x8, [x6]");                                        // reload offset
-    emitter.instruction("add x8, x8, x2");                                      // advance by result length
-    emitter.instruction("str x8, [x6]");                                        // store updated offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the addslashes helper frame
     emitter.instruction("ret");                                                 // return
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_addslashes_size_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
 /// Emits the x86_64 Linux variant of `__rt_addslashes`.
 ///
 /// Identical behavior to the ARM64 variant but uses x86_64 System V ABI
 /// registers: `rax`/`rdx` for pointer/length, `r8`-`r11` and `rcx` as temporaries.
+/// Reserves the worst-case `2 * len` expansion through `__rt_concat_reserve` and publishes the
+/// written length through `__rt_concat_publish`.
 fn emit_addslashes_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: addslashes ---");
     emitter.label_global("__rt_addslashes");
 
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // load the current concat-buffer absolute offset before appending the escaped string
-    abi::emit_symbol_address(emitter, "r9", "_concat_buf");                     // materialize the concat-buffer base pointer for the escaped string write
-    emitter.instruction("add r9, r8");                                          // compute the current concat-buffer write pointer from the base plus offset
+    // -- reserve the worst-case two-bytes-per-input-byte escaped result before writing anything --
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the reservation and publish calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed source string
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the source pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed source pointer across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the borrowed source length across the reservation call
+    emitter.instruction("imul rax, rdx, 2");                                    // compute the worst-case escaped result size as 2 * source length
+    emitter.instruction("jo __rt_addslashes_size_overflow_linux_x86_64");       // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the escaped result
+    emitter.instruction("mov r9, rax");                                         // compute the destination write pointer where the escaped string begins
     emitter.instruction("mov r10, r9");                                         // preserve the escaped-string start pointer for the final result slice
-    emitter.instruction("mov rcx, rdx");                                        // track how many source bytes remain to be escaped
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // track how many source bytes remain to be escaped
+    emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // reload the borrowed source cursor the escape loop advances through
 
     emitter.label("__rt_addslashes_loop");
     emitter.instruction("test rcx, rcx");                                       // have we consumed every byte of the source string?
@@ -116,10 +139,14 @@ fn emit_addslashes_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_addslashes_done");
     emitter.instruction("mov rax, r10");                                        // return the escaped-string start pointer in the x86_64 string result pointer register
-    emitter.instruction("mov rdx, r9");                                         // snapshot the final concat-buffer write pointer before computing the escaped result length
+    emitter.instruction("mov rdx, r9");                                         // snapshot the final destination write pointer before computing the escaped result length
     emitter.instruction("sub rdx, r10");                                        // compute the escaped result length from the write pointer minus the start pointer
-    abi::emit_load_symbol_to_reg(emitter, "r8", "_concat_off", 0);              // reload the previous concat-buffer absolute offset before publishing the appended slice
-    emitter.instruction("add r8, rdx");                                         // advance the concat-buffer absolute offset by the escaped result length
-    abi::emit_store_reg_to_symbol(emitter, "r8", "_concat_off", 0);             // publish the updated concat-buffer absolute offset for later writers
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 32");                                         // release the addslashes spill slots before returning the escaped string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the escaped string
     emitter.instruction("ret");                                                 // return to the caller with the escaped string slice in rax/rdx
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_addslashes_size_overflow_linux_x86_64");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }

@@ -724,7 +724,7 @@ fn parse_instanceof_target(
 ///
 /// Precedence order (lowest to highest): `or` (1) < `xor` (3) < `and` (5)
 /// < `??` (9) < `||` (11) < `&&` (13) < `|` (15) < `^` (17) < `&` (19)
-/// < `==`/`!=`/`===`/`!==` (21) < `<`/`>`/`<=`/`>=`/`<=>` (23)
+/// < `==`/`!=`/`<>`/`===`/`!==` (21) < `<`/`>`/`<=`/`>=`/`<=>` (23)
 /// < `<<`/`>>` (25) < `.` (27) < `+`/`-` (29) < `*`/`/`/`%` (31)
 /// < `**` (37 right-assoc)
 fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
@@ -740,6 +740,7 @@ fn infix_bp(token: &Token) -> Option<(BinOp, u8, u8)> {
         Token::Ampersand => Some((BinOp::BitAnd, 19, 20)),
         Token::EqualEqual => Some((BinOp::Eq, 21, 22)),
         Token::NotEqual => Some((BinOp::NotEq, 21, 22)),
+        Token::LessGreater => Some((BinOp::NotEq, 21, 22)),
         Token::EqualEqualEqual => Some((BinOp::StrictEq, 21, 22)),
         Token::NotEqualEqual => Some((BinOp::StrictNotEq, 21, 22)),
         Token::Less => Some((BinOp::Lt, 23, 24)),

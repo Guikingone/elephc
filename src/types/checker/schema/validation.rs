@@ -233,6 +233,23 @@ pub(crate) fn validate_signature_compatibility(
     kind: &str,
     context: &str,
 ) -> Result<(), CompileError> {
+    // The hidden variadic that collects surplus positional arguments for
+    // `func_num_args()`/`func_get_args()`/`func_get_arg()` is a real ABI parameter, so an
+    // inherited signature that does not carry it cannot dispatch to a body that does.
+    // Report that directly instead of the generic parameter-count mismatch, which names a
+    // parameter the source never wrote.
+    if crate::func_args::sig_collects_surplus_args(child_sig)
+        != crate::func_args::sig_collects_surplus_args(parent_sig)
+    {
+        return Err(CompileError::new(
+            span,
+            &format!(
+                "func_num_args()/func_get_args()/func_get_arg() are not supported in {}::{} when {} {}: the inherited signature cannot be widened to collect surplus arguments",
+                owner_name, method_name, context, kind
+            ),
+        ));
+    }
+
     if child_sig.params.len() != parent_sig.params.len() {
         return Err(CompileError::new(
             span,
@@ -305,6 +322,22 @@ pub(crate) fn declared_return_type_compatible(
     actual: &PhpType,
 ) -> bool {
     matches!(actual, PhpType::Never) || checker.type_accepts(expected, actual)
+}
+
+/// Returns true for PDO's internal SQLSTATE-aware widening of `Exception::getCode()`.
+pub(crate) fn is_pdo_exception_get_code_contract(
+    class_name: &str,
+    method_name: &str,
+    return_type: &PhpType,
+) -> bool {
+    let PhpType::Union(types) = return_type else {
+        return false;
+    };
+    class_name.trim_start_matches('\\') == "PDOException"
+        && php_symbol_key(method_name) == "getcode"
+        && types.len() == 2
+        && types.contains(&PhpType::Str)
+        && types.contains(&PhpType::Int)
 }
 
 /// Checks a preserved late-static parent/interface return against a child declaration.
@@ -381,7 +414,11 @@ pub(crate) fn validate_override_signature(
         class_name,
         method.span,
     )?;
-    let return_compatible = late_static_compatible.unwrap_or_else(|| {
+    let return_compatible = is_pdo_exception_get_code_contract(
+        class_name,
+        &method.name,
+        &child_sig.return_type,
+    ) || late_static_compatible.unwrap_or_else(|| {
         declared_return_type_compatible(
             checker,
             &parent_sig.return_type,

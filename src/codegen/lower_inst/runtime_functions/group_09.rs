@@ -35,6 +35,9 @@ pub(super) fn lower(
         RuntimeFnId::SplObjectId => Some({
             crate::codegen::lower_inst::builtins::spl::lower_spl_object_id(ctx, inst)
         }),
+        RuntimeFnId::Base64Decode => Some({
+            crate::codegen::lower_inst::builtins::strings::lower_base64_decode(ctx, inst)
+        }),
         RuntimeFnId::Chop => Some({
             crate::codegen::lower_inst::builtins::strings::lower_trim_like(
                     ctx,

@@ -33,15 +33,18 @@ const DEFAULT_EVAL_PHP_VERSION_ID: u32 = 80500;
 
 /// The supported profiles, paired with the `PHP_VERSION` string each one reports.
 ///
-/// KEEP IN SYNC with `crate::web_prelude::PhpVersion::ALL` and `version_string()`
+/// KEEP IN SYNC with `crate::php_version::PhpVersion::ALL` and `version_string()`
 /// in the compiler. The patch component is `0` for every entry by the same rule
 /// the compiler applies — elephc targets a language profile, not an upstream
 /// patch release.
 const EVAL_PHP_PROFILES: &[(u32, &str)] = &[
+    (80000, "8.0.0"),
+    (80100, "8.1.0"),
     (80200, "8.2.0"),
     (80300, "8.3.0"),
     (80400, "8.4.0"),
     (80500, "8.5.0"),
+    (80600, "8.6.0"),
 ];
 
 thread_local! {
@@ -136,7 +139,7 @@ mod tests {
     #[test]
     fn an_unsupported_id_is_ignored() {
         let _guard = scoped_profile(80200);
-        set_eval_php_version_id(80600);
+        set_eval_php_version_id(90000);
         assert_eq!(eval_php_version_id(), 80200);
         assert_eq!(eval_php_version_string(), "8.2.0");
     }

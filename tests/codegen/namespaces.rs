@@ -568,3 +568,117 @@ namespace App {
     );
     assert_eq!(out, "Vendor\\Legacy");
 }
+
+/// Verifies that a namespace alias (`use App\Math as M;`) expands the leading segment of a
+/// qualified *function* call, matching PHP's rule that qualified names are translated
+/// through the class/namespace import table.
+#[test]
+fn test_namespace_alias_expands_qualified_function_call() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+function double(int $x): int { return $x * 2; }
+
+namespace App\Main;
+use App\Math as M;
+echo M\double(5);
+"#,
+    );
+    assert_eq!(out, "10");
+}
+
+/// Verifies that a namespace alias expands the leading segment of qualified *class*
+/// references: static call, class constant, `new`, and `instanceof`.
+#[test]
+fn test_namespace_alias_expands_qualified_class_references() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+class Thing {
+    const V = 7;
+    public static function m(): string { return "Thing::m"; }
+    public function i(): string { return "i"; }
+}
+
+namespace App\Main;
+use App\Math as M;
+echo M\Thing::m();
+echo M\Thing::V;
+$t = new M\Thing();
+echo $t->i();
+echo $t instanceof M\Thing ? "yes" : "no";
+"#,
+    );
+    assert_eq!(out, "Thing::m7iyes");
+}
+
+/// Verifies that a namespace alias expands the leading segment of a qualified *constant*
+/// reference (`M\FOO`).
+#[test]
+fn test_namespace_alias_expands_qualified_constant() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+const FOO = 42;
+
+namespace App\Main;
+use App\Math as M;
+echo M\FOO;
+"#,
+    );
+    assert_eq!(out, "42");
+}
+
+/// Verifies that namespace-alias expansion is case-insensitive on both the alias and the
+/// aliased function name, as PHP namespace/function lookups are.
+#[test]
+fn test_namespace_alias_expansion_is_case_insensitive() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+function double(int $x): int { return $x * 2; }
+
+namespace App\Main;
+use App\Math as M;
+echo m\double(5);
+echo M\DOUBLE(6);
+"#,
+    );
+    assert_eq!(out, "1012");
+}
+
+/// Verifies that only the FIRST segment of a qualified name is alias-expanded: `A\C\g()`
+/// expands `A` and keeps `C\g` verbatim even though `C` is itself an alias.
+#[test]
+fn test_namespace_alias_expands_only_first_segment() {
+    let out = compile_and_run(
+        r#"<?php
+namespace Q\R;
+function h(): string { return "Q\\R\\h"; }
+
+namespace App\Main;
+use Q as A;
+use Zzz as R;
+echo A\R\h();
+"#,
+    );
+    assert_eq!(out, "Q\\R\\h");
+}
+
+/// Verifies that an alias imported directly for a class (`use App\Math\Thing as T;`) still
+/// works as an unqualified constructor name.
+#[test]
+fn test_namespace_class_alias_unqualified_constructor() {
+    let out = compile_and_run(
+        r#"<?php
+namespace App\Math;
+class Thing { public function i(): string { return "i"; } }
+
+namespace App\Main;
+use App\Math\Thing as T;
+$t = new T();
+echo $t->i();
+"#,
+    );
+    assert_eq!(out, "i");
+}

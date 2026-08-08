@@ -251,6 +251,40 @@ echo "ok";
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies cross-target `--emit-asm` stops before preparing a host-incompatible runtime object.
+#[test]
+fn test_cli_emit_asm_does_not_require_target_assembler() {
+    let dir = make_cli_test_dir("elephc_cli_emit_cross_target_asm");
+    let php_path = dir.join("main.php");
+    fs::write(&php_path, "<?php echo 'cross-target';").unwrap();
+
+    let target = if cfg!(all(target_os = "linux", target_arch = "x86_64")) {
+        "linux-aarch64"
+    } else {
+        "linux-x86_64"
+    };
+    let output = elephc_cli_command(&dir)
+        .arg("--target")
+        .arg(target)
+        .arg("--emit-asm")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run cross-target elephc CLI with --emit-asm");
+
+    assert!(
+        output.status.success(),
+        "cross-target elephc --emit-asm failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(dir.join("main.s").exists(), "expected target assembly output");
+    assert!(
+        !dir.join("main.o").exists() && !dir.join("main").exists(),
+        "cross-target --emit-asm must not assemble or link"
+    );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies plain `--web` assembly keeps the compact auto-start core while
 /// pruning public session APIs and callable-handler machinery that user code
 /// does not reference.
@@ -728,6 +762,64 @@ echo 1 + 2;
         asm.contains(".loc 1 2 "),
         "expected a .loc directive for PHP line 2: {asm}"
     );
+
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `--debug-info` survives a source path that carries assembler string
+/// metacharacters. A `\` used to be spliced into `.file`/`.asciz` unescaped, so
+/// the assembler rejected the module outright; combined with `"` it terminated
+/// the directive string early and let the rest of the path be assembled as
+/// directives. The full compile must now succeed and the program must run.
+#[test]
+fn test_cli_debug_info_escapes_metacharacters_in_source_path() {
+    let dir = make_cli_test_dir("elephc_cli_debug_info_escapes");
+    // A backslash alone broke the assembler; `\"` was the directive-injection
+    // vector. Both are legal filename bytes on every supported target.
+    let php_path = dir.join("bs\\la\"sh.php");
+    fs::write(
+        &php_path,
+        r#"<?php
+function greet(): void { echo "escaped\n"; }
+greet();
+"#,
+    )
+    .unwrap();
+
+    let output = elephc_cli_command(&dir)
+        .arg("--debug-info")
+        .arg(&php_path)
+        .output()
+        .expect("failed to run elephc CLI with --debug-info");
+
+    assert!(
+        output.status.success(),
+        "elephc --debug-info failed for a path with `\\` and `\"`: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let asm = fs::read_to_string(dir.join("bs\\la\"sh.s")).expect("failed to read assembly");
+    let file_line = asm.lines().next().expect("assembly is empty");
+    assert!(
+        file_line.contains("bs\\\\la\\\"sh.php\""),
+        "source path must be escaped inside the .file string: {file_line}"
+    );
+    assert!(
+        asm.contains(".asciz \"") && asm.contains("bs\\\\la\\\"sh.php\""),
+        "source path must be escaped inside the compile-unit DW_AT_name too"
+    );
+    for line in asm.lines() {
+        assert!(
+            !line.starts_with(".globl bs") && !line.trim_start().starts_with("sh.php"),
+            "path bytes leaked out of their directive: {line}"
+        );
+    }
+
+    let run = std::process::Command::new(dir.join("bs\\la\"sh"))
+        .output()
+        .expect("failed to run the compiled binary");
+    assert!(run.status.success(), "compiled binary did not run");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "escaped\n");
 
     let _ = fs::remove_dir_all(&dir);
 }

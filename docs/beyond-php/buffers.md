@@ -70,6 +70,19 @@ Restrictions:
 
 Always enabled. Out-of-bounds aborts: `Fatal error: buffer index out of bounds`
 
+## Length validation
+
+`buffer_new<T>()` validates the requested length before allocating. A negative length, or a length
+whose `length * stride` payload size does not fit in a machine word, aborts with:
+
+```
+Fatal error: buffer_new() length is negative or exceeds the maximum buffer size
+```
+
+This keeps the length recorded in the buffer header consistent with the memory the buffer actually
+owns, so the bounds check above can never approve an index outside the allocation. A length that is
+representable but larger than the configured heap still reports `Fatal error: heap memory exhausted`.
+
 ## Memory layout
 
 ```

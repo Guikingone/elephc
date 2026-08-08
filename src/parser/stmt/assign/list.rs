@@ -66,6 +66,48 @@ pub(in crate::parser::stmt) fn parse_list_construct_unpack(
     Ok(lower_list_unpack(pattern, value, span))
 }
 
+/// Parses a destructuring pattern used as a `foreach` value target and lowers it into the
+/// statement that unpacks `source` into the pattern's targets.
+///
+/// Accepts both spellings PHP allows there — `[$a, $b]` and `list($a, $b)` — and consumes
+/// exactly the pattern, leaving `*pos` on the token that follows it (`)` for a `foreach`
+/// value target). `source` is the expression the loop assigns each element to, normally a
+/// hidden temporary the caller also names as the loop's value variable.
+///
+/// The returned statement is the very same lowering `[$a, $b] = $source;` produces, so
+/// nested, keyed, skipped, and property/array-element targets all behave identically inside
+/// and outside `foreach`.
+pub(crate) fn parse_destructuring_pattern_unpack(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    span: Span,
+    source: Expr,
+) -> Result<Stmt, CompileError> {
+    let pattern = match tokens.get(*pos).map(|(token, _)| token) {
+        Some(Token::LBracket) => parse_bracket_list_pattern(tokens, pos, span)?,
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("list") => {
+            parse_list_construct_pattern(tokens, pos, span)?
+        }
+        _ => return Err(CompileError::new(span, "Expected destructuring pattern")),
+    };
+    Ok(lower_list_unpack(pattern, source, span))
+}
+
+/// Returns true when the token at `pos` opens a destructuring pattern (`[` or `list(`).
+pub(crate) fn starts_destructuring_pattern(
+    tokens: &[SpannedToken],
+    pos: usize,
+) -> bool {
+    match tokens.get(pos).map(|(token, _)| token) {
+        Some(Token::LBracket) => true,
+        Some(Token::Identifier(name)) if name.eq_ignore_ascii_case("list") => matches!(
+            tokens.get(pos + 1).map(|(token, _)| token),
+            Some(Token::LParen)
+        ),
+        _ => false,
+    }
+}
+
 /// Represents a list destructuring pattern with ordered entries.
 #[derive(Debug, Clone)]
 struct ListPattern {

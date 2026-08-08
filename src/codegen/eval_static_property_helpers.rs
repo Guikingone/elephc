@@ -21,7 +21,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::static_property_symbol;
+use crate::names::{join_php_symbol, static_property_symbol};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, PhpType};
 
@@ -394,10 +394,9 @@ fn emit_aarch64_static_property_dispatch(
     mode: &str,
 ) {
     for (class_name, class_slots) in grouped_slots(slots) {
-        let next_label = format!(
-            "__elephc_eval_static_property_{}_next_{}",
-            mode,
-            label_fragment(class_name)
+        let next_label = join_php_symbol(
+            &format!("__elephc_eval_static_property_{}_next", mode),
+            &[class_name],
         );
         emit_aarch64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
@@ -417,9 +416,11 @@ fn emit_x86_64_static_property_dispatch(
 ) {
     for (class_name, class_slots) in grouped_slots(slots) {
         let next_label = format!(
-            "__elephc_eval_static_property_{}_next_{}_x",
-            mode,
-            label_fragment(class_name)
+            "{}_x",
+            join_php_symbol(
+                &format!("__elephc_eval_static_property_{}_next", mode),
+                &[class_name],
+            )
         );
         emit_x86_64_static_class_name_compare(emitter, data, class_name, &next_label);
         for slot in class_slots {
@@ -715,7 +716,7 @@ fn emit_aarch64_uninitialized_guard(
     }
     let initialized_label = format!(
         "{}_initialized",
-        label_fragment(&slot_body_label_raw(slot, "get"))
+        slot_body_label_raw(slot, "get")
     );
     abi::emit_load_symbol_to_reg(emitter, "x10", &slot.symbol, 8);
     abi::emit_load_int_immediate(emitter, "x11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
@@ -737,7 +738,7 @@ fn emit_x86_64_uninitialized_guard(
     }
     let initialized_label = format!(
         "{}_initialized_x",
-        label_fragment(&slot_body_label_raw(slot, "get"))
+        slot_body_label_raw(slot, "get")
     );
     abi::emit_load_symbol_to_reg(emitter, "r10", &slot.symbol, 8);
     abi::emit_load_int_immediate(emitter, "r11", UNINITIALIZED_TYPED_PROPERTY_SENTINEL);
@@ -772,11 +773,11 @@ fn emit_aarch64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStati
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = format!(
                 "{}_mixed_null",
-                label_fragment(&slot_body_label_raw(slot, "get"))
+                slot_body_label_raw(slot, "get")
             );
             let done_label = format!(
                 "{}_mixed_done",
-                label_fragment(&slot_body_label_raw(slot, "get"))
+                slot_body_label_raw(slot, "get")
             );
             abi::emit_load_symbol_to_reg(emitter, "x0", &slot.symbol, 0);
             emitter.instruction(&format!("cbz x0, {}", null_label));            // null static storage reads as PHP null
@@ -818,11 +819,11 @@ fn emit_x86_64_box_static_property_slot(emitter: &mut Emitter, slot: &EvalStatic
         PhpType::Mixed | PhpType::Union(_) => {
             let null_label = format!(
                 "{}_mixed_null_x",
-                label_fragment(&slot_body_label_raw(slot, "get"))
+                slot_body_label_raw(slot, "get")
             );
             let done_label = format!(
                 "{}_mixed_done_x",
-                label_fragment(&slot_body_label_raw(slot, "get"))
+                slot_body_label_raw(slot, "get")
             );
             abi::emit_load_symbol_to_reg(emitter, "rax", &slot.symbol, 0);
             emitter.instruction("test rax, rax");                               // check whether static storage holds a Mixed cell
@@ -1055,11 +1056,11 @@ fn emit_aarch64_store_tagged_scalar_static_property(
 ) {
     let null_label = format!(
         "{}_tagged_scalar_null",
-        label_fragment(&slot_body_label_raw(slot, "set"))
+        slot_body_label_raw(slot, "set")
     );
     let done_label = format!(
         "{}_tagged_scalar_done",
-        label_fragment(&slot_body_label_raw(slot, "set"))
+        slot_body_label_raw(slot, "set")
     );
     emitter.instruction("ldr x0, [sp, #32]");                                   // reload the boxed eval value for nullable-int inspection
     emitter.instruction("bl __rt_mixed_unbox");                                 // expose the assigned value tag and payload words
@@ -1083,11 +1084,11 @@ fn emit_x86_64_store_tagged_scalar_static_property(
 ) {
     let null_label = format!(
         "{}_tagged_scalar_null_x",
-        label_fragment(&slot_body_label_raw(slot, "set"))
+        slot_body_label_raw(slot, "set")
     );
     let done_label = format!(
         "{}_tagged_scalar_done_x",
-        label_fragment(&slot_body_label_raw(slot, "set"))
+        slot_body_label_raw(slot, "set")
     );
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // reload the boxed eval value for nullable-int inspection
     emitter.instruction("call __rt_mixed_unbox");                               // expose the assigned value tag and payload words
@@ -1145,13 +1146,13 @@ fn slot_access_miss_label(
 }
 
 /// Returns the architecture-independent body label stem for a static property slot.
+///
+/// `mode` is a compiler-controlled literal and becomes part of the fixed prefix; the PHP names
+/// go through `join_php_symbol()` so slots differing only in underscore placement stay distinct.
 fn slot_body_label_raw(slot: &EvalStaticPropertySlot, mode: &str) -> String {
-    format!(
-        "__elephc_eval_static_property_{}_{}_{}_{}",
-        mode,
-        label_fragment(&slot.class_name),
-        label_fragment(&slot.declaring_class),
-        label_fragment(&slot.property)
+    join_php_symbol(
+        &format!("__elephc_eval_static_property_{}", mode),
+        &[&slot.class_name, &slot.declaring_class, &slot.property],
     )
 }
 
@@ -1211,13 +1212,6 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
         .unwrap_or(u64::MAX)
 }
 
-/// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a C-visible global label with target-specific symbol mangling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, name: &str) {

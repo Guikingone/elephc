@@ -5,20 +5,24 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` reproduces the legacy rule: reversing preserves the array shape, so the
-//!   return type is the (array-or-assoc) input type unchanged. A check hook is
-//!   required both to reject non-array arguments and to echo the input type back.
-//! - Arity (exactly 1 argument) is validated by the registry's `check_arity` before
-//!   the hook fires; the inline arity check from the legacy arm is not reproduced here.
+//! - PHP's signature is `array_reverse(array $array, bool $preserve_keys = false)`; both the
+//!   positional and the `preserve_keys:` named form are accepted.
+//! - `preserve_keys` CHANGES THE RESULT SHAPE, so it must be a literal in AOT mode (same rule as
+//!   `class_exists()`'s autoload flag). With `false` the result is the input array type; with
+//!   `true` an indexed `array<T>` becomes `AssocArray { key: Int, value: T }`, because PHP keeps
+//!   the original integer keys while reversing the iteration order — something elephc's dense
+//!   indexed representation cannot express.
+//! - `check` is required both to reject non-array arguments and to compute that shape.
 
-use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
+use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
     name: "array_reverse",
     area: Array,
-    params: [array: Mixed],
+    params: [array: Mixed, preserve_keys: Bool = DefaultSpec::Bool(false)],
     returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
@@ -28,11 +32,14 @@ builtin! {
     php_manual: "https://www.php.net/manual/en/function.array-reverse.php",
 }
 
-/// Returns the (shape-preserving) array type for an `array_reverse` call.
+/// Returns the reversed array's type, which depends on the literal `preserve_keys` flag.
 ///
-/// Reversing keeps the array shape, so the input array/assoc type is returned
-/// unchanged. Non-array arguments are rejected. The argument is re-inferred here;
-/// the registry already inferred it once for side effects, and arity is pre-validated.
+/// Without `preserve_keys` (or with a literal `false`) reversing keeps the array shape, so the
+/// input array/assoc type is returned unchanged. With a literal `true` an indexed array keeps its
+/// integer keys in reversed insertion order, which is an `AssocArray` keyed by `Int`; a source
+/// that is already associative keeps its own shape because reordering a hash preserves its keys.
+/// Non-array arguments and a non-literal flag are rejected. Arity is pre-validated and every
+/// argument has already been inferred once by the registry's common path.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
     if !matches!(ty, PhpType::Array(_) | PhpType::AssocArray { .. }) {
@@ -41,5 +48,27 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             "array_reverse() argument must be array",
         ));
     }
-    Ok(ty)
+    let Some(flag) = cx.args.get(1) else {
+        return Ok(ty);
+    };
+    let preserve = match flag.kind {
+        ExprKind::BoolLiteral(value) => value,
+        ExprKind::IntLiteral(value) => value != 0,
+        _ => {
+            return Err(CompileError::new(
+                cx.span,
+                "array_reverse() preserve_keys argument must be a literal bool in AOT mode",
+            ))
+        }
+    };
+    if !preserve {
+        return Ok(ty);
+    }
+    match ty {
+        PhpType::Array(elem) => Ok(PhpType::AssocArray {
+            key: Box::new(PhpType::Int),
+            value: elem,
+        }),
+        other => Ok(other),
+    }
 }

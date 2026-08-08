@@ -7829,6 +7829,31 @@ echo ":"; echo function_exists("pathinfo"); echo defined("PATHINFO_ALL");');
     );
 }
 
+/// Verifies eval `parse_url()` supports array/component shapes, constants, callables, and errors.
+#[test]
+fn test_eval_dispatches_parse_url_builtin_call() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$info = parse_url("https://user:pass@example.com:8080/path?q=1#frag");
+echo $info["scheme"] . "|" . $info["host"] . "|" . $info["port"] . "|" . $info["path"] . ":";
+echo parse_url("http://[::1]:80/", PHP_URL_HOST) . ":";
+echo parse_url("http://host: 80", PHP_URL_PORT) . ":";
+echo parse_url("http://host:\t80", PHP_URL_PORT) . ":";
+echo parse_url(url: "http://host", component: PHP_URL_PORT) === null ? "missing" : "bad"; echo ":";
+echo parse_url("http://") === false ? "false" : "bad"; echo ":";
+echo count(parse_url("/path", -2)); echo ":";
+echo call_user_func("parse_url", "//callable/path", PHP_URL_HOST); echo ":";
+echo call_user_func_array("parse_url", ["url" => "mailto:a@b", "component" => PHP_URL_PATH]); echo ":";
+try { parse_url("x", 8); } catch (ValueError $error) { echo $error->getMessage(); }
+echo ":"; echo function_exists("parse_url"); echo defined("PHP_URL_FRAGMENT");');
+"#,
+    );
+    assert_eq!(
+        out,
+        "https|example.com|8080|/path:[::1]:80:80:missing:false:1:callable:a@b:parse_url(): Argument #2 ($component) must be a valid URL component identifier, 8 given:11"
+    );
+}
+
 /// Verifies eval local filesystem builtins read, write, stat, delete, and dispatch.
 #[test]
 fn test_eval_dispatches_filesystem_builtin_calls() {
@@ -8405,6 +8430,25 @@ echo ":"; echo function_exists("strpos"); echo function_exists("strrpos");');
 "#,
     );
     assert_eq!(out, "2:4:F:0:3:1:3:11");
+}
+
+/// Verifies eval honors PHP's third `$offset` argument on both position builtins, including
+/// the named-argument spelling and `strrpos()`'s negative-offset rule (which bounds where a
+/// match may end rather than where the scan starts).
+/// Expected output is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_eval_string_position_builtins_honor_offset_argument() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strpos("hello world", "o", 5);
+echo ":"; echo strrpos("hello world", "o", -3);
+echo ":"; echo strpos("hello world", "o", offset: -4);
+echo ":"; echo strrpos("abcabc", "bc", -6) === false ? "F" : "bad";
+echo ":"; echo strpos("abc", "", 1);
+echo ":"; echo strrpos("abc", "", -1);');
+"#,
+    );
+    assert_eq!(out, "7:7:7:F:1:2");
 }
 
 /// Verifies eval `strstr()` returns matching suffixes, prefixes, and false for misses.
@@ -28799,4 +28843,25 @@ echo eval('try {
 "#,
     );
     assert_eq!(out, "F1");
+}
+
+/// Verifies eval honors PHP's second `intval()` argument, including the named spelling, the
+/// `strtol()` prefix rules, the silent `0` for an out-of-range base, and the rule that `$base`
+/// is ignored for a non-string subject.
+/// Expected output is verbatim `LC_ALL=C php` 8.4 output for the same program.
+#[test]
+fn test_eval_intval_honors_base_argument() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo intval("42", 8);
+echo ":"; echo intval("0x1A", 0);
+echo ":"; echo intval("0b101", 0);
+echo ":"; echo intval("42", base: 8);
+echo ":"; echo intval("42", 1);
+echo ":"; echo intval(42.9, 8);
+echo ":"; echo intval("ffffffffffffffffff", 16);
+echo ":"; echo intval("42");');
+"#,
+    );
+    assert_eq!(out, "34:26:5:34:0:42:9223372036854775807:42");
 }

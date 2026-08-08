@@ -10,15 +10,19 @@
 
 mod itoa;
 mod concat;
+mod concat_scratch;
 mod ftoa;
+mod php_num_scan;
 mod str_eq;
 mod str_loose_eq;
 mod str_to_number;
 mod str_to_int;
+mod str_to_int_base;
 mod number_format;
 mod atoi;
 mod grapheme_strrev;
 mod strcopy;
+mod str_inc_dec;
 mod str_persist;
 mod strtolower;
 mod strtoupper;
@@ -27,11 +31,15 @@ mod ltrim;
 mod rtrim;
 mod strpos;
 mod strrpos;
+mod stripos;
+mod strripos;
 mod str_repeat;
 mod strrev;
 mod chr;
 mod strcmp;
 mod strcasecmp;
+mod strncmp;
+mod strncasecmp;
 mod str_starts_with;
 mod str_ends_with;
 mod str_replace;
@@ -41,14 +49,24 @@ mod implode_bool;
 mod implode_int;
 mod ucwords;
 mod str_ireplace;
+mod substr_count;
 mod substr_replace;
 mod str_pad;
 mod str_split;
+mod str_word_count;
 mod addslashes;
 mod stripslashes;
 mod nl2br;
+mod base_convert;
+mod chunk_split;
+mod count_chars;
+mod strtr;
+mod quotemeta;
+mod quoted_printable_encode;
 mod wordwrap;
 mod bin2hex;
+mod base_to_number;
+mod dec_to_base;
 mod hex2bin;
 mod inet_ntop;
 mod inet_pton;
@@ -81,12 +99,14 @@ mod trim_mask;
 mod resource_to_string;
 mod resource_type_name;
 mod resource_write_stdout;
+mod parse_url;
 
 pub use itoa::emit_itoa;
 /// Emit integer-to-string conversion helper.
 pub use concat::emit_concat;
 /// Emit string concatenation helper.
-pub use ftoa::emit_ftoa;
+pub use ftoa::{emit_ftoa, emit_ftoa_repr};
+pub use php_num_scan::emit_php_num_scan;
 /// Emit float-to-string conversion helper.
 pub use str_eq::emit_str_eq;
 /// Emit case-sensitive string equality check.
@@ -97,6 +117,7 @@ pub use str_to_number::emit_str_to_number;
 pub use str_to_number::emit_str_looks_like_int_for_coercion;
 /// Emit string-to-number conversion helper.
 pub use str_to_int::emit_str_to_int;
+pub use str_to_int_base::emit_str_to_int_base;
 /// Emit PHP string-to-integer cast helper.
 pub use number_format::emit_number_format;
 /// Emit number formatting helper.
@@ -104,8 +125,11 @@ pub use atoi::emit_atoi;
 /// Emit ASCII-to-integer conversion.
 pub use strcopy::emit_strcopy;
 /// Emit string copy helper.
+pub use concat_scratch::emit_concat_scratch;
 pub use str_persist::emit_str_persist;
 /// Emit string persistence helper.
+pub use str_inc_dec::{emit_mixed_inc_dec, emit_str_inc_dec};
+/// Emit PHP's `++`/`--` on a string value and its boxed dispatch entry point.
 pub use strtolower::emit_strtolower;
 /// Emit lowercase string conversion.
 pub use strtoupper::emit_strtoupper;
@@ -120,6 +144,10 @@ pub use strpos::emit_strpos;
 /// Emit string position lookup (first occurrence).
 pub use strrpos::emit_strrpos;
 /// Emit string position lookup (last occurrence).
+pub use stripos::emit_stripos;
+/// Emit case-insensitive string position lookup (first occurrence).
+pub use strripos::emit_strripos;
+/// Emit case-insensitive string position lookup (last occurrence).
 pub use str_repeat::emit_str_repeat;
 /// Emit string repeat helper.
 pub use strrev::emit_strrev;
@@ -131,6 +159,10 @@ pub use chr::emit_chr;
 pub use strcmp::emit_strcmp;
 /// Emit case-sensitive string comparison.
 pub use strcasecmp::emit_strcasecmp;
+/// Emit length-limited case-sensitive string comparison.
+pub use strncmp::emit_strncmp;
+/// Emit length-limited case-insensitive string comparison.
+pub use strncasecmp::emit_strncasecmp;
 /// Emit case-insensitive string comparison.
 pub use str_starts_with::emit_str_starts_with;
 /// Emit check for string prefix match.
@@ -150,6 +182,8 @@ pub use ucwords::emit_ucwords;
 /// Emit uppercase-words helper.
 pub use str_ireplace::emit_str_ireplace;
 /// Emit case-insensitive string replace.
+pub use substr_count::emit_substr_count;
+/// Emit the non-overlapping substring occurrence counter.
 pub use substr_replace::emit_substr_replace;
 /// Emit substring replace helper.
 pub use str_pad::emit_str_pad;
@@ -161,10 +195,28 @@ pub use addslashes::emit_addslashes;
 pub use stripslashes::emit_stripslashes;
 /// Emit stripslashes unescaping helper.
 pub use nl2br::emit_nl2br;
+/// Emit the base_convert numeral re-renderer.
+pub use base_convert::emit_base_convert;
+/// Emit the chunk_split fixed-length splitter.
+pub use chunk_split::emit_chunk_split;
+/// Emit the count_chars byte-frequency tally.
+pub use count_chars::emit_count_chars;
+/// Emit the strtr pairwise and replacement-pair translators.
+pub use strtr::emit_strtr;
+/// Emit the quotemeta regular-expression metacharacter escaper.
+pub use quotemeta::emit_quotemeta;
+/// Emit the quoted_printable_encode MIME transfer encoder.
+pub use quoted_printable_encode::emit_quoted_printable_encode;
+/// Emit the str_word_count word scanner.
+pub use str_word_count::emit_str_word_count;
 /// Emit newline to `<br>` conversion.
 pub use wordwrap::emit_wordwrap;
 /// Emit wordwrap helper.
 pub use bin2hex::emit_bin2hex;
+/// Emit the shared unsigned integer-to-base renderer used by dechex/decbin/decoct.
+pub use dec_to_base::emit_dec_to_base;
+/// Emit the shared base-digit parser used by hexdec/bindec/octdec.
+pub use base_to_number::emit_base_to_number;
 /// Emit binary-to-hexadecimal encoding.
 pub use hex2bin::emit_hex2bin;
 /// Emit hexadecimal-to-binary decoding.
@@ -190,6 +242,9 @@ pub use base64_encode::emit_base64_encode;
 /// Emit Base64 encoding helper.
 pub use base64_decode::emit_base64_decode;
 /// Emit Base64 decoding helper.
+/// Re-export the php-src reverse-table sentinels so `runtime::data::fixed` builds
+/// `_b64_decode_tbl` from the exact classification `__rt_base64_decode` reads back.
+pub use base64_decode::{B64_DECODE_INVALID, B64_DECODE_SKIP, B64_DECODE_WHITESPACE};
 pub use sprintf::emit_sprintf;
 pub use vsprintf::emit_vsprintf;
 /// Emit sprintf formatting helper.
@@ -226,3 +281,5 @@ pub use resource_to_string::emit_resource_to_string;
 pub use resource_type_name::emit_resource_type_name;
 /// Emit the resource type-name resolver (`stream` when open, `Unknown` once closed).
 pub use resource_write_stdout::emit_resource_write_stdout;
+/// Emit the PHP-compatible URL component scanner.
+pub use parse_url::emit_parse_url;

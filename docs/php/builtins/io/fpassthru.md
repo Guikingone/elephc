@@ -2,7 +2,7 @@
 title: "fpassthru()"
 description: "Output all remaining data on a file pointer."
 sidebar:
-  order: 172
+  order: 179
 ---
 
 ## fpassthru()

@@ -237,3 +237,121 @@ echo buffer_len($buf);
     );
     assert!(err.contains("use of buffer after buffer_free()"), "{}", err);
 }
+
+/// Verifies that a `buffer_new<int>()` length whose `len * 8` payload size wraps the machine word
+/// is rejected. Before the guard the wrapped product allocated 32 bytes while the header still
+/// advertised the pre-overflow length, so `$b[0x100000]` passed the bounds check and read roughly
+/// 8 MB past the block.
+#[test]
+fn test_buffer_new_overflowing_length_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+buffer<int> $b = buffer_new<int>(0x2000000000000002);
+echo $b[0];
+"#,
+    );
+    assert!(
+        err.contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+        "{}",
+        err
+    );
+}
+
+/// Verifies that an out-of-range index cannot follow an overflowing `buffer_new<int>()`: the
+/// allocation itself aborts, so the read never reaches the payload. Before the guard this program
+/// printed `read:0` after loading roughly 8 MB past the 32-byte allocation and exited 0.
+#[test]
+fn test_buffer_new_overflow_prevents_out_of_range_read() {
+    let out = compile_and_run_capture(
+        r#"<?php
+buffer<int> $b = buffer_new<int>(0x2000000000000002);
+echo "read:", $b[0x100000];
+"#,
+    );
+    assert!(!out.success, "overflowing buffer_new unexpectedly succeeded");
+    assert!(
+        out.stderr
+            .contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+        "{}",
+        out.stderr
+    );
+    assert_eq!(out.stdout, "");
+}
+
+/// Verifies that an out-of-range write cannot follow an overflowing `buffer_new<int>()` either.
+#[test]
+fn test_buffer_new_overflow_prevents_out_of_range_write() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+buffer<int> $b = buffer_new<int>(0x2000000000000002);
+$b[0x40000000] = 1;
+echo "wrote";
+"#,
+    );
+    assert!(
+        err.contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+        "{}",
+        err
+    );
+}
+
+/// Verifies that a negative `buffer_new<int>()` length is rejected with the same controlled fatal
+/// instead of being multiplied as an unsigned value into a huge allocation request.
+#[test]
+fn test_buffer_new_negative_length_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+buffer<int> $b = buffer_new<int>(-2);
+echo buffer_len($b);
+"#,
+    );
+    assert!(
+        err.contains("buffer_new() length is negative or exceeds the maximum buffer size"),
+        "{}",
+        err
+    );
+}
+
+/// Positive control: an ordinary small `buffer_new<int>()` still allocates, zero-initializes,
+/// reads, and writes, so the length guard did not narrow the common path.
+#[test]
+fn test_buffer_new_normal_length_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+buffer<int> $b = buffer_new<int>(4);
+$b[2] = 42;
+echo buffer_len($b), ":", $b[0], ":", $b[2];
+"#,
+    );
+    assert_eq!(out, "4:0:42");
+}
+
+/// Verifies the linux-x86_64 runtime carries the same `__rt_buffer_new` length guard as the ARM64
+/// runtime. The x86_64 code cannot be executed from an aarch64 host, so this asserts on the emitted
+/// assembly text.
+#[test]
+fn test_x86_64_runtime_buffer_new_carries_length_guard() {
+    let target = Target::parse("linux-x86_64").expect("linux-x86_64 is a supported target");
+    let runtime_asm = elephc::codegen::generate_runtime(8_388_608, target);
+    let marker = "__rt_buffer_new:";
+    let start = runtime_asm
+        .find(marker)
+        .expect("missing assembly label __rt_buffer_new");
+    let rest = &runtime_asm[start..];
+    let buffer_new = &rest[..rest.find("\n\n").unwrap_or(rest.len())];
+    for expected in [
+        "js __rt_buffer_new_size_fail",
+        "imul rax, rdi",
+        "jo __rt_buffer_new_size_fail",
+        "add rax, 16",
+    ] {
+        assert!(
+            buffer_new.contains(expected),
+            "x86_64 __rt_buffer_new missing {expected}: {buffer_new}"
+        );
+    }
+    assert!(
+        runtime_asm.contains("__rt_buffer_new_size_fail:"),
+        "x86_64 runtime is missing the buffer-length fatal handler"
+    );
+}

@@ -259,6 +259,14 @@ fn parse_atomic_type_expr(
         }
         Some(Token::Identifier(name)) if matches!(name.as_str(), "ptr" | "pointer") => {
             *pos += 1;
+            // `ptr<>` lexes as the single `<>` token (PHP's `!=` alias), so the empty
+            // type list is recognized here instead of reading as a bare `ptr`.
+            if *pos < tokens.len() && tokens[*pos].0 == Token::LessGreater {
+                return Err(CompileError::new(
+                    span,
+                    "Expected pointer target type inside ptr<...>",
+                ));
+            }
             if *pos < tokens.len() && tokens[*pos].0 == Token::Less {
                 *pos += 1;
                 let target = parse_name(
@@ -280,6 +288,13 @@ fn parse_atomic_type_expr(
         }
         Some(Token::Identifier(name)) if name == "buffer" => {
             *pos += 1;
+            // `buffer<>` lexes as the single `<>` token (PHP's `!=` alias).
+            if *pos < tokens.len() && tokens[*pos].0 == Token::LessGreater {
+                return Err(CompileError::new(
+                    span,
+                    "Expected buffer element type after 'buffer<'",
+                ));
+            }
             expect_token(tokens, pos, &Token::Less, "Expected '<' after buffer")?;
             let inner = parse_type_expr(tokens, pos, span)?;
             expect_token(

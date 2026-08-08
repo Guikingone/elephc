@@ -7,6 +7,10 @@
 //!
 //! Key details:
 //! - PHP symbol lookup and emitted assembly labels depend on these transformations staying stable.
+//! - Composite symbols (class + member, function + static local, …) must be built with
+//!   `join_symbol_fragments()`/`join_php_symbol()`. Joining mangled fragments with a bare `_`
+//!   is ambiguous because mangled fragments contain `_`, which silently merged unrelated PHP
+//!   declarations onto one storage cell.
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 /// Kind of PHP name based on how it was written in source.
@@ -214,6 +218,83 @@ pub fn mangle_fqn(name: &str) -> String {
     mangled
 }
 
+/// Separator inserted between a symbol prefix and mangled fragments when at least one
+/// fragment carries a `mangle_fqn()` escape.
+///
+/// A `mangle_fqn()` result is a concatenation of single alphanumerics and the escape groups
+/// `_u_`, `_N_` and `_xNN_`. Every escape opens and closes with exactly one `_` and has a
+/// non-empty body, so the longest run of consecutive underscores a mangled fragment can
+/// contain is two (the closing `_` of one escape followed by the opening `_` of the next),
+/// and a mangled fragment can neither start nor end with `__`. Three underscores therefore
+/// never occur inside a mangled fragment, which makes them usable as a boundary marker.
+const ESCAPED_FRAGMENT_SEPARATOR: &str = "___";
+
+/// Separator inserted between a symbol prefix and mangled fragments when every fragment is a
+/// plain alphanumeric run. Keeps the common `_method_Foo_bar` symbol shape readable.
+const COMPACT_FRAGMENT_SEPARATOR: &str = "_";
+
+/// Returns `true` when a mangled fragment is a non-empty run of ASCII alphanumerics.
+///
+/// Such fragments contain no `_` at all, so a single-underscore separator between them is
+/// unambiguous. Any fragment that went through a `mangle_fqn()` escape fails this test.
+fn is_compact_fragment(fragment: &str) -> bool {
+    !fragment.is_empty() && fragment.bytes().all(|byte| byte.is_ascii_alphanumeric())
+}
+
+/// Joins a fixed symbol prefix with already-mangled fragments so that the result is injective
+/// in the fragment tuple.
+///
+/// `prefix` must be a compile-time literal without a trailing separator (e.g. `"_method"`);
+/// `fragments` must be `mangle_fqn()` results or decimal numbers. Two separator regimes are
+/// used and they can never be confused with one another:
+///
+/// - every fragment alphanumeric → `prefix_f1_f2`. The joined tail then contains exactly one
+///   `_` per fragment and no run of two, so splitting on `_` recovers the tuple.
+/// - otherwise → `prefix___f1___f2`. Fragments contain no `___`, so the runs of three or more
+///   underscores mark exactly the boundaries. A boundary run has length 3 to 5 (a fragment
+///   contributes at most one adjacent `_`), and the split is still unique because no
+///   `mangle_fqn()` result stays valid when a trailing `_` is added or removed: an escape's
+///   closing `_` cannot be dropped and a dangling `_` cannot be appended.
+///
+/// The two regimes are distinguished by the run length alone (the compact form never contains
+/// two adjacent underscores in the joined tail, the escaped form always contains at least three).
+pub fn join_symbol_fragments(prefix: &str, fragments: &[&str]) -> String {
+    let separator = if fragments.iter().all(|fragment| is_compact_fragment(fragment)) {
+        COMPACT_FRAGMENT_SEPARATOR
+    } else {
+        ESCAPED_FRAGMENT_SEPARATOR
+    };
+    let mut symbol = String::from(prefix);
+    for fragment in fragments {
+        symbol.push_str(separator);
+        symbol.push_str(fragment);
+    }
+    symbol
+}
+
+/// Mangles each raw PHP name and joins them onto `prefix` with `join_symbol_fragments()`.
+///
+/// This is the only supported way to build a symbol or label out of more than one PHP name.
+pub fn join_php_symbol(prefix: &str, names: &[&str]) -> String {
+    let mangled: Vec<String> = names.iter().map(|name| mangle_fqn(name)).collect();
+    let fragments: Vec<&str> = mangled.iter().map(String::as_str).collect();
+    join_symbol_fragments(prefix, &fragments)
+}
+
+/// Converts an arbitrary PHP-derived name into a decorative assembly-label fragment.
+///
+/// Every non-alphanumeric byte collapses to `_`, so this is deliberately **not** injective:
+/// `a_b` and `aéb` produce the same fragment. It may only be used for the human-readable part
+/// of a label whose uniqueness is already guaranteed by a separate unique numeric id (see
+/// `crate::codegen::context::FunctionContext::next_label()`). Any label that must be unique on
+/// its own has to be built with `join_php_symbol()` instead.
+pub fn label_fragment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
+        .collect()
+}
+
 #[cfg(test)]
 mod mangle_tests {
     use super::*;
@@ -245,6 +326,192 @@ mod mangle_tests {
         assert_ne!(mangle_fqn("价"), mangle_fqn("格"));
         assert_ne!(mangle_fqn("价"), mangle_fqn("a"));
         assert_ne!(mangle_fqn("a_b"), mangle_fqn("a\\b"));
+    }
+
+    /// Verifies the documented separator invariant the joiner relies on: no `mangle_fqn()`
+    /// result ever contains three consecutive underscores, and none starts or ends with two.
+    #[test]
+    fn mangled_fragments_never_contain_the_escaped_separator() {
+        let adversarial = [
+            "_", "__", "___", "____", "_S_", "_u_", "_N_", "_x5f_", "\\", "\\\\", "_\\_",
+            "a_\\_b", "__construct", "价_格", "_é_", "\\_\\_",
+        ];
+        for name in adversarial {
+            let mangled = mangle_fqn(name);
+            assert!(
+                !mangled.contains(ESCAPED_FRAGMENT_SEPARATOR),
+                "mangle_fqn({name:?}) = {mangled:?} contains the fragment separator"
+            );
+            assert!(
+                !mangled.starts_with("__") && !mangled.ends_with("__"),
+                "mangle_fqn({name:?}) = {mangled:?} must not start or end with two underscores"
+            );
+        }
+    }
+
+    /// Verifies the adversarial `_S_` case called out for naive separator schemes: the PHP name
+    /// `_S_` mangles to a string containing `_S_`, so `_S_` would be an unusable separator,
+    /// while the `___` separator survives it.
+    #[test]
+    fn joiner_survives_the_self_referential_separator_name() {
+        assert!(mangle_fqn("_S_").contains("_S_"));
+        assert_ne!(
+            join_php_symbol("_p", &["a", "_S_b"]),
+            join_php_symbol("_p", &["a_S", "b"])
+        );
+        assert_ne!(
+            join_php_symbol("_p", &["a", "___b"]),
+            join_php_symbol("_p", &["a___", "b"])
+        );
+    }
+
+    /// Verifies the compact regime is used only for alphanumeric fragments and keeps the
+    /// historical readable symbol shape.
+    #[test]
+    fn joiner_keeps_alphanumeric_symbols_compact() {
+        assert_eq!(method_symbol("Exception", "run"), "_method_Exception_run");
+        assert_eq!(static_method_symbol("Foo", "bar"), "_static_Foo_bar");
+        assert_eq!(static_property_symbol("Foo", "bar"), "_static_prop_Foo_bar");
+        assert_eq!(enum_case_symbol("Suit", "Hearts"), "_enum_case_Suit_Hearts");
+        assert_eq!(static_local_symbol("f", "x"), "_static_local_f_x");
+        assert_eq!(interface_method_wrapper_symbol(1, 2, "run"), "_ifacewrap_1_2_run");
+    }
+
+    /// Verifies the reported static-property collision (`a::$u_b` versus `a_u::$b`) now maps to
+    /// two distinct `.comm` symbols instead of merging both classes onto one storage cell.
+    #[test]
+    fn static_property_symbols_do_not_collide_on_underscore_boundaries() {
+        assert_ne!(
+            static_property_symbol("a", "u_b"),
+            static_property_symbol("a_u", "b")
+        );
+    }
+
+    /// Verifies the reported method / static-method / enum-case collisions, which previously
+    /// made valid PHP fail to assemble with a duplicate-symbol error.
+    #[test]
+    fn member_symbols_do_not_collide_on_underscore_boundaries() {
+        assert_ne!(method_symbol("a", "u_b"), method_symbol("a_u", "b"));
+        assert_ne!(
+            static_method_symbol("a", "u_b"),
+            static_method_symbol("a_u", "b")
+        );
+        assert_ne!(enum_case_symbol("a", "u_b"), enum_case_symbol("a_u", "b"));
+        assert_ne!(
+            interface_method_wrapper_symbol(1, 2, "u_b"),
+            interface_method_wrapper_symbol(1, 2, "b")
+        );
+    }
+
+    /// Verifies the static-local storage and initialization-flag namespaces stay disjoint, so a
+    /// PHP static named `$x_init` can no longer alias the init flag of static `$x`.
+    #[test]
+    fn static_local_flag_symbols_cannot_be_spelled_by_a_php_variable() {
+        assert_ne!(
+            static_local_symbol("f", "x_init"),
+            static_local_init_symbol("f", "x")
+        );
+        assert_ne!(
+            static_local_symbol("f", "x"),
+            static_local_init_symbol("f", "x")
+        );
+        assert_ne!(
+            static_local_init_symbol("f", "x_init"),
+            static_local_init_symbol("f_init", "x")
+        );
+    }
+
+    /// Verifies static locals of two distinct functions never share one storage cell, including
+    /// the non-ASCII case where the old fragment helper collapsed `é` to `_`.
+    #[test]
+    fn static_local_symbols_do_not_collide_across_functions() {
+        assert_ne!(
+            static_local_symbol("a", "b_c"),
+            static_local_symbol("aéb", "c")
+        );
+        assert_ne!(
+            static_local_symbol("a_b", "c"),
+            static_local_symbol("a", "b_c")
+        );
+        assert_ne!(
+            static_local_symbol("A::m", "x"),
+            static_local_symbol("A", "m_x")
+        );
+    }
+
+    /// Verifies the distinct symbol kinds cannot spell one another, in particular the
+    /// static-method / static-local overlap that shared the `_static_` prefix and produced an
+    /// `invalid symbol redefinition` on a class and function with the same name.
+    #[test]
+    fn symbol_kinds_stay_in_disjoint_namespaces() {
+        assert_ne!(static_method_symbol("A", "m"), static_local_symbol("A", "m"));
+        assert_ne!(
+            static_method_symbol("prop", "x"),
+            static_property_symbol("prop", "x")
+        );
+        assert_ne!(
+            static_method_symbol("local", "x"),
+            static_local_symbol("local", "x")
+        );
+        assert_ne!(
+            format!("{}_epilogue", method_symbol("A", "m")),
+            method_symbol("A", "m_epilogue")
+        );
+        assert_ne!(
+            format!("{}__genbody", method_symbol("A", "m")),
+            method_symbol("A", "m__genbody")
+        );
+    }
+
+    /// Verifies the joiner is injective over an exhaustive cross product of adversarial name
+    /// pairs, which is the property every composite symbol builder depends on.
+    #[test]
+    fn joiner_is_injective_over_adversarial_name_pairs() {
+        let names = [
+            "a", "b", "a_", "_a", "a_b", "a__b", "a_u", "u_b", "_", "__", "___", "_S_", "_u_",
+            "_N_", "A\\b", "a\\b", "aéb", "a_é", "é", "x_init", "init", "prop", "local", "1",
+            "12", "价格", "a价", "_x5f_", "\\_",
+        ];
+        let mut seen: std::collections::HashMap<String, (&str, &str)> =
+            std::collections::HashMap::new();
+        for left in names {
+            for right in names {
+                let symbol = join_php_symbol("_k", &[left, right]);
+                if let Some(previous) = seen.insert(symbol.clone(), (left, right)) {
+                    panic!("{previous:?} and {:?} both produce {symbol:?}", (left, right));
+                }
+            }
+        }
+    }
+
+    /// Verifies three-fragment joins stay injective too, covering interface wrappers and the
+    /// eval-bridge class/declaring-class/member labels.
+    #[test]
+    fn joiner_is_injective_over_adversarial_name_triples() {
+        let names = ["a", "b", "a_b", "_", "_u_", "aéb", "a\\b", "1", "12"];
+        let mut seen: std::collections::HashMap<String, (&str, &str, &str)> =
+            std::collections::HashMap::new();
+        for first in names {
+            for second in names {
+                for third in names {
+                    let symbol = join_php_symbol("_k", &[first, second, third]);
+                    if let Some(previous) = seen.insert(symbol.clone(), (first, second, third)) {
+                        panic!(
+                            "{previous:?} and {:?} both produce {symbol:?}",
+                            (first, second, third)
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Verifies `label_fragment()` stays a pure decoration helper: it is documented as
+    /// non-injective, and this pins the collision so nobody grows a uniqueness assumption on it.
+    #[test]
+    fn label_fragment_is_decorative_and_not_injective() {
+        assert_eq!(label_fragment("a_b"), "a_b");
+        assert_eq!(label_fragment("aéb"), label_fragment("a_b"));
     }
 }
 
@@ -297,55 +564,66 @@ pub fn function_epilogue_symbol(name: &str) -> String {
 
 /// Returns the instance method symbol for a class/method pair.
 ///
-/// Format: `_method_<mangled_class>_<mangled_method>`. Used for virtual dispatch
-/// and method table entries.
+/// Format: `_method_<class>_<method>` for alphanumeric names, `_method___<class>___<method>`
+/// once either name needs a `mangle_fqn()` escape. Used for virtual dispatch and method table
+/// entries; the epilogue label appends `_epilogue` to this symbol.
 pub fn method_symbol(class_name: &str, method_name: &str) -> String {
-    format!(
-        "_method_{}_{}",
-        mangle_fqn(class_name),
-        mangle_fqn(method_name)
-    )
+    join_php_symbol("_method", &[class_name, method_name])
 }
 
 /// Returns the interface method wrapper symbol for a class/interface/method triplet.
 ///
-/// Format: `_ifacewrap_<class_id>_<interface_id>_<mangled_method>`. Used by the
-/// runtime to route interface method calls through concrete implementation wrappers.
+/// Format: `_ifacewrap_<class_id>_<interface_id>_<method>`. Used by the runtime to route
+/// interface method calls through concrete implementation wrappers. The two ids are decimal
+/// numbers and join as plain fragments.
 pub fn interface_method_wrapper_symbol(
     class_id: u64,
     interface_id: u64,
     method_name: &str,
 ) -> String {
-    format!(
-        "_ifacewrap_{}_{}_{}",
-        class_id,
-        interface_id,
-        mangle_fqn(method_name)
+    let class_id = class_id.to_string();
+    let interface_id = interface_id.to_string();
+    join_symbol_fragments(
+        "_ifacewrap",
+        &[&class_id, &interface_id, &mangle_fqn(method_name)],
     )
 }
 
 /// Returns the static method symbol for a class/method pair.
 ///
-/// Format: `_static_<mangled_class>_<mangled_method>`. Used for static method
-/// dispatch and method table entries.
+/// Format: `_static_<class>_<method>`, escaping to `_static___<class>___<method>` when either
+/// name is not purely alphanumeric. Used for static method dispatch and method table entries.
 pub fn static_method_symbol(class_name: &str, method_name: &str) -> String {
-    format!(
-        "_static_{}_{}",
-        mangle_fqn(class_name),
-        mangle_fqn(method_name)
-    )
+    join_php_symbol("_static", &[class_name, method_name])
 }
 
 /// Returns the static property symbol for a class/property pair.
 ///
-/// Format: `_static_prop_<mangled_class>_<mangled_property>`. Used for static
-/// property access and the property lookup table.
+/// Format: `_static_prop_<class>_<property>`, escaping to `_static_prop___<class>___<property>`
+/// when either name is not purely alphanumeric. Used for static property access and the
+/// property lookup table.
 pub fn static_property_symbol(class_name: &str, property_name: &str) -> String {
-    format!(
-        "_static_prop_{}_{}",
-        mangle_fqn(class_name),
-        mangle_fqn(property_name)
-    )
+    join_php_symbol("_static_prop", &[class_name, property_name])
+}
+
+/// Returns the storage symbol for one function-scoped `static $var` declaration.
+///
+/// Format: `_static_local_<function>_<variable>`, escaping to
+/// `_static_local___<function>___<variable>` when either name is not purely alphanumeric.
+/// The dedicated `_static_local` prefix keeps this namespace disjoint from
+/// `static_method_symbol()`, which used to share the `_static_` prefix and made a class's
+/// static method collide with a same-named function's static local.
+pub fn static_local_symbol(function_name: &str, variable_name: &str) -> String {
+    join_php_symbol("_static_local", &[function_name, variable_name])
+}
+
+/// Returns the one-shot initialization flag symbol paired with `static_local_symbol()`.
+///
+/// Format: `_static_local_init_<function>_<variable>`. Derived from the same injective
+/// (function, variable) encoding rather than by suffixing the storage symbol, so no PHP-legal
+/// variable name can spell another static's flag symbol.
+pub fn static_local_init_symbol(function_name: &str, variable_name: &str) -> String {
+    join_php_symbol("_static_local_init", &[function_name, variable_name])
 }
 
 /// Returns the synthetic accessor-method name for a property's `get` hook.
@@ -366,12 +644,9 @@ pub fn property_hook_set_method(property_name: &str) -> String {
 
 /// Returns the enum case symbol for an enum/case pair.
 ///
-/// Format: `_enum_case_<mangled_enum>_<mangled_case>`. Used for enum case
-/// lookup and the enum case table.
+/// Format: `_enum_case_<enum>_<case>`, escaping to `_enum_case___<enum>___<case>` when either
+/// name is not purely alphanumeric (namespaced enums always take the escaped form). Used for
+/// enum case lookup and the enum case table.
 pub fn enum_case_symbol(enum_name: &str, case_name: &str) -> String {
-    format!(
-        "_enum_case_{}_{}",
-        mangle_fqn(enum_name),
-        mangle_fqn(case_name)
-    )
+    join_php_symbol("_enum_case", &[enum_name, case_name])
 }

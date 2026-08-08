@@ -608,3 +608,90 @@ echo $u->id();
     );
     assert_eq!(out, "7");
 }
+
+/// Verifies PHP's `==` between two objects: same class plus loosely equal properties.
+///
+/// `===` (identity) must keep answering instance identity, a property-less class
+/// compares equal for two distinct instances, differing property values and
+/// differing classes compare unequal, and property comparison is LOOSE
+/// (`Box(1) == Box("1")` and `Box(0) == Box(null)` are true).
+#[test]
+fn test_object_loose_equality_compares_class_then_properties() {
+    let out = compile_and_run(
+        r#"<?php
+class Empty1 {}
+class Pt { public int $x = 1; public string $y = "a"; }
+class Pt2 { public int $x = 1; public string $y = "a"; }
+class Box { public $v; function __construct($v) { $this->v = $v; } }
+$e1 = new Empty1(); $e2 = new Empty1();
+var_dump($e1 == $e2, $e1 === $e2, $e1 === $e1);
+$p1 = new Pt(); $p2 = new Pt();
+var_dump($p1 == $p2, $p1 === $p2);
+$p2->x = 2;
+var_dump($p1 == $p2, $p1 != $p2);
+var_dump($p1 == new Pt2());
+var_dump(new Box(1) == new Box("1"), new Box(0) == new Box(null), new Box(1) == new Box(2));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\nbool(true)\n\
+         bool(true)\nbool(false)\n\
+         bool(false)\nbool(true)\n\
+         bool(false)\n\
+         bool(true)\nbool(true)\nbool(false)\n"
+    );
+}
+
+/// Verifies object `==` recurses through array-valued and object-valued properties,
+/// and that enum cases keep PHP's compare-by-identity behavior.
+#[test]
+fn test_object_loose_equality_recurses_and_handles_enums() {
+    let out = compile_and_run(
+        r#"<?php
+class Bag { public array $items = [1, 2, 3]; }
+class Pt { public int $x = 1; }
+class Wrap { public ?Pt $inner = null; }
+enum Suit { case Hearts; case Spades; }
+enum Grade: string { case A = 'a'; case B = 'b'; }
+$b1 = new Bag(); $b2 = new Bag();
+var_dump($b1 == $b2);
+$b2->items = [1, 2, 4];
+var_dump($b1 == $b2);
+$w1 = new Wrap(); $w2 = new Wrap();
+var_dump($w1 == $w2);
+$w1->inner = new Pt();
+var_dump($w1 == $w2);
+$w2->inner = new Pt();
+var_dump($w1 == $w2);
+var_dump(Suit::Hearts == Suit::Hearts, Suit::Hearts == Suit::Spades, Suit::Hearts === Suit::Hearts);
+var_dump(Grade::A == Grade::A, Grade::A == Grade::B);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(true)\nbool(false)\n\
+         bool(true)\nbool(false)\nbool(true)\n\
+         bool(true)\nbool(false)\nbool(true)\n\
+         bool(true)\nbool(false)\n"
+    );
+}
+
+/// Verifies a cyclic object graph does not make `==` recurse until the stack dies.
+///
+/// PHP raises `Nesting level too deep - recursive dependency?`; elephc's walker caps
+/// its depth and reports "not equal" instead (documented in `docs/php/classes.md`).
+/// The regression this pins is that the program terminates normally.
+#[test]
+fn test_object_loose_equality_survives_recursive_dependency() {
+    let out = compile_and_run(
+        r#"<?php
+class Node { public ?Node $self = null; public int $v = 1; }
+$a = new Node(); $a->self = $a;
+$b = new Node(); $b->self = $b;
+var_dump($a == $b);
+echo "survived";
+"#,
+    );
+    assert_eq!(out, "bool(false)\nsurvived");
+}

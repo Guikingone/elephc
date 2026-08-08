@@ -21,7 +21,8 @@ use crate::names::{php_symbol_key, property_hook_get_method, property_hook_set_m
 use crate::parser::ast::{Expr, ExprKind, StaticReceiver, Stmt, TypeExpr};
 use crate::span::Span;
 use crate::types::{
-    ClassInfo, EnumInfo, ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
+    array_storage_conversion, join_array_storage_conversion, ClassInfo, EnumInfo,
+    ExternFunctionSig, FunctionSig, InterfaceInfo, PackedClassInfo, PhpType,
     ReturnAliasSummaries, ThrowAccessInfo, TypeEnv,
 };
 
@@ -38,6 +39,11 @@ pub(crate) struct LoopFrame {
     pub break_block: BlockId,
     pub continue_block: BlockId,
     pub cleanup: Option<LoopCleanup>,
+    /// Lifetime reference a by-reference `foreach` took on a borrowed element source, so the
+    /// loop keeps iterating live storage even if the body drops the parent that owned it
+    /// (issue #580). Released on every exit that skips the loop's own exit block, exactly like
+    /// `cleanup`.
+    pub source_pin: Option<LoopCleanup>,
 }
 
 /// Cleanup that must run when control leaves a loop without visiting its exit block.
@@ -88,6 +94,79 @@ pub(crate) struct ClosureCapture {
     pub value: ValueId,
 }
 
+/// Rollback point for a speculative statement lowering.
+pub(crate) struct LoweringSnapshot {
+    function: Function,
+    insertion_block: Option<BlockId>,
+    data: DataPoolLengths,
+    local_slots: HashMap<String, LocalSlotId>,
+    local_kinds: HashMap<String, LocalKind>,
+    local_types: TypeEnv,
+    initialized_slots: HashSet<LocalSlotId>,
+    constants: HashMap<String, (ExprKind, PhpType)>,
+    loop_stack: Vec<LoopFrame>,
+    finally_stack: Vec<FinallyFrame>,
+    static_callable_locals: HashMap<String, StaticCallableBinding>,
+    reflection_class_locals: HashMap<String, String>,
+    reflection_function_locals: HashMap<String, String>,
+    reflection_property_locals: HashMap<String, (String, String)>,
+    reflection_method_locals: HashMap<String, (String, String)>,
+    reflection_arg_array_locals: HashMap<String, Vec<Expr>>,
+    fiber_start_sigs: HashMap<String, FunctionSig>,
+    ref_bound_locals: HashSet<String>,
+    ref_cell_owner_locals: HashMap<String, LocalSlotId>,
+    foreach_int_key_locals: HashSet<String>,
+    array_conversions: HashMap<String, PhpType>,
+    speculating: bool,
+    closure_count: usize,
+    pending_static_callable_result: Option<StaticCallableBinding>,
+    closure_counter: usize,
+    hidden_temp_counter: usize,
+    eval_barrier_active: bool,
+    eval_executed: bool,
+    eval_scope_read_param: Option<String>,
+    eval_scope_read_names: HashSet<String>,
+    eval_scope_write_names: HashSet<String>,
+    eval_scope_flush_names: BTreeSet<String>,
+}
+
+/// Lengths of append-only intern pools captured for speculative rollback.
+struct DataPoolLengths {
+    strings: usize,
+    float_literals: usize,
+    global_names: usize,
+    function_names: usize,
+    class_names: usize,
+    method_names: usize,
+    property_names: usize,
+}
+
+impl DataPoolLengths {
+    /// Captures the current length of every intern pool.
+    fn capture(data: &DataPool) -> Self {
+        Self {
+            strings: data.strings.len(),
+            float_literals: data.float_literals.len(),
+            global_names: data.global_names.len(),
+            function_names: data.function_names.len(),
+            class_names: data.class_names.len(),
+            method_names: data.method_names.len(),
+            property_names: data.property_names.len(),
+        }
+    }
+
+    /// Removes entries interned after the snapshot.
+    fn truncate(&self, data: &mut DataPool) {
+        data.strings.truncate(self.strings);
+        data.float_literals.truncate(self.float_literals);
+        data.global_names.truncate(self.global_names);
+        data.function_names.truncate(self.function_names);
+        data.class_names.truncate(self.class_names);
+        data.method_names.truncate(self.method_names);
+        data.property_names.truncate(self.property_names);
+    }
+}
+
 const EVAL_CONTEXT_LOCAL_NAME: &str = "__eir_eval_context";
 const EVAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_scope";
 const EVAL_GLOBAL_SCOPE_LOCAL_NAME: &str = "__eir_eval_global_scope";
@@ -119,6 +198,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
+    /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
+    /// target. Those locals get boxed `Mixed` frame storage from their first store, so
+    /// every read of the slot is already a boxed load instead of an owned string detach.
+    pub string_incdec_locals: &'m HashSet<(String, String)>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -143,6 +226,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     /// still promoting for keys that may be strings (generic `Array(Mixed)`,
     /// `AssocArray`, `Mixed`, `Union` sources).
     foreach_int_key_locals: HashSet<String>,
+    /// Joined storage representation conversions observed while lowering this function.
+    array_conversions: HashMap<String, PhpType>,
+    /// Whether the current statement lowering is a disposable discovery pass.
+    speculating: bool,
     pub return_type: IrType,
     pub return_php_type: PhpType,
     /// `true` when the function/closure being lowered returns by reference (`function &f()`),
@@ -190,6 +277,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
+        string_incdec_locals: &'m HashSet<(String, String)>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -222,6 +310,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             builtin_call_types,
             loop_storage_types,
+            string_incdec_locals,
             loop_storage_scope,
             constants: constants.clone(),
             top_level_env,
@@ -238,6 +327,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             ref_bound_locals: HashSet::new(),
             ref_cell_owner_locals: HashMap::new(),
             foreach_int_key_locals: HashSet::new(),
+            array_conversions: HashMap::new(),
+            speculating: false,
             return_type,
             return_php_type,
             by_ref_return: false,
@@ -257,6 +348,80 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             eval_scope_flush_names: BTreeSet::new(),
             source_path,
         }
+    }
+
+    /// Captures every mutable field touched by speculative statement lowering.
+    pub(crate) fn snapshot(&self) -> LoweringSnapshot {
+        LoweringSnapshot {
+            function: self.builder.snapshot_function(),
+            insertion_block: self.builder.insertion_block(),
+            data: DataPoolLengths::capture(self.data),
+            local_slots: self.local_slots.clone(),
+            local_kinds: self.local_kinds.clone(),
+            local_types: self.local_types.clone(),
+            initialized_slots: self.initialized_slots.clone(),
+            constants: self.constants.clone(),
+            loop_stack: self.loop_stack.clone(),
+            finally_stack: self.finally_stack.clone(),
+            static_callable_locals: self.static_callable_locals.clone(),
+            reflection_class_locals: self.reflection_class_locals.clone(),
+            reflection_function_locals: self.reflection_function_locals.clone(),
+            reflection_property_locals: self.reflection_property_locals.clone(),
+            reflection_method_locals: self.reflection_method_locals.clone(),
+            reflection_arg_array_locals: self.reflection_arg_array_locals.clone(),
+            fiber_start_sigs: self.fiber_start_sigs.clone(),
+            ref_bound_locals: self.ref_bound_locals.clone(),
+            ref_cell_owner_locals: self.ref_cell_owner_locals.clone(),
+            foreach_int_key_locals: self.foreach_int_key_locals.clone(),
+            array_conversions: self.array_conversions.clone(),
+            speculating: self.speculating,
+            closure_count: self.closures.len(),
+            pending_static_callable_result: self.pending_static_callable_result.clone(),
+            closure_counter: self.closure_counter,
+            hidden_temp_counter: self.hidden_temp_counter,
+            eval_barrier_active: self.eval_barrier_active,
+            eval_executed: self.eval_executed,
+            eval_scope_read_param: self.eval_scope_read_param.clone(),
+            eval_scope_read_names: self.eval_scope_read_names.clone(),
+            eval_scope_write_names: self.eval_scope_write_names.clone(),
+            eval_scope_flush_names: self.eval_scope_flush_names.clone(),
+        }
+    }
+
+    /// Restores state captured before a discarded speculative lowering.
+    pub(crate) fn restore(&mut self, snapshot: LoweringSnapshot) {
+        self.builder.restore_function(snapshot.function);
+        self.builder.restore_insertion_cursor(snapshot.insertion_block);
+        snapshot.data.truncate(self.data);
+        self.local_slots = snapshot.local_slots;
+        self.local_kinds = snapshot.local_kinds;
+        self.local_types = snapshot.local_types;
+        self.initialized_slots = snapshot.initialized_slots;
+        self.constants = snapshot.constants;
+        self.loop_stack = snapshot.loop_stack;
+        self.finally_stack = snapshot.finally_stack;
+        self.static_callable_locals = snapshot.static_callable_locals;
+        self.reflection_class_locals = snapshot.reflection_class_locals;
+        self.reflection_function_locals = snapshot.reflection_function_locals;
+        self.reflection_property_locals = snapshot.reflection_property_locals;
+        self.reflection_method_locals = snapshot.reflection_method_locals;
+        self.reflection_arg_array_locals = snapshot.reflection_arg_array_locals;
+        self.fiber_start_sigs = snapshot.fiber_start_sigs;
+        self.ref_bound_locals = snapshot.ref_bound_locals;
+        self.ref_cell_owner_locals = snapshot.ref_cell_owner_locals;
+        self.foreach_int_key_locals = snapshot.foreach_int_key_locals;
+        self.array_conversions = snapshot.array_conversions;
+        self.speculating = snapshot.speculating;
+        self.closures.truncate(snapshot.closure_count);
+        self.pending_static_callable_result = snapshot.pending_static_callable_result;
+        self.closure_counter = snapshot.closure_counter;
+        self.hidden_temp_counter = snapshot.hidden_temp_counter;
+        self.eval_barrier_active = snapshot.eval_barrier_active;
+        self.eval_executed = snapshot.eval_executed;
+        self.eval_scope_read_param = snapshot.eval_scope_read_param;
+        self.eval_scope_read_names = snapshot.eval_scope_read_names;
+        self.eval_scope_write_names = snapshot.eval_scope_write_names;
+        self.eval_scope_flush_names = snapshot.eval_scope_flush_names;
     }
 
     /// Returns the canonical PHP source path associated with this lowered body, if known.
@@ -421,10 +586,48 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
 
     /// Updates the current known PHP type for a local.
     pub(crate) fn set_local_type(&mut self, name: &str, ty: PhpType) {
+        self.set_local_type_impl(name, ty, true);
+    }
+
+    /// Updates a local type and optionally records a runtime array-layout conversion.
+    fn set_local_type_impl(&mut self, name: &str, ty: PhpType, track_array_conversion: bool) {
         if let Some(slot) = self.local_slots.get(name).copied() {
             self.builder.widen_local_storage_type(slot, ty.clone());
         }
+        if track_array_conversion {
+            if let Some(target) = array_storage_conversion(self.local_types.get(name), &ty) {
+                let joined = self
+                    .array_conversions
+                    .get(name)
+                    .map_or(target.clone(), |previous| {
+                        join_array_storage_conversion(previous, &target)
+                    });
+                self.array_conversions.insert(name.to_string(), joined);
+            }
+        }
         self.local_types.insert(name.to_string(), ty);
+    }
+
+    /// Returns the joined array representation conversion observed for a local.
+    pub(crate) fn array_conversion(&self, name: &str) -> Option<&PhpType> {
+        self.array_conversions.get(name)
+    }
+
+    /// Clears conversion facts for the candidate locals before a discovery pass.
+    pub(crate) fn forget_array_conversions(&mut self, names: &[String]) {
+        for name in names {
+            self.array_conversions.remove(name);
+        }
+    }
+
+    /// Returns whether lowering is currently running only to discover conversions.
+    pub(crate) fn is_speculating(&self) -> bool {
+        self.speculating
+    }
+
+    /// Sets speculative-lowering mode and returns its previous value.
+    pub(crate) fn set_speculating(&mut self, speculating: bool) -> bool {
+        std::mem::replace(&mut self.speculating, speculating)
     }
 
     /// Updates only the flow-sensitive PHP type fact for a local.
@@ -442,6 +645,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
     }
 
+    /// Returns the frame storage type a local must use, boxing `string` locals that PHP's
+    /// `++`/`--` can retype.
+    ///
+    /// `"9"++` is `int(10)`, so a local the checker recorded as a string increment/decrement
+    /// target cannot keep concrete `Str` storage. Widening the slot lazily at the increment
+    /// is not enough: the slot type is a whole-frame property, so every OTHER `Str`-typed
+    /// read of the same slot would then have to detach an owned copy out of the boxed cell
+    /// (`__rt_mixed_cast_string`), leaking one heap block per executed read. Boxing from the
+    /// first store — including the incoming-parameter store — keeps every access on the
+    /// ordinary boxed-Mixed path instead.
+    fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        if !matches!(php_type.codegen_repr(), PhpType::Str) {
+            return php_type;
+        }
+        let key = (self.loop_storage_scope.clone(), name.to_string());
+        if self.string_incdec_locals.contains(&key) {
+            return PhpType::Mixed;
+        }
+        php_type
+    }
+
     /// Declares a local slot with the requested role if it does not already exist.
     pub(crate) fn declare_local_with_kind(
         &mut self,
@@ -452,14 +676,52 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(slot) = self.local_slots.get(name) {
             return *slot;
         }
+        let boxed_php_type = if kind == LocalKind::PhpLocal {
+            self.boxed_incdec_storage_type(name, php_type.clone())
+        } else {
+            php_type.clone()
+        };
+        // An incoming `string` parameter arrives with a `Str` entry already seeded from the
+        // signature environment, so the boxed contract has to REPLACE that fact rather than
+        // defer to it; otherwise every read of the parameter stays `Str`-typed against the
+        // boxed slot the increment needs.
+        let overrides_seeded_type = boxed_php_type != php_type;
+        let php_type = boxed_php_type;
         let ir_type = value_ir_type(&php_type);
         let slot = self
             .builder
             .add_local(Some(name.to_string()), ir_type, php_type.clone(), kind);
         self.local_slots.insert(name.to_string(), slot);
         self.local_kinds.insert(name.to_string(), kind);
-        self.local_types.entry(name.to_string()).or_insert(php_type);
+        if overrides_seeded_type {
+            self.local_types.insert(name.to_string(), php_type);
+        } else {
+            self.local_types.entry(name.to_string()).or_insert(php_type);
+        }
         slot
+    }
+
+    /// Rebinds a by-value array/hash parameter to an owning copy-on-write shadow slot.
+    ///
+    /// Call sites pass container pointers as borrows. Acquiring the value into a fresh local makes
+    /// the first callee mutation observe refcount two and split instead of modifying caller storage.
+    pub(crate) fn privatize_container_param(
+        &mut self,
+        name: &str,
+        php_type: &PhpType,
+        span: Option<Span>,
+    ) {
+        let borrowed = self.load_local(name, span);
+        let shadow = self.builder.add_local(
+            Some(format!("{}#cow", name)),
+            value_ir_type(php_type),
+            php_type.clone(),
+            LocalKind::PhpLocal,
+        );
+        self.local_slots.insert(name.to_string(), shadow);
+        self.local_kinds
+            .insert(name.to_string(), LocalKind::PhpLocal);
+        self.store_local(name, borrowed, php_type.clone(), span);
     }
 
     /// Marks a local slot as initialized by caller or synthetic setup.
@@ -474,9 +736,37 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.initialized_slots.clone()
     }
 
+    /// Returns whether a local slot is definitely initialized at this point.
+    pub(crate) fn slot_is_initialized(&self, slot: LocalSlotId) -> bool {
+        self.initialized_slots.contains(&slot)
+    }
+
     /// Replaces the definitely-initialized local set after branch lowering or merge analysis.
     pub(crate) fn restore_initialized_slots(&mut self, initialized_slots: HashSet<LocalSlotId>) {
         self.initialized_slots = initialized_slots;
+    }
+
+    /// Captures the flow-sensitive local-type facts at a control-flow split.
+    pub(crate) fn local_types_snapshot(&self) -> TypeEnv {
+        self.local_types.clone()
+    }
+
+    /// Restores only the flow-sensitive type facts at a branch split.
+    ///
+    /// This deliberately avoids `set_local_type`, which would also widen the shared frame slot;
+    /// storage widening must survive while each branch gets its own logical type environment.
+    pub(crate) fn restore_local_types(&mut self, types: TypeEnv) {
+        self.local_types = types;
+    }
+
+    /// Returns whether a local is backed by program-global storage.
+    pub(crate) fn local_uses_global_storage(&self, name: &str) -> bool {
+        let kind = self
+            .local_kinds
+            .get(name)
+            .copied()
+            .unwrap_or(LocalKind::PhpLocal);
+        self.uses_global_storage(name, kind)
     }
 
     /// Records that a local currently aliases by-reference storage.
@@ -494,11 +784,78 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_bound_locals.contains(name)
     }
 
+    /// Returns the hidden internal-array-pointer cursor slot for `variable`, declaring it
+    /// on first use.
+    ///
+    /// PHP keeps the internal pointer on the hashtable itself. elephc's array and hash
+    /// headers have no room for it — widening either would shift every offset in every
+    /// runtime helper and inline lowering — so the cursor lives in a hidden `Int` frame
+    /// slot beside the array local, named after that local so repeated calls on the same
+    /// variable share one cursor.
+    ///
+    /// The slot is seeded with `0` at the END of the entry block, which is where PHP's
+    /// freshly-created array starts its pointer. Appending there (rather than at the call
+    /// site) is what makes `while (current($a) !== false) { next($a); }` work: a call-site
+    /// seed inside a loop body would rewind the cursor on every iteration. The entry block
+    /// stores its terminator separately from its instruction list, so appending after it
+    /// has been terminated still lands before the branch and dominates every use.
+    pub(crate) fn array_pointer_cursor_slot(&mut self, variable: &str) -> LocalSlotId {
+        let name = Self::array_pointer_cursor_name(variable);
+        if let Some(slot) = self.local_slots.get(&name) {
+            return *slot;
+        }
+        let slot = self.declare_local_with_kind(&name, PhpType::Int, LocalKind::HiddenTemp);
+        self.builder.seed_entry_int_local(slot, 0);
+        self.initialized_slots.insert(slot);
+        slot
+    }
+
+    /// Rewinds a local's internal-array-pointer cursor to the first element, if it has one.
+    ///
+    /// PHP resets the internal pointer whenever the variable is bound to a different array
+    /// (`$a = [1,2,3]; next($a); $a = [4,5,6];` leaves `key($a)` at `0`), because the new
+    /// value carries its own hashtable. Assignments lowered BEFORE the variable's first
+    /// pointer call see no slot yet and skip this, which is harmless: the cursor is still
+    /// sitting on its entry-block seed of `0` at that point.
+    pub(crate) fn reset_array_pointer_cursor(&mut self, variable: &str) {
+        let name = Self::array_pointer_cursor_name(variable);
+        let Some(slot) = self.local_slots.get(&name).copied() else {
+            return;
+        };
+        let zero = self.builder.emit_const_i64(0);
+        self.builder.emit_store_local(slot, zero);
+    }
+
+    /// Builds the reserved frame-slot name holding one local's internal-array-pointer cursor.
+    ///
+    /// The `__eir_` prefix cannot appear in PHP source, so the cursor can never collide
+    /// with a user variable.
+    fn array_pointer_cursor_name(variable: &str) -> String {
+        format!("__eir_aptr_{}", variable)
+    }
+
     /// Declares a fresh hidden temporary slot and returns its synthetic name.
     pub(crate) fn declare_hidden_temp(&mut self, php_type: PhpType) -> String {
         let name = format!("__eir_tmp{}", self.hidden_temp_counter);
         self.hidden_temp_counter += 1;
         self.declare_local_with_kind(&name, php_type, LocalKind::HiddenTemp);
+        name
+    }
+
+    /// Declares a fresh synthetic slot that follows ordinary PHP local-variable ownership.
+    ///
+    /// `declare_hidden_temp` uses `LocalKind::HiddenTemp`, whose store *moves* an already-owned
+    /// expression result into the slot without retaining it. A lowering that desugars a PHP
+    /// construct into `$tmp = <place>; ...; <place> = $tmp;` needs the opposite contract: the
+    /// read may be a borrowed pointer (a static-property load carries no reference of its own),
+    /// so the store must retain and function-exit cleanup must release. Declaring the slot as
+    /// `LocalKind::PhpLocal` gives it exactly the ownership rules the equivalent user-written
+    /// assignment would have. The `__eir_` prefix cannot appear in PHP source, so the name can
+    /// never collide with a user variable.
+    pub(crate) fn declare_synthetic_php_local(&mut self, php_type: PhpType) -> String {
+        let name = format!("__eir_place{}", self.hidden_temp_counter);
+        self.hidden_temp_counter += 1;
+        self.declare_local_with_kind(&name, php_type, LocalKind::PhpLocal);
         name
     }
 
@@ -1021,6 +1378,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.should_store_to_eval_scope(name) {
             return self.store_eval_scope_name(name, value, span);
         }
+        // Binding the variable to a different array gives it a different hashtable, and
+        // PHP's internal pointer belongs to the hashtable: rewind the hidden cursor so
+        // `$a = [1,2,3]; next($a); $a = [4,5,6];` leaves `key($a)` at `0` like PHP.
+        self.reset_array_pointer_cursor(name);
         let previous_slot = self.local_slots.get(name).copied();
         let previous_type = self.local_type(name);
         let previous_kind = self
@@ -1031,6 +1392,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let uses_global = self.uses_global_storage(name, previous_kind);
         let php_type = if uses_global {
             self.global_alias_type(name)
+        } else if previous_kind == LocalKind::PhpLocal {
+            // A `string` local PHP's `++`/`--` can retype uses boxed Mixed storage from its
+            // FIRST store, so no read of the slot is ever typed `Str` against boxed storage.
+            self.boxed_incdec_storage_type(name, php_type)
         } else {
             php_type
         };
@@ -1364,7 +1729,23 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_mutated_local_impl(name, value, php_type, span, true)
+        self.store_mutated_local_impl(name, value, php_type, span, true, true)
+    }
+
+    /// Stores a by-reference call's internal array normalization without hoisting it.
+    ///
+    /// Call lowering deliberately captures the operand's concrete representation before adapting
+    /// an `array<mixed>` by-reference argument. Treating that adaptation as a statement-level
+    /// conversion makes the fixed-point pass pre-widen the operand and breaks concrete builtin
+    /// dispatch such as `sort()` and `array_pop()`.
+    pub(crate) fn store_call_normalized_local(
+        &mut self,
+        name: &str,
+        value: LoweredValue,
+        php_type: PhpType,
+        span: Option<Span>,
+    ) -> LoweredValue {
+        self.store_mutated_local_impl(name, value, php_type, span, true, false)
     }
 
     /// Stores a mutation result whose previous boxed local owner was released beforehand.
@@ -1375,7 +1756,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
     ) -> LoweredValue {
-        self.store_mutated_local_impl(name, value, php_type, span, false)
+        self.store_mutated_local_impl(name, value, php_type, span, false, true)
     }
 
     /// Implements consuming local storeback with caller-selected cleanup timing.
@@ -1386,6 +1767,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         php_type: PhpType,
         span: Option<Span>,
         release_previous: bool,
+        track_array_conversion: bool,
     ) -> LoweredValue {
         self.clear_static_callable_local(name);
         self.clear_reflection_class_local(name);
@@ -1403,12 +1785,12 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let slot = self.declare_local(name, php_type.clone());
         if uses_global {
             self.store_global_name(name, slot, value, span);
-            self.set_local_type(name, php_type);
+            self.set_local_type_impl(name, php_type, track_array_conversion);
             return value;
         }
         let is_ref_bound = self.is_ref_bound_local(name) && previous_kind == LocalKind::PhpLocal;
         let value_type = self.builder.value_php_type(value.value).codegen_repr();
-        self.set_local_type(name, php_type.clone());
+        self.set_local_type_impl(name, php_type.clone(), track_array_conversion);
         let storage_type = self.builder.local_php_type(slot).codegen_repr();
         if release_previous
             && !is_ref_bound
@@ -1499,6 +1881,29 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.mark_ref_bound_local(name);
         self.initialized_slots.insert(slot);
         self.initialized_slots.insert(owner_slot);
+    }
+
+    /// Widens a concrete local to boxed `Mixed` storage, then promotes that storage to a
+    /// durable heap reference cell suitable for an escaping by-reference parameter.
+    pub(crate) fn promote_local_mixed_ref_cell(&mut self, name: &str, span: Option<Span>) {
+        if self.is_ref_bound_local(name) && self.local_type(name).codegen_repr() == PhpType::Mixed {
+            return;
+        }
+        if self.local_type(name).codegen_repr() != PhpType::Mixed {
+            let source = self.load_local(name, span);
+            let boxed = self.emit_value(
+                Op::MixedBox,
+                vec![source.value],
+                None,
+                PhpType::Mixed,
+                Op::MixedBox.default_effects(),
+                span,
+            );
+            self.store_local(name, boxed, PhpType::Mixed, span);
+        }
+        if !self.is_ref_bound_local(name) {
+            self.promote_local_ref_cell(name, span);
+        }
     }
 
     /// Binds one local name to the same ref-cell pointer as another local.
@@ -1667,9 +2072,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
+                    | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
                     | Op::StrPersist
@@ -1810,7 +2217,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn call_result_may_alias_arg(&self, argument: ValueId, result: ValueId) -> bool {
         if matches!(
             self.builder.value_defining_op(argument),
-            Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+            Some(
+                Op::MixedNumericBinop
+                    | Op::StrIncDec
+                    | Op::ICheckedAdd
+                    | Op::ICheckedSub
+                    | Op::ICheckedMul
+                    | Op::ICheckedPow
+            )
         ) {
             return false;
         }
@@ -1944,7 +2358,16 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let op = self.builder.value_defining_op(value);
         (matches!(php_type, PhpType::Mixed | PhpType::Union(_))
             || (php_type.is_refcounted() && php_type != PhpType::Str))
-            && matches!(op, Some(Op::ArrayGet | Op::HashGet | Op::HashGetSilent))
+            && matches!(
+                op,
+                Some(
+                    Op::ArrayGet
+                        | Op::ArrayGetForWrite
+                        | Op::HashGet
+                        | Op::HashGetSilent
+                        | Op::HashGetForWrite
+                )
+            )
     }
 
     /// Returns whether an index-read receiver is itself an owned intermediate
@@ -1970,8 +2393,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             Some(
                 Op::ArrayGet
                     | Op::ArrayGetSilent
+                    | Op::ArrayGetForWrite
                     | Op::HashGet
                     | Op::HashGetSilent
+                    | Op::HashGetForWrite
                     | Op::ArrayGetMixedKey
                     | Op::ArrayGetMixedKeySilent
             )
@@ -1986,7 +2411,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         match inst.immediate {
             Some(Immediate::RuntimeCall(
                 crate::ir::RuntimeCallTarget::ArrayFetchForWrite,
-            )) => false,
+            )) => matches!(inst.result_php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)),
             Some(Immediate::RuntimeCall(crate::ir::RuntimeCallTarget::Function(target))) => {
                 matches!(
                     target.result_ownership(),

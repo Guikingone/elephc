@@ -95,3 +95,45 @@ fn test_parenthesized_expression_statement() {
         )]
     );
 }
+
+/// Verifies `$this->n++;` parses to the same read-modify-write statement as `$this->n += 1;`.
+/// Regression: the `$this` statement parser used to reject the trailing `++`.
+#[test]
+fn test_this_property_postfix_increment_parses_as_compound_assignment() {
+    assert_eq!(
+        parse_source("<?php $this->n++;"),
+        parse_source("<?php $this->n += 1;")
+    );
+    assert_eq!(
+        parse_source("<?php $this->n--;"),
+        parse_source("<?php $this->n -= 1;")
+    );
+}
+
+/// Verifies prefix `++`/`--` on complex targets parses to the same statement as the
+/// equivalent compound assignment, since statement position discards the result.
+#[test]
+fn test_prefix_increment_on_complex_targets_parses_as_compound_assignment() {
+    assert_eq!(
+        parse_source("<?php ++$this->n;"),
+        parse_source("<?php $this->n += 1;")
+    );
+    assert_eq!(
+        parse_source("<?php ++$obj->n;"),
+        parse_source("<?php $obj->n += 1;")
+    );
+    assert_eq!(
+        parse_source("<?php --$a[0];"),
+        parse_source("<?php $a[0] -= 1;")
+    );
+}
+
+/// Verifies `$this->arr[0]++;` parses to the same statement as the compound assignment,
+/// so the array element under a `$this` property is reached as well.
+#[test]
+fn test_this_property_element_increment_parses_as_compound_assignment() {
+    assert_eq!(
+        parse_source("<?php $this->arr[0]++;"),
+        parse_source("<?php $this->arr[0] += 1;")
+    );
+}

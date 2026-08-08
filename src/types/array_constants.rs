@@ -11,11 +11,14 @@
 
 /// Tuple of `(name, value)` pairs for PHP array integer constants.
 ///
-/// `array_filter()` uses these constants to select which callback arguments are passed.
+/// `array_filter()` uses the `ARRAY_FILTER_*` constants to select which callback arguments
+/// are passed; `count()` uses the `COUNT_*` constants to select flat or recursive counting.
 pub(crate) const ARRAY_INT_CONSTANTS: &[(&str, i64)] = &[
     ("ARRAY_FILTER_USE_VALUE", 0),
     ("ARRAY_FILTER_USE_BOTH", 1),
     ("ARRAY_FILTER_USE_KEY", 2),
+    ("COUNT_NORMAL", 0),
+    ("COUNT_RECURSIVE", 1),
 ];
 
 #[cfg(test)]
@@ -30,6 +33,23 @@ mod tests {
             .find(|(name, _)| *name == "ARRAY_FILTER_USE_VALUE")
             .expect("ARRAY_FILTER_USE_VALUE defined");
         assert_eq!(entry.1, 0);
+    }
+
+    /// Verifies `count()`'s mode constants carry php-src's exact values.
+    ///
+    /// `count()`'s omitted-`$mode` default and its `ValueError` range check both assume
+    /// `COUNT_NORMAL == 0` and `COUNT_RECURSIVE == 1`.
+    #[test]
+    fn count_modes_match_php() {
+        let normal = ARRAY_INT_CONSTANTS
+            .iter()
+            .find(|(name, _)| *name == "COUNT_NORMAL")
+            .expect("COUNT_NORMAL defined");
+        let recursive = ARRAY_INT_CONSTANTS
+            .iter()
+            .find(|(name, _)| *name == "COUNT_RECURSIVE")
+            .expect("COUNT_RECURSIVE defined");
+        assert_eq!((normal.1, recursive.1), (0, 1));
     }
 
     /// Asserts no duplicate names exist in `ARRAY_INT_CONSTANTS`.

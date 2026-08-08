@@ -2,7 +2,7 @@
 title: "call_user_func_array()"
 description: "Calls a callback with an array of parameters."
 sidebar:
-  order: 50
+  order: 51
 ---
 
 ## call_user_func_array()

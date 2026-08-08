@@ -17,7 +17,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::codegen::{abi, emit_box_current_value_as_mixed};
 use crate::ir::{Function, LocalKind, Module};
-use crate::names::php_symbol_key;
+use crate::names::{join_php_symbol, php_symbol_key};
 use crate::parser::ast::{BinOp, Expr, ExprKind, StaticReceiver, Visibility};
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
@@ -1494,17 +1494,20 @@ fn class_id_for_scope(module: &Module, class_name: &str) -> u64 {
 }
 
 /// Returns a platform-safe body label for one class-constant slot.
+///
+/// `mode` is a compiler-controlled literal and becomes part of the fixed prefix; the PHP names
+/// go through `join_php_symbol()` so slots differing only in underscore placement stay distinct.
 fn slot_body_label(module: &Module, slot: &EvalClassConstantSlot, mode: &str) -> String {
     let suffix = match module.target.arch {
         Arch::AArch64 => "",
         Arch::X86_64 => "_x",
     };
     format!(
-        "__elephc_eval_class_constant_{}_{}_{}_{}{}",
-        mode,
-        label_fragment(&slot.reflected_class),
-        label_fragment(&slot.declaring_class),
-        label_fragment(&slot.constant),
+        "{}{}",
+        join_php_symbol(
+            &format!("__elephc_eval_class_constant_{}", mode),
+            &[&slot.reflected_class, &slot.declaring_class, &slot.constant]
+        ),
         suffix
     )
 }
@@ -1514,13 +1517,6 @@ fn slot_miss_label(module: &Module, slot: &EvalClassConstantSlot, mode: &str) ->
     format!("{}_miss", slot_body_label(module, slot, mode))
 }
 
-/// Converts arbitrary PHP metadata names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a C-global label using the target's symbol spelling.
 fn label_c_global(module: &Module, emitter: &mut Emitter, symbol: &str) {

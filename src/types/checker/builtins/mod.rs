@@ -28,10 +28,12 @@ pub(crate) use catalog::{
     strict_php_hidden_builtin, supported_builtin_function_names_for_profile,
 };
 pub(crate) use callables::{
-    array_element_type, array_filter_callback_arg_types, callback_supports_complex_descriptor_env,
+    array_element_type, array_filter_callback_arg_types, array_key_type,
+    array_walk_callback_arg_types, callback_supports_complex_descriptor_env,
     check_array_callback_builtin_call, check_call_user_func, check_call_user_func_array,
-    check_callback_builtin_call, check_function_exists,
+    check_function_exists,
     check_preg_replace_callback_first_class_call,
+    contextual_callback_arg_positions,
     runtime_callable_array_type,
 };
 
@@ -188,7 +190,15 @@ impl Checker {
                 unreachable!("non-checker builtin returned from semantic validation branch");
             };
             if !lazy {
-                for arg in args.iter() {
+                // A contextual callback position is deliberately left to the hook, which
+                // types the closure's unannotated parameters from the array element/key
+                // before checking its body. Pre-inferring it here would check that body
+                // once against the unhinted parameter fallback and reject valid PHP.
+                let contextual = contextual_callback_arg_positions(name);
+                for (idx, arg) in args.iter().enumerate() {
+                    if contextual.contains(&idx) {
+                        continue;
+                    }
                     self.infer_type(arg, env)?;
                 }
             }

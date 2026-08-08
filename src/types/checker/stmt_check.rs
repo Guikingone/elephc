@@ -32,9 +32,17 @@ impl Checker {
     /// Returns an error for unresolved conditionals, namespace/use directives,
     /// includes, or invalid break/continue levels.
     pub fn check_stmt(&mut self, stmt: &Stmt, env: &mut TypeEnv) -> Result<(), CompileError> {
-        crate::strict_php::with_source_mode(stmt.source_mode, || {
+        // `declare(strict_types=1)` is scoped to the physical file the statement was written in,
+        // and the checker only ever sees the merged program, so the file's answer travels on the
+        // statement. Save/restore rather than assign: a strict file's `include` of a coercive one
+        // must not leave the includer's setting behind, and vice versa.
+        let outer_strict_types = self.strict_types;
+        self.strict_types = stmt.strict_types;
+        let result = crate::strict_php::with_source_mode(stmt.source_mode, || {
             self.check_stmt_in_current_source_mode(stmt, env)
-        })
+        });
+        self.strict_types = outer_strict_types;
+        result
     }
 
     /// Checks one statement after its physical source profile has been installed.
@@ -45,6 +53,9 @@ impl Checker {
     ) -> Result<(), CompileError> {
         match &stmt.kind {
             StmtKind::Synthetic(stmts) => {
+                if self.check_empty_indexed_nested_append(stmts, env)? {
+                    return Ok(());
+                }
                 for stmt in stmts {
                     self.check_stmt(stmt, env)?;
                 }
@@ -109,7 +120,15 @@ impl Checker {
             StmtKind::FunctionDecl { .. } => Ok(()),
             StmtKind::Return(expr) => {
                 if let Some(e) = expr {
-                    self.infer_type_with_assignment_effects(e, env)?;
+                    let returned = self.infer_type_with_assignment_effects(e, env)?;
+                    // Record the type as observed HERE, in flow order, so the later
+                    // flow-insensitive return-coverage pass does not apply a narrowing that
+                    // only holds further down the body to this return. See
+                    // `Checker::flow_typed_returns`.
+                    self.flow_typed_returns.insert(
+                        stmt as *const Stmt as usize,
+                        (stmt.span, returned),
+                    );
                     // `function &f() { return $obj->prop; }` returns a reference to the
                     // property, so promote it to a reference property program-wide.
                     if self.current_by_ref_return {

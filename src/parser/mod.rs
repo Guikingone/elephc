@@ -8,6 +8,8 @@
 //! Key details:
 //! - Parser output preserves spans and PHP syntax shape for later passes to rewrite safely.
 
+/// PHP alternative control-structure syntax (`:` … `endif;`) body parsing helpers.
+mod alt_syntax;
 /// Defines AST node types representing the PHP syntax tree produced by the parser.
 pub mod ast;
 mod attributes;
@@ -97,7 +99,9 @@ pub fn parse_with_recovery_in_mode(
     tokens: &[SpannedToken],
     mode: crate::source::SourceMode,
 ) -> Result<Program, Vec<CompileError>> {
-    crate::source::with_parse_mode(mode, || parse_with_recovery_inner(tokens))
+    crate::source::with_parse_mode(crate::source::SourceProfile::new(mode), || {
+        parse_with_recovery_inner(tokens)
+    })
 }
 
 /// Implements recovery parsing after the source-mode scope has been installed.
