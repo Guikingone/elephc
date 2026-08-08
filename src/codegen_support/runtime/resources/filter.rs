@@ -908,6 +908,14 @@ pub fn emit_stream_close_filter_chains(emitter: &mut Emitter) {
     emitter.instruction("cbz x0, __rt_scfc_close");                             // already dead: nothing to read ahead
     emitter.instruction(&format!("ldr x12, [x0, #{FILTER_NEXT_OFFSET}]"));      // successor handle
     emitter.instruction("str x12, [sp, #24]");
+    // A node carrying a user filter owes it an `onClose()`. The per-descriptor sweep
+    // cannot reach it, so the chain fires it here. Clearing the slot first keeps it to
+    // one call: a STREAM_FILTER_ALL node sits in both chains and is visited twice.
+    emitter.instruction(&format!("ldr x1, [x0, #{FILTER_OBJECT_OFFSET}]"));     // php_user_filter instance, if any
+    emitter.instruction("cbz x1, __rt_scfc_close_ready");                       // a built-in node carries none
+    emitter.instruction(&format!("str xzr, [x0, #{FILTER_OBJECT_OFFSET}]"));    // claim the instance before calling out
+    emitter.instruction("mov x0, x1");
+    emitter.instruction("bl __rt_user_filter_release_obj");                     // onClose()
     emitter.instruction("b __rt_scfc_close_ready");
     emitter.label("__rt_scfc_close");
     emitter.instruction("str xzr, [sp, #24]");                                  // a stale node ends the walk
@@ -965,6 +973,13 @@ fn emit_stream_close_filter_chains_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jz __rt_scfc_close_x");                                // already dead: nothing to read ahead
     emitter.instruction(&format!("mov r11, QWORD PTR [rax + {FILTER_NEXT_OFFSET}]"));
     emitter.instruction("mov QWORD PTR [rbp - 32], r11");
+    // See the AArch64 counterpart: the chain owes a node-carried user filter its
+    // `onClose()`, and the cleared slot keeps a STREAM_FILTER_ALL node to one call.
+    emitter.instruction(&format!("mov rdi, QWORD PTR [rax + {FILTER_OBJECT_OFFSET}]")); // php_user_filter instance, if any
+    emitter.instruction("test rdi, rdi");
+    emitter.instruction("jz __rt_scfc_close_ready_x");                          // a built-in node carries none
+    emitter.instruction(&format!("mov QWORD PTR [rax + {FILTER_OBJECT_OFFSET}], 0")); // claim the instance before calling out
+    emitter.instruction("call __rt_user_filter_release_obj");                   // onClose()
     emitter.instruction("jmp __rt_scfc_close_ready_x");
     emitter.label("__rt_scfc_close_x");
     emitter.instruction("mov QWORD PTR [rbp - 32], 0");                         // a stale node ends the walk
