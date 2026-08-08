@@ -131,6 +131,7 @@ pub(super) fn lower_method_call_with_receiver(
     let result_type = method_call_result_type(ctx, object.value, dispatch_method, op, expr);
     let mut operands = vec![object.value];
     let sig = method_signature(ctx, object.value, dispatch_method);
+    promote_pdo_binding_ref_argument(ctx, object.value, dispatch_method, args);
     let arg_values = lower_args_with_signature(ctx, sig.as_ref(), args);
     operands.extend(arg_values.iter().copied());
     let data = ctx.intern_string(dispatch_method);
@@ -143,11 +144,12 @@ pub(super) fn lower_method_call_with_receiver(
         Some(expr.span),
     );
     let return_alias = method_return_arg_alias(ctx, object.value, dispatch_method);
-    release_owned_call_arg_temporaries(
+    release_owned_call_arg_temporaries_with_signature(
         ctx,
         &arg_values,
         Some(call.value),
         &return_alias,
+        sig.as_ref(),
         expr.span,
     );
     release_owning_receiver_temporary(ctx, object, expr.span);
@@ -221,6 +223,10 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
             ir_type: value_ir_type(&php_type),
         };
         if ctx.value_is_owning_temporary(lowered) {
+            // PHP callees acquire by-value array/hash parameters into owning COW shadow slots.
+            // Their result therefore cannot be an unretained alias of the caller's argument.
+            let callee_owns = signature
+                .is_some_and(|signature| signature.param_is_callee_owned(parameter_index));
             let independently_boxed = signature.is_some_and(|signature| {
                 call_arg_gets_independent_mixed_box(signature, parameter_index, &php_type)
             });
@@ -246,7 +252,7 @@ pub(super) fn release_owned_call_arg_temporaries_with_signature(
                     || (return_alias.proven_aliases_parameter(parameter_index)
                         && ctx.arg_and_result_types_can_alias(*value, result))
             });
-            if !independently_boxed && result_reuses_arg {
+            if !callee_owns && !independently_boxed && result_reuses_arg {
                 // Both suppression reasons above are MAY facts, so an unconditional skip is
                 // right only on the calls that actually hand the payload back. Emitting a
                 // conditional release instead lets each call decide at runtime: the codegen
@@ -350,4 +356,3 @@ pub(super) fn release_owning_receiver_temporary(
         crate::ir_lower::ownership::release_if_owned(ctx, receiver, Some(span));
     }
 }
-

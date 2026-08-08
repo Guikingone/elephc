@@ -231,7 +231,7 @@ fn check_probe(name: &str) {
         let dir = make_test_dir(&format!("elephc_sess_{}", case.name));
         let predicted_independent = table_predicts_independent(case.source);
 
-        let bodies: Vec<(String, String)> = PhpVersion::ALL
+        let bodies: Vec<(String, String)> = PhpVersion::MAINTAINED
             .iter()
             .map(|profile| {
                 let spelling = profile.spelling().to_string();

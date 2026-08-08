@@ -537,6 +537,27 @@ fn validate_opcode_rules(
         | HashCloneShallow => {
             check_first_heap(function, inst_id, inst, IrHeapKind::Hash, "Heap(Hash)")
         }
+        // `SlotDetach` is the one array op that accepts either storage: it nulls `container[key]`
+        // on an indexed array (via `__rt_array_set_refcounted`) or on a hash (via `__rt_hash_set`).
+        // This rule is not optional — the match ends in `_ => Ok(())`, so an unlisted op would be
+        // validated by *accepting anything*, including a malformed operand list.
+        SlotDetach => {
+            check_count(inst_id, inst, 2, "2")?;
+            let container = inst.operands[0];
+            let actual = function
+                .value(container)
+                .ok_or(ValidationError::UnknownValue(container))?
+                .ir_type;
+            match actual {
+                IrType::Heap(IrHeapKind::Array) | IrType::Heap(IrHeapKind::Hash) => Ok(()),
+                _ => Err(ValidationError::OperandTypeMismatch {
+                    inst: inst_id,
+                    operand: container,
+                    expected: "Heap(Array) or Heap(Hash)",
+                    actual,
+                }),
+            }
+        }
         IterCurrentValueRef => check_count(inst_id, inst, 1, "1"),
         ArrayKeyExists | OffsetExists => check_count_at_least(inst_id, inst, 1, "at least 1"),
         BufferLen | BufferGet | BufferSet | BufferFree => {
@@ -557,6 +578,14 @@ fn validate_opcode_rules(
         | InstanceOfDynamic => {
             check_count_at_least(inst_id, inst, 1, "at least 1")
         }
+        CallablePtr
+        | NormalizeCallable
+        | PdoAdapterAddr
+        | DynamicClassHasConstructor
+        | DynamicPdoStatementClassStatus
+        | DynamicPdoCalledClassStatus => check_count(inst_id, inst, 1, "1"),
+        DynamicPdoStatementConstructorCall => check_count(inst_id, inst, 3, "3"),
+        DynamicPdoStatementInitialize => check_count(inst_id, inst, 5, "5"),
         RuntimeCall => validate_typed_runtime_call(function, inst_id, inst),
         _ => Ok(()),
     }

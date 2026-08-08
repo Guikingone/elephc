@@ -228,7 +228,8 @@ fn is_valid_string_offset_index(index: &Expr, idx_ty: &PhpType) -> bool {
 /// `Never`-typed arms (`throw`, normalized at the call site) defer to the
 /// other arm's type, `Void`-typed arms (checker `null`) keep the merge
 /// nullable so the null arm's value survives return-type-driven coercion.
-/// Array pairs widen their element types while keeping the array container.
+/// Array pairs widen their element types while keeping the array container; array/false pairs
+/// retain the declared PHP sentinel union instead of collapsing to bare Mixed.
 /// Object pairs, including supported `false`/null sentinels, retain a normalized
 /// union so declared object-union returns and member validation remain precise;
 /// every other heterogeneous pair widens to `Mixed` so each arm's runtime value
@@ -251,6 +252,13 @@ fn merge_match_arm_result_type(checker: &Checker, acc: PhpType, next: PhpType) -
     }
     if let Some(merged) = merge_array_branch_types(&acc, &next) {
         return merged;
+    }
+    if matches!(acc, PhpType::Array(_) | PhpType::AssocArray { .. })
+        && next == PhpType::False
+        || matches!(next, PhpType::Array(_) | PhpType::AssocArray { .. })
+            && acc == PhpType::False
+    {
+        return checker.normalize_union_type(vec![acc, next]);
     }
     if object_union_match_arm_type(&acc) && object_union_match_arm_type(&next) {
         return merge_object_union_match_arm_types(checker, acc, next);

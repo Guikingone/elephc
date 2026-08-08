@@ -54,7 +54,9 @@ mod instance_property_writes;
 mod static_property_writes;
 mod property_array_writes;
 mod metadata_control;
+mod nested_append;
 mod return_coercions;
+mod repr_fixpoint;
 mod static_property_helpers;
 
 use statement_basics::*;
@@ -89,15 +91,14 @@ pub(super) use array_write_storage::{
 /// Lowers one AST statement into the current EIR insertion block.
 pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     crate::strict_php::with_source_mode(stmt.source_mode, || {
-        lower_stmt_in_current_source_mode(ctx, stmt);
+        if !ctx.builder.insertion_block_is_terminated() {
+            repr_fixpoint::lower_stmt_at_type_fixpoint(ctx, stmt);
+        }
     });
 }
 
-/// Lowers one statement after installing its physical source visibility profile.
-fn lower_stmt_in_current_source_mode(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
-    if ctx.builder.insertion_block_is_terminated() {
-        return;
-    }
+/// Lowers one statement exactly once against the current local representations.
+fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     lower_statement_concat_reset(ctx, stmt.span);
     match &stmt.kind {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
@@ -184,7 +185,13 @@ fn lower_stmt_in_current_source_mode(ctx: &mut LoweringContext<'_, '_>, stmt: &S
             lower_include_once_guard(ctx, label, body, stmt.span);
         }
         StmtKind::Throw(expr) => lower_throw(ctx, expr),
-        StmtKind::Synthetic(body) => lower_block(ctx, body),
+        // Nested appends are parser-generated read/push/write-back groups. Fuse the recognized
+        // shape so a missing inner bucket is auto-vivified and a local bucket can be detached
+        // before mutation; every other synthetic group keeps ordinary block lowering.
+        StmtKind::Synthetic(body) => match nested_append::recognize(ctx, body) {
+            Some(group) => nested_append::lower(ctx, &group, stmt.span),
+            None => lower_block(ctx, body),
+        },
         StmtKind::Try {
             try_body,
             catches,
@@ -252,4 +259,13 @@ fn lower_stmt_in_current_source_mode(ctx: &mut LoweringContext<'_, '_>, stmt: &S
             value,
         } => lower_property_array_assign(ctx, object, property, index, value, stmt.span),
     }
+}
+
+/// Returns whether a local array slot can be converted at the current program point.
+fn local_slot_is_convertible_here(ctx: &LoweringContext<'_, '_>, name: &str) -> bool {
+    repr_fixpoint::local_slot_kind_is_convertible(ctx, name)
+        && ctx
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| ctx.slot_is_initialized(*slot))
 }

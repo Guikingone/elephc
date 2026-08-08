@@ -338,11 +338,19 @@ pub(super) fn lower_new_dynamic(
     expr: &Expr,
 ) -> LoweredValue {
     let mut operands = vec![lower_expr(ctx, name_expr).value];
-    operands.extend(lower_args(ctx, args));
+    let uses_runtime_arg_container = args.iter().any(is_spread_arg)
+        || crate::types::call_args::has_named_args(args);
+    if uses_runtime_arg_container {
+        let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
+            .expect("dynamic constructor arguments always have a runtime container form");
+        operands.push(arg_container.value);
+    } else {
+        operands.extend(lower_args(ctx, args));
+    }
     ctx.emit_value(
         Op::DynamicObjectNewMixed,
         operands,
-        None,
+        uses_runtime_arg_container.then_some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::DynamicObjectNewMixed.default_effects(),
         Some(expr.span),
@@ -382,4 +390,3 @@ pub(super) fn constructor_signature<'a>(
         .get(class_name.as_str().trim_start_matches('\\'))
         .and_then(|class_info| class_info.methods.get(&key))
 }
-

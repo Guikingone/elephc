@@ -158,11 +158,11 @@ pub(super) fn lower_local_parent_fetch_for_write(
                     // The element now exists: the in-bounds read returns the
                     // STORED cell (retained) without an undefined-key warning.
                     let cell = ctx.emit_value(
-                        Op::ArrayGet,
+                        Op::ArrayGetForWrite,
                         vec![ensured.value, key.value],
                         None,
                         PhpType::Mixed,
-                        Op::ArrayGet.default_effects(),
+                        Op::ArrayGetForWrite.default_effects(),
                         Some(span),
                     );
                     Some(cell)
@@ -203,7 +203,7 @@ pub(super) fn lower_local_parent_fetch_for_write(
 /// Ensures a hash element exists for a nested write parent, stores the
 /// possibly reallocated hash back into the local (the previous owner was
 /// already released by `prepare_mutated_local_owner`), and re-reads the
-/// stored cell (retained by `Op::HashGet`) as the parent of the leaf write.
+/// stored cell (retained by `Op::HashGetForWrite`) as the parent of the leaf write.
 pub(super) fn lower_hash_parent_fetch_for_write(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
@@ -223,12 +223,11 @@ pub(super) fn lower_hash_parent_fetch_for_write(
     );
     ctx.store_prepared_mutated_local(name, ensured, assoc_ty, Some(span));
     ctx.emit_value(
-        Op::HashGet,
+        Op::HashGetForWrite,
         vec![ensured.value, key.value],
         None,
         PhpType::Mixed,
-        Op::HashGet.default_effects(),
+        Op::HashGetForWrite.default_effects(),
         Some(span),
     )
 }
-

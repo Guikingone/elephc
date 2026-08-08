@@ -121,11 +121,12 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
             .function(canonical)
             .cloned()
             .unwrap_or(ReturnArgAlias::Unknown);
-        release_owned_call_arg_temporaries(
+        release_owned_call_arg_temporaries_with_signature(
             ctx,
             &operands,
             Some(call.value),
             &return_alias,
+            sig.as_ref(),
             expr.span,
         );
         return call;
@@ -304,4 +305,3 @@ pub(super) fn registry_builtin_result_type(
     };
     Some(normalize_value_php_type(resolved))
 }
-

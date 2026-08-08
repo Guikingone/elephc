@@ -81,6 +81,11 @@ pub(crate) fn build(inputs: LinkPlanningInputs<'_>) -> LinkPlan {
         };
         push_named_once(&mut plan, &mut named, library, origin);
     }
+    if named.contains("elephc_pdo") {
+        for library in linker::pdo_system_libraries() {
+            push_named_once(&mut plan, &mut named, library, LinkOrigin::Runtime);
+        }
+    }
     for requirement in inputs.runtime_requirements {
         match requirement {
             LinkRequirement::NativePackage(_) => {}

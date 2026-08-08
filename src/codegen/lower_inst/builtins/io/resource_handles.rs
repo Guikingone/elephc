@@ -288,9 +288,8 @@ pub(super) fn emit_stream_type_error_and_exit(ctx: &mut FunctionContext<'_>, lab
             ctx.emitter.instruction("mov eax, 1");                              // select Linux x86_64 write syscall
             ctx.emitter.instruction("syscall");                                 // emit the stream TypeError diagnostic
             ctx.emitter.instruction("mov edi, 1");                              // exit with status 1 after reporting the TypeError
-            ctx.emitter.instruction("mov eax, 60");                             // select Linux x86_64 exit syscall
+            ctx.emitter.instruction("mov eax, 231");                            // select Linux x86_64 exit_group syscall
             ctx.emitter.instruction("syscall");                                 // terminate the process after the fatal TypeError
         }
     }
 }
-

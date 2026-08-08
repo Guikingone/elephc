@@ -8,8 +8,19 @@
 //! - Preserves statement ordering, CFG shape, EIR effects, and ownership contracts.
 
 use super::*;
+use crate::types::TypeEnv;
 
-/// Lowers an `if` / `elseif` / `else` chain and terminates unreachable merge blocks explicitly.
+/// One reachable arm of an `if` chain together with its deferred merge edge.
+struct IfArmExit {
+    /// Empty block filled after every sibling arm has been lowered.
+    tail: BlockId,
+    /// Flow-sensitive local types at the end of this arm.
+    types: TypeEnv,
+    /// Definitely-initialized slots at the end of this arm.
+    initialized: HashSet<LocalSlotId>,
+}
+
+/// Lowers an `if` / `elseif` / `else` chain and joins all reachable arm types once.
 pub(super) fn lower_if(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
@@ -19,6 +30,7 @@ pub(super) fn lower_if(
     span: Span,
 ) {
     let merge = ctx.builder.create_named_block("if.merge", Vec::new());
+    let mut arms = Vec::new();
     let merge_reachable = lower_if_chain(
         ctx,
         condition,
@@ -26,8 +38,10 @@ pub(super) fn lower_if(
         elseif_clauses,
         else_body,
         merge,
+        &mut arms,
         span,
     );
+    finish_if_type_join(ctx, arms, merge, span);
     ctx.builder.position_at_end(merge);
     if !merge_reachable {
         ctx.builder.terminate(Terminator::Unreachable);
@@ -35,19 +49,22 @@ pub(super) fn lower_if(
     ctx.clear_static_callable_locals();
 }
 
-/// Recursively emits one condition node in an `if` chain and reports whether the merge is reachable.
-pub(super) fn lower_if_chain(
+/// Recursively emits one condition node and records every reachable arm against one shared merge.
+#[allow(clippy::too_many_arguments)]
+fn lower_if_chain(
     ctx: &mut LoweringContext<'_, '_>,
     condition: &Expr,
     then_body: &[Stmt],
     elseif_clauses: &[(Expr, Vec<Stmt>)],
     else_body: Option<&[Stmt]>,
     merge: BlockId,
+    arms: &mut Vec<IfArmExit>,
     span: Span,
 ) -> bool {
     let cond_value = lower_expr(ctx, condition);
     let cond_value = ctx.truthy_consuming(cond_value, Some(condition.span));
     let split_initialized = ctx.initialized_slots_snapshot();
+    let split_types = ctx.local_types_snapshot();
     let then_block = ctx.builder.create_named_block("if.then", Vec::new());
     let else_block = ctx.builder.create_named_block("if.else", Vec::new());
     ctx.builder.terminate(Terminator::CondBr {
@@ -60,25 +77,36 @@ pub(super) fn lower_if_chain(
 
     ctx.builder.position_at_end(then_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types.clone());
     lower_block(ctx, then_body);
     let then_initialized = ctx.initialized_slots_snapshot();
     let mut merge_reachable = false;
     let then_reachable = !ctx.builder.insertion_block_is_terminated();
     if then_reachable {
         merge_reachable = true;
-        branch_to(ctx, merge);
+        record_if_arm_exit(ctx, arms);
     }
 
     ctx.clear_static_callable_locals();
     ctx.builder.position_at_end(else_block);
     ctx.restore_initialized_slots(split_initialized.clone());
+    ctx.restore_local_types(split_types);
     let else_reachable =
         if let Some(((next_condition, next_body), rest)) = elseif_clauses.split_first() {
-            lower_if_chain(ctx, next_condition, next_body, rest, else_body, merge, span)
+            lower_if_chain(
+                ctx,
+                next_condition,
+                next_body,
+                rest,
+                else_body,
+                merge,
+                arms,
+                span,
+            )
         } else if let Some(else_body) = else_body {
             lower_block(ctx, else_body);
             if !ctx.builder.insertion_block_is_terminated() {
-                branch_to(ctx, merge);
+                record_if_arm_exit(ctx, arms);
                 true
             } else {
                 false
@@ -86,7 +114,7 @@ pub(super) fn lower_if_chain(
         } else {
             lower_noop(ctx, span);
             if !ctx.builder.insertion_block_is_terminated() {
-                branch_to(ctx, merge);
+                record_if_arm_exit(ctx, arms);
                 true
             } else {
                 false
@@ -102,6 +130,146 @@ pub(super) fn lower_if_chain(
         else_reachable,
     ));
     merge_reachable
+}
+
+/// Defers one reachable arm's merge edge so representation conversions can be inserted later.
+fn record_if_arm_exit(ctx: &mut LoweringContext<'_, '_>, arms: &mut Vec<IfArmExit>) {
+    let tail = ctx.builder.create_named_block("if.arm", Vec::new());
+    ctx.builder.terminate(Terminator::Br {
+        target: tail,
+        args: Vec::new(),
+    });
+    arms.push(IfArmExit {
+        tail,
+        types: ctx.local_types_snapshot(),
+        initialized: ctx.initialized_slots_snapshot(),
+    });
+}
+
+/// Reconciles flow-sensitive types and indexed-array layouts on all incoming merge edges.
+fn finish_if_type_join(
+    ctx: &mut LoweringContext<'_, '_>,
+    arms: Vec<IfArmExit>,
+    merge: BlockId,
+    span: Span,
+) {
+    if arms.len() < 2 {
+        if let Some(arm) = arms.first() {
+            ctx.restore_local_types(arm.types.clone());
+        }
+        for arm in &arms {
+            ctx.builder.position_at_end(arm.tail);
+            ctx.builder.terminate(Terminator::Br {
+                target: merge,
+                args: Vec::new(),
+            });
+        }
+        return;
+    }
+
+    let joined = join_arm_types(ctx, &arms);
+    let saved_types = ctx.local_types_snapshot();
+    for arm in &arms {
+        ctx.restore_local_types(arm.types.clone());
+        let conversions = arm_conversions(arm, &joined);
+        ctx.builder.position_at_end(arm.tail);
+        widen_indexed_arrays_to_mixed(ctx, &conversions, span);
+        ctx.builder.terminate(Terminator::Br {
+            target: merge,
+            args: Vec::new(),
+        });
+    }
+    ctx.restore_local_types(saved_types);
+    for (name, ty) in joined {
+        ctx.set_local_type(&name, ty);
+    }
+}
+
+/// Computes the common post-merge type facts that every reachable arm can represent safely.
+fn join_arm_types(ctx: &LoweringContext<'_, '_>, arms: &[IfArmExit]) -> TypeEnv {
+    let Some(first) = arms.first() else {
+        return TypeEnv::new();
+    };
+    let mut names = first.types.keys().cloned().collect::<Vec<_>>();
+    names.sort();
+
+    let mut joined = TypeEnv::new();
+    'names: for name in names {
+        let mut arm_types = Vec::with_capacity(arms.len());
+        for arm in arms {
+            let Some(arm_type) = arm.types.get(&name) else {
+                continue 'names;
+            };
+            arm_types.push(arm_type.codegen_repr());
+        }
+        if arm_types.windows(2).all(|pair| pair[0] == pair[1]) {
+            continue;
+        }
+        if arm_types.iter().any(|ty| *ty == PhpType::Mixed) {
+            joined.insert(name, PhpType::Mixed);
+            continue;
+        }
+
+        for arm_type in arm_types {
+            let PhpType::Array(_) = arm_type else {
+                continue 'names;
+            };
+        }
+        if !arms
+            .iter()
+            .all(|arm| local_slot_is_convertible(ctx, &name, &arm.initialized))
+        {
+            continue;
+        }
+        joined.insert(name, PhpType::Array(Box::new(PhpType::Mixed)));
+    }
+    joined
+}
+
+/// Returns indexed-array locals whose current arm needs boxing before entering the merge.
+fn arm_conversions(arm: &IfArmExit, joined: &TypeEnv) -> Vec<String> {
+    let mut names = joined
+        .keys()
+        .filter(|name| {
+            matches!(
+                arm.types.get(name.as_str()).map(PhpType::codegen_repr),
+                Some(PhpType::Array(element)) if element.codegen_repr() != PhpType::Mixed
+            )
+        })
+        .cloned()
+        .collect::<Vec<_>>();
+    names.sort();
+    names
+}
+
+/// Returns whether one arm can safely convert the named local's array storage in place.
+fn local_slot_is_convertible(
+    ctx: &LoweringContext<'_, '_>,
+    name: &str,
+    initialized: &HashSet<LocalSlotId>,
+) -> bool {
+    repr_fixpoint::local_slot_kind_is_convertible(ctx, name)
+        && ctx
+            .local_slots
+            .get(name)
+            .is_some_and(|slot| initialized.contains(slot))
+}
+
+/// Boxes indexed-array elements on an arm edge so all paths agree at the merge.
+fn widen_indexed_arrays_to_mixed(ctx: &mut LoweringContext<'_, '_>, names: &[String], span: Span) {
+    let mixed_array_ty = PhpType::Array(Box::new(PhpType::Mixed));
+    for name in names {
+        let array = ctx.load_local(name, Some(span));
+        let converted = ctx.emit_value(
+            Op::ArrayToMixed,
+            vec![array.value],
+            None,
+            mixed_array_ty.clone(),
+            Op::ArrayToMixed.default_effects(),
+            Some(span),
+        );
+        ctx.store_mutated_local(name, converted, mixed_array_ty.clone(), Some(span));
+    }
 }
 
 /// Merges definitely-initialized locals from the reachable branches of an `if`.
@@ -222,4 +390,3 @@ pub(super) fn apply_loop_storage_contracts(
         }
     }
 }
-

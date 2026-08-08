@@ -86,6 +86,7 @@ pub(in crate::codegen::lower_inst) fn lower_object_new(ctx: &mut FunctionContext
                 impl_class,
                 param_types,
                 ref_params: constructor.ref_params.clone(),
+                sig: constructor.clone(),
             })
         } else if !inst.operands.is_empty() {
             return Err(CodegenIrError::unsupported(format!(

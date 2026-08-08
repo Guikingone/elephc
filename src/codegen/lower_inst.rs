@@ -211,6 +211,8 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::StrToF => conversions::lower_str_to_float(ctx, &inst),
         Op::Cast => conversions::lower_cast(ctx, &inst),
         Op::MixedBox => lower_mixed_box(ctx, &inst),
+        Op::MixedClone => lower_mixed_clone(ctx, &inst),
+        Op::MixedUnbox => lower_mixed_unbox(ctx, &inst),
         Op::InvokerRefArg => lower_invoker_ref_arg(ctx, &inst),
         Op::ArrayToMixed => arrays::lower_array_to_mixed(ctx, &inst),
         Op::HashToMixed => hashes::lower_hash_to_mixed(ctx, &inst),
@@ -226,6 +228,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ArrayIsset => builtins::lower_array_isset(ctx, &inst),
         Op::ArrayElemAddr => arrays::lower_array_elem_addr(ctx, &inst),
         Op::ArraySet => arrays::lower_array_set(ctx, &inst),
+        Op::SlotDetach => arrays::lower_slot_detach(ctx, &inst),
         Op::ArraySetMixedKey => arrays::lower_array_set_mixed_key(ctx, &inst),
         Op::ArrayGetMixedKey => arrays::lower_array_get_mixed_key(ctx, &inst, true),
         Op::ArrayGetMixedKeySilent => arrays::lower_array_get_mixed_key(ctx, &inst, false),
@@ -261,6 +264,24 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::DynamicObjectNewMixed => objects::lower_dynamic_object_new_mixed(ctx, &inst),
         Op::DynamicObjectNewWithoutConstructorMixed => {
             objects::lower_dynamic_object_new_without_constructor_mixed(ctx, &inst)
+        }
+        Op::CallablePtr => builtins::pointers::lower_elephc_callable_ptr(ctx, &inst),
+        Op::NormalizeCallable => builtins::pointers::lower_elephc_normalize_callable(ctx, &inst),
+        Op::PdoAdapterAddr => builtins::pointers::lower_elephc_pdo_adapter_addr(ctx, &inst),
+        Op::DynamicClassHasConstructor => {
+            builtins::system::lower_elephc_class_has_constructor(ctx, &inst)
+        }
+        Op::DynamicPdoStatementClassStatus => {
+            builtins::system::lower_elephc_pdo_statement_class_status(ctx, &inst)
+        }
+        Op::DynamicPdoCalledClassStatus => {
+            builtins::system::lower_elephc_pdo_called_class_status(ctx, &inst)
+        }
+        Op::DynamicPdoStatementConstructorCall => {
+            builtins::system::lower_elephc_invoke_pdo_statement_constructor(ctx, &inst)
+        }
+        Op::DynamicPdoStatementInitialize => {
+            builtins::system::lower_elephc_initialize_pdo_statement(ctx, &inst)
         }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
         Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
@@ -336,6 +357,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::FunctionVariantDispatch => Ok(()),
         Op::FunctionVariantMark => lower_function_variant_mark(ctx, &inst),
         Op::RuntimeCall => lower_runtime_call(ctx, &inst),
+        Op::MixedArrayGetForWrite => lower_mixed_array_runtime_get(ctx, &inst, true),
         Op::GeneratorYield => lower_generator_yield(ctx, &inst),
         Op::GeneratorYieldFrom => lower_generator_yield_from(ctx, &inst),
         Op::ConcatReset => lower_concat_reset(ctx),

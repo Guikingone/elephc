@@ -127,7 +127,7 @@ pub(super) fn lower_by_ref_array_arg_with_signature(
         Op::ArrayToMixed.default_effects(),
         Some(arg.span),
     );
-    ctx.store_mutated_local(name, converted, array_ty, Some(arg.span));
+    ctx.store_call_normalized_local(name, converted, array_ty, Some(arg.span));
     Some(ctx.load_local(name, Some(arg.span)).value)
 }
 

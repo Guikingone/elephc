@@ -87,7 +87,11 @@ pub(super) fn lower_do_while(
     ctx.clear_static_callable_locals();
 }
 
-/// Lowers a `for` loop.
+/// Lowers a `for` loop after establishing its loop-carried storage representation.
+///
+/// The fixed-point region starts below the initializer because an array created by the initializer
+/// does not exist at the statement entry and therefore cannot be discovered by the outer
+/// statement-level representation scan.
 pub(super) fn lower_for(
     ctx: &mut LoweringContext<'_, '_>,
     init: Option<&Stmt>,
@@ -107,6 +111,23 @@ pub(super) fn lower_for(
         .or_else(|| body.first().map(|s| s.span));
     apply_loop_storage_contracts(ctx, loop_span, contract_span);
 
+    repr_fixpoint::lower_for_body_at_type_fixpoint(
+        ctx,
+        loop_span,
+        condition,
+        update,
+        body,
+        |ctx| lower_for_once(ctx, condition, update, body),
+    );
+}
+
+/// Emits the control-flow graph, body, and update of a `for` loop exactly once.
+fn lower_for_once(
+    ctx: &mut LoweringContext<'_, '_>,
+    condition: Option<&Expr>,
+    update: Option<&Stmt>,
+    body: &[Stmt],
+) {
     let header = ctx.builder.create_named_block("for.cond", Vec::new());
     let body_block = ctx.builder.create_named_block("for.body", Vec::new());
     let update_block = ctx.builder.create_named_block("for.update", Vec::new());

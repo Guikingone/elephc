@@ -213,6 +213,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".comm _heap_free_list, 8, 3\n");
     out.push_str(".comm _heap_small_bins, 32, 3\n");
     out.push_str(".comm _heap_debug_enabled, 8, 3\n");
+    out.push_str(".comm _web_heap_guard_enabled, 8, 3\n");
     // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
     // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
     // blocks can never share a granule because the smallest block is 16 header
