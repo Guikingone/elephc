@@ -24,8 +24,9 @@
 //! - `&$consumed` is passed as a Mixed(int=0) cell pointer. The method
 //!   can write to it through normal Mixed by-ref semantics, but the
 //!   caller does not currently propagate the value back into stream
-//!   accounting. `$closing` is passed as Mixed(int=0) (we don't yet
-//!   distinguish closing from non-closing dispatches).
+//!   accounting. `$closing` is passed as a plain int: an untyped parameter
+//!   is typed Int, so a boxed cell would arrive as its address. It is 1 only
+//!   for the closing flush `stream_filter_remove()` runs.
 //! - The method's `int` return value (PSFS_PASS_ON / FEED_ME /
 //!   ERR_FATAL) is observed to decide the result:
 //!   - `PSFS_PASS_ON` (2): walk `$out->_buckets` and concatenate the
@@ -68,7 +69,7 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     //   [sp, #32]  = in_brigade obj
     //   [sp, #40]  = out_brigade obj
     //   [sp, #48]  = consumed Mixed (int=0)
-    //   [sp, #56]  = closing  Mixed (int=0)
+    //   [sp, #56]  = closing  int (0 or 1)
     //   [sp, #64]  = bucket obj (transient during setup)
     //   [sp, #72]  = mixed_bucket cell ptr (transient)
     //   [sp, #80]  = mixed_buckets_array cell ptr (transient)
@@ -159,12 +160,16 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
     emitter.instruction("str x0, [sp, #48]");                                   // save consumed mixed cell
 
-    // -- Create closing Mixed(int=0) --
-    emitter.instruction("mov x1, #0");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x2, #0");                                          // prepare AArch64 call argument
-    emitter.instruction("mov x0, #0");                                          // prepare AArch64 call argument
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.instruction("str x0, [sp, #56]");                                   // save closing mixed cell
+    // -- Load $closing as a PLAIN int, not a Mixed cell --
+    // An untyped `$closing` parameter is typed Int by the checker, so the method reads
+    // the register as a number. Boxing it handed the method the CELL ADDRESS instead:
+    // `if ($closing)` was true on every dispatch, which made a filter guarding its
+    // closing flush answer PSFS_ERR_FATAL for ordinary reads and writes too.
+    // Read/write dispatches leave the flag at 0; the flush `stream_filter_remove()`
+    // performs raises it so `filter()` sees PHP's `$closing = true`.
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_closing");
+    emitter.instruction("ldr x0, [x9]");                                        // the pending $closing value
+    emitter.instruction("str x0, [sp, #56]");                                   // save it for the call
 
     // -- Call filter($this, $in, $out, &consumed, $closing) --
     // The user method's params are inferred as Object (no typehint, default
@@ -176,12 +181,14 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #32]");                                   // in_brigade obj (raw)
     emitter.instruction("ldr x2, [sp, #40]");                                   // out_brigade obj (raw)
     emitter.instruction("ldr x3, [sp, #48]");                                   // consumed mixed (pseudo by-ref)
-    emitter.instruction("ldr x4, [sp, #56]");                                   // closing mixed
+    emitter.instruction("ldr x4, [sp, #56]");                                   // closing as a plain int
     emitter.instruction("ldr x5, [sp, #24]");                                   // method ptr
     emitter.instruction("blr x5");                                              // invoke filter()
 
     // -- observe the PSFS return code (x0): 0=ERR_FATAL, 1=FEED_ME, 2=PASS_ON --
     emitter.instruction("str x0, [sp, #64]");                                   // save PSFS code (reuse bucket slot, now free)
+    abi::emit_symbol_address(emitter, "x9", "_user_filter_last_psfs");
+    emitter.instruction("str x0, [x9]");                                        // publish it: the pair this returns cannot carry it
     emitter.instruction("cmp x0, #0");                                          // ERR_FATAL?
     emitter.instruction("b.eq __rt_ufbi_fatal");                                 // -> empty result (error signal)
     emitter.instruction("cmp x0, #1");                                          // FEED_ME?
@@ -304,7 +311,7 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp -  40] in_brigade obj
     //   [rbp -  48] out_brigade obj
     //   [rbp -  56] consumed mixed
-    //   [rbp -  64] closing  mixed
+    //   [rbp -  64] closing  int (0 or 1)
     //   [rbp -  72] bucket obj (transient) / later mixed_in
     //   [rbp -  80] mixed_bucket    / later mixed_out
     //   [rbp -  88] mixed_buckets_array
@@ -392,12 +399,13 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_call_label(emitter, "__rt_mixed_from_value");
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // store runtime value
 
-    // -- closing Mixed(int=0) --
-    emitter.instruction("xor edi, edi");                                        // clear register value
-    emitter.instruction("xor esi, esi");                                        // clear register value
-    emitter.instruction("mov rax, 0");                                          // prepare runtime result value
-    abi::emit_call_label(emitter, "__rt_mixed_from_value");
-    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // store runtime value
+    // -- $closing as a PLAIN int, not a Mixed cell --
+    // See the AArch64 counterpart: the method reads this register as a number, so a
+    // boxed cell reached it as an address and made `if ($closing)` always true. Only
+    // the flush `stream_filter_remove()` performs raises the flag.
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_closing");
+    emitter.instruction("mov rax, QWORD PTR [r10]");                            // the pending $closing value
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save it for the call
 
     // -- Call filter($this, $in, $out, $consumed, $closing) --
     // Pass raw obj pointers for $in/$out (the user method's params are
@@ -407,12 +415,14 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // in_brigade obj (raw)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // out_brigade obj (raw)
     emitter.instruction("mov rcx, QWORD PTR [rbp - 56]");                       // consumed mixed
-    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // closing mixed
+    emitter.instruction("mov r8, QWORD PTR [rbp - 64]");                        // closing as a plain int
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // method ptr
     emitter.instruction("call r11");                                            // call filter()
 
     // -- observe the PSFS return code (rax): 0=ERR_FATAL, 1=FEED_ME, 2=PASS_ON --
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                        // save PSFS code (reuse bucket slot, now free)
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_last_psfs");
+    emitter.instruction("mov QWORD PTR [r10], rax");                            // publish it: the pair this returns cannot carry it
     emitter.instruction("test rax, rax");                                       // ERR_FATAL?
     emitter.instruction("jz __rt_ufbi_fatal_x");                                 // -> empty result (error signal)
     emitter.instruction("cmp rax, 1");                                          // FEED_ME?

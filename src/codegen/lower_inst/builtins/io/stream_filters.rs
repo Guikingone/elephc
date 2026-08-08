@@ -481,6 +481,7 @@ pub(crate) fn lower_stream_filter_remove(
     // per-descriptor filter, so the previous teardown stays reachable until the
     // remaining families move over.
     let legacy = ctx.next_label("sfr_legacy");
+    let refused = ctx.next_label("sfr_refused");
     let done = ctx.next_label("sfr_done");
     load_stream_handle_to_result(ctx, filter, "stream_filter_remove")?;
     abi::emit_reserve_temporary_stack(ctx.emitter, 16);
@@ -489,6 +490,11 @@ pub(crate) fn lower_stream_filter_remove(
             ctx.emitter.instruction("str x0, [sp, #0]");                        // preserve the candidate handle
             abi::emit_call_label(ctx.emitter, "__rt_filter_state");
             ctx.emitter.instruction(&format!("cbz x0, {}", legacy));            // not a chain filter: use the legacy teardown
+            // PHP flushes a filter before removing it, and a PSFS_ERR_FATAL flush
+            // CANCELS the removal: the filter stays attached and the call reports false.
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
+            abi::emit_call_label(ctx.emitter, "__rt_filter_node_closing_flush");
+            ctx.emitter.instruction(&format!("cbz x0, {}", refused));           // PSFS_ERR_FATAL: keep the filter attached
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
             ctx.emitter.instruction(&format!("mov x1, #{STREAM_READ_FILTER_HEAD_OFFSET}"));
             abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the read chain
@@ -507,6 +513,10 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             ctx.emitter.instruction("mov x0, #1");                              // stream_filter_remove() reports success
             abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&refused);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the node stays linked and live
+            ctx.emitter.instruction("mov x0, #0");                              // a refused flush reports false
+            abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&legacy);
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the candidate for the legacy path
             abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -517,6 +527,11 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_call_label(ctx.emitter, "__rt_filter_state");
             ctx.emitter.instruction("test rax, rax");
             ctx.emitter.instruction(&format!("jz {}", legacy));                 // not a chain filter: use the legacy teardown
+            // See the AArch64 counterpart: a PSFS_ERR_FATAL flush cancels the removal.
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
+            abi::emit_call_label(ctx.emitter, "__rt_filter_node_closing_flush");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", refused));                // PSFS_ERR_FATAL: keep the filter attached
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
             ctx.emitter.instruction(&format!("mov rsi, {STREAM_READ_FILTER_HEAD_OFFSET}"));
             abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the read chain
@@ -533,6 +548,10 @@ pub(crate) fn lower_stream_filter_remove(
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");         // drop the reference stream_filter_append() handed out
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             ctx.emitter.instruction("mov eax, 1");                              // stream_filter_remove() reports success
+            abi::emit_jump(ctx.emitter, &done);
+            ctx.emitter.label(&refused);
+            abi::emit_release_temporary_stack(ctx.emitter, 16);                 // the node stays linked and live
+            ctx.emitter.instruction("xor eax, eax");                            // a refused flush reports false
             abi::emit_jump(ctx.emitter, &done);
             ctx.emitter.label(&legacy);
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // reload the candidate for the legacy path

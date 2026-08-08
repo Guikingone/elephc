@@ -938,6 +938,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // + dir] where dir=0 is read, dir=1 is write. Slot is null when no
     // user filter is attached. 256 fds × 2 dirs × 8 B = 4096 bytes.
     out.push_str(".comm _user_filter_instances, 4096, 3\n");
+    // _user_filter_closing: the `$closing` value the next brigade dispatch passes to
+    // `filter()`. Every dispatch on the read/write path is a non-closing one; only the
+    // flush `stream_filter_remove()` performs sets it, and clears it again straight away.
+    out.push_str(".comm _user_filter_closing, 8, 3\n");
+    // _user_filter_last_psfs: the PSFS code the last brigade dispatch returned. The
+    // dispatcher itself answers with a buffer/length pair, so the code — which decides
+    // whether a closing flush failed — has nowhere else to travel.
+    out.push_str(".comm _user_filter_last_psfs, 8, 3\n");
     // _stream_context_options: transient scratch used while constructing or
     // selecting a registry-backed ContextState for legacy wrapper consumers.
     out.push_str(".comm _stream_context_options, 8, 3\n");
