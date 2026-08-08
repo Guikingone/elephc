@@ -484,6 +484,12 @@ pub(super) fn emit_web_handler_prologue(ctx: &mut FunctionContext<'_>) {
 pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
     ctx.emitter.blank();
     ctx.emitter.comment("web handler epilogue + ret");
+    // Drain still-active output buffers, for the same reason and in the same position
+    // as the CLI epilogue: PHP flushes whatever `ob_start()` left open at request
+    // shutdown, and user output handlers must run while locals and statics are alive.
+    // Without this a request that left a buffer open returned nothing AND swallowed
+    // every later request served by the same worker, because the level leaked.
+    abi::emit_call_label(ctx.emitter, "__rt_ob_flush_all");
     emit_main_local_epilogue_cleanup(ctx);
     ctx.emitter
         .comment("close and invalidate abandoned request-owned resources");

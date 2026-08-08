@@ -272,6 +272,45 @@ fn web_reset_clears_static_property() {
     assert!(r2.ends_with("1"), "second response body: {:?}", r2);
 }
 
+/// Verifies an output buffer left open at request end is flushed, and does not swallow
+/// the responses that follow.
+///
+/// PHP flushes whatever `ob_start()` left open at request shutdown. The `--web`
+/// epilogue skipped that drain, so the request itself returned nothing and the leaked
+/// nesting level captured every later response served by the same worker.
+#[test]
+fn web_unbalanced_output_buffer_is_flushed_and_not_inherited() {
+    let dir = make_test_dir("web_ob_leak");
+    let src = r#"<?php
+if (isset($_GET["leak"])) {
+    ob_start();
+    echo "buffered";
+} else {
+    echo "plain-ok";
+}
+"#;
+    let bin = compile_web(&dir, src, "app");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{}", port);
+    let mut child = spawn_server(&bin, &addr, "1");
+    let first = http_get(&addr, "/?leak=1");
+    let second = http_get(&addr, "/");
+    let third = http_get(&addr, "/");
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        first.ends_with("buffered"),
+        "an output buffer left open was not flushed at request end: {:?}",
+        first
+    );
+    assert!(
+        second.ends_with("plain-ok"),
+        "a leaked output-buffer level swallowed the next response: {:?}",
+        second
+    );
+    assert!(third.ends_with("plain-ok"), "third response body: {:?}", third);
+}
+
 /// Verifies a worker survives reading the wrapper registry after an earlier request
 /// registered one.
 ///
