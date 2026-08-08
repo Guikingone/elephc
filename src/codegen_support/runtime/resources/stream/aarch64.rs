@@ -461,6 +461,9 @@ fn emit_stream_destroy_state(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // preserve StreamState across nested releases
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload StreamState for the attached filter chains
     emitter.instruction("bl __rt_stream_close_filter_chains");                  // PHP invalidates filter resources when their stream closes
+    // Reload: x0 is caller-saved, and the chain teardown now runs user `onClose()`
+    // hooks, so whatever it leaves behind is not the StreamState.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload StreamState after the chain teardown
     emitter.instruction(&format!(
         "ldr x0, [x0, #{}]", STREAM_URI_PTR_OFFSET
     ));                                                                         // load the owned URI allocation

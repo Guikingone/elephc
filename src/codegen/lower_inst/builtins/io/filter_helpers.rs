@@ -78,7 +78,7 @@ pub(super) fn lower_builtin_stream_filter_attach(
     load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     materialize_stream_filter_mode(ctx, inst)?;
-    emit_attach_filter_node(ctx, Some(filter_id), prepend);
+    emit_attach_filter_node(ctx, Some(filter_id), prepend, false);
     // Box the registry handle itself. `emit_boxed_stream_resource` mints a fresh
     // display id, which the legacy design could afford because its "filter
     // resource" was really the stream descriptor; a chain node has to be findable
@@ -96,25 +96,46 @@ pub(super) fn lower_builtin_stream_filter_attach(
 /// A node attached with `STREAM_FILTER_ALL` is linked into both chains, which is
 /// why the direction bits are stored on the node rather than inferred from which
 /// list it sits in.
-fn emit_attach_filter_node(ctx: &mut FunctionContext<'_>, filter_id: Option<u8>, prepend: bool) {
+///
+/// With `user_object`, the node carries a `php_user_filter` instance parked on the
+/// stack under the stream handle, and its built-in id stays 0. The node retains no
+/// params value in that case: the attach helper already exposed `$params` on the
+/// instance, which is what `filter()` reads.
+fn emit_attach_filter_node(
+    ctx: &mut FunctionContext<'_>,
+    filter_id: Option<u8>,
+    prepend: bool,
+    user_object: bool,
+) {
     let skip_read = ctx.next_label("sf_chain_skip_read");
     let skip_write = ctx.next_label("sf_chain_skip_write");
     let prepend_flag = i64::from(prepend);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             abi::emit_pop_reg(ctx.emitter, "x4");                               // recover the owning stream handle
+            if user_object {
+                abi::emit_pop_reg(ctx.emitter, "x5");                           // recover the php_user_filter instance
+            }
             abi::emit_reserve_temporary_stack(ctx.emitter, 32);
             ctx.emitter.instruction("str x4, [sp, #0]");                        // preserve the stream handle across the calls
             ctx.emitter.instruction("str x0, [sp, #8]");                        // preserve the requested direction bits
+            if user_object {
+                ctx.emitter.instruction("str x5, [sp, #24]");                   // preserve the instance across the calls
+            }
             ctx.emitter.instruction("mov x2, x0");                              // direction bits
             match filter_id {
                 // A literal name resolves at compile time; a dynamic one arrives in
                 // x9 from __rt_builtin_filter_id.
                 Some(id) => ctx.emitter.instruction(&format!("mov x0, #{id}")),  // built-in filter id
+                None if user_object => ctx.emitter.instruction("mov x0, #0"),    // a user filter has no built-in id
                 None => ctx.emitter.instruction("mov x0, x9"),                   // run-time resolved filter id
             }
-            ctx.emitter.instruction("mov x1, #0");                              // built-ins carry no user-filter object
-            ctx.emitter.instruction("mov x3, #0");                              // built-ins retain no params value
+            if user_object {
+                ctx.emitter.instruction("ldr x1, [sp, #24]");                   // the instance this node owns
+            } else {
+                ctx.emitter.instruction("mov x1, #0");                          // built-ins carry no user-filter object
+            }
+            ctx.emitter.instruction("mov x3, #0");                              // params live on the instance, not the node
             abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // x0 = the new filter handle
             ctx.emitter.instruction("str x0, [sp, #16]");                       // preserve the filter handle
 
@@ -143,18 +164,29 @@ fn emit_attach_filter_node(ctx: &mut FunctionContext<'_>, filter_id: Option<u8>,
         }
         Arch::X86_64 => {
             abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the owning stream handle
+            if user_object {
+                abi::emit_pop_reg(ctx.emitter, "r14");                          // recover the php_user_filter instance
+            }
             abi::emit_reserve_temporary_stack(ctx.emitter, 32);
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rcx");            // preserve the stream handle across the calls
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");            // preserve the requested direction bits
+            if user_object {
+                ctx.emitter.instruction("mov QWORD PTR [rsp + 24], r14");       // preserve the instance across the calls
+            }
             ctx.emitter.instruction("mov rdx, rax");                            // direction bits
             match filter_id {
                 // A literal name resolves at compile time; a dynamic one arrives in
                 // r13 from __rt_builtin_filter_id.
                 Some(id) => ctx.emitter.instruction(&format!("mov rdi, {id}")),  // built-in filter id
+                None if user_object => ctx.emitter.instruction("xor edi, edi"),  // a user filter has no built-in id
                 None => ctx.emitter.instruction("mov rdi, r13"),                 // run-time resolved filter id
             }
-            ctx.emitter.instruction("xor esi, esi");                            // built-ins carry no user-filter object
-            ctx.emitter.instruction("xor ecx, ecx");                            // built-ins retain no params value
+            if user_object {
+                ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 24]");       // the instance this node owns
+            } else {
+                ctx.emitter.instruction("xor esi, esi");                        // built-ins carry no user-filter object
+            }
+            ctx.emitter.instruction("xor ecx, ecx");                            // params live on the instance, not the node
             abi::emit_call_label(ctx.emitter, "__rt_filter_create");            // rax = the new filter handle
             ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // preserve the filter handle
 
@@ -264,7 +296,7 @@ pub(super) fn lower_user_stream_filter_attach(
             ctx.emitter.instruction("mov r13, QWORD PTR [rsp + 8]");            // resolved id, below the pushed handle
         }
     }
-    emit_attach_filter_node(ctx, None, prepend);
+    emit_attach_filter_node(ctx, None, prepend, false);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("add sp, sp, #16");                         // drop the preserved id
@@ -276,12 +308,88 @@ pub(super) fn lower_user_stream_filter_attach(
     emit_boxed_filter_handle(ctx);
     abi::emit_jump(ctx.emitter, &attached);
     ctx.emitter.label(&user_path);
-    lower_user_stream_filter_attach_legacy(ctx, inst)?;
+    lower_user_stream_filter_attach_node(ctx, inst, prepend)?;
+    // Both paths leave their boxed result in the same register, so the store belongs
+    // here: the built-in branch used to jump over the user branch's own store and
+    // dropped the resource `$f = stream_filter_append($s, $dynamicBuiltinName)`
+    // should have received.
     ctx.emitter.label(&attached);
-    return Ok(());
+    store_if_result(ctx, inst)
+}
+
+/// Attaches a user-registered filter as a chain node carrying its `php_user_filter`.
+///
+/// PHP hands back a `stream filter` resource distinct from the stream, and closing the
+/// stream invalidates it. The per-descriptor tables could support neither: they returned
+/// the STREAM's own descriptor boxed as the filter resource, so `is_resource($filter)`
+/// stayed true after `fclose()` and `stream_filter_remove()` had no node to unlink.
+///
+/// The attach helper runs in node mode — signalled by the negative descriptor — so it
+/// resolves the name, instantiates the class, exposes `$params` and runs `onCreate()`
+/// exactly as before, but hands the instance back instead of registering it. A filter
+/// lives in exactly one mechanism, and for user filters that mechanism is now the chain.
+fn lower_user_stream_filter_attach_node(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    prepend: bool,
+) -> Result<()> {
+    let stream = expect_operand(inst, 0)?;
+    let filter = expect_operand(inst, 1)?;
+    let fail = ctx.next_label("sfan_false");
+    let done = ctx.next_label("sfan_done");
+
+    load_open_stream_handle_to_result(ctx, stream, "stream_filter_append")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    load_string_to_result(ctx, filter, "stream_filter_append filter")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // name pointer/length
+            materialize_stream_filter_mode(ctx, inst)?;
+            abi::emit_push_reg(ctx.emitter, "x0");                              // requested direction bits
+            materialize_stream_filter_params(ctx, inst)?;
+            ctx.emitter.instruction("mov x4, x0");                              // boxed stream-filter params
+            abi::emit_pop_reg(ctx.emitter, "x3");                               // direction bits
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");                    // name pointer/length
+            ctx.emitter.instruction("mov x0, #-1");                             // node mode: instantiate, register nothing
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_attach_user");
+            ctx.emitter.instruction(&format!("cbz x0, {}", fail));              // unknown name or refused onCreate
+            ctx.emitter.instruction("ldr x9, [sp]");                            // the stream handle parked before the call
+            ctx.emitter.instruction("str x0, [sp]");                            // park the instance in its place
+            abi::emit_push_reg(ctx.emitter, "x9");                              // handle on top, instance beneath
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // name pointer/length
+            materialize_stream_filter_mode(ctx, inst)?;
+            abi::emit_push_reg(ctx.emitter, "rax");                             // requested direction bits
+            materialize_stream_filter_params(ctx, inst)?;
+            ctx.emitter.instruction("mov r8, rax");                             // boxed stream-filter params
+            abi::emit_pop_reg(ctx.emitter, "rcx");                              // direction bits
+            abi::emit_pop_reg_pair(ctx.emitter, "rsi", "rdx");                  // name pointer/length
+            ctx.emitter.instruction("mov rdi, -1");                             // node mode: instantiate, register nothing
+            abi::emit_call_label(ctx.emitter, "__rt_stream_filter_attach_user");
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction(&format!("jz {}", fail));                   // unknown name or refused onCreate
+            ctx.emitter.instruction("mov r9, QWORD PTR [rsp]");                 // the stream handle parked before the call
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // park the instance in its place
+            abi::emit_push_reg(ctx.emitter, "r9");                              // handle on top, instance beneath
+        }
+    }
+    materialize_stream_filter_mode(ctx, inst)?;                                 // direction bits for the node
+    emit_attach_filter_node(ctx, None, prepend, true);
+    emit_boxed_filter_handle(ctx);
+    abi::emit_jump(ctx.emitter, &done);
+
+    ctx.emitter.label(&fail);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);                         // drop the parked stream handle
+    emit_boxed_bool(ctx, false);
+    ctx.emitter.label(&done);
+    Ok(())
 }
 
 /// Attaches a user-registered filter through the legacy per-descriptor slots.
+///
+/// Kept while the chain path is being validated test by test; see the node variant.
+#[allow(dead_code)]
 fn lower_user_stream_filter_attach_legacy(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,

@@ -41,6 +41,7 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_apply_chain_aarch64(emitter);
             emit_fwrite_filtered_aarch64(emitter);
             emit_stream_close_filter_chains(emitter);
+            emit_filter_node_close_obj(emitter);
         }
         Arch::X86_64 => {
             emit_filter_state_x86_64(emitter);
@@ -50,6 +51,7 @@ pub(crate) fn emit_filter_resources(emitter: &mut Emitter) {
             emit_filter_apply_chain_x86_64(emitter);
             emit_fwrite_filtered_x86_64(emitter);
             emit_stream_close_filter_chains(emitter);
+            emit_filter_node_close_obj(emitter);
         }
     }
 }
@@ -463,6 +465,7 @@ fn emit_fwrite_filtered_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fwrite through the write filter chain ---");
     emitter.label_global("__rt_fwrite_filtered");
     // Frame: [0]=stream handle [8]=payload ptr [16]=payload len [24]=scratch
+    //        [32]=filtered len [40]=filtered buffer
     emitter.instruction("sub sp, sp, #64");                                     // reserve the filtered-write frame
     emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
     emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
@@ -506,11 +509,15 @@ fn emit_fwrite_filtered_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_apply_filter_chain");                   // x1/x2 <- filtered buffer and length
 
     // -- write the filtered bytes through the regular descriptor path --
-    emitter.instruction("mov x1, x2");                                          // filtered length becomes the write length
+    // Both halves of the returned pair matter. A built-in node rewrites the scratch
+    // in place, but a user filter answers with the string its `filter()` returned,
+    // which lives elsewhere — reading the scratch back would write the raw bytes at
+    // the filtered length.
+    emitter.instruction("str x1, [sp, #40]");                                   // stash the buffer the chain settled on
+    emitter.instruction("str x2, [sp, #32]");                                   // stash its length across the resolve
     emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle
-    emitter.instruction("str x1, [sp, #32]");                                   // stash the filtered length across the resolve
     emitter.instruction("bl __rt_stream_fd");                                   // x0 = backend descriptor
-    emitter.instruction("ldr x1, [sp, #24]");                                   // filtered buffer
+    emitter.instruction("ldr x1, [sp, #40]");                                   // filtered buffer
     emitter.instruction("ldr x2, [sp, #32]");                                   // filtered length
     emitter.instruction("bl __rt_fwrite");                                      // perform the descriptor write
 
@@ -542,7 +549,7 @@ fn emit_fwrite_filtered_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fwrite through the write filter chain ---");
     emitter.label_global("__rt_fwrite_filtered");
     // Frame: [-8]=stream handle [-16]=payload ptr [-24]=payload len
-    //        [-32]=scratch [-40]=filtered len
+    //        [-32]=scratch [-40]=filtered len [-48]=filtered buffer
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the filtered-write frame
     emitter.instruction("sub rsp, 48");                                         // reserve spill slots
@@ -587,13 +594,16 @@ fn emit_fwrite_filtered_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length
     emitter.instruction(&format!("mov rsi, {STREAM_WRITE_FILTER_HEAD_OFFSET}")); // select the write chain
     emitter.instruction("call __rt_stream_apply_filter_chain");                 // rax/rdx <- filtered buffer and length
+    // See the AArch64 counterpart: the pointer matters as much as the length, because
+    // a user filter answers with its own string rather than the rewritten scratch.
+    emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // stash the buffer the chain settled on
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // stash the filtered length
 
     // -- write the filtered bytes through the regular descriptor path --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle
     emitter.instruction("call __rt_stream_fd");                                 // rax = backend descriptor
     emitter.instruction("mov rdi, rax");                                        // descriptor argument
-    emitter.instruction("mov rsi, QWORD PTR [rbp - 32]");                       // filtered buffer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // filtered buffer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // filtered length
     emitter.instruction("call __rt_fwrite");                                    // perform the descriptor write
 
@@ -875,6 +885,52 @@ const _: () = {
 /// A filter attached with `STREAM_FILTER_ALL` sits in both chains, so it is
 /// visited twice; `__rt_resource_mark_closed` reports already-closed resources
 /// as a no-op, which makes the second visit inert.
+/// `__rt_filter_node_close_obj(handle)`: fire `onClose()` for one chain node.
+///
+/// `stream_filter_remove()` reaches a node by handle rather than by walking a chain,
+/// so it needs the same "claim the instance, then close it exactly once" step the
+/// chain teardown performs inline. Clearing the slot first is what makes it once-only:
+/// removing a filter and later closing its stream must not fire `onClose()` twice.
+pub fn emit_filter_node_close_obj(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: close one filter node's user instance ---");
+    emitter.label_global("__rt_filter_node_close_obj");
+    if emitter.target.arch == Arch::X86_64 {
+        emitter.instruction("push rbp");                                        // preserve the caller frame pointer
+        emitter.instruction("mov rbp, rsp");                                    // establish the helper frame
+        emitter.instruction("call __rt_filter_state");                          // rax = FilterState or 0
+        emitter.instruction("test rax, rax");
+        emitter.instruction("jz __rt_fnco_done_x");                             // a stale handle owns no instance
+        emitter.instruction(&format!(
+            "mov rdi, QWORD PTR [rax + {FILTER_OBJECT_OFFSET}]"
+        ));                                                                     // the php_user_filter instance, if any
+        emitter.instruction("test rdi, rdi");
+        emitter.instruction("jz __rt_fnco_done_x");                             // a built-in node carries none
+        emitter.instruction(&format!(
+            "mov QWORD PTR [rax + {FILTER_OBJECT_OFFSET}], 0"
+        ));                                                                     // claim it before calling out
+        emitter.instruction("call __rt_user_filter_release_obj");               // onClose()
+        emitter.label("__rt_fnco_done_x");
+        emitter.instruction("leave");                                           // restore rbp + rsp
+        emitter.instruction("ret");                                             // return to the caller
+        return;
+    }
+    emitter.instruction("sub sp, sp, #16");                                     // helper frame
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("bl __rt_filter_state");                                // x0 = FilterState or 0
+    emitter.instruction("cbz x0, __rt_fnco_done");                              // a stale handle owns no instance
+    emitter.instruction(&format!("ldr x1, [x0, #{FILTER_OBJECT_OFFSET}]"));     // the php_user_filter instance, if any
+    emitter.instruction("cbz x1, __rt_fnco_done");                              // a built-in node carries none
+    emitter.instruction(&format!("str xzr, [x0, #{FILTER_OBJECT_OFFSET}]"));    // claim it before calling out
+    emitter.instruction("mov x0, x1");
+    emitter.instruction("bl __rt_user_filter_release_obj");                     // onClose()
+    emitter.label("__rt_fnco_done");
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.instruction("ret");                                                 // return to the caller
+}
+
 pub fn emit_stream_close_filter_chains(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stream_close_filter_chains_x86_64(emitter);

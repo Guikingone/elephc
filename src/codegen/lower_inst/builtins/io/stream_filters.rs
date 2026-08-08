@@ -496,6 +496,11 @@ pub(crate) fn lower_stream_filter_remove(
             ctx.emitter.instruction(&format!("mov x1, #{STREAM_WRITE_FILTER_HEAD_OFFSET}"));
             abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the write chain
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
+            // PHP closes a removed filter, so `onClose()` fires here rather than only
+            // when the stream goes: the node is off both chains and the teardown that
+            // sweeps them will never see it again.
+            abi::emit_call_label(ctx.emitter, "__rt_filter_node_close_obj");    // onClose(), exactly once
+            ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
             abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // publish Closed so is_resource() reports false
             ctx.emitter.instruction("ldr x0, [sp, #0]");                        // reload the filter handle
             abi::emit_call_label(ctx.emitter, "__rt_resource_release");         // drop the reference stream_filter_append() handed out
@@ -518,6 +523,10 @@ pub(crate) fn lower_stream_filter_remove(
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
             ctx.emitter.instruction(&format!("mov rsi, {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
             abi::emit_call_label(ctx.emitter, "__rt_stream_filter_unlink");     // detach from the write chain
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
+            // See the AArch64 counterpart: a removed node is off both chains, so the
+            // chain teardown can no longer fire its `onClose()`.
+            abi::emit_call_label(ctx.emitter, "__rt_filter_node_close_obj");    // onClose(), exactly once
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
             abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // publish Closed so is_resource() reports false
             ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");            // reload the filter handle
