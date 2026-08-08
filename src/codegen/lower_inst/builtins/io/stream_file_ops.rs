@@ -117,7 +117,7 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     emit_zlib_flush_on_close_for_current_fd(ctx);
     emit_bz2_flush_on_close_for_current_fd(ctx);
     emit_iconv_flush_on_close_for_current_fd(ctx);
-    emit_tls_session_teardown_for_current_fd(ctx);
+    emit_tls_session_teardown_for_handle(ctx, 0);
     let legacy_filter_cleanup_done = ctx.next_label("fclose_legacy_filter_cleanup_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {

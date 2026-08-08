@@ -90,14 +90,12 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("csel x14, x13, x14, gt");                              // clamp to the remaining capacity
     emitter.instruction("str x14, [sp, #8]");                                   // publish the clamped request
 
-    // -- TLS dispatch: route through elephc_tls_read when fd has an
-    //    attached session (Phase 11 B3). --
-    emitter.instruction("ldr x0, [sp, #32]");                                   // reload fd for the TLS check
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
-    emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
-    emitter.instruction("cbz x14, __rt_fread_do_syscall");                      // no TLS attached → fall through to read syscall
-    emitter.instruction("mov x0, x14");                                         // handle as first arg
-    emitter.instruction("mov x1, x12");                                         // buf ptr
+    // -- TLS dispatch: the session hangs off the StreamState, so it is keyed by
+    //    the generation-checked handle rather than by a reusable descriptor. --
+    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
+    emitter.instruction("bl __rt_stream_tls_session");                          // x0 = attached session, zero when plain
+    emitter.instruction("cbz x0, __rt_fread_do_syscall");                       // no TLS attached → fall through to read syscall
+    emitter.instruction("ldr x1, [sp, #16]");                                   // buf ptr: x12 is caller-saved and the call clobbered it
     emitter.instruction("ldr x2, [sp, #8]");                                    // len
     crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_elephc_tls_read_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load elephc_tls_read entry pointer
@@ -110,7 +108,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.label("__rt_fread_do_syscall");
     // -- perform read syscall --
     emitter.instruction("ldr x0, [sp, #32]");                                   // fd for read syscall
-    emitter.instruction("mov x1, x12");                                         // buffer pointer for read
+    emitter.instruction("ldr x1, [sp, #16]");                                   // buffer pointer: the TLS probe clobbers caller-saved x12
     emitter.instruction("ldr x2, [sp, #8]");                                    // number of bytes to read
     emitter.syscall(3);
     if emitter.platform.needs_cmp_before_error_branch() {
@@ -260,14 +258,13 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("lea rax, [r11 + r10]");                                // compute the start pointer for the bytes that libc read() will append
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the concat-buffer start pointer for the final elephc string result
 
-    // -- TLS dispatch: route through elephc_tls_read when fd has an
-    //    attached session (Phase 11 B3). --
-    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // reload fd for the TLS table lookup
-    abi::emit_symbol_address(emitter, "r11", "_tls_sessions");                  // load runtime data address
-    emitter.instruction("mov r12, QWORD PTR [r11 + r10 * 8]");                  // _tls_sessions[fd] handle (0 = plain TCP)
-    emitter.instruction("test r12, r12");                                       // check whether the runtime value is zero
+    // -- TLS dispatch: the session hangs off the StreamState, so it is keyed by
+    //    the generation-checked handle rather than by a reusable descriptor. --
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
+    emitter.instruction("call __rt_stream_tls_session");                        // rax = attached session, zero when plain
+    emitter.instruction("test rax, rax");                                       // is a TLS session attached?
     emitter.instruction("jz __rt_fread_do_syscall_x86");                        // no TLS attached → use libc read
-    emitter.instruction("mov rdi, r12");                                        // handle as first arg
+    emitter.instruction("mov rdi, rax");                                        // handle as first arg
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // buf ptr
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // len
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_read_fn", 0);      // prepare SysV call argument

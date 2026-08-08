@@ -16,7 +16,12 @@ use crate::support::*;
 const TLS_PROBE_ACCEPT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
 const TLS_PROBE_ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 const TLS_PROBE_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
-const TLS_PROBE_WORKER_LIMIT: usize = 16;
+/// The pool must cover every connection the probe holds open AT ONCE, not just the
+/// busiest moment of a sequential exchange: a worker completes its handshake and then
+/// blocks reading, while `supports_more_than_256_live_tls_sessions` opens all 257
+/// streams before writing to any of them. A pool of 16 therefore stalled the 17th
+/// handshake and capped that test at 16 sessions regardless of what the compiler does.
+const TLS_PROBE_WORKER_LIMIT: usize = 320;
 
 const TEST_TLS_CERT_PEM: &str = "\
 -----BEGIN CERTIFICATE-----

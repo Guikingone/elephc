@@ -10,7 +10,7 @@
 use super::*;
 
 /// Tears down the TLS session attached to the current fd result, if one exists.
-/// Leaves 1 in the int result register when the descriptor has a live TLS session.
+/// Leaves 1 in the int result register when the stream has a live TLS session.
 ///
 /// `stream_socket_enable_crypto($s, false)` answers on this and nothing else. php-src
 /// runs the openssl handler only for a stream that is actually SSL-active: that handler
@@ -19,73 +19,73 @@ use super::*;
 /// NOTIMPL, which lands on the `default:` arm and `RETURN_TRUE`s. So a disable on a
 /// plain `php://memory` handle is true and a disable on a live TLS socket is false.
 ///
-/// The probe has to run BEFORE the teardown, which clears the slot it reads.
-pub(super) fn emit_tls_session_present_flag(ctx: &mut FunctionContext<'_>) {
-    let absent = ctx.next_label("tls_session_absent");
-    let done = ctx.next_label("tls_session_probe_done");
+/// `handle_slot` is the stack offset of the opaque stream handle. The probe has to run
+/// BEFORE the teardown, which detaches the session it reads.
+pub(super) fn emit_tls_session_present_flag(ctx: &mut FunctionContext<'_>, handle_slot: i64) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #256");                            // the transitional TLS side table has 256 descriptor slots
-            ctx.emitter.instruction(&format!("b.hs {}", absent));               // high descriptors cannot have a table-backed session
-            abi::emit_symbol_address(ctx.emitter, "x9", "_tls_sessions");
-            ctx.emitter.instruction("ldr x9, [x9, x0, lsl #3]");                // the TLS session handle for this descriptor
-            ctx.emitter.instruction("cmp x9, #0");
-            ctx.emitter.instruction("cset x0, ne");                             // 1 when a session is attached
-            ctx.emitter.instruction(&format!("b {}", done));
-            ctx.emitter.label(&absent);
-            ctx.emitter.instruction("mov x0, #0");                              // no slot to consult: no session
-            ctx.emitter.label(&done);
+            ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", handle_slot)); // the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_tls_session");        // x0 = attached session, zero when plain
+            ctx.emitter.instruction("cmp x0, #0");
+            ctx.emitter.instruction("cset x0, ne");                              // 1 when a session is attached
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 256");                            // the transitional TLS side table has 256 descriptor slots
-            ctx.emitter.instruction(&format!("jae {}", absent));                // high descriptors cannot have a table-backed session
-            abi::emit_symbol_address(ctx.emitter, "r9", "_tls_sessions");       // TLS session table base
-            ctx.emitter.instruction("mov r9, QWORD PTR [r9 + rax*8]");          // the TLS session handle for this descriptor
-            ctx.emitter.instruction("test r9, r9");
-            ctx.emitter.instruction("setne al");                                // 1 when a session is attached
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", handle_slot)); // the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_tls_session");        // rax = attached session, zero when plain
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter.instruction("setne al");                                 // 1 when a session is attached
             ctx.emitter.instruction("movzx rax, al");
-            ctx.emitter.instruction(&format!("jmp {}", done));
-            ctx.emitter.label(&absent);
-            ctx.emitter.instruction("xor eax, eax");                            // no slot to consult: no session
-            ctx.emitter.label(&done);
         }
     }
 }
 
-pub(super) fn emit_tls_session_teardown_for_current_fd(ctx: &mut FunctionContext<'_>) {
+/// Tears down the TLS session attached to a stream, if one exists.
+///
+/// `handle_slot` is the stack offset of the opaque stream handle, measured from
+/// `sp`/`rsp` on entry. The session is reached THROUGH THE HANDLE rather than through
+/// the descriptor: it lives on the StreamState, which a reused descriptor number cannot
+/// address — that aliasing is exactly what the raw-fd table used to allow.
+///
+/// The descriptor in the result register is preserved, because both callers go on to
+/// use it for descriptor-keyed cleanup.
+pub(super) fn emit_tls_session_teardown_for_handle(ctx: &mut FunctionContext<'_>, handle_slot: i64) {
     let skip = ctx.next_label("tls_teardown_skip");
+    let clear = ctx.next_label("tls_teardown_clear");
+    let slot = handle_slot + 16;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("cmp x0, #256");                            // the transitional TLS side table has 256 descriptor slots
-            ctx.emitter.instruction(&format!("b.hs {}", skip));                 // high descriptors cannot have a table-backed TLS session
-            abi::emit_symbol_address(ctx.emitter, "x9", "_tls_sessions");
-            ctx.emitter.instruction("ldr x10, [x9, x0, lsl #3]");               // load the TLS session handle for this descriptor
-            ctx.emitter.instruction(&format!("cbz x10, {}", skip));             // skip close_notify when no TLS session is attached
             abi::emit_push_reg(ctx.emitter, "x0");
-            ctx.emitter.instruction("mov x0, x10");                             // pass the TLS handle to the close helper
+            ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", slot));       // load the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_tls_session");       // x0 = attached session, zero when plain
+            ctx.emitter.instruction(&format!("cbz x0, {}", skip));              // nothing attached: skip close_notify
             abi::emit_symbol_address(ctx.emitter, "x9", "_elephc_tls_close_fn");
             ctx.emitter.instruction("ldr x9, [x9]");                            // load the published TLS close function pointer
+            ctx.emitter.instruction(&format!("cbz x9, {}", clear));             // the TLS backend is not linked into this program
             ctx.emitter.instruction("blr x9");                                  // close the TLS session and send close_notify
-            abi::emit_pop_reg(ctx.emitter, "x0");
-            abi::emit_symbol_address(ctx.emitter, "x9", "_tls_sessions");
-            ctx.emitter.instruction("str xzr, [x9, x0, lsl #3]");               // clear the per-fd TLS session slot
+            ctx.emitter.label(&clear);
+            ctx.emitter.instruction(&format!("ldr x0, [sp, #{}]", slot));       // reload the stream handle
+            ctx.emitter.instruction("mov x1, #0");                              // detach the session from the stream
+            abi::emit_call_label(ctx.emitter, "__rt_stream_set_tls_session");
             ctx.emitter.label(&skip);
+            abi::emit_pop_reg(ctx.emitter, "x0");
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cmp rax, 256");                            // the transitional TLS side table has 256 descriptor slots
-            ctx.emitter.instruction(&format!("jae {}", skip));                  // high descriptors cannot have a table-backed TLS session
-            abi::emit_symbol_address(ctx.emitter, "r9", "_tls_sessions");       // TLS session table base
-            ctx.emitter.instruction("mov r10, QWORD PTR [r9 + rax*8]");         // load the TLS session handle for this descriptor
-            ctx.emitter.instruction("test r10, r10");                           // test whether a TLS session is attached
-            ctx.emitter.instruction(&format!("je {}", skip));                   // skip close_notify when no TLS session is attached
             abi::emit_push_reg(ctx.emitter, "rax");
-            ctx.emitter.instruction("mov rdi, r10");                            // pass the TLS handle to the close helper
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", slot)); // load the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_tls_session");       // rax = attached session, zero when plain
+            ctx.emitter.instruction("test rax, rax");                           // is a TLS session attached?
+            ctx.emitter.instruction(&format!("jz {}", skip));                   // nothing attached: skip close_notify
             abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_elephc_tls_close_fn", 0); // load the published TLS close function pointer
+            ctx.emitter.instruction("test r9, r9");                             // is the TLS backend linked into this program?
+            ctx.emitter.instruction(&format!("jz {}", clear));                  // no TLS backend: just detach
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the session handle to the close helper
             ctx.emitter.instruction("call r9");                                 // close the TLS session and send close_notify
-            abi::emit_pop_reg(ctx.emitter, "rax");
-            abi::emit_symbol_address(ctx.emitter, "r9", "_tls_sessions");       // TLS session table base
-            ctx.emitter.instruction("mov QWORD PTR [r9 + rax*8], 0");           // clear the per-fd TLS session slot
+            ctx.emitter.label(&clear);
+            ctx.emitter.instruction(&format!("mov rdi, QWORD PTR [rsp + {}]", slot)); // reload the stream handle
+            ctx.emitter.instruction("xor esi, esi");                            // detach the session from the stream
+            abi::emit_call_label(ctx.emitter, "__rt_stream_set_tls_session");
             ctx.emitter.label(&skip);
+            abi::emit_pop_reg(ctx.emitter, "rax");
         }
     }
 }
@@ -301,14 +301,15 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_aarch64(
     ctx.emitter.instruction("ldr x9, [x9]");                                    // load the non-verifying attach function pointer
     ctx.emitter.label(&do_attach);
     ctx.emitter.instruction("blr x9");                                          // attach TLS to the fd and return a session handle
-    ctx.emitter.instruction("ldr x10, [sp, #64]");                              // reload fd before releasing the spill storage
+    ctx.emitter.instruction("ldr x10, [sp, #80]");                              // reload the opaque stream handle before releasing the spill storage
     abi::emit_release_temporary_stack(ctx.emitter, 64);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     ctx.emitter.instruction("cmp x0, #0");                                      // negative handles indicate TLS attach failure
     ctx.emitter.instruction(&format!("b.lt {}", fail_label));                   // return false when attach failed
-    abi::emit_symbol_address(ctx.emitter, "x11", "_tls_sessions");
-    ctx.emitter.instruction("str x0, [x11, x10, lsl #3]");                      // store the TLS session handle for this fd
+    ctx.emitter.instruction("mov x1, x0");                                      // the session becomes the second argument
+    ctx.emitter.instruction("mov x0, x10");                                     // the stream handle becomes the first argument
+    abi::emit_call_label(ctx.emitter, "__rt_stream_set_tls_session");           // publish the session on the StreamState
     ctx.emitter.instruction("mov x0, #1");                                      // return true after successful TLS attach
     ctx.emitter.instruction(&format!("b {}", done_label));                      // skip the failure result
     ctx.emitter.label(&fail_label);
@@ -395,14 +396,15 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_x86_64(
     abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_elephc_tls_attach_fd_fn", 0); // load the default TLS attach function pointer
     ctx.emitter.instruction("call r9");                                         // attach TLS and return a session handle
     ctx.emitter.label(&after_attach);
-    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 64]");                   // reload fd before releasing the spill storage
+    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 80]");                   // reload the opaque stream handle before releasing the spill storage
     abi::emit_release_temporary_stack(ctx.emitter, 64);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     ctx.emitter.instruction("cmp rax, 0");                                      // negative handles indicate TLS attach failure
     ctx.emitter.instruction(&format!("jl {}", fail_label));                     // return false when attach failed
-    abi::emit_symbol_address(ctx.emitter, "r11", "_tls_sessions");
-    ctx.emitter.instruction("mov QWORD PTR [r11 + r10 * 8], rax");              // store the TLS session handle for this fd
+    ctx.emitter.instruction("mov rsi, rax");                                    // the session becomes the second argument
+    ctx.emitter.instruction("mov rdi, r10");                                    // the stream handle becomes the first argument
+    abi::emit_call_label(ctx.emitter, "__rt_stream_set_tls_session");           // publish the session on the StreamState
     ctx.emitter.instruction("mov eax, 1");                                      // return true after successful TLS attach
     ctx.emitter.instruction(&format!("jmp {}", done_label));                    // skip the failure result
     ctx.emitter.label(&fail_label);

@@ -31,6 +31,30 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fwrite ---");
     emitter.label_global("__rt_fwrite");
 
+    // Frame (64 bytes): [0]=fd [8]=pointer [16]=length [24]=handle [32]=session
+    //                   [48]=x29 [56]=x30.
+    //
+    // The frame is established before the synthetic-descriptor range checks
+    // because x0 arrives as an opaque stream handle, not as a descriptor. The
+    // TLS session has to be read while the handle is still in hand: it lives on
+    // the StreamState now, and the descriptor cannot reach it.
+    //
+    // Raw descriptors still work unchanged. `__rt_stream_fd` passes a
+    // non-handle through untouched and `__rt_stream_tls_session` reports no
+    // session for it, which is exactly the plain-write path the internal
+    // callers want.
+    emitter.instruction("sub sp, sp, #64");                                     // frame for the saved write state
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    emitter.instruction("str x0, [sp, #24]");                                   // save the incoming handle or raw descriptor
+    emitter.instruction("str x1, [sp, #8]");                                    // save the payload pointer
+    emitter.instruction("str x2, [sp, #16]");                                   // save the payload length
+    emitter.instruction("bl __rt_stream_tls_session");                          // resolve the session while the handle is available
+    emitter.instruction("str x0, [sp, #32]");                                   // save the attached TLS session, zero when plain
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the handle for descriptor resolution
+    emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
+    emitter.instruction("str x0, [sp, #0]");                                    // save the resolved file descriptor
+
     // -- phar:// write stream synthetic fd range (0x50000000..0x50000020) --
     emitter.instruction("mov w10, #0x5000");                                    // low half of the phar-write descriptor base
     emitter.instruction("lsl w10, w10, #16");                                   // form the full 0x50000000 phar-write descriptor base
@@ -39,6 +63,10 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("add x11, x10, #32");                                   // upper bound for the 32 buffered PHAR write descriptors
     emitter.instruction("cmp x0, x11");                                         // is this inside the phar-write descriptor range?
     emitter.instruction("b.ge __rt_fwrite_not_phar");                           // above the phar-write range: use normal stream dispatch
+    emitter.instruction("ldr x1, [sp, #8]");                                    // restore the payload pointer for the tail call
+    emitter.instruction("ldr x2, [sp, #16]");                                   // restore the payload length for the tail call
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the frame before the tail call
     emitter.instruction("b __rt_phar_write_append");                            // in range: append to the phar buffer (uncond → cross-atom safe)
     emitter.label("__rt_fwrite_not_phar");
 
@@ -47,16 +75,14 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("lsl w9, w9, #16");                                     // shift into bits 30..16 to form 0x40000000
     emitter.instruction("cmp x0, x9");                                          // is this a synthetic user-wrapper fd?
     emitter.instruction("b.lt __rt_fwrite_real_fd");                            // not a wrapper fd → issue the real write syscall path
+    emitter.instruction("ldr x1, [sp, #8]");                                    // restore the payload pointer for the tail call
+    emitter.instruction("ldr x2, [sp, #16]");                                   // restore the payload length for the tail call
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the frame before the tail call
     emitter.instruction("b __rt_user_wrapper_fwrite");                          // wrapper fd: tail-call stream_write (uncond → cross-atom safe)
     emitter.label("__rt_fwrite_real_fd");
-
-    // Frame (48 bytes): [0]=fd [8]=pointer [16]=length [32]=x29 [40]=x30.
-    emitter.instruction("sub sp, sp, #48");                                     // frame for the saved write state
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
-    emitter.instruction("str x0, [sp, #0]");                                    // save the file descriptor
-    emitter.instruction("str x1, [sp, #8]");                                    // save the payload pointer
-    emitter.instruction("str x2, [sp, #16]");                                   // save the payload length
+    emitter.instruction("ldr x1, [sp, #8]");                                    // reload the payload pointer clobbered by resolution
+    emitter.instruction("ldr x2, [sp, #16]");                                   // reload the payload length clobbered by resolution
 
     // -- look up the write filter for this descriptor --
     abi::emit_symbol_address(emitter, "x9", "_stream_write_filters");
@@ -101,8 +127,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_zlib_fwrite_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the deflate fwrite helper pointer
     emitter.instruction("blr x9");                                              // deflate-compress the payload, x0 = bytes consumed
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the frame
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
     // -- bzip2.compress filter: bzip2-compress the payload into the stream --
@@ -113,8 +139,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_bz2_fwrite_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the bzip2 compress fwrite helper pointer
     emitter.instruction("blr x9");                                              // bzip2-compress the payload, x0 = bytes consumed
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the frame
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
     // -- convert.iconv write filter: transcode the payload into the stream --
@@ -125,8 +151,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x9", "_iconv_fwrite_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the iconv write helper pointer
     emitter.instruction("blr x9");                                              // transcode the payload, x0 = bytes consumed
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the frame
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
     // -- user filter: dispatch through filter(string), then write the result --
@@ -146,8 +172,7 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("ldr x2, [sp, #16]");                                   // payload length
     // -- TLS dispatch: route through elephc_tls_write when fd has an
     //    attached session (Phase 11 B3). --
-    abi::emit_symbol_address(emitter, "x13", "_tls_sessions");
-    emitter.instruction("ldr x14, [x13, x0, lsl #3]");                          // _tls_sessions[fd] handle (0 = plain TCP)
+    emitter.instruction("ldr x14, [sp, #32]");                                  // the session resolved from the handle at entry
     emitter.instruction("cbz x14, __rt_fwrite_syscall");                        // no TLS attached → write syscall
     emitter.instruction("mov x0, x14");                                         // handle as first arg
     abi::emit_symbol_address(emitter, "x9", "_elephc_tls_write_fn");
@@ -157,8 +182,8 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.label("__rt_fwrite_syscall");
     emitter.syscall(4);
     emitter.label("__rt_fwrite_return");
-    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #48");                                     // release the frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // release the frame
     emitter.instruction("ret");                                                 // return the byte count from write
 }
 
@@ -168,27 +193,57 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fwrite ---");
     emitter.label_global("__rt_fwrite");
 
+    // Frame (rbp-relative): [-8]=fd [-16]=pointer [-24]=length [-32]=handle
+    //                        [-40]=session.
+    //
+    // The frame is established before the synthetic-descriptor range checks
+    // because rdi arrives as an opaque stream handle, not as a descriptor. The
+    // TLS session has to be read while the handle is still in hand: it lives on
+    // the StreamState now, and the descriptor cannot reach it.
+    //
+    // Raw descriptors still work unchanged. `__rt_stream_fd` passes a
+    // non-handle through untouched and `__rt_stream_tls_session` reports no
+    // session for it, which is exactly the plain-write path the internal
+    // callers want.
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("sub rsp, 48");                                         // frame for the saved write state
+    emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the incoming handle or raw descriptor
+    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the payload pointer
+    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
+    emitter.instruction("call __rt_stream_tls_session");                        // resolve the session while the handle is available
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the attached TLS session, zero when plain
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the handle for descriptor resolution
+    emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the resolved file descriptor
+    emitter.instruction("mov rdi, rax");                                        // the range checks below classify the descriptor
+
     // -- phar:// write stream synthetic fd range (0x50000000..0x50000020) --
     emitter.instruction("mov r10d, 0x50000000");                                // the phar-write synthetic descriptor base
     emitter.instruction("cmp rdi, r10");                                        // is the descriptor below the phar-write range?
     emitter.instruction("jl __rt_fwrite_not_phar_x86");                         // below the range: use normal stream dispatch
     emitter.instruction("lea r11, [r10 + 32]");                                 // upper bound for the 32 buffered PHAR write descriptors
     emitter.instruction("cmp rdi, r11");                                        // is this inside the phar-write descriptor range?
-    emitter.instruction("jl __rt_phar_write_append");                           // append the payload to the selected phar buffer
+    emitter.instruction("jge __rt_fwrite_not_phar_x86");                        // above the phar-write range: use normal stream dispatch
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // restore the payload pointer for the tail call
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore the payload length for the tail call
+    emitter.instruction("mov rsp, rbp");                                        // discard the helper frame before the tail call
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_phar_write_append");                          // append the payload to the selected phar buffer
     emitter.label("__rt_fwrite_not_phar_x86");
 
     // -- user-wrapper synthetic fd path (Phase 10 step 4) --
     emitter.instruction("mov r9d, 0x40000000");                                 // USER_WRAPPER_FD_BASE
     emitter.instruction("cmp rdi, r9");                                         // is this a synthetic user-wrapper fd?
-    emitter.instruction("jge __rt_user_wrapper_fwrite");                        // dispatch into the wrapper's stream_write instead of issuing a write syscall
-
-    // Frame (rbp-relative): [-8]=fd [-16]=pointer [-24]=length.
-    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
-    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
-    emitter.instruction("sub rsp, 32");                                         // frame for the saved write state
-    emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the file descriptor
-    emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the payload pointer
-    emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
+    emitter.instruction("jl __rt_fwrite_real_fd_x86");                          // not a wrapper fd → issue the real write syscall path
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // restore the payload pointer for the tail call
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // restore the payload length for the tail call
+    emitter.instruction("mov rsp, rbp");                                        // discard the helper frame before the tail call
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("jmp __rt_user_wrapper_fwrite");                        // dispatch into the wrapper's stream_write instead of issuing a write syscall
+    emitter.label("__rt_fwrite_real_fd_x86");
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the payload pointer clobbered by resolution
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // reload the payload length clobbered by resolution
 
     // -- look up the write filter for this descriptor --
     abi::emit_symbol_address(emitter, "r9", "_stream_write_filters");           // write-filter table base
@@ -274,8 +329,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // payload pointer (original or filtered)
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length
     // -- TLS dispatch (Phase 11 B3) --
-    abi::emit_symbol_address(emitter, "r10", "_tls_sessions");                  // load runtime data address
-    emitter.instruction("mov r11, QWORD PTR [r10 + rdi * 8]");                  // _tls_sessions[fd] handle
+    emitter.instruction("mov r11, QWORD PTR [rbp - 40]");                       // the session resolved from the handle at entry
     emitter.instruction("test r11, r11");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_fwrite_syscall_x86");                          // plain TCP → libc write
     emitter.instruction("mov rdi, r11");                                        // handle as first arg

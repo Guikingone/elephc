@@ -211,11 +211,11 @@ pub(crate) fn lower_stream_socket_enable_crypto(
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("cbnz x0, {}", enable_label));     // enable=true enters the TLS attach path
-            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the stashed descriptor for TLS teardown
-            emit_tls_session_present_flag(ctx);                                 // probe before the teardown clears the slot
+            // The stream handle sits under the descriptor at [sp, #16]; the session is
+            // reached through it, never through the descriptor.
+            emit_tls_session_present_flag(ctx, 16);                             // probe before the teardown detaches the session
             abi::emit_push_reg(ctx.emitter, "x0");                              // stash the flag across the teardown
-            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the descriptor under the stashed flag
-            emit_tls_session_teardown_for_current_fd(ctx);
+            emit_tls_session_teardown_for_handle(ctx, 32);                      // handle moved down by the stashed flag
             abi::emit_pop_reg(ctx.emitter, "x9");                               // recover the flag
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_release_temporary_stack(ctx.emitter, 16);
@@ -231,11 +231,10 @@ pub(crate) fn lower_stream_socket_enable_crypto(
         Arch::X86_64 => {
             ctx.emitter.instruction("test rax, rax");                           // did the caller request TLS enablement?
             ctx.emitter.instruction(&format!("jnz {}", enable_label));          // enable=true enters the TLS attach path
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp]");                // reload the stashed descriptor for TLS teardown
-            emit_tls_session_present_flag(ctx);                                 // probe before the teardown clears the slot
+            // See the AArch64 counterpart: the handle at [rsp + 16] carries the session.
+            emit_tls_session_present_flag(ctx, 16);                             // probe before the teardown detaches the session
             abi::emit_push_reg(ctx.emitter, "rax");                             // stash the flag across the teardown
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the descriptor under the stashed flag
-            emit_tls_session_teardown_for_current_fd(ctx);
+            emit_tls_session_teardown_for_handle(ctx, 32);                      // handle moved down by the stashed flag
             abi::emit_pop_reg(ctx.emitter, "r10");                              // recover the flag
             abi::emit_release_temporary_stack(ctx.emitter, 16);
             abi::emit_release_temporary_stack(ctx.emitter, 16);

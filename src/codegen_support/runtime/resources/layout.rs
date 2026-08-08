@@ -133,6 +133,15 @@ pub(crate) const STREAM_READ_FILTER_HEAD_OFFSET: i64 = 88;
 /// Byte offset of the write-direction filter chain head (filter handle, 0 = no filters).
 pub(crate) const STREAM_WRITE_FILTER_HEAD_OFFSET: i64 = 96;
 
+/// Byte offset of the attached TLS session handle (0 = plain, unencrypted transport).
+///
+/// This used to live in `_tls_sessions`, a fixed 2048-byte table indexed by raw
+/// descriptor. That table capped a program at 256 concurrent TLS streams, and
+/// because the kernel reuses descriptor numbers, a freshly opened socket
+/// inherited the session of a closed one. Keeping the session on the StreamState
+/// ties it to the generation-checked handle instead, so neither limit applies.
+pub(crate) const STREAM_TLS_SESSION_OFFSET: i64 = 104;
+
 /// Byte offset of the PHP-visible stream chunk size, or zero for the 8192-byte default.
 pub(crate) const STREAM_CHUNK_SIZE_OFFSET: i64 = 144;
 
@@ -222,6 +231,8 @@ const _: () = {
     assert!(STREAM_READ_FILTER_HEAD_OFFSET > STREAM_CONTEXT_HANDLE_OFFSET);
     assert!(STREAM_WRITE_FILTER_HEAD_OFFSET == STREAM_READ_FILTER_HEAD_OFFSET + 8);
     assert!(STREAM_WRITE_FILTER_HEAD_OFFSET < STREAM_CHUNK_SIZE_OFFSET);
+    assert!(STREAM_TLS_SESSION_OFFSET == STREAM_WRITE_FILTER_HEAD_OFFSET + 8);
+    assert!(STREAM_TLS_SESSION_OFFSET < STREAM_CHUNK_SIZE_OFFSET);
     assert!(FILTER_PREV_OFFSET == FILTER_NEXT_OFFSET + 8);
     assert!(FILTER_STREAM_HANDLE_OFFSET == FILTER_PREV_OFFSET + 8);
     assert!(FILTER_FLAGS_OFFSET + 8 == FILTER_STATE_SIZE as i64);

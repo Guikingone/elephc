@@ -17,9 +17,11 @@ use super::super::layout::{
     STREAM_BACKEND_PHAR_WRITE, STREAM_BACKEND_POPEN, STREAM_BACKEND_USER_DIRECTORY,
     STREAM_BACKEND_USER_WRAPPER, STREAM_CHUNK_SIZE_OFFSET, STREAM_CONNECT_HOST_LEN_OFFSET,
     STREAM_CONNECT_HOST_PTR_OFFSET, STREAM_CONTEXT_HANDLE_OFFSET, STREAM_EOF_OFFSET, STREAM_FD_OFFSET,
-    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE, STREAM_URI_LEN_OFFSET,
+    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE, STREAM_TLS_SESSION_OFFSET,
+    STREAM_URI_LEN_OFFSET,
     STREAM_URI_PTR_OFFSET,
 };
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 
 /// Emits every Linux x86_64 stream-resource helper.
@@ -29,6 +31,8 @@ pub(super) fn emit_stream_resources_x86_64(emitter: &mut Emitter) {
     emit_stream_fd(emitter);
     emit_stream_eof_get(emitter);
     emit_stream_eof_set(emitter);
+    emit_stream_tls_session(emitter);
+    emit_stream_set_tls_session(emitter);
     emit_stream_chunk_size(emitter);
     emit_stream_set_chunk_size(emitter);
     emit_stream_attach_context(emitter);
@@ -294,6 +298,58 @@ fn emit_stream_eof_get(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the state-owned EOF predicate
 }
 
+/// Emits `__rt_stream_tls_session(handle) -> session`, zero when the transport is
+/// plain or the handle is not a live stream.
+///
+/// Returning zero for a non-handle is what lets the write path accept either a
+/// handle or a raw descriptor during the migration: a raw descriptor simply has
+/// no state, hence no session, hence the plain-write path.
+fn emit_stream_tls_session(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: read the stream-owned TLS session handle ---");
+    emitter.label_global("__rt_stream_tls_session");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame
+    emitter.instruction("call __rt_stream_state");                              // resolve the stable stream state from the opaque handle
+    emitter.instruction("test rax, rax");                                       // did lookup produce an authoritative state?
+    emitter.instruction("jz __rt_stream_tls_session_none_x86");                 // raw descriptors and stale handles carry no session
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [rax + {}]", STREAM_TLS_SESSION_OFFSET
+    ));                                                                         // load the attached TLS session handle
+    emitter.instruction("jmp __rt_stream_tls_session_done_x86");                // join the common helper epilogue
+    emitter.label("__rt_stream_tls_session_none_x86");
+    emitter.instruction("xor eax, eax");                                        // report a plain, unencrypted transport
+    emitter.label("__rt_stream_tls_session_done_x86");
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the attached session handle
+}
+
+/// Emits `__rt_stream_set_tls_session(handle, session) -> ok`.
+fn emit_stream_set_tls_session(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: attach a TLS session to an opaque stream ---");
+    emitter.label_global("__rt_stream_set_tls_session");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable attachment frame
+    emitter.instruction("sub rsp, 16");                                         // reserve the session slot
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // preserve the session across state lookup
+    emitter.instruction("call __rt_stream_state");                              // resolve the authoritative StreamState
+    emitter.instruction("test rax, rax");                                       // did lookup produce an authoritative state?
+    emitter.instruction("jz __rt_stream_set_tls_session_fail_x86");             // reject stale or non-stream handles
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 8]");                        // reload the session handle
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rax + {}], rcx", STREAM_TLS_SESSION_OFFSET
+    ));                                                                         // publish the session on the stream state
+    emitter.instruction("mov eax, 1");                                          // report successful attachment
+    emitter.instruction("jmp __rt_stream_set_tls_session_done_x86");            // join the common helper epilogue
+    emitter.label("__rt_stream_set_tls_session_fail_x86");
+    emitter.instruction("xor eax, eax");                                        // report that no session was attached
+    emitter.label("__rt_stream_set_tls_session_done_x86");
+    emitter.instruction("mov rsp, rbp");                                        // discard the attachment scratch storage
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return the attachment status
+}
+
 /// Emits EOF replacement keyed by the stable x86_64 stream state.
 fn emit_stream_eof_set(emitter: &mut Emitter) {
     emitter.blank();
@@ -399,6 +455,24 @@ fn emit_stream_close_backend(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // is the stable stream state available?
     emitter.instruction("jz __rt_stream_close_backend_mark");                   // still publish Closed for an absent state
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve StreamState for typed backend destructors
+    // -- close any attached TLS session before the backend descriptor goes away --
+    // Closing here rather than in the fclose lowering means every path that
+    // destroys a stream sends close_notify, not just an explicit fclose().
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [rax + {}]", STREAM_TLS_SESSION_OFFSET
+    ));                                                                         // load the attached TLS session handle
+    emitter.instruction("test r10, r10");                                       // is a TLS session attached?
+    emitter.instruction("jz __rt_stream_close_backend_tls_done_x86");           // plain transports have nothing to shut down
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rax + {}], 0", STREAM_TLS_SESSION_OFFSET
+    ));                                                                         // detach before the call so a re-entrant close cannot double-free
+    abi::emit_load_symbol_to_reg(emitter, "r11", "_elephc_tls_close_fn", 0);    // load the published TLS close function pointer
+    emitter.instruction("test r11, r11");                                       // is the TLS backend linked into this program?
+    emitter.instruction("jz __rt_stream_close_backend_tls_done_x86");           // no TLS backend: nothing to shut down
+    emitter.instruction("mov rdi, r10");                                        // pass the session handle to the close helper
+    emitter.instruction("call r11");                                            // send close_notify and free the session
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // reload StreamState clobbered by the close call
+    emitter.label("__rt_stream_close_backend_tls_done_x86");
     emitter.instruction("mov r10, QWORD PTR [rax]");                            // load the stream backend kind
     emitter.instruction("mov r11, QWORD PTR [rax + 16]");                       // load the backend descriptor or handle
     emitter.instruction(&format!(

@@ -516,9 +516,8 @@ fn emit_fwrite_filtered_aarch64(emitter: &mut Emitter) {
     // which lives elsewhere — reading the scratch back would write the raw bytes at
     // the filtered length.
     emitter.instruction("str x1, [sp, #40]");                                   // stash the buffer the chain settled on
-    emitter.instruction("str x2, [sp, #32]");                                   // stash its length across the resolve
-    emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle
-    emitter.instruction("bl __rt_stream_fd");                                   // x0 = backend descriptor
+    emitter.instruction("str x2, [sp, #32]");                                   // stash its length across the write
+    emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle: __rt_fwrite resolves the descriptor itself
     emitter.instruction("ldr x1, [sp, #40]");                                   // filtered buffer
     emitter.instruction("ldr x2, [sp, #32]");                                   // filtered length
     emitter.instruction("bl __rt_fwrite");                                      // perform the descriptor write
@@ -532,8 +531,7 @@ fn emit_fwrite_filtered_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the consumed byte count
 
     emitter.label("__rt_fwrite_filtered_direct");
-    emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle
-    emitter.instruction("bl __rt_stream_fd");                                   // x0 = backend descriptor
+    emitter.instruction("ldr x0, [sp, #0]");                                    // stream handle: __rt_fwrite resolves the descriptor itself
     emitter.instruction("ldr x1, [sp, #8]");                                    // original payload pointer
     emitter.instruction("ldr x2, [sp, #16]");                                   // original payload length
     emitter.instruction("bl __rt_fwrite");                                      // unfiltered descriptor write
@@ -602,9 +600,7 @@ fn emit_fwrite_filtered_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 40], rdx");                       // stash the filtered length
 
     // -- write the filtered bytes through the regular descriptor path --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle
-    emitter.instruction("call __rt_stream_fd");                                 // rax = backend descriptor
-    emitter.instruction("mov rdi, rax");                                        // descriptor argument
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle: __rt_fwrite resolves the descriptor itself
     emitter.instruction("mov rsi, QWORD PTR [rbp - 48]");                       // filtered buffer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // filtered length
     emitter.instruction("call __rt_fwrite");                                    // perform the descriptor write
@@ -617,9 +613,7 @@ fn emit_fwrite_filtered_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the consumed byte count
 
     emitter.label("__rt_fwrite_filtered_direct_x");
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle
-    emitter.instruction("call __rt_stream_fd");                                 // rax = backend descriptor
-    emitter.instruction("mov rdi, rax");                                        // descriptor argument
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // stream handle: __rt_fwrite resolves the descriptor itself
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // original payload pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // original payload length
     emitter.instruction("call __rt_fwrite");                                    // unfiltered descriptor write

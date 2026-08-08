@@ -656,12 +656,15 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // _phar_list_len: output-length scratch written by elephc_phar_list_entries
     // and consumed immediately while expanding serialized names into an array.
     out.push_str(".p2align 3\n.globl _phar_list_len\n_phar_list_len:\n    .quad 0\n");
-    // _tls_sessions: per-fd TLS handle (i64 returned by
-    // elephc_tls_attach_fd or 0 when the fd is plain TCP). Indexed by raw
-    // fd up to 256; the runtime fread/fwrite/fclose paths consult this
-    // table and route through the elephc-tls helpers when an entry is
-    // non-zero, falling back to read/write/close syscalls otherwise.
-    out.push_str(".comm _tls_sessions, 2048, 3\n");
+    // FTP's TLS sessions. PHP-visible streams keep theirs on the StreamState, reached
+    // through the opaque handle; FTP's control and data sockets are INTERNAL — they are
+    // never exposed as PHP resources, so adopting them into the registry would mint
+    // resource ids and shift the php-src-aligned numbering. The `__rt_ftp_*` helpers are
+    // synchronous, so at most one control and one data connection are live at a time and
+    // two words suffice. Unlike the fd-indexed table these replace, there is no 256
+    // ceiling and a reused descriptor number cannot inherit a previous session.
+    out.push_str(".comm _ftp_tls_control, 8, 3\n");
+    out.push_str(".comm _ftp_tls_data, 8, 3\n");
     // _stream_notification_callback: the callable descriptor pointer for the
     // stream context's `notification` option, captured at codegen time by
     // stream_context_create / stream_context_set_params. __rt_http_open fires
