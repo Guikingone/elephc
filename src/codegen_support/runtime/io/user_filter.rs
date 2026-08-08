@@ -751,6 +751,29 @@ pub fn emit_user_filter_release_fd(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release runtime stack frame
     emitter.instruction("ret");                                                 // return to caller
+
+    // -- instance-keyed onClose, for a filter that lives on the chain --
+    // A user filter carried by a chain node has no entry in `_user_filter_instances`,
+    // so the per-descriptor sweep above can never reach it. `onClose()` still has to
+    // fire exactly once when its stream closes, which is what the chain teardown calls.
+    emitter.blank();
+    emitter.comment("--- runtime: user_filter_release_obj (instance-keyed onClose) ---");
+    emitter.label_global("__rt_user_filter_release_obj");
+    emitter.instruction("cbz x0, __rt_ufro_done");                              // no instance: nothing to close
+    emitter.instruction("sub sp, sp, #16");                                     // frame for the onClose call
+    emitter.instruction("stp x29, x30, [sp, #0]");                              // save frame pointer and return address
+    emitter.instruction("mov x29, sp");                                         // establish the helper frame pointer
+    emitter.instruction("ldr x12, [x0]");                                       // class_id at obj head
+    abi::emit_symbol_address(emitter, "x13", "_user_filter_vtable_ptrs");
+    emitter.instruction("ldr x13, [x13, x12, lsl #3]");                         // per-class vtable
+    emitter.instruction("ldr x14, [x13, #16]");                                 // slot 2 = onClose method ptr
+    emitter.instruction("cbz x14, __rt_ufro_no_method");                        // method absent → nothing to call
+    emitter.instruction("blr x14");                                             // call onClose($this) — return discarded
+    emitter.label("__rt_ufro_no_method");
+    emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #16");                                     // release the helper frame
+    emitter.label("__rt_ufro_done");
+    emitter.instruction("ret");                                                 // return to caller
 }
 
 /// Emits the Linux x86_64 stream runtime helper for user filter release fd.
@@ -801,5 +824,27 @@ fn emit_user_filter_release_fd_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // preserve fd
     emitter.instruction("add rsp, 16");                                         // release runtime stack frame
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
+    emitter.instruction("ret");                                                 // return to caller
+
+    // -- instance-keyed onClose, for a filter that lives on the chain --
+    // See the AArch64 counterpart: a chain-carried user filter has no per-descriptor
+    // entry, so the sweep above cannot reach it, yet `onClose()` must still fire once.
+    emitter.blank();
+    emitter.comment("--- runtime: user_filter_release_obj (instance-keyed onClose) ---");
+    emitter.label_global("__rt_user_filter_release_obj");
+    emitter.instruction("test rdi, rdi");                                       // no instance: nothing to close
+    emitter.instruction("jz __rt_ufro_done_x86");
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the helper frame pointer
+    emitter.instruction("mov r11, QWORD PTR [rdi]");                            // class_id at obj head
+    abi::emit_symbol_address(emitter, "r10", "_user_filter_vtable_ptrs");       // load runtime data address
+    emitter.instruction("mov r10, QWORD PTR [r10 + r11 * 8]");                  // per-class vtable
+    emitter.instruction("mov r11, QWORD PTR [r10 + 16]");                       // slot 2 = onClose method ptr
+    emitter.instruction("test r11, r11");                                       // method absent?
+    emitter.instruction("jz __rt_ufro_no_method_x86");                          // nothing to call
+    emitter.instruction("call r11");                                            // call onClose($this) — return discarded
+    emitter.label("__rt_ufro_no_method_x86");
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.label("__rt_ufro_done_x86");
     emitter.instruction("ret");                                                 // return to caller
 }
