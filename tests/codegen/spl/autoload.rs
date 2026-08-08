@@ -85,6 +85,30 @@ fn test_psr4_transitive_autoload() {
     assert_eq!(out, "hi Ada");
 }
 
+/// Verifies that incremental-hash usage found only after PSR-4 expansion receives the late hash
+/// prelude and that bare namespaced `hash_*` calls fall back to its global declarations.
+#[test]
+fn test_psr4_autoloaded_hash_context_usage_injects_late_prelude() {
+    let out = compile_and_run_files(
+        &[
+            (
+                "composer.json",
+                r#"{"autoload":{"psr-4":{"App\\":"src/"}}}"#,
+            ),
+            (
+                "src/Digester.php",
+                "<?php\nnamespace App;\nclass Digester {\n    public static function md5(string $value): string {\n        $context = hash_init('md5');\n        hash_update($context, $value);\n        return hash_final($context);\n    }\n}\n",
+            ),
+            (
+                "main.php",
+                "<?php\necho App\\Digester::md5('abc');\n",
+            ),
+        ],
+        "main.php",
+    );
+    assert_eq!(out, "900150983cd24fb0d6963f7d28e17f72");
+}
+
 /// Verifies PSR-4 static property assignment triggers autoload.
 #[test]
 fn test_psr4_static_property_assignment_triggers_autoload() {

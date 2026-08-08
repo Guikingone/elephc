@@ -5,11 +5,11 @@
 //! for programs that actually stream a hash.
 //!
 //! Called from:
-//! - `crate::hash_prelude::inject_if_used`.
+//! - `crate::hash_prelude::inject_if_used` and `inject_resolved_if_used`.
 //!
 //! Key details:
-//! - Runs before name resolution, so `Name`s are raw source text and PHP function
-//!   and class names are case-insensitive. A reference may be written `hash_init`,
+//! - Runs before or after name resolution, so names may be raw or canonical while PHP function
+//!   and class names remain case-insensitive. A reference may be written `hash_init`,
 //!   `\hash_init`, or `\Some\hash_init`, and `HashContext` may be spelled
 //!   `\HashContext` or `hashcontext`. The walk therefore matches the unqualified
 //!   last segment case-insensitively.

@@ -216,7 +216,10 @@ pub(crate) fn expr_invalidation(expr: &Expr) -> Invalidation {
             })
         }
         ExprKind::FunctionCall { name, .. }
-            if php_symbol_key(name.as_str().trim_start_matches('\\')) == "eval" =>
+            if matches!(
+                php_symbol_key(name.as_str().trim_start_matches('\\')).as_str(),
+                "eval" | "extract"
+            ) =>
         {
             Invalidation::All
         }

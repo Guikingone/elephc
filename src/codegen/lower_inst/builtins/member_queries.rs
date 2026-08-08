@@ -262,7 +262,11 @@ pub(in crate::codegen::lower_inst) fn lower_member_exists(
     if has_eval_context(ctx) {
         return lower_eval_member_exists(ctx, inst, target, member, name);
     }
-    let member_name = const_string_operand(ctx, member)?;
+    let Some(member_name) = maybe_const_string_operand(ctx, member)? else {
+        return super::member_exists::lower_dynamic_member_exists(
+            ctx, inst, target, member, name,
+        );
+    };
     let exists = match ctx.value_php_type(target)?.codegen_repr() {
         PhpType::Object(class_name) => {
             static_member_exists_on_class(ctx, &class_name, &member_name, name, true)
@@ -270,6 +274,11 @@ pub(in crate::codegen::lower_inst) fn lower_member_exists(
         PhpType::Str => {
             let class_name = const_string_operand(ctx, target)?;
             static_member_exists_on_class(ctx, &class_name, &member_name, name, false)
+        }
+        PhpType::Mixed | PhpType::Union(_) => {
+            return super::member_exists::lower_dynamic_member_exists(
+                ctx, inst, target, member, name,
+            );
         }
         other => {
             return Err(CodegenIrError::unsupported(format!(
@@ -456,4 +465,3 @@ pub(in crate::codegen::lower_inst) fn static_method_string_is_callable(
     }
     class_info.static_method_visibilities.get(&method_key) == Some(&Visibility::Public)
 }
-

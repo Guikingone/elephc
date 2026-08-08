@@ -312,3 +312,294 @@ pub(super) fn lower_in_array_string_x86_64(
     ctx.emitter.label(&done_label);
     Ok(())
 }
+
+/// Lowers a Mixed-needle membership scan over a concrete indexed `array<Str>`.
+///
+/// The needle is an already-boxed Mixed cell (e.g. an untyped `mixed` parameter). Each concrete
+/// string element is boxed into a temporary Mixed string cell via `__rt_mixed_from_value` (which
+/// heap-persists its own copy), compared against the needle with the selected runtime helper, then
+/// released with `__rt_decref_mixed`. `__rt_php_compare` yields the PHP 8 three-way sign so a loose
+/// match is `sign == 0`; `__rt_mixed_strict_eq` yields a boolean so a strict match is a non-zero
+/// result. This is the symmetric counterpart of `lower_in_array_mixed_string`, which handles a
+/// string needle over an `array<Mixed>`.
+pub(super) fn lower_in_array_string_mixed_needle(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            lower_in_array_string_mixed_needle_aarch64(ctx, needle, array, eq_helper, match_on_zero)
+        }
+        Arch::X86_64 => {
+            lower_in_array_string_mixed_needle_x86_64(ctx, needle, array, eq_helper, match_on_zero)
+        }
+    }
+}
+
+/// Emits the boxed-Mixed-array membership loop for a boxed Mixed needle.
+///
+/// `eq_helper` takes two boxed Mixed cells in the first two argument registers and returns in the
+/// integer result register: `__rt_mixed_strict_eq` yields a boolean (match on non-zero), and
+/// `__rt_php_compare` yields the `-1`/`0`/`+1` sign (match on zero) — the same two helpers
+/// `lower_inst::comparisons` uses for `===` and `==` on two Mixed operands, so membership agrees
+/// with the operators by construction. `match_on_zero` selects which convention applies.
+///
+/// Unlike the concrete-string-array variant below, the elements are ALREADY boxed cells, so no
+/// per-element boxing (and therefore no matching decref) is needed.
+pub(super) fn lower_in_array_mixed_mixed(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => lower_in_array_mixed_mixed_aarch64(ctx, needle, array, eq_helper, match_on_zero),
+        Arch::X86_64 => lower_in_array_mixed_mixed_x86_64(ctx, needle, array, eq_helper, match_on_zero),
+    }
+}
+
+/// Emits the AArch64 boxed-Mixed-array membership loop for a boxed Mixed needle.
+///
+/// State (index, length, payload base, needle cell) lives in a 32-byte SP-relative frame so it
+/// survives the comparison call.
+fn lower_in_array_mixed_mixed_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_mm_loop");
+    let found_label = ctx.next_label("in_array_mm_found");
+    let end_label = ctx.next_label("in_array_mm_end");
+    let done_label = ctx.next_label("in_array_mm_done");
+
+    ctx.load_value_to_reg(array, "x10")?;
+    ctx.emitter.instruction("ldr x11, [x10]");                                  // load the array<Mixed> length before scanning boxed cell slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first boxed Mixed cell slot
+    ctx.load_value_to_reg(needle, "x0")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, "x0", 24); // stash the boxed Mixed needle cell pointer in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "x11", 8); // stash the array length in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "x10", 16); // stash the cell base pointer in the state frame
+    ctx.emitter.instruction("mov x12, #0");                                     // start the membership scan at index zero
+    abi::emit_store_to_sp(ctx.emitter, "x12", 0);
+    ctx.emitter.label(&loop_label);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x12", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x13", 8);
+    ctx.emitter.instruction("cmp x12, x13");                                    // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false once every cell is scanned
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x13", 16);
+    ctx.emitter.instruction("ldr x1, [x13, x12, lsl #3]");                      // load the current boxed Mixed cell as the second comparison argument
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 24); // reload the needle cell as the first comparison argument
+    abi::emit_call_label(ctx.emitter, eq_helper);
+    if match_on_zero {
+        ctx.emitter.instruction(&format!("cbz x0, {}", found_label));           // a zero PHP compare sign is a loose match
+    } else {
+        ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));          // a non-zero strict-eq result is a match
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x12", 0);
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next boxed Mixed cell
+    abi::emit_store_to_sp(ctx.emitter, "x12", 0);
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning the remaining cells
+    ctx.emitter.label(&found_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("b {}", done_label));
+    ctx.emitter.label(&end_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no cell matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the x86_64 boxed-Mixed-array membership loop for a boxed Mixed needle.
+///
+/// State (index, length, payload base, needle cell) lives in a 32-byte SP-relative frame so it
+/// survives the comparison call.
+fn lower_in_array_mixed_mixed_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_mm_loop");
+    let found_label = ctx.next_label("in_array_mm_found");
+    let end_label = ctx.next_label("in_array_mm_end");
+    let done_label = ctx.next_label("in_array_mm_done");
+
+    ctx.load_value_to_reg(array, "r10")?;
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the array<Mixed> length before scanning boxed cell slots
+    ctx.emitter.instruction("lea r10, [r10 + 24]");                             // point at the first boxed Mixed cell slot
+    ctx.load_value_to_reg(needle, "rax")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    abi::emit_store_to_sp(ctx.emitter, "rax", 24); // stash the boxed Mixed needle cell pointer in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "r11", 8); // stash the array length in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "r10", 16); // stash the cell base pointer in the state frame
+    ctx.emitter.instruction("xor ecx, ecx");                                    // start the membership scan at index zero
+    abi::emit_store_to_sp(ctx.emitter, "rcx", 0);
+    ctx.emitter.label(&loop_label);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 8);
+    ctx.emitter.instruction("cmp rax, rcx");                                    // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false once every cell is scanned
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 16);
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rcx + rax*8]");                // load the current boxed Mixed cell as the second comparison argument
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 24); // reload the needle cell as the first comparison argument
+    abi::emit_call_label(ctx.emitter, eq_helper);
+    ctx.emitter.instruction("test rax, rax");                                   // inspect the comparison outcome for this cell
+    if match_on_zero {
+        ctx.emitter.instruction(&format!("je {}", found_label));                // a zero PHP compare sign is a loose match
+    } else {
+        ctx.emitter.instruction(&format!("jne {}", found_label));               // a non-zero strict-eq result is a match
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+    ctx.emitter.instruction("add rax, 1");                                      // advance to the next boxed Mixed cell
+    abi::emit_store_to_sp(ctx.emitter, "rax", 0);
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning the remaining cells
+    ctx.emitter.label(&found_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a matching cell
+    ctx.emitter.instruction(&format!("jmp {}", done_label));
+    ctx.emitter.label(&end_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no cell matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the AArch64 concrete-string-array membership loop for a boxed Mixed needle.
+///
+/// State (index, length, payload base, needle cell, boxed element cell, comparison result) lives in
+/// a 48-byte SP-relative frame so it survives the boxing, comparison, and decref calls.
+fn lower_in_array_string_mixed_needle_aarch64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_smn_loop");
+    let found_label = ctx.next_label("in_array_smn_found");
+    let end_label = ctx.next_label("in_array_smn_end");
+    let done_label = ctx.next_label("in_array_smn_done");
+
+    ctx.load_value_to_reg(array, "x10")?;
+    ctx.emitter.instruction("ldr x11, [x10]");                                  // load the concrete string-array length before scanning payload slots
+    ctx.emitter.instruction("add x10, x10, #24");                               // point at the first indexed string payload slot
+    ctx.load_value_to_reg(needle, "x0")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 48);
+    abi::emit_store_to_sp(ctx.emitter, "x0", 24); // stash the boxed Mixed needle cell pointer in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "x11", 8); // stash the string-array length in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "x10", 16); // stash the payload base pointer in the state frame
+    ctx.emitter.instruction("mov x12, #0");                                     // start the membership scan at index zero
+    abi::emit_store_to_sp(ctx.emitter, "x12", 0);
+    ctx.emitter.label(&loop_label);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x12", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x13", 8);
+    ctx.emitter.instruction("cmp x12, x13");                                    // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("b.ge {}", end_label));                    // finish with false once every element is scanned
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x13", 16);
+    ctx.emitter.instruction("lsl x14, x12, #4");                                // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("add x13, x13, x14");                               // compute the current string element slot address
+    ctx.emitter.instruction("ldr x1, [x13]");                                   // load the current string element pointer for boxing
+    ctx.emitter.instruction("ldr x2, [x13, #8]");                               // load the current string element length for boxing
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str); // box the element into a temporary owned Mixed string cell (x0)
+    abi::emit_store_to_sp(ctx.emitter, "x0", 32); // stash the temporary element cell for the later decref
+    ctx.emitter.instruction("mov x1, x0");                                      // pass the boxed element as the second comparison argument
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 24); // reload the needle cell as the first comparison argument
+    abi::emit_call_label(ctx.emitter, eq_helper);
+    abi::emit_store_to_sp(ctx.emitter, "x0", 40); // stash the comparison result across the element decref
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 32);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 40);
+    if match_on_zero {
+        ctx.emitter.instruction(&format!("cbz x0, {}", found_label));           // a zero PHP compare sign is a loose match
+    } else {
+        ctx.emitter.instruction(&format!("cbnz x0, {}", found_label));          // a non-zero strict-eq result is a match
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "x12", 0);
+    ctx.emitter.instruction("add x12, x12, #1");                                // advance to the next indexed string element
+    abi::emit_store_to_sp(ctx.emitter, "x12", 0);
+    ctx.emitter.instruction(&format!("b {}", loop_label));                      // continue scanning the remaining string elements
+    ctx.emitter.label(&found_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    ctx.emitter.instruction("mov x0, #1");                                      // return true after finding a matching element
+    ctx.emitter.instruction(&format!("b {}", done_label));
+    ctx.emitter.label(&end_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    ctx.emitter.instruction("mov x0, #0");                                      // return false when no element matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Emits the x86_64 concrete-string-array membership loop for a boxed Mixed needle.
+///
+/// State (index, length, payload base, needle cell, boxed element cell, comparison result) lives in
+/// a 48-byte SP-relative frame so it survives the boxing, comparison, and decref calls.
+fn lower_in_array_string_mixed_needle_x86_64(
+    ctx: &mut FunctionContext<'_>,
+    needle: crate::ir::ValueId,
+    array: crate::ir::ValueId,
+    eq_helper: &str,
+    match_on_zero: bool,
+) -> Result<()> {
+    let loop_label = ctx.next_label("in_array_smn_loop");
+    let found_label = ctx.next_label("in_array_smn_found");
+    let end_label = ctx.next_label("in_array_smn_end");
+    let done_label = ctx.next_label("in_array_smn_done");
+
+    ctx.load_value_to_reg(array, "r10")?;
+    ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                        // load the concrete string-array length before scanning payload slots
+    ctx.emitter.instruction("lea r10, [r10 + 24]");                             // point at the first indexed string payload slot
+    ctx.load_value_to_reg(needle, "rax")?;
+    abi::emit_reserve_temporary_stack(ctx.emitter, 48);
+    abi::emit_store_to_sp(ctx.emitter, "rax", 24); // stash the boxed Mixed needle cell pointer in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "r11", 8); // stash the string-array length in the state frame
+    abi::emit_store_to_sp(ctx.emitter, "r10", 16); // stash the payload base pointer in the state frame
+    ctx.emitter.instruction("xor ecx, ecx");                                    // start the membership scan at index zero
+    abi::emit_store_to_sp(ctx.emitter, "rcx", 0);
+    ctx.emitter.label(&loop_label);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 8);
+    ctx.emitter.instruction("cmp rax, rcx");                                    // compare the scan index against the array length
+    ctx.emitter.instruction(&format!("jge {}", end_label));                     // finish with false once every element is scanned
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rcx", 16);
+    ctx.emitter.instruction("shl rax, 4");                                      // scale the element index by the 16-byte string slot width
+    ctx.emitter.instruction("add rcx, rax");                                    // compute the current string element slot address
+    ctx.emitter.instruction("mov rax, QWORD PTR [rcx]");                        // load the current string element pointer for boxing
+    ctx.emitter.instruction("mov rdx, QWORD PTR [rcx + 8]");                    // load the current string element length for boxing
+    emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Str); // box the element into a temporary owned Mixed string cell (rax)
+    abi::emit_store_to_sp(ctx.emitter, "rax", 32); // stash the temporary element cell for the later decref
+    ctx.emitter.instruction("mov rsi, rax");                                    // pass the boxed element as the second comparison argument
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 24); // reload the needle cell as the first comparison argument
+    abi::emit_call_label(ctx.emitter, eq_helper);
+    abi::emit_store_to_sp(ctx.emitter, "rax", 40); // stash the comparison result across the element decref
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 32);
+    abi::emit_call_label(ctx.emitter, "__rt_decref_mixed");
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 40);
+    ctx.emitter.instruction("test rax, rax");                                   // inspect the comparison outcome for this element
+    if match_on_zero {
+        ctx.emitter.instruction(&format!("je {}", found_label));                // a zero PHP compare sign is a loose match
+    } else {
+        ctx.emitter.instruction(&format!("jne {}", found_label));               // a non-zero strict-eq result is a match
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, "rax", 0);
+    ctx.emitter.instruction("add rax, 1");                                      // advance to the next indexed string element
+    abi::emit_store_to_sp(ctx.emitter, "rax", 0);
+    ctx.emitter.instruction(&format!("jmp {}", loop_label));                    // continue scanning the remaining string elements
+    ctx.emitter.label(&found_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    ctx.emitter.instruction("mov rax, 1");                                      // return true after finding a matching element
+    ctx.emitter.instruction(&format!("jmp {}", done_label));
+    ctx.emitter.label(&end_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 48);
+    ctx.emitter.instruction("xor eax, eax");                                    // return false when no element matches the needle
+    ctx.emitter.label(&done_label);
+    Ok(())
+}

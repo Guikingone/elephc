@@ -159,3 +159,19 @@ echo implode(",", $removed), "|", implode(",", $a3);
     );
     assert_eq!(out, "20,30|30,40,50|2,3|1,4,5");
 }
+
+/// Associative slicing preserves string keys and optionally preserves numeric keys.
+#[test]
+fn test_array_slice_associative_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php
+$source = ['a' => 10, 5 => 20, 'b' => 30, 8 => 40];
+$preserved = array_slice($source, 1, 2, true);
+foreach ($preserved as $key => $value) { echo $key, '=', $value, ';'; }
+echo '|';
+$renumbered = array_slice($source, -3, -1, false);
+foreach ($renumbered as $key => $value) { echo $key, '=', $value, ';'; }
+"#,
+    );
+    assert_eq!(out, "5=20;b=30;|0=20;b=30;");
+}

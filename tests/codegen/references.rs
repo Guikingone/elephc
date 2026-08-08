@@ -116,6 +116,56 @@ fn test_reference_property_keeps_default_until_written() {
     assert_eq!(out, "7\n7\n11\n");
 }
 
+/// `isset()` probes the owner-slot marker and dereferenced value without triggering a typed
+/// uninitialized-property read, including properties promoted to reference-cell storage.
+#[test]
+fn test_isset_reference_properties_respects_initialization_and_null() {
+    let out = compile_and_run(
+        r#"<?php
+class ReferenceIssetBox {
+    public int $typed;
+    public mixed $nullable = null;
+    public int $zero = 0;
+
+    public function &typedRef(): int { return $this->typed; }
+    public function &nullableRef(): mixed { return $this->nullable; }
+    public function &zeroRef(): int { return $this->zero; }
+}
+$box = new ReferenceIssetBox();
+var_dump(isset($box->typed), isset($box->nullable), isset($box->zero));
+$box->typed = 7;
+$alias =& $box->nullable;
+$alias = "set";
+var_dump(isset($box->typed), isset($box->nullable));
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)\nbool(false)\nbool(true)\nbool(true)\nbool(true)\n"
+    );
+}
+
+/// Unsetting an element through an array by-reference parameter publishes a relocated sparse hash
+/// through the shared cell, so string and integer-key removals are both visible to the caller.
+#[test]
+fn test_unset_array_element_through_by_ref_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function remove_ref_key(array &$values, mixed $key): void {
+    unset($values[$key]);
+}
+$assoc = ["keep" => 1, "drop" => 2];
+$copy = $assoc;
+remove_ref_key($assoc, "drop");
+echo count($assoc), ":", isset($assoc["drop"]) ? "bad" : "assoc", ":", count($copy), "|";
+$list = [10, 20, 30];
+remove_ref_key($list, 1);
+echo count($list), ":", array_is_list($list) ? "list" : "assoc", ":", $list[2];
+"#,
+    );
+    assert_eq!(out, "1:assoc:2|2:assoc:30");
+}
+
 /// A by-reference free function returns a reference to a property; `$x = &f()` aliases it
 /// and a write through `$x` updates the property.
 #[test]

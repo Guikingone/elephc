@@ -81,6 +81,26 @@ echo $c->make()->add(3, 4);
     assert_eq!(out, "7");
 }
 
+/// A same-name dynamic candidate with a nullable-int parameter must not reject a string branch.
+#[test]
+fn test_mixed_method_dispatch_with_string_and_nullable_int_candidates() {
+    let out = compile_and_run(
+        r#"<?php
+class StringTarget {
+    public function run(string $value): string { return 's:'.$value; }
+}
+class IntTarget {
+    public function run(?int $value): string { return 'i:'.$value; }
+}
+function target(bool $string): mixed {
+    return $string ? new StringTarget() : new IntTarget();
+}
+echo target(true)->run('text'), '|', target(false)->run('12');
+"#,
+    );
+    assert_eq!(out, "s:text|i:12");
+}
+
 /// Verifies dynamic dispatch selects the correct class at runtime when several
 /// classes define the same method.
 #[test]

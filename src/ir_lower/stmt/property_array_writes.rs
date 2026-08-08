@@ -230,7 +230,7 @@ pub(super) fn release_property_array_insert_value_after_retain(
 }
 
 /// Releases the loaded property value after rewriting it through a retaining `PropSet`.
-pub(super) fn release_rewritten_property_value_after_retaining_store(
+pub(crate) fn release_rewritten_property_value_after_retaining_store(
     ctx: &mut LoweringContext<'_, '_>,
     property_ty: &PhpType,
     property_value: LoweredValue,
@@ -267,4 +267,3 @@ pub(super) fn indexed_property_array_element_type(property_ty: &PhpType) -> Opti
         _ => None,
     }
 }
-

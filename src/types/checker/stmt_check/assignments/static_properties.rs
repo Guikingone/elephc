@@ -48,6 +48,16 @@ pub(super) fn check_static_property_assign(
             span,
             &format!("Static property {}::${}", target.class_name, property),
         )?;
+        if let Some(updated_ty) =
+            declared_array_storage_after_gradual_assignment(&target.prop_ty, &val_ty)
+        {
+            update_static_property_type(
+                checker,
+                property,
+                &target.declaring_class,
+                updated_ty,
+            );
+        }
     }
 
     if !target.property_has_declared_type {
@@ -59,6 +69,32 @@ pub(super) fn check_static_property_assign(
         );
     }
     Ok(())
+}
+
+/// Widens a declared PHP `array` slot after a whole-value gradual assignment.
+///
+/// A default value may specialize the compiler's storage metadata to an indexed array or a
+/// typed associative hash, but PHP's declared `array` contract does not constrain keys or element
+/// values. Once a `Mixed`/union value is assigned, normalize the whole-program slot metadata to a
+/// Mixed-keyed/Mixed-valued hash so codegen can validate array-ness and copy either runtime array
+/// representation without subsequently reading its elements through a stale specialized type.
+fn declared_array_storage_after_gradual_assignment(
+    current: &PhpType,
+    assigned: &PhpType,
+) -> Option<PhpType> {
+    if !matches!(assigned.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+        return None;
+    }
+    if !matches!(
+        current.codegen_repr(),
+        PhpType::Array(_) | PhpType::AssocArray { .. }
+    ) {
+        return None;
+    }
+    Some(PhpType::AssocArray {
+        key: Box::new(PhpType::Mixed),
+        value: Box::new(PhpType::Mixed),
+    })
 }
 
 /// Type-checks an array-push assignment `Class::$prop[] = value`.

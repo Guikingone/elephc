@@ -412,12 +412,12 @@ pub(super) fn require_array_slice_element_layout(elem: &PhpType) -> Result<()> {
         PhpType::Int
             | PhpType::Bool
             | PhpType::Float
+            | PhpType::Str
+            | PhpType::Callable
             | PhpType::Void
             | PhpType::Mixed
-            | PhpType::Array(_)
-            | PhpType::AssocArray { .. }
-            | PhpType::Object(_)
-    ) {
+    ) || elem.is_refcounted()
+    {
         return Ok(());
     }
     Err(CodegenIrError::unsupported(format!(

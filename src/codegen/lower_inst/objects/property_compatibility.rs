@@ -238,6 +238,18 @@ pub(super) fn can_coerce_tagged_scalar_to_int_property(value_ty: &PhpType, slot_
     value_ty.codegen_repr() == PhpType::TaggedScalar && slot_ty.codegen_repr() == PhpType::Int
 }
 
+/// Returns true when the source already uses the integer word representation of a bool slot.
+pub(super) fn can_store_integer_like_in_bool_property(
+    value_ty: &PhpType,
+    slot_ty: &PhpType,
+) -> bool {
+    matches!(slot_ty.codegen_repr(), PhpType::Bool | PhpType::False)
+        && matches!(
+            value_ty.codegen_repr(),
+            PhpType::Bool | PhpType::False | PhpType::Int
+        )
+}
+
 /// Returns true when a class default initializer writes into an untyped property later refined to null.
 pub(super) fn can_store_class_default_in_refined_null_property(
     ctx: &FunctionContext<'_>,
@@ -256,9 +268,9 @@ pub(super) fn can_store_class_default_in_refined_null_property(
 /// Returns true when an empty array literal initializes a typed array property.
 pub(super) fn is_empty_array_for_array_property(value_ty: &PhpType, slot_ty: &PhpType) -> bool {
     matches!(
-        (value_ty, slot_ty),
-        (PhpType::Array(elem_ty), PhpType::Array(_))
-            if matches!(elem_ty.as_ref(), PhpType::Never | PhpType::Void)
+        (value_ty.codegen_repr(), slot_ty.codegen_repr()),
+        (PhpType::Array(elem_ty), PhpType::Array(_) | PhpType::AssocArray { .. })
+            if matches!(elem_ty.codegen_repr(), PhpType::Never | PhpType::Void)
     )
 }
 
@@ -270,6 +282,32 @@ pub(super) fn can_convert_indexed_array_to_mixed_property(value_ty: &PhpType, sl
         return false;
     };
     slot_elem.codegen_repr() == PhpType::Mixed && value_elem.codegen_repr() != PhpType::Mixed
+}
+
+/// Returns true when indexed storage can be promoted to an associative Mixed-value property.
+pub(super) fn can_convert_indexed_array_to_assoc_mixed_property(
+    value_ty: &PhpType,
+    slot_ty: &PhpType,
+) -> bool {
+    let PhpType::Array(_) = value_ty.codegen_repr() else {
+        return false;
+    };
+    matches!(
+        slot_ty.codegen_repr(),
+        PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+    )
+}
+
+/// Returns true when gradual array storage can be normalized for an associative Mixed property.
+pub(super) fn can_convert_mixed_to_assoc_mixed_property(
+    value_ty: &PhpType,
+    slot_ty: &PhpType,
+) -> bool {
+    matches!(value_ty.codegen_repr(), PhpType::Mixed | PhpType::Union(_))
+        && matches!(
+            slot_ty.codegen_repr(),
+            PhpType::AssocArray { value, .. } if value.codegen_repr() == PhpType::Mixed
+        )
 }
 
 /// Returns true when associative-array storage can satisfy a generic `array` property.

@@ -47,6 +47,12 @@ pub(super) fn lower_function_call(ctx: &mut LoweringContext<'_, '_>, name: &Name
     if let Some(value) = lower_static_array_map(ctx, canonical, args, expr) {
         return value;
     }
+    if let Some(value) = lower_single_arg_assert(ctx, canonical, args, expr) {
+        return value;
+    }
+    if let Some(value) = lower_default_initial_array_reduce(ctx, canonical, args, expr) {
+        return value;
+    }
     if let Some(value) = lower_static_array_reduce(ctx, canonical, args, expr) {
         return value;
     }

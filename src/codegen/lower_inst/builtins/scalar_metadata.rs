@@ -82,6 +82,111 @@ pub(crate) fn lower_gettype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Lowers `get_debug_type(value)` with PHP 8's short scalar names and runtime object class names.
+pub(crate) fn lower_get_debug_type(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<()> {
+    ensure_arg_count(inst, "get_debug_type", 1)?;
+    let value = expect_operand(inst, 0)?;
+    let ty = ctx.raw_value_php_type(value)?;
+    if matches!(ty.codegen_repr(), PhpType::TaggedScalar) {
+        emit_tagged_scalar_get_debug_type(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(ty, PhpType::Mixed | PhpType::Union(_)) {
+        emit_mixed_get_debug_type(ctx, value)?;
+        return store_if_result(ctx, inst);
+    }
+    if matches!(ty, PhpType::Object(_)) {
+        ctx.load_value_to_result(value)?;
+        super::types::emit_dynamic_object_class_name(ctx, "get_class");
+        return store_if_result(ctx, inst);
+    }
+    let Some(type_name) = static_get_debug_type_name(&ty) else {
+        return Err(CodegenIrError::unsupported(format!(
+            "get_debug_type for PHP type {:?}",
+            ty
+        )));
+    };
+    emit_type_name_result(ctx, type_name);
+    store_if_result(ctx, inst)
+}
+
+/// Emits `get_debug_type()` for an inline tagged scalar containing an integer or null.
+fn emit_tagged_scalar_get_debug_type(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let null_case = ctx.next_label("debugtype_tagged_null");
+    let done = ctx.next_label("debugtype_tagged_done");
+    ctx.load_value_to_result(value)?;
+    crate::codegen::sentinels::emit_branch_if_tagged_scalar_null(ctx.emitter, &null_case);
+    emit_type_name_result(ctx, b"int");
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&null_case);
+    emit_type_name_result(ctx, b"null");
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Emits `get_debug_type()` for a boxed Mixed or Union payload by dispatching on its runtime tag.
+fn emit_mixed_get_debug_type(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+) -> Result<()> {
+    let integer_case = ctx.next_label("debugtype_mixed_int");
+    let double_case = ctx.next_label("debugtype_mixed_float");
+    let string_case = ctx.next_label("debugtype_mixed_string");
+    let boolean_case = ctx.next_label("debugtype_mixed_bool");
+    let null_case = ctx.next_label("debugtype_mixed_null");
+    let array_case = ctx.next_label("debugtype_mixed_array");
+    let object_case = ctx.next_label("debugtype_mixed_object");
+    let resource_case = ctx.next_label("debugtype_mixed_resource");
+    let done = ctx.next_label("debugtype_mixed_done");
+    ctx.load_value_to_result(value)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    emit_branch_on_gettype_mixed_tag(ctx, 0, &integer_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 1, &string_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 2, &double_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 3, &boolean_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 4, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 5, &array_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 6, &object_case);
+    emit_branch_on_gettype_mixed_tag(ctx, 9, &resource_case);
+    abi::emit_jump(ctx.emitter, &null_case);
+
+    emit_mixed_gettype_case(ctx, &integer_case, b"int", &done);
+    emit_mixed_gettype_case(ctx, &double_case, b"float", &done);
+    emit_mixed_gettype_case(ctx, &string_case, b"string", &done);
+    emit_mixed_gettype_case(ctx, &boolean_case, b"bool", &done);
+    emit_mixed_gettype_case(ctx, &null_case, b"null", &done);
+    emit_mixed_gettype_case(ctx, &array_case, b"array", &done);
+    emit_mixed_gettype_case(ctx, &resource_case, b"resource", &done);
+
+    ctx.emitter.label(&object_case);
+    super::types::emit_mixed_object_class_name_from_value(ctx, value, "get_class")?;
+    abi::emit_jump(ctx.emitter, &done);
+    ctx.emitter.label(&done);
+    Ok(())
+}
+
+/// Returns PHP's `get_debug_type()` spelling for concrete statically known non-object types.
+fn static_get_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
+    match ty {
+        PhpType::Int => Some(b"int".as_slice()),
+        PhpType::Float => Some(b"float".as_slice()),
+        PhpType::Str => Some(b"string".as_slice()),
+        PhpType::Bool | PhpType::False => Some(b"bool".as_slice()),
+        PhpType::Void | PhpType::Never => Some(b"null".as_slice()),
+        PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
+            Some(b"array".as_slice())
+        }
+        PhpType::Resource(_) => Some(b"resource".as_slice()),
+        _ => None,
+    }
+}
+
 /// Emits `gettype()` for an inline tagged scalar by dispatching on its tag word.
 pub(in crate::codegen::lower_inst) fn emit_tagged_scalar_gettype(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let null_case = ctx.next_label("gettype_tagged_null");
@@ -289,9 +394,66 @@ pub(in crate::codegen::lower_inst) fn lower_dynamic_phpversion(ctx: &mut Functio
 pub(crate) fn lower_defined(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count(inst, "defined", 1)?;
     let value = expect_operand(inst, 0)?;
-    let constant_name = const_string_operand(ctx, value)?;
-    emit_static_bool(ctx, ctx.has_global_name(&constant_name));
+    if let Some(constant_name) = maybe_const_string_operand(ctx, value)? {
+        emit_static_bool(
+            ctx,
+            ctx.has_global_name(&constant_name) || const_registry_contains(ctx, &constant_name),
+        );
+    } else {
+        emit_registry_string_lookup(ctx, value, "defined", "__rt_defined")?;
+    }
     store_if_result(ctx, inst)
+}
+
+/// Lowers `constant($name)` against the closed-world scalar constant registry.
+pub(crate) fn lower_constant(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count(inst, "constant", 1)?;
+    let value = expect_operand(inst, 0)?;
+    emit_registry_string_lookup(ctx, value, "constant", "__rt_constant")?;
+    store_if_result(ctx, inst)
+}
+
+/// Returns whether the emitted constant registry contains a canonicalized global name.
+fn const_registry_contains(ctx: &FunctionContext<'_>, name: &str) -> bool {
+    let normalized = name.trim_start_matches('\\');
+    ctx.module
+        .const_registry
+        .iter()
+        .any(|(candidate, _)| candidate == normalized)
+}
+
+/// Materializes a string constant name and invokes a runtime registry lookup helper.
+fn emit_registry_string_lookup(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    builtin_name: &str,
+    helper: &str,
+) -> Result<()> {
+    let ty = ctx.load_value_to_result(value)?;
+    match ty.codegen_repr() {
+        PhpType::Str => {}
+        PhpType::Mixed | PhpType::Union(_) => {
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} name with PHP type {:?}",
+                builtin_name, other
+            )))
+        }
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x0, x1");                              // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov x1, x2");                              // move string length into helper argument 1
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // move string pointer into helper argument 0
+            ctx.emitter.instruction("mov rsi, rdx");                            // move string length into helper argument 1
+        }
+    }
+    abi::emit_call_label(ctx.emitter, helper);
+    Ok(())
 }
 
 /// Compile-time-known set of "loaded" PHP extensions for `extension_loaded()` and the regular

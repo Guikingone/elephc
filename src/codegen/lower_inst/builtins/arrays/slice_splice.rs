@@ -432,7 +432,11 @@ pub(super) fn array_pad_runtime_helper(source_elem_ty: &PhpType) -> &'static str
 
 /// Returns the helper that matches the source element ownership representation.
 pub(super) fn array_slice_runtime_helper(source_elem_ty: &PhpType) -> &'static str {
-    if source_elem_ty.is_refcounted() {
+    if matches!(source_elem_ty.codegen_repr(), PhpType::Str) {
+        "__rt_array_slice_str"
+    } else if matches!(source_elem_ty.codegen_repr(), PhpType::Callable)
+        || source_elem_ty.is_refcounted()
+    {
         "__rt_array_slice_refcounted"
     } else {
         "__rt_array_slice"

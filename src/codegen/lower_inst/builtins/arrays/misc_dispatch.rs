@@ -139,6 +139,9 @@ fn emit_range_guards(ctx: &mut FunctionContext<'_>, has_explicit_step: bool) {
 pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_pop", 1)?;
     let array = expect_operand(inst, 0)?;
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Mixed) {
+        return pop_shift_dynamic::lower_array_pop_dynamic(ctx, inst, array);
+    }
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
     let receiver = ReceiverPlace::resolve(ctx, array)?;
@@ -153,6 +156,11 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `array_shift()` for indexed arrays by compacting slots and boxing `T|null` as Mixed.
 pub(crate) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count(inst, "array_shift", 1)?;
+    let array = expect_operand(inst, 0)?;
+    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Mixed) {
+        return pop_shift_dynamic::lower_array_shift_dynamic(ctx, inst, array);
+    }
     shift::lower_array_shift(ctx, inst)
 }
 
@@ -496,4 +504,3 @@ pub(crate) fn lower_array_merge_recursive(
         None,
     )
 }
-

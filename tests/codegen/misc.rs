@@ -9,6 +9,22 @@
 
 use crate::support::*;
 
+/// Verifies the one-argument assertion form returns true or throws a catchable AssertionError.
+#[test]
+fn test_assert_one_argument_success_and_failure() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(assert(true));
+try {
+    assert(false);
+} catch (AssertionError $error) {
+    echo get_class($error), ':', $error->getMessage();
+}
+"#,
+    );
+    assert_eq!(out, "bool(true)\nAssertionError:assertion failed");
+}
+
 /// Compiles a program whose source begins with a UTF-8 BOM (U+FEFF) before `<?php` and
 /// verifies it builds and runs end-to-end, matching editors that emit BOM-prefixed UTF-8.
 #[test]

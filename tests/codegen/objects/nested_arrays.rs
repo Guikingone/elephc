@@ -206,3 +206,36 @@ echo score(1) . "|" . score(2) . "|" . score(3) . "|" . score(9);
     );
     assert_eq!(out, "100|80|60|0");
 }
+
+/// Verifies unsetting one indexed element through a declared instance-array property
+/// preserves the remaining element and writes the sparse representation back.
+#[test]
+fn test_unset_declared_instance_array_property_element() {
+    let out = compile_and_run(
+        r#"<?php
+final class DeferredValues {
+    private array $values = [];
+
+    public function add(int $key, int $value): void {
+        $this->values[$key] = $value;
+    }
+
+    public function remove(int $key): void {
+        unset($this->values[$key]);
+    }
+
+    public function contains(int $key): bool {
+        return isset($this->values[$key]);
+    }
+}
+
+$values = new DeferredValues();
+$values->add(0, 1);
+$values->add(1, 2);
+$values->remove(0);
+echo ($values->contains(0) ? 'present' : 'removed')."\n";
+echo ($values->contains(1) ? 'present' : 'removed')."\n";
+"#,
+    );
+    assert_eq!(out, "removed\npresent\n");
+}

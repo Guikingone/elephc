@@ -163,6 +163,46 @@ echo Registry::$items[0] . ":" . Registry::$items[1];
     assert_eq!(out, "4:8");
 }
 
+/// Verifies that assigning `[]` to an associative static property preserves hash storage.
+#[test]
+fn test_empty_array_resets_associative_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+class Registry {
+    public static array $items = ['seed' => 1];
+
+    public static function reset(): void {
+        self::$items = [];
+    }
+}
+Registry::reset();
+Registry::$items['next'] = 2;
+echo count(Registry::$items), ':', Registry::$items['next'];
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
+/// Verifies that a boxed gradual array is copied into associative static-property storage.
+#[test]
+fn test_mixed_array_replaces_associative_static_property() {
+    let out = compile_and_run(
+        r#"<?php
+function boxed(mixed $value): mixed { return $value; }
+class Registry {
+    public static array $items = ['seed' => 1];
+
+    public static function replace(mixed $items): void {
+        self::$items = $items;
+    }
+}
+Registry::replace(boxed(['next' => 2]));
+echo count(Registry::$items), ':', Registry::$items['next'];
+"#,
+    );
+    assert_eq!(out, "1:2");
+}
+
 /// Tests `+=` and `*=` compound assignment on an `int` typed static property.
 #[test]
 fn test_static_property_compound_assign() {

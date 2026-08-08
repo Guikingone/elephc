@@ -9,6 +9,18 @@
 
 use super::*;
 
+/// Verifies one-argument `array_reverse()` supports packed string payloads and renumbers keys.
+#[test]
+fn test_array_reverse_string_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php
+$result = array_reverse(["alpha", "bravo", "charlie"]);
+echo implode(",", $result);
+"#,
+    );
+    assert_eq!(out, "charlie,bravo,alpha");
+}
+
 /// Compiles `array_reverse($a)` and verifies the returned array has elements in reverse order.
 /// Input: `[3, 1, 2]` → reversed to `[2, 1, 3]` → access via indices 0,1,2 yields `"213"`.
 #[test]

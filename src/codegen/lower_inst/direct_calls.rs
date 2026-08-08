@@ -385,11 +385,48 @@ pub(in crate::codegen) fn coerce_loaded_value_to_tagged_scalar(
             emit_mixed_result_as_tagged_scalar(ctx);
             Ok(PhpType::TaggedScalar)
         }
+        PhpType::Str => {
+            emit_string_result_as_tagged_scalar(ctx);
+            Ok(PhpType::TaggedScalar)
+        }
         other => Err(CodegenIrError::unsupported(format!(
             "conversion from PHP type {:?} to PHP type TaggedScalar",
             other
         ))),
     }
+}
+
+/// Coerces a loaded PHP string into nullable-int ABI storage or throws a catchable TypeError.
+fn emit_string_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) {
+    let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
+    let invalid_label = ctx.next_label("call_arg_string_to_nullable_int_invalid");
+    let done_label = ctx.next_label("call_arg_string_to_nullable_int_done");
+    abi::emit_push_reg_pair(ctx.emitter, ptr_reg, len_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_str_looks_like_int_for_coercion");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("cbz x0, {}", invalid_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");
+            ctx.emitter
+                .instruction(&format!("jz {}", invalid_label));
+        }
+    }
+    abi::emit_load_temporary_stack_slot(ctx.emitter, ptr_reg, 0);
+    abi::emit_load_temporary_stack_slot(ctx.emitter, len_reg, 8);
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_int");
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    crate::codegen::sentinels::emit_tagged_scalar_from_int_result(ctx.emitter);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&invalid_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    exceptions::emit_type_error(
+        ctx,
+        "Argument must be of type ?int, non-numeric string given",
+    );
+    ctx.emitter.label(&done_label);
 }
 
 /// Reorders `__rt_mixed_unbox` output into the inline tagged-scalar result registers.
@@ -408,4 +445,3 @@ pub(super) fn emit_mixed_result_as_tagged_scalar(ctx: &mut FunctionContext<'_>) 
         }
     }
 }
-

@@ -482,7 +482,30 @@ pub(super) fn lower_in_array_with_mode(
         InArrayCase::MixedStringLoose => {
             lower_in_array_mixed_string(ctx, needle, array, "__rt_str_loose_eq")?
         }
+        InArrayCase::MixedMixedExact => {
+            lower_in_array_mixed_mixed(ctx, needle, array, "__rt_mixed_strict_eq", false)?
+        }
+        InArrayCase::MixedMixedLoose => {
+            lower_in_array_mixed_mixed(ctx, needle, array, "__rt_php_compare", true)?
+        }
+        InArrayCase::StrArrayMixedNeedleStrict => {
+            lower_in_array_string_mixed_needle(
+                ctx,
+                needle,
+                array,
+                "__rt_mixed_strict_eq",
+                false,
+            )?
+        }
+        InArrayCase::StrArrayMixedNeedleLoose => {
+            lower_in_array_string_mixed_needle(
+                ctx,
+                needle,
+                array,
+                "__rt_php_compare",
+                true,
+            )?
+        }
     }
     Ok(())
 }
-

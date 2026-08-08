@@ -85,6 +85,12 @@ fn test_linux_x86_64_runtime_uses_shared_surface() {
         "__rt_json_encode_assoc",
         "__rt_preg_match",
         "__rt_fiber_alloc_stack",
+        "__rt_resource_id_of",
+        "__rt_object_handle_acquire",
+        "__rt_report_uncaught_exception",
+        "__rt_function_exists_lookup",
+        "__rt_hash_flip",
+        "__rt_var_dump_object",
     ] {
         assert!(
             asm.contains(&format!(".globl {}\n", sym)),

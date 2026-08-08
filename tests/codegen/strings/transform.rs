@@ -754,3 +754,40 @@ string(17) \"Hello|World-Again\"\n\
 string(17) \"Hello|world-again\"\n"
     );
 }
+
+/// Two-argument `levenshtein()` uses PHP's unit insertion, replacement, and deletion costs.
+#[test]
+fn test_levenshtein_two_argument_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php echo levenshtein("kitten", "sitting"), ":", levenshtein("", "abc"), ":", levenshtein("same", "same");"#,
+    );
+    assert_eq!(out, "3:3:0");
+}
+
+/// One-argument `strip_tags()` removes quoted-attribute tags and comments while retaining text.
+#[test]
+fn test_strip_tags_one_argument_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php echo strip_tags('<a title="1 > 0">hello</a><!-- hidden --><b>!</b>');"#,
+    );
+    assert_eq!(out, "hello!");
+}
+
+/// Integer-only `pack()` compatibility emits the expected endian byte sequences.
+#[test]
+fn test_pack_integer_compatibility_helper() {
+    let out = compile_and_run(
+        r#"<?php
+$bytes = pack('VNn', 0x12345678, 0x12345678, 0x1234);
+for ($i = 0; $i < strlen($bytes); $i++) { echo ord($bytes[$i]), ','; }
+"#,
+    );
+    assert_eq!(out, "120,86,52,18,18,52,86,120,18,52,");
+}
+
+/// `random_bytes()` returns a binary string with exactly the requested length.
+#[test]
+fn test_random_bytes_compatibility_helper() {
+    let out = compile_and_run(r#"<?php echo strlen(random_bytes(1)), ':', strlen(random_bytes(9));"#);
+    assert_eq!(out, "1:9");
+}

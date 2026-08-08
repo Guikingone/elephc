@@ -64,7 +64,7 @@ pub(super) fn emit_module(
     regalloc_linear: bool,
     web: bool,
 ) -> Result<()> {
-    let mut shared = SharedCodegenState::default();
+    let mut shared = SharedCodegenState::new(module);
     function_variants::emit_dispatchers(module, emitter, data);
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol

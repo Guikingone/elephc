@@ -422,6 +422,12 @@ pub enum Op {
     DynamicPdoStatementInitialize,
     PropGet,
     PropInitialized,
+    /// Tests whether a statically named declared property is initialized and non-null without
+    /// performing an observable property read. Operand: object; immediate: property-name data id.
+    PropIsset,
+    /// Unsets a statically named declared instance property. Operand: object; immediate:
+    /// property-name data id. Typed slots become uninitialized; untyped slots become null.
+    PropUnset,
     PropSet,
     /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
     /// refcounted payload the slot owned and stamps the uninitialized-typed-property
@@ -677,6 +683,10 @@ impl Op {
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
             | PropUnset | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
+            PropIsset => E::READS_HEAP | E::MAY_FATAL,
+            // Reads the fixed slot's initialization marker and old refcounted payload before
+            // transitioning it to the typed-uninitialized sentinel or untyped null.
+            PropUnset => E::READS_HEAP | E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
             // checks its load factor and may grow/rehash the table before it even knows whether
@@ -962,6 +972,8 @@ impl Op {
             DynamicPdoStatementInitialize => "dynamic_pdo_statement_initialize",
             PropGet => "prop_get",
             PropInitialized => "prop_initialized",
+            PropIsset => "prop_isset",
+            PropUnset => "prop_unset",
             PropSet => "prop_set",
             PropUnset => "prop_unset",
             LoadPropRefCell => "load_prop_ref_cell",

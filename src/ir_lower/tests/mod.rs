@@ -50,9 +50,7 @@ fn lower_source_at(source: &str, main_file_path: &Path, parent: &Path) -> crate:
     )
     .expect("physical-source finalization failed");
     let (autoload_registry, parsed) = crate::autoload::Registry::build(parent, parsed);
-    let (ast, _) =
-        crate::resolver::resolve_collecting_includes_with_defines(parsed, parent, &defines)
-            .expect("resolver failed");
+    let ast = crate::resolver::resolve(parsed, parent).expect("resolver failed");
     let ast = crate::autoload::collect_aliases(ast);
     let ast = crate::pdo_prelude::inject_if_used(ast, false);
     let ast = crate::tz_prelude::inject_if_used(ast, false);
