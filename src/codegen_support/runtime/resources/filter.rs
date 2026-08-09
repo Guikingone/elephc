@@ -606,7 +606,10 @@ fn emit_fwrite_filtered_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_fwrite");                                    // perform the descriptor write
 
     // -- release the scratch and report the consumed payload length --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // scratch pointer
+    // __rt_heap_free takes its pointer in rax on x86_64, not rdi — same convention as
+    // __rt_heap_alloc a few lines above. Passing rdi left rax holding __rt_fwrite's return
+    // value, so this freed the BYTE COUNT as if it were an address.
+    emitter.instruction("mov rax, QWORD PTR [rbp - 32]");                       // scratch pointer
     emitter.instruction("call __rt_heap_free");                                 // the copy never escapes this helper
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // PHP reports payload bytes consumed
     emitter.instruction("leave");                                               // restore rbp + rsp
