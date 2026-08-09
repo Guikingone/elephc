@@ -23,6 +23,7 @@ pub(super) fn parse_native_phar_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u
 /// The stub is the byte prefix up to and including the `__HALT_COMPILER();` marker
 /// (and any trailing ` ?>\r\n`); the global metadata is the manifest's metadata field.
 pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
+    verify_native_phar_signature(data)?;
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
     let mut p = halt_idx + halt.len();
@@ -36,6 +37,7 @@ pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
     let stub = data.get(..manifest_start)?.to_vec();
     let manifest_len = le32(data, manifest_start)? as usize;
     let data_section = manifest_start.checked_add(4)?.checked_add(manifest_len)?;
+    data.get(..data_section)?;
     let num_files = le32(data, manifest_start + 4)?;
     let mut q = manifest_start + 8 + 2 + 4;
     let alias_len = le32(data, q)? as usize;
@@ -45,8 +47,13 @@ pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
     let metadata = data.get(q..q.checked_add(meta_len)?)?.to_vec();
     q = q.checked_add(meta_len)?;
 
+    let manifest_remaining = data_section.checked_sub(q)?;
+    // Every entry needs at least a name length and six 32-bit metadata words.
+    if usize::try_from(num_files).ok()? > manifest_remaining / 28 {
+        return None;
+    }
     let mut data_offset = 0usize;
-    let mut entries = Vec::with_capacity(num_files as usize);
+    let mut entries = Vec::new();
     for _ in 0..num_files {
         let name_len = le32(data, q)? as usize;
         q = q.checked_add(4)?;
@@ -96,16 +103,30 @@ pub(super) fn phar_compression_from_flags(flags: u32) -> PharCompression {
 }
 
 /// Decodes a native PHAR entry payload according to its per-entry flags.
+/// Rejects implausible declared expansion and stops after one byte beyond the
+/// claimed output size so a forged header cannot drive unbounded decompression.
 pub(super) fn decode_phar_payload(stored: &[u8], flags: u32, uncompressed: usize) -> Option<Vec<u8>> {
     if flags & PHAR_FLAG_GZIP != 0 {
-        let mut out = Vec::with_capacity(uncompressed);
-        let mut decoder = flate2::read::DeflateDecoder::new(stored);
-        decoder.read_to_end(&mut out).ok()?;
+        if uncompressed > stored.len().checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)? {
+            return None;
+        }
+        let mut out = Vec::new();
+        let decoder = flate2::read::DeflateDecoder::new(stored);
+        decoder
+            .take(u64::try_from(uncompressed.checked_add(1)?).ok()?)
+            .read_to_end(&mut out)
+            .ok()?;
         (out.len() == uncompressed).then_some(out)
     } else if flags & PHAR_FLAG_BZIP2 != 0 {
-        let mut out = Vec::with_capacity(uncompressed);
-        let mut decoder = bzip2_rs::DecoderReader::new(stored);
-        decoder.read_to_end(&mut out).ok()?;
+        if uncompressed > stored.len().checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)? {
+            return None;
+        }
+        let mut out = Vec::new();
+        let decoder = bzip2_rs::DecoderReader::new(stored);
+        decoder
+            .take(u64::try_from(uncompressed.checked_add(1)?).ok()?)
+            .read_to_end(&mut out)
+            .ok()?;
         (out.len() == uncompressed).then_some(out)
     } else {
         Some(stored.to_vec())

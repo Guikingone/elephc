@@ -30,8 +30,9 @@
 //! | 168    | 8    | user_arg_max      | how many start_args slots `start()` may write |
 //! | 176    | 8    | start_arg_count   | number of boxed values copied by `start()` |
 //! | 184    | 48   | reserved          | legacy slot file; descriptor captures now carry hidden Fiber callback args |
+//! | 232    | 8    | own_recursion_stack_bytes | saved active native-stack byte budget |
 //!
-//! Total payload = 232 bytes.
+//! Total payload = 240 bytes.
 
 mod alloc;
 mod api;
@@ -84,8 +85,10 @@ pub(crate) const FIBER_START_ARG_COUNT_OFFSET: i32 = 176;
 pub(crate) const FIBER_FLOAT_ARGS_OFFSET: i32 = 184;
 /// Maximum number of reserved legacy float slots.
 pub(crate) const FIBER_FLOAT_ARGS_MAX: i32 = 6;
+/// Byte offset of the per-Fiber saved native-stack byte budget used across context switches.
+pub(crate) const FIBER_OWN_RECURSION_STACK_BYTES_OFFSET: i32 = 232;
 /// Total size of the Fiber object payload in bytes (heap-allocated; class_id at offset 0, followed by all runtime-managed fields).
-pub(crate) const FIBER_OBJECT_SIZE: i32 = 232;
+pub(crate) const FIBER_OBJECT_SIZE: i32 = 240;
 
 // ── Lifecycle states (stored in FIBER_STATE_OFFSET) ──────────────────
 // Phase 3 (suspend) will introduce the first user of FIBER_STATE_SUSPENDED.

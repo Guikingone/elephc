@@ -637,7 +637,9 @@ impl Op {
             IToStr | FToStr | ResourceToStr | StrConcat | StrCharAt | StrInterpolate
             | MixedCastString | VarDump | PrintR => E::ALLOC_CONCAT,
             ConcatReset => E::WRITES_GLOBAL,
-            Cast => E::READS_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL,
+            Cast => {
+                E::READS_HEAP | E::ALLOC_HEAP | E::ALLOC_CONCAT | E::MAY_WARN | E::MAY_FATAL
+            }
             InvokerRefArg => E::READS_LOCAL | E::ALLOC_HEAP,
             MixedBox | MixedClone | ArrayToMixed | HashToMixed | ArrayNew | HashNew | ObjectNew
             | ClosureNew | FirstClassCallableNew | CallableArrayNew | NormalizeCallable | BufferNew

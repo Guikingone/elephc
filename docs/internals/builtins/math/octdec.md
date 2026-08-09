@@ -2,7 +2,7 @@
 title: "octdec() — internals"
 description: "Compiler internals for octdec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 292
+  order: 291
 ---
 
 ## `octdec()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/octdec.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/octdec.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

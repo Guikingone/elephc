@@ -36,6 +36,12 @@ use discovery::discover_include_declarations;
 use engine::resolve_stmts;
 use state::ResolveState;
 
+/// Maximum nested include depth accepted by both discovery and resolution.
+///
+/// This bound is independent of parser delimiter depth: a long acyclic include
+/// chain otherwise recurses through the host stack before resolution begins.
+pub(super) const MAX_INCLUDE_DEPTH: usize = 256;
+
 /// Resolves all include/require statements by inlining the referenced files.
 ///
 /// Inputs: `program` is the parsed AST; `base_dir` is the directory used for

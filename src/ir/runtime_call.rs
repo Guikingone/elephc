@@ -10,7 +10,7 @@
 //! - Each target has one storage-level signature shared by lowering and validation.
 //! - Backend code selects the concrete runtime symbol and physical ABI placement.
 
-use crate::ir::IrType;
+use crate::ir::{IrHeapKind, IrType};
 
 /// Logical storage signature enforced for a typed runtime operation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,6 +37,15 @@ pub enum RuntimeCallTarget {
     /// Fetches an intermediate array element in write context, installing an
     /// empty child container when the addressed parent slot is missing or null.
     ArrayFetchForWrite,
+    /// Promotes an indexed-array payload stored in a boxed Mixed cell to a
+    /// Mixed-entry hash and installs the new payload back into that same cell.
+    MixedCellPromoteToHash,
+    /// Promotes a boxed Mixed cell fetched for write from its parent and marks the returned hash
+    /// as already published into that parent-owned cell.
+    MixedCellPromoteAttachedToHash,
+    /// Creates an independently mutable boxed Mixed cell from one stored
+    /// Mixed cell while retaining its tag-4/tag-5 payload ownership.
+    MixedCellClone,
     /// A one-string-to-one-string transform implemented by the shared runtime.
     UnaryString(UnaryStringRuntime),
     /// A stable runtime function whose target-aware implementation is backend-owned.
@@ -58,6 +67,17 @@ impl RuntimeCallTarget {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
+            RuntimeCallTarget::MixedCellPromoteToHash
+            | RuntimeCallTarget::MixedCellPromoteAttachedToHash => {
+                Some(RuntimeCallSignature::Fixed {
+                    parameters: &[IrType::Heap(IrHeapKind::Mixed)],
+                    result: IrType::Heap(IrHeapKind::Hash),
+                })
+            }
+            RuntimeCallTarget::MixedCellClone => Some(RuntimeCallSignature::Fixed {
+                parameters: &[IrType::Heap(IrHeapKind::Mixed)],
+                result: IrType::Heap(IrHeapKind::Mixed),
+            }),
             RuntimeCallTarget::UnaryString(_) => Some(RuntimeCallSignature::Fixed {
                 parameters: &[IrType::Str],
                 result: IrType::Str,
@@ -75,6 +95,11 @@ impl RuntimeCallTarget {
     pub fn as_eir(self) -> &'static str {
         match self {
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
+            RuntimeCallTarget::MixedCellPromoteToHash => "array.mixed_cell_promote_to_hash",
+            RuntimeCallTarget::MixedCellPromoteAttachedToHash => {
+                "array.mixed_cell_promote_attached_to_hash"
+            }
+            RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",
             RuntimeCallTarget::UnaryString(runtime) => runtime.as_eir(),
             RuntimeCallTarget::Function(target) => target.as_eir(),
             RuntimeCallTarget::ProfiledFunction { target, .. } => target.as_eir(),

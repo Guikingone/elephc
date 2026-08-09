@@ -35,7 +35,6 @@ const EVAL_ONLY_REFLECTION_BUILTINS: &[&str] = &[
     "get_called_class",
     "get_class_methods",
     "get_class_vars",
-    "get_object_vars",
     "hash_copy",
     "hash_final",
     "hash_init",

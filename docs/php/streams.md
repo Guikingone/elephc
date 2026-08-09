@@ -130,6 +130,10 @@ Whole-archive compression is supported on tar-based `PharData`: `compress(Phar::
 and `compress(Phar::BZ2)` write a sibling `.tar.gz` / `.tar.bz2` and return a fresh
 `PharData` for it, while `decompress()` writes the plain `.tar` back; the compressed
 archives are read transparently (and are interchangeable with the PHP interpreter).
+When reading a whole-archive gzip or bzip2 wrapper, Elephc limits decompressed output
+to the smaller of 1024x the compressed size and 64 MiB. These Elephc-specific
+safety ceilings intentionally diverge from PHP: PHP may accept a highly expanding or
+larger archive that Elephc rejects.
 Per-entry compression for native PHAR / zip stays on `compressFiles()` /
 `decompressFiles()`.
 

@@ -644,6 +644,7 @@ dependencies = [
  "fs2",
  "indicatif",
  "inventory",
+ "libc",
  "rustls",
  "rustls-pemfile",
  "serde",
@@ -760,6 +761,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "libc",
+ "memchr",
  "socket2 0.5.10",
  "tokio",
 ]

@@ -22,6 +22,34 @@ catch (FiberError $e) { echo $e->getMessage(); }
     assert_eq!(out, "Cannot suspend outside of a fiber");
 }
 
+/// Verifies a hydration hook cannot suspend while `unserialize()` owns
+/// process-scoped parser state. The controlled `FiberError` must leave that
+/// state clean enough for the caught fiber to deserialize another value.
+#[test]
+fn test_fiber_cannot_suspend_during_unserialize_hydration() {
+    let out = compile_and_run(
+        r#"<?php
+class SuspendingWakeupPayload {
+    public function __wakeup(): void { Fiber::suspend("unsafe"); }
+}
+$fiber = new Fiber(function(): void {
+    $wire = serialize(new SuspendingWakeupPayload());
+    try {
+        unserialize($wire, ['allowed_classes' => ['SuspendingWakeupPayload']]);
+        echo "no-throw";
+    } catch (FiberError $e) {
+        echo $e->getMessage(), "|", unserialize('i:2;');
+    }
+});
+$fiber->start();
+"#,
+    );
+    assert_eq!(
+        out,
+        "Cannot suspend a fiber while unserialize() is active|2"
+    );
+}
+
 /// Verifies that calling `start()` on a fiber that has already been started
 /// throws `FiberError` with the message "Cannot start a fiber that has already been started".
 #[test]

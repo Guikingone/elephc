@@ -2,7 +2,7 @@
 title: "pow() — internals"
 description: "Compiler internals for pow(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 294
+  order: 293
 ---
 
 ## `pow()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/pow.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/pow.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

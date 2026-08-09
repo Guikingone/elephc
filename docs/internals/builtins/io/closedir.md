@@ -2,7 +2,7 @@
 title: "closedir() — internals"
 description: "Compiler internals for closedir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 166
+  order: 165
 ---
 
 ## `closedir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/closedir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/closedir.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

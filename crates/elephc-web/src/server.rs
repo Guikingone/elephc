@@ -7,7 +7,8 @@
 //!
 //! Key details:
 //! - fork() happens BEFORE any tokio runtime is created (tokio does not survive
-//!   fork); each child builds its own current-thread runtime in worker::serve.
+//!   fork); each worker then prestarts its threadless handler broker before
+//!   building the current-thread runtime in `worker::serve`.
 //! - --listen host:port is required; without it the process errors and exits.
 
 use std::ffi::{c_char, CStr};
@@ -26,9 +27,12 @@ Options:
   --listen HOST:PORT     Address to bind (required), e.g. 127.0.0.1:8080
   --workers N            Number of prefork worker processes (default: CPU count)
   --max-body-size BYTES  Max request body in bytes; 0 = unlimited (default: 8388608)
+  --body-read-timeout N  Max seconds to receive a request body; 0 = unlimited (default: 30)
+  --response-write-timeout N
+                         Max seconds a response may wait on client backpressure; 0 = unlimited (default: 30)
   --max-requests N       Recycle a worker after N requests; 0 = never (default: 0)
   --access-log           Log one line per request to stderr
-  --max-execution-time N Kill (and respawn) a worker whose handler runs > N seconds; 0 = no limit
+  --max-execution-time N Kill the disposable request child when its handler runs > N seconds; 0 = no limit
   --gzip                 Compress responses when the client sends Accept-Encoding: gzip
   --help                 Show this help and exit
   --version              Show the server version and exit";
@@ -80,6 +84,13 @@ fn reset_signal_handlers_to_default() {
 
 /// Default request body cap in bytes (8 MiB), matching PHP's `post_max_size`.
 const DEFAULT_MAX_BODY: usize = 8 * 1024 * 1024;
+/// Default deadline for receiving a declared request body, in seconds.
+const DEFAULT_BODY_READ_SECS: u64 = 30;
+/// Default deadline for response writes stalled by client backpressure, in seconds.
+///
+/// Operators can explicitly pass `--response-write-timeout 0` to opt out of
+/// this bound for long-lived streaming responses.
+const DEFAULT_RESPONSE_WRITE_SECS: u64 = 30;
 
 /// Parsed server configuration from the binary's own argv.
 struct ServerArgs {
@@ -87,6 +98,10 @@ struct ServerArgs {
     workers: usize,
     /// Max request body in bytes; `0` means unlimited.
     max_body: usize,
+    /// Body receive deadline in seconds; `0` means unlimited.
+    body_read_secs: u64,
+    /// Response backpressure deadline in seconds; `0` means unlimited. Defaults to 30 seconds.
+    response_write_secs: u64,
     /// Recycle a worker after this many requests; `0` means never.
     max_requests: usize,
     /// When true, log one line per request to stderr.
@@ -102,6 +117,8 @@ impl ServerArgs {
     fn worker_config(&self) -> WorkerConfig {
         WorkerConfig {
             max_body: self.max_body,
+            body_read_secs: self.body_read_secs,
+            response_write_secs: self.response_write_secs,
             max_requests: self.max_requests,
             access_log: self.access_log,
             max_exec_secs: self.max_exec_secs,
@@ -145,6 +162,8 @@ fn parse_args(argc: i32, argv: *const *const c_char) -> ParsedArgs {
     let mut listen: Option<String> = None;
     let mut workers: usize = default_workers();
     let mut max_body: usize = DEFAULT_MAX_BODY;
+    let mut body_read_secs = DEFAULT_BODY_READ_SECS;
+    let mut response_write_secs = DEFAULT_RESPONSE_WRITE_SECS;
     let mut max_requests: usize = 0;
     let mut access_log = false;
     let mut max_exec_secs: u32 = 0;
@@ -155,6 +174,8 @@ fn parse_args(argc: i32, argv: *const *const c_char) -> ParsedArgs {
             "--listen" => { i += 1; listen = args.get(i).cloned(); }
             "--workers" => { i += 1; workers = args.get(i).and_then(|w| w.parse().ok()).unwrap_or(workers); }
             "--max-body-size" => { i += 1; max_body = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_body); }
+            "--body-read-timeout" => { i += 1; body_read_secs = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(body_read_secs); }
+            "--response-write-timeout" => { i += 1; response_write_secs = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(response_write_secs); }
             "--max-requests" => { i += 1; max_requests = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_requests); }
             "--max-execution-time" => { i += 1; max_exec_secs = args.get(i).and_then(|v| v.parse().ok()).unwrap_or(max_exec_secs); }
             "--access-log" => { access_log = true; }
@@ -168,6 +189,8 @@ fn parse_args(argc: i32, argv: *const *const c_char) -> ParsedArgs {
             listen: l,
             workers: workers.max(1),
             max_body,
+            body_read_secs,
+            response_write_secs,
             max_requests,
             access_log,
             max_exec_secs,
@@ -314,6 +337,18 @@ pub extern "C" fn elephc_web_run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::CString;
+
+    /// Parses a test argv through the same C-compatible entry path as the
+    /// compiled web binary while keeping all backing strings alive.
+    fn parse_test_args(args: &[&str]) -> ParsedArgs {
+        let owned = args
+            .iter()
+            .map(|arg| CString::new(*arg).expect("test argument must not contain NUL"))
+            .collect::<Vec<_>>();
+        let pointers = owned.iter().map(|arg| arg.as_ptr()).collect::<Vec<_>>();
+        parse_args(pointers.len() as i32, pointers.as_ptr())
+    }
 
     /// Builds a `waitpid` status word for a normal exit with `code`. Both
     /// supported unix families (Linux and macOS) encode a normal exit as
@@ -348,5 +383,20 @@ mod tests {
         assert!(!is_planned_recycle(libc::SIGSEGV));
         assert!(!is_planned_recycle(libc::SIGKILL));
         assert!(!is_planned_recycle(libc::SIGTERM));
+    }
+
+    /// Verifies the shipped configuration bounds stalled response writers even
+    /// when the operator does not pass `--response-write-timeout` explicitly.
+    #[test]
+    fn response_write_timeout_is_bounded_by_default() {
+        let ParsedArgs::Run(args) = parse_test_args(&["app", "--listen", "127.0.0.1:0"])
+        else {
+            panic!("a valid listen address must produce runnable server arguments");
+        };
+
+        assert_eq!(
+            args.response_write_secs, 30,
+            "the default must reclaim handler slots held by stalled clients"
+        );
     }
 }

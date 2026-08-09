@@ -2,7 +2,7 @@
 title: "sinh() — internals"
 description: "Compiler internals for sinh(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 300
+  order: 299
 ---
 
 ## `sinh()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/sinh.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/sinh.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

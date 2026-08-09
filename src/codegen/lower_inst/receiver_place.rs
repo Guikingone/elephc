@@ -15,7 +15,8 @@
 //! - A plain local is its own frame slot. A by-reference parameter is read with `load_ref_cell`
 //!   and must be republished through that slot's ref-cell representation
 //!   (`store_value_through_ref_cell_slot`), which is exactly what a bare `store_value_to_local`
-//!   on a raw frame slot would skip.
+//!   on a raw frame slot would skip. A direct declared-property receiver preserves the object SSA
+//!   value through ownership and packed-to-hash transitions and republishes into its fixed slot.
 
 use crate::codegen::context::FunctionContext;
 use crate::codegen::{CodegenIrError, Result};
@@ -23,7 +24,7 @@ use crate::ir::{Immediate, LocalSlotId, Op, ValueDef, ValueId};
 use crate::types::PhpType;
 
 /// Where a mutating container builtin's receiver has to be written back.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub(super) enum ReceiverPlace {
     /// The receiver was not loaded from a slot this lowering can write back to.
     Opaque,
@@ -31,14 +32,19 @@ pub(super) enum ReceiverPlace {
     Local(LocalSlotId),
     /// A slot whose value is reached through its ref-cell representation.
     RefCell(LocalSlotId),
+    /// A declared object property whose runtime container owner may be replaced by COW.
+    Property {
+        object: ValueId,
+        slot: super::objects::PropertySlot,
+    },
 }
 
 impl ReceiverPlace {
-    /// Resolves the slot a receiver value was loaded from, if any.
+    /// Resolves the writable place a receiver value was loaded from, if any.
     ///
-    /// Only the two loads that name a slot qualify: `load_local` for a plain variable and
-    /// `load_ref_cell` for a by-reference parameter. Anything else (a call result, a property
-    /// read, a global) has no slot to publish a relocated pointer into.
+    /// Local loads resolve directly. A declared-property read also resolves through the explicit
+    /// retain and optional packed-to-hash conversion emitted by the direct `krsort` write context.
+    /// Calls, globals, dynamic properties, and arbitrary expressions remain opaque.
     pub(super) fn resolve(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Self> {
         let Some(value_ref) = ctx.function.value(value) else {
             return Err(CodegenIrError::missing_entry("value", value.as_raw()));
@@ -49,13 +55,16 @@ impl ReceiverPlace {
         let Some(inst_ref) = ctx.function.instruction(inst) else {
             return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
         };
-        let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate else {
-            return Ok(Self::Opaque);
-        };
-        match inst_ref.op {
-            Op::LoadLocal => Ok(Self::Local(slot)),
-            Op::LoadRefCell => Ok(Self::RefCell(slot)),
-            _ => Ok(Self::Opaque),
+        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
+            return match inst_ref.op {
+                Op::LoadLocal => Ok(Self::Local(slot)),
+                Op::LoadRefCell => Ok(Self::RefCell(slot)),
+                _ => Ok(Self::Opaque),
+            };
+        }
+        match direct_property_receiver(ctx, value)? {
+            Some((object, slot)) => Ok(Self::Property { object, slot }),
+            None => Ok(Self::Opaque),
         }
     }
 
@@ -67,6 +76,7 @@ impl ReceiverPlace {
         match self {
             Self::Opaque => None,
             Self::Local(slot) | Self::RefCell(slot) => Some(*slot),
+            Self::Property { .. } => None,
         }
     }
 
@@ -102,6 +112,9 @@ impl ReceiverPlace {
                 value,
                 value_php_type,
             ),
+            Self::Property { object, slot } => {
+                super::objects::store_mutated_container_property_owner(ctx, *object, slot, value)
+            }
         }
     }
 
@@ -120,5 +133,47 @@ impl ReceiverPlace {
         }
         let value_ty = ctx.value_php_type(value)?;
         self.store_back(ctx, value, &value_ty)
+    }
+}
+
+/// Finds a declared property behind the direct sort path's transparent value transitions.
+///
+/// `Acquire` owns the borrowed property payload during conversion, and `ArrayToHash` changes only
+/// its physical representation. Neither changes the PHP lvalue that must receive the final COW
+/// pointer, so both are peeled until the originating `PropGet` is reached.
+fn direct_property_receiver(
+    ctx: &FunctionContext<'_>,
+    mut value: ValueId,
+) -> Result<Option<(ValueId, super::objects::PropertySlot)>> {
+    loop {
+        let Some(value_ref) = ctx.function.value(value) else {
+            return Err(CodegenIrError::missing_entry("value", value.as_raw()));
+        };
+        let ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return Ok(None);
+        };
+        let Some(inst_ref) = ctx.function.instruction(inst) else {
+            return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
+        };
+        match inst_ref.op {
+            Op::Acquire | Op::ArrayToHash => {
+                let Some(source) = inst_ref.operands.first().copied() else {
+                    return Ok(None);
+                };
+                value = source;
+            }
+            Op::PropGet => {
+                let Some(object) = inst_ref.operands.first().copied() else {
+                    return Ok(None);
+                };
+                let Ok(slot) =
+                    super::objects::resolve_mutated_container_property(ctx, object, inst_ref)
+                else {
+                    return Ok(None);
+                };
+                return Ok(Some((object, slot)));
+            }
+            _ => return Ok(None),
+        }
     }
 }

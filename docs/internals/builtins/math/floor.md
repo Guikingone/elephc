@@ -2,7 +2,7 @@
 title: "floor() — internals"
 description: "Compiler internals for floor(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 278
+  order: 277
 ---
 
 ## `floor()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/floor.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/floor.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

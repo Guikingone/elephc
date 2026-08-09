@@ -54,6 +54,12 @@ pub(super) fn discover_include(
     state: &mut ResolveState,
     output: &mut DiscoveryOutput,
 ) -> Result<(), CompileError> {
+    if include_chain.len() >= super::super::MAX_INCLUDE_DEPTH {
+        return Err(CompileError::new(
+            span,
+            "maximum include depth exceeded",
+        ));
+    }
     let path_str = fold_include_path(path, state).map_err(|msg| CompileError::new(span, &msg))?;
     let resolved = resolve_path(&path_str, base_dir);
     let canonical = resolved.canonicalize().unwrap_or_else(|_| resolved.clone());

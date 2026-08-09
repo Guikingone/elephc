@@ -15,9 +15,6 @@ use crate::codegen::{
     emit_box_current_value_as_mixed, emit_box_runtime_payload_as_mixed, runtime,
     runtime_value_tag,
 };
-use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
-};
 use crate::intrinsics::{IntrinsicCall, IntrinsicCallKind};
 use crate::ir::{
     BlockId, Builder, CmpPredicate, Function, FunctionParam, Immediate, InstId, Instruction,

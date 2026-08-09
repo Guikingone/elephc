@@ -33,7 +33,8 @@ builtin! {
 
 /// Validates that the data argument is string-compatible.
 ///
-/// The optional options argument is inferred but not type-restricted.
+/// The optional options argument and its `allowed_classes` policy are validated
+/// by the runtime helpers so dynamic values cannot be interpreted as untyped words.
 /// Reports type errors at the span of the offending argument, not the call span.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     let data_ty = cx.checker.infer_type(&cx.args[0], cx.env)?;
@@ -42,9 +43,6 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
             cx.args[0].span,
             "unserialize() data argument must be string-compatible",
         ));
-    }
-    if let Some(options) = cx.args.get(1) {
-        cx.checker.infer_type(options, cx.env)?;
     }
     Ok(PhpType::Mixed)
 }

@@ -98,7 +98,6 @@ sidebar:
 | [`get_declared_classes()`](./builtins/class/get_declared_classes.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_interfaces()`](./builtins/class/get_declared_interfaces.md) | `(): array` | `array` | ✓ | ✓ |
 | [`get_declared_traits()`](./builtins/class/get_declared_traits.md) | `(): array` | `array` | ✓ | ✓ |
-| [`get_object_vars()`](./builtins/class/get_object_vars.md) | `(mixed $object): mixed` | `mixed` | — | ✓ |
 | [`get_parent_class()`](./builtins/class/get_parent_class.md) | `(mixed $object_or_class = null): string` | `string` | ✓ | ✓ |
 | [`interface_exists()`](./builtins/class/interface_exists.md) | `(string $interface, bool $autoload = true): bool` | `bool` | ✓ | ✓ |
 | [`is_a()`](./builtins/class/is_a.md) | `(object $object_or_class, string $class, bool $allow_string = false): bool` | `bool` | ✓ | ✓ |
@@ -319,6 +318,7 @@ sidebar:
 | [`empty()`](./builtins/misc/empty.md) | `(mixed $value): bool` | `bool` | ✓ | ✓ |
 | [`extension_loaded()`](./builtins/misc/extension_loaded.md) | `(string $extension): bool` | `bool` | ✓ | ✓ |
 | [`get_loaded_extensions()`](./builtins/misc/get_loaded_extensions.md) | `(bool $zend_extensions = false): array` | `array` | ✓ | ✓ |
+| [`get_object_vars()`](./builtins/misc/get_object_vars.md) | `(mixed $object): array` | `array` | ✓ | ✓ |
 | [`header()`](./builtins/misc/header.md) | `(string $header, bool $replace = true, int $response_code = 0): void` | `void` | ✓ | ✓ |
 | [`http_response_code()`](./builtins/misc/http_response_code.md) | `(int $response_code = 0): int` | `int` | ✓ | ✓ |
 | [`isset()`](./builtins/misc/isset.md) | `(mixed $var, ...$vars): bool` | `bool` | ✓ | ✓ |

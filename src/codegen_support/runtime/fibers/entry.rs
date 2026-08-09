@@ -11,7 +11,9 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::try_handlers::{TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE};
+use crate::codegen_support::try_handlers::{
+    TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET, TRY_HANDLER_SLOT_SIZE,
+};
 
 use super::{
     FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET, FIBER_PENDING_THROW_OFFSET,
@@ -57,9 +59,11 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     emitter.instruction("str xzr, [sp, #8]");                                   // handler.activation_record = NULL → cleanup_frames unwinds the entire fiber call stack
     abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0); // x10 = current diagnostic-suppression depth
     emitter.instruction("str x10, [sp, #16]");                                  // handler.saved_diag_depth = current depth (matches user-emitted try frames)
+    abi::emit_load_symbol_to_reg(emitter, "x10", "_runtime_recursion_stack_bytes", 0); // snapshot byte budget before entering the fiber body
+    emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // handler.saved_recursion_stack_bytes restores skipped epilogues
     emitter.instruction("mov x10, sp");                                         // x10 = address of the handler base
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // push the boundary handler onto the global handler chain
-    emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf address inside the handler (offset 24)
+    emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // x0 = jmp_buf address inside the handler after scalar metadata
     emitter.bl_c("setjmp"); // setjmp returns 0 the first time; non-zero on a longjmp from __rt_throw_current
     emitter.instruction("cbnz x0, __rt_fiber_entry_escape");                    // a non-zero return means an exception unwound past every user handler
 
@@ -95,6 +99,8 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     // Use x10 — emit_store_reg_to_symbol uses x9 internally for the symbol address.
     emitter.instruction("ldr x10, [sp, #0]");                                   // x10 = handler.next (previous chain head)
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // restore the previous handler chain head
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // recover caller byte budget after the fiber body terminated
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_runtime_recursion_stack_bytes", 0); // abandoned fiber frames must not consume future recursion budget
 
     // -- switch back to whoever resumed us (caller can never be NULL inside a fiber) --
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_CALLER_OFFSET));   // x0 = caller fiber* (or NULL = main)
@@ -123,6 +129,8 @@ pub fn emit_fiber_entry(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // restore the previous handler chain head
     emitter.instruction("ldr x10, [sp, #16]");                                  // x10 = saved diagnostic suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore the diagnostic suppression depth captured at setjmp time
+    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // recover caller byte budget after longjmp skipped fiber epilogues
+    abi::emit_store_reg_to_symbol(emitter, "x10", "_runtime_recursion_stack_bytes", 0); // no recursion-budget leak after an escaped fiber exception
 
     // -- switch back to the caller; their helper sees Terminated + non-null pending_throw and re-raises --
     emitter.instruction(&format!("ldr x0, [x19, #{}]", FIBER_CALLER_OFFSET));   // x0 = caller fiber* (or NULL = main)
@@ -153,6 +161,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 8], 0");                          // handler.activation_record = NULL
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0); // r10 = current diagnostic-suppression depth
     emitter.instruction("mov QWORD PTR [rsp + 16], r10");                       // handler.saved_diag_depth = current depth
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_runtime_recursion_stack_bytes", 0); // snapshot byte budget before the fiber creates stack frames
+    emitter.instruction(&format!("mov QWORD PTR [rsp + {}], r10", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // longjmp-safe recursion byte snapshot
     emitter.instruction("mov r10, rsp");                                        // r10 = address of the handler base
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // push the boundary handler onto the global handler chain
     emitter.instruction(&format!("lea rdi, [rsp + {}]", TRY_HANDLER_JMP_BUF_OFFSET)); // rdi = jmp_buf address inside the handler
@@ -199,6 +209,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     // -- pop the boundary handler before yielding control back to the caller --
     emitter.instruction("mov r10, QWORD PTR [rsp]");                            // r10 = handler.next (previous chain head)
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // restore the previous handler chain head
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // recover caller byte budget on ordinary termination
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_runtime_recursion_stack_bytes", 0); // prevent abandoned fiber frames from permanently consuming budget
     emitter.instruction(&format!(
         "mov rdi, QWORD PTR [r12 + {}]",
         FIBER_CALLER_OFFSET
@@ -230,6 +242,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // restore the previous handler chain head
     emitter.instruction("mov r10, QWORD PTR [rsp + 16]");                       // r10 = saved diagnostic suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore diagnostic suppression captured at setjmp time
+    emitter.instruction(&format!("mov r10, QWORD PTR [rsp + {}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // recover byte-budget state across longjmp
+    abi::emit_store_reg_to_symbol(emitter, "r10", "_runtime_recursion_stack_bytes", 0); // escaped fiber frames cannot leak recursive stack budget
     emitter.instruction(&format!(
         "mov rdi, QWORD PTR [r12 + {}]",
         FIBER_CALLER_OFFSET

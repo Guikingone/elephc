@@ -161,6 +161,8 @@ pub enum BuiltinArgumentLowering {
     PositionalRegex,
     /// Preserve by-reference array storage while lowering user-comparator sorts.
     UserValueSort,
+    /// Promote a packed by-reference array before reverse key sorting preserves its keys.
+    ReverseKeySort,
     /// Promote a typed `array_splice()` receiver whose `$replacement` changes the element type.
     ///
     /// PHP's `array_splice($a, 1, 1, ["x"])` on `$a = [1, 2, 3]` leaves a heterogeneous

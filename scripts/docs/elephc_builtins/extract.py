@@ -628,6 +628,7 @@ def build_registry(repo: Path) -> list[Builtin]:
                 ),
                 lowering=lowering,
                 description=description,
+                examples=list(entry.get("examples") or []),
                 eval_support=entry.get("eval"),
                 is_extension=bool(entry.get("extension")),
                 semantics=entry.get("semantics"),
@@ -709,6 +710,7 @@ def _builtin_to_dict(b: Builtin) -> dict:
         "is_internal": b.is_internal,
         "is_extension": b.is_extension,
         "description": b.description,
+        "examples": b.examples,
         "sig": {
             "params": [
                 {

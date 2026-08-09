@@ -2,7 +2,7 @@
 title: "dechex() — internals"
 description: "Compiler internals for dechex(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 273
+  order: 272
 ---
 
 ## `dechex()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/dechex.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/dechex.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

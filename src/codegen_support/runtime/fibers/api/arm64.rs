@@ -17,6 +17,7 @@ use super::super::{
     FIBER_CALLABLE_OFFSET, FIBER_CALLABLE_WRAPPER_OFFSET, FIBER_CALLER_OFFSET,
     FIBER_DEFAULT_STACK_SIZE, FIBER_FLOAT_ARGS_MAX, FIBER_FLOAT_ARGS_OFFSET,
     FIBER_OBJECT_SIZE, FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET,
+    FIBER_OWN_RECURSION_STACK_BYTES_OFFSET,
     FIBER_PENDING_THROW_OFFSET, FIBER_SAVED_SP_OFFSET, FIBER_STACK_BASE_OFFSET,
     FIBER_STACK_SIZE_OFFSET, FIBER_STACK_TOP_OFFSET, FIBER_START_ARGS_MAX,
     FIBER_START_ARGS_OFFSET, FIBER_START_ARG_COUNT_OFFSET, FIBER_STATE_NOT_STARTED,
@@ -103,6 +104,7 @@ pub(super) fn emit_construct(emitter: &mut Emitter) {
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_PENDING_THROW_OFFSET)); // pending_throw cleared
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_EXC_HEAD_OFFSET)); // own_exc_head cleared (no installed handlers yet)
     emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // own_call_frame cleared (no activation records on the fresh fiber stack yet)
+    emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_OWN_RECURSION_STACK_BYTES_OFFSET)); // fresh Fiber has no saved native-stack byte budget
     for i in 0..FIBER_START_ARGS_MAX {
         emitter.instruction(&format!("str xzr, [x21, #{}]", FIBER_START_ARGS_OFFSET + i * 8)); // start_args[i] cleared
     }
@@ -296,6 +298,7 @@ pub(super) fn emit_resume(emitter: &mut Emitter) {
 /// __rt_fiber_suspend: yield control from the running fiber back to its caller.
 /// Input:  x0 = value to deliver to the resumer's `start()` / `resume()` call
 /// Output: x0 = the value the next resumer passes back via `resume($v)`
+/// Raises FiberError before mutation when an active `unserialize()` owns global parser state.
 pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fiber_suspend ---");
@@ -316,6 +319,12 @@ pub(super) fn emit_suspend(emitter: &mut Emitter) {
     emitter.instruction("mov x1, #33");                                         // x1 = error message length in bytes
     emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise FiberError; this call does not return
     emitter.label("__rt_fiber_suspend_state_ok");
+    abi::emit_load_symbol_to_reg(emitter, "x9", "_unser_active", 0);          // x9 = active unserialize nesting count
+    emitter.instruction("cbz x9, __rt_fiber_suspend_unserialize_ok");           // switching is safe only when no parser context is live
+    abi::emit_symbol_address(emitter, "x0", "_fiber_msg_suspend_unserialize"); // x0 = stable FiberError message for the forbidden switch
+    emitter.instruction("mov x1, #52");                                         // x1 = error message length in bytes
+    emitter.instruction("bl __rt_fiber_throw_state_error");                     // raise before publishing a yielded value or Suspended state
+    emitter.label("__rt_fiber_suspend_unserialize_ok");
     emitter.instruction("mov x0, x20");                                         // restore the yielded value into x0 for the suspend logic below
     emitter.instruction("ldp x20, x21, [sp], #16");                             // restore caller's x20/x21 now that the state check is done
 

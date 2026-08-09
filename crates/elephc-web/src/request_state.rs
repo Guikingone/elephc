@@ -9,20 +9,19 @@
 //! Called from:
 //! - The compiled `--web` runtime's `__rt_stdout_write` capture branch, which
 //!   calls `elephc_web_write(ptr, len)` when `elephc_web_capture` is non-zero.
-//! - `crate::server::elephc_web_run`, which sets capture, clears the buffer,
-//!   runs the handler, and flushes the captured body.
-//! - `crate::worker`, which calls `set_request` after parsing the HTTP request
-//!   and before invoking the PHP handler.
+//! - `crate::handler_broker`, which installs one request snapshot and configures
+//!   the response stream before invoking a disposable PHP handler.
 //!
 //! Key details:
-//! - One process per prefork worker, single-threaded: each request runs to
-//!   completion on the worker's one thread, so all process-statics are race-free.
+//! - Request/response statics are accessed only by the threadless broker before
+//!   fork or by one disposable handler child, so they remain race-free.
 //! - All access to `static mut` items goes through raw pointers
 //!   (`core::ptr::addr_of_mut!` / `core::ptr::addr_of!`), never `&mut`/`&`
 //!   references, to stay clear of the `static_mut_refs` lint (a hard error under
 //!   the workspace's zero-warnings gate).
 
 use std::ffi::{c_char, CString};
+use std::os::fd::RawFd;
 
 extern "C" {
     /// Per-request output-capture flag defined in the compiled program's runtime
@@ -34,10 +33,38 @@ extern "C" {
     static mut elephc_web_capture: u8;
 }
 
-/// Process-static per-worker response body. Bytes echoed by the PHP handler land
-/// here while capture is enabled; the server scaffold flushes it to the client
-/// (currently stdout) once the handler returns.
+/// Process-static fallback body. Normal responses stream directly; trans-SID
+/// responses use this buffer because rewriting requires the complete plaintext.
 static mut RESPONSE_BODY: Vec<u8> = Vec::new();
+/// Dedicated handler-channel descriptor, or `-1` outside a disposable child.
+static mut RESPONSE_STREAM_FD: RawFd = -1;
+/// Whether status and headers were frozen by the first output operation.
+static mut RESPONSE_COMMITTED: bool = false;
+/// Whether trans-SID requires the plaintext body to remain buffered until exit.
+static mut RESPONSE_TRANS_SID_BUFFERED: bool = false;
+/// Records a response-channel write failure so the child exits unsuccessfully.
+static mut RESPONSE_STREAM_FAILED: bool = false;
+/// Whether the web wrapper caught an exception after response output committed.
+static mut RESPONSE_HANDLER_FAILED: bool = false;
+/// Whether this request already emitted the late-`header()` warning.
+static mut LATE_HEADER_WARNED: bool = false;
+/// Whether this request already emitted the late-`http_response_code()` warning.
+static mut LATE_STATUS_WARNED: bool = false;
+
+/// Emits one PHP-style late-header diagnostic without allocating or panicking.
+unsafe fn warn_headers_already_sent_once(warned: *mut bool, message: &'static [u8]) {
+    if *warned {
+        return;
+    }
+    core::ptr::write(warned, true);
+    let _ = libc::write(2, message.as_ptr().cast(), message.len());
+}
+
+/// Terminates a disposable request child whose worker-side response channel closed.
+unsafe fn abort_failed_response_stream() -> ! {
+    core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STREAM_FAILED), true);
+    libc::_exit(1);
+}
 
 /// Enables or disables per-request output capture by writing the runtime's
 /// extern capture flag. When `on` is true, `__rt_stdout_write` routes echo
@@ -52,8 +79,7 @@ pub fn set_capture(on: bool) {
     }
 }
 
-/// Clears the response-body buffer before a request begins, so each request
-/// starts with an empty body regardless of the previous request's output.
+/// Clears the fallback response buffer before a disposable handler begins.
 pub fn clear_body() {
     // SAFETY: single-threaded per worker; the buffer is mutated through a raw
     // pointer to avoid forming a reference to the `static mut`.
@@ -62,10 +88,9 @@ pub fn clear_body() {
     }
 }
 
-/// Appends `len` bytes starting at `ptr` to the per-worker response body. This
-/// is the real destination for captured PHP output: the compiled runtime's
-/// `__rt_stdout_write` capture branch calls this with the same C ABI as the
-/// Phase-1 stub (byte pointer + length, no return value).
+/// Sends `len` captured PHP output bytes to the response channel, committing
+/// status and headers on first output. Only active trans-SID rewriting retains
+/// the bytes in the fallback whole-body buffer.
 ///
 /// # Safety
 /// `ptr` must point to `len` valid bytes for the duration of the call. Single-
@@ -76,11 +101,89 @@ pub unsafe extern "C" fn elephc_web_write(ptr: *const u8, len: usize) {
         return;
     }
     let bytes = core::slice::from_raw_parts(ptr, len);
-    (*core::ptr::addr_of_mut!(RESPONSE_BODY)).extend_from_slice(bytes);
+    let fd = *core::ptr::addr_of!(RESPONSE_STREAM_FD);
+    if fd < 0 {
+        (*core::ptr::addr_of_mut!(RESPONSE_BODY)).extend_from_slice(bytes);
+        return;
+    }
+    if !*core::ptr::addr_of!(RESPONSE_COMMITTED) {
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_COMMITTED), true);
+        let cookie = request_header_owned("cookie");
+        let host = request_header_owned("host");
+        if crate::trans_sid::prepare_streaming_response(
+            cookie.as_deref(),
+            host.as_deref(),
+            &mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS),
+        ) {
+            core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_TRANS_SID_BUFFERED), true);
+        } else if !crate::handler_ipc::write_response_start(
+            fd,
+            *core::ptr::addr_of!(RESPONSE_STATUS),
+            &*core::ptr::addr_of!(RESPONSE_HEADERS),
+        ) {
+            abort_failed_response_stream();
+        }
+    }
+    if *core::ptr::addr_of!(RESPONSE_TRANS_SID_BUFFERED) {
+        (*core::ptr::addr_of_mut!(RESPONSE_BODY)).extend_from_slice(bytes);
+    } else if !crate::handler_ipc::write_response_chunks(fd, bytes) {
+        abort_failed_response_stream();
+    }
 }
 
-/// Takes ownership of the accumulated response body, leaving the buffer empty for
-/// the next request. The server scaffold writes the returned bytes to the client.
+/// Initializes response streaming for one disposable handler child.
+pub(crate) fn begin_response_stream(fd: RawFd) {
+    clear_body();
+    reset_response();
+    unsafe {
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STREAM_FD), fd);
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_COMMITTED), false);
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_TRANS_SID_BUFFERED), false);
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STREAM_FAILED), false);
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_HANDLER_FAILED), false);
+    }
+}
+
+/// Commits any delayed response, emits its final frame, and reports IPC success.
+pub(crate) fn finish_response_stream() -> bool {
+    unsafe {
+        let fd = *core::ptr::addr_of!(RESPONSE_STREAM_FD);
+        if fd < 0 {
+            return false;
+        }
+        if *core::ptr::addr_of!(RESPONSE_HANDLER_FAILED) {
+            core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STREAM_FD), -1);
+            return false;
+        }
+        let failed = *core::ptr::addr_of!(RESPONSE_STREAM_FAILED);
+        let buffered = *core::ptr::addr_of!(RESPONSE_TRANS_SID_BUFFERED);
+        let committed = *core::ptr::addr_of!(RESPONSE_COMMITTED);
+        let mut complete = !failed;
+        if complete && (buffered || !committed) {
+            let mut headers = take_headers();
+            let cookie = request_header_owned("cookie");
+            let host = request_header_owned("host");
+            let body = crate::trans_sid::maybe_rewrite_response(
+                cookie.as_deref(),
+                host.as_deref(),
+                &mut headers,
+                take_body(),
+            );
+            complete = crate::handler_ipc::write_response_start(
+                fd,
+                *core::ptr::addr_of!(RESPONSE_STATUS),
+                &headers,
+            ) && crate::handler_ipc::write_response_chunks(fd, &body);
+        }
+        if complete {
+            complete = crate::handler_ipc::write_response_end(fd);
+        }
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STREAM_FD), -1);
+        complete
+    }
+}
+
+/// Takes the fallback response body, leaving it empty for the next handler.
 pub fn take_body() -> Vec<u8> {
     // SAFETY: single-threaded per worker; the buffer is replaced through a raw
     // pointer to avoid forming a reference to the `static mut`.
@@ -92,6 +195,20 @@ static mut RESPONSE_STATUS: u16 = 200;
 /// Response headers for the current request, as (name, value) pairs in send order.
 static mut RESPONSE_HEADERS: Vec<(String, String)> = Vec::new();
 
+/// Converts an uncaught web-handler exception into a pre-commit 500 or marks a
+/// committed response incomplete so the worker closes it without an end frame.
+///
+/// # Safety
+/// Called only by the single-threaded disposable request child.
+#[no_mangle]
+pub unsafe extern "C" fn elephc_web_handle_uncaught_exception() {
+    if *core::ptr::addr_of!(RESPONSE_COMMITTED) {
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_HANDLER_FAILED), true);
+    } else {
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STATUS), 500);
+    }
+}
+
 /// Sets the response status. `code <= 0` reads the current status without
 /// changing it (backs `http_response_code()` with no argument); a positive code
 /// sets the status and returns the PREVIOUS one.
@@ -102,7 +219,14 @@ static mut RESPONSE_HEADERS: Vec<(String, String)> = Vec::new();
 pub unsafe extern "C" fn elephc_web_set_status(code: i64) -> i64 {
     let prev = *core::ptr::addr_of!(RESPONSE_STATUS) as i64;
     if code > 0 {
-        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STATUS), code as u16);
+        if *core::ptr::addr_of!(RESPONSE_COMMITTED) {
+            warn_headers_already_sent_once(
+                core::ptr::addr_of_mut!(LATE_STATUS_WARNED),
+                b"Warning: http_response_code(): headers already sent\n",
+            );
+        } else {
+            core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STATUS), code as u16);
+        }
     }
     prev
 }
@@ -126,6 +250,13 @@ pub unsafe extern "C" fn elephc_web_header(
     response_code: i64,
 ) {
     if ptr.is_null() {
+        return;
+    }
+    if *core::ptr::addr_of!(RESPONSE_COMMITTED) {
+        warn_headers_already_sent_once(
+            core::ptr::addr_of_mut!(LATE_HEADER_WARNED),
+            b"Warning: header(): headers already sent\n",
+        );
         return;
     }
     let line = String::from_utf8_lossy(core::slice::from_raw_parts(ptr, len)).into_owned();
@@ -188,10 +319,15 @@ pub fn reset_response() {
     unsafe {
         core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STATUS), 200);
         (*core::ptr::addr_of_mut!(RESPONSE_HEADERS)).clear();
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_COMMITTED), false);
+        core::ptr::write(core::ptr::addr_of_mut!(LATE_HEADER_WARNED), false);
+        core::ptr::write(core::ptr::addr_of_mut!(LATE_STATUS_WARNED), false);
+        core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_HANDLER_FAILED), false);
     }
 }
 
 /// Returns the current response status code.
+#[cfg(test)]
 pub fn take_status() -> u16 {
     // SAFETY: single-threaded per worker; read through a raw pointer.
     unsafe { *core::ptr::addr_of!(RESPONSE_STATUS) }
@@ -201,6 +337,16 @@ pub fn take_status() -> u16 {
 pub fn take_headers() -> Vec<(String, String)> {
     // SAFETY: single-threaded per worker; replaced through a raw pointer.
     unsafe { core::mem::take(&mut *core::ptr::addr_of_mut!(RESPONSE_HEADERS)) }
+}
+
+/// Returns an owned request-header value using an ASCII-insensitive name match.
+fn request_header_owned(name: &str) -> Option<String> {
+    unsafe {
+        (&*core::ptr::addr_of!(REQ_HEADERS))
+            .iter()
+            .find(|(header, _)| header.to_bytes().eq_ignore_ascii_case(name.as_bytes()))
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+    }
 }
 
 // Per-worker current-request state. One request runs to completion on the
@@ -254,22 +400,46 @@ pub(crate) fn set_request(
         .map(|d| d.as_secs() as i64)
         .unwrap_or(0);
     unsafe {
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_METHOD), Some(cstr(&method)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_URI), Some(cstr(&uri)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_PATH), Some(cstr(&path)));
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_QUERY), Some(cstr(&query)));
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_METHOD),
+            Some(cstr(&method)),
+        ));
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_URI),
+            Some(cstr(&uri)),
+        ));
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_PATH),
+            Some(cstr(&path)),
+        ));
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_QUERY),
+            Some(cstr(&query)),
+        ));
         let hs: Vec<(CString, CString)> =
             headers.iter().map(|(n, v)| (cstr(n), cstr(v))).collect();
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_HEADERS), hs);
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_BODY), body);
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_REMOTE_ADDR), Some(cstr(&meta.remote_addr)));
+        drop(core::ptr::replace(core::ptr::addr_of_mut!(REQ_HEADERS), hs));
+        drop(core::ptr::replace(core::ptr::addr_of_mut!(REQ_BODY), body));
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_REMOTE_ADDR),
+            Some(cstr(&meta.remote_addr)),
+        ));
         core::ptr::write(core::ptr::addr_of_mut!(REQ_REMOTE_PORT), meta.remote_port as i64);
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_SERVER_ADDR), Some(cstr(&meta.server_addr)));
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_SERVER_ADDR),
+            Some(cstr(&meta.server_addr)),
+        ));
         core::ptr::write(core::ptr::addr_of_mut!(REQ_SERVER_PORT), meta.server_port as i64);
-        core::ptr::write(core::ptr::addr_of_mut!(REQ_PROTOCOL), Some(cstr(&meta.protocol)));
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(REQ_PROTOCOL),
+            Some(cstr(&meta.protocol)),
+        ));
         core::ptr::write(core::ptr::addr_of_mut!(REQ_TIME), now);
         // Invalidate the lazily-parsed multipart cache: it belongs to the prior request.
-        core::ptr::write(core::ptr::addr_of_mut!(MULTIPART_CACHE), None);
+        drop(core::ptr::replace(
+            core::ptr::addr_of_mut!(MULTIPART_CACHE),
+            None,
+        ));
     }
 }
 

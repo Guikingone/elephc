@@ -36,18 +36,27 @@ pub(super) fn parse_archive(data: &[u8]) -> Option<Archive> {
 
 /// Decompresses a whole gzip (`.gz`) stream into its plain bytes.
 pub(super) fn decompress_gzip_stream(data: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
     let mut decoder = flate2::read::GzDecoder::new(data);
-    std::io::Read::read_to_end(&mut decoder, &mut out).ok()?;
-    Some(out)
+    read_bounded_archive_stream(&mut decoder, data.len())
 }
 
 /// Decompresses a whole bzip2 (`.bz2`) stream into its plain bytes.
 pub(super) fn decompress_bzip2_stream(data: &[u8]) -> Option<Vec<u8>> {
-    let mut out = Vec::new();
     let mut decoder = bzip2_rs::DecoderReader::new(data);
-    std::io::Read::read_to_end(&mut decoder, &mut out).ok()?;
-    Some(out)
+    read_bounded_archive_stream(&mut decoder, data.len())
+}
+
+/// Reads a whole-archive compression stream without allowing an input bomb to
+/// allocate beyond both a fixed ceiling and the PHAR expansion-ratio ceiling.
+fn read_bounded_archive_stream(reader: &mut impl Read, compressed_len: usize) -> Option<Vec<u8>> {
+    let ratio_ceiling = compressed_len.checked_mul(MAX_PHAR_DECOMPRESSION_RATIO)?;
+    let ceiling = ratio_ceiling.min(MAX_PHAR_ARCHIVE_DECOMPRESSED_BYTES);
+    let mut out = Vec::new();
+    reader
+        .take(u64::try_from(ceiling.checked_add(1)?).ok()?)
+        .read_to_end(&mut out)
+        .ok()?;
+    (out.len() <= ceiling).then_some(out)
 }
 
 /// Returns the plain (uncompressed) archive bytes, stripping a whole-archive gzip or
@@ -94,6 +103,25 @@ pub(super) fn bzip2_archive(src: &[u8]) -> Option<Vec<u8>> {
     let dest = compression_dest_path(src, "bz2")?;
     write_path(&dest, &encoder.finish().ok()?)?;
     Some(dest)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verifies whole-archive readers stop after the shared expansion ceiling
+    /// instead of draining an unbounded decompression stream.
+    #[test]
+    fn whole_archive_stream_reader_rejects_output_beyond_ratio_ceiling() {
+        let mut hostile = std::io::repeat(b'A').take(
+            u64::try_from(MAX_PHAR_DECOMPRESSION_RATIO + 1)
+                .expect("PHAR ratio ceiling fits u64"),
+        );
+        assert!(
+            read_bounded_archive_stream(&mut hostile, 1).is_none(),
+            "whole-archive readers must reject output beyond compressed_len * ratio"
+        );
+    }
 }
 
 /// Reads a whole-archive-compressed `src` (a `.gz`/`.bz2` path), writes its plain

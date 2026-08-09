@@ -96,6 +96,63 @@ pub(super) fn native_phar_hash_signature_round_trip() {
     std::fs::remove_file(&path).ok();
 }
 
+/// Verifies a signed native PHAR is rejected when its entry payload is
+/// modified without recomputing the recorded SHA-256 signature.
+#[test]
+pub(super) fn native_phar_rejects_tampered_signed_payload() {
+    let path = std::env::temp_dir().join(format!(
+        "elephc_phar_tampered_signature_{}.phar",
+        std::process::id()
+    ));
+    let pb = path.to_string_lossy();
+    assert_eq!(put_entry_bytes(pb.as_bytes(), b"a.txt", b"alpha"), Some(5));
+    assert_eq!(sign_archive_hash(pb.as_bytes(), 3), Some(()));
+
+    let mut data = std::fs::read(&path).unwrap();
+    let payload = data
+        .windows(b"alpha".len())
+        .position(|window| window == b"alpha")
+        .expect("signed fixture contains its payload");
+    data[payload] ^= 0x01;
+
+    assert!(
+        parse_archive(&data).is_none(),
+        "a payload whose signature no longer verifies must be rejected"
+    );
+    std::fs::remove_file(&path).ok();
+}
+
+/// Verifies signed tar and ZIP PHARs authenticate their payload while being
+/// opened, rather than merely exposing unverified signature metadata.
+#[test]
+pub(super) fn tar_and_zip_phars_reject_tampered_signed_payloads() {
+    const PAYLOAD: &[u8] = b"authenticated archive payload";
+    for extension in ["tar", "zip"] {
+        let path = std::env::temp_dir().join(format!(
+            "elephc-phar-tamper-{}-{extension}.{extension}",
+            std::process::id()
+        ));
+        let path_bytes = path.to_string_lossy();
+        assert_eq!(
+            put_entry_bytes(path_bytes.as_bytes(), b"payload.txt", PAYLOAD),
+            Some(PAYLOAD.len())
+        );
+        assert_eq!(sign_archive_hash(path_bytes.as_bytes(), 3), Some(()));
+
+        let mut archive = std::fs::read(&path).expect("read signed PHAR fixture");
+        let offset = archive
+            .windows(PAYLOAD.len())
+            .position(|window| window == PAYLOAD)
+            .expect("locate stored payload bytes");
+        archive[offset] ^= 0x01;
+        assert!(
+            parse_archive(&archive).is_none(),
+            "tampered signed {extension} PHAR must fail authentication"
+        );
+        std::fs::remove_file(&path).ok();
+    }
+}
+
 /// Reconstructs the byte range a tar/zip phar signature is computed over from a
 /// parsed archive: the tar data records, or the zip locals + central + comment.
 pub(super) fn tar_zip_signed_range(arch: &Archive) -> Vec<u8> {

@@ -2,7 +2,7 @@
 title: "ob_implicit_flush()"
 description: "Turns implicit flush on/off."
 sidebar:
-  order: 208
+  order: 207
 ---
 
 ## ob_implicit_flush()

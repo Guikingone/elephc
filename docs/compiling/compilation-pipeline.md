@@ -27,14 +27,14 @@ Physical source (.php or .lfc)
   -> tz-prelude         inject the timezone-introspection prelude when used
   -> list-id-prelude    inject the DateTimeZone identifier-list prelude when used
   -> var-export-prelude inject the var_export prelude when used
-  -> opcache-prelude    inject the OPcache API prelude when used
+  -> opcache-prelude     inject OPcache declarations and a placeholder script manifest when used
   -> image-prelude      inject the image (GD/Exif/Imagick) prelude when used
-  -> hash-prelude       inject the incremental-hashing prelude when used
+  -> hash-prelude       inject the incremental HashContext/hash_* prelude when used
   -> web-prelude        inject the web runtime prelude with --web
-  -> version-prelude    inject referenced PHP version-surface helpers
+  -> version-prelude    inject requested PHP version/SAPI surface functions
   -> name-resolve       apply namespace/use rules, canonicalize names
   -> autoload-run       run autoload insertion
-  -> opcache-manifest-bake complete the OPcache script manifest after autoloading
+  -> opcache-manifest-bake complete and bake the post-autoload OPcache script manifest
   -> opt-fold           AST constant folding
   -> typecheck          Type checker / warnings
   -> exports-scan       collect #[Export] functions (cdylib)
@@ -71,12 +71,13 @@ Physical source (.php or .lfc)
 - **resolve / prelude injection / name-resolve** — `include`/`require` are
   resolved, declarations are discovered, and demand-loaded PHP preludes for PDO,
   timezone introspection, `DateTimeZone::listIdentifiers()`, `var_export()`,
-  OPcache, image processing, incremental hashing, and PHP version helpers are
-  injected only when referenced. The web runtime prelude is injected with
-  `--web`, and namespace/`use` rules rewrite references to fully-qualified
-  names. Autoloading is wired in around these steps; after autoload insertion,
-  **opcache-manifest-bake** replaces the preliminary OPcache script manifest
-  with the complete entry/include/autoload file set before constant folding.
+  OPcache, image processing, incremental hash contexts, and the PHP version/SAPI
+  surface are injected only when referenced. The web runtime prelude is injected
+  with `--web`, and namespace/`use` rules rewrite references to fully-qualified
+  names. Autoloading is wired in around these steps.
+- **opcache-manifest-bake** — after autoload insertion discovers the final set of
+  compiled scripts, replaces the placeholder OPcache manifest literals before
+  constant folding and emits any preload warning against that complete set.
 - **typecheck** — the [Type Checker](../internals/the-type-checker.md) infers and
   validates types and emits warnings.
 

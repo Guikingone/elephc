@@ -20,7 +20,9 @@ use super::{
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
-    STR_REPEAT_TIMES_MSG,
+    STR_REPEAT_TIMES_MSG, UNSER_ALLOWED_CLASSES_ENTRY_PREFIX,
+    UNSER_ALLOWED_CLASSES_POLICY_PREFIX, UNSER_OBJECT_STRING_ERROR_PREFIX,
+    UNSER_OBJECT_STRING_ERROR_SUFFIX, UNSER_OPTIONS_TYPE_PREFIX, UNSER_TYPE_GIVEN_SUFFIX,
 };
 use super::super::system;
 use crate::codegen_support::data_section::comm_directive;
@@ -51,6 +53,53 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
+    out.push_str(&comm_directive("_runtime_recursion_stack_bytes", 8, target));
+    out.push_str(&format!(
+        ".globl _runtime_recursion_depth_msg\n_runtime_recursion_depth_msg:\n    .ascii {STACK_OVERFLOW_MSG:?}\n"
+    ));
+    out.push_str(&comm_directive("_unser_depth", 8, target));
+    out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
+    out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
+    out.push_str(&comm_directive("_unser_allowed_list", 8, target));
+    out.push_str(&comm_directive("_unser_allowed_list_mixed", 8, target));
+    out.push_str(&comm_directive("_unser_active", 8, target));
+    out.push_str(&comm_directive("_unser_context", 8, target));
+    out.push_str(".globl _unser_allowed_classes_key\n_unser_allowed_classes_key:\n    .ascii \"allowed_classes\"\n");
+    out.push_str(&format!(
+        ".globl _unser_options_type_prefix\n_unser_options_type_prefix:\n    .ascii {UNSER_OPTIONS_TYPE_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_allowed_classes_policy_prefix\n_unser_allowed_classes_policy_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_POLICY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_allowed_classes_entry_prefix\n_unser_allowed_classes_entry_prefix:\n    .ascii {UNSER_ALLOWED_CLASSES_ENTRY_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_object_string_error_prefix\n_unser_object_string_error_prefix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_object_string_error_suffix\n_unser_object_string_error_suffix:\n    .ascii {UNSER_OBJECT_STRING_ERROR_SUFFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _unser_type_given_suffix\n_unser_type_given_suffix:\n    .ascii {UNSER_TYPE_GIVEN_SUFFIX:?}\n"
+    ));
+    for (label, name) in [
+        ("_unser_type_int", "int"),
+        ("_unser_type_string", "string"),
+        ("_unser_type_float", "float"),
+        ("_unser_type_bool", "bool"),
+        ("_unser_type_array", "array"),
+        ("_unser_type_object", "object"),
+        ("_unser_type_null", "null"),
+        ("_unser_type_resource", "resource"),
+        ("_unser_type_unknown", "unknown"),
+    ] {
+        out.push_str(&format!(
+            ".globl {label}\n{label}:\n    .ascii {name:?}\n"
+        ));
+    }
+    out.push_str(".globl _incomplete_class_name\n_incomplete_class_name:\n    .ascii \"__PHP_Incomplete_Class\"\n");
+    out.push_str(".globl _incomplete_class_property_name\n_incomplete_class_property_name:\n    .ascii \"__PHP_Incomplete_Class_Name\"\n");
     // print_r($value, true) return-mode capture state. _print_r_mode is a flag
     // (0 = write to stdout, 1 = append to _print_r_buf) consulted by
     // __rt_stdout_write and __rt_pr_write; _print_r_off tracks the accumulated
@@ -153,8 +202,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // index, keys excluded) plus a pointer->index map of already-serialized objects
     // (parallel arrays, linear scan) so a repeated object emits r:<index>. unserialize:
     // a registry of created value boxes indexed by the same pre-order counter so r:<N>
-    // resolves to the existing value. Capacity bounds the per-call object/value count;
-    // overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
+    // resolves to the existing value. Reentrant calls snapshot the used prefix plus their
+    // policy/depth fields through _unser_context. Capacity bounds the per-call object/value
+    // count; overflow degrades gracefully (serialize stops deduping, unserialize fails the ref).
     out.push_str(&comm_directive("_ser_value_counter", 8, target));
     out.push_str(&comm_directive("_ser_obj_count", 8, target));
     out.push_str(&comm_directive("_ser_obj_ptrs", 524288, target));
@@ -202,6 +252,11 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
+    out.push_str(&comm_directive(
+        "_fiber_main_saved_recursion_stack_bytes",
+        8,
+        target,
+    ));
     // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
     // execution context that is running right now: every compiled function prologue does an
     // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow
@@ -231,6 +286,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_heap_small_bins", 32, target));
     out.push_str(&comm_directive("_heap_debug_enabled", 8, target));
     out.push_str(&comm_directive("_web_heap_guard_enabled", 8, target));
+    // Generation-safe buffer descriptor registry. Public Buffer values are
+    // scalar `(generation << 32) | index` handles, never heap pointers: slot
+    // reuse increments generation so stale aliases cannot access a new payload.
+    // Index zero is reserved as the invalid/null handle; the descriptor free
+    // list is static metadata and therefore does not consume user heap space.
+    out.push_str(&comm_directive(
+        "_buffer_registry",
+        (crate::codegen_support::runtime::buffers::BUFFER_REGISTRY_CAPACITY + 1)
+            * crate::codegen_support::runtime::buffers::BUFFER_DESCRIPTOR_SIZE,
+        target,
+    ));
+    out.push_str(&comm_directive("_buffer_registry_free", 8, target));
+    out.push_str(".globl _buffer_registry_next\n_buffer_registry_next:\n    .quad 1\n");
     // PHP object-handle pool. `_obj_handle_index` is a DIRECT-MAPPED side table
     // holding one u32 handle per 16-byte granule of `_heap_buf`: two live heap
     // blocks can never share a granule because the smallest block is 16 header
@@ -321,6 +389,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ));
     out.push_str(".globl _buffer_bounds_msg\n_buffer_bounds_msg:\n    .ascii \"Fatal error: buffer index out of bounds\\n\"\n");
     out.push_str(".globl _buffer_uaf_msg\n_buffer_uaf_msg:\n    .ascii \"Fatal error: use of buffer after buffer_free()\\n\"\n");
+    out.push_str(".globl _buffer_registry_exhausted_msg\n_buffer_registry_exhausted_msg:\n    .ascii \"Fatal error: buffer registry exhausted\\n\"\n");
     out.push_str(".globl _closure_bind_unsupported_msg\n_closure_bind_unsupported_msg:\n    .ascii \"Fatal error: Closure::bind requires a closure that captures only $this\\n\"\n");
     out.push_str(".globl _iterable_unsupported_kind_msg\n_iterable_unsupported_kind_msg:\n    .ascii \"Fatal error: foreach over iterable with unsupported kind\\n\"\n");
     out.push_str(".globl _iterable_array_str\n_iterable_array_str:\n    .ascii \"Array\"\n");
@@ -526,6 +595,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _fiber_msg_throw_not_suspended\n_fiber_msg_throw_not_suspended:\n    .ascii \"Cannot resume a fiber that is not suspended\"\n");
     out.push_str(".globl _fiber_msg_not_terminated\n_fiber_msg_not_terminated:\n    .ascii \"Cannot get fiber return value: The fiber has not returned\"\n");
     out.push_str(".globl _fiber_msg_suspend_outside\n_fiber_msg_suspend_outside:\n    .ascii \"Cannot suspend outside of a fiber\"\n");
+    out.push_str(".globl _fiber_msg_suspend_unserialize\n_fiber_msg_suspend_unserialize:\n    .ascii \"Cannot suspend a fiber while unserialize() is active\"\n");
     out.push_str(".globl _fiber_msg_unsupported_callable\n_fiber_msg_unsupported_callable:\n    .ascii \"Fiber callable is not supported by this compiler\"\n");
     out.push_str(".globl _fiber_msg_stack_alloc_failed\n_fiber_msg_stack_alloc_failed:\n    .ascii \"Cannot allocate fiber stack\"\n");
     out.push_str(&emit_builtin_callable_data(target));

@@ -455,7 +455,7 @@ path for from a leaf helper.
 
 ## System routines
 
-**Source:** `src/codegen_support/runtime/system/` (43 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories; 70 files recursively)
+**Source:** `src/codegen_support/runtime/system/` (44 top-level files plus `date/`, `strtotime/`, `json_validate/`, `json_decode_mixed/`, and `json_encode_str/` subdirectories; 71 files recursively)
 
 ### `__rt_build_argv` — Build $argv array
 
@@ -505,7 +505,7 @@ The check itself lives in every compiled function prologue — see [The codegen]
 
 ## Exception routines
 
-**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (7 files)
+**Source:** `src/codegen_support/runtime/exceptions.rs` plus `src/codegen_support/runtime/exceptions/` (7 files in the directory)
 
 elephc lowers exceptions with a small runtime layer around `_setjmp` / `_longjmp`. Codegen publishes the current exception object into `_exc_value`, pushes a handler record into `_exc_handler_top`, and then uses these helpers to unwind, match catch clauses, and resume control flow through `catch` / `finally`.
 
@@ -805,15 +805,18 @@ These helpers back the PHP `zval` bridge extension: they convert elephc runtime 
 
 ## Buffer routines
 
-**Source:** `src/codegen_support/runtime/buffers/` (5 files including `mod.rs`)
+**Source:** `src/codegen_support/runtime/buffers/` (8 files including `mod.rs`)
 
-These helpers support the compiler-specific `buffer<T>` hot-path data type.
+These helpers support the compiler-specific `buffer<T>` hot-path data type. Public Buffer values are opaque `(generation:u32 << 32) | descriptor_index:u32` handles. The runtime resolves each non-null handle through a 4096-slot static descriptor registry and validates its active marker and generation before exposing payload metadata. Payload bytes remain a separate compiler-heap allocation.
 
 | Routine | What it does | Input | Output |
 |---|---|---|---|
-| `__rt_buffer_new` | Allocate a contiguous buffer with header `[length:8][stride:8]` followed by zero-initialized payload | `x0` = element count, `x1` = element stride | `x0` = buffer pointer |
-| `__rt_buffer_len` | Read the logical element count from a buffer header | `x0` = buffer pointer | `x0` = length |
+| `__rt_buffer_resolve` | Validate handle index, non-zero generation, active state, and exact descriptor generation | `x0` = opaque buffer handle | `x0` = static descriptor address |
+| `__rt_buffer_new` | Reuse or claim a descriptor, allocate and exactly zero `length * stride` payload bytes, then publish the new handle | `x0` = element count, `x1` = element stride | `x0` = opaque buffer handle |
+| `__rt_buffer_free` | Invalidate a resolved descriptor, recycle it unless its u32 generation is saturated, then release the detached payload | `x0` = opaque buffer handle | — |
+| `__rt_buffer_len` | Resolve the handle and read the logical element count from descriptor offset 8 | `x0` = opaque buffer handle | `x0` = length |
 | `__rt_buffer_bounds_fail` | Abort with `Fatal error: buffer index out of bounds` | — | does not return |
+| `__rt_buffer_size_overflow` | Abort when `length * stride` overflows or no descriptor can be issued | — | does not return |
 | `__rt_buffer_use_after_free` | Abort with `Fatal error: use of buffer after buffer_free()` | — | does not return |
 
 ## Mixed-type helpers
@@ -951,7 +954,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // eval bridge/scope: boxed-value hooks and native eval scope helpers (gated)
     // spl: SplDoublyLinkedList/SplStack/SplQueue and SplFixedArray storage helpers
     // objects: stdClass dynamic properties and boxed Mixed property/index dispatch
-    // buffers: contiguous buffer allocation, bounds checking, UAF traps
+    // buffers: generation-safe handle resolution, descriptor allocation/free, bounds/size/UAF traps
     // io: stdout funnel + web helpers, c-string buffers, file I/O, stat/fs helpers,
     // scandir/glob/tempnam, CSV, streams/sockets, var_dump/print_r, ob_* buffer stack
     // pointers: ptoa, null check, str_to_cstr, cstr_to_str
@@ -1019,6 +1022,10 @@ The runtime data layer lives in `src/codegen_support/runtime/data/`. `fixed.rs` 
 .comm _heap_free_list, 8     ; head of the general address-ordered free list
 .comm _heap_small_bins, 32   ; 4 x 8-byte heads for <=8/16/32/64-byte cached blocks
 .comm _heap_debug_enabled, 8 ; BSS-backed debug flag, set to 1 in _main when compiled with --heap-debug
+.comm _buffer_registry, 196656 ; reserved slot 0 + 4096 generation-safe 48-byte descriptors
+.comm _buffer_registry_free, 8 ; recycled descriptor-index free-list head
+_buffer_registry_next:
+    .quad 1                 ; next never-issued descriptor index
 .comm _gc_collecting, 8      ; cycle collector re-entry guard
 .comm _gc_release_suppressed, 8 ; suppress nested collection during deep frees
 .comm _json_last_error, 8    ; last JSON_ERROR_* code
@@ -1065,7 +1072,7 @@ Additionally, the runtime emits static data tables:
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_size_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_heap_dbg_bad_refcount_msg`, `_heap_dbg_double_free_msg`, `_heap_dbg_free_list_msg` — fatal heap-debug error strings enabled by `--heap-debug`
 - `_heap_dbg_*` summary labels — fixed strings used by `__rt_heap_debug_report` for alloc/free/live/leak output
 - `_resource_id_prefix` — prefix used by resource display helpers

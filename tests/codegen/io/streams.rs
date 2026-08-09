@@ -2244,6 +2244,37 @@ unlink("perfile.zip");
     assert_eq!(out, "first:3|nested|yy|9:yn|n");
 }
 
+/// Verifies persisted archive metadata cannot instantiate application classes
+/// or run wakeup hooks while a fresh Phar object loads an untrusted archive.
+#[test]
+fn test_phar_persisted_metadata_blocks_class_hydration() {
+    let out = compile_and_run(
+        r#"<?php
+class ArchiveMetadata {
+    public static int $wakeups = 0;
+    public function __wakeup(): void {
+        self::$wakeups = self::$wakeups + 1;
+    }
+}
+$p = new Phar("metadata-policy.phar");
+$p->addFromString("entry.txt", "payload");
+$p->setMetadata(new ArchiveMetadata());
+$p["entry.txt"]->setMetadata(new ArchiveMetadata());
+
+$q = new Phar("metadata-policy.phar");
+echo get_class($q->getMetadata()), "|";
+echo get_class($q["entry.txt"]->getMetadata()), "|";
+echo ArchiveMetadata::$wakeups;
+unlink("metadata-policy.phar");
+"#,
+    );
+    assert_eq!(
+        out,
+        "__PHP_Incomplete_Class|__PHP_Incomplete_Class|0",
+        "archive metadata must deserialize with allowed_classes=false"
+    );
+}
+
 /// `PharData::compress()` produces a whole-archive `.tar.gz`/`.tar.bz2` that is read
 /// back transparently, and `decompress()` reverses it — entries (including a nested
 /// path) survive each step.

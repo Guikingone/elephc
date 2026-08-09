@@ -20,3 +20,4 @@ mod prune;
 mod dce;
 mod control;
 mod normalize;
+mod performance;

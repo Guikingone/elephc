@@ -290,6 +290,10 @@ pub(super) fn emit_function_prologue_with_label(
         );
     }
 
+    // The incoming ABI registers are now durable in local slots, so the guard
+    // may use caller-saved registers without corrupting parameters.
+    emit_recursion_stack_bytes_adjust(ctx, "__rt_recursion_stack_bytes_enter");
+
     // Once all ABI inputs are safe in their frame slots, materialize any widened
     // Mixed boxes and retain the parameters whose slots become callee-owned.
     for (index, param) in ctx.function.params.iter().enumerate() {
@@ -1214,6 +1218,7 @@ pub(super) fn emit_function_return_epilogue(
     skip_return_slot: Option<LocalSlotId>,
 ) {
     emit_function_local_epilogue_cleanup(ctx, skip_return_slot);
+    emit_recursion_depth_leave_preserving_return(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
@@ -1230,10 +1235,54 @@ pub(super) fn emit_function_epilogue(ctx: &mut FunctionContext<'_>) {
         .expect("codegen bug: user function has no epilogue label");
     ctx.emitter.label(&label);
     emit_function_local_epilogue_cleanup(ctx, None);
+    emit_recursion_depth_leave_preserving_return(ctx);
     emit_callee_saved_restores(ctx);
     abi::emit_frame_restore(ctx.emitter, ctx.frame_size);
     abi::emit_return(ctx.emitter);
     ctx.epilogue_emitted = true;
+}
+
+/// Leaves the recursion guard without allowing its scratch registers to alter
+/// the PHP value already prepared in the ABI return registers.
+///
+/// By-reference functions always return their single-word ref-cell pointer in
+/// the integer result register, irrespective of the declared PHP return type.
+fn emit_recursion_depth_leave_preserving_return(ctx: &mut FunctionContext<'_>) {
+    let return_ty = if ctx.function.flags.by_ref_return {
+        PhpType::Int
+    } else {
+        ctx.function.return_php_type.codegen_repr()
+    };
+    let preserves_return = !matches!(return_ty, PhpType::Void | PhpType::Never);
+    if preserves_return {
+        push_return_value(ctx, &return_ty);
+    }
+    emit_recursion_stack_bytes_adjust(ctx, "__rt_recursion_stack_bytes_leave");
+    if preserves_return {
+        pop_return_value(ctx, &return_ty);
+    }
+}
+
+/// Adjusts the runtime user-stack budget by this generated function's exact
+/// frame allocation while its ABI return registers are either still unused or
+/// safely saved by the caller.
+fn emit_recursion_stack_bytes_adjust(ctx: &mut FunctionContext<'_>, helper: &str) {
+    // `frame_size` accounts for the generated local frame, but each recursive
+    // call also carries ABI return/control state outside that allocation. Keep
+    // a conservative, target-neutral 32-byte allowance so an otherwise tiny
+    // frame cannot drive the native stack past the byte budget.
+    const USER_CALL_STACK_FIXED_OVERHEAD: usize = 32;
+    let frame_bytes = i64::try_from(align_to_16(
+        ctx.frame_size
+            .saturating_add(USER_CALL_STACK_FIXED_OVERHEAD),
+    ))
+        .expect("generated frame size must fit in the runtime stack-budget ABI");
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        abi::int_arg_reg_name(ctx.emitter.target, 0),
+        frame_bytes,
+    );
+    abi::emit_call_label(ctx.emitter, helper);
 }
 
 /// Rounds a byte count up to a 16-byte stack alignment boundary.

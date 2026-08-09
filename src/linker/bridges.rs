@@ -462,24 +462,29 @@ impl BridgeStaticlib {
 
     /// Finds the checkout this elephc was built from, if it was built from one.
     ///
-    /// The EXECUTABLE is asked first and the working directory only as a fallback, because
-    /// they answer different questions. `current_exe()` is a fact about which build produced
-    /// this compiler; the working directory is the user's PHP project, which has no reason to
-    /// sit inside elephc's source tree. Asking the project first meant that compiling from
-    /// anywhere else — every integration test runs from a temp directory — found no workspace
-    /// and silently gave up on rebuilding.
+    /// The compile-time manifest directory identifies the exact checkout that produced this
+    /// compiler, including worktrees whose Cargo target directory is shared with another
+    /// checkout. The working directory and executable ancestry remain fallbacks for relocated
+    /// or installed binaries where that original source tree no longer exists.
     ///
     /// An installed binary has neither, and correctly gets `None`: `/usr/local/bin/elephc` has
     /// no ancestor carrying elephc's crates, so nothing tries to run cargo on a user's machine.
     fn find_workspace(&self) -> Option<PathBuf> {
         let manifest = format!("crates/{}/Cargo.toml", self.crate_name);
+        let compiled_from = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        if compiled_from.join(&manifest).exists() {
+            return Some(compiled_from);
+        }
+        let from_cwd = std::env::current_dir()
+            .ok()
+            .and_then(|cwd| Self::ancestor_carrying(&cwd, &manifest));
+        if from_cwd.is_some() {
+            return from_cwd;
+        }
         let from_executable = std::env::current_exe()
             .ok()
             .and_then(|executable| Self::ancestor_carrying(&executable, &manifest));
-        from_executable.or_else(|| {
-            let cwd = std::env::current_dir().ok()?;
-            Self::ancestor_carrying(&cwd, &manifest)
-        })
+        from_executable
     }
 
     /// Returns the nearest ancestor of `start` that carries `manifest`.
@@ -548,6 +553,16 @@ mod tests {
         assert!(BridgeStaticlib::ancestor_carrying(&scratch("bare"), manifest).is_none());
 
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Verifies shared Cargo target directories cannot redirect bridge discovery to another worktree.
+    #[test]
+    fn bridge_workspace_prefers_the_compiler_manifest_checkout() {
+        let bridge = bridge_for_library("elephc_web").expect("web bridge");
+        assert_eq!(
+            bridge.find_workspace().as_deref(),
+            Some(Path::new(env!("CARGO_MANIFEST_DIR")))
+        );
     }
 
     /// Staleness is decided by modification time, and a nested `target/` never counts.

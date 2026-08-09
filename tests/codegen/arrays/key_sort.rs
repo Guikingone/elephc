@@ -249,24 +249,19 @@ foreach ($a as $k => $v) { echo $k, "=", $v, ";"; }
     assert_eq!(out, "0=3;1=1;2=2;");
 }
 
-/// `krsort()` on a non-empty indexed array must be refused by name rather than silently
-/// returning the receiver untouched: indexed storage has no room for a descending key order.
+/// `krsort()` promotes non-empty indexed storage, returns true, and preserves direct lookup
+/// while exposing descending integer keys through iteration.
 #[test]
-fn test_krsort_on_indexed_array_reports_named_backend_error() {
-    let error = compile_source_expect_backend_error(
+fn test_krsort_on_indexed_array_returns_true_and_preserves_lookup() {
+    let out = compile_and_run(
         r#"<?php
 $a = [1, 2, 3];
-krsort($a);
+echo krsort($a) ? "true:" : "false:";
+echo $a[0], ":";
+foreach ($a as $key => $value) { echo $key, "=", $value, ";"; }
 "#,
     );
-    assert!(
-        error.contains("krsort for indexed array<Int>"),
-        "unexpected diagnostic: {error}"
-    );
-    assert!(
-        error.contains("descending key order has no representation"),
-        "unexpected diagnostic: {error}"
-    );
+    assert_eq!(out, "true:1:2=3;1=2;0=1;");
 }
 
 /// `krsort()` on a statically empty indexed array stays accepted, because an empty receiver

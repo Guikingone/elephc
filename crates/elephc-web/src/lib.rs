@@ -13,6 +13,8 @@
 //! - One process per prefork worker means no shared-thread state: per-worker
 //!   request/response data lives in plain process statics, not behind a mutex.
 
+mod handler_broker;
+mod handler_ipc;
 mod multipart;
 mod request_state;
 mod server;
@@ -39,7 +41,9 @@ pub use request_state::{
 
 // Re-exported so the compiled `--web` runtime routines (`__rt_header`,
 // `__rt_http_response_code`) can link against the response-control setters.
-pub use request_state::{elephc_web_header, elephc_web_set_status};
+pub use request_state::{
+    elephc_web_handle_uncaught_exception, elephc_web_header, elephc_web_set_status,
+};
 
 // Re-exported so the compiled `--web` web prelude can link against all session
 // C-ABI bridge symbols defined in `session/` (state, file I/O, ID generation,

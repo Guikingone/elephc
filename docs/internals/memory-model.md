@@ -22,6 +22,9 @@ This page explains where every value lives in memory at runtime.
 │  (arrays, hash tables,       │  Free-list + bump allocator
 │   objects, persisted strings) │
 ├─────────────────────────────┤
+│ Buffer descriptor registry   │  _buffer_registry: 4097 x 48B
+│  (generation-safe handles)   │  index 0 reserved; 4096 usable slots
+├─────────────────────────────┤
 │     String buffer            │  _concat_buf: 64KB, scratch pad
 │  (temporary string results)  │  Reset at each statement
 ├─────────────────────────────┤
@@ -34,9 +37,10 @@ This page explains where every value lives in memory at runtime.
 │  (C strings, streams, TLS,   │  _stream_*, _http_*, _ftp_*, wrapper/filter
 │   wrappers, filters)         │  tables, protocol/service/principal lookup buffers
 ├─────────────────────────────┤
-│   Runtime metadata (BSS)     │  _concat_off, _global_argc/_argv,
+│ Runtime metadata (BSS/data)  │  _concat_off, _global_argc/_argv,
 │  (heap state, counters,      │  _heap_off, _heap_free_list,
 │   globals, static storage)   │  _heap_small_bins, _heap_debug_enabled,
+│                              │  _buffer_registry_free/_next,
 │                              │  _gc_allocs/_frees/_live/_peak,
 │                              │  _gc_collecting/_gc_release_suppressed,
 │                              │  _exc_handler_top, _exc_call_frame_top,
@@ -107,7 +111,7 @@ For heap-backed values, stack slots also carry compile-time ownership metadata i
 | `Callable` | 8 bytes | Function pointer |
 | `Pointer` | 8 bytes | Raw 64-bit address |
 | `Resource` | 8 bytes | Native resource payload, such as a stream descriptor |
-| `Buffer` | 8 bytes | Pointer to buffer header |
+| `Buffer` | 8 bytes | Opaque `(generation:u32 << 32) \| descriptor_index:u32` handle |
 | `Packed` | 8 bytes | Metadata-only nominal type, accessed via pointer |
 | `Union` | 8 bytes | Boxed runtime-tagged payload (same storage as Mixed) |
 | `TaggedScalar` | 16 bytes | 8-byte payload + 8-byte runtime tag (tagged null representation) |
@@ -170,6 +174,29 @@ a pointer to a boxed Mixed cell.
 ### Pointer values
 
 Pointers are stored as raw 64-bit addresses. An opaque pointer and a typed `ptr<T>` value have the same runtime representation; the type tag only exists in the checker. Null pointers use address `0x0`, and dereference helpers explicitly trap on null via `__rt_ptr_check_nonnull`.
+
+### Buffer handles, descriptors, and payloads
+
+A `buffer<T>` local stores an opaque 64-bit handle rather than a payload or header pointer:
+
+```
+Bits 63..32  generation (non-zero u32)
+Bits 31..0   descriptor index (1..=4096)
+```
+
+The static `_buffer_registry` contains a reserved descriptor at index zero plus 4096 usable 48-byte descriptors:
+
+```
+Offset  Size  Field
+  0      8    payload pointer
+  8      8    logical element count
+ 16      8    element stride
+ 24      8    generation slot (low u32 used)
+ 32      8    active marker
+ 40      8    free-list successor index
+```
+
+`__rt_buffer_resolve` validates the handle index, non-zero generation, active marker, and exact generation match before length, read, write, or free paths use descriptor metadata. `buffer_new<T>()` allocates exactly `length * stride` payload bytes from the compiler-managed heap and zeroes only that payload. `buffer_free()` marks the descriptor inactive before releasing the detached payload. Reusable descriptors enter the `_buffer_registry_free` list and receive a new generation for their next lifetime, which keeps stale aliases invalid after slot or heap reuse. A descriptor whose u32 generation reaches its maximum is retired instead of wrapping to zero.
 
 ### Fiber stacks and scheduler state
 
@@ -525,7 +552,7 @@ The runtime data layer is split into fixed shared data, user-program data, and d
 - `_b64_decode_tbl` — 256-byte Base64 decoding lookup table
 - `_spl_autoload_exts_default`, `_spl_autoload_exts_ptr`, `_spl_autoload_exts_len` — mutable SPL autoload extension state
 - `_heap_err_msg`, `_arr_cap_err_msg`, `_ptr_null_err_msg` — fatal runtime error strings
-- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
+- `_buffer_bounds_msg`, `_buffer_uaf_msg`, `_buffer_size_msg`, `_match_unhandled_msg`, `_static_prop_private_access_msg`, `_instanceof_target_type_msg`, `_iterable_unsupported_kind_msg` — fatal runtime error strings for buffers, `match`, late-bound private static-property access, dynamic `instanceof` target validation, and iterable dispatch
 - `_fiber_msg_*` — Fiber state-error message strings used when constructing `FiberError`
 - `_rt_diag_suppression`, `_diag_fopen_failed_msg`, `_diag_file_get_contents_failed_msg`, `_diag_define_already_defined_msg` — runtime warning suppression depth and warning strings used by `@`
 - `_resource_id_prefix` — prefix used by resource display helpers
@@ -619,6 +646,7 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | Eval bridge hook slots | `_elephc_eval_ob_handler_fn`, `_elephc_eval_dynamic_object_destruct_fn` = 8 bytes each | Late-bound magician callbacks for eval-registered output handlers and eval dynamic-object destructors |
 | Heap | 8MB (configurable) | Fatal error: "heap memory exhausted" |
 | Heap metadata | `_heap_off`, `_heap_free_list`, `_heap_small_bins`, `_heap_debug_enabled`, `_gc_*` flags/counters = 104 bytes total | Fixed-size bookkeeping, not user-visible |
+| Buffer descriptors | `_buffer_registry` = 196656 bytes (4097 descriptors × 48 bytes), `_buffer_registry_free` = 8 bytes, `_buffer_registry_next` = 8 bytes | Up to 4096 live buffers; freed descriptors are recycled with a new generation, while exhaustion aborts with `Fatal error: invalid buffer size` |
 | Exception state | `_exc_handler_top`, `_exc_call_frame_top`, `_exc_value` = 24 bytes total | Fixed-size setjmp/longjmp handler and thrown-value bookkeeping |
 | Fiber scheduler state | `_fiber_current`, `_fiber_main_saved_sp`, `_fiber_main_saved_exc`, `_fiber_main_saved_call_frame` = 32 bytes total | Fixed-size current-fiber and main-frame resume bookkeeping |
 | Runtime diagnostics | `_rt_diag_suppression` = 8 bytes total | Fixed-size warning-suppression depth used by `@` and exception unwinding |

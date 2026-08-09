@@ -94,6 +94,37 @@ pub(super) fn compute_signature(flag: u32, key: Option<&[u8]>, data: &[u8]) -> O
     }
 }
 
+/// Verifies a native PHAR hash trailer before exposing any parsed payload.
+///
+/// OpenSSL trailers cannot be cryptographically verified without the archive's
+/// external public key, so this parser validates their length framing and leaves
+/// public-key verification to the signature API. An unknown flag before a trailing
+/// `GBMB` is treated as ordinary unsigned archive data because those bytes may occur
+/// naturally at the end of a stub or payload.
+pub(super) fn verify_native_phar_signature(data: &[u8]) -> Option<()> {
+    if !data.ends_with(b"GBMB") {
+        return Some(());
+    }
+
+    let flags = le32(data, data.len().checked_sub(8)?)?;
+    if flags == PHAR_OPENSSL_SIGNATURE_TYPE {
+        let signature_len = le32(data, data.len().checked_sub(12)?)? as usize;
+        let trailer_len = signature_len.checked_add(12)?;
+        let signed_len = data.len().checked_sub(trailer_len)?;
+        data.get(signed_len..signed_len.checked_add(signature_len)?)?;
+        return Some(());
+    }
+
+    let Some(digest_len) = signature_digest_len(flags) else {
+        return Some(());
+    };
+    let trailer_len = digest_len.checked_add(8)?;
+    let signed_len = data.len().checked_sub(trailer_len)?;
+    let expected = data.get(signed_len..signed_len.checked_add(digest_len)?)?;
+    let actual = compute_signature(flags, None, data.get(..signed_len)?)?;
+    (actual.as_slice() == expected).then_some(())
+}
+
 /// Builds the `.phar/signature.bin` payload for a tar/zip phar:
 /// `LE32(sig_flag) ++ LE32(sig_len) ++ signature`.
 pub(super) fn signature_bin_payload(flag: u32, sig: &[u8]) -> Option<Vec<u8>> {
@@ -178,7 +209,8 @@ pub(super) fn sign_archive_hash(path: &[u8], algo: u32) -> Option<()> {
 pub(super) fn parse_signature_bin(payload: &[u8]) -> Option<(u32, Vec<u8>)> {
     let flag = le32(payload, 0)?;
     let len = le32(payload, 4)? as usize;
-    Some((flag, payload.get(8..8usize.checked_add(len)?)?.to_vec()))
+    let end = 8usize.checked_add(len)?;
+    (end == payload.len()).then_some((flag, payload.get(8..end)?.to_vec()))
 }
 
 /// Returns the raw `.phar/signature.bin` payload from a tar phar, if present.
@@ -245,6 +277,133 @@ pub(super) fn read_zip_signature(data: &[u8]) -> Option<Vec<u8>> {
             .checked_add(comment_len)?;
     }
     None
+}
+
+/// Verifies a hash-signed tar PHAR before any entry is exposed.
+///
+/// Tar PHAR signatures cover every byte before the signature entry's header.
+/// Hash signatures are authenticated here before entries are exposed. OpenSSL
+/// signatures retain PHP's metadata-readable contract: their public key is
+/// out-of-band, so this parser validates framing without claiming authentication.
+pub(super) fn verify_tar_phar_signature(data: &[u8]) -> Option<()> {
+    let mut p = 0usize;
+    while p.checked_add(512)? <= data.len() {
+        let header = &data[p..p + 512];
+        if header.iter().all(|&byte| byte == 0) {
+            return Some(());
+        }
+        let size = parse_tar_octal(&header[124..136])?;
+        let payload_start = p.checked_add(512)?;
+        if (header[156] == 0 || header[156] == b'0')
+            && tar_entry_name(header)? == PHAR_SIGNATURE_ENTRY
+        {
+            let payload = data.get(payload_start..payload_start.checked_add(size)?)?;
+            let (flag, expected) = parse_signature_bin(payload)?;
+            if flag == PHAR_OPENSSL_SIGNATURE_TYPE {
+                return Some(());
+            }
+            signature_digest_len(flag)?;
+            let actual = compute_signature(flag, None, data.get(..p)?)?;
+            return (actual == expected).then_some(());
+        }
+        p = payload_start.checked_add(round_up_to_512(size)?)?;
+    }
+    Some(())
+}
+
+/// Verifies a hash-signed ZIP PHAR before any entry is exposed.
+///
+/// The digest covers local records, central-directory records, and the ZIP
+/// comment while excluding the reserved signature entry and EOCD record.
+/// OpenSSL records remain framing-validated because their public key is external.
+pub(super) fn verify_zip_phar_signature(data: &[u8]) -> Option<()> {
+    let eocd = find_zip_eocd(data)?;
+    let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
+    let comment_len = le16(data, eocd.checked_add(20)?)? as usize;
+    let comment_start = eocd.checked_add(22)?;
+    let comment = data.get(comment_start..comment_start.checked_add(comment_len)?)?;
+    let mut p = central_dir_offset;
+    let mut signature: Option<(usize, usize, usize, u32, Vec<u8>)> = None;
+    for _ in 0..entry_count {
+        if le32(data, p)? != 0x0201_4b50 {
+            return None;
+        }
+        let method = le16(data, p + 10)?;
+        let mut compressed_size = le32(data, p + 20)? as usize;
+        let mut uncompressed_size = le32(data, p + 24)? as usize;
+        let name_len = le16(data, p + 28)? as usize;
+        let extra_len = le16(data, p + 30)? as usize;
+        let entry_comment_len = le16(data, p + 32)? as usize;
+        let mut local_offset = le32(data, p + 42)? as usize;
+        let name_start = p.checked_add(46)?;
+        let name = data.get(name_start..name_start.checked_add(name_len)?)?;
+        apply_zip64_central_extra(
+            data,
+            name_start.checked_add(name_len)?,
+            extra_len,
+            &mut uncompressed_size,
+            &mut compressed_size,
+            &mut local_offset,
+        )?;
+        let central_end = name_start
+            .checked_add(name_len)?
+            .checked_add(extra_len)?
+            .checked_add(entry_comment_len)?;
+        if name == PHAR_SIGNATURE_ENTRY {
+            if method != ZIP_METHOD_STORE || signature.is_some() {
+                return None;
+            }
+            let payload = decode_zip_local_entry(
+                data,
+                local_offset,
+                method,
+                compressed_size,
+                uncompressed_size,
+                false,
+                0,
+            )?;
+            let (flag, expected) = parse_signature_bin(&payload)?;
+            if flag != PHAR_OPENSSL_SIGNATURE_TYPE {
+                signature_digest_len(flag)?;
+            }
+            let local_name_len = le16(data, local_offset.checked_add(26)?)? as usize;
+            let local_extra_len = le16(data, local_offset.checked_add(28)?)? as usize;
+            let local_end = local_offset
+                .checked_add(30)?
+                .checked_add(local_name_len)?
+                .checked_add(local_extra_len)?
+                .checked_add(compressed_size)?;
+            signature = Some((local_offset, local_end, p, flag, expected));
+        }
+        p = central_end;
+    }
+    let Some((local_start, local_end, central_start, flag, expected)) = signature else {
+        return Some(());
+    };
+    if flag == PHAR_OPENSSL_SIGNATURE_TYPE {
+        return Some(());
+    }
+    let central_end = p;
+    if local_end > central_dir_offset || central_end > eocd {
+        return None;
+    }
+    let mut signed = Vec::with_capacity(data.len().saturating_sub(local_end - local_start));
+    signed.extend_from_slice(data.get(..local_start)?);
+    signed.extend_from_slice(data.get(local_end..central_dir_offset)?);
+    signed.extend_from_slice(data.get(central_dir_offset..central_start)?);
+    let signature_central_end = {
+        let name_len = le16(data, central_start.checked_add(28)?)? as usize;
+        let extra_len = le16(data, central_start.checked_add(30)?)? as usize;
+        let comment_len = le16(data, central_start.checked_add(32)?)? as usize;
+        central_start
+            .checked_add(46)?
+            .checked_add(name_len)?
+            .checked_add(extra_len)?
+            .checked_add(comment_len)?
+    };
+    signed.extend_from_slice(data.get(signature_central_end..central_end)?);
+    signed.extend_from_slice(comment);
+    (compute_signature(flag, None, &signed)? == expected).then_some(())
 }
 
 /// Reads the signature of the phar at `path`, returning the flag and the raw

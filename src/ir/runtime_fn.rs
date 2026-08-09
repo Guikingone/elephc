@@ -126,6 +126,7 @@ pub enum RuntimeFnId {
     EnumExists,
     FunctionExists,
     GetClass,
+    GetObjectVars,
     GetDeclaredClasses,
     GetDeclaredInterfaces,
     GetDeclaredTraits,
@@ -928,6 +929,12 @@ impl RuntimeFnId {
             RuntimeFnId::ElephcObjectPropValue => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits() | crate::ir::Effects::ALLOC_HEAP.bits(),
             ),
+            RuntimeFnId::GetObjectVars => crate::ir::Effects::from_bits_retain(
+                crate::ir::Effects::READS_HEAP.bits()
+                    | crate::ir::Effects::ALLOC_HEAP.bits()
+                    | crate::ir::Effects::REFCOUNT_OP.bits()
+                    | crate::ir::Effects::MAY_FATAL.bits(),
+            ),
             RuntimeFnId::SplObjectHash => crate::ir::Effects::from_bits_retain(
                 crate::ir::Effects::READS_HEAP.bits()
                     | crate::ir::Effects::ALLOC_CONCAT.bits(),
@@ -1266,6 +1273,7 @@ impl RuntimeFnId {
                 // its release, leaking one block per call — measured unbounded, 10 calls left
                 // 10 live blocks, so a `--web` worker calling it per request grows forever.
                 | RuntimeFnId::Getcwd
+                | RuntimeFnId::GetObjectVars
                 | RuntimeFnId::IteratorToArray
                 // `json_encode()` builds its text in fresh storage and persists it; the result
                 // is new bytes, never a slice of the encoded value. Same leak shape as the
@@ -1440,6 +1448,7 @@ impl RuntimeFnId {
             RuntimeFnId::EnumExists => "enum_exists",
             RuntimeFnId::FunctionExists => "function_exists",
             RuntimeFnId::GetClass => "get_class",
+            RuntimeFnId::GetObjectVars => "get_object_vars",
             RuntimeFnId::GetDeclaredClasses => "get_declared_classes",
             RuntimeFnId::GetDeclaredInterfaces => "get_declared_interfaces",
             RuntimeFnId::GetDeclaredTraits => "get_declared_traits",

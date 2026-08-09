@@ -100,6 +100,16 @@ the phase finishes, elephc keeps its action-oriented label with a checkmark and
 elapsed time, then starts the next phase on a new line. Non-interactive output
 and `--quiet` keep the compact plain output without progress lines.
 
+### `--quiet` / `-q`
+
+Disables live and completed progress lines and forces unstyled plain output. It
+does not suppress compiler errors, warnings, or the final success line. Timing
+tables requested with `--timings` still print, using ASCII borders.
+
+```bash
+elephc --quiet hello.php
+```
+
 ### `--timings`
 
 Prints a bordered timing table to stderr in addition to the interactive
@@ -125,6 +135,15 @@ Compiler timings
 ├────────────────────────────────┼───────────┼────────┤
 │ Total                          │   11.08 s │ 100.0% │
 └────────────────────────────────┴───────────┴────────┘
+```
+
+### `--mascotte`
+
+Prints elephc's built-in ASCII mascot and one randomly selected quote before
+normal help, diagnostic, or compilation output.
+
+```bash
+elephc --mascotte hello.php
 ```
 
 ## Runtime diagnostics

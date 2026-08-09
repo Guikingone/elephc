@@ -20,8 +20,9 @@
 //!   backwards from its tail. That makes it stable — PHP 8 sorts are stable, and ties are
 //!   observable for keys such as `'01'` and `' 1'`, which PHP compares equal — and linear
 //!   on input that is already ordered.
-//! - Ordering is delegated to `__rt_php_compare`, so keys and values follow PHP 8's own
-//!   comparison table (`10 < 'Banana'`, `'0.5' < 2`, …) instead of a byte-wise order.
+//! - Key ordering uses `__rt_key_compare_regular`, which preserves exact decimal-integer
+//!   ordering beyond binary64 precision and rejects libc-only numeric spellings. Value
+//!   ordering remains delegated to `__rt_php_compare` and PHP 8's general comparison table.
 //! - Callers must split shared tables with `__rt_hash_ensure_unique` first: these helpers
 //!   mutate the table they are handed.
 
@@ -50,6 +51,7 @@ const MODE_VALUE_DESCENDING: i64 = 3;
 /// pointer in the first integer argument register and returns nothing; the table is
 /// mutated in place by relinking its insertion-order chain.
 pub fn emit_hash_sort(emitter: &mut Emitter) {
+    super::hash_key_compare::emit_hash_key_compare(emitter);
     if emitter.target.arch == Arch::X86_64 {
         emit_hash_sort_entry_points_x86_64(emitter);
         emit_hash_sort_links_x86_64(emitter);
@@ -173,7 +175,17 @@ fn emit_hash_sort_links_aarch64(emitter: &mut Emitter) {
     emitter.instruction("ldr x3, [sp, #64]");                                   // pass the placed entry's tag as the right operand
     emitter.instruction("ldr x4, [sp, #72]");                                   // pass the placed entry's low payload word
     emitter.instruction("ldr x5, [sp, #80]");                                   // pass the placed entry's high payload word
-    emitter.instruction("bl __rt_php_compare");                                 // apply PHP 8's ordering table to scanned versus placed
+    emitter.instruction("ldr x9, [sp, #16]");                                   // reload the mode to select key-specific or general comparison
+    emitter.instruction("tbnz x9, #1, __rt_hsort_compare_value");               // value sorts keep the general PHP comparison table
+    emitter.instruction("mov x0, x1");                                          // pass the scanned normalized key low word
+    emitter.instruction("mov x1, x2");                                          // pass the scanned normalized key length or integer sentinel
+    emitter.instruction("mov x2, x4");                                          // pass the placed normalized key low word
+    emitter.instruction("mov x3, x5");                                          // pass the placed normalized key length or integer sentinel
+    emitter.instruction("bl __rt_key_compare_regular");                         // compare keys with exact PHP SORT_REGULAR semantics
+    emitter.instruction("b __rt_hsort_compare_done");                           // skip the general value comparator
+    emitter.label("__rt_hsort_compare_value");
+    emitter.instruction("bl __rt_php_compare");                                 // apply PHP 8's general ordering table to sorted values
+    emitter.label("__rt_hsort_compare_done");
     emitter.instruction("ldr x9, [sp, #16]");                                   // reload the mode word to pick the direction test
     emitter.instruction("tbnz x9, #0, __rt_hsort_scan_desc");                   // descending sorts invert the stop condition
     emitter.instruction("cmp x0, #0");                                          // does the scanned entry already sort at or before the placed one?
@@ -268,7 +280,7 @@ fn emit_hash_sort_triple_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmn x2, #1");                                          // is this a normalized integer key?
     emitter.instruction("b.ne __rt_hsort_triple_key_str");                      // string keys keep their pointer and length
     emitter.instruction("mov x0, #0");                                          // runtime tag 0 = int
-    emitter.instruction("mov x2, #0");                                          // integer operands carry no high payload word
+    emitter.instruction("mov x2, #-1");                                         // integer keys carry the comparator's all-ones sentinel
     emitter.instruction("ret");                                                 // return the integer key triple
 
     emitter.label("__rt_hsort_triple_key_str");
@@ -361,12 +373,21 @@ fn emit_hash_sort_links_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdi, r11");                                        // pass the entry address to the operand reader
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the mode so the reader picks the key or the value
     emitter.instruction("call __rt_hash_sort_triple");                          // materialize the scanned entry's comparison triple
+    emitter.instruction("test QWORD PTR [rbp - 24], 2");                        // mode bit 1 selects value comparison
+    emitter.instruction("jnz __rt_hsort_compare_value");                        // value sorts keep the general PHP comparison table
+    emitter.instruction("mov rsi, rdx");                                        // pass the scanned normalized key length or integer sentinel
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 80]");                       // pass the placed normalized key low word
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 88]");                       // pass the placed normalized key length or integer sentinel
+    emitter.instruction("call __rt_key_compare_regular");                       // compare keys with exact PHP SORT_REGULAR semantics
+    emitter.instruction("jmp __rt_hsort_compare_done");                         // skip the general value comparator
+    emitter.label("__rt_hsort_compare_value");
     emitter.instruction("mov rsi, rdi");                                        // move the scanned low payload word into the left-operand slot
     emitter.instruction("mov rdi, rax");                                        // move the scanned runtime tag into the left-operand slot
     emitter.instruction("mov rcx, QWORD PTR [rbp - 72]");                       // pass the placed entry's tag as the right operand
     emitter.instruction("mov r8, QWORD PTR [rbp - 80]");                        // pass the placed entry's low payload word
     emitter.instruction("mov r9, QWORD PTR [rbp - 88]");                        // pass the placed entry's high payload word
     emitter.instruction("call __rt_php_compare");                               // apply PHP 8's ordering table to scanned versus placed
+    emitter.label("__rt_hsort_compare_done");
     emitter.instruction("test QWORD PTR [rbp - 24], 1");                        // reload the mode word to pick the direction test
     emitter.instruction("jnz __rt_hsort_scan_desc");                            // descending sorts invert the stop condition
     emitter.instruction("cmp rax, 0");                                          // does the scanned entry already sort at or before the placed one?
@@ -466,7 +487,7 @@ fn emit_hash_sort_triple_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_hsort_triple_key_str");                       // string keys keep their pointer and length
     emitter.instruction("xor eax, eax");                                        // runtime tag 0 = int
     emitter.instruction("mov rdi, r10");                                        // publish the integer key payload as the low word
-    emitter.instruction("xor edx, edx");                                        // integer operands carry no high payload word
+    emitter.instruction("mov rdx, -1");                                         // integer keys carry the comparator's all-ones sentinel
     emitter.instruction("ret");                                                 // return the integer key triple
 
     emitter.label("__rt_hsort_triple_key_str");

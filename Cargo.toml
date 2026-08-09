@@ -38,6 +38,7 @@ path = "tools/gen_builtins.rs"
 
 [dependencies]
 inventory = "0.3"
+libc = "0.2"
 # Grows the stack on demand inside the recursive-descent parser so deeply
 # nested expressions never overflow small (2 MiB test-thread) stacks.
 stacker = "0.1"

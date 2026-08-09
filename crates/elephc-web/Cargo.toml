@@ -27,3 +27,5 @@ libc = "0.2"
 # flate2: optional gzip response compression (--gzip). Already in the workspace
 # dependency tree, so this adds no new external crate.
 flate2 = "1"
+# memchr provides a two-way byte-search primitive for adversarial multipart bodies.
+memchr = "2"

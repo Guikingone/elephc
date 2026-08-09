@@ -2,7 +2,7 @@
 title: "stream_get_line() — internals"
 description: "Compiler internals for stream_get_line(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 229
+  order: 228
 ---
 
 ## `stream_get_line()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/stream_get_line.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/stream_get_line.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -224,7 +224,8 @@ pub(super) fn emit_resume_x86_64(emitter: &mut Emitter) {
 
 /// Emits `__rt_fiber_suspend` which yields control from a running Fiber back to its caller.
 /// Takes rdi=boxed Mixed value to yield. Requires the caller is executing inside a Fiber
-/// (checks `_fiber_current` is non-NULL); raises FiberError via `__rt_fiber_throw_state_error` otherwise.
+/// (checks `_fiber_current` is non-NULL) and no `unserialize()` parser is active;
+/// raises FiberError via `__rt_fiber_throw_state_error` before mutation otherwise.
 /// On return, `_fiber_current` is the resuming Fiber and rax holds the value it delivered.
 /// If `Fiber->throw()` scheduled a pending exception, re-raises it via `__rt_throw_current`.
 pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
@@ -244,6 +245,12 @@ pub(super) fn emit_suspend_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 33");                                         // rsi = error message length in bytes
     emitter.instruction("call __rt_fiber_throw_state_error");                   // raise FiberError; this call does not return
     emitter.label("__rt_fiber_suspend_state_ok");
+    emitter.instruction("cmp QWORD PTR [rip + _unser_active], 0");              // is global unserialize parser state currently owned?
+    emitter.instruction("je __rt_fiber_suspend_unserialize_ok_x");              // switching is safe only when no parser context is live
+    abi::emit_symbol_address(emitter, "rdi", "_fiber_msg_suspend_unserialize"); // rdi = stable FiberError message for the forbidden switch
+    emitter.instruction("mov esi, 52");                                         // rsi = error message length in bytes
+    emitter.instruction("call __rt_fiber_throw_state_error");                   // raise before publishing a yielded value or Suspended state
+    emitter.label("__rt_fiber_suspend_unserialize_ok_x");
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], r13", FIBER_TRANSFER_VALUE_OFFSET)); // fiber->transfer_value.lo = yielded value
     emitter.instruction(&format!("mov QWORD PTR [r12 + {}], {}", FIBER_STATE_OFFSET, FIBER_STATE_SUSPENDED)); // fiber->state = Suspended
     emitter.instruction(&format!("mov rdi, QWORD PTR [r12 + {}]", FIBER_CALLER_OFFSET)); // rdi = fiber->caller

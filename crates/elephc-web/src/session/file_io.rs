@@ -594,7 +594,9 @@ pub unsafe extern "C" fn elephc_web_session_should_gc() -> i64 {
         return 0;
     }
     let mut buf = [0u8; 4];
-    read_random(&mut buf);
+    if !read_random(&mut buf) {
+        return 0;
+    }
     let roll = (u32::from_le_bytes(buf) % divisor as u32) as i64;
     if roll < probability {
         1
@@ -670,7 +672,7 @@ mod tests {
     /// Generates a test-only random suffix without introducing shared state.
     fn read_random_u64() -> u64 {
         let mut bytes = [0u8; 8];
-        read_random(&mut bytes);
+        assert!(read_random(&mut bytes), "test entropy source must be available");
         u64::from_le_bytes(bytes)
     }
 

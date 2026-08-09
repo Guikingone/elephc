@@ -89,6 +89,25 @@ pub(in crate::codegen) fn runtime_referenced_class_names(module: &Module) -> Has
     names
 }
 
+/// Returns whether emitted EIR can deserialize a runtime-selected declared class.
+///
+/// `unserialize()` resolves serialized class names and `allowed_classes` object
+/// entries through dense class-id metadata, so its indirect runtime dispatch
+/// requires every declared class to remain represented in those tables.
+pub(in crate::codegen) fn module_uses_unserialize(module: &Module) -> bool {
+    module
+        .functions
+        .iter()
+        .chain(module.class_methods.iter())
+        .chain(module.closures.iter())
+        .chain(module.fiber_wrappers.iter())
+        .chain(module.callback_wrappers.iter())
+        .chain(module.extern_callback_trampolines.iter())
+        .chain(module.runtime_callable_invokers.iter())
+        .flat_map(|function| function.instructions.iter())
+        .any(|inst| typed_builtin_target(inst) == Some(crate::ir::RuntimeFnId::Unserialize))
+}
+
 // The eager enum-singleton reachability scan that used to live here is gone.
 // It existed only to keep `main`'s prologue from allocating a case object (and
 // burning an object handle) for an enum user code never touched. Cases are now
