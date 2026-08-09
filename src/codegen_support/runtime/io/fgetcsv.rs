@@ -240,7 +240,10 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     // -- prologue: 96-byte frame with rbp --
     emitter.instruction("push rbp");                                            // preserve caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish frame base
-    emitter.instruction("sub rsp, 96");                                         // reserve 96 bytes for parser state
+    // 104, not 96: the five callee-saved pushes below move rsp by an odd multiple of 8, so
+    // a 96-byte frame leaves it at 8 mod 16 and every SysV call made from here — anything
+    // touching SSE — faults. Eight more bytes restore the 16-byte alignment the ABI wants.
+    emitter.instruction("sub rsp, 104");                                        // reserve parser state, keeping rsp 16-byte aligned after the pushes
     emitter.instruction("push rbx");                                            // save rbx (callee-saved, used for array_ptr)
     emitter.instruction("push r12");                                            // save r12 (scan_ptr)
     emitter.instruction("push r13");                                            // save r13 (end_ptr)
