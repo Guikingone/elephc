@@ -443,13 +443,13 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_sfau_skip_write_x86");
 
     emitter.instruction("mov eax, 1");                                          // success
-    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 
     emitter.label("__rt_sfau_node_mode_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // the created instance, for the caller's chain node
-    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // non-zero instance doubles as the success flag
 
@@ -482,7 +482,7 @@ fn emit_stream_filter_attach_user_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_decref_any");                                // release params before reporting attach failure
     emitter.label("__rt_sfau_fail_x86");
     emitter.instruction("xor eax, eax");                                        // failure
-    emitter.instruction("add rsp, 48");                                         // release the helper frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return to the caller
 }

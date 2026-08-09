@@ -287,7 +287,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length argument
     abi::emit_load_symbol_to_reg(emitter, "r9", "_zlib_fwrite_fn", 0);          // load the deflate fwrite helper pointer
     emitter.instruction("call r9");                                             // deflate-compress the payload, rax = bytes consumed
-    emitter.instruction("add rsp, 32");                                         // release the frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
@@ -298,7 +298,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length argument
     abi::emit_load_symbol_to_reg(emitter, "r9", "_bz2_fwrite_fn", 0);           // load the bzip2 compress fwrite helper pointer
     emitter.instruction("call r9");                                             // bzip2-compress the payload, rax = bytes consumed
-    emitter.instruction("add rsp, 32");                                         // release the frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
@@ -309,7 +309,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // payload length argument
     abi::emit_load_symbol_to_reg(emitter, "r9", "_iconv_fwrite_fn", 0);         // load the iconv write helper pointer
     emitter.instruction("call r9");                                             // transcode the payload, rax = bytes consumed
-    emitter.instruction("add rsp, 32");                                         // release the frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the helper's bytes-consumed count
 
@@ -339,7 +339,7 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fwrite_syscall_x86");
     emitter.instruction("call write");                                          // write the payload through libc write()
     emitter.label("__rt_fwrite_return_x86");
-    emitter.instruction("add rsp, 32");                                         // release the frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the byte count from write
 }
