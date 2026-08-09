@@ -5397,29 +5397,56 @@ flock($h, LOCK_SH, $would);
     );
 }
 
-/// Pins that a `php://filter` URL works when it is built at run time, not only written
-/// as a literal.
+/// Pins that `fopen()` honours a wrapper scheme in a path built at RUN TIME, not only in a
+/// literal.
 ///
-/// IGNORED because `php://filter` is recognised only at compile time: `parse_php_filter_url`
-/// runs over a literal `fopen` path and stamps the filter, while a runtime-built string
-/// falls through to the generic wrapper open, which does not know the scheme and returns
-/// false. The literal form already handles any resource — a plain path included — so this
-/// is about WHERE the URL comes from, not what it points at.
+/// IGNORED because the wrapper dispatch is a compile-time chain over literal paths:
+/// `lower_fopen` matches `php://`, `data://`, `ftp://`, `phar://` and `compress.*://` on the
+/// constant-folded filename, while the dynamic path recognises `http://` alone and hands
+/// everything else to the generic file opener. Every other scheme therefore opens as a file
+/// name, fails to find it, and answers `false`.
 ///
-/// The dynamic form is the common one in real code: the resource is usually a variable.
+/// Measured against php 8.5.6, which opens all of these — nine of the ten probes below fail
+/// under elephc today and only the plain file path works:
+///
+/// | path | php 8.5.6 | elephc |
+/// |---|---|---|
+/// | `php://memory`, `php://temp` | opens | `false` |
+/// | `php://stdout`, `php://stderr` | opens | `false` |
+/// | `php://input`, `php://output`, `php://fd/1` | opens | `false` |
+/// | `php://filter/read=…/resource=…` | opens | `false` |
+/// | `data://text/plain,hi` | opens | `false` |
+/// | a plain file name | opens | opens |
+///
+/// This is the common shape in real code — `function readIt(string $path)` receives its path
+/// as a variable — so the literal-only dispatch is invisible until a caller passes one in.
 #[test]
-#[ignore = "php://filter is parsed only for literal fopen paths; a runtime-built URL returns false"]
-fn test_php_filter_url_built_at_run_time_opens() {
+#[ignore = "the wrapper scheme dispatch runs at compile time over literal paths; a runtime-built path only recognises http://"]
+fn test_fopen_honours_a_wrapper_scheme_built_at_run_time() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
+function probe(string $label, string $path, string $mode): void {
+    $h = @fopen($path, $mode);
+    echo $label, "=", var_export($h !== false, true), " ";
+    if ($h !== false) { fclose($h); }
+}
+$p = "php://";
+probe("memory", $p . "memory", "r+");
+probe("temp", $p . "temp", "r+");
+probe("stdout", $p . "stdout", "w");
+probe("fd1", $p . "fd/1", "w");
 file_put_contents("pf.txt", "hello");
-$url = "php://filter/read=string.toupper/resource=pf.txt";
-$f = fopen($url, "r");
-echo var_export($f !== false, true), "|";
-if ($f !== false) { echo stream_get_contents($f); fclose($f); }
+probe("data", "data://text/plain," . "hi", "r");
+$url = "php://filter/read=string.toupper/resource=" . "pf.txt";
+$f = @fopen($url, "r");
+echo "filter=", var_export($f !== false, true);
+if ($f !== false) { echo ":", stream_get_contents($f); fclose($f); }
 "#,
     );
-    assert_eq!(out, "true|HELLO");
+    assert_eq!(
+        out,
+        "memory=true temp=true stdout=true fd1=true data=true filter=true:HELLO"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
