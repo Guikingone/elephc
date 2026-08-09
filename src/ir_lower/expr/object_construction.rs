@@ -146,7 +146,16 @@ pub(super) fn lower_clone(ctx: &mut LoweringContext<'_, '_>, inner: &Expr, expr:
         Some(expr.span),
     );
     if class_method_signature(ctx, &class_name, &php_symbol_key("__clone")).is_some() {
+        // The generic method-call path releases an owning temporary receiver after the call.
+        // Keep an independent owner for the clone expression result while `__clone()` borrows
+        // and mutates the same object.
+        let preserved = crate::ir_lower::ownership::acquire_if_refcounted(
+            ctx,
+            cloned,
+            Some(expr.span),
+        );
         lower_method_call_with_receiver(ctx, cloned, "__clone", &[], Op::MethodCall, expr);
+        return preserved;
     }
     cloned
 }

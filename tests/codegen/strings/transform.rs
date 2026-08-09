@@ -791,3 +791,20 @@ fn test_random_bytes_compatibility_helper() {
     let out = compile_and_run(r#"<?php echo strlen(random_bytes(1)), ':', strlen(random_bytes(9));"#);
     assert_eq!(out, "1:9");
 }
+
+/// Randomizer's PHP 8.3 alphabet sampler returns the requested byte count and rejects invalid
+/// empty-alphabet and non-positive-length inputs with ValueError.
+#[test]
+fn test_randomizer_get_bytes_from_string_compatibility_class() {
+    let out = compile_and_run(
+        r#"<?php
+$randomizer = new Random\Randomizer();
+$sample = $randomizer->getBytesFromString('x', 4);
+echo $sample, ':', strlen($sample), ':';
+try { $randomizer->getBytesFromString('', 1); } catch (ValueError $error) { echo 'empty'; }
+echo ':';
+try { $randomizer->getBytesFromString('x', 0); } catch (ValueError $error) { echo 'length'; }
+"#,
+    );
+    assert_eq!(out, "xxxx:4:empty:length");
+}

@@ -341,9 +341,16 @@ pub(super) fn require_array_combine_result_type(value_elem_ty: &PhpType, result_
 }
 
 /// Verifies `array_flip()` produces a hash with normalized keys and integer source indexes.
+/// Empty `Void`/`Never` sources accept a widened key type because no key payload can be emitted.
 pub(super) fn require_array_flip_result_type(value_elem_ty: &PhpType, result_ty: &PhpType) -> Result<()> {
     let expected_key_ty = array_key_type_from_value_type(value_elem_ty.clone()).codegen_repr();
     match result_ty {
+        PhpType::AssocArray { value, .. }
+            if matches!(value_elem_ty.codegen_repr(), PhpType::Void | PhpType::Never)
+                && value.codegen_repr() == PhpType::Int =>
+        {
+            Ok(())
+        }
         PhpType::AssocArray { key, value }
             if key.codegen_repr() == expected_key_ty && value.codegen_repr() == PhpType::Int =>
         {
@@ -386,4 +393,3 @@ pub(super) fn require_array_fill_assoc_result_type(result_ty: &PhpType) -> Resul
         ))),
     }
 }
-

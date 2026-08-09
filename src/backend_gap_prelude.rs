@@ -32,14 +32,20 @@ pub(crate) const RANDOM_BYTES_NAME: &str = "__elephc_random_bytes";
 /// Reserved helper used for one-argument `sort()` calls on gradual indexed arrays.
 pub(crate) const SORT_MIXED_NAME: &str = "__elephc_sort_mixed";
 
-/// Reserved helper used for two-string-list `array_diff()` calls.
+/// Reserved helper used for two-argument `array_diff()` calls.
 pub(crate) const ARRAY_DIFF_STRING_NAME: &str = "__elephc_array_diff_string";
+
+/// Reserved helper used for two-argument `array_intersect()` calls.
+pub(crate) const ARRAY_INTERSECT_NAME: &str = "__elephc_array_intersect";
 
 /// Reserved helper used for one-argument `array_reverse()` calls on string lists.
 pub(crate) const ARRAY_REVERSE_STRING_NAME: &str = "__elephc_array_reverse_string";
 
 /// Reserved helper used for `array_search()` calls on gradual indexed arrays.
 pub(crate) const ARRAY_SEARCH_MIXED_NAME: &str = "__elephc_array_search_mixed";
+
+/// Canonical name of PHP's randomizer class supplied by the compatibility prelude.
+pub(crate) const RANDOMIZER_CLASS_NAME: &str = "Random\\Randomizer";
 
 /// Byte-oriented dynamic-programming implementation matching PHP's default edit costs.
 const LEVENSHTEIN_TWO_ARG_SRC: &str = r#"<?php
@@ -207,6 +213,31 @@ function __elephc_random_bytes(int $length): string {
 }
 "#;
 
+/// PHP-level implementation of the Randomizer surface currently needed by Symfony.
+const RANDOMIZER_SRC: &str = r#"<?php
+namespace Random;
+final class Randomizer {
+    public function __construct(mixed $engine = null) {}
+
+    public function getBytesFromString(string $string, int $length): string {
+        if ($string === '') {
+            throw new \ValueError('Random\\Randomizer::getBytesFromString(): Argument #1 ($string) must not be empty');
+        }
+        if ($length < 1) {
+            throw new \ValueError('Random\\Randomizer::getBytesFromString(): Argument #2 ($length) must be greater than 0');
+        }
+        $result = '';
+        $maximum = strlen($string) - 1;
+        $position = 0;
+        while ($position < $length) {
+            $result .= $string[random_int(0, (int) $maximum)];
+            $position++;
+        }
+        return $result;
+    }
+}
+"#;
+
 /// Stable in-place ascending sort using PHP's ordinary comparison semantics.
 const SORT_MIXED_SRC: &str = r#"<?php
 function __elephc_sort_mixed(array &$values): bool {
@@ -229,20 +260,38 @@ function __elephc_sort_mixed(array &$values): bool {
 }
 "#;
 
-/// Two-list string difference that preserves the first list's keys and order.
+/// Two-array difference that compares values by PHP string cast and preserves left keys.
 const ARRAY_DIFF_STRING_SRC: &str = r#"<?php
 function __elephc_array_diff_string(array $left, array $right): array {
-    $result = [];
+    $result = ["__elephc_seed" => null];
+    unset($result["__elephc_seed"]);
     foreach ($left as $key => $value) {
         $found = false;
         foreach ($right as $candidate) {
-            if ($value === $candidate) {
+            if ((string) $value === (string) $candidate) {
                 $found = true;
                 break;
             }
         }
         if (!$found) {
             $result[$key] = $value;
+        }
+    }
+    return $result;
+}
+"#;
+
+/// Two-array intersection that compares values by PHP string cast and preserves left keys.
+const ARRAY_INTERSECT_SRC: &str = r#"<?php
+function __elephc_array_intersect(array $left, array $right): array {
+    $result = ["__elephc_seed" => null];
+    unset($result["__elephc_seed"]);
+    foreach ($left as $key => $value) {
+        foreach ($right as $candidate) {
+            if ((string) $value === (string) $candidate) {
+                $result[$key] = $value;
+                break;
+            }
         }
     }
     return $result;
@@ -278,6 +327,14 @@ function __elephc_array_search_mixed(mixed $needle, array $haystack, bool $stric
 pub fn inject_if_used(program: Program) -> Program {
     let usage = crate::ast_usage::collect(&program);
     let mut sources = Vec::new();
+    let inject_randomizer = usage.constructs(RANDOMIZER_CLASS_NAME)
+        && !program.iter().any(|stmt| {
+            matches!(
+                &stmt.kind,
+                crate::parser::ast::StmtKind::ClassDecl { name, .. }
+                    if php_class_name_is(name, RANDOMIZER_CLASS_NAME)
+            )
+        });
     if usage.references("levenshtein") {
         sources.push(LEVENSHTEIN_TWO_ARG_SRC);
     }
@@ -302,20 +359,39 @@ pub fn inject_if_used(program: Program) -> Program {
     if usage.references("array_diff") {
         sources.push(ARRAY_DIFF_STRING_SRC);
     }
+    if usage.references("array_intersect") {
+        sources.push(ARRAY_INTERSECT_SRC);
+    }
     if usage.references("array_reverse") {
         sources.push(ARRAY_REVERSE_STRING_SRC);
     }
     if usage.references("array_search") {
         sources.push(ARRAY_SEARCH_MIXED_SRC);
     }
-    if sources.is_empty() {
+    if sources.is_empty() && !inject_randomizer {
         return program;
     }
     let mut combined = Vec::new();
+    if inject_randomizer {
+        let tokens = crate::lexer::tokenize(RANDOMIZER_SRC)
+            .expect("Randomizer compatibility prelude must tokenize");
+        let parsed = crate::parser::parse(&tokens)
+            .expect("Randomizer compatibility prelude must parse");
+        combined.extend(
+            crate::name_resolver::resolve(parsed)
+                .expect("Randomizer compatibility prelude must name-resolve"),
+        );
+    }
     for source in sources {
         let tokens = crate::lexer::tokenize(source).expect("backend gap prelude must tokenize");
         combined.extend(crate::parser::parse(&tokens).expect("backend gap prelude must parse"));
     }
     combined.extend(program);
     combined
+}
+
+/// Compares canonical PHP class names case-insensitively and without a leading separator.
+fn php_class_name_is(candidate: &str, expected: &str) -> bool {
+    crate::names::php_symbol_key(candidate.trim_start_matches('\\'))
+        == crate::names::php_symbol_key(expected.trim_start_matches('\\'))
 }

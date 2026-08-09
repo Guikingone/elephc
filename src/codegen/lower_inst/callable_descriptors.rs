@@ -205,4 +205,3 @@ pub(super) fn emit_instance_method_first_class_callable(
     crate::codegen_support::runtime::emit_acquire_object_handle(ctx.emitter);
     Ok(true)
 }
-

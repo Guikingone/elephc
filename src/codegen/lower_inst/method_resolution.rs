@@ -172,4 +172,3 @@ pub(super) fn method_name_data<'a>(ctx: &'a FunctionContext<'_>, inst: &Instruct
         .map(String::as_str)
         .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
 }
-

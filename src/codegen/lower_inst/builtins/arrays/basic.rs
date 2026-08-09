@@ -208,19 +208,63 @@ pub(crate) fn lower_array_column(ctx: &mut FunctionContext<'_>, inst: &Instructi
 pub(crate) fn lower_array_flip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_flip", 1)?;
     let array = expect_operand(inst, 0)?;
-    if matches!(
-        ctx.value_php_type(array)?.codegen_repr(),
-        PhpType::AssocArray { .. }
-    ) {
+    let source_ty = ctx.value_php_type(array)?.codegen_repr();
+    if matches!(&source_ty, PhpType::AssocArray { .. }) {
         return lower_hash_flip(ctx, inst, array);
     }
-    let value_elem_ty = array_flip_source_element_type(ctx.value_php_type(array)?)?;
+    if matches!(&source_ty, PhpType::Array(elem) if elem.codegen_repr() == PhpType::Mixed) {
+        return lower_mixed_indexed_flip(ctx, inst, array);
+    }
+    let value_elem_ty = array_flip_source_element_type(source_ty)?;
     require_array_flip_result_type(&value_elem_ty, &inst.result_php_type.codegen_repr())?;
     ctx.load_value_to_result(array)?;
     if ctx.emitter.target.arch == Arch::X86_64 {
         ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the flip helper argument
     }
     abi::emit_call_label(ctx.emitter, array_flip_runtime_helper(&value_elem_ty));
+    store_if_result(ctx, inst)
+}
+
+/// Lowers `array_flip()` over an indexed array whose slots contain boxed `Mixed` cells.
+///
+/// The packed source is first copied into an integer-keyed hash so `__rt_hash_flip` can inspect
+/// each cell's runtime tag. The conversion is an owned temporary and must be released after the
+/// fresh flipped hash has been preserved across the release call.
+fn lower_mixed_indexed_flip(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    require_array_flip_result_type(&PhpType::Mixed, &inst.result_php_type.codegen_repr())?;
+    let dest_value_ty = hash_flip_result_value_type(&inst.result_php_type.codegen_repr())?;
+    let dest_value_tag = runtime_value_tag("array_flip", &dest_value_ty)?;
+    ctx.load_value_to_result(array)?;
+    super::misc_dispatch::emit_convert_indexed_to_hash(ctx);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the owned converted hash across the flip
+            ctx.emitter
+                .instruction(&format!("mov x1, #{}", dest_value_tag));          // destination values are the original integer indexes
+            abi::emit_call_label(ctx.emitter, "__rt_hash_flip");
+            abi::emit_pop_reg(ctx.emitter, "x1");                               // recover the converted source hash
+            abi::emit_push_reg(ctx.emitter, "x0");                              // preserve the fresh flipped result across release
+            ctx.emitter.instruction("mov x0, x1");                              // release the owned converted source hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            abi::emit_pop_reg(ctx.emitter, "x0");                               // restore the fresh flipped result
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rdi, rax");                            // pass and preserve the converted hash as argument zero
+            abi::emit_push_reg(ctx.emitter, "rdi");
+            ctx.emitter
+                .instruction(&format!("mov rsi, {}", dest_value_tag));          // destination values are the original integer indexes
+            abi::emit_call_label(ctx.emitter, "__rt_hash_flip");
+            abi::emit_pop_reg(ctx.emitter, "rcx");                              // recover the converted source hash
+            abi::emit_push_reg(ctx.emitter, "rax");                             // preserve the fresh flipped result across release
+            ctx.emitter.instruction("mov rdi, rcx");                            // release the owned converted source hash
+            abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+            abi::emit_pop_reg(ctx.emitter, "rax");                              // restore the fresh flipped result
+        }
+    }
     store_if_result(ctx, inst)
 }
 
@@ -257,18 +301,15 @@ pub(super) fn lower_hash_flip(
 
 /// Returns the source value type when `__rt_hash_flip` can flip a hash faithfully.
 ///
-/// Only `Int` and `Str` values are accepted. A `Mixed`-valued hash is refused ON PURPOSE:
-/// building a heterogeneous associative array currently mis-tags its entries UPSTREAM of this
-/// lowering — `$a["k1"] = 1; $a["k2"] = "s";` stores the string payload under the int tag, which
-/// `var_dump()` of the source array already renders as `int(<pointer>)` without `array_flip()`
-/// ever being involved. The flip dispatches on that per-entry tag, so accepting a Mixed-valued
-/// source would turn a visible upstream defect into a silent pointer-keyed miscompile. Refusing
-/// keeps the failure honest until the hash-construction path tags Mixed values correctly.
+/// `Int`, `Str`, and boxed `Mixed` values are accepted. The runtime helper unboxes each `Mixed`
+/// cell and dispatches on its concrete tag, which lets one heterogeneous source flip integer and
+/// string entries while warning and skipping values PHP does not accept as keys. Concrete static
+/// types outside that set remain compile-time refusals because their entire source is invalid.
 pub(super) fn hash_flip_source_value_type(source_ty: &PhpType) -> Result<PhpType> {
     match source_ty {
         PhpType::AssocArray { value, .. } => {
             let value = value.codegen_repr();
-            if matches!(value, PhpType::Int | PhpType::Str) {
+            if matches!(value, PhpType::Int | PhpType::Str | PhpType::Mixed) {
                 return Ok(value);
             }
             Err(CodegenIrError::unsupported(format!(

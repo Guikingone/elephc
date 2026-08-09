@@ -182,6 +182,7 @@ fn static_get_debug_type_name(ty: &PhpType) -> Option<&'static [u8]> {
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Iterable => {
             Some(b"array".as_slice())
         }
+        PhpType::Callable => Some(b"Closure".as_slice()),
         PhpType::Resource(_) => Some(b"resource".as_slice()),
         _ => None,
     }

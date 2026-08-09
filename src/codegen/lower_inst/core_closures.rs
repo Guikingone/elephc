@@ -468,4 +468,3 @@ pub(super) fn ensure_variadic_param_slot(signature: &mut FunctionSig) {
     signature.declared_params.push(variadic_declared);
     signature.param_type_exprs.push(variadic_type_expr);
 }
-

@@ -1,15 +1,16 @@
 //! Purpose:
 //! End-to-end tests for `array_flip()` over an ASSOCIATIVE source — the `__rt_hash_flip`
 //! runtime helper (`src/codegen_support/runtime/arrays/hash_flip.rs`) and its lowering
-//! (`lower_hash_flip` in `src/codegen/lower_inst/builtins/arrays.rs`) — plus the heap-ownership
+//! (`lower_hash_flip` in `src/codegen/lower_inst/builtins/arrays/basic.rs`) — plus the heap-ownership
 //! fix that made `RuntimeFnId::ArrayFlip` a `Fresh`-result operation.
 //!
 //! Two independent behaviours are pinned here because they ship together:
 //!
 //! - FLIP OVER A HASH. Before `__rt_hash_flip` existed, only INDEXED sources could be flipped;
 //!   an associative source had no helper at all. The helper walks the source hash in insertion
-//!   order and dispatches on each entry's RUNTIME value tag, so `Str`- and `Int`-valued hashes
-//!   share one lowering, and string values are normalized through `__rt_hash_normalize_key` so
+//!   order and dispatches on each entry's RUNTIME value tag, so `Str`-, `Int`-, and boxed
+//!   `Mixed`-valued hashes share one lowering, and string values are normalized through
+//!   `__rt_hash_normalize_key` so
 //!   numeric strings collapse to integer keys exactly as php-src does.
 //! - RESULT OWNERSHIP. `RuntimeFnId::ArrayFlip` sat in the default `MayAliasArguments` bucket,
 //!   which suppresses the release of an owned source TEMPORARY. `array_flip(build())` therefore
@@ -30,21 +31,15 @@
 //!   host `php` loads Xdebug, which overloads `var_dump`, so that flag is mandatory.
 //! - Sources come from a FUNCTION RETURN rather than a literal wherever the shape allows it, so
 //!   the constant folder cannot answer in place of the runtime helper.
-//! - THE SKIP RULE IS NOT EXERCISED AT RUNTIME, and that is not an oversight. php-src's
+//! - THE SKIP RULE IS ONLY REACHABLE THROUGH `Mixed`. php-src's
 //!   `array_flip()` warns `Can only flip string and integer values, entry skipped` for any
 //!   float/bool/array/null value, and `__rt_hash_flip` implements that arm
-//!   (`ARRAY_FLIP_SKIPPED_MESSAGES`). No PHP source shape can reach it today: the lowering's
-//!   `hash_flip_source_value_type` gate refuses every source whose static value type is not
-//!   `Int` or `Str`, so a float-, bool-, array- or Mixed-valued source is rejected AT COMPILE
-//!   TIME and never reaches the helper. The `*_is_still_refused` tests pin those refusals, which
-//!   is the behaviour that actually exists; the skip arm stays live code for the day the gate
-//!   widens.
-//! - The Mixed refusal is DELIBERATE and is documented on `hash_flip_source_value_type`: an
-//!   associative array built entry by entry currently mis-tags heterogeneous values upstream of
-//!   the flip (`$a["k1"] = 1; $a["k2"] = "s";` renders as `int(<pointer>)` under `var_dump()`
-//!   with no `array_flip()` involved), and the flip dispatches on exactly that tag. Accepting a
-//!   Mixed-valued source would convert a visible upstream defect into a silent pointer-keyed
-//!   miscompile.
+//!   (`ARRAY_FLIP_SKIPPED_MESSAGES`). A heterogeneous associative source reaches it as boxed
+//!   `Mixed`; homogeneous float-, bool-, array-, or null-valued sources remain compile-time
+//!   refusals because their static type proves every entry invalid.
+//! - Mixed associative writes preserve a correct concrete tag in each boxed cell. The flip
+//!   helper unboxes those cells before dispatch, so heterogeneous integer and string values can
+//!   be flipped faithfully through the same runtime path.
 //! - Compile-failure assertions read the RAW stderr and only assert a substring, so the HOST
 //!   linker's environmental warnings (GNU `ld` on Linux, silent on macOS) cannot interfere.
 //!   Successful compiles go through `elephc_diagnostics`, which keeps elephc's own lines only.
@@ -153,6 +148,29 @@ fn assert_program_output(prefix: &str, source: &str, expected: &str) {
     let dir = make_test_dir(prefix);
     let bin = compile(&dir, source, prefix, &[]);
     assert_eq!(run_binary(&bin), expected);
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Compiles and runs `source`, asserting both output streams from the generated program.
+fn assert_program_output_and_stderr(
+    prefix: &str,
+    source: &str,
+    expected_stdout: &str,
+    expected_stderr: &str,
+) {
+    let dir = make_test_dir(prefix);
+    let bin = compile(&dir, source, prefix, &[]);
+    let output = Command::new(&bin)
+        .output()
+        .expect("failed to run compiled binary");
+    assert!(
+        output.status.success(),
+        "compiled binary exited non-zero ({:?}):\n{}",
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected_stdout);
+    assert_eq!(String::from_utf8_lossy(&output.stderr), expected_stderr);
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -347,26 +365,36 @@ var_dump(array_flip(build()));
 }
 
 // ---------------------------------------------------------------------------
-// Deliberate refusals — the value-type gate on the associative lowering
+// Mixed runtime dispatch and deliberate static refusals
 // ---------------------------------------------------------------------------
 
-/// NEGATIVE CONTROL: a `Mixed`-valued associative source is still REFUSED.
+/// A `Mixed`-valued associative source dispatches each boxed entry by its concrete runtime tag.
 ///
-/// This is the refusal `hash_flip_source_value_type` documents. php-src would flip the int and
-/// string entries and warn-skip the rest; elephc cannot, because a heterogeneous associative
-/// array currently mis-tags its entries upstream of the flip, and the flip dispatches on exactly
-/// that tag. Accepting this source would produce pointer-valued keys with no diagnostic, which
-/// is strictly worse than refusing. If this test ever fails, the upstream tagging was fixed and
-/// the gate can widen — but only together, never by widening alone.
+/// The integer and string values become keys while their original string keys become values,
+/// matching PHP 8.5.6 and proving the heterogeneous string payload is not mistaken for an int.
 #[test]
-fn a_mixed_valued_associative_source_is_still_refused() {
-    assert_compile_refused(
-        "flip_assoc_mixed_refused",
+fn a_mixed_valued_associative_source_flips_each_supported_runtime_value() {
+    assert_program_output(
+        "flip_assoc_mixed_runtime_dispatch",
         r#"<?php
 function build(): array { return ["a" => 1, "b" => "s"]; }
 var_dump(array_flip(build()));
 "#,
-        "array_flip for associative value PHP type Mixed",
+        "array(2) {\n  [1]=>\n  string(1) \"a\"\n  [\"s\"]=>\n  string(1) \"b\"\n}\n",
+    );
+}
+
+/// A boxed unsupported value warns once, is skipped, and does not stop later valid entries.
+#[test]
+fn a_mixed_valued_associative_source_warns_and_skips_unsupported_runtime_values() {
+    assert_program_output_and_stderr(
+        "flip_assoc_mixed_runtime_skip",
+        r#"<?php
+function build(): array { return ["a" => 1, "skip" => true, "b" => "s"]; }
+var_dump(array_flip(build()));
+"#,
+        "array(2) {\n  [1]=>\n  string(1) \"a\"\n  [\"s\"]=>\n  string(1) \"b\"\n}\n",
+        "Warning: array_flip(): Can only flip string and integer values, entry skipped\n",
     );
 }
 

@@ -194,6 +194,16 @@ pub(super) fn method_call_result_type(
         }
         return fallback_expr_type(expr);
     };
+    // A common same-named signature can normalize arguments for a gradual receiver, but a
+    // nominal object return does not prove the receiver belongs to that unrelated class. Match
+    // the checker's Mixed result so chained calls retain runtime dispatch.
+    let return_ty = if dynamic_method_receiver_needs_mixed_fallback(&object_ty)
+        && type_mentions_nominal_object(&return_ty)
+    {
+        PhpType::Mixed
+    } else {
+        return_ty
+    };
     let return_ty = if let Some((receiver_name, _)) = singular_object_class(&object_ty) {
         instance_method_late_static_return_for_ir(ctx, receiver_name, &php_symbol_key(method))
             .map(|return_type| late_static_return_type_for_ir(ctx, &return_type, receiver_name))
@@ -205,6 +215,15 @@ pub(super) fn method_call_result_type(
         nullable_result_type(return_ty)
     } else {
         return_ty
+    }
+}
+
+/// Returns whether a type contains a nominal object member whose runtime class is not proven.
+fn type_mentions_nominal_object(php_type: &PhpType) -> bool {
+    match php_type {
+        PhpType::Object(_) => true,
+        PhpType::Union(members) => members.iter().any(type_mentions_nominal_object),
+        _ => false,
     }
 }
 

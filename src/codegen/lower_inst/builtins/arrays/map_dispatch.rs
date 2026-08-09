@@ -60,14 +60,19 @@ pub(crate) fn lower_array_map(ctx: &mut FunctionContext<'_>, inst: &Instruction)
             );
         }
         PhpType::Str => {
-            let callback_elem_ty = PhpType::Mixed;
+            // A runtime string still has precise callback-result metadata when the checker could
+            // resolve its literal or finite candidate set (for example `array_map('strtoupper',
+            // build())`). Preserve that result ABI in the descriptor wrapper; forcing Mixed here
+            // creates boxed slots while the EIR result remains `array<string>`, which the backend
+            // must correctly reject rather than misread as raw string pairs.
+            let callback_elem_ty = array_map_descriptor_callback_result_element_type(inst)?;
             let result_elem_ty = array_map_result_element_type(inst, &callback_elem_ty)?;
             lower_runtime_string_descriptor_callback(
                 ctx,
                 callback,
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![elem_ty.clone()],
-                PhpType::Mixed,
+                callback_elem_ty.clone(),
                 super::super::super::instruction_strict_php_profile(inst),
                 "array_map",
                 |ctx, wrapper_label, env_bytes| {
@@ -381,4 +386,3 @@ pub(super) fn emit_dynamic_string_callback_abort(ctx: &mut FunctionContext<'_>, 
         }
     }
 }
-
