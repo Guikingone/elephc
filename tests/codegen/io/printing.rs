@@ -577,6 +577,47 @@ echo "done\n";
     assert!(out.stderr.contains(r#"Warning: Undefined array key "zz""#));
 }
 
+/// Regression for issue #647's post-`main` integration: object rendering was added after
+/// the original fix, and a missed object read carried the same sentinel into its walker.
+#[test]
+fn test_print_r_missed_object_read_prints_nothing() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PrintRNullSentinelObject {
+    public int $n = 1;
+}
+$a = [new PrintRNullSentinelObject()];
+$value = $a[7];
+print_r($value);
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "done\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
+/// Verifies return mode leaves its capture buffer empty when an object-typed missed read
+/// resolves to PHP null, rather than passing the sentinel to the object walker.
+#[test]
+fn test_print_r_missed_object_read_return_mode_yields_empty_string() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class PrintRNullSentinelReturnObject {
+    public int $n = 1;
+}
+$a = [new PrintRNullSentinelReturnObject()];
+$value = $a[7];
+$s = print_r($value, true);
+echo "[", $s, "] len=", strlen($s), "\n";
+echo "done\n";
+"#,
+    );
+    assert!(out.success, "program crashed: {}", out.stderr);
+    assert_eq!(out.stdout, "[] len=0\ndone\n");
+    assert!(out.stderr.contains("Warning: Undefined array key 7"));
+}
+
 /// Regression for issue #647: a miss forwarded through `?? null` keeps the sentinel payload
 /// while suppressing the warning; the render must still be silent rather than crash.
 #[test]
@@ -699,5 +740,49 @@ print_r($arr);
     assert!(
         cmp_pos < call_pos,
         "sentinel comparison must precede the print_r walker call, got:\n{body}"
+    );
+}
+
+/// Verifies the object path added by the merged `main` also branches around its runtime
+/// walker for both null-container representations on every supported architecture.
+#[test]
+fn test_print_r_object_emits_null_container_guard_before_walker_call() {
+    let dir = make_cli_test_dir("elephc_print_r_null_object_guard");
+    let (user_asm, _runtime_asm, _libs) = compile_source_to_asm_with_options(
+        r#"<?php
+class PrintRGuardObject {}
+$a = [new PrintRGuardObject()];
+$value = $a[7];
+print_r($value);
+"#,
+        &dir,
+        8_388_608,
+        false,
+        false,
+    );
+
+    let body_start = user_asm
+        .find("print_r_skip_null_object")
+        .expect("missing print_r null-object skip branch");
+    let body_end = user_asm
+        .match_indices("print_r_skip_null_object")
+        .map(|(pos, _)| pos)
+        .find(|pos| user_asm[*pos..].lines().next().is_some_and(|l| l.ends_with(':')))
+        .expect("missing print_r null-object skip label definition");
+    let body = &user_asm[body_start..body_end];
+
+    let (sentinel_cmp, walker_call) = match target().arch {
+        Arch::AArch64 => ("cmp x0, x10", "bl __rt_print_r_object"),
+        Arch::X86_64 => ("cmp rax, r10", "call __rt_print_r_object"),
+    };
+    let cmp_pos = body
+        .find(sentinel_cmp)
+        .unwrap_or_else(|| panic!("missing sentinel comparison `{sentinel_cmp}` in:\n{body}"));
+    let call_pos = body
+        .find(walker_call)
+        .unwrap_or_else(|| panic!("missing object walker call `{walker_call}` in:\n{body}"));
+    assert!(
+        cmp_pos < call_pos,
+        "sentinel comparison must precede the print_r object walker call, got:\n{body}"
     );
 }

@@ -370,8 +370,18 @@ fn emit_print_r_mixed(ctx: &mut FunctionContext<'_>) {
 /// a top-level render and a render at depth cannot drift apart. That helper owns
 /// the whole layout: the `ClassName Object` header (or PHP's `ClassName Enum[:t]`
 /// for an enum case), the `(` / `)` lines, the per-property body and the
-/// `*RECURSION*` guard.
+/// `*RECURSION*` guard. A zero pointer or the in-band null-container sentinel from
+/// a missed object read skips the walker entirely, matching `print_r(null)`.
 fn emit_print_r_object(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let skip_label = ctx.next_label("print_r_skip_null_object");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &skip_label,
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, #0");                              // base indent = 0 for the top-level object
@@ -382,6 +392,7 @@ fn emit_print_r_object(ctx: &mut FunctionContext<'_>) {
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_print_r_object");
+    ctx.emitter.label(&skip_label);
 }
 
 /// Emits `var_dump` output for a boxed Mixed payload in the integer result register.
