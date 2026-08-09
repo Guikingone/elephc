@@ -369,7 +369,11 @@ fn emit_compute_timeout_aarch64(emitter: &mut Emitter, _linux: bool) {
 
 /// x86_64 Linux variant of `__rt_stream_select` using `poll` (syscall 7).
 ///
-/// Frame layout (rbp-relative): `[rbp-2048..rbp]` pollfd array, then state slots.
+/// Frame layout (4352 bytes, rbp-relative): `[rbp-4352..rbp-2304)` pollfd array (256 × 8),
+/// `[rbp-2184..rbp-2048]` state slots. The pollfd array used to start at `rbp-2048`, which
+/// is also the except-array slot: writing the FIRST pollfd entry overwrote that pointer and
+/// the except compaction then dereferenced it. AArch64 was immune — there the pollfds sit at
+/// `sp+0` and the state slots at `sp+2048`, so the two never met.
 fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     let linux = emitter.target.platform == Platform::Linux;
     emitter.blank();
@@ -378,7 +382,7 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("push rbp");                                             // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                         // establish the helper frame pointer
-    emitter.instruction("sub rsp, 2304");                                        // allocate the poll-based select frame
+    emitter.instruction("sub rsp, 4352");                                        // pollfd array plus state slots, kept disjoint
 
     // -- save the three resource arrays --
     emitter.instruction("mov QWORD PTR [rbp - 2064], rdi");                       // save the read resource array
@@ -416,7 +420,7 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emit_compute_timeout_x86(emitter, linux);
 
     // -- invoke poll(2) --
-    emitter.instruction("lea rdi, [rbp - 2048]");                                 // pollfds pointer = frame base
+    emitter.instruction("lea rdi, [rbp - 4352]");                                 // pollfds pointer = frame base
     emitter.instruction("mov rsi, QWORD PTR [rbp - 2096]");                      // nfds
     emitter.instruction("mov rdx, QWORD PTR [rbp - 2112]");                       // timeout in ms
     if linux {
@@ -521,7 +525,7 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
     // -- store the pollfd entry at pollfds[r14] (even for fd=-1 so indices stay aligned) --
     emitter.instruction("mov rax, r14");                                         // pollfd index
     emitter.instruction("shl rax, 3");                                          // byte offset = index * 8
-    emitter.instruction("lea rax, [rbp - 2048 + rax]");                          // pollfd address = frame base + offset
+    emitter.instruction("lea rax, [rbp - 4352 + rax]");                          // pollfd address = frame base + offset
     emitter.instruction("mov DWORD PTR [rax], edx");                             // store the fd (low 32 bits; -1 is fine, poll reports POLLNVAL)
     emitter.instruction(&format!("mov WORD PTR [rax + 4], {}", events));         // store the events field (16-bit)
     emitter.instruction("mov WORD PTR [rax + 6], 0");                            // clear the revents field
@@ -624,7 +628,7 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
     emitter.instruction("mov rax, r14");                                         // section offset
     emitter.instruction("add rax, rsi");                                         // pollfd index = section_offset + source_index
     emitter.instruction("shl rax, 3");                                          // byte offset = pollfd_index * 8
-    emitter.instruction("lea rax, [rbp - 2048 + rax]");                          // pollfd address = frame base + offset
+    emitter.instruction("lea rax, [rbp - 4352 + rax]");                          // pollfd address = frame base + offset
     emitter.instruction("movzx eax, WORD PTR [rax + 6]");                         // load the revents field (16-bit)
     emitter.instruction("and eax, 7");                                          // mask out POLLNVAL/POLLERR/POLLHUP (keep POLLIN|POLLOUT|POLLPRI)
     emitter.instruction("test eax, eax");                                       // revents & 0x7 == 0?
