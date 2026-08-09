@@ -5207,6 +5207,52 @@ fclose($m);
     assert_eq!(out, "8192|4096|2048");
 }
 
+/// Pins that `fread($f, $n)` never hands back more than `$n` bytes through a filter.
+///
+/// IGNORED because elephc has no filtered-read buffer: a read filter that expands its input
+/// has its whole output returned in one go, so `fread($f, 2)` over a filter tripling `"ab"`
+/// answers the 6-byte `"ababab"` where php 8.5.6 answers `ab`, `ab`, `ab` — it caps the
+/// result at `$n` and keeps the remainder on the stream for the next read.
+///
+/// This is INDEPENDENT of [`test_user_filter_psfs_feed_me_buffers_across_dispatches`]: the
+/// filter here answers `PSFS_PASS_ON` on every dispatch, so no FEED_ME handling is involved.
+/// It is also that fixture's prerequisite — without somewhere to park the remainder, a
+/// FEED_ME fix cannot hand back the right chunk sizes either.
+///
+/// Returning more bytes than requested is a contract break in its own right: a caller that
+/// sized a buffer from `$n` gets more than it asked for.
+#[test]
+#[ignore = "no filtered-read buffer: an expanding filter's whole output is returned at once"]
+fn test_fread_caps_a_filtered_read_at_the_requested_length() {
+    let out = compile_and_run(
+        r#"<?php
+class ExpandThrice extends php_user_filter {
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $ob = stream_bucket_new($this->stream, str_repeat($b->data, 3));
+            stream_bucket_append($out, $ob);
+        }
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("expand.thrice", "ExpandThrice");
+$f = fopen("php://memory", "r+");
+fwrite($f, "ab");
+rewind($f);
+stream_filter_append($f, "expand.thrice", STREAM_FILTER_READ);
+$parts = [];
+while (!feof($f)) {
+    $c = fread($f, 2);
+    if ($c === "" || $c === false) { break; }
+    $parts[] = $c;
+}
+echo implode("|", $parts);
+"#,
+    );
+    assert_eq!(out, "ab|ab|ab");
+}
+
 /// Pins PHP's `PSFS_FEED_ME` contract for a filter that buffers across dispatches.
 ///
 /// IGNORED because elephc does not implement it yet, and the current behaviour is a

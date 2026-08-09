@@ -17957,6 +17957,12 @@
           "default": "0",
           "name": "flags",
           "optional": true
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "context",
+          "optional": true
         }
       ],
       "required_param_count": 1,
