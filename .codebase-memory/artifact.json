@@ -1,11 +1,11 @@
 {
     "schema_version": 2,
-    "commit": "b5aa05f935e5f6191b016d111ca9a4dae2c78002",
-    "indexed_at": "2026-08-09T14:22:27Z",
+    "commit": "6228ff60903951f5a70a44b25054f6618ca562e4",
+    "indexed_at": "2026-08-09T14:25:49Z",
     "project": "Users-guillaumeloulier-PhpstormProjects-oss-elephc-.claude-worktrees-streams-csv-signature",
-    "nodes": 64318,
-    "edges": 353806,
-    "original_size": 386662400,
-    "compressed_size": 37507761,
+    "nodes": 64320,
+    "edges": 353830,
+    "original_size": 386727936,
+    "compressed_size": 37502679,
     "compression_level": 3
 }

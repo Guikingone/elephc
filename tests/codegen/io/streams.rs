@@ -5242,6 +5242,32 @@ fclose($m);
     assert_eq!(out, "8192|4096|2048");
 }
 
+/// Pins that a `php://filter` URL works when it is built at run time, not only written
+/// as a literal.
+///
+/// IGNORED because `php://filter` is recognised only at compile time: `parse_php_filter_url`
+/// runs over a literal `fopen` path and stamps the filter, while a runtime-built string
+/// falls through to the generic wrapper open, which does not know the scheme and returns
+/// false. The literal form already handles any resource — a plain path included — so this
+/// is about WHERE the URL comes from, not what it points at.
+///
+/// The dynamic form is the common one in real code: the resource is usually a variable.
+#[test]
+#[ignore = "php://filter is parsed only for literal fopen paths; a runtime-built URL returns false"]
+fn test_php_filter_url_built_at_run_time_opens() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("pf.txt", "hello");
+$url = "php://filter/read=string.toupper/resource=pf.txt";
+$f = fopen($url, "r");
+echo var_export($f !== false, true), "|";
+if ($f !== false) { echo stream_get_contents($f); fclose($f); }
+"#,
+    );
+    assert_eq!(out, "true|HELLO");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Pins that `fread($f, $n)` never hands back more than `$n` bytes through a filter.
 ///
 /// IGNORED because elephc has no filtered-read buffer: a read filter that expands its input
