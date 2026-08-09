@@ -3117,6 +3117,76 @@ echo ($bad === false) ? ":closed" : ":open";
     assert_eq!(out, "ping:ok:closed");
 }
 
+/// Verifies the socket error out-parameters carry the real failure, not a fixed guess.
+///
+/// The two outputs used to be a hardcoded `ECONNREFUSED` / `"Connection refused"` pair on
+/// `fsockopen()` and nothing at all on `stream_socket_client()`. A `unix://` path that does not
+/// exist pins the distinction: the answer must be `ENOENT`, which is 2 on both supported
+/// platforms, rather than the connection-refused text a fixed guess would produce.
+#[test]
+fn test_socket_error_outputs_report_the_real_failure() {
+    let out = compile_and_run(
+        r#"<?php
+$c = @stream_socket_client("unix:///nonexistent/elephc-probe.sock", $errno, $errstr, 1);
+echo var_export($c === false, true), "|", $errno, "|", $errstr;
+"#,
+    );
+    assert_eq!(out, "true|2|No such file or directory");
+}
+
+/// Verifies a successful call leaves the out-parameters at PHP's "nothing went wrong" values.
+#[test]
+fn test_socket_error_outputs_are_empty_after_a_successful_connect() {
+    let out = compile_and_run(
+        r#"<?php
+$srv = stream_socket_server("tcp://127.0.0.1:0", $se, $ss);
+$cli = stream_socket_client("tcp://" . stream_socket_get_name($srv, false), $ce, $cs, 5);
+echo var_export($cli !== false, true), "|", $se, "|", var_export($ss, true);
+echo "|", $ce, "|", var_export($cs, true);
+fclose($cli);
+fclose($srv);
+"#,
+    );
+    assert_eq!(out, "true|0|''|0|''");
+}
+
+/// Verifies `stream_socket_server()` describes a bind failure the way php-src does.
+///
+/// php-src is measurably the odd one out here: it leaves `&$error_code` at `0` for every bind
+/// and listen failure and puts the reason in `&$error_message` alone. Reporting the real `errno`
+/// would be more informative and would not be PHP.
+#[test]
+fn test_stream_socket_server_reports_a_bind_failure_through_the_message_only() {
+    let out = compile_and_run(
+        r#"<?php
+$first = stream_socket_server("tcp://127.0.0.1:0", $e1, $s1);
+$taken = stream_socket_get_name($first, false);
+$second = @stream_socket_server("tcp://" . $taken, $e2, $s2);
+echo var_export($second === false, true), "|", $e2, "|", $s2;
+fclose($first);
+"#,
+    );
+    assert_eq!(out, "true|0|Address already in use");
+}
+
+/// Verifies an error number does not survive into the NEXT socket call.
+///
+/// The failure reason lives in one process-global, so a helper that never records one — the
+/// `unix://` and IPv6 paths are reached by a tail call — would otherwise hand back whatever the
+/// previous failure left there. The entry of each socket helper clears it for that reason.
+#[test]
+fn test_socket_error_outputs_do_not_leak_between_calls() {
+    let out = compile_and_run(
+        r#"<?php
+$a = @stream_socket_client("tcp://127.0.0.1:1", $e1, $s1, 1);
+$srv = stream_socket_server("tcp://127.0.0.1:0", $e2, $s2);
+echo var_export($e1 !== 0, true), "|", $e2, "|", var_export($s2, true);
+fclose($srv);
+"#,
+    );
+    assert_eq!(out, "true|0|''");
+}
+
 /// Verifies compiled PHP output for stream socket client rejects closed port.
 #[test]
 fn test_stream_socket_client_rejects_closed_port() {
@@ -5244,23 +5314,87 @@ fclose($m);
 
 /// Pins PHP's own out-parameter idiom: `&$errno` / `&$errstr` passed undeclared.
 ///
-/// IGNORED because the checker treats a variable passed to a by-ref BUILTIN parameter as a
-/// use rather than a definition, so it reports `Undefined variable: $errno` and the program
-/// does not compile. This is the form every PHP manual example uses — the callee is what
-/// writes the variable — so idiomatic socket code is rejected outright.
-///
-/// The gap is not specific to sockets: `flock($h, LOCK_SH, $would)` with an undeclared
-/// `$would` is rejected the same way, as is any builtin whose parameter is by-ref.
+/// PHP auto-vivifies a variable bound to a by-reference parameter, which is why every manual
+/// example writes the call this way and never declares the two error variables. The parameters
+/// are declared `ref(Int)` / `ref(Str)` in the registry, so the checker treats those argument
+/// positions as definition sites and gives each variable the type the builtin writes.
 #[test]
-#[ignore = "a variable passed to a by-ref builtin parameter is treated as a use, not a definition"]
 fn test_socket_out_parameters_may_be_undeclared() {
     let out = compile_and_run(
         r#"<?php
 $s = @stream_socket_client("tcp://127.0.0.1:1", $errno, $errstr, 1);
-echo var_export($s === false, true), "|", gettype($errno);
+echo var_export($s === false, true), "|", gettype($errno), "|", gettype($errstr);
 "#,
     );
-    assert_eq!(out, "true|integer");
+    assert_eq!(out, "true|integer|string");
+}
+
+/// Pins that a NAMED out-parameter binds the parameter it names, not the one sharing its index.
+///
+/// `error_message:` is the third parameter but the second argument here, so resolving by position
+/// would type `$why` as `int` and the runtime would then write a string pointer into an integer
+/// slot. It also pins that omitting `$error_code` is allowed: normalization materialises the
+/// parameter's `null` default at that position, which a by-reference argument check must accept.
+#[test]
+fn test_named_out_parameter_binds_the_parameter_it_names() {
+    let out = compile_and_run(
+        r#"<?php
+$c = @stream_socket_client("unix:///nonexistent/elephc-probe.sock", error_message: $why);
+echo gettype($why), "=", $why;
+"#,
+    );
+    assert_eq!(out, "string=No such file or directory");
+}
+
+/// Pins that a by-ref output still refuses an argument with nowhere to write back into.
+#[test]
+fn test_out_parameter_rejects_an_argument_without_storage() {
+    let error = compile_expect_type_error(
+        r#"<?php
+$c = @stream_socket_client("tcp://127.0.0.1:1", 0, $errstr, 1);
+"#,
+    );
+    assert!(
+        error.contains("parameter $error_code must be passed a variable"),
+        "expected the by-reference storage diagnostic, got: {error}"
+    );
+}
+
+/// Pins that the undeclared out-parameter also works in statement position, where the call's
+/// result is discarded — `flock()` is the non-socket member of the same family.
+#[test]
+fn test_flock_would_block_out_parameter_may_be_undeclared() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+flock($h, LOCK_SH, $would);
+echo gettype($would), "=", var_export($would, true);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "integer=0");
+}
+
+/// Pins that a by-ref out-parameter whose variable already holds an incompatible type reports
+/// elephc's ordinary reassignment error.
+///
+/// The write used to go straight into the caller's slot without consulting its representation:
+/// an `int` landing in a `string` slot overwrote the pointer half with a small integer, and the
+/// program segfaulted on the next read. Binding the out-parameter through the normal assignment
+/// merge is what turns that silent corruption into a diagnostic.
+#[test]
+fn test_by_ref_out_parameter_rejects_an_incompatible_variable() {
+    let error = compile_expect_type_error(
+        r#"<?php
+$would = "untouched";
+$h = fopen("php://memory", "r+");
+flock($h, LOCK_SH, $would);
+"#,
+    );
+    assert!(
+        error.contains("cannot reassign $would from string to int"),
+        "expected a reassignment diagnostic, got: {error}"
+    );
 }
 
 /// Pins that a `php://filter` URL works when it is built at run time, not only written

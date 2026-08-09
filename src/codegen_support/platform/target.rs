@@ -168,16 +168,6 @@ impl Platform {
         }
     }
 
-    /// `ECONNREFUSED` error number — 61 on macOS, 111 on Linux. `fsockopen()`
-    /// reports it generically when a connection cannot be established.
-    pub fn econnrefused(&self) -> i64 {
-        match self {
-            Platform::MacOS => 61,
-            Platform::Linux => 111,
-            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
-        }
-    }
-
     /// `AF_INET6` family value — 30 on macOS (BSD), 10 on Linux. Passed to
     /// `socket()` for IPv6 sockets and stored as the family byte in
     /// `sockaddr_in6` before `bind()` / `connect()`.

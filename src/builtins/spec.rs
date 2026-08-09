@@ -93,6 +93,20 @@ pub struct ParamSpec {
     pub default: Option<DefaultSpec>,
     /// Whether the parameter is passed by reference (mutating builtins).
     pub by_ref: bool,
+    /// For a by-reference parameter the builtin only ever WRITES, the type the caller's
+    /// variable holds once the call returns — `stream_socket_client()`'s `$error_code` is
+    /// `Int`, its `$error_message` is `Str`.
+    ///
+    /// PHP binds an undeclared variable to a by-reference parameter by auto-vivifying it to
+    /// `null`, so the manual's own idiom passes those variables without ever declaring them.
+    /// This field is what lets the checker treat such an argument as a DEFINITION instead of a
+    /// use, and what tells codegen the slot's representation. Because both consumers read this
+    /// one declaration, the type a builtin writes and the slot it writes into cannot drift.
+    ///
+    /// `None` for an in-out parameter the builtin also reads (`sort()`'s array,
+    /// `stream_select()`'s three arrays, `preg_match()`'s `$matches`): those are ordinary uses
+    /// and keep the ordinary `Undefined variable` diagnostic.
+    pub writes: Option<TypeSpec>,
 }
 
 /// Context passed to a builtin's optional `check` hook during type-checking.
@@ -231,7 +245,8 @@ mod tests {
     /// Verifies a const BuiltinSpec can be built and read (const-friendly shape).
     #[test]
     fn const_spec_is_constructible() {
-        const P: &[ParamSpec] = &[ParamSpec { name: "string", ty: TypeSpec::Str, default: None, by_ref: false }];
+        const P: &[ParamSpec] =
+            &[ParamSpec { name: "string", ty: TypeSpec::Str, default: None, by_ref: false, writes: None }];
         const S: BuiltinSpec = BuiltinSpec {
             name: "strlen", area: Area::String, params: P, variadic: None,
             max_args: None, min_args: None, arity_error: None,

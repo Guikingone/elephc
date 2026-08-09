@@ -13,6 +13,7 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::super::builtins::out_params;
 use super::super::super::null_probe;
 use super::super::super::Checker;
 use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
@@ -230,6 +231,11 @@ impl Checker {
             ExprKind::FunctionCall { name, args } => {
                 let expanded_args = crate::types::call_args::expand_static_assoc_spread_args(args);
                 let builtin_name = name.trim_start_matches('\\');
+                // A write-only by-ref argument is a definition, not a use: PHP auto-vivifies it
+                // to `null` before the call, so reading it below would reject the manual's own
+                // `stream_socket_client($url, $errno, $errstr)` idiom. The same list is what
+                // binds those variables once the call has been checked.
+                let write_only = out_params::write_only_variable_args(builtin_name, &expanded_args);
                 // `isset`/`unset` are lazy language constructs: an operand may be
                 // an undeclared property routed to `__isset`/`__unset`, which must
                 // not be inferred as a bare property access here. The call's own
@@ -268,6 +274,9 @@ impl Checker {
                         if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
                             continue;
                         }
+                        if write_only.iter().any(|out| out.index == idx) {
+                            continue;
+                        }
                         if is_empty {
                             let probe = null_probe::begin_null_probe_root(self, arg, env);
                             let effects = self.infer_type_with_assignment_effects(arg, env);
@@ -288,6 +297,15 @@ impl Checker {
                             env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
                         }
                     }
+                }
+                // Bind each write-only by-ref argument to the type the builtin writes. Going
+                // through the ordinary assignment merge means a variable already holding an
+                // incompatible type reports elephc's own reassignment error rather than having
+                // the runtime write an int into, say, a string slot.
+                for out in &write_only {
+                    crate::types::checker::stmt_check::assignments::locals::merge_local_assignment_type(
+                        self, &out.variable, &out.written, out.span, env,
+                    )?;
                 }
                 if builtin_name.eq_ignore_ascii_case("unset") {
                     for arg in &expanded_args {

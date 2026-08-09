@@ -28,6 +28,7 @@ pub(crate) fn lower_stream_socket_server(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_socket_server");
+    store_socket_error_outputs(ctx, inst, 1, 2, false)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_server");
     store_if_result(ctx, inst)
 }
@@ -58,6 +59,7 @@ pub(crate) fn lower_stream_socket_client(
             abi::emit_call_label(ctx.emitter, "__rt_stream_socket_client");
         }
     }
+    store_socket_error_outputs(ctx, inst, 1, 2, true)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_client");
     emit_stash_connect_host_after_boxed_stashed(ctx);
     abi::emit_release_temporary_stack(ctx.emitter, 16);

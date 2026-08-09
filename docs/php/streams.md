@@ -76,7 +76,7 @@ resources than the initial reservation holds grows the table on the heap as usua
 | `stream_get_contents()` | `stream_get_contents(resource $handle, ?int $length = null, int $offset = -1): string\|false` | Read remaining bytes from the stream. `$offset >= 0` seeks there first (seekable streams / user wrappers via `stream_seek()`) and returns `false` if that seek fails; a finite `$length` reads at most that many bytes (a `null`/negative `$length` reads to EOF). The bounded form loops through `fread` until it fills `$length`, reaches EOF, or receives an empty read. |
 | `stream_copy_to_stream()` | `stream_copy_to_stream(resource $from, resource $to, ?int $length = null, int $offset = -1): int\|false` | Copy bytes from one stream to another, returning the count. `$offset >= 0` seeks the source first (seekable streams / user wrappers via `stream_seek()`) and returns `false` if that seek fails; a finite `$length` copies at most that many bytes (a `null`/negative `$length` copies to EOF). The bounded form drives a chunked read/write loop and clamps wrapper chunks that exceed the requested count. |
 | `stream_get_line()` | `stream_get_line(resource $handle, int $length [, string $ending]): string` | Read up to `$length` bytes, stopping at and consuming `$ending` when supplied. |
-| `flock()` | `flock(resource $handle, int $op, &$would_block = null): bool` | Advisory locking. `LOCK_SH`, `LOCK_EX`, `LOCK_UN`, and `LOCK_NB` are supported; user wrappers route through `stream_lock(int $operation)`. |
+| `flock()` | `flock(resource $handle, int $op, int &$would_block = null): bool` | Advisory locking. `LOCK_SH`, `LOCK_EX`, `LOCK_UN`, and `LOCK_NB` are supported; user wrappers route through `stream_lock(int $operation)`. `&$would_block` may be passed undeclared, as in PHP — the call defines it as `int`. |
 | `tmpfile()` | `tmpfile(): resource\|false` | Create an anonymous temporary stream backed by a `/tmp/elephc-XXXXXX` file that is immediately unlinked. |
 | `fstat()` | `fstat(resource $handle): array\|false` | Return the same stat shape as `stat()`, but for an open stream. User wrappers route through `stream_stat()`. |
 | `ftruncate()` | `ftruncate(resource $handle, $size): bool` | Truncate or extend a stream. User wrappers route through `stream_truncate(int $new_size)`. |
@@ -321,14 +321,37 @@ type, or as `mixed`, when returning associative stat arrays with string keys.
 
 ## Sockets and process streams
 
+### By-reference output parameters
+
+A builtin parameter the runtime only writes — `&$error_code`, `&$error_message`,
+`&$peer_name`, `&$address`, `flock()`'s `&$would_block` — may be passed a variable
+that was never declared, exactly as PHP's own examples do:
+
+```php
+$fp = stream_socket_client("tcp://127.0.0.1:80", $errno, $errstr, 30);
+if ($fp === false) {
+    echo "$errstr ($errno)\n";
+}
+```
+
+The call is the variable's definition, and it holds the type that parameter
+writes: `int` for `&$error_code`, `string` for `&$error_message`. A variable that
+already holds an incompatible type reports elephc's ordinary reassignment error
+rather than being silently overwritten, and an argument with no storage to write
+back into — a literal, an expression — is rejected as it is in PHP.
+
+This applies only to parameters the builtin purely writes. One it also reads,
+such as `stream_select()`'s three arrays, stays an ordinary use and must be
+declared first.
+
 | Function | Signature | Description |
 |---|---|---|
 | `stream_get_transports()` | `stream_get_transports(): array` | Return recognized socket transports: `tcp`, `udp`, `unix`, `udg`, `tls`, `ssl`, `sslv2`, `sslv3`, `tlsv1.0`, `tlsv1.1`, `tlsv1.2`, and `tlsv1.3`. TLS-version names all use rustls default negotiation. |
-| `stream_socket_server()` | `stream_socket_server($address): resource\|false` | Bind a server socket for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. TCP and Unix-stream sockets listen; UDP and Unix-datagram sockets only bind. |
-| `stream_socket_client()` | `stream_socket_client($address): resource\|false` | Open a client stream for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. ⚠️ `&$errno` and `&$errstr` must be declared before the call: a variable passed to a by-ref builtin parameter is treated as a use rather than a definition, so PHP's own idiom of passing them undeclared is a compile error. The same applies to every by-ref builtin parameter, `flock()`'s `&$would_block` included. |
+| `stream_socket_server()` | `stream_socket_server($address, int &$error_code = null, string &$error_message = null): resource\|false` | Bind a server socket for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. TCP and Unix-stream sockets listen; UDP and Unix-datagram sockets only bind. `&$error_message` carries the reason a bind or listen failed; `&$error_code` stays `0`, as it does in php-src for this function. |
+| `stream_socket_client()` | `stream_socket_client($address, int &$error_code = null, string &$error_message = null): resource\|false` | Open a client stream for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. The two error outputs carry the real failure: the `errno` of the syscall that failed and its `strerror` text. Both may be passed undeclared, as in PHP — the call defines them as `int` and `string`. |
 | `stream_socket_accept()` | `stream_socket_accept($socket): resource\|false` | Accept the next pending connection from a listening stream. |
 | `stream_socket_enable_crypto()` | `stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | Attach TLS to an already-connected TCP fd. `$enable=false` unwinds the session (sends `close_notify` and detaches it from the stream), leaving the fd a plain TCP socket, and reports `false` as PHP does — php-src performs the shutdown and still returns -1. On a handle that never had crypto it is a no-op and reports `true`. |
-| `fsockopen()` | `fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Open a TCP connection to `$hostname:$port`, writing optional by-reference error outputs. The timeout arg is evaluated but the OS default connect timeout is used in v1. |
+| `fsockopen()` | `fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Open a TCP connection to `$hostname:$port`. The by-reference error outputs carry the real failure, as for `stream_socket_client()`. The timeout arg is evaluated but the OS default connect timeout is used in v1. |
 | `pfsockopen()` | `pfsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Alias of `fsockopen()`; persistent connections are not meaningful for standalone native binaries. |
 | `stream_set_blocking()` | `stream_set_blocking($stream, bool $enable): bool` | Toggle `O_NONBLOCK`. Non-blocking read misses return an empty `fread()` result or `false` from `fgetc()`/`fgets()` without setting EOF. User wrappers route through `stream_set_option(STREAM_OPTION_BLOCKING, ...)`. |
 | `stream_set_timeout()` | `stream_set_timeout($stream, int $seconds, int $microseconds = 0): bool` | Set `SO_RCVTIMEO` on socket streams. User wrappers route through `stream_set_option(STREAM_OPTION_READ_TIMEOUT, ...)`. |

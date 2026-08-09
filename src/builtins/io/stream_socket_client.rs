@@ -7,12 +7,11 @@
 //! Key details:
 //! - `check` returns `Union(stream_resource, Bool)` reflecting PHP's false-on-failure return.
 //! - `returns: Mixed` is used because the union cannot be expressed through the scalar field.
-//! - The `error_code` and `error_message` parameters are by-reference: the caller passes
-//!   plain variables that the runtime writes on failure.
+//! - `error_code` and `error_message` are declared `ref(Int)` / `ref(Str)`: the runtime writes
+//!   them on failure, so the caller may pass them undeclared as PHP's own idiom does.
 
 use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
-use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
@@ -20,8 +19,8 @@ builtin! {
     area: Io,
     params: [
         address: Str,
-        ref error_code: Mixed = DefaultSpec::Null,
-        ref error_message: Mixed = DefaultSpec::Null,
+        ref(Int) error_code: Mixed = DefaultSpec::Null,
+        ref(Str) error_message: Mixed = DefaultSpec::Null,
         timeout: Mixed = DefaultSpec::Null,
         flags: Int = DefaultSpec::Int(1),
         context: Mixed = DefaultSpec::Null
@@ -35,23 +34,8 @@ builtin! {
     php_manual: "function.stream-socket-client",
 }
 
-/// Validates by-ref output params are plain variables, then returns the union return type.
+/// Returns PHP's `resource|false` result. The by-reference outputs need no check here: their
+/// `ref(T)` declarations carry the rule.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
-    if let Some(ec) = cx.args.get(1) {
-        if !matches!(ec.kind, ExprKind::Variable(_)) {
-            return Err(CompileError::new(
-                ec.span,
-                &format!("{}() parameter $error_code must be passed a variable", cx.name),
-            ));
-        }
-    }
-    if let Some(em) = cx.args.get(2) {
-        if !matches!(em.kind, ExprKind::Variable(_)) {
-            return Err(CompileError::new(
-                em.span,
-                &format!("{}() parameter $error_message must be passed a variable", cx.name),
-            ));
-        }
-    }
     Ok(cx.checker.normalize_union_type(vec![PhpType::stream_resource(), PhpType::False]))
 }

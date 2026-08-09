@@ -11,6 +11,8 @@
 
 use crate::codegen_support::{emit::Emitter, platform::Arch, platform::Platform};
 
+use super::socket_errno;
+
 /// stream_socket_server: open a listening TCP socket on an IPv4 address.
 /// Input:  x0 = address string pointer, x1 = address string length
 /// Output: x0 = listening descriptor, or -1 on failure
@@ -24,6 +26,9 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_socket_server ---");
     emitter.label_global("__rt_stream_socket_server");
+    // Clear the stash before dispatching, for the reason spelled out in the client helper: the
+    // unix:// / udg:// / IPv6 servers are tail calls that never record an error number.
+    socket_errno::emit_clear_socket_errno(emitter);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. Mirrors __rt_stream_socket_client's probe so both
@@ -140,7 +145,10 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
 
     emitter.instruction("bl __rt_inet_addr_parse");                             // x0 = packed IPv4 or -1, x1 = port
     emitter.instruction("cmp x0, #0");                                          // did the address fail to parse?
-    emitter.instruction("b.lt __rt_stream_socket_server_fail");                 // bail out on a bad address
+    emitter.instruction("b.ge __rt_stream_socket_server_addr_ok");              // the address parsed: continue
+    socket_errno::emit_clear_socket_errno(emitter);                             // no syscall failed, so PHP reports error code 0
+    emitter.instruction("b __rt_stream_socket_server_fail");                    // bail out on a bad address
+    emitter.label("__rt_stream_socket_server_addr_ok");
     emitter.instruction("str x0, [sp, #16]");                                   // save the packed address
     emitter.instruction("str x1, [sp, #24]");                                   // save the port
 
@@ -154,6 +162,7 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative descriptor means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_server_sock_ok")); // continue when socket succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why socket() failed
     emitter.instruction("b __rt_stream_socket_server_fail");                    // socket() failed
     emitter.label("__rt_stream_socket_server_sock_ok");
     emitter.instruction("str x0, [sp, #32]");                                   // save the socket descriptor
@@ -194,6 +203,7 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_server_bind_ok")); // continue when bind succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why bind() failed, before close() overwrites x0
     emitter.instruction("b __rt_stream_socket_server_fail_close");              // bind() failed
     emitter.label("__rt_stream_socket_server_bind_ok");
 
@@ -210,6 +220,7 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
         emitter.instruction("cmp x0, #0");                                      // Linux: a negative result means failure
     }
     emitter.instruction(&plat.branch_on_syscall_success("__rt_stream_socket_server_ok")); // continue when listen succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "x0");                     // record why listen() failed, before close() overwrites x0
     emitter.instruction("b __rt_stream_socket_server_fail_close");              // listen() failed
 
     emitter.label("__rt_stream_socket_server_ok");
@@ -234,6 +245,9 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: stream_socket_server ---");
     emitter.label_global("__rt_stream_socket_server");
+    // Clear the stash before dispatching, for the reason spelled out in the client helper: the
+    // unix:// / udg:// / IPv6 servers are tail calls that never record an error number.
+    socket_errno::emit_clear_socket_errno(emitter);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. Mirrors __rt_stream_socket_client's probe so both
@@ -350,7 +364,10 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("call __rt_inet_addr_parse");                           // rax = packed IPv4 or -1, rdx = port
     emitter.instruction("test rax, rax");                                       // did the address fail to parse?
-    emitter.instruction("js __rt_stream_socket_server_fail_x86");               // bail out on a bad address
+    emitter.instruction("jns __rt_stream_socket_server_addr_ok_x86");           // the address parsed: continue
+    socket_errno::emit_clear_socket_errno(emitter);                             // no syscall failed, so PHP reports error code 0
+    emitter.instruction("jmp __rt_stream_socket_server_fail_x86");              // bail out on a bad address
+    emitter.label("__rt_stream_socket_server_addr_ok_x86");
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the packed address
     emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the port
 
@@ -361,7 +378,10 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 41");                                         // Linux x86_64 syscall 41 = socket
     emitter.instruction("syscall");                                             // create the socket
     emitter.instruction("test rax, rax");                                       // did socket() fail?
-    emitter.instruction("js __rt_stream_socket_server_fail_x86");               // socket() failed
+    emitter.instruction("jns __rt_stream_socket_server_sock_ok_x86");           // continue when socket succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why socket() failed
+    emitter.instruction("jmp __rt_stream_socket_server_fail_x86");              // socket() failed
+    emitter.label("__rt_stream_socket_server_sock_ok_x86");
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the socket descriptor
     emitter.instruction("mov rdi, rax");                                        // pass the fd to the options helper
     emitter.instruction("call __rt_apply_socket_server_opts");                  // apply so_reuseport before bind (best-effort)
@@ -391,7 +411,10 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 49");                                         // Linux x86_64 syscall 49 = bind
     emitter.instruction("syscall");                                             // bind the socket
     emitter.instruction("test rax, rax");                                       // did bind() fail?
-    emitter.instruction("js __rt_stream_socket_server_fail_close_x86");         // bind() failed
+    emitter.instruction("jns __rt_stream_socket_server_bind_ok_x86");           // continue when bind succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why bind() failed, before close() overwrites rax
+    emitter.instruction("jmp __rt_stream_socket_server_fail_close_x86");        // bind() failed
+    emitter.label("__rt_stream_socket_server_bind_ok_x86");
 
     emitter.instruction("mov rax, QWORD PTR [rbp - 64]");                       // load the udp transport flag
     emitter.instruction("test rax, rax");                                       // is this a udp socket?
@@ -403,7 +426,10 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov eax, 50");                                         // Linux x86_64 syscall 50 = listen
     emitter.instruction("syscall");                                             // mark the socket as listening
     emitter.instruction("test rax, rax");                                       // did listen() fail?
-    emitter.instruction("js __rt_stream_socket_server_fail_close_x86");         // listen() failed
+    emitter.instruction("jns __rt_stream_socket_server_listen_ok_x86");         // continue when listen succeeded
+    socket_errno::emit_capture_socket_errno(emitter, "rax");                    // record why listen() failed, before close() overwrites rax
+    emitter.instruction("jmp __rt_stream_socket_server_fail_close_x86");        // listen() failed
+    emitter.label("__rt_stream_socket_server_listen_ok_x86");
 
     emitter.label("__rt_stream_socket_server_ok_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the listening descriptor

@@ -57,6 +57,7 @@ pub(super) fn emit_platform_runtime(emitter: &mut Emitter, features: RuntimeFeat
     io::emit_stream_wrapper_unregister(emitter);
     io::emit_stream_socket_server(emitter);
     io::emit_stream_socket_client(emitter);
+    io::emit_socket_strerror(emitter);
     io::emit_unix_socket_server(emitter);
     io::emit_unix_socket_client(emitter);
     io::emit_stream_socket_accept(emitter);
