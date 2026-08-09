@@ -17,7 +17,10 @@ use super::super::layout::{
     STREAM_BACKEND_PHAR_WRITE, STREAM_BACKEND_POPEN, STREAM_BACKEND_USER_DIRECTORY,
     STREAM_BACKEND_USER_WRAPPER, STREAM_CHUNK_SIZE_OFFSET, STREAM_CONNECT_HOST_LEN_OFFSET,
     STREAM_CONNECT_HOST_PTR_OFFSET, STREAM_CONTEXT_HANDLE_OFFSET, STREAM_EOF_OFFSET, STREAM_FD_OFFSET,
-    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE, STREAM_TLS_SESSION_OFFSET,
+    STREAM_FILTERED_BUF_CAP_OFFSET, STREAM_FILTERED_BUF_LEN_OFFSET, STREAM_FILTERED_BUF_POS_OFFSET,
+    STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_FLUSHED_OFFSET,
+    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET, STREAM_STATE_SIZE,
+    STREAM_TLS_SESSION_OFFSET,
     STREAM_URI_LEN_OFFSET,
     STREAM_URI_PTR_OFFSET,
 };
@@ -262,6 +265,12 @@ fn emit_stream_fd(emitter: &mut Emitter) {
 }
 
 /// Emits EOF lookup keyed by the stable stream state.
+///
+/// A filtered stream is at EOF only once the reader has actually seen everything: bytes may still
+/// sit in the filtered-read buffer after the backend is exhausted, and the filter is still owed
+/// its `$closing` dispatch. Reporting the backend's state alone would make `while (!feof($f))`
+/// stop while output was still pending — the buffered read exists precisely to hand that output
+/// back one `$length` at a time.
 fn emit_stream_eof_get(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: read opaque stream EOF state ---");
@@ -271,10 +280,30 @@ fn emit_stream_eof_get(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_state");                                // resolve the stable stream state from the opaque handle
     emitter.instruction("cbz x0, __rt_stream_eof_get_fail");                    // invalid or legacy handles have no state-owned EOF bit
     emitter.instruction(&format!(
+        "ldr x9, [x0, #{}]", STREAM_READ_FILTER_HEAD_OFFSET
+    ));                                                                         // does the stream carry a read filter?
+    emitter.instruction("cbz x9, __rt_stream_eof_get_backend");                 // unfiltered: the backend's state is the answer
+    emitter.instruction(&format!(
+        "ldr x10, [x0, #{}]", STREAM_FILTERED_BUF_LEN_OFFSET
+    ));                                                                         // filtered bytes held
+    emitter.instruction(&format!(
+        "ldr x11, [x0, #{}]", STREAM_FILTERED_BUF_POS_OFFSET
+    ));                                                                         // filtered bytes already served
+    emitter.instruction("cmp x10, x11");                                        // is anything still owed to the reader?
+    emitter.instruction("b.ne __rt_stream_eof_get_more");                       // yes: the stream is not finished
+    emitter.instruction(&format!(
+        "ldr x12, [x0, #{}]", STREAM_FILTERED_FLUSHED_OFFSET
+    ));                                                                         // has the closing dispatch run?
+    emitter.instruction("cbz x12, __rt_stream_eof_get_more");                   // not yet: the filter may still emit
+    emitter.label("__rt_stream_eof_get_backend");
+    emitter.instruction(&format!(
         "ldr x0, [x0, #{}]", STREAM_EOF_OFFSET
     ));                                                                         // load the stream-owned EOF word
     emitter.instruction("cmp x0, #0");                                          // normalize any non-zero state to PHP true
     emitter.instruction("cset x0, ne");                                         // return a strict zero-or-one EOF predicate
+    emitter.instruction("b __rt_stream_eof_get_done");                          // join the common helper epilogue
+    emitter.label("__rt_stream_eof_get_more");
+    emitter.instruction("mov x0, #0");                                          // filtered output is still owed to the reader
     emitter.instruction("b __rt_stream_eof_get_done");                          // join the common helper epilogue
     emitter.label("__rt_stream_eof_get_fail");
     emitter.instruction("mov x0, #0");                                          // report false when no authoritative state exists
@@ -352,6 +381,20 @@ fn emit_stream_eof_set(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "str x9, [x0, #{}]", STREAM_EOF_OFFSET
     ));                                                                         // publish EOF on this stream state only
+    // Clearing EOF is how a seek says reading starts again, so the filtered-read buffer must
+    // forget what the previous pass produced — including that the filter was already flushed.
+    // Its allocation is kept; only the contents are discarded.
+    emitter.instruction("cbnz x9, __rt_stream_eof_set_keep_buffer");            // setting EOF leaves the pending bytes alone
+    emitter.instruction(&format!(
+        "str xzr, [x0, #{}]", STREAM_FILTERED_BUF_LEN_OFFSET
+    ));                                                                         // no filtered bytes carry across the seek
+    emitter.instruction(&format!(
+        "str xzr, [x0, #{}]", STREAM_FILTERED_BUF_POS_OFFSET
+    ));                                                                         // and the read cursor restarts
+    emitter.instruction(&format!(
+        "str xzr, [x0, #{}]", STREAM_FILTERED_FLUSHED_OFFSET
+    ));                                                                         // the new pass earns its own closing dispatch
+    emitter.label("__rt_stream_eof_set_keep_buffer");
     emitter.instruction("mov x0, #1");                                          // report that the state was updated
     emitter.instruction("b __rt_stream_eof_set_done");                          // join the common helper epilogue
     emitter.label("__rt_stream_eof_set_fail");
@@ -558,6 +601,23 @@ fn emit_stream_destroy_state(emitter: &mut Emitter) {
         "str xzr, [x9, #{}]", STREAM_CONNECT_HOST_LEN_OFFSET
     ));                                                                         // clear the detached host length
     emitter.instruction("bl __rt_heap_free_safe");                              // release owned host storage when present
+    // The filtered-read buffer belongs to the state, so it is released here beside the URI and
+    // host rather than at backend close: not every teardown path dispatches a backend close, and
+    // one that skipped it left the buffer live for the life of the process.
+    emitter.instruction("ldr x9, [sp, #0]");                                    // reload StreamState for filtered-buffer teardown
+    emitter.instruction(&format!(
+        "ldr x0, [x9, #{}]", STREAM_FILTERED_BUF_PTR_OFFSET
+    ));                                                                         // load the buffer a filtered read allocated
+    emitter.instruction(&format!(
+        "str xzr, [x9, #{}]", STREAM_FILTERED_BUF_PTR_OFFSET
+    ));                                                                         // detach before the free so a re-entrant teardown cannot double-free
+    emitter.instruction(&format!(
+        "str xzr, [x9, #{}]", STREAM_FILTERED_BUF_LEN_OFFSET
+    ));                                                                         // no bytes are held any more
+    emitter.instruction(&format!(
+        "str xzr, [x9, #{}]", STREAM_FILTERED_BUF_CAP_OFFSET
+    ));                                                                         // and no capacity remains
+    emitter.instruction("bl __rt_heap_free_safe");                              // release the filtered-read buffer when present
     emitter.instruction("ldr x9, [sp, #0]");                                    // reload StreamState for context teardown
     emitter.instruction(&format!(
         "ldr x0, [x9, #{}]", STREAM_CONTEXT_HANDLE_OFFSET

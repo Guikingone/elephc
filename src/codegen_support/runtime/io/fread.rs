@@ -1,5 +1,10 @@
 //! Purpose:
-//! Emits the `__rt_fread`, `__rt_fread_done` runtime helper assembly for fread.
+//! Emits `__rt_fread_raw`, the unbuffered read behind `fread()`.
+//!
+//! `__rt_fread` itself lives in `fread_filtered`: it wraps this helper with the per-stream
+//! filtered-read buffer PHP keeps, and tail-calls straight here when the stream has no read
+//! filter chain. This helper therefore does NOT apply that chain — the wrapper does, because it
+//! is the only place that can re-read when a filter withholds its output.
 //! Keeps PHP filesystem/resource behavior, libc calls, and target-specific ABI variants in one focused emitter.
 //!
 //! Called from:
@@ -44,7 +49,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
 
     emitter.blank();
     emitter.comment("--- runtime: fread ---");
-    emitter.label_global("__rt_fread");
+    emitter.label_global("__rt_fread_raw");
 
     // -- set up stack frame --
     emitter.instruction("sub sp, sp, #64");                                     // allocate stream, descriptor, and read-result spill slots
@@ -159,16 +164,6 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #16]");                                   // return string start pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // return actual bytes read as length
 
-    // -- apply the attached read filter chain to the bytes just read --
-    // The chain is an arbitrarily long linked list rooted in StreamState, so this
-    // replaces the old two-slot table that silently dropped a third filter.
-    emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
-    emitter.instruction(&format!(
-        "mov x3, #{}",
-        crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET
-    ));                                                                         // select the read-direction chain
-    emitter.instruction("bl __rt_stream_apply_filter_chain");                   // x1/x2 <- filtered buffer and length
-
     // Legacy per-descriptor slots still serve the filter families not yet moved
     // onto the chain (user filters, zlib/bzip2/iconv). A filter lives in exactly
     // one mechanism, so running both is correct for the duration of the migration.
@@ -213,7 +208,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
 fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: fread ---");
-    emitter.label_global("__rt_fread");
+    emitter.label_global("__rt_fread_raw");
 
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fread() uses local spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved file descriptor, length, and concat-buffer start pointer
@@ -309,16 +304,6 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fread_publish_x86");
     emitter.instruction("mov rdx, QWORD PTR [rbp - 40]");                       // return the successful byte count in the string-length register
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer in the x86_64 elephc string-pointer result register
-    // -- apply the attached read filter chain to the bytes just read --
-    // The chain is an arbitrarily long linked list rooted in StreamState, so this
-    // replaces the old two-slot table that silently dropped a third filter.
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
-    emitter.instruction(&format!(
-        "mov rsi, {}",
-        crate::codegen_support::runtime::resources::layout::STREAM_READ_FILTER_HEAD_OFFSET
-    ));                                                                         // select the read-direction chain
-    emitter.instruction("call __rt_stream_apply_filter_chain");                 // rax/rdx <- filtered buffer and length
-
     // Legacy per-descriptor slots still serve the filter families not yet moved
     // onto the chain (user filters, zlib/bzip2/iconv). A filter lives in exactly
     // one mechanism, so running both is correct for the duration of the migration.

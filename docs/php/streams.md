@@ -57,7 +57,7 @@ resources than the initial reservation holds grows the table on the heap as usua
 |---|---|---|
 | `fopen()` | `fopen($filename, $mode, $use_include_path = false, $context = null): resource\|false` | Open a file, wrapper URL, socket-like wrapper, or temporary/memory stream. Modes `r`, `w`, `a`, `r+`, `w+`, and `a+` are supported. The optional args are evaluated in source order. `fopen()`, `file_get_contents()` and `readfile()` each publish their own `$context` for the duration of the call and restore the previous one afterwards. |
 | `fclose()` | `fclose(resource $handle): bool` | Close a stream. Closing a `phar://` write stream finalizes the archive, and closing a filtered stream runs pending filter cleanup such as user-filter `onClose()`. |
-| `fread()` | `fread(resource $handle, $length): string` | Read up to `$length` bytes. Attached read filters and user-wrapper `stream_read()` methods are honored. |
+| `fread()` | `fread(resource $handle, $length): string` | Read up to `$length` bytes. Attached read filters and user-wrapper `stream_read()` methods are honored. On a filtered stream the result is capped at `$length` and the filter's remainder is kept for the next read. |
 | `fwrite()` | `fwrite(resource $handle, $data): int` | Write bytes and return the byte count. Attached write filters and user-wrapper `stream_write()` methods are honored. |
 | `fprintf()` | `fprintf(resource $handle, string $format, ...$values): int` | Format like `sprintf()` and write to the stream. |
 | `vfprintf()` | `vfprintf(resource $handle, string $format, array $values): int` | Like `fprintf()`, with format values supplied as an array. |
@@ -283,18 +283,19 @@ filter is removed with `stream_filter_remove()` or carried off by `fclose()`.
 closing flush a removal performs. `PSFS_ERR_FATAL` cancels a removal but does not
 otherwise propagate as a stream error.
 
-⚠️ **`PSFS_FEED_ME` currently passes the raw input through** instead of withholding it.
-A filter that buffers across dispatches — returning `PSFS_FEED_ME` until it has enough
-bytes — therefore leaks its unfiltered input to the caller: reading `abcdefghi` in
-three-byte chunks through such a filter yields `abc`, `ABCDEF`, `ghi` where PHP yields
-`ABC`, `DEF`, `GHI`. Filters that answer `PSFS_PASS_ON` on every dispatch are
-unaffected. The fix needs three things together: `PSFS_FEED_ME` returning nothing, the
-read path fetching more input and dispatching again rather than reporting a short read,
-and a filtered-read buffer on the stream so a filter that emits more than the caller
-asked for keeps the remainder — plus a closing dispatch at end-of-stream so bytes still
-held by the filter are flushed. Measured against php 8.5.6: a filter that triples `"ab"`
-answers three `fread($f, 2)` calls with `ab`, `ab`, `ab`, and a filter still buffering
-when the stream ends has its `$closing` output reach the reader.
+`PSFS_FEED_ME` means the filter has taken the input and has no output yet, so the read
+returns nothing and fetches more input to dispatch again. A filter that buffers across
+dispatches therefore behaves as in PHP: reading `abcdefghi` in three-byte chunks through
+a filter that accumulates six bytes before emitting yields `ABC`, `DEF`, `GHI`.
+
+Filtered reads are buffered on the stream, which is what makes that work. A read filter
+does not emit one byte per byte consumed, so `fread($h, $n)` caps the result at `$n` and
+keeps the remainder for the next read — a filter that triples `"ab"` answers three
+`fread($f, 2)` calls with `ab`, `ab`, `ab`. Reaching the end of the input gives the chain
+one final `filter(..., $closing = true)` dispatch, and whatever it emits reaches the
+reader, so a filter still holding bytes when the stream ends flushes them. `feof()` stays
+false while any of that output is still owed, and seeking discards it: the new pass earns
+its own closing dispatch.
 
 ## User stream wrappers
 

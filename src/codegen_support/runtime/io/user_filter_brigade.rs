@@ -31,8 +31,8 @@
 //!   ERR_FATAL) is observed to decide the result:
 //!   - `PSFS_PASS_ON` (2): walk `$out->_buckets` and concatenate the
 //!     `data` strings into `_stream_filter_buf`.
-//!   - `PSFS_FEED_ME` (1): return the original input buffer unchanged
-//!     so the stream layer can re-read and re-invoke the filter.
+//!   - `PSFS_FEED_ME` (1): return NOTHING. The filter has taken the input and has
+//!     no output yet; `__rt_fread`'s buffered wrapper re-reads and dispatches again.
 //!   - `PSFS_ERR_FATAL` (0): return an empty result to signal a fatal
 //!     filter error to the caller.
 
@@ -281,13 +281,19 @@ fn emit_user_filter_brigade_invoke_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add sp, sp, #128");                                    // release runtime stack frame
     emitter.instruction("ret");                                                 // return empty result to the caller
 
-    // -- PSFS_FEED_ME: return the original input unchanged (the stream layer will re-read) --
+    // -- PSFS_FEED_ME: the filter kept the input and produced nothing yet --
+    //
+    // This used to hand the ORIGINAL input back, on the theory that the stream layer would
+    // re-read and dispatch again. Nothing did, so the caller received the filter's raw,
+    // unfiltered bytes — a silent wrong result for any filter that buffers across dispatches.
+    // Answering empty is what PSFS_FEED_ME means; `__rt_fread`'s buffered wrapper is what
+    // fetches more input and dispatches again.
     emitter.label("__rt_ufbi_feed_me");
-    emitter.instruction("ldr x1, [sp, #8]");                                    // original buf_ptr
-    emitter.instruction("ldr x2, [sp, #16]");                                   // original buf_len
+    abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");              // a readable pointer for a zero-length result
+    emitter.instruction("mov x2, #0");                                          // the filter has produced nothing to pass on
     emitter.instruction("ldp x29, x30, [sp, #112]");                            // restore frame pointer and return address
     emitter.instruction("add sp, sp, #128");                                    // release runtime stack frame
-    emitter.instruction("ret");                                                 // return original input unchanged
+    emitter.instruction("ret");                                                 // return an empty result
 
     emitter.label("__rt_ufbi_empty");
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");
@@ -517,10 +523,12 @@ fn emit_user_filter_brigade_invoke_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return empty result to the caller
 
-    // -- PSFS_FEED_ME: return the original input unchanged (the stream layer will re-read) --
+    // -- PSFS_FEED_ME: the filter kept the input and produced nothing yet --
+    // See the AArch64 counterpart: handing the original input back leaked unfiltered bytes to
+    // the caller. `__rt_fread`'s buffered wrapper is what fetches more input and dispatches again.
     emitter.label("__rt_ufbi_feed_me_x");
-    emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // original buf_ptr
-    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // original buf_len
+    abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // a readable pointer for a zero-length result
+    emitter.instruction("xor edx, edx");                                        // the filter has produced nothing to pass on
     emitter.instruction("mov r12, QWORD PTR [rbp - 96]");                       // restore callee-saved regs
     emitter.instruction("mov r13, QWORD PTR [rbp - 104]");                      // move runtime value between registers
     emitter.instruction("mov r14, QWORD PTR [rbp - 112]");                      // move runtime value between registers

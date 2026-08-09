@@ -801,12 +801,18 @@ fn test_error_stream_socket_recvfrom_address_not_variable() {
     );
 }
 
-/// Verifies the invalid-call diagnostic for error stream socket recvfrom address not string.
+/// Verifies a variable of the wrong type in the `$address` output position is rejected.
+///
+/// The diagnostic is now elephc's ordinary reassignment error rather than a message
+/// `stream_socket_recvfrom()` spelled out for itself: `$address` is declared `ref(Str)`, so the
+/// call binds the variable to `string` through the normal assignment merge. That is what makes
+/// the SLOT a string wherever the runtime writes one, and it is the same diagnostic every other
+/// by-reference output gives for the same mistake.
 #[test]
 fn test_error_stream_socket_recvfrom_address_not_string() {
     expect_error(
         "<?php $n = 1; stream_socket_recvfrom(STDIN, 32, 0, $n);",
-        "stream_socket_recvfrom() parameter $address must be a string",
+        "cannot reassign $n from int to string",
     );
 }
 

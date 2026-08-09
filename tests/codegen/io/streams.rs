@@ -5438,7 +5438,6 @@ if ($f !== false) { echo stream_get_contents($f); fclose($f); }
 /// Returning more bytes than requested is a contract break in its own right: a caller that
 /// sized a buffer from `$n` gets more than it asked for.
 #[test]
-#[ignore = "no filtered-read buffer: an expanding filter's whole output is returned at once"]
 fn test_fread_caps_a_filtered_read_at_the_requested_length() {
     let out = compile_and_run(
         r#"<?php
@@ -5490,7 +5489,6 @@ echo implode("|", $parts);
 ///      stream ends gets a `$closing` dispatch whose output reaches the reader. With
 ///      only (1)+(2) this fixture prints `<ABCDEF>` — the leak becomes a loss.
 #[test]
-#[ignore = "PSFS_FEED_ME passes the raw input through; needs the fread re-read loop, a filtered-read buffer and a closing flush"]
 fn test_user_filter_psfs_feed_me_buffers_across_dispatches() {
     let out = compile_and_run(
         r#"<?php
@@ -5540,7 +5538,6 @@ echo $out;
 /// capping and parking the remainder, and this closing flush. Landing the first two without this
 /// one turns the leak into silent data loss, so all three ship together.
 #[test]
-#[ignore = "nothing flushes a read filter at EOF, so a filter holding bytes until $closing never emits them"]
 fn test_read_filter_is_flushed_when_the_stream_ends() {
     let out = compile_and_run(
         r#"<?php
@@ -7423,7 +7420,12 @@ echo "len=" . strlen($r) . "|";
     assert_eq!(out, "len=0|");
 }
 
-/// Verifies a user filter returning PSFS_FEED_ME passes the input through unchanged.
+/// Verifies a user filter that only ever answers `PSFS_FEED_ME` yields NOTHING.
+///
+/// This fixture used to assert `"hello\n"` — it pinned the defect. `PSFS_FEED_ME` means the
+/// filter took the input and has no output yet, so passing the input through handed the caller
+/// raw, unfiltered bytes. Measured against php 8.5.6, which answers the empty string here (plus
+/// a "Unprocessed filter buckets remaining on input brigade" warning elephc does not emit).
 #[test]
 fn test_user_filter_psfs_feed_me() {
     let out = compile_and_run(
@@ -7438,10 +7440,11 @@ $f = fopen("php://memory", "r+");
 fwrite($f, "hello\n");
 rewind($f);
 stream_filter_append($f, "feedme");
-echo fread($f, 100);
+$r = fread($f, 100);
+echo "len=", strlen($r);
 "#,
     );
-    assert_eq!(out, "hello\n");
+    assert_eq!(out, "len=0");
 }
 
 /// Verifies a user filter returning PSFS_PASS_ON transforms the output (control).

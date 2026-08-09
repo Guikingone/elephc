@@ -145,6 +145,32 @@ pub(crate) const STREAM_TLS_SESSION_OFFSET: i64 = 104;
 /// Byte offset of the PHP-visible stream chunk size, or zero for the 8192-byte default.
 pub(crate) const STREAM_CHUNK_SIZE_OFFSET: i64 = 144;
 
+/// Byte offset of the filtered-read buffer: heap pointer, or 0 before the first filtered read.
+///
+/// A read filter does not produce one output byte per input byte, so what it emits cannot be
+/// handed straight back to `fread($h, $n)`: PHP caps the result at `$n` and keeps the remainder
+/// on the stream for the next read. This buffer is that remainder. Without it an expanding
+/// filter returned its whole output at once — more bytes than the caller asked for — and a
+/// filter that answered `PSFS_FEED_ME` had no place to accumulate, which is why the read path
+/// passed its raw, unfiltered input through instead.
+pub(crate) const STREAM_FILTERED_BUF_PTR_OFFSET: i64 = 152;
+
+/// Byte offset of the number of filtered bytes currently held in the buffer.
+pub(crate) const STREAM_FILTERED_BUF_LEN_OFFSET: i64 = 160;
+
+/// Byte offset of the filtered buffer's allocated capacity.
+pub(crate) const STREAM_FILTERED_BUF_CAP_OFFSET: i64 = 168;
+
+/// Byte offset of the read cursor into the filtered buffer.
+pub(crate) const STREAM_FILTERED_BUF_POS_OFFSET: i64 = 176;
+
+/// Byte offset of the "closing flush already ran" marker.
+///
+/// PHP gives a read filter one final `filter(..., $closing = true)` dispatch when the stream
+/// ends, and whatever that dispatch emits reaches the reader. The marker keeps it to exactly one
+/// dispatch however many times the caller reads past EOF.
+pub(crate) const STREAM_FILTERED_FLUSHED_OFFSET: i64 = 184;
+
 /// Byte offset of stream ownership flags.
 pub(crate) const STREAM_OWNERSHIP_FLAGS_OFFSET: i64 = 296;
 
@@ -249,6 +275,14 @@ const _: () = {
     assert!(STREAM_CONTEXT_HANDLE_OFFSET < STREAM_CHUNK_SIZE_OFFSET);
     assert!(STREAM_EOF_OFFSET < STREAM_CHUNK_SIZE_OFFSET);
     assert!(STREAM_CHUNK_SIZE_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
+    // The five filtered-read buffer fields sit in the gap between the chunk size and the
+    // ownership flags, contiguous so a single loop can clear them.
+    assert!(STREAM_FILTERED_BUF_PTR_OFFSET > STREAM_CHUNK_SIZE_OFFSET);
+    assert!(STREAM_FILTERED_BUF_LEN_OFFSET == STREAM_FILTERED_BUF_PTR_OFFSET + 8);
+    assert!(STREAM_FILTERED_BUF_CAP_OFFSET == STREAM_FILTERED_BUF_LEN_OFFSET + 8);
+    assert!(STREAM_FILTERED_BUF_POS_OFFSET == STREAM_FILTERED_BUF_CAP_OFFSET + 8);
+    assert!(STREAM_FILTERED_FLUSHED_OFFSET == STREAM_FILTERED_BUF_POS_OFFSET + 8);
+    assert!(STREAM_FILTERED_FLUSHED_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(CONTEXT_STATE_SIZE == 32);
     assert!(CONTEXT_PARAMS_OFFSET == CONTEXT_OPTIONS_OFFSET + 8);
     assert!(CONTEXT_NOTIFIER_OFFSET == CONTEXT_PARAMS_OFFSET + 8);

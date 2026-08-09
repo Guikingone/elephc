@@ -17,7 +17,10 @@ use super::super::layout::{
     STREAM_BACKEND_PHAR_WRITE, STREAM_BACKEND_POPEN, STREAM_BACKEND_USER_DIRECTORY,
     STREAM_BACKEND_USER_WRAPPER, STREAM_CHUNK_SIZE_OFFSET, STREAM_CONNECT_HOST_LEN_OFFSET,
     STREAM_CONNECT_HOST_PTR_OFFSET, STREAM_CONTEXT_HANDLE_OFFSET, STREAM_EOF_OFFSET, STREAM_FD_OFFSET,
-    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_STATE_SIZE, STREAM_TLS_SESSION_OFFSET,
+    STREAM_FILTERED_BUF_CAP_OFFSET, STREAM_FILTERED_BUF_LEN_OFFSET, STREAM_FILTERED_BUF_POS_OFFSET,
+    STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_FLUSHED_OFFSET,
+    STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET, STREAM_STATE_SIZE,
+    STREAM_TLS_SESSION_OFFSET,
     STREAM_URI_LEN_OFFSET,
     STREAM_URI_PTR_OFFSET,
 };
@@ -285,11 +288,32 @@ fn emit_stream_eof_get(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stream_state");                              // resolve the stable stream state from the opaque handle
     emitter.instruction("test rax, rax");                                       // did lookup produce an authoritative state?
     emitter.instruction("jz __rt_stream_eof_get_fail");                         // invalid or legacy handles have no state-owned EOF bit
+    // See the AArch64 counterpart: a filtered stream is at EOF only once the reader has seen
+    // everything, so buffered output and an owed `$closing` dispatch both hold `feof()` false.
+    emitter.instruction(&format!(
+        "cmp QWORD PTR [rax + {}], 0", STREAM_READ_FILTER_HEAD_OFFSET
+    ));                                                                         // does the stream carry a read filter?
+    emitter.instruction("je __rt_stream_eof_get_backend");                      // unfiltered: the backend's state is the answer
+    emitter.instruction(&format!(
+        "mov r10, QWORD PTR [rax + {}]", STREAM_FILTERED_BUF_LEN_OFFSET
+    ));                                                                         // filtered bytes held
+    emitter.instruction(&format!(
+        "cmp r10, QWORD PTR [rax + {}]", STREAM_FILTERED_BUF_POS_OFFSET
+    ));                                                                         // is anything still owed to the reader?
+    emitter.instruction("jne __rt_stream_eof_get_more");                        // yes: the stream is not finished
+    emitter.instruction(&format!(
+        "cmp QWORD PTR [rax + {}], 0", STREAM_FILTERED_FLUSHED_OFFSET
+    ));                                                                         // has the closing dispatch run?
+    emitter.instruction("je __rt_stream_eof_get_more");                         // not yet: the filter may still emit
+    emitter.label("__rt_stream_eof_get_backend");
     emitter.instruction(&format!(
         "cmp QWORD PTR [rax + {}], 0", STREAM_EOF_OFFSET
     ));                                                                         // test the stream-owned EOF word
     emitter.instruction("setne al");                                            // normalize any non-zero state to PHP true
     emitter.instruction("movzx eax, al");                                       // widen the strict EOF predicate
+    emitter.instruction("jmp __rt_stream_eof_get_done");                        // join the common helper epilogue
+    emitter.label("__rt_stream_eof_get_more");
+    emitter.instruction("xor eax, eax");                                        // filtered output is still owed to the reader
     emitter.instruction("jmp __rt_stream_eof_get_done");                        // join the common helper epilogue
     emitter.label("__rt_stream_eof_get_fail");
     emitter.instruction("xor eax, eax");                                        // report false when no authoritative state exists
@@ -368,6 +392,20 @@ fn emit_stream_eof_set(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov QWORD PTR [rax + {}], r10", STREAM_EOF_OFFSET
     ));                                                                         // publish EOF on this stream state only
+    // See the AArch64 counterpart: clearing EOF is a seek saying reading starts again, so the
+    // filtered-read buffer discards what the previous pass produced. The allocation is kept.
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jnz __rt_stream_eof_set_keep_buffer_x86");             // setting EOF leaves the pending bytes alone
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rax + {}], 0", STREAM_FILTERED_BUF_LEN_OFFSET
+    ));                                                                         // no filtered bytes carry across the seek
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rax + {}], 0", STREAM_FILTERED_BUF_POS_OFFSET
+    ));                                                                         // and the read cursor restarts
+    emitter.instruction(&format!(
+        "mov QWORD PTR [rax + {}], 0", STREAM_FILTERED_FLUSHED_OFFSET
+    ));                                                                         // the new pass earns its own closing dispatch
+    emitter.label("__rt_stream_eof_set_keep_buffer_x86");
     emitter.instruction("mov eax, 1");                                          // report that the state was updated
     emitter.instruction("jmp __rt_stream_eof_set_done");                        // join the common helper epilogue
     emitter.label("__rt_stream_eof_set_fail");
@@ -585,6 +623,22 @@ fn emit_stream_destroy_state(emitter: &mut Emitter) {
         "mov QWORD PTR [r10 + {}], 0", STREAM_CONNECT_HOST_LEN_OFFSET
     ));                                                                         // clear the detached host length
     emitter.instruction("call __rt_heap_free_safe");                            // release owned host storage when present
+    // See the AArch64 counterpart: the filtered-read buffer belongs to the state, so it is
+    // released here beside the URI and host rather than at backend close.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload StreamState for filtered-buffer teardown
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [r10 + {}]", STREAM_FILTERED_BUF_PTR_OFFSET
+    ));                                                                         // load the buffer a filtered read allocated
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], 0", STREAM_FILTERED_BUF_PTR_OFFSET
+    ));                                                                         // detach before the free so a re-entrant teardown cannot double-free
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], 0", STREAM_FILTERED_BUF_LEN_OFFSET
+    ));                                                                         // no bytes are held any more
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], 0", STREAM_FILTERED_BUF_CAP_OFFSET
+    ));                                                                         // and no capacity remains
+    emitter.instruction("call __rt_heap_free_safe");                            // release the filtered-read buffer when present
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload StreamState for context teardown
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r10 + {}]", STREAM_CONTEXT_HANDLE_OFFSET
