@@ -10,5 +10,6 @@
 //! - User functions, builtins, externs, and callable aliases must share the same argument semantics.
 
 mod call_validation;
+mod param_binding;
 mod resolution;
 mod returns;

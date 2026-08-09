@@ -71,9 +71,9 @@ pub fn emit_mixed_cast_float(emitter: &mut Emitter) {
     emitter.instruction("ret");                                                 // return the floating-point cast result in d0
 }
 
-/// x86_64 Linux SysV ABI variant of `emit_mixed_cast_float`. Uses the SysV calling
-/// convention:
-/// - Input: rdi = boxed mixed pointer
+/// x86_64 Linux variant of `emit_mixed_cast_float`:
+/// - Input: rax = boxed mixed pointer. The cell is forwarded untouched to
+///   `__rt_mixed_unbox`, whose x86_64 input register is `rax`, so `rdi` is NOT the input.
 /// - Tag returned in rax, payload words in rdi/rdx after `__rt_mixed_unbox`
 /// - Float result returned in xmm0
 /// - Stack kept 16-byte aligned; one 16-byte scratch slot reserved for nested calls.

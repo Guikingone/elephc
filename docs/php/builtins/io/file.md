@@ -2,19 +2,21 @@
 title: "file()"
 description: "Reads an entire file into an array."
 sidebar:
-  order: 168
+  order: 175
 ---
 
 ## file()
 
 ```php
-function file(string $filename): array
+function file(string $filename, int $flags = 0, mixed $context = null): array
 ```
 
 Reads an entire file into an array.
 
 **Parameters**:
 - `$filename` (`string`)
+- `$flags` (`int`), default `0`, optional
+- `$context` (`mixed`), default `null`, optional
 
 **Returns**: `array`
 

@@ -2,7 +2,7 @@
 title: "socket_set_blocking() — internals"
 description: "Compiler internals for socket_set_blocking(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 213
+  order: 220
 ---
 
 ## `socket_set_blocking()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/socket_set_blocking.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/socket_set_blocking.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

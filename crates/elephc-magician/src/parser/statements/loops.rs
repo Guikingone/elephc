@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Foreach key/value targets and statement bodies retain EvalIR source order.
+//! - `for` and `foreach` accept PHP's alternative `:` … `endfor;`/`endforeach;` bodies, which
+//!   lower to the same EvalIR as the brace form.
 
 use super::*;
 
@@ -59,7 +61,7 @@ impl Parser {
         };
         self.expect_semicolon()?;
         let update = self.parse_for_update_clause()?;
-        let body = self.parse_statement_body()?;
+        let body = self.parse_statement_body_or_alternative("endfor")?;
         Ok(vec![EvalStmt::For {
             init,
             condition,
@@ -95,7 +97,7 @@ impl Parser {
             (None, value_name)
         };
         self.expect(TokenKind::RParen)?;
-        let body = self.parse_statement_body()?;
+        let body = self.parse_statement_body_or_alternative("endforeach")?;
         Ok(vec![EvalStmt::Foreach {
             array,
             key_name,

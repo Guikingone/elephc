@@ -171,3 +171,94 @@ fn parse_fragment_accepts_foreach_key_value_source() {
         }]
     );
 }
+
+// --- Alternative control-structure syntax ---
+
+/// Verifies an alternative-syntax `if`/`else` fragment lowers to the same branch statement as
+/// the braced form, so a runtime `eval()` string behaves like the AOT-compiled one.
+#[test]
+fn parse_fragment_accepts_alternative_if_else_source() {
+    let alternative =
+        parse_fragment(br#"if ($flag): $x = "yes"; else: $x = "no"; endif;"#)
+            .expect("alternative fragment should parse");
+    let braced = parse_fragment(br#"if ($flag) { $x = "yes"; } else { $x = "no"; }"#)
+        .expect("braced fragment should parse");
+    assert_eq!(alternative.statements(), braced.statements());
+}
+
+/// Verifies `elseif:` segments nest exactly like the braced `elseif` chain.
+#[test]
+fn parse_fragment_accepts_alternative_elseif_chain() {
+    let alternative =
+        parse_fragment(br#"if ($a): $x = 1; elseif ($b): $x = 2; else: $x = 3; endif;"#)
+            .expect("alternative fragment should parse");
+    let braced =
+        parse_fragment(br#"if ($a) { $x = 1; } elseif ($b) { $x = 2; } else { $x = 3; }"#)
+            .expect("braced fragment should parse");
+    assert_eq!(alternative.statements(), braced.statements());
+}
+
+/// Verifies the alternative `while` body lowers to the same loop as the braced form.
+#[test]
+fn parse_fragment_accepts_alternative_while_source() {
+    let alternative = parse_fragment(br#"while ($i): $i = $i - 1; endwhile;"#)
+        .expect("alternative fragment should parse");
+    let braced = parse_fragment(br#"while ($i) { $i = $i - 1; }"#)
+        .expect("braced fragment should parse");
+    assert_eq!(alternative.statements(), braced.statements());
+}
+
+/// Verifies the alternative `for` body lowers to the same loop as the braced form.
+#[test]
+fn parse_fragment_accepts_alternative_for_source() {
+    let alternative = parse_fragment(br#"for ($i = 0; $i < 3; $i++): $x = $i; endfor;"#)
+        .expect("alternative fragment should parse");
+    let braced = parse_fragment(br#"for ($i = 0; $i < 3; $i++) { $x = $i; }"#)
+        .expect("braced fragment should parse");
+    assert_eq!(alternative.statements(), braced.statements());
+}
+
+/// Verifies the alternative `foreach` body lowers to the same loop as the braced form,
+/// including the `$key => $value` binding.
+#[test]
+fn parse_fragment_accepts_alternative_foreach_source() {
+    let alternative = parse_fragment(br#"foreach ($items as $k => $v): $x = $v; endforeach;"#)
+        .expect("alternative fragment should parse");
+    let braced = parse_fragment(br#"foreach ($items as $k => $v) { $x = $v; }"#)
+        .expect("braced fragment should parse");
+    assert_eq!(alternative.statements(), braced.statements());
+}
+
+/// Verifies the alternative `switch` case list lowers to the same arms as the braced form.
+#[test]
+fn parse_fragment_accepts_alternative_switch_source() {
+    let alternative = parse_fragment(
+        br#"switch ($x): case 1: $y = "one"; break; default: $y = "other"; endswitch;"#,
+    )
+    .expect("alternative fragment should parse");
+    let braced = parse_fragment(
+        br#"switch ($x) { case 1: $y = "one"; break; default: $y = "other"; }"#,
+    )
+    .expect("braced fragment should parse");
+    assert_eq!(alternative.statements(), braced.statements());
+}
+
+/// Verifies alternative bodies may be empty and that the two forms nest in either direction.
+#[test]
+fn parse_fragment_accepts_empty_and_nested_alternative_bodies() {
+    parse_fragment(br#"if ($a): endif;"#).expect("empty alternative if should parse");
+    parse_fragment(br#"while ($a): endwhile;"#).expect("empty alternative while should parse");
+    parse_fragment(br#"foreach ($a as $v): if ($v) { $x = 1; } endforeach;"#)
+        .expect("braced body nested in alternative loop should parse");
+    parse_fragment(br#"foreach ($a as $v) { if ($v): $x = 1; endif; }"#)
+        .expect("alternative body nested in braced loop should parse");
+}
+
+/// Verifies an unterminated alternative body is rejected rather than silently consuming
+/// the rest of the fragment.
+#[test]
+fn parse_fragment_rejects_unterminated_alternative_body() {
+    assert!(parse_fragment(br#"if ($a): $x = 1;"#).is_err());
+    assert!(parse_fragment(br#"while ($a): $x = 1;"#).is_err());
+    assert!(parse_fragment(br#"switch ($a): case 1: $x = 1;"#).is_err());
+}

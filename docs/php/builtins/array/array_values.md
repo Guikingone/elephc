@@ -2,7 +2,7 @@
 title: "array_values()"
 description: "Returns all the values of an array, re-indexed numerically."
 sidebar:
-  order: 44
+  order: 45
 ---
 
 ## array_values()

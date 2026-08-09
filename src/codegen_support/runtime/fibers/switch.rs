@@ -22,8 +22,23 @@
 use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::system::{
+    STACK_GUARD_RESERVE_BYTES, STACK_LIMIT_MAIN_SYMBOL, STACK_LIMIT_SYMBOL,
+};
 
-use super::{FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET, FIBER_SAVED_SP_OFFSET};
+use super::alloc::FIBER_GUARD_PAGE_SIZE;
+use super::{
+    FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET, FIBER_SAVED_SP_OFFSET,
+    FIBER_STACK_BASE_OFFSET,
+};
+
+/// Call-stack floor for a coroutine stack, measured from the fiber's mmap base.
+///
+/// `stack_base` is the low address of the whole mapping, whose first `FIBER_GUARD_PAGE_SIZE`
+/// bytes are the `PROT_NONE` guard. Adding the guard plus the shared reserve gives the
+/// lowest address a compiled prologue may legally reach on that coroutine stack, leaving the
+/// guard page itself as a hard backstop for anything the software check cannot see.
+const FIBER_STACK_FLOOR_OFFSET: i64 = FIBER_GUARD_PAGE_SIZE as i64 + STACK_GUARD_RESERVE_BYTES;
 
 /// Total bytes saved on the stack by an AArch64 context switch (must stay 16-aligned).
 const AARCH64_SWITCH_SAVE_BYTES: i32 = 160;
@@ -117,6 +132,7 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x12", "_exc_handler_top", 0);       // restore the target fiber's handler chain head globally
     emitter.instruction(&format!("ldr x13, [x0, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // x13 = target fiber's saved activation-record cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "x13", "_exc_call_frame_top", 0);    // restore the target fiber's call-frame chain head globally
+    emit_adopt_fiber_stack_limit_aarch64(emitter);
     emitter.instruction(&format!("ldr x11, [x0, #{}]", FIBER_SAVED_SP_OFFSET)); // x11 = target fiber's saved SP
     emitter.instruction("mov sp, x11");                                         // adopt the target fiber's stack
     emitter.instruction("b __rt_fiber_switch_restore");                         // proceed to restore callee-saved registers
@@ -127,6 +143,8 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x12", "_exc_handler_top", 0);       // restore the main thread handler chain head globally
     abi::emit_load_symbol_to_reg(emitter, "x13", "_fiber_main_saved_call_frame", 0); // x13 = main thread's saved activation-record cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "x13", "_exc_call_frame_top", 0);    // restore the main thread call-frame chain head globally
+    abi::emit_load_symbol_to_reg(emitter, "x14", STACK_LIMIT_MAIN_SYMBOL, 0);   // x14 = the OS-thread call-stack floor measured at process start
+    abi::emit_store_reg_to_symbol(emitter, "x14", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
     abi::emit_load_symbol_to_reg(emitter, "x11", "_fiber_main_saved_sp", 0);    // x11 = main thread's saved SP
     emitter.instruction("mov sp, x11");                                         // adopt the main thread's stack
 
@@ -144,6 +162,44 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     emitter.instruction("ldp d14, d15, [sp, #144]");                            // restore callee-saved floating-point registers d14/d15
     emitter.instruction(&format!("add sp, sp, #{}", AARCH64_SWITCH_SAVE_BYTES)); // release the switch save area on the target's stack
     emitter.instruction("ret");                                                 // resume the target context where it last yielded
+}
+
+/// Publishes the incoming fiber's call-stack floor into `_stack_limit` (AArch64).
+///
+/// Called with `x0` still holding the target `Fiber*`, before its saved SP is adopted.
+/// A fiber runs on an mmap'd coroutine stack that has nothing to do with the OS thread
+/// stack, so the guard would otherwise compare against a completely unrelated address; this
+/// swap is what keeps the guard from misfiring the moment a generator or Fiber body starts.
+/// A zero `stack_base` (a fiber whose stack allocation failed) publishes zero, which leaves
+/// the guard inert instead of publishing a nonsensical low-address floor.
+///
+/// Clobbers x9 (symbol scratch), x14, and x15, none of which carry switch state.
+fn emit_adopt_fiber_stack_limit_aarch64(emitter: &mut Emitter) {
+    emitter.comment("adopt the target fiber's call-stack floor");
+    emitter.instruction(&format!("ldr x14, [x0, #{}]", FIBER_STACK_BASE_OFFSET)); // x14 = low address of the target fiber's stack mapping
+    emitter.instruction("cbz x14, __rt_fiber_switch_limit_ready");              // an unallocated stack publishes zero and disables the guard
+    abi::emit_load_int_immediate(emitter, "x15", FIBER_STACK_FLOOR_OFFSET);
+    emitter.instruction("add x14, x14, x15");                                   // skip the guard page and the shared reserve to get the usable floor
+    emitter.label("__rt_fiber_switch_limit_ready");
+    abi::emit_store_reg_to_symbol(emitter, "x14", STACK_LIMIT_SYMBOL, 0);       // publish the coroutine floor for every prologue that runs on this stack
+}
+
+/// Publishes the incoming fiber's call-stack floor into `_stack_limit` (x86_64 SysV).
+///
+/// Mirrors `emit_adopt_fiber_stack_limit_aarch64`, reading the target `Fiber*` from `rdi`
+/// before its saved SP is adopted. Clobbers rax and (in PIC mode) the borrowed GOT scratch
+/// register the symbol helper protects itself.
+fn emit_adopt_fiber_stack_limit_x86_64(emitter: &mut Emitter) {
+    emitter.comment("adopt the target fiber's call-stack floor");
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [rdi + {}]",
+        FIBER_STACK_BASE_OFFSET
+    )); // rax = low address of the target fiber's stack mapping
+    emitter.instruction("test rax, rax");                                       // did this fiber ever get a stack mapping?
+    emitter.instruction("jz __rt_fiber_switch_limit_ready");                    // an unallocated stack publishes zero and disables the guard
+    emitter.instruction(&format!("add rax, {}", FIBER_STACK_FLOOR_OFFSET));     // skip the guard page and the shared reserve to get the usable floor
+    emitter.label("__rt_fiber_switch_limit_ready");
+    abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // publish the coroutine floor for every prologue that runs on this stack
 }
 
 /// Returns the total bytes reserved on a freshly-created fiber stack for the entry frame.
@@ -235,6 +291,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_handler_top", 0);       // restore the target fiber's handler chain head globally
     emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_OWN_CALL_FRAME_OFFSET)); // r11 = target fiber's cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);    // restore the target fiber's cleanup chain head globally
+    emit_adopt_fiber_stack_limit_x86_64(emitter);
     emitter.instruction(&format!("mov rsp, QWORD PTR [rdi + {}]", FIBER_SAVED_SP_OFFSET)); // adopt the target fiber's saved stack pointer
     emitter.instruction("jmp __rt_fiber_switch_restore");                       // proceed to restore callee-saved registers
 
@@ -244,6 +301,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_handler_top", 0);       // restore the main thread handler chain head globally
     abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_call_frame", 0); // r11 = main thread's saved cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);    // restore the main thread cleanup chain head globally
+    abi::emit_load_symbol_to_reg(emitter, "rax", STACK_LIMIT_MAIN_SYMBOL, 0);   // rax = the OS-thread call-stack floor measured at process start
+    abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
     abi::emit_load_symbol_to_reg(emitter, "rsp", "_fiber_main_saved_sp", 0);    // adopt the main thread's saved stack pointer
 
     // -- restore callee-saved state from the target stack and return into it --

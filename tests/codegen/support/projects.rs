@@ -229,6 +229,9 @@ pub(crate) fn compile_expect_type_error(source: &str) -> String {
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, &dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
+    // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let error = match elephc::types::check_with_target(&resolved, target()) {
         Ok(_) => panic!("source unexpectedly passed type checking"),
@@ -284,6 +287,9 @@ pub(crate) fn compile_and_run_files_expect_failure(
     let resolved = elephc::resolver::resolve(ast, base_dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
+    // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -358,6 +364,9 @@ pub(crate) fn compile_and_run_files_with_defines(
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, base_dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
+    // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -439,6 +448,7 @@ pub(crate) fn compile_files_fails_with_defines(
         let resolved = elephc::resolver::resolve(ast, base_dir)?;
         let resolved = elephc::autoload::collect_aliases(resolved);
         let resolved = elephc::name_resolver::resolve(resolved)?;
+        let resolved = elephc::func_args::desugar(resolved)?;
         let resolved = elephc::optimize::fold_constants(resolved);
         elephc::types::check_with_target(&resolved, target())?;
         Ok(())
@@ -466,6 +476,9 @@ pub(crate) fn compile_and_run_with_stdin(source: &str, stdin_data: &str) -> Stri
     let resolved = elephc::resolver::resolve(ast, &dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
+    // Mirrors `pipeline::compile`: desugar `func_num_args`/`func_get_args`/`func_get_arg`
+    // into a hidden variadic parameter plus plain PHP before the optimizer and the checker.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");

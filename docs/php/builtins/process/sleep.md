@@ -2,7 +2,7 @@
 title: "sleep()"
 description: "Delays execution for a number of seconds."
 sidebar:
-  order: 341
+  order: 356
 ---
 
 ## sleep()

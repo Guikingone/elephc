@@ -64,12 +64,22 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => match env.get(name) {
                 Some(PhpType::Int) => Ok(PhpType::Mixed),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
+                // PHP's string increment can change the value's type (`"9"++` is
+                // `int(10)`), so the pre-form's value is dynamically tagged. EIR lowering
+                // gives the local boxed Mixed frame storage for the same reason.
+                Some(PhpType::Str) => {
+                    self.reject_unboxable_string_incdec(name, expr.span)?;
+                    self.record_string_incdec_local(name);
+                    Ok(PhpType::Mixed)
+                }
+                // PHP's `++`/`--` on a float adds or subtracts 1.0 and keeps the float.
+                Some(PhpType::Float) => Ok(PhpType::Float),
                 Some(PhpType::Bool) | Some(PhpType::False) | Some(PhpType::Void) => {
                     Ok(PhpType::Int)
                 }
                 Some(other) => Err(CompileError::new(
                     expr.span,
-                    &format!("Cannot increment/decrement ${} of type {:?}", name, other),
+                    &increment_type_error(name, other),
                 )),
                 None => Err(CompileError::new(
                     expr.span,
@@ -82,9 +92,19 @@ impl Checker {
                 | Some(PhpType::False)
                 | Some(PhpType::Void) => Ok(PhpType::Int),
                 Some(PhpType::Mixed) => Ok(PhpType::Mixed),
+                // The post-forms yield the value the local held BEFORE the update, so a
+                // string local still answers `string` even though the update itself can
+                // retype the local (see the pre-form arm).
+                Some(PhpType::Str) => {
+                    self.reject_unboxable_string_incdec(name, expr.span)?;
+                    self.record_string_incdec_local(name);
+                    Ok(PhpType::Str)
+                }
+                // The post-forms yield the float the local held before the update.
+                Some(PhpType::Float) => Ok(PhpType::Float),
                 Some(other) => Err(CompileError::new(
                     expr.span,
-                    &format!("Cannot increment/decrement ${} of type {:?}", name, other),
+                    &increment_type_error(name, other),
                 )),
                 None if self.eval_barrier_active => Ok(PhpType::Int),
                 None => Err(CompileError::new(
@@ -303,6 +323,9 @@ impl Checker {
                     // "undefined index" warning behavior for this very
                     // common idiom (e.g. `json_decode($json, true)["k"]`).
                     PhpType::Mixed => Ok(PhpType::Mixed),
+                    // `isset($n['k'])` / `$n['k'] ?? $d` reach through a null base in PHP and
+                    // answer `false` / the default; only a probe context may do so.
+                    PhpType::Void if self.null_probe_depth > 0 => Ok(PhpType::Void),
                     _ => Err(CompileError::new(expr.span, "Cannot index non-array")),
                 }
             }
@@ -374,4 +397,12 @@ impl Checker {
             _ => unreachable!("non-basic expression routed to basic inference"),
         }
     }
+}
+
+/// Formats the diagnostic for `++`/`--` applied to a local elephc cannot update in place.
+///
+/// `int`, `float`, `bool`, `null`, `string`, and boxed `mixed` locals all have an increment
+/// path; everything else (arrays, objects, buffers, pointers) reaches this diagnostic.
+fn increment_type_error(name: &str, ty: &PhpType) -> String {
+    format!("Cannot increment/decrement ${} of type {:?}", name, ty)
 }

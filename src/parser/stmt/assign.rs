@@ -14,6 +14,10 @@ mod locals;
 mod postfix;
 mod simple;
 
+pub(crate) use list::{
+    parse_destructuring_pattern_unpack,
+    starts_destructuring_pattern,
+};
 pub(super) use list::{
     parse_list_construct_unpack,
     parse_list_unpack,
@@ -30,6 +34,7 @@ pub(crate) use postfix::{
 };
 pub(super) use postfix::{
     try_parse_postfix_assignment,
+    try_parse_postfix_incdec,
     try_parse_scoped_postfix_incdec,
     try_parse_scoped_property_assignment,
 };

@@ -14,7 +14,7 @@ use crate::parser::ast::{Expr, ExprKind, Stmt, StmtKind};
 use crate::parser::expr::{parse_assignment_value_expr, parse_expr};
 use crate::span::Span;
 
-use super::assign::try_parse_postfix_assignment;
+use super::assign::{try_parse_postfix_assignment, try_parse_postfix_incdec};
 use super::{expect_semicolon, expect_token};
 
 /// Parses `include`/`require` (with optional `_once`) statements.
@@ -233,6 +233,11 @@ pub(super) fn parse_this_stmt(
     span: Span,
 ) -> Result<Stmt, CompileError> {
     if let Some(stmt) = try_parse_postfix_assignment(tokens, pos, span)? {
+        return Ok(stmt);
+    }
+    // `$this->n++` and `$this->arr[0]++` are read-modify-write statements, exactly like
+    // `$obj->n++`; without this the `++` would be left for `expect_semicolon` to reject.
+    if let Some(stmt) = try_parse_postfix_incdec(tokens, pos, span)? {
         return Ok(stmt);
     }
 

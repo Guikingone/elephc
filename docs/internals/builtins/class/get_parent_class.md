@@ -2,7 +2,7 @@
 title: "get_parent_class() — internals"
 description: "Compiler internals for get_parent_class(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 84
+  order: 91
 ---
 
 ## `get_parent_class()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/get_parent_class.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_parent_class.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

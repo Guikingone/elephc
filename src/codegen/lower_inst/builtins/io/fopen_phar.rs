@@ -9,40 +9,7 @@
 
 use super::*;
 
-/// Lowers a literal `file_get_contents("phar://...")` through compile-time PHAR extraction.
-pub(super) fn lower_literal_phar_file_get_contents(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    path: &str,
-) -> Result<()> {
-    match crate::codegen::phar_stream::extract_phar_entry(path) {
-        Some(payload) => {
-            let (symbol, len) = ctx.data.add_string(&payload);
-            match ctx.emitter.target.arch {
-                Arch::AArch64 => {
-                    abi::emit_symbol_address(ctx.emitter, "x1", &symbol);
-                    ctx.emitter.instruction(&format!("mov x2, #{}", len));      // embedded phar entry byte length
-                }
-                Arch::X86_64 => {
-                    abi::emit_symbol_address(ctx.emitter, "rax", &symbol);
-                    ctx.emitter.instruction(&format!("mov rdx, {}", len));      // embedded phar entry byte length
-                }
-            }
-        }
-        None => match ctx.emitter.target.arch {
-            Arch::AArch64 => {
-                ctx.emitter.instruction("mov x1, #0");                          // null string pointer asks the boxer for PHP false
-                ctx.emitter.instruction("mov x2, #0");                          // clear the unused failure length
-            }
-            Arch::X86_64 => {
-                ctx.emitter.instruction("xor eax, eax");                        // null string pointer asks the boxer for PHP false
-                ctx.emitter.instruction("xor edx, edx");                        // clear the unused failure length
-            }
-        },
-    }
-    box_owned_string_or_false_result(ctx, "fgc_phar");
-    store_if_result(ctx, inst)
-}
+
 
 /// Emits the boxed result for a literal read-mode `phar://` stream open.
 pub(super) fn emit_literal_phar_fopen_read_result(ctx: &mut FunctionContext<'_>, path: &str) -> Result<()> {

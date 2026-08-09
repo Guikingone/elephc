@@ -32,6 +32,7 @@ mod lower_term;
 mod runtime_callable_invoker;
 mod runtime_metadata;
 mod shared_state;
+mod stack_guard;
 pub mod value_placement;
 mod web;
 use runtime_metadata::*;
@@ -248,7 +249,7 @@ fn finalize_user_asm(
         eval_reflection_helpers::emit_eval_reflection_helpers(module, &mut emitter);
         eval_reflection_owner_helpers::emit_eval_reflection_owner_helpers(module, &mut emitter);
     }
-    let data_output = data.emit();
+    let data_output = data.emit(module.target);
     let empty_globals = HashSet::<String>::new();
     let empty_static_vars = HashMap::<(String, String), PhpType>::new();
     let user_functions = runtime_user_function_sigs(module);
@@ -292,6 +293,7 @@ fn finalize_user_asm(
         // canonicalized string into any program that mentions it, and reference PHP
         // prints it in every fatal error.
         module.source_path.as_deref(),
+        module.target,
     );
 
     let mut user_asm = emitter.output();

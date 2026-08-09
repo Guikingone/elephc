@@ -6,7 +6,10 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::io`.
 //!
 //! Key details:
-//! - Reads one byte at a time into the concat buffer until the byte budget is
+//! - The caller's `$length` budget is reserved up front through `__rt_concat_reserve`, so a
+//!   budget larger than the remaining 64 KiB concat scratch takes owned heap storage instead
+//!   of writing past `_concat_buf` into the adjacent BSS globals.
+//! - Reads one byte at a time into that reservation until the byte budget is
 //!   spent, EOF is reached, or the trailing bytes match the ending delimiter
 //!   (which is consumed and stripped). EOF/read failure updates `StreamState`.
 
@@ -14,7 +17,8 @@ use crate::codegen_support::{abi, abi::emit_symbol_address, emit::Emitter, platf
 
 /// stream_get_line: read up to a length or an ending delimiter from a stream.
 /// Input:  x0=handle, x1=max length, x2=ending pointer, x3=ending length
-/// Output: x1=string pointer (in concat_buf), x2=length read (delimiter stripped)
+/// Output: x1=string pointer (concat scratch or owned heap storage), x2=length read
+///         (delimiter stripped)
 pub fn emit_stream_get_line(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stream_get_line_linux_x86_64(emitter);
@@ -38,11 +42,11 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
     emitter.instruction("str x0, [sp, #64]");                                   // preserve the resolved backend descriptor
 
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // current concat-buffer offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x12, x11, x10");                                   // result start pointer
-    emitter.instruction("str x12, [sp, #48]");                                  // save the result start pointer
+    emitter.instruction("mov x0, x1");                                          // the line can never exceed the caller's byte budget
+    emitter.instruction("cmp x0, #0");                                          // is the requested budget non-positive?
+    emitter.instruction("csel x0, xzr, x0, lt");                                // a negative budget reserves nothing at all
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage for the whole budget
+    emitter.instruction("str x0, [sp, #48]");                                   // save the result start pointer
     emitter.instruction("str xzr, [sp, #56]");                                  // running total starts at zero
 
     // -- user-wrapper fd: read via stream_read into _user_wrapper_drain_buf --
@@ -64,11 +68,10 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("cmp x10, x11");                                        // reached the byte budget?
     emitter.instruction("b.ge __rt_stream_get_line_done");                      // stop at the maximum length
 
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // current concat-buffer offset
-    emit_symbol_address(emitter, "x11", "_concat_buf");
-    emitter.instruction("add x1, x11, x10");                                    // single-byte write pointer
-    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the file descriptor
+    emitter.instruction("ldr x1, [sp, #48]");                                   // reserved result start pointer
+    emitter.instruction("ldr x10, [sp, #56]");                                  // running total
+    emitter.instruction("add x1, x1, x10");                                     // single-byte write pointer inside the reservation
+    emitter.instruction("ldr x0, [sp, #64]");                                   // reload the resolved backend descriptor
     emitter.instruction("mov x2, #1");                                          // read exactly one byte
     emitter.syscall(3);
     if plat.needs_cmp_before_error_branch() {
@@ -85,10 +88,6 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_line_read_ok");
     emitter.instruction("cbz x0, __rt_stream_get_line_eof");                    // a zero-byte read means EOF
 
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // concat-buffer offset
-    emitter.instruction("add x10, x10, #1");                                    // advance past the byte just read
-    emitter.instruction("str x10, [x9]");                                       // publish the updated offset
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
     emitter.instruction("add x10, x10, #1");                                    // count the new byte
     emitter.instruction("str x10, [sp, #56]");                                  // store the running total
@@ -118,10 +117,6 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
     emitter.instruction("sub x10, x10, x3");                                    // drop the delimiter from the result
     emitter.instruction("str x10, [sp, #56]");                                  // store the stripped total
-    emit_symbol_address(emitter, "x9", "_concat_off");
-    emitter.instruction("ldr x10, [x9]");                                       // concat-buffer offset
-    emitter.instruction("sub x10, x10, x3");                                    // rewind past the consumed delimiter
-    emitter.instruction("str x10, [x9]");                                       // publish the rewound offset
     emitter.instruction("b __rt_stream_get_line_done");                         // a delimiter match is not EOF
 
     // -- user-wrapper line read: feof-gated stream_read into _user_wrapper_drain_buf
@@ -149,6 +144,8 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("strb w13, [x12, x10]");                                // append the byte to the line buffer
     emitter.instruction("add x10, x10, #1");                                    // advance the running total
     emitter.instruction("str x10, [sp, #56]");                                  // store the updated total
+    emitter.instruction("mov x2, #0");                                          // release the whole chunk window
+    emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back before the next read
     emitter.instruction("mov x0, x1");                                          // chunk ptr (byte already copied)
     emitter.instruction("bl __rt_decref_any");                                  // release the owned chunk
     emitter.instruction("ldr x3, [sp, #40]");                                   // ending-delimiter length
@@ -184,6 +181,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_line_done");
     emitter.instruction("ldr x1, [sp, #48]");                                   // return the result start pointer
     emitter.instruction("ldr x2, [sp, #56]");                                   // return the bytes read
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the line slice
@@ -207,10 +205,12 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the resolved backend descriptor
 
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
-    emitter.instruction("lea r11, [r10 + r9]");                                 // result start pointer
-    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // save the result start pointer
+    emitter.instruction("mov rax, rsi");                                        // the line can never exceed the caller's byte budget
+    emitter.instruction("xor r8d, r8d");                                        // a negative budget reserves nothing at all
+    emitter.instruction("cmp rax, 0");                                          // is the requested budget non-positive?
+    emitter.instruction("cmovl rax, r8");                                       // clamp a negative budget to a zero-byte reservation
+    emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the whole budget
+    emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // running total starts at zero
 
     // -- user-wrapper fd: read via stream_read into _user_wrapper_drain_buf --
@@ -230,10 +230,9 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp rax, QWORD PTR [rbp - 16]");                       // reached the byte budget?
     emitter.instruction("jge __rt_stream_get_line_done_x86");                   // stop at the maximum length
 
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // current concat-buffer offset
-    abi::emit_symbol_address(emitter, "r10", "_concat_buf");                    // concat-buffer base address
-    emitter.instruction("lea rsi, [r10 + r9]");                                 // single-byte write pointer
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the file descriptor
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 40]");                       // reserved result start pointer
+    emitter.instruction("add rsi, QWORD PTR [rbp - 48]");                       // single-byte write pointer inside the reservation
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 56]");                       // reload the resolved backend descriptor
     emitter.instruction("mov rdx, 1");                                          // read exactly one byte
     emitter.instruction("call read");                                           // read one byte through libc read()
     emitter.instruction("cmp rax, 0");                                          // classify libc read() as a byte, EOF, or failure
@@ -242,9 +241,6 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_stream_get_line_eof_x86");                    // zero-byte read means real EOF
 
     emitter.label("__rt_stream_get_line_read_ok_x86");
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // concat-buffer offset
-    emitter.instruction("inc r9");                                              // advance past the byte just read
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the updated offset
     emitter.instruction("inc QWORD PTR [rbp - 48]");                            // count the new byte
 
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // ending-delimiter length
@@ -273,9 +269,6 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 48]");                       // running total
     emitter.instruction("sub rax, rcx");                                        // drop the delimiter from the result
     emitter.instruction("mov QWORD PTR [rbp - 48], rax");                       // store the stripped total
-    abi::emit_load_symbol_to_reg(emitter, "r9", "_concat_off", 0);              // concat-buffer offset
-    emitter.instruction("sub r9, rcx");                                         // rewind past the consumed delimiter
-    abi::emit_store_reg_to_symbol(emitter, "r9", "_concat_off", 0);             // publish the rewound offset
     emitter.instruction("jmp __rt_stream_get_line_done_x86");                   // a delimiter match is not EOF
 
     emitter.label("__rt_stream_get_line_read_failed_x86");
@@ -309,6 +302,8 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
     emitter.instruction("inc r10");                                             // advance the running total
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // store the updated total
+    emitter.instruction("xor edx, edx");                                        // release the whole chunk window
+    emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back before the next read
     emitter.instruction("call __rt_decref_any");                                // release the owned chunk (rax = chunk ptr)
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // ending-delimiter length
     emitter.instruction("test rcx, rcx");                                       // no delimiter configured?
@@ -345,6 +340,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_stream_get_line_done_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result start pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // return the bytes read
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the line slice

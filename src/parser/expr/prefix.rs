@@ -517,6 +517,7 @@ fn parse_array_literal_with_terminator(
             first = false;
             continue;
         }
+        reject_reference_array_element(tokens, pos, closing)?;
         let expr = parse_expr(tokens, pos)?;
         if *pos < tokens.len() && tokens[*pos].0 == Token::DoubleArrow {
             if !is_assoc {
@@ -524,6 +525,7 @@ fn parse_array_literal_with_terminator(
             }
             is_assoc = true;
             *pos += 1;
+            reject_reference_array_element(tokens, pos, closing)?;
             let value = parse_expr(tokens, pos)?;
             update_next_auto_key_from_explicit_key(
                 &expr,
@@ -554,6 +556,58 @@ fn parse_array_literal_with_terminator(
         Ok(Expr::new(ExprKind::ArrayLiteralAssoc(assoc_elems), span))
     } else {
         Ok(Expr::new(ExprKind::ArrayLiteral(elems), span))
+    }
+}
+
+/// Rejects a by-reference array-literal element (`[&$x]`, `[$k => &$x]`, `array(&$x)`) with a
+/// diagnostic that names the construct instead of a bare "Unexpected token: Ampersand".
+///
+/// PHP stores such an element as a reference cell that aliases the source variable's storage,
+/// so `$r = [&$a]; $r[0] = 9;` writes through to `$a`. elephc arrays hold plain values and its
+/// only reference form points *into* array storage (`$b =& $a[0]`), never out of it, so the
+/// construct cannot be honoured without either silently copying or leaving the array holding a
+/// pointer to a stack slot it can outlive. Returns `Ok(())` when the element is not a reference.
+///
+/// On rejection `pos` is advanced past the rest of the literal so statement recovery resumes
+/// after it and does not report cascading errors for the remaining elements.
+fn reject_reference_array_element(
+    tokens: &[SpannedToken],
+    pos: &mut usize,
+    closing: &Token,
+) -> Result<(), CompileError> {
+    let Some((Token::Ampersand, metadata)) = tokens.get(*pos) else {
+        return Ok(());
+    };
+    let span = metadata.span;
+    skip_to_array_literal_end(tokens, pos, closing);
+    Err(CompileError::new(
+        span,
+        "Reference elements in array literals (`[&$x]`) are not supported: an array element \
+         cannot alias a variable's storage. Assign the value instead, or use `$b =& $a[0]` \
+         to alias an existing array element",
+    ))
+}
+
+/// Advances `pos` past the remainder of the current array literal, including its `closing`
+/// token, tracking nested `[`/`(` pairs so inner literals and calls are skipped whole.
+///
+/// Stops at end-of-input if the literal is unterminated, leaving `pos` at `Eof`.
+fn skip_to_array_literal_end(tokens: &[SpannedToken], pos: &mut usize, closing: &Token) {
+    let mut depth = 0usize;
+    while let Some((token, _)) = tokens.get(*pos) {
+        match token {
+            Token::Eof => return,
+            Token::LBracket | Token::LParen => depth += 1,
+            Token::RBracket | Token::RParen => {
+                if depth == 0 && token == closing {
+                    *pos += 1;
+                    return;
+                }
+                depth = depth.saturating_sub(1);
+            }
+            _ => {}
+        }
+        *pos += 1;
     }
 }
 

@@ -2,7 +2,7 @@
 title: "disk_free_space() — internals"
 description: "Compiler internals for disk_free_space(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 112
+  order: 119
 ---
 
 ## `disk_free_space()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/disk_free_space.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/disk_free_space.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

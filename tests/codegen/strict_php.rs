@@ -99,6 +99,32 @@ echo ptr_get(41);
     assert_eq!(out, "42");
 }
 
+/// Verifies every call form dispatches a strict-hidden extension builtin name to the user
+/// function that shadows it, so callable strings cannot pick a different target than a
+/// direct call.
+///
+/// The five forms are a direct call, a variable holding the name, `call_user_func()` with
+/// that variable, `call_user_func()` with the literal name, and a first-class callable.
+/// `ptr_is_null` is an extension builtin `--strict-php` hides, so only the user function is
+/// visible here and all five must answer `7`. Pinned on its own so the rule does not depend
+/// on the mixed PHP/LFC include-graph fixture in `tests/codegen/lfc.rs`.
+#[test]
+fn test_strict_php_user_shadowed_extension_name_dispatches_the_same_from_every_call_form() {
+    let out = compile_strict_cli_and_run(
+        r#"<?php
+function ptr_is_null(int $value): int { return $value + 7; }
+echo ptr_is_null(0), ":";
+$name = "ptr_is_null";
+echo $name(0), ":";
+echo call_user_func($name, 0), ":";
+echo call_user_func("ptr_is_null", 0), ":";
+$callable = ptr_is_null(...);
+echo $callable(0);
+"#,
+    );
+    assert_eq!(out, "7:7:7:7:7");
+}
+
 /// Verifies `function_exists()` reports extension builtins as missing under
 /// strict mode (matching the PHP interpreter) while user-shadowed names exist.
 #[test]

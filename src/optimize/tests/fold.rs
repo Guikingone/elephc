@@ -10,6 +10,8 @@
 
 use super::*;
 
+mod php_semantics;
+
 /// Verifies fold_constants evaluates (2+3)*4 to 20, respecting AST structure.
 #[test]
 fn test_fold_nested_integer_arithmetic() {
@@ -37,9 +39,10 @@ fn test_fold_nested_integer_arithmetic() {
     assert_eq!(folded, vec![Stmt::echo(Expr::int_lit(20))]);
 }
 
-/// Verifies 2 ** 3 is folded to FloatLiteral(8.0) — exponentiation yields float.
+/// Verifies `2 ** 3` folds to `IntLiteral(8)`: PHP keeps an integer result when the base and a
+/// non-negative exponent are integers and the result fits (`var_dump(2 ** 3)` is `int(8)`).
 #[test]
-fn test_fold_constant_pow_to_float_literal() {
+fn test_fold_constant_pow_to_int_literal() {
     let program = vec![Stmt::echo(Expr::new(
         ExprKind::BinaryOp {
             left: Box::new(Expr::int_lit(2)),
@@ -51,13 +54,7 @@ fn test_fold_constant_pow_to_float_literal() {
 
     let folded = fold_constants(program);
 
-    assert_eq!(
-        folded,
-        vec![Stmt::echo(Expr::new(
-            ExprKind::FloatLiteral(8.0),
-            Span::dummy(),
-        ))]
-    );
+    assert_eq!(folded, vec![Stmt::echo(Expr::int_lit(8))]);
 }
 
 /// Verifies division by zero is NOT folded — PHP would fatal, optimizer preserves the AST.
@@ -279,9 +276,11 @@ fn test_fold_scalar_casts_when_result_is_unambiguous() {
     );
 }
 
-/// Verifies int("42abc") is NOT folded — ambiguous string casts must stay unfolded.
+/// Verifies `(int) "42abc"` folds to `42`, matching PHP's leading-numeric-prefix rule.
+///
+/// php -r 'var_dump((int) "42abc");' prints `int(42)`.
 #[test]
-fn test_keep_ambiguous_string_casts_unfolded() {
+fn test_fold_leading_numeric_string_cast() {
     let expr = Expr::new(
         ExprKind::Cast {
             target: CastType::Int,
@@ -290,9 +289,9 @@ fn test_keep_ambiguous_string_casts_unfolded() {
         Span::dummy(),
     );
 
-    let folded = fold_constants(vec![Stmt::echo(expr.clone())]);
+    let folded = fold_constants(vec![Stmt::echo(expr)]);
 
-    assert_eq!(folded, vec![Stmt::echo(expr)]);
+    assert_eq!(folded, vec![Stmt::echo(Expr::int_lit(42))]);
 }
 
 /// Verifies `$items[0] = 5` result_target is dropped when structurally equal to target.

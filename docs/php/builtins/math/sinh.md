@@ -2,7 +2,7 @@
 title: "sinh()"
 description: "Returns the hyperbolic sine of a number."
 sidebar:
-  order: 294
+  order: 308
 ---
 
 ## sinh()

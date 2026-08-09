@@ -25,7 +25,7 @@ pub(super) fn extract_discoverable_declarations(stmts: &[Stmt]) -> Vec<Stmt> {
     let mut context_flushed = false;
 
     for stmt in stmts {
-        let _source_mode = crate::source::scoped_parse_mode(stmt.source_mode);
+        let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
         match &stmt.kind {
             StmtKind::NamespaceDecl { .. } => {
                 context.clear();
@@ -96,7 +96,7 @@ fn strip_stmts(
     let mut stripped = Vec::new();
     let mut namespace = namespace;
     for stmt in stmts {
-        let _source_mode = crate::source::scoped_parse_mode(stmt.source_mode);
+        let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
         let stmt_namespace = namespace.clone();
         if let Some(stmt) = strip_stmt(
             stmt,

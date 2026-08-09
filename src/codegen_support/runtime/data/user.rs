@@ -10,6 +10,8 @@
 
 use std::collections::{HashMap, HashSet};
 
+use crate::codegen_support::data_section::comm_directive;
+use crate::codegen_support::platform::Target;
 use crate::names::{
     enum_case_symbol, function_variant_active_symbol, interface_method_wrapper_symbol, mangle_fqn,
     method_symbol, php_symbol_key, static_method_symbol, static_property_symbol,
@@ -63,27 +65,28 @@ pub(crate) fn emit_runtime_data_user(
     allowed_class_names: Option<&HashSet<String>>,
     emit_eval_reflection_metadata: bool,
     source_path: Option<&str>,
+    target: Target,
 ) -> String {
     let mut out = String::new();
 
     let mut sorted_globals: Vec<&String> = global_var_names.iter().collect();
     sorted_globals.sort();
     for name in sorted_globals {
-        out.push_str(&format!(".comm _gvar_{}, 16, 3\n", name));
+        out.push_str(&comm_directive(&format!("_gvar_{}", name), 16, target));
     }
 
     let mut sorted_statics: Vec<&(String, String)> = static_vars.keys().collect();
     sorted_statics.sort();
     for (func_name, var_name) in sorted_statics {
-        out.push_str(&format!(
-            ".comm _static_{}_{}, 16, 3\n",
-            mangle_fqn(func_name),
-            var_name
+        out.push_str(&comm_directive(
+            &format!("_static_{}_{}", mangle_fqn(func_name), var_name),
+            16,
+            target,
         ));
-        out.push_str(&format!(
-            ".comm _static_{}_{}_init, 8, 3\n",
-            mangle_fqn(func_name),
-            var_name
+        out.push_str(&comm_directive(
+            &format!("_static_{}_{}_init", mangle_fqn(func_name), var_name),
+            8,
+            target,
         ));
     }
 
@@ -104,7 +107,7 @@ pub(crate) fn emit_runtime_data_user(
     let mut static_property_symbols: Vec<String> = static_property_symbols.into_iter().collect();
     static_property_symbols.sort();
     for symbol in static_property_symbols {
-        out.push_str(&format!(".comm {}, 16, 3\n", symbol));
+        out.push_str(&comm_directive(&symbol, 16, target));
     }
 
     let mut sorted_enum_names: Vec<&String> = enums.keys().collect();
@@ -114,9 +117,10 @@ pub(crate) fn emit_runtime_data_user(
             continue;
         };
         for case in &enum_info.cases {
-            out.push_str(&format!(
-                ".comm {}, 8, 3\n",
-                enum_case_symbol(*enum_name, &case.name)
+            out.push_str(&comm_directive(
+                &enum_case_symbol(*enum_name, &case.name),
+                8,
+                target,
             ));
         }
     }
@@ -274,6 +278,60 @@ pub(crate) fn emit_runtime_data_user(
             } else {
                 out.push_str("    .quad _class_vd_desc_missing\n");
             }
+        }
+    }
+
+    // Per-class print_r / var_export descriptor pointer table — read by
+    // `__rt_print_r_object` and by the `__elephc_object_prop_*` prelude helpers.
+    // Same rows as `_class_vd_desc_ptrs`, different key spellings.
+    out.push_str(".globl _class_prop_desc_ptrs\n_class_prop_desc_ptrs:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            if class_info_by_id.contains_key(&class_id) {
+                out.push_str(&format!("    .quad _class_prop_desc_{}\n", class_id));
+            } else {
+                out.push_str("    .quad _class_prop_desc_missing\n");
+            }
+        }
+    }
+
+    // Per-class enum tables. `_class_enum_kinds` is 0 for an ordinary class and
+    // 1/2/3 for a pure / int-backed / string-backed enum — `print_r` prints
+    // `E Enum`, `E Enum:int` and `E Enum:string` respectively, and `var_dump` /
+    // `var_export` only need the non-zero test. `_class_enum_name_offsets` is the
+    // byte offset of the enum's `name` property slot inside the instance (`-1`
+    // for a non-enum), which is where the case name every renderer prints lives.
+    // Both are indexed by the same class id as every other per-class table, so an
+    // enum instance is recognized from its object header alone.
+    out.push_str(".globl _class_enum_kinds\n_class_enum_kinds:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let kind = class_name_by_id
+                .get(&class_id)
+                .and_then(|class_name| enums.get(*class_name))
+                .map(|enum_info| match &enum_info.backing_type {
+                    Some(PhpType::Int) => 2u64,
+                    Some(PhpType::Str) => 3u64,
+                    _ => 1u64,
+                })
+                .unwrap_or(0);
+            out.push_str(&format!("    .quad {}\n", kind));
+        }
+    }
+
+    out.push_str(".globl _class_enum_name_offsets\n_class_enum_name_offsets:\n");
+    if let Some(max_class_id) = max_class_id {
+        for class_id in 0..=max_class_id {
+            let offset = match (
+                class_name_by_id.get(&class_id),
+                class_info_by_id.get(&class_id),
+            ) {
+                (Some(class_name), Some(class_info)) if enums.contains_key(*class_name) => {
+                    enum_case_name_property_offset(class_info)
+                }
+                _ => -1,
+            };
+            out.push_str(&format!("    .quad {}\n", offset));
         }
     }
 
@@ -508,6 +566,12 @@ pub(crate) fn emit_runtime_data_user(
     // _class_vd_desc_missing: zero properties (a class id with no var_dump metadata).
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_vd_desc_missing\n_class_vd_desc_missing:\n");
+    out.push_str("    .quad 0\n"); // property count = 0
+    // _class_prop_desc_missing: zero properties (a class id with no print_r /
+    // var_export metadata), so an unknown class renders an empty body instead of
+    // reading past the table.
+    out.push_str("    .p2align 3\n");
+    out.push_str(".globl _class_prop_desc_missing\n_class_prop_desc_missing:\n");
     out.push_str("    .quad 0\n"); // property count = 0
     out.push_str("    .p2align 3\n");
     out.push_str(".globl _class_vtable_missing\n_class_vtable_missing:\n");
@@ -941,7 +1005,10 @@ pub(crate) fn emit_runtime_data_user(
         // (see `var_dump_debug_info_projection`), because `var_dump` is the only PHP
         // renderer that consults `__debugInfo` AND the only elephc renderer that
         // enumerates object properties at all.
-        let vd_rows = var_dump_descriptor_rows(class_info, class_name);
+        let mut vd_rows = var_dump_descriptor_rows(class_info, class_name);
+        if enums.contains_key(class_name.as_str()) {
+            hoist_enum_name_row(&mut vd_rows);
+        }
         for (row_index, row) in vd_rows.iter().enumerate() {
             out.push_str(&format!(
                 ".globl _class_vd_pkey_{}_{}\n_class_vd_pkey_{}_{}:\n    .ascii \"{}\"\n",
@@ -973,6 +1040,46 @@ pub(crate) fn emit_runtime_data_user(
                 class_info.class_id, row_index
             ));
             out.push_str(&format!("    .quad {}\n", row.type_name.len())); // declared type-name byte length
+        }
+
+        // print_r / var_export property table: the SAME rows (and therefore the
+        // same `__debugInfo()` projection, offsets and value tags) as the
+        // var_dump descriptor above, but carrying the two other key spellings PHP
+        // uses for the same property — `print_r`'s unquoted `x` / `y:protected` /
+        // `z:C:private`, and `var_export`'s bare `x`. Sharing one row list is what
+        // keeps the three renderers from ever disagreeing about which properties
+        // an object has or where they live.
+        for (row_index, row) in vd_rows.iter().enumerate() {
+            out.push_str(&format!(
+                ".globl _class_prop_pkey_{}_{}\n_class_prop_pkey_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id, row_index, class_info.class_id, row_index,
+                escaped_ascii(&row.print_r_key),
+            ));
+            out.push_str(&format!(
+                ".globl _class_prop_nkey_{}_{}\n_class_prop_nkey_{}_{}:\n    .ascii \"{}\"\n",
+                class_info.class_id, row_index, class_info.class_id, row_index,
+                escaped_ascii(&row.plain_key),
+            ));
+        }
+        out.push_str("    .p2align 3\n");
+        out.push_str(&format!(
+            ".globl _class_prop_desc_{}\n_class_prop_desc_{}:\n",
+            class_info.class_id, class_info.class_id,
+        ));
+        out.push_str(&format!("    .quad {}\n", vd_rows.len()));
+        for (row_index, row) in vd_rows.iter().enumerate() {
+            out.push_str(&format!(
+                "    .quad _class_prop_pkey_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.print_r_key.len())); // print_r key byte length
+            out.push_str(&format!("    .quad {}\n", row.offset)); // byte offset within the object
+            out.push_str(&format!("    .quad {}\n", row.tag)); // runtime value tag
+            out.push_str(&format!(
+                "    .quad _class_prop_nkey_{}_{}\n",
+                class_info.class_id, row_index
+            ));
+            out.push_str(&format!("    .quad {}\n", row.plain_key.len())); // bare property-name byte length
         }
 
         out.push_str("    .p2align 3\n");
@@ -2445,6 +2552,13 @@ fn mangled_property_name(class_info: &ClassInfo, class_name: &str, prop_name: &s
 struct VarDumpRow {
     /// Text PHP renders between the `[` and `]`, quotes included.
     key: String,
+    /// Text PHP's `print_r` renders between the `[` and `]`: the same visibility
+    /// annotation as `key` but WITHOUT the double quotes (`x`, `y:protected`,
+    /// `z:C:private`). Consumed by `__rt_print_r_object`.
+    print_r_key: String,
+    /// Bare property name, which `var_export` prints with no visibility suffix
+    /// at all. Consumed by `__elephc_object_prop_name`.
+    plain_key: String,
     /// Byte offset of the backing property within the object.
     offset: usize,
     /// Runtime value tag of the backing property.
@@ -2467,6 +2581,11 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
                     .find(|(_, (name, _))| *name == prop_name)?;
                 Some(VarDumpRow {
                     key: format!("\"{}\"", key),
+                    // A `__debugInfo()` projection key is a plain array key, so PHP
+                    // never annotates it with a visibility: print_r and var_export
+                    // both print the projected key verbatim.
+                    print_r_key: key.clone(),
+                    plain_key: key,
                     offset: class_info
                         .property_offsets
                         .get(&prop_name)
@@ -2484,6 +2603,8 @@ fn var_dump_descriptor_rows(class_info: &ClassInfo, class_name: &str) -> Vec<Var
         .enumerate()
         .map(|(layout_index, (prop_name, prop_ty))| VarDumpRow {
             key: var_dump_property_key(class_info, class_name, prop_name),
+            print_r_key: print_r_property_key(class_info, class_name, prop_name),
+            plain_key: prop_name.clone(),
             offset: class_info
                 .property_offsets
                 .get(prop_name)
@@ -2600,6 +2721,68 @@ fn var_dump_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &s
     }
 }
 
+/// Moves an enum's `name` row to the front of its rendered property list.
+///
+/// PHP prints a backed enum case as `[name] => Hearts` then `[value] => H`
+/// (`print_r`), and `var_export` follows the same order. elephc lays a backed
+/// enum's storage out with `value` first, so the two disagree unless the DISPLAY
+/// order is fixed here. Rows carry an explicit byte offset, so reordering them is
+/// purely cosmetic — every row still points at the same slot. Applied only to
+/// enum classes, and a no-op when `name` is already first or absent.
+fn hoist_enum_name_row(rows: &mut Vec<VarDumpRow>) {
+    if let Some(index) = rows.iter().position(|row| row.plain_key == "name") {
+        let row = rows.remove(index);
+        rows.insert(0, row);
+    }
+}
+
+/// Returns the byte offset of an enum class's `name` property slot, or `-1` when
+/// the class does not declare one.
+///
+/// Every PHP enum case exposes a readonly `name` holding the case identifier, and
+/// elephc materializes it as an ordinary declared string property — so the case
+/// name `enum(E::C)`, `E Enum` bodies and `\E::C` all print is just that slot's
+/// 16-byte `(ptr, len)` pair. A `-1` result makes the runtime treat the class as a
+/// plain object rather than reading a slot that may not exist.
+fn enum_case_name_property_offset(class_info: &ClassInfo) -> i64 {
+    class_info
+        .properties
+        .iter()
+        .enumerate()
+        .find(|(_, (prop_name, _))| prop_name == "name")
+        .map(|(layout_index, (prop_name, _))| {
+            class_info
+                .property_offsets
+                .get(prop_name)
+                .copied()
+                .unwrap_or(8 + layout_index * 16) as i64
+        })
+        .unwrap_or(-1)
+}
+
+/// Renders the text PHP prints between the `[` and `]` of a declared property's
+/// `print_r` key line.
+///
+/// `print_r` annotates visibility like `var_dump` does but WITHOUT quoting either
+/// the property name or the declaring class: `x`, `y:protected`, `z:C:private`
+/// (verified against PHP 8.4). The declaring class comes from the same
+/// `property_declaring_classes` map `var_dump_property_key` reads, so the two
+/// renderings can never name a different class for one property.
+fn print_r_property_key(class_info: &ClassInfo, class_name: &str, prop_name: &str) -> String {
+    match class_info.property_visibilities.get(prop_name) {
+        Some(Visibility::Protected) => format!("{}:protected", prop_name),
+        Some(Visibility::Private) => {
+            let declaring = class_info
+                .property_declaring_classes
+                .get(prop_name)
+                .map(String::as_str)
+                .unwrap_or(class_name);
+            format!("{}:{}:private", prop_name, declaring)
+        }
+        _ => prop_name.to_string(),
+    }
+}
+
 /// Renders the declared type name PHP prints inside `uninitialized(...)` for a
 /// typed property read before its first write.
 ///
@@ -2647,6 +2830,8 @@ fn prop_value_tag(class_info: &ClassInfo, prop_name: &str, prop_ty: &PhpType) ->
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+
+    use crate::codegen_support::platform::{Arch, Platform, Target};
 
     use crate::parser::ast::Visibility;
     use crate::types::{ClassInfo, PhpType};
@@ -2761,6 +2946,10 @@ mod tests {
             Some(&allowed_class_names),
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_vtable_1"));
@@ -2792,6 +2981,10 @@ mod tests {
             None,
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_gc_desc_count:\n    .quad 4\n"));
@@ -2830,6 +3023,10 @@ mod tests {
             None,
             false,
             None,
+            Target {
+                platform: Platform::MacOS,
+                arch: Arch::AArch64,
+            },
         );
 
         assert!(asm.contains("_class_gc_desc_1:\n    .byte 10\n"));

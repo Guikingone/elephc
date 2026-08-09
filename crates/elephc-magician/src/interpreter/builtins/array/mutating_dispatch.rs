@@ -28,6 +28,11 @@ pub(in crate::interpreter) fn eval_builtin_array_mutating_declared_call(
         }
         "array_splice" => super::array_splice::eval_builtin_array_splice_call(args, context, scope, values),
         "array_walk" => super::array_walk::eval_builtin_array_walk_call(args, context, scope, values),
+        "end" | "next" | "prev" | "reset" => {
+            super::array_pointer::eval_array_pointer_declared_call(
+                name, args, context, scope, values,
+            )
+        }
         "arsort" | "asort" | "krsort" | "ksort" | "natcasesort" | "natsort" | "rsort"
         | "shuffle" | "sort" => {
             super::sort::eval_array_sort_declared_call(name, args, context, scope, values)

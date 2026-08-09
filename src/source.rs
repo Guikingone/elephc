@@ -1,5 +1,6 @@
 //! Purpose:
-//! Defines the source-language mode selected from a physical input path.
+//! Defines the per-file source profile: the language mode selected from a physical input path
+//! plus the `declare(strict_types=1)` state that file opted into.
 //! Centralizes `.lfc` classification so every file loader agrees on tag and strict-mode semantics.
 //!
 //! Called from:
@@ -9,6 +10,13 @@
 //! Key details:
 //! - Only `.lfc` opts into tagless elephc source; every other path preserves tagged-PHP behavior.
 //! - Classification is ASCII case-insensitive and never changes output-path naming.
+//! - `strict_types` is a *per-file* PHP directive. It is stamped onto every `Stmt` created while
+//!   one physical file is parsed (`crate::parser::ast::Stmt::strict_types`) and therefore survives
+//!   include/autoload merging into the single flat program the type checker sees. Statement
+//!   rewriting passes must re-install the profile they read off the statement they are rebuilding,
+//!   which is why `with_parse_mode`/`scoped_parse_mode` take the whole `SourceProfile` instead of
+//!   the mode alone: a rebuild that dropped the flag would silently downgrade a strict file to
+//!   PHP's coercive parameter binding.
 
 use std::cell::Cell;
 use std::collections::HashSet;
@@ -28,9 +36,37 @@ pub enum SourceMode {
     Internal,
 }
 
+/// Everything one physical source file contributes to the AST nodes parsed from it.
+///
+/// `mode` comes from the file's path and is known before parsing starts; `strict_types` comes
+/// from a `declare(strict_types=1)` directive and is only known once the parser has read the
+/// file's first statement. Both are stamped onto every `Stmt` the file produces, so the merged
+/// program still answers "which file was this written in" for the two questions that need it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct SourceProfile {
+    /// Language profile selected from the physical path.
+    pub mode: SourceMode,
+    /// Whether the file declared `strict_types=1`.
+    pub strict_types: bool,
+}
+
+impl SourceProfile {
+    /// Builds the profile a physical file starts parsing with: its path-derived mode and PHP's
+    /// default coercive typing, which only a `declare(strict_types=1)` directive changes.
+    pub fn new(mode: SourceMode) -> Self {
+        Self {
+            mode,
+            strict_types: false,
+        }
+    }
+}
+
 thread_local! {
     /// Source mode inherited by AST nodes created during one parser invocation.
     static CURRENT_PARSE_MODE: Cell<SourceMode> = const { Cell::new(SourceMode::Internal) };
+
+    /// `strict_types` state inherited by AST nodes created during one parser invocation.
+    static CURRENT_STRICT_TYPES: Cell<bool> = const { Cell::new(false) };
 }
 
 impl SourceMode {
@@ -79,33 +115,52 @@ pub fn composer_source_stem(component: &str) -> String {
         .to_string()
 }
 
-/// RAII guard restoring the parser's previous source mode on drop.
+/// RAII guard restoring the parser's previous source profile on drop.
 pub(crate) struct ParseModeGuard {
-    previous: SourceMode,
+    previous: SourceProfile,
 }
 
 impl Drop for ParseModeGuard {
-    /// Restores the parser source mode active before the nested parse.
+    /// Restores the parser source profile active before the nested parse.
     fn drop(&mut self) {
-        CURRENT_PARSE_MODE.with(|cell| cell.set(self.previous));
+        CURRENT_PARSE_MODE.with(|cell| cell.set(self.previous.mode));
+        CURRENT_STRICT_TYPES.with(|cell| cell.set(self.previous.strict_types));
     }
 }
 
-/// Runs `f` while parser-created AST nodes inherit `mode`.
-pub(crate) fn with_parse_mode<T>(mode: SourceMode, f: impl FnOnce() -> T) -> T {
-    let _guard = scoped_parse_mode(mode);
+/// Runs `f` while parser-created AST nodes inherit `profile`.
+pub(crate) fn with_parse_mode<T>(profile: SourceProfile, f: impl FnOnce() -> T) -> T {
+    let _guard = scoped_parse_mode(profile);
     f()
 }
 
-/// Installs one parser/source reconstruction mode until the returned guard is dropped.
-pub(crate) fn scoped_parse_mode(mode: SourceMode) -> ParseModeGuard {
-    let previous = CURRENT_PARSE_MODE.with(|cell| cell.replace(mode));
-    ParseModeGuard { previous }
+/// Installs one parser/source reconstruction profile until the returned guard is dropped.
+pub(crate) fn scoped_parse_mode(profile: SourceProfile) -> ParseModeGuard {
+    let mode = CURRENT_PARSE_MODE.with(|cell| cell.replace(profile.mode));
+    let strict_types = CURRENT_STRICT_TYPES.with(|cell| cell.replace(profile.strict_types));
+    ParseModeGuard {
+        previous: SourceProfile { mode, strict_types },
+    }
 }
 
 /// Returns the source mode assigned to AST nodes created at the current parse site.
 pub(crate) fn current_parse_mode() -> SourceMode {
     CURRENT_PARSE_MODE.with(Cell::get)
+}
+
+/// Returns the `strict_types` state assigned to AST nodes created at the current parse site.
+pub(crate) fn current_strict_types() -> bool {
+    CURRENT_STRICT_TYPES.with(Cell::get)
+}
+
+/// Records that the file currently being parsed declared `strict_types=<enabled>`.
+///
+/// PHP requires the directive to be a file's very first statement, so every statement created
+/// after this call belongs to the same file and inherits the flag. The enclosing
+/// `ParseModeGuard` resets it when the file's parse ends, which is what keeps the directive from
+/// leaking into an included file or back out to the includer.
+pub(crate) fn declare_strict_types(enabled: bool) {
+    CURRENT_STRICT_TYPES.with(|cell| cell.set(enabled));
 }
 
 /// Applies path-dependent post-parse processing shared by every physical source loader.
@@ -145,6 +200,47 @@ mod tests {
         assert!(is_composer_source_path(Path::new("src/App.LFC")));
         assert!(!is_composer_source_path(Path::new("src/App.inc")));
         assert_eq!(composer_source_stem("App.lfc"), "App");
+    }
+
+    /// Verifies a nested file parse starts coercive and cannot leak its `strict_types` state
+    /// back to the includer, which is what makes the directive per-file after include merging.
+    #[test]
+    fn nested_parse_scopes_strict_types_to_one_file() {
+        with_parse_mode(SourceProfile::new(SourceMode::Php), || {
+            assert!(!current_strict_types());
+            declare_strict_types(true);
+            assert!(current_strict_types());
+
+            // An `include`d file parses inside the includer's scope and must start coercive.
+            with_parse_mode(SourceProfile::new(SourceMode::Php), || {
+                assert!(!current_strict_types());
+                declare_strict_types(true);
+            });
+            assert!(current_strict_types());
+
+            with_parse_mode(SourceProfile::new(SourceMode::Php), || {
+                assert!(!current_strict_types());
+            });
+            assert!(current_strict_types());
+        });
+        assert!(!current_strict_types());
+    }
+
+    /// Verifies a statement-rewriting pass re-installing a statement's profile restores both the
+    /// language mode and the `strict_types` flag, so a rebuilt node keeps its file's binding
+    /// rules instead of silently reverting to coercive.
+    #[test]
+    fn reinstalling_a_profile_restores_both_fields() {
+        let strict = SourceProfile {
+            mode: SourceMode::Php,
+            strict_types: true,
+        };
+        with_parse_mode(strict, || {
+            assert_eq!(current_parse_mode(), SourceMode::Php);
+            assert!(current_strict_types());
+        });
+        assert_eq!(current_parse_mode(), SourceMode::Internal);
+        assert!(!current_strict_types());
     }
 
     /// Verifies strict PHP applies only to PHP-mode user source.

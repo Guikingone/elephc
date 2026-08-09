@@ -418,3 +418,47 @@ pub(super) fn emit_runtime_stdclass_set_for_stacked_name(
     abi::emit_call_label(ctx.emitter, "__rt_stdclass_set");
     Ok(())
 }
+
+/// Lowers `unset($object->property)` for a declared, accessible instance property.
+///
+/// PHP removes the property from the instance; a *typed* property becomes
+/// "uninitialized" again. elephc renders declared properties from a fixed per-class
+/// descriptor and cannot drop a slot, so the slot is stamped with the shared
+/// uninitialized-typed-property marker — exactly the state a typed property without
+/// a default starts in. `isset()` then answers false, `print_r`/`var_export` skip the
+/// property, and a later read raises the "must not be accessed before initialization"
+/// diagnostic. Any refcounted payload the slot owned is released first, so the write
+/// cannot leak a string/array/object.
+///
+/// A property that lives in the receiver's DYNAMIC-property hash instead of a fixed
+/// slot — every `stdClass` property, and an undeclared name on an
+/// `#[AllowDynamicProperties]` class — is genuinely removable, so it takes the hash
+/// removal path and matches PHP exactly: the key disappears, `isset()` answers false,
+/// the value renderers stop listing it, and a later write re-appends it.
+///
+/// Every other slot shape is REFUSED rather than silently skipped. A by-reference
+/// property slot holds an object-owned ref-cell pointer that the destructor still has
+/// to free and that a later write would write THROUGH — reviving the alias PHP's
+/// `unset()` just broke — so neither zeroing nor keeping the cell reproduces PHP.
+/// A packed field and an undeclared slot have no removable storage at all. Skipping
+/// them quietly left `isset()` answering `true` after an `unset()`, so they now name
+/// themselves instead.
+pub(in crate::codegen::lower_inst) fn lower_prop_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    let object = expect_operand(inst, 0)?;
+    let property = property_name_immediate(ctx, inst)?.to_string();
+    if let Some(hash_offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
+        return lower_dynamic_prop_unset(ctx, object, &property, hash_offset);
+    }
+    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    if let Some(reason) = unset_unsupported_slot_reason(&slot) {
+        return Err(CodegenIrError::unsupported(format!(
+            "unset() of {} {}::${}",
+            reason, slot.class_name, slot.property
+        )));
+    }
+    let base_reg = abi::symbol_scratch_reg(ctx.emitter);
+    ctx.load_value_to_reg(object, base_reg)?;
+    release_previous_property_value(ctx, base_reg, &slot.php_type, slot.offset, None);
+    emit_property_uninitialized_marker(ctx, &slot, base_reg);
+    Ok(())
+}

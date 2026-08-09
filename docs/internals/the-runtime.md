@@ -106,11 +106,34 @@ Formats the native resource payload used by stream handles as PHP's display stri
 
 `__rt_resource_write_stdout` uses the same display form for `echo` / `print` without exposing the raw file descriptor as an integer.
 
-### `__rt_ftoa` — Float to string
+### `__rt_ftoa` — Float to string (`precision = 14`)
 
 **File:** `strings/ftoa.rs`
 
-Converts a double-precision float in `d0` to a decimal string. Handles special cases: `INF`, `-INF`, `NAN`. For normal numbers, it separates the integer and fractional parts, converts each to digits, and joins them with a decimal point.
+Converts a double-precision float in `d0` to the decimal string PHP produces for `echo`,
+`(string)`, string interpolation, concatenation and `print_r()` — that is,
+`zend_gcvt(value, 14, '.', 'E')`. It formats the value with `snprintf("%.14G", …)` into a
+stack scratch buffer, then copies the bytes into the [concat buffer](memory-model.md#the-string-buffer-scratch-pad)
+applying the two fixups where C's `%G` differs from `zend_gcvt`: exponential form always
+keeps a mantissa fraction (`1.0E+300`, not `1E+300`) and the exponent is written without
+zero padding (`1.0E-7`, not `1E-07`). `NAN` is emitted unsigned, since glibc renders a
+negative quiet NaN as `-NAN` and PHP never does. `INF` / `-INF` pass through unchanged.
+
+**Input:** `d0` = float value
+**Output:** `x1` = pointer to string, `x2` = length
+
+### `__rt_ftoa_repr` — Float to string (`serialize_precision = -1`)
+
+**File:** `strings/ftoa.rs`
+
+The rendering `var_dump()` uses: the shortest decimal string that round-trips back to the
+same `double`, with an uppercase `E`, a `d.d` mantissa in exponential form, an unpadded
+exponent, and no trailing `.0` for integer-valued floats. The plain/exponential boundary
+is `zend_gcvt`'s for `ndigit = 17` (`decpt < -3 || decpt > 17`), which keeps
+`var_dump(1e16)` as `10000000000000000` where `echo 1e16` is already `1.0E+16`. Finite
+values are handed to the shared `__rt_json_ftoa` shortest-round-trip formatter (the one
+`json_encode`/`serialize` use) with `'E'` as the exponent marker; this helper only owns
+the `INF` / `-INF` / `NAN` spellings.
 
 **Input:** `d0` = float value
 **Output:** `x1` = pointer to string, `x2` = length
@@ -161,7 +184,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | Routine | What it does | Input | Output |
 |---|---|---|---|
 | `__rt_strcopy` | Copy string into concat buffer | `x1`/`x2` | `x1`/`x2` |
-| `__rt_str_to_number` | Parse a PHP numeric string for loose comparison and numeric-string casts | `x1`/`x2` | numeric payload + success flag |
+| `__rt_php_num_scan` | Clip a C string to PHP's leading numeric run (`_is_numeric_string_ex` grammar) in place and report whether the whole string was numeric. Runs between `__rt_cstr` and libc so `strtod`/`strtoll` never see hexadecimal, `INF`/`NAN` or underscore forms PHP does not accept | `x0` = C string | `x0` = run pointer, `x1` = fully-numeric flag |
+| `__rt_str_to_number` | Parse a PHP numeric string for loose comparison, `is_numeric()`, and numeric-string casts (via `__rt_php_num_scan`) | `x1`/`x2` | numeric payload + success flag |
 | `__rt_str_looks_like_int_for_coercion` | Validate PHP coercive int-parameter numeric strings while rejecting libc-only `strtod` forms such as `0x`, `INF`, and `NAN` | `x1`/`x2` | `x0` (0 or 1) |
 | `__rt_str_to_int` | Parse a PHP numeric-string prefix with integer/float forms and truncate toward zero like PHP `(int)` casts | `x1`/`x2` | `x0` (integer) |
 | `__rt_str_loose_eq` | Compare two strings using PHP loose-comparison numeric-string rules before falling back to bytes | two strings | `x0` (0 or 1) |
@@ -176,6 +200,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_mb_strlen` | Multibyte-aware string length for `mb_strlen()` (emitted only for programs that use it) | `x1`/`x2` | `x0` |
 | `__rt_strpos` | Find substring | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
 | `__rt_strrpos` | Find last occurrence | `x1`/`x2` + `x3`/`x4` | `x0` |
+| `__rt_stripos` | Find substring, ASCII case-insensitive | `x1`/`x2` + `x3`/`x4` | `x0` (index or -1) |
+| `__rt_strripos` | Find last occurrence, ASCII case-insensitive | `x1`/`x2` + `x3`/`x4` | `x0` |
 | `__rt_str_repeat` | Repeat N times with heap fallback for large results | `x1`/`x2` + count | `x1`/`x2` |
 | `__rt_str_replace` | Replace all occurrences | search + replace + subject | `x1`/`x2` |
 | `__rt_explode` | Split by delimiter | delimiter + string | `x0` (array ptr) |
@@ -194,7 +220,8 @@ Each routine follows the same pattern — inputs in registers, output in standar
 | `__rt_sha1` | SHA1 hash | `x1`/`x2` | `x1`/`x2` |
 | `__rt_sprintf` | Format string | format + args on stack | `x1`/`x2` |
 | `__rt_base64_encode` | Base64 encode | `x1`/`x2` | `x1`/`x2` |
-| `__rt_base64_decode` | Base64 decode | `x1`/`x2` | `x1`/`x2` |
+| `__rt_base64_decode` | Base64 decode (php-src semantics, `$strict` in `x3`) | `x1`/`x2`/`x3` | `x0` ok flag + `x1`/`x2` |
+| `__rt_quoted_printable_encode` | MIME quoted-printable encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_urlencode` | URL encode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_urldecode` | URL decode | `x1`/`x2` | `x1`/`x2` |
 | `__rt_htmlspecialchars` | HTML escape | `x1`/`x2` | `x1`/`x2` |
@@ -340,6 +367,8 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_array_merge` | Concatenate two indexed arrays into a new array |
 | `__rt_array_merge_into` | Append all elements from source array into dest array (in-place) |
 | `__rt_array_slice` / `__rt_array_splice` | Extract slices and remove splice windows from indexed arrays |
+| `__rt_array_splice_str` | The `array_splice()` removal for indexed **string** arrays, whose payload slots are 16-byte `{pointer, length}` pairs rather than the 8-byte slots the other splice helpers move. The removed strings are MOVED into the result array: an indexed string array owns its persisted bytes exclusively, so retaining them would double free and copying them would leak |
+| `__rt_array_splice_insert` / `_refcounted` / `_boxed` / `_unboxed` / `_str` | Write `array_splice()`'s `$replacement` into the gap the removal opened, growing the destination first. The five variants differ in what one replacement slot becomes: copied verbatim, retained, wrapped in a fresh boxed `Mixed` cell, read back out of one as a plain integer, or duplicated with `__rt_str_persist` into a 16-byte string slot |
 | `__rt_array_unique` | Remove duplicate values |
 | `__rt_array_diff` / `__rt_array_intersect` | Set difference/intersection by value |
 | `__rt_array_diff_key` / `__rt_array_intersect_key` | Set operations by key |
@@ -355,17 +384,22 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_range` | Generate integer range array |
 | `__rt_shuffle` / `__rt_array_rand` | Randomize order / pick random |
 | `__rt_random_u32` / `__rt_random_uniform` | Target-aware random primitives used by `rand()`, `random_int()`, `shuffle()`, and `array_rand()` |
-| `__rt_asort` / `__rt_arsort` | Sort by value while preserving keys, ascending or descending |
-| `__rt_ksort` / `__rt_krsort` | Sort by key, ascending or descending |
+| `__rt_asort` / `__rt_arsort` | Sort an indexed array by value, ascending or descending |
+| `__rt_hash_ksort` / `__rt_hash_krsort` | Sort an associative array by key, ascending or descending |
+| `__rt_hash_asort` / `__rt_hash_arsort` | Sort an associative array by value while preserving keys, ascending or descending |
+| `__rt_hash_sort_links` | Shared engine behind the four hash sorts: a stable insertion sort that relinks the table's `prev`/`next`/`head`/`tail` chain, so buckets never move, key/value association is preserved, and no refcount changes |
+| `__rt_hash_sort_triple` | Reads a hash entry's key or value as a `__rt_php_compare` `(tag, lo, hi)` triple, peeling boxed Mixed cells |
 | `__rt_natsort` / `__rt_natcasesort` | Natural-order sort, case-sensitive or case-insensitive |
 | `__rt_array_map` | Apply callback to each scalar element, return new array; an optional third argument carries a captured-closure environment for generated callback wrappers |
 | `__rt_array_map_str` | Apply callback to each scalar or string element and return a string array; an optional third argument carries a captured-closure environment |
 | `__rt_array_map_str_owned` | Apply a descriptor-wrapper callback that returns owned strings and transfer those strings directly into the result array |
 | `__rt_array_map_mixed` | Apply a descriptor-backed callback that returns owned boxed Mixed cells and store them directly into a newly allocated result array |
 | `__rt_array_filter` | Filter scalar elements where callback returns truthy; an optional third argument carries a captured-closure environment |
-| `__rt_array_reduce` | Reduce array to single value via callback; an optional fourth argument carries a captured-callback environment |
+| `__rt_array_reduce` | Reduce an indexed array of 8-byte payload slots to a single value via callback; an optional fourth argument carries a captured-callback environment |
+| `__rt_array_reduce_str` | Reduce an indexed string array's 16-byte `[ptr][len]` slots into one integer accumulator, passing each element to the callback as a pointer/length pair; an optional fourth argument carries a captured-callback environment |
 | `__rt_array_walk` | Call callback on each element (side-effects); an optional third argument carries a captured-callback environment |
-| `__rt_usort` | Sort array using user comparison callback; an optional third argument carries a captured-callback environment |
+| `__rt_usort` | Sort an indexed array of 8-byte payload slots using a user comparison callback; an optional third argument carries a captured-callback environment |
+| `__rt_usort_str` | Stable insertion sort over an indexed string array's 16-byte `[ptr][len]` slots using a user comparison callback that receives both strings as pointer/length pairs; an optional third argument carries a captured-callback environment |
 
 ### Reference counting
 
@@ -384,6 +418,40 @@ See [Memory Model](memory-model.md) for the hash table memory layout.
 | `__rt_object_free_deep` | Free an object and release heap-backed properties using runtime/class metadata | `x0` = object pointer | — |
 
 Refcounts are stored as a 32-bit value in the uniform 16-byte heap header, at `[user_ptr - 12]`. Each heap allocation starts with refcount 1. When a reference is shared (e.g., assigned to another variable or passed to a function), `__rt_incref` bumps it. When the reference goes away, `__rt_decref_any` can dispatch through the uniform heap-kind tag to the concrete string/array/hash/object/mixed release path. Runtime-thrown Throwable payloads carry the dedicated heap kind `6`, which `__rt_decref_any` and `__rt_object_free_deep` accept and route through the same object release path (issue #448). Arrays, hashes, objects, and boxed mixed cells still use ordinary reference counting first, but when a decref sees a container/object graph that can contain nested heap-backed values, the runtime can invoke `__rt_gc_collect_cycles` to clear transient metadata, count heap-only incoming edges, mark externally reachable blocks, and deep-free the remaining unreachable array/hash/object/mixed island.
+
+## Loose-equality routines
+
+**Source:** `src/codegen_support/runtime/compare/`
+
+PHP's `==` is decided at run time whenever the static operand types do not settle
+it: two boxed `mixed` cells, two arrays, or two objects. Three mutually recursive
+helpers implement PHP 8's comparison table; the backend's `lower_loose_eq`
+fallback boxes both operands and calls the first one.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_mixed_loose_eq` | PHP `==` between two boxed mixed values, entering at recursion depth 0 | `x0`/`x1` = mixed pointers | `x0` = 0/1 |
+| `__rt_mixed_loose_eq_d` | Same, carrying an explicit recursion depth so the walkers stay reentrant | `x0`/`x1` = mixed pointers, `x2` = depth | `x0` = 0/1 |
+| `__rt_mixed_array_loose_eq` | Equal counts plus, for every key of the left array, the same key on the right with a loosely equal value (order-independent) | `x0`/`x1` = boxed arrays, `x2` = depth | `x0` = 0/1 |
+| `__rt_obj_loose_eq` | Same instance, or same runtime class id with every descriptor property loosely equal | `x0`/`x1` = object pointers, `x2` = depth | `x0` = 0/1 |
+
+Rule order inside `__rt_mixed_loose_eq` is load-bearing: a `bool` operand coerces
+both sides first, then `null` (converted to `""` against a string and to `bool`
+otherwise), then containers (an array equals only another array), then objects,
+then strings, then a numeric comparison. Same-tag int/resource/callable payloads
+compare word-for-word so large integers keep full precision.
+
+Both operands stay borrowed. The array walker reads elements through
+`__rt_mixed_array_get` and the object walker reads properties through
+`__rt_obj_prop_value`; both return OWNED cells, and both walkers release them
+after each comparison. Key presence is probed (`__rt_hash_get`, or the list bounds
+for tag-4 arrays) before a value is read, because a missing key and a stored
+`null` are otherwise indistinguishable.
+
+The depth argument caps recursion (`MAX_LOOSE_EQ_DEPTH`): a cyclic object/array
+graph reports "not equal" instead of running the stack out. PHP instead raises
+`Nesting level too deep - recursive dependency?`, which the runtime has no unwind
+path for from a leaf helper.
 
 ## System routines
 
@@ -408,6 +476,32 @@ At program start, the OS passes `argc` (argument count) in `x0` and `argv` (poin
 | `__rt_getenv` | Get environment variable value via libc `getenv()` | `x1`/`x2` = name string | `x1`/`x2` = value string |
 | `__rt_php_uname` | Read target runtime system information via libc `uname()`; supports PHP modes `a`, `s`, `n`, `r`, `v`, and `m` | `x1`/`x2` = mode string | `x1`/`x2` = selected uname string |
 | `__rt_shell_exec` | Execute shell command and capture output via libc `popen()`/`pclose()` | `x1`/`x2` = command string | `x1`/`x2` = output string |
+
+### Call-stack overflow guard
+
+**File:** `system/stack_guard.rs`
+
+Unbounded recursion would otherwise run the stack pointer off the end of the mapping and kill the process with a raw `SIGSEGV`. Two runtime helpers plus one word of state turn that into a controlled fatal on every supported target.
+
+| Routine | What it does | Input | Output |
+|---|---|---|---|
+| `__rt_stack_limit_init` | Measure the running stack once and publish the lowest address compiled prologues may reach | — | writes `_stack_limit` and `_stack_limit_main` |
+| `__rt_stack_overflow` | Write `Fatal error: Maximum call stack size reached. Infinite recursion?` to stderr and exit with status 255 | — | does not return |
+
+`__rt_stack_limit_init` calls `getrlimit(RLIMIT_STACK, …)` — resource number 3 on both Linux and macOS — and publishes `entry_sp - (min(rlim_cur, 64 MiB) - 32 KiB)`. The cap absorbs `RLIM_INFINITY`; the 32 KiB reserve is the headroom a guarded frame may still consume before the next guarded call (outgoing stack arguments, `__rt_*` helper frames, and their libc calls). When `getrlimit` fails, reports an implausibly small limit, or the subtraction would wrap, the routine publishes zero instead, and zero disables the guard for the whole process.
+
+The process-entry prologue calls it once, after argc/argv have been stored to globals (it is an ordinary call and clobbers the argument registers). Under `--web` the call sits in the process-entry stub, before the workers are forked, so every worker inherits a floor that matches its own stack.
+
+Two globals hold the state:
+
+| Symbol | Meaning |
+|---|---|
+| `_stack_limit` | Lowest stack address the *currently running* context may reach; `0` disables the guard |
+| `_stack_limit_main` | The OS-thread floor, remembered so `__rt_fiber_switch` can restore it |
+
+Fibers and generators run on their own 256 KiB mmap'd coroutine stack, which has nothing to do with the OS-thread stack, so `__rt_fiber_switch` swaps `_stack_limit` along with the exception and cleanup chain heads: switching *into* a fiber publishes `stack_base + guard page + reserve`, and switching back to the main context restores `_stack_limit_main`. A fiber whose stack allocation failed publishes zero, leaving the guard inert rather than comparing against a nonsensical address.
+
+The check itself lives in every compiled function prologue — see [The codegen](the-codegen.md).
 
 ## Exception routines
 

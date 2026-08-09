@@ -22,7 +22,7 @@ use super::exprs::rewrite_expr;
 pub(super) fn apply_stmts(stmts: Vec<Stmt>, defines: &HashSet<String>) -> Vec<Stmt> {
     let mut result = Vec::new();
     for stmt in stmts {
-        let _source_mode = crate::source::scoped_parse_mode(stmt.source_mode);
+        let _source_mode = crate::source::scoped_parse_mode(stmt.profile());
         match stmt.kind {
             StmtKind::IfDef {
                 symbol,

@@ -2,13 +2,13 @@
 title: "round()"
 description: "Rounds a float."
 sidebar:
-  order: 292
+  order: 306
 ---
 
 ## round()
 
 ```php
-function round(float $num, int $precision = 0): float
+function round(float $num, int $precision = 0, int $mode = 1): float
 ```
 
 Rounds a float.
@@ -16,6 +16,7 @@ Rounds a float.
 **Parameters**:
 - `$num` (`float`)
 - `$precision` (`int`), default `0`, optional
+- `$mode` (`int`), default `1`, optional
 
 **Returns**: `float`
 

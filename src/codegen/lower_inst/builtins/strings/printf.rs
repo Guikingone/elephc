@@ -107,8 +107,44 @@ pub(in crate::codegen::lower_inst::builtins) fn sprintf_spec_cats_for_format(
 }
 
 /// Parses the conversion categories consumed by the runtime sprintf scanner.
+/// Highest `printf`-family argument position `parse_sprintf_spec_cats` will track. A format
+/// string is program text, so its `N$` digits are attacker-controlled; the cap keeps the
+/// category table from being sized by them. Positions above it fall back to static-type
+/// packing and are rejected by the runtime's argument-count check.
+const MAX_TRACKED_SPRINTF_ARGS: usize = 4096;
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+/// Parses the conversion categories consumed by the runtime sprintf scanner, indexed by the
+/// argument position each conversion consumes.
+///
+/// The result must agree with `__rt_sprintf`'s own specifier parser, because the runtime
+/// dispatches on the conversion character while this pass decides how the operand is
+/// coerced and tagged. That means recognizing everything the runtime recognizes: PHP's
+/// `N$` explicit argument numbers (which select a position without advancing the sequential
+/// cursor, exactly like PHP), the `'X` custom-pad-character flag (whose `X` must not be
+/// mistaken for the conversion character), and the full float conversion set
+/// `f F e E g G`. Positions no conversion refers to keep an inert `Str` coercion; the
+/// runtime never reads those records.
 pub(super) fn parse_sprintf_spec_cats(format: &[u8]) -> Vec<SprintfSpecCat> {
-    let mut cats = Vec::new();
+    let mut cats: Vec<Option<SprintfSpecCat>> = Vec::new();
+    let mut next_arg = 0usize;
     let mut index = 0;
     while index < format.len() {
         if format[index] != b'%' {
@@ -123,10 +159,27 @@ pub(super) fn parse_sprintf_spec_cats(format: &[u8]) -> Vec<SprintfSpecCat> {
             index += 1;
             continue;
         }
-        while index < format.len()
-            && matches!(format[index], b'-' | b'+' | b'0' | b' ' | b'#')
-        {
-            index += 1;
+        let mut explicit: Option<usize> = None;
+        let mut probe = index;
+        while probe < format.len() && format[probe].is_ascii_digit() {
+            probe += 1;
+        }
+        if probe > index && probe < format.len() && format[probe] == b'$' {
+            let mut value: usize = 0;
+            for digit in &format[index..probe] {
+                value = value
+                    .saturating_mul(10)
+                    .saturating_add((digit - b'0') as usize);
+            }
+            explicit = Some(value);
+            index = probe + 1;
+        }
+        while index < format.len() {
+            match format[index] {
+                b'-' | b'+' | b'0' | b' ' | b'#' => index += 1,
+                b'\'' => index += 2,
+                _ => break,
+            }
         }
         while index < format.len() && format[index].is_ascii_digit() {
             index += 1;
@@ -140,14 +193,33 @@ pub(super) fn parse_sprintf_spec_cats(format: &[u8]) -> Vec<SprintfSpecCat> {
         if index >= format.len() {
             break;
         }
-        cats.push(match format[index] {
-            b'f' | b'e' | b'g' => SprintfSpecCat::Float,
+        let cat = match format[index] {
+            b'f' | b'F' | b'e' | b'E' | b'g' | b'G' => SprintfSpecCat::Float,
             b's' => SprintfSpecCat::Str,
             _ => SprintfSpecCat::Int,
-        });
+        };
         index += 1;
+        let slot = match explicit {
+            // `%0$s` has no operand, and an argument number far past any real call cannot
+            // match one either. Both are left for the runtime's argument-count check rather
+            // than sizing this table from an attacker-controlled digit run.
+            Some(0) => continue,
+            Some(number) if number > MAX_TRACKED_SPRINTF_ARGS => continue,
+            Some(number) => number - 1,
+            None => {
+                let slot = next_arg;
+                next_arg += 1;
+                slot
+            }
+        };
+        if slot >= cats.len() {
+            cats.resize(slot + 1, None);
+        }
+        cats[slot] = Some(cat);
     }
-    cats
+    cats.into_iter()
+        .map(|cat| cat.unwrap_or(SprintfSpecCat::Str))
+        .collect()
 }
 
 /// Preserves the format string, evaluates the values array, and calls `__rt_vsprintf`.

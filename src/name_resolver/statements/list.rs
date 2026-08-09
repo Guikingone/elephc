@@ -52,7 +52,7 @@ pub(in crate::name_resolver) fn resolve_stmt_list(
                 register_imports(&mut imports, use_items, stmt.span)?;
             }
             _ => {
-                let resolved_decl = crate::source::with_parse_mode(stmt.source_mode, || {
+                let resolved_decl = crate::source::with_parse_mode(stmt.profile(), || {
                     crate::strict_php::with_source_mode(stmt.source_mode, || {
                         resolve_decl_stmt(stmt, namespace.as_deref(), &imports, symbols)
                     })
@@ -63,7 +63,7 @@ pub(in crate::name_resolver) fn resolve_stmt_list(
                 }
 
                 let ctx = ResolveContext::new(namespace.as_deref(), &imports, symbols);
-                let resolved_stmt = crate::source::with_parse_mode(stmt.source_mode, || {
+                let resolved_stmt = crate::source::with_parse_mode(stmt.profile(), || {
                     crate::strict_php::with_source_mode(stmt.source_mode, || {
                         resolve_regular_stmt(stmt, ctx)
                     })

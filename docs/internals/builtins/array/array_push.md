@@ -2,7 +2,7 @@
 title: "array_push() — internals"
 description: "Compiler internals for array_push(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 29
+  order: 30
 ---
 
 ## `array_push()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_push.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_push.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

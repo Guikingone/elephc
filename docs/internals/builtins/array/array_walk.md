@@ -2,7 +2,7 @@
 title: "array_walk() — internals"
 description: "Compiler internals for array_walk(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 45
+  order: 46
 ---
 
 ## `array_walk()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_walk.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_walk.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

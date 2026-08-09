@@ -17,10 +17,16 @@ impl Parser {
     }
 
     /// Parses the condition, then block, and optional else branch for an `if` chain.
+    ///
+    /// Delegates to the alternative-syntax path when the body opens with `:`, which consumes the
+    /// whole `elseif:`/`else:` chain up to and including `endif;`.
     pub(in crate::parser) fn parse_if_after_keyword(&mut self) -> Result<EvalStmt, EvalParseError> {
         self.expect(TokenKind::LParen)?;
         let condition = self.parse_expr()?;
         self.expect(TokenKind::RParen)?;
+        if matches!(self.current(), TokenKind::Colon) {
+            return self.parse_alternative_if_chain(condition);
+        }
         let then_branch = self.parse_statement_body()?;
         let else_branch = self.parse_optional_else_branch()?;
         Ok(EvalStmt::If {
@@ -28,6 +34,86 @@ impl Parser {
             then_branch,
             else_branch,
         })
+    }
+
+    /// Parses a complete alternative-syntax `if` chain and consumes its closing `endif;`.
+    ///
+    /// `condition` is the already-parsed `if` condition and the cursor sits on the `:` that opens
+    /// the `then` segment.
+    fn parse_alternative_if_chain(
+        &mut self,
+        condition: EvalExpr,
+    ) -> Result<EvalStmt, EvalParseError> {
+        let statement = self.parse_alternative_if_segment(condition)?;
+        self.expect_keyword("endif")?;
+        self.expect_semicolon()?;
+        Ok(statement)
+    }
+
+    /// Parses one `: body` segment plus any `elseif:`/`else:` continuation, without consuming
+    /// the shared `endif;` that closes the whole chain.
+    ///
+    /// `elseif` recurses so the resulting `EvalStmt::If` nests exactly like the brace form.
+    fn parse_alternative_if_segment(
+        &mut self,
+        condition: EvalExpr,
+    ) -> Result<EvalStmt, EvalParseError> {
+        self.expect(TokenKind::Colon)?;
+        let then_branch = self.parse_alternative_body(&["elseif", "else", "endif"])?;
+        let else_branch = if self.at_keyword("elseif") {
+            self.advance();
+            self.expect(TokenKind::LParen)?;
+            let branch_condition = self.parse_expr()?;
+            self.expect(TokenKind::RParen)?;
+            vec![self.parse_alternative_if_segment(branch_condition)?]
+        } else if self.at_keyword("else") {
+            self.advance();
+            self.expect(TokenKind::Colon)?;
+            self.parse_alternative_body(&["endif"])?
+        } else {
+            Vec::new()
+        };
+        Ok(EvalStmt::If {
+            condition,
+            then_branch,
+            else_branch,
+        })
+    }
+
+    /// Parses statements until one of the `stops` keywords, leaving that keyword unconsumed.
+    ///
+    /// Returns `UnexpectedEof` when the fragment ends before a terminator is found.
+    pub(in crate::parser) fn parse_alternative_body(
+        &mut self,
+        stops: &[&str],
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        let mut statements = Vec::new();
+        loop {
+            if matches!(self.current(), TokenKind::Eof) {
+                return Err(EvalParseError::UnexpectedEof);
+            }
+            if self.at_any_keyword(stops) {
+                break;
+            }
+            statements.extend(self.parse_nested_stmt()?);
+        }
+        Ok(statements)
+    }
+
+    /// Parses a loop body in brace/braceless form, or in the alternative `:` … `<terminator>;`
+    /// form when the body opens with `:`.
+    pub(in crate::parser) fn parse_statement_body_or_alternative(
+        &mut self,
+        terminator: &str,
+    ) -> Result<Vec<EvalStmt>, EvalParseError> {
+        if !matches!(self.current(), TokenKind::Colon) {
+            return self.parse_statement_body();
+        }
+        self.advance();
+        let body = self.parse_alternative_body(&[terminator])?;
+        self.expect_keyword(terminator)?;
+        self.expect_semicolon()?;
+        Ok(body)
     }
 
     /// Parses `elseif`, `else if`, or `else` branches after an `if` body.
@@ -48,21 +134,41 @@ impl Parser {
         }
     }
 
-    /// Parses `switch (expr) { case expr: ... default: ... }`.
+    /// Parses `switch (expr) { case expr: ... default: ... }`, or the alternative
+    /// `switch (expr): case expr: ... endswitch;` form.
     pub(in crate::parser) fn parse_switch_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
         let expr = self.parse_expr()?;
         self.expect(TokenKind::RParen)?;
-        self.expect(TokenKind::LBrace)?;
+        // The case list is terminated by `}` in the brace form and by `endswitch` otherwise.
+        let alternative = matches!(self.current(), TokenKind::Colon);
+        if alternative {
+            self.advance();
+        } else {
+            self.expect(TokenKind::LBrace)?;
+        }
         let mut cases = Vec::new();
-        while !matches!(self.current(), TokenKind::RBrace) {
+        loop {
             if matches!(self.current(), TokenKind::Eof) {
                 return Err(EvalParseError::UnexpectedEof);
             }
+            let at_end = if alternative {
+                self.at_keyword("endswitch")
+            } else {
+                matches!(self.current(), TokenKind::RBrace)
+            };
+            if at_end {
+                break;
+            }
             cases.push(self.parse_switch_case()?);
         }
-        self.expect(TokenKind::RBrace)?;
+        if alternative {
+            self.expect_keyword("endswitch")?;
+            self.expect_semicolon()?;
+        } else {
+            self.expect(TokenKind::RBrace)?;
+        }
         Ok(vec![EvalStmt::Switch { expr, cases }])
     }
 
@@ -152,13 +258,13 @@ impl Parser {
         Ok(statements)
     }
 
-    /// Parses `while (expr) { ... }`.
+    /// Parses `while (expr) { ... }`, or the alternative `while (expr): ... endwhile;` form.
     pub(in crate::parser) fn parse_while_stmt(&mut self) -> Result<Vec<EvalStmt>, EvalParseError> {
         self.advance();
         self.expect(TokenKind::LParen)?;
         let condition = self.parse_expr()?;
         self.expect(TokenKind::RParen)?;
-        let body = self.parse_statement_body()?;
+        let body = self.parse_statement_body_or_alternative("endwhile")?;
         Ok(vec![EvalStmt::While { condition, body }])
     }
 

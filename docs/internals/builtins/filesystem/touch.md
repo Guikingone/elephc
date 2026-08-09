@@ -2,7 +2,7 @@
 title: "touch() — internals"
 description: "Compiler internals for touch(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 156
+  order: 163
 ---
 
 ## `touch()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/touch.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/touch.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

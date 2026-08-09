@@ -2,7 +2,7 @@
 title: "fdiv() — internals"
 description: "Compiler internals for fdiv(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 273
+  order: 285
 ---
 
 ## `fdiv()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/math/fdiv.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/math/fdiv.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

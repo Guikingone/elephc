@@ -168,6 +168,7 @@ pub enum MixedNumericOp {
     Add,
     Sub,
     Mul,
+    Pow,
 }
 
 /// PHP runtime type category tested by the backend-neutral `TypePredicate` opcode.
@@ -208,6 +209,7 @@ impl MixedNumericOp {
             MixedNumericOp::Add => "add",
             MixedNumericOp::Sub => "sub",
             MixedNumericOp::Mul => "mul",
+            MixedNumericOp::Pow => "pow",
         }
     }
 }
@@ -272,6 +274,7 @@ pub enum Op {
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
+    ICheckedPow,
     IDiv,
     ISDiv,
     ISMod,
@@ -290,6 +293,7 @@ pub enum Op {
     FPow,
     FNeg,
     MixedNumericBinop,
+    StrIncDec,
     ICmp,
     FCmp,
     StrEq,
@@ -419,6 +423,11 @@ pub enum Op {
     PropGet,
     PropInitialized,
     PropSet,
+    /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
+    /// refcounted payload the slot owned and stamps the uninitialized-typed-property
+    /// marker, so the property stops being reported by `isset()` and by the
+    /// descriptor walkers. Operand: object; immediate: property name data id.
+    PropUnset,
     /// Loads the raw reference-cell pointer stored in a reference property's slot,
     /// without dereferencing it. Used to alias a local to `$obj->prop` and to return
     /// `$this->prop` by reference. Operand: object; immediate: property name data id.
@@ -557,12 +566,9 @@ impl Op {
             | IBitOr
             | IBitXor
             | IBitNot
-            | IShl
-            | IShrA
             | FAdd
             | FSub
             | FMul
-            | FDiv
             | FPow
             | FNeg
             | ICmp
@@ -587,8 +593,13 @@ impl Op {
             | Move
             | Borrow
             | Nop => E::PURE,
-            IDiv | ISDiv | ISMod | PtrCheckNonnull => E::MAY_FATAL,
-            ICheckedAdd | ICheckedSub | ICheckedMul => E::ALLOC_HEAP | E::READS_HEAP,
+            // PHP 8 raises catchable errors here, so these are never removable, hoistable,
+            // or CSE-able: `/` and `%` throw `DivisionByZeroError` for a zero divisor and
+            // `<<` / `>>` throw `ArithmeticError` for a negative shift count.
+            IDiv | ISDiv | ISMod => E::MAY_FATAL | E::MAY_THROW,
+            IShl | IShrA | FDiv => E::MAY_THROW,
+            PtrCheckNonnull => E::MAY_FATAL,
+            ICheckedAdd | ICheckedSub | ICheckedMul | ICheckedPow => E::ALLOC_HEAP | E::READS_HEAP,
             ConstEnumCase => E::ALLOC_HEAP,
             LoadCalledClassId => E::READS_LOCAL,
             LoadLocal | LoadRefCell | LoadStaticLocal | ClosureCapture => E::READS_LOCAL,
@@ -664,7 +675,7 @@ impl Op {
             LoadArrayElemRefCell => E::READS_HEAP | E::MAY_FATAL,
             BindRefCellPtr => E::WRITES_LOCAL,
             ArraySet | HashSet | HashUnset | ArrayPush | HashAppend | OffsetUnset | PropSet
-            | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
+            | PropUnset | DynamicPropSet | BufferSet | BufferFree | PackedFieldSet | PtrWrite
             | PtrWriteString => E::WRITES_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             MixedArrayAppend => E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::MAY_FATAL | E::REFCOUNT_OP,
             // ALLOC_HEAP because the hash-storage lowering goes through `__rt_hash_set`, which
@@ -689,6 +700,10 @@ impl Op {
             | InstanceOfDynamic | MixedNumericBinop | LooseEq | LooseNotEq | Spaceship => {
                 E::READS_HEAP | E::MAY_DEOPT
             }
+            // `++`/`--` on a string reads the operand's payload, may write the shared
+            // concat scratch while building the carried result, and always allocates the
+            // boxed Mixed cell the new value is returned in.
+            StrIncDec => E::READS_HEAP | E::ALLOC_CONCAT | E::ALLOC_HEAP | E::MAY_DEOPT,
             IterCurrentValueRef | IterNext | IterEnd | GeneratorYield | GeneratorYieldFrom | GeneratorReturn => {
                 E::READS_HEAP | E::WRITES_HEAP | E::MAY_DEOPT
             }
@@ -742,10 +757,22 @@ impl Op {
     }
 
     /// Returns true when the builder may replace the conservative default effects.
+    ///
+    /// The arithmetic opcodes below default to `MAY_THROW` because PHP raises a catchable
+    /// `DivisionByZeroError` / `ArithmeticError` for a zero divisor or a negative shift count.
+    /// `ir_lower::expr::arithmetic_effects()` drops that bit when the right operand is a literal
+    /// that rules the error out, so `$x << 3` and `$x / 2` stay removable, hoistable, and
+    /// CSE-able exactly as they were before the guards existed.
     pub fn allows_effect_refinement(self) -> bool {
         matches!(
             self,
-            Op::Call
+            Op::IDiv
+                | Op::ISDiv
+                | Op::ISMod
+                | Op::FDiv
+                | Op::IShl
+                | Op::IShrA
+                | Op::Call
                 | Op::FunctionVariantCall
                 | Op::ClosureBind
                 | Op::LanguageConstructCall
@@ -809,6 +836,7 @@ impl Op {
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
+            ICheckedPow => "ichecked_pow",
             IDiv => "idiv",
             ISDiv => "isdiv",
             ISMod => "ismod",
@@ -827,6 +855,7 @@ impl Op {
             FPow => "fpow",
             FNeg => "fneg",
             MixedNumericBinop => "mixed_numeric_binop",
+            StrIncDec => "str_inc_dec",
             ICmp => "icmp",
             FCmp => "fcmp",
             StrEq => "str_eq",
@@ -934,6 +963,7 @@ impl Op {
             PropGet => "prop_get",
             PropInitialized => "prop_initialized",
             PropSet => "prop_set",
+            PropUnset => "prop_unset",
             LoadPropRefCell => "load_prop_ref_cell",
             LoadArrayElemRefCell => "load_array_elem_ref_cell",
             BindRefCellPtr => "bind_ref_cell_ptr",

@@ -23,6 +23,7 @@ use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
+use super::super::resolve_int_operand_to_result;
 
 const STREAM_METADATA_SLOT: usize = 14;
 const STREAM_WRAPPER_UNLINK_SLOT: usize = 15;
@@ -178,3 +179,43 @@ pub(super) use resource_handles::{
     load_resource_payload_to_result, load_stream_fd_to_result, load_stream_handle_to_result,
 };
 pub(super) use string_validation::load_string_to_result;
+
+/// Emits a literal `file_get_contents("phar://...")` payload through compile-time PHAR extraction.
+///
+/// The extracted bytes live in read-only `.data`, so a following `$offset`/`$length` window — which
+/// trims its input in place and frees a failed read — would move and free a rodata pointer.
+/// `persist` therefore copies the entry into an owned heap string before the window runs.
+fn emit_literal_phar_file_get_contents_bytes(
+    ctx: &mut FunctionContext<'_>,
+    path: &str,
+    persist: bool,
+) {
+    match crate::codegen::phar_stream::extract_phar_entry(path) {
+        Some(payload) => {
+            let (symbol, len) = ctx.data.add_string(&payload);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_symbol_address(ctx.emitter, "x1", &symbol);
+                    ctx.emitter.instruction(&format!("mov x2, #{}", len));      // embedded phar entry byte length
+                }
+                Arch::X86_64 => {
+                    abi::emit_symbol_address(ctx.emitter, "rax", &symbol);
+                    ctx.emitter.instruction(&format!("mov rdx, {}", len));      // embedded phar entry byte length
+                }
+            }
+            if persist {
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            }
+        }
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, #0");                          // null string pointer asks the boxer for PHP false
+                ctx.emitter.instruction("mov x2, #0");                          // clear the unused failure length
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor eax, eax");                        // null string pointer asks the boxer for PHP false
+                ctx.emitter.instruction("xor edx, edx");                        // clear the unused failure length
+            }
+        },
+    }
+}

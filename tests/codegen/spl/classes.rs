@@ -549,3 +549,38 @@ var_dump($it->valid());
         )
     );
 }
+
+// Tests that an SplFixedArray size whose `size * 8` storage payload wraps the machine word is
+// rejected by the shared `__rt_array_new` guard instead of allocating a tiny block behind a header
+// that advertises 2^61 slots. PHP reports the same class of failure as
+// "Possible integer overflow in memory allocation".
+/// Verifies that an unrepresentable SplFixedArray size aborts instead of over-reporting capacity.
+#[test]
+fn test_spl_fixed_array_overflowing_size_is_fatal() {
+    let err = compile_and_run_expect_failure(
+        r#"<?php
+$fixed = new SplFixedArray(0x2000000000000004);
+echo $fixed->getSize();
+"#,
+    );
+    assert!(
+        err.contains("requested array size exceeds the maximum allowed array size"),
+        "{}",
+        err
+    );
+}
+
+// Positive control for the SplFixedArray storage-size guard: an ordinary fixed array still
+// allocates, zero-initializes, and round-trips element writes.
+/// Verifies that ordinary SplFixedArray allocation is unaffected by the storage-size guard.
+#[test]
+fn test_spl_fixed_array_normal_size_still_works() {
+    let out = compile_and_run(
+        r#"<?php
+$fixed = new SplFixedArray(3);
+$fixed[1] = 7;
+echo $fixed->getSize(), ":", $fixed[1], ":", $fixed[0] === null ? "null" : "set";
+"#,
+    );
+    assert_eq!(out, "3:7:null");
+}

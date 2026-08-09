@@ -2,7 +2,7 @@
 title: "hypot()"
 description: "Calculates the length of the hypotenuse of a right-angle triangle."
 sidebar:
-  order: 276
+  order: 289
 ---
 
 ## hypot()

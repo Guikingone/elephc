@@ -15,7 +15,7 @@ use super::*;
 /// modified inside the loop.
 ///
 /// After the optimizer runs, `$base = 2` followed by a foreach over `[1, 2, 3]`
-/// and `echo $base ** 3` should reduce to `echo 8.0` since `$base` is never
+/// and `echo $base ** 3` should reduce to `echo 8` since `$base` is never
 /// reassigned in the loop body.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_foreach_loop() {
@@ -45,6 +45,6 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_foreach_loop() {
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }

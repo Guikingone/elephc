@@ -2,7 +2,7 @@
 title: "define()"
 description: "Defines a named constant at runtime."
 sidebar:
-  order: 299
+  order: 314
 ---
 
 ## define()

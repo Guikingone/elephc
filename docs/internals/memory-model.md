@@ -161,8 +161,11 @@ b.eq value_is_null
 
 A tagged null carries the sentinel as its payload word, so boxing it into a Mixed
 cell produces `{tag 8, sentinel}` words and un-audited consumers degrade
-to sentinel behavior. `?int` parameters, returns, and properties keep their boxed Mixed
-representation under both modes.
+to sentinel behavior. Declared `?int` parameters, returns, and properties are tagged
+scalars too under the default mode, so they round-trip the full 64-bit range; a `?int`
+property slot stores the payload at its slot offset and the runtime tag at `offset + 8`,
+and its literal default must be written as that same `{payload, tag}` pair rather than as
+a pointer to a boxed Mixed cell.
 
 ### Pointer values
 
@@ -347,6 +350,8 @@ Header (24 bytes) │ ptr[0] (8B) │ len[0] (8B) │ ptr[1] (8B) │ len[1] (8B
 
 Access: `base + 24 + (index × 16)` for pointer, `base + 24 + (index × 16) + 8` for length
 
+The wider slot is why a runtime helper that walks an indexed array cannot assume 8-byte payloads. `array_splice()` used to do exactly that on a string receiver, so the removed-elements array came back holding raw heap pointers surfaced as PHP integers; string arrays now go through the dedicated `__rt_array_splice_str` / `__rt_array_splice_insert_str` pair. A string array also owns its payloads exclusively — a copy-on-write split re-persists every slot and a deep free releases every slot — so moving a slot between two string arrays transfers ownership with it, while inserting one duplicates it with `__rt_str_persist`.
+
 ### Array growth
 
 When `array_push` finds that `length >= capacity`, the array grows automatically:
@@ -368,6 +373,8 @@ Indexed arrays and associative arrays now follow **shared-until-modified** seman
 4. If the refcount is greater than 1, the runtime clones the container structure, retains nested heap-backed children (or re-persists immutable strings/keys), decrements the mutator's old owner slot, rewrites the mutating owner to the clone, and only then performs the write
 
 This is what lets PHP-style code such as `$b = $a; $b[0] = 9;` leave `$a` unchanged without requiring deep copies on every assignment. Nested arrays and hashes remain shallow-shared until their own first mutation.
+
+Because both the split in step 4 and any growth relocate the container, a mutating builtin has to publish the new pointer back into the place its receiver was READ from. A plain local is its own frame slot; a **by-reference parameter** is read through a reference cell and must be republished through that cell. Missing that write-back is not a leak but a wrong answer: the caller keeps the pre-split container (so the mutation is invisible) or, after a growth, a pointer into storage the reallocation already freed.
 
 ## Hash table layout (associative arrays)
 
@@ -622,7 +629,10 @@ The naming pattern comes from `static_property_symbol(...)`. Inherited static pr
 | User globals | 16 bytes per `global $var` slot | Grows with number of referenced globals |
 | Static vars | 24 bytes per `static $var` (`16 + 8 init flag`) | Grows with number of declared static locals |
 | Static properties | 16 bytes per effective declaring class static property | Grows with number of declared and redeclared static properties |
-| Array capacity | Fixed at creation until grow/re-hash logic runs | Fatal error: "array capacity exceeded" if a hard limit is hit |
+| Array capacity | Fixed at creation until grow/re-hash logic runs | `__rt_array_new` / `__rt_hash_new` validate the requested size first: negative capacities allocate an empty payload region, and a `capacity * elem_size` (or `capacity * 64`) that does not fit in a non-negative machine word aborts with "Fatal error: requested array size exceeds the maximum allowed array size" instead of wrapping to a small allocation |
+| Range element count | `range()` sizes its result from `\|end - start\| + 1` | An interval needing more than 1073741823 elements never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("The supplied range exceeds the maximum array size: start=… end=… step=…") first, naming the ordered endpoints and `abs($step)`. The runtime's own overflow abort remains as the backstop |
+| Fill element count | `array_fill()` sizes its result from `$count` | A `$count` past `INT_MAX` (2147483647) never reaches the allocator: the lowering guard raises reference PHP's catchable `ValueError` ("array_fill(): Argument #2 ($count) is too large"). Counts at or below the bound whose payload does not fit the heap still report "Fatal error: heap memory exhausted", which is what reference PHP reports as a memory-limit fatal too |
+| Buffer length | Fixed at `buffer_new<T>()` | A negative length, or a `length * stride` that does not fit in a non-negative machine word, aborts with "Fatal error: buffer_new() length is negative or exceeds the maximum buffer size" |
 | C-string buffers | `_cstr_buf`, `_cstr_buf2` = 4KB each, `_empty_str` = 1 byte | Long converted paths/strings are truncated to buffer size; `_empty_str` is a safe zero-length string pointer |
 | File descriptor state | `_eof_flags`, `_stream_read_filters`, `_stream_write_filters` = 256 bytes each; `_popen_files`, `_dir_handles`, `_glob_handles`, `_zstream_handles`, `_bzstream_handles`, `_iconv_handles`, `_tls_sessions`, `_stream_chunk_size` = 2048 bytes each | Per-fd stream, process, directory, compression, iconv, TLS, and chunk-size bookkeeping for up to 256 descriptors |
 | Stream filter scratch | `_stream_filter_buf`, `_stream_grow_scratch` = 64KB each | Scratch space for stream filters, including length-growing filters such as base64 and quoted-printable encoders |

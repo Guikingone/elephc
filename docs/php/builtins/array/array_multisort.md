@@ -2,7 +2,7 @@
 title: "array_multisort()"
 description: "Sorts multiple arrays or multi-dimensional arrays."
 sidebar:
-  order: 25
+  order: 26
 ---
 
 ## array_multisort()

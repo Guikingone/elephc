@@ -2,7 +2,7 @@
 title: "array_filter()"
 description: "Filters elements of an array using a callback function."
 sidebar:
-  order: 11
+  order: 12
 ---
 
 ## array_filter()

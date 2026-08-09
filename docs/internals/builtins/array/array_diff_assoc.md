@@ -2,7 +2,7 @@
 title: "array_diff_assoc() — internals"
 description: "Compiler internals for array_diff_assoc(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 ## `array_diff_assoc()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_diff_assoc.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_diff_assoc.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

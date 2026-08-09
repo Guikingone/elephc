@@ -2,7 +2,7 @@
 title: "tan()"
 description: "Returns the tangent of a number (radians)."
 sidebar:
-  order: 296
+  order: 310
 ---
 
 ## tan()

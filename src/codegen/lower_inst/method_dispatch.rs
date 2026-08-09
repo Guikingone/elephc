@@ -313,11 +313,10 @@ pub(super) fn emit_mixed_method_class_dispatch(
     abi::emit_jump(ctx.emitter, no_match_label);
 }
 
-/// Returns a label-safe fragment for class names and method metadata keys.
-pub(super) fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
+/// Re-exports the shared label fragmenter so instruction lowering keeps one implementation.
+///
+/// `crate::names::label_fragment` is documented as deliberately NON-injective — every
+/// non-alphanumeric byte collapses to `_`, so `a_b` and `aéb` collide. A second copy here
+/// invited use where uniqueness matters; there is now one definition carrying that warning.
+pub(super) use crate::names::label_fragment;
 

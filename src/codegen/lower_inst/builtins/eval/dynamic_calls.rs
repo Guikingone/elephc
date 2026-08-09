@@ -59,7 +59,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_function_call_array(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "eval function call array", 1)?;
+    super::super::ensure_arg_count(inst, "eval function call array", 1)?;
     let function_name = ctx.function_name_data(expect_data(inst)?)?.to_string();
     let arg_array = expect_operand(inst, 0)?;
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);

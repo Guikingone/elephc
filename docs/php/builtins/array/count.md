@@ -2,7 +2,7 @@
 title: "count()"
 description: "Counts all elements in an array or Countable object."
 sidebar:
-  order: 51
+  order: 52
 ---
 
 ## count()

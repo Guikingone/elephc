@@ -2,7 +2,7 @@
 title: "stream_socket_shutdown()"
 description: "Shutdown a full-duplex connection."
 sidebar:
-  order: 251
+  order: 258
 ---
 
 ## stream_socket_shutdown()

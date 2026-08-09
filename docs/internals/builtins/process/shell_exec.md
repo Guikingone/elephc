@@ -2,7 +2,7 @@
 title: "shell_exec() — internals"
 description: "Compiler internals for shell_exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 340
+  order: 355
 ---
 
 ## `shell_exec()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/system/shell_exec.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/system/shell_exec.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

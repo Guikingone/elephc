@@ -306,6 +306,12 @@ pub(super) fn instance_method_already_emitted(
 }
 
 /// Verifies the wrapper can forward the callback argument ABI without boxing or shuffling pairs.
+///
+/// String arguments occupy two integer ABI slots, so they are only forwarded when every
+/// visible argument is a string: that is the shape the runtime callback helpers actually
+/// produce (a single-string element callback, or the two-string `usort()` comparator).
+/// A mixed string/scalar list would need a register-shuffling wrapper no runtime helper
+/// currently calls, so it stays a diagnosed unsupported feature.
 pub(super) fn require_static_method_callback_arg_types(
     owner: &str,
     callback_name: &str,
@@ -324,9 +330,12 @@ pub(super) fn require_static_method_callback_arg_types(
         .any(|ty| matches!(ty.codegen_repr(), PhpType::Str))
         && !(visible_arg_types.len() == 1
             && matches!(visible_arg_types[0].codegen_repr(), PhpType::Str))
+        && !visible_arg_types
+            .iter()
+            .all(|ty| matches!(ty.codegen_repr(), PhpType::Str))
     {
         return Err(CodegenIrError::unsupported(format!(
-            "{} '{}' with string callback args outside the one-argument ABI",
+            "{} '{}' with mixed string and scalar callback args",
             owner, callback_name
         )));
     }

@@ -2,7 +2,7 @@
 title: "ptr_set() — internals"
 description: "Compiler internals for ptr_set(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 323
+  order: 338
 ---
 
 ## `ptr_set()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_set.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_set.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -2,7 +2,7 @@
 title: "json_encode()"
 description: "Returns the JSON representation of a value."
 sidebar:
-  order: 258
+  order: 265
 ---
 
 ## json_encode()

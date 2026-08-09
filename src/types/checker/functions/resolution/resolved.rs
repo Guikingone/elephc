@@ -156,12 +156,33 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                     }
-                    self.require_compatible_arg_type(
-                        expected_ty,
-                        &actual_ty,
-                        arg.span,
-                        &format!("Function '{}' parameter ${}", name, param_name),
-                    )?;
+                    // PHP's parameter binding only applies to a *declared* parameter type.
+                    // An inferred parameter's "expected" type is just what earlier call sites
+                    // produced, so coercing against it would invent a conversion PHP does not
+                    // perform.
+                    if effective_sig
+                        .declared_params
+                        .get(param_idx)
+                        .copied()
+                        .unwrap_or(false)
+                    {
+                        self.require_bound_param_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg,
+                            caller_env,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                            Some((name, param_name.as_str())),
+                            effective_sig.ref_params.get(param_idx).copied().unwrap_or(false),
+                        )?;
+                    } else {
+                        self.require_compatible_arg_type(
+                            expected_ty,
+                            &actual_ty,
+                            arg.span,
+                            &format!("Function '{}' parameter ${}", name, param_name),
+                        )?;
+                    }
                 }
             } else if let (Some(vname), Some(expected_ty)) =
                 (effective_sig.variadic.as_ref(), variadic_elem_ty.as_ref())

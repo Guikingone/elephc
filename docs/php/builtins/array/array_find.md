@@ -2,7 +2,7 @@
 title: "array_find()"
 description: "Returns the first element satisfying a predicate callback, or null."
 sidebar:
-  order: 12
+  order: 13
 ---
 
 ## array_find()

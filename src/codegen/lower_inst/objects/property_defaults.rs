@@ -125,18 +125,11 @@ pub(super) fn emit_property_default(
         }
         LiteralDefaultValue::TaggedNull => {
             emit_tagged_null_literal_to_result(ctx);
-            abi::emit_store_to_address(
-                ctx.emitter,
-                abi::int_result_reg(ctx.emitter),
-                object_reg,
-                default.offset,
-            );
-            abi::emit_store_to_address(
-                ctx.emitter,
-                crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
-                object_reg,
-                default.offset + 8,
-            );
+            emit_tagged_scalar_property_default_store(ctx, object_reg, default.offset);
+        }
+        LiteralDefaultValue::TaggedInt(value) => {
+            emit_tagged_int_literal_to_result(ctx, *value);
+            emit_tagged_scalar_property_default_store(ctx, object_reg, default.offset);
         }
         LiteralDefaultValue::BoxedNull => {
             abi::emit_push_reg(ctx.emitter, object_reg);

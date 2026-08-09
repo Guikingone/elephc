@@ -361,11 +361,14 @@ impl Checker {
                             &format!("Function '{}' parameter ${}", name, param_name),
                         )?;
                     }
-                    self.require_compatible_arg_type(
+                    self.require_bound_param_arg_type(
                         &declared_ty,
                         &ty,
-                        arg.span,
+                        arg,
+                        caller_env,
                         &format!("Function '{}' parameter ${}", name, param_name),
+                        Some((name, decl.params[arg_idx].as_str())),
+                        decl.ref_params.get(arg_idx).copied().unwrap_or(false),
                     )?;
                     let specialized_ty =
                         Self::specialize_generic_array_param_hint(&declared_ty, &ty);
@@ -386,6 +389,15 @@ impl Checker {
                         &format!("Function '{}' variadic parameter ${}", name, vname),
                     )?;
                     self.require_compatible_arg_type(
+                        &elem_ty,
+                        &ty,
+                        arg.span,
+                        &format!("Function '{}' variadic parameter ${}", name, vname),
+                    )?;
+                    // PHP applies `strict_types` to a variadic element exactly like a regular
+                    // declared parameter, so the strict rejection runs here too; the coercive
+                    // widenings `require_compatible_arg_type` allows are unchanged otherwise.
+                    self.require_strict_types_param_binding(
                         &elem_ty,
                         &ty,
                         arg.span,

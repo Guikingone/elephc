@@ -14,6 +14,10 @@ use crate::support::{
     compile_and_run, compile_and_run_capture_with_regex, compile_and_run_with_regex,
 };
 
+/// Registry builtins that exist only in the AOT catalog and have no eval interpreter hook yet.
+///
+/// `function_exists()` inside `eval()` answers from the eval interpreter's own registry, so a
+/// name listed here is skipped by the catalog sweep below.
 const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_all",
     "array_any",
@@ -30,7 +34,14 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "array_udiff",
     "array_uintersect",
     "array_walk_recursive",
+    "bindec",
+    "decbin",
+    "dechex",
+    "decoct",
     "diskfreespace",
+    "hexdec",
+    "join",
+    "octdec",
     "serialize",
     "set_file_buffer",
     "set_socket_blocking",
@@ -39,6 +50,9 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "socket_set_blocking",
     "socket_set_timeout",
     "stream_register_wrapper",
+    "strncasecmp",
+    "strncmp",
+    "substr_count",
     "unserialize",
     "zval_free",
     "zval_pack",
@@ -507,5 +521,127 @@ return implode("|", $out);');
 s:T:string:42|f:T:string:42|c:T:string:42|\
 s:1:ab:a:b|f:1:ab:a:b|c:1:ab:a:b|\
 s:2:a,b|f:2:a,b|c:2:a,b"
+    );
+}
+
+/// Verifies the eval interpreter reproduces every `str_word_count()` result shape, including
+/// the byte-offset map, the extra `$characters` alphabet, and php-src's boundary trims.
+#[test]
+fn test_eval_str_word_count_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo str_word_count("Hello friend, you\'re here"), ":";
+echo implode(",", str_word_count("Hello friend", 1)), ":";
+foreach (str_word_count("one two", 2) as $offset => $word) { echo $offset, "=", $word, ";"; }
+echo implode(",", str_word_count("fri3nd", 1, "3")), ":";
+echo implode(",", str_word_count("-abc-", 1));');
+"#,
+    );
+
+    assert_eq!(out, "4:Hello,friend:0=one;4=two;fri3nd:abc");
+}
+
+/// Verifies the eval interpreter reproduces every `count_chars()` mode and raises php-src's
+/// catchable `ValueError` for an unknown one.
+#[test]
+fn test_eval_count_chars_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('$used = count_chars("hello", 1);
+foreach ($used as $byte => $count) { echo $byte, "=", $count, ";"; }
+echo ":", count_chars("hello world", 3), ":", strlen(count_chars("hello world", 4)), ":", count(count_chars("aab", 0));
+try { count_chars("ab", 7); } catch (\ValueError $e) { echo ":", $e->getMessage(); }');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "101=1;104=1;108=2;111=1;: dehlorw:248:256:count_chars(): Argument #2 ($mode) must be between 0 and 4 (inclusive)"
+    );
+}
+
+/// Verifies the eval interpreter reproduces both `strtr()` shapes, including longest-match-first
+/// selection, integer keys, and keys longer than the subject.
+#[test]
+fn test_eval_strtr_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('echo strtr("foo bar", ["foo"=>"bar","bar"=>"baz"]), ":";
+echo strtr("abc", ["a"=>"b","ab"=>"X"]), ":";
+echo strtr("12345", [1=>"one", 23=>"two-three"]), ":";
+echo strtr("abcd", "abc", "xy"), ":";
+echo strtr("abc", ["abcd"=>"X"]);');
+"#,
+    );
+
+    assert_eq!(out, "bar baz:Xc:onetwo-three45:xycd:abc");
+}
+
+/// Verifies the eval interpreter raises php-src's catchable `ValueError` for an unknown
+/// `str_word_count()` format, matching the compiled backend's guard.
+#[test]
+fn test_eval_str_word_count_invalid_format_parity() {
+    let out = compile_and_run(
+        r#"<?php
+eval('try { str_word_count("ab", 5); } catch (\ValueError $e) { echo $e->getMessage(); }');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "str_word_count(): Argument #2 ($format) must be a valid format value"
+    );
+}
+
+/// Verifies the eval interpreter reproduces `file_get_contents()`'s `$offset`/`$length` window,
+/// its unreachable-seek `false`, and its negative-`$length` `ValueError`, matching what the
+/// compiled backend produces for the same reads.
+///
+/// Both sides now declare the same five-parameter PHP 8.4 signature, so this fixture also pins
+/// that the eval dispatcher accepts every argument position the static catalog advertises.
+#[test]
+fn test_eval_file_get_contents_offset_length_parity() {
+    let out = compile_and_run(
+        r#"<?php
+file_put_contents("eval_fgc.txt", "ABCDEFGHIJ");
+echo file_get_contents("eval_fgc.txt", false, null, 3, 4), ":";
+eval('echo file_get_contents("eval_fgc.txt", false, null, 3, 4), ":";
+echo file_get_contents("eval_fgc.txt", false, null, -3), ":";
+echo file_get_contents("eval_fgc.txt", false, null, 20) === "" ? "past-eof" : "bad", ":";
+echo file_get_contents("eval_fgc.txt", true, null, 4, 3), ":";
+try { file_get_contents("eval_fgc.txt", false, null, 0, -1); } catch (\ValueError $e) { echo $e->getMessage(); }');
+unlink("eval_fgc.txt");
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "DEFG:DEFG:HIJ:past-eof:EFG:file_get_contents(): Argument #5 ($length) must be greater than or equal to 0"
+    );
+}
+
+/// Verifies the eval interpreter and the compiled backend agree on `array_splice()`'s
+/// `$replacement`: the same removed slice and the same mutated receiver on both sides.
+#[test]
+fn test_eval_array_splice_replacement_parity() {
+    let out = compile_and_run(
+        r#"<?php
+$a = [1,2,3,4,5];
+$removed = array_splice($a, 1, 2, [90,91,92]);
+echo implode(",", $a), "|", implode(",", $removed), ":";
+eval('$b = [1,2,3,4,5];
+$removed2 = array_splice($b, 1, 2, [90,91,92]);
+echo implode(",", $b), "|", implode(",", $removed2), ":";
+$c = [1,2,3];
+echo count(array_splice($c, 1, 0, [7,8])), "|", implode(",", $c), ":";
+$d = [1,2,3];
+array_splice($d, 1, 1, 9);
+echo implode(",", $d);');
+"#,
+    );
+
+    assert_eq!(
+        out,
+        "1,90,91,92,4,5|2,3:1,90,91,92,4,5|2,3:0|1,7,8,2,3:1,9,3"
     );
 }

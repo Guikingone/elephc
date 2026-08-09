@@ -2,7 +2,7 @@
 title: "is_nan()"
 description: "Checks whether a float is NAN."
 sidebar:
-  order: 280
+  order: 293
 ---
 
 ## is_nan()

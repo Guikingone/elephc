@@ -2,7 +2,7 @@
 title: "stream_wrapper_register()"
 description: "Registers a URL wrapper implemented as a PHP class."
 sidebar:
-  order: 253
+  order: 260
 ---
 
 ## stream_wrapper_register()

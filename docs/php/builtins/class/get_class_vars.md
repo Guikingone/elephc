@@ -2,7 +2,7 @@
 title: "get_class_vars()"
 description: "get_class_vars() is available inside eval'd code via the magician interpreter; compiled (AOT) code does not support it yet."
 sidebar:
-  order: 79
+  order: 86
 ---
 
 ## get_class_vars()

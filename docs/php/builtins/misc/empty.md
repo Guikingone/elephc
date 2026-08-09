@@ -2,7 +2,7 @@
 title: "empty()"
 description: "Determines whether a variable is considered empty."
 sidebar:
-  order: 301
+  order: 316
 ---
 
 ## empty()

@@ -2,7 +2,7 @@
 title: "floor()"
 description: "Rounds a number down to the nearest integer."
 sidebar:
-  order: 274
+  order: 286
 ---
 
 ## floor()

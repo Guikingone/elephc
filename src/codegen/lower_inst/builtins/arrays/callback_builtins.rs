@@ -8,6 +8,7 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 
 use super::*;
+use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
 /// Returns the scalar callback element type for an indexed-array predicate/comparator builtin.
 ///
@@ -341,16 +342,12 @@ pub(crate) fn lower_array_multisort(
     eight_byte_indexed_array_element_type(ctx.value_php_type(arr2)?, "array_multisort")?;
 
     // -- copy-on-write split both by-ref arrays and publish the new pointers to their locals --
-    let slot1 = source_load_local_slot(ctx, arr1)?;
+    let receiver1 = ReceiverPlace::resolve(ctx, arr1)?;
     ensure_unique_sort_source(ctx, arr1)?;
-    if let Some(slot) = slot1 {
-        ctx.store_value_to_local(slot, arr1)?;
-    }
-    let slot2 = source_load_local_slot(ctx, arr2)?;
+    receiver1.store_back_value(ctx, arr1)?;
+    let receiver2 = ReceiverPlace::resolve(ctx, arr2)?;
     ensure_unique_sort_source(ctx, arr2)?;
-    if let Some(slot) = slot2 {
-        ctx.store_value_to_local(slot, arr2)?;
-    }
+    receiver2.store_back_value(ctx, arr2)?;
 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -372,26 +369,34 @@ pub(crate) fn lower_array_multisort(
 }
 
 /// Lowers `array_search()` for indexed arrays with integer-like payloads.
+///
+/// PHP's third parameter (`bool $strict = false`) selects `===` instead of `==`. Every
+/// comparison this emitter can already lower is value-exact, so the two modes only diverge
+/// when the needle and the element type are statically different scalar types — the case
+/// `array_search_strict_never_matches()` detects. There, the strict answer is unconditionally
+/// `false`, so the flag is resolved with a runtime branch around the ordinary search.
 pub(crate) fn lower_array_search(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_search", 2)?;
+    ensure_arg_count_between(inst, "array_search", 2, 3)?;
     let needle = expect_operand(inst, 0)?;
     let array = expect_operand(inst, 1)?;
     let needle_ty = ctx.value_php_type(needle)?;
     let array_ty = ctx.value_php_type(array)?;
-    if search::try_lower_assoc_array_search(
-        ctx,
-        needle,
-        array,
-        needle_ty.clone(),
-        array_ty.clone(),
-    )? {
-        store_if_result(ctx, inst)?;
-        return Ok(());
-    }
-    match supported_array_search_case(needle_ty, array_ty)? {
-        ArraySearchCase::Empty => box_array_search_miss(ctx),
-        ArraySearchCase::Scalar => lower_array_search_scalar(ctx, needle, array)?,
-        ArraySearchCase::String => lower_array_search_string(ctx, needle, array)?,
+    let strict = inst.operands.get(2).copied();
+    match strict {
+        Some(strict) if array_search_strict_never_matches(&needle_ty, &array_ty) => {
+            let strict_label = ctx.next_label("array_search_strict");
+            let done_label = ctx.next_label("array_search_strict_done");
+            branch_if_bool_value_true(ctx, strict, &strict_label)?;
+            lower_array_search_loose(ctx, needle, array, needle_ty, array_ty)?;
+            abi::emit_jump(ctx.emitter, &done_label);
+            ctx.emitter.label(&strict_label);
+            box_array_search_miss(ctx);
+            ctx.emitter.label(&done_label);
+        }
+        // Either `strict` was omitted, or the needle and element types agree (or one side is
+        // a boxed `Mixed` compared tag-exactly), in which case `===` and `==` pick the same
+        // element and the flag has no observable effect on the emitted search.
+        _ => lower_array_search_loose(ctx, needle, array, needle_ty, array_ty)?,
     }
     store_if_result(ctx, inst)
 }

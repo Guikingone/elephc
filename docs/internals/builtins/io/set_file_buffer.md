@@ -2,7 +2,7 @@
 title: "set_file_buffer() — internals"
 description: "Compiler internals for set_file_buffer(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 209
+  order: 216
 ---
 
 ## `set_file_buffer()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/set_file_buffer.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/set_file_buffer.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:448](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L448) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

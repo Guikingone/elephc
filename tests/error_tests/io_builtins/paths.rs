@@ -56,9 +56,16 @@ fn test_error_fseek_wrong_args() {
 }
 
 /// Verifies the error diagnostic for file wrong args.
+///
+/// PHP's signature is `file(string $filename, int $flags = 0, $context = null)`; elephc declares
+/// all three, so only a no-argument call and a four-argument call are out of range.
 #[test]
 fn test_error_file_wrong_args() {
     expect_error("<?php file();", "file() takes 1 to 3 arguments");
+    expect_error(
+        r#"<?php file("a.txt", 0, null, 1);"#,
+        "file() takes 1 to 3 arguments",
+    );
 }
 
 /// Verifies the error diagnostic for readline wrong args.
