@@ -15,11 +15,12 @@
 //! - Disabled built-ins live in a bitmask rather than a table so the state costs
 //!   one word and a restore is a single bit clear.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::data_section::comm_directive;
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Target};
 use crate::types::stream_constants::STREAM_WRAPPERS;
 
 /// Emits the built-in wrapper name table into the runtime data section.
-pub(crate) fn emit_builtin_wrapper_table(out: &mut String) {
+pub(crate) fn emit_builtin_wrapper_table(out: &mut String, target: Target) {
     for (index, name) in STREAM_WRAPPERS.iter().enumerate() {
         out.push_str(&format!(
             ".globl _bw_name_{index}\n_bw_name_{index}:\n    .ascii \"{name}\"\n"
@@ -35,7 +36,7 @@ pub(crate) fn emit_builtin_wrapper_table(out: &mut String) {
     out.push_str("    .quad 0\n    .quad 0\n    .quad 0\n");
     // One bit per built-in wrapper; a set bit means stream_wrapper_unregister()
     // removed it and fopen() must refuse the scheme until it is restored.
-    out.push_str(".comm _disabled_builtin_wrappers, 8, 3\n");
+    out.push_str(&comm_directive("_disabled_builtin_wrappers", 8, target));
 }
 
 /// `__rt_builtin_wrapper_index(ptr, len) -> index`, or -1 when not built in.

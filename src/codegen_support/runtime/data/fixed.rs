@@ -962,7 +962,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // doubling through `__rt_user_wrappers_reserve` instead of exposing a fixed
     // capacity — Gate 1 forbids PHP-visible fixed capacities.
     crate::codegen_support::runtime::io::emit_builtin_filter_table(&mut out);
-    crate::codegen_support::runtime::io::emit_builtin_wrapper_table(&mut out);
+    crate::codegen_support::runtime::io::emit_builtin_wrapper_table(&mut out, target);
     out.push_str(&comm_directive("_user_wrappers_ptr", 8, target));
     // _user_wrappers_cap: number of allocated 32-byte slots, zero until the
     // table is first reserved. Every scan bounds itself on this value.

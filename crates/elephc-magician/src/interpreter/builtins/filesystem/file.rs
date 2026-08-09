@@ -6,13 +6,19 @@
 //!
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the file-lines helper.
-//! - The parameter list mirrors PHP's `file(string $filename, int $flags = 0)` and must stay
-//!   shape-identical to the static registry declaration, which the builtin parity gate asserts.
+//! - The parameter list mirrors PHP's `file(string $filename, int $flags = 0, $context = null)`
+//!   and must stay shape-identical to the static registry declaration, which the builtin
+//!   parity gate asserts. `$context` is accepted and ignored here: eval has no stream-context
+//!   plumbing, and dropping the parameter would put the two registries out of shape.
 
 eval_builtin! {
     name: "file",
     area: Filesystem,
-    params: [filename, flags = EvalBuiltinDefaultValue::Int(0)],
+    params: [
+        filename,
+        flags = EvalBuiltinDefaultValue::Int(0),
+        context = EvalBuiltinDefaultValue::Null
+    ],
     direct: Filesystem,
     values: Filesystem,
 }
@@ -38,7 +44,7 @@ pub(in crate::interpreter) fn eval_file_declared_values_result(
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     match evaluated_args {
         [filename] => eval_file_result(*filename, 0, context, values),
-        [filename, flags] => {
+        [filename, flags] | [filename, flags, _] => {
             let flags = eval_int_value(*flags, values)?;
             eval_file_result(*filename, flags, context, values)
         }
@@ -58,7 +64,7 @@ pub(in crate::interpreter) fn eval_builtin_file(
             let filename = eval_expr(filename, context, scope, values)?;
             eval_file_result(filename, 0, context, values)
         }
-        [filename, flags] => {
+        [filename, flags] | [filename, flags, _] => {
             let filename = eval_expr(filename, context, scope, values)?;
             let flags = eval_expr(flags, context, scope, values)?;
             let flags = eval_int_value(flags, values)?;
