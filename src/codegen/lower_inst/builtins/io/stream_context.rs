@@ -80,6 +80,16 @@ pub(crate) fn lower_stream_wrapper_unregister(
 }
 
 /// Lowers `stream_wrapper_restore(protocol)` by clearing its disabled bit.
+///
+/// PHP answers all three cases differently, and elephc now matches each:
+/// a built-in that `stream_wrapper_unregister()` disabled is restored silently and reports
+/// `true`; a built-in that was never disabled reports `true` with a Notice; a scheme that
+/// never existed reports `false` with a Warning. Only the two diagnostics were missing —
+/// the return values already matched.
+///
+/// The scheme bytes are spilled once around the whole body: `__rt_builtin_wrapper_index`
+/// clobbers them, and every one of the three exits needs them or the matching release, so a
+/// single reserve/release pair keeps the stack balanced whichever way the call goes.
 pub(crate) fn lower_stream_wrapper_restore(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -87,18 +97,23 @@ pub(crate) fn lower_stream_wrapper_restore(
     super::super::ensure_arg_count(inst, "stream_wrapper_restore", 1)?;
     let protocol = expect_operand(inst, 0)?;
     load_string_to_result(ctx, protocol, "stream_wrapper_restore protocol")?;
-    // Previously an unconditional true, which claimed success for names that were
-    // never built in. Restoring clears the disabled bit that
-    // stream_wrapper_unregister() set, and reports false for anything else.
     let restored = ctx.next_label("swr_restored");
+    let unchanged = ctx.next_label("swr_unchanged");
     let done = ctx.next_label("swr_done");
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("str x1, [sp, #0]");                        // keep the scheme pointer for the diagnostics
+            ctx.emitter.instruction("str x2, [sp, #8]");                        // keep the scheme length for the diagnostics
             ctx.emitter.instruction("mov x0, x1");                              // protocol pointer
             ctx.emitter.instruction("mov x1, x2");                              // protocol length
             abi::emit_call_label(ctx.emitter, "__rt_builtin_wrapper_index");
             ctx.emitter.instruction("cmp x0, #0");
             ctx.emitter.instruction(&format!("b.ge {}", restored));             // a built-in name can be restored
+            ctx.emitter.instruction("mov x0, #1");                              // diagnostic kind 1 = warning
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // scheme pointer
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // scheme length
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_restore_diag");
             ctx.emitter.instruction("mov x0, #0");                              // unknown scheme reports false
             ctx.emitter.instruction(&format!("b {}", done));
             ctx.emitter.label(&restored);
@@ -106,17 +121,32 @@ pub(crate) fn lower_stream_wrapper_restore(
             ctx.emitter.instruction("ldr x10, [x9]");                           // current disabled mask
             ctx.emitter.instruction("mov x11, #1");
             ctx.emitter.instruction("lsl x11, x11, x0");                        // bit for this wrapper
+            ctx.emitter.instruction("tst x10, x11");                            // was it actually unregistered?
+            ctx.emitter.instruction(&format!("b.eq {}", unchanged));            // never changed: PHP emits a Notice
             ctx.emitter.instruction("bic x10, x10, x11");                       // clear it: the built-in is available again
             ctx.emitter.instruction("str x10, [x9]");
             ctx.emitter.instruction("mov x0, #1");                              // report success
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&unchanged);
+            ctx.emitter.instruction("mov x0, #0");                              // diagnostic kind 0 = notice
+            ctx.emitter.instruction("ldr x1, [sp, #0]");                        // scheme pointer
+            ctx.emitter.instruction("ldr x2, [sp, #8]");                        // scheme length
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_restore_diag");
+            ctx.emitter.instruction("mov x0, #1");                              // PHP still reports success here
             ctx.emitter.label(&done);
         }
         Arch::X86_64 => {
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // keep the scheme pointer for the diagnostics
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // keep the scheme length for the diagnostics
             ctx.emitter.instruction("mov rdi, rax");                            // protocol pointer
             ctx.emitter.instruction("mov rsi, rdx");                            // protocol length
             abi::emit_call_label(ctx.emitter, "__rt_builtin_wrapper_index");
             ctx.emitter.instruction("cmp rax, 0");
             ctx.emitter.instruction(&format!("jge {}", restored));              // a built-in name can be restored
+            ctx.emitter.instruction("mov rdi, 1");                              // diagnostic kind 1 = warning
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");            // scheme pointer
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // scheme length
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_restore_diag");
             ctx.emitter.instruction("xor eax, eax");                            // unknown scheme reports false
             ctx.emitter.instruction(&format!("jmp {}", done));
             ctx.emitter.label(&restored);
@@ -125,13 +155,23 @@ pub(crate) fn lower_stream_wrapper_restore(
             ctx.emitter.instruction("mov r10, QWORD PTR [r9]");                 // current disabled mask
             ctx.emitter.instruction("mov r11, 1");
             ctx.emitter.instruction("shl r11, cl");                             // bit for this wrapper
+            ctx.emitter.instruction("test r10, r11");                           // was it actually unregistered?
+            ctx.emitter.instruction(&format!("jz {}", unchanged));              // never changed: PHP emits a Notice
             ctx.emitter.instruction("not r11");
             ctx.emitter.instruction("and r10, r11");                            // clear it: the built-in is available again
             ctx.emitter.instruction("mov QWORD PTR [r9], r10");
             ctx.emitter.instruction("mov eax, 1");                              // report success
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&unchanged);
+            ctx.emitter.instruction("mov rdi, 0");                              // diagnostic kind 0 = notice
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");            // scheme pointer
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");            // scheme length
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_restore_diag");
+            ctx.emitter.instruction("mov eax, 1");                              // PHP still reports success here
             ctx.emitter.label(&done);
         }
     }
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
     store_if_result(ctx, inst)
 }
 

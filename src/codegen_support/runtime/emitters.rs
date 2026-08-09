@@ -43,6 +43,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     arrays::emit_array_set_resource(emitter);
     io::emit_builtin_filter_id(emitter);
     io::emit_builtin_wrapper_index(emitter);
+    io::emit_stream_wrapper_restore_diag(emitter);
     io::emit_user_wrappers_reserve(emitter);
     io::emit_user_wrapper_handles_reserve(emitter);
     io::emit_stream_get_filters(emitter);

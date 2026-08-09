@@ -16,6 +16,9 @@
 //!   one word and a restore is a single bit clear.
 
 use crate::codegen_support::data_section::comm_directive;
+use crate::codegen_support::runtime::data::{
+    SWR_NEVER_CHANGED, SWR_NEVER_EXISTED, SWR_NTC_PREFIX, SWR_WRN_PREFIX,
+};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Target};
 use crate::types::stream_constants::STREAM_WRAPPERS;
 
@@ -108,4 +111,111 @@ fn emit_builtin_wrapper_index_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_bwi_miss_x");
     emitter.instruction("mov rax, -1");
     emitter.instruction("ret");
+}
+
+/// Emits `__rt_stream_wrapper_restore_diag(kind, ptr, len)`.
+///
+/// `kind` 0 writes PHP's Notice for a built-in scheme that was never unregistered, and 1
+/// writes PHP's Warning for a scheme that never existed. Each message is three fragments —
+/// prefix, the caller's scheme bytes, suffix — because the scheme is only known at run time.
+///
+/// The two severities go to different places, following what elephc already does elsewhere:
+/// Notices through `__rt_stdout_write`, so an active output buffer captures them exactly as
+/// PHP does with display_errors on; Warnings through `__rt_diag_warning`, which honours `@`.
+/// PHP CLI puts both on stdout; that divergence is repo-wide and not settled here.
+///
+/// Keeping this in a helper rather than inline in the lowering means the stack discipline
+/// lives in one framed function instead of being repeated across the caller's branches.
+pub fn emit_stream_wrapper_restore_diag(emitter: &mut Emitter) {
+    if emitter.target.arch == Arch::X86_64 {
+        emit_stream_wrapper_restore_diag_linux_x86_64(emitter);
+        return;
+    }
+
+    emitter.blank();
+    emitter.comment("--- runtime: stream_wrapper_restore_diag ---");
+    emitter.label_global("__rt_stream_wrapper_restore_diag");
+
+    emitter.instruction("sub sp, sp, #48");                                     // scheme ptr/len plus saved frame linkage
+    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #32");                                    // establish the diagnostic helper frame
+    emitter.instruction("str x1, [sp, #0]");                                    // save the scheme pointer across the fragment writes
+    emitter.instruction("str x2, [sp, #8]");                                    // save the scheme length across the fragment writes
+    emitter.instruction("cbnz x0, __rt_swr_diag_warning");                      // kind 1 = the unknown-scheme warning
+
+    // -- Notice: "<prefix><scheme>:// was never changed, nothing to restore" --
+    abi::emit_symbol_address(emitter, "x0", "_swr_ntc_prefix");
+    emitter.instruction(&format!("mov x1, #{}", SWR_NTC_PREFIX.len()));         // notice prefix byte count
+    emitter.instruction("bl __rt_stdout_write");                                // notices travel through the output-buffer funnel
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the caller's scheme pointer
+    emitter.instruction("ldr x1, [sp, #8]");                                    // the caller's scheme length
+    emitter.instruction("bl __rt_stdout_write");                                // write the scheme name itself
+    abi::emit_symbol_address(emitter, "x0", "_swr_never_changed");
+    emitter.instruction(&format!("mov x1, #{}", SWR_NEVER_CHANGED.len()));      // notice suffix byte count
+    emitter.instruction("bl __rt_stdout_write");                                // finish the notice line
+    emitter.instruction("b __rt_swr_diag_done");                                // skip the warning path
+
+    // -- Warning: "<prefix><scheme>:// never existed, nothing to restore" --
+    emitter.label("__rt_swr_diag_warning");
+    abi::emit_symbol_address(emitter, "x1", "_swr_wrn_prefix");
+    emitter.instruction(&format!("mov x2, #{}", SWR_WRN_PREFIX.len()));         // warning prefix byte count
+    emitter.instruction("bl __rt_diag_warning");                                // warnings honour the @ suppression depth
+    emitter.instruction("ldr x1, [sp, #0]");                                    // the caller's scheme pointer
+    emitter.instruction("ldr x2, [sp, #8]");                                    // the caller's scheme length
+    emitter.instruction("bl __rt_diag_warning");                                // write the scheme name itself
+    abi::emit_symbol_address(emitter, "x1", "_swr_never_existed");
+    emitter.instruction(&format!("mov x2, #{}", SWR_NEVER_EXISTED.len()));      // warning suffix byte count
+    emitter.instruction("bl __rt_diag_warning");                                // finish the warning line
+
+    emitter.label("__rt_swr_diag_done");
+    emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #48");                                     // release the diagnostic helper frame
+    emitter.instruction("ret");                                                 // return to stream_wrapper_restore
+}
+
+/// x86_64 variant of [`emit_stream_wrapper_restore_diag`].
+///
+/// Both `__rt_stdout_write` and `__rt_diag_warning` take `rdi`/`rsi` here, so the two paths
+/// differ only in which helper they call.
+fn emit_stream_wrapper_restore_diag_linux_x86_64(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: stream_wrapper_restore_diag ---");
+    emitter.label_global("__rt_stream_wrapper_restore_diag");
+
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer
+    emitter.instruction("mov rbp, rsp");                                        // establish the diagnostic helper frame
+    emitter.instruction("sub rsp, 32");                                         // scheme ptr/len spill slots, 16-byte aligned
+    emitter.instruction("mov QWORD PTR [rbp - 8], rsi");                        // save the scheme pointer across the fragment writes
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the scheme length across the fragment writes
+    emitter.instruction("test rdi, rdi");                                       // kind 0 = notice, 1 = warning
+    emitter.instruction("jnz __rt_swr_diag_warning_x");                         // kind 1 = the unknown-scheme warning
+
+    // -- Notice: "<prefix><scheme>:// was never changed, nothing to restore" --
+    abi::emit_symbol_address(emitter, "rdi", "_swr_ntc_prefix");
+    emitter.instruction(&format!("mov esi, {}", SWR_NTC_PREFIX.len()));         // notice prefix byte count
+    emitter.instruction("call __rt_stdout_write");                              // notices travel through the output-buffer funnel
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the caller's scheme pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the caller's scheme length
+    emitter.instruction("call __rt_stdout_write");                              // write the scheme name itself
+    abi::emit_symbol_address(emitter, "rdi", "_swr_never_changed");
+    emitter.instruction(&format!("mov esi, {}", SWR_NEVER_CHANGED.len()));      // notice suffix byte count
+    emitter.instruction("call __rt_stdout_write");                              // finish the notice line
+    emitter.instruction("jmp __rt_swr_diag_done_x");                            // skip the warning path
+
+    // -- Warning: "<prefix><scheme>:// never existed, nothing to restore" --
+    emitter.label("__rt_swr_diag_warning_x");
+    abi::emit_symbol_address(emitter, "rdi", "_swr_wrn_prefix");
+    emitter.instruction(&format!("mov esi, {}", SWR_WRN_PREFIX.len()));         // warning prefix byte count
+    emitter.instruction("call __rt_diag_warning");                              // warnings honour the @ suppression depth
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the caller's scheme pointer
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // the caller's scheme length
+    emitter.instruction("call __rt_diag_warning");                              // write the scheme name itself
+    abi::emit_symbol_address(emitter, "rdi", "_swr_never_existed");
+    emitter.instruction(&format!("mov esi, {}", SWR_NEVER_EXISTED.len()));      // warning suffix byte count
+    emitter.instruction("call __rt_diag_warning");                              // finish the warning line
+
+    emitter.label("__rt_swr_diag_done_x");
+    emitter.instruction("mov rsp, rbp");                                        // release the diagnostic helper frame
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer
+    emitter.instruction("ret");                                                 // return to stream_wrapper_restore
 }

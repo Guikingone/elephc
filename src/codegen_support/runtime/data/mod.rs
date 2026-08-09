@@ -29,6 +29,19 @@ pub(crate) const PHP_UNAME_MODE_VALUE_MSG: &str =
 /// Fatal error message when `dirname()` receives a `$levels` argument less than 1.
 /// ob_* PHP-parity diagnostics shared by the fixed data section and the
 /// output-buffering runtime emitters (which need the exact byte lengths).
+/// PHP's Notice when `stream_wrapper_restore()` is given a built-in scheme that was never
+/// unregistered. Completed at run time with the scheme name and the suffix below.
+pub(crate) const SWR_NTC_PREFIX: &str = "Notice: stream_wrapper_restore(): ";
+
+/// PHP's Warning when `stream_wrapper_restore()` is given a scheme that never existed.
+pub(crate) const SWR_WRN_PREFIX: &str = "Warning: stream_wrapper_restore(): ";
+
+/// Tail of the never-unregistered Notice, after the scheme name.
+pub(crate) const SWR_NEVER_CHANGED: &str = ":// was never changed, nothing to restore\n";
+
+/// Tail of the unknown-scheme Warning, after the scheme name.
+pub(crate) const SWR_NEVER_EXISTED: &str = ":// never existed, nothing to restore\n";
+
 pub(crate) const OB_NTC_NO_END_FLUSH: &str =
     "Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n";
 /// ob_get_flush() no-buffer notice line.

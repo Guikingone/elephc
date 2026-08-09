@@ -20,6 +20,7 @@ use super::{
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
+    SWR_NEVER_CHANGED, SWR_NEVER_EXISTED, SWR_NTC_PREFIX, SWR_WRN_PREFIX,
     STR_REPEAT_TIMES_MSG,
 };
 use super::super::system;
@@ -127,6 +128,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // through __rt_stdout_write, so active parent buffers capture them exactly
     // like PHP with display_errors enabled.
     for (label, message) in [
+        ("_swr_ntc_prefix", SWR_NTC_PREFIX),
+        ("_swr_wrn_prefix", SWR_WRN_PREFIX),
+        ("_swr_never_changed", SWR_NEVER_CHANGED),
+        ("_swr_never_existed", SWR_NEVER_EXISTED),
         ("_ob_ntc_no_end_flush", OB_NTC_NO_END_FLUSH),
         ("_ob_ntc_no_get_flush", OB_NTC_NO_GET_FLUSH),
         ("_ob_ntc_no_end_clean", OB_NTC_NO_END_CLEAN),

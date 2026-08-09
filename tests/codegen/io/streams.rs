@@ -4870,15 +4870,50 @@ echo stream_wrapper_register("foo", "W") ? "true" : "false";
     assert_eq!(out, "true|false|true");
 }
 
-/// Verifies compiled PHP output for stream wrapper restore always true.
+/// Verifies `stream_wrapper_restore()` answers PHP's three cases, diagnostics included.
+///
+/// php 8.5.6 distinguishes them: a built-in that `stream_wrapper_unregister()` disabled is
+/// restored silently and reports `true`; a built-in that was never disabled reports `true`
+/// with a Notice; a scheme that never existed reports `false` with a Warning. The return
+/// values already matched — the two diagnostics were missing.
+///
+/// Severity decides the stream, following what elephc does for every other diagnostic:
+/// Notices go to stdout through the output-buffer funnel, Warnings to stderr through the
+/// `@`-aware path. PHP CLI puts both on stdout; that divergence is repo-wide, not specific
+/// to this builtin.
 #[test]
-fn test_stream_wrapper_restore_always_true() {
-    // v1 cannot unregister built-in wrappers, so stream_wrapper_restore()
-    // is effectively a no-op that reports success.
-    let out = compile_and_run(
-        r#"<?php echo stream_wrapper_restore("file") ? "true" : "false";"#,
+fn test_stream_wrapper_restore_reports_phps_three_cases() {
+    let out = compile_and_run_capture(
+        r#"<?php
+var_dump(stream_wrapper_restore("file"));
+var_dump(stream_wrapper_restore("nosuch"));
+stream_wrapper_unregister("file");
+var_dump(stream_wrapper_restore("file"));
+"#,
     );
-    assert_eq!(out, "true");
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(
+        out.stdout,
+        "Notice: stream_wrapper_restore(): file:// was never changed, nothing to restore\n\
+         bool(true)\n\
+         bool(false)\n\
+         bool(true)\n"
+    );
+    assert_eq!(
+        out.stderr,
+        "Warning: stream_wrapper_restore(): nosuch:// never existed, nothing to restore\n"
+    );
+}
+
+/// Verifies `@` suppresses the unknown-scheme Warning, as it does every runtime warning.
+#[test]
+fn test_stream_wrapper_restore_warning_is_suppressible() {
+    let out = compile_and_run_capture(
+        r#"<?php var_dump(@stream_wrapper_restore("nosuch"));"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\n");
+    assert_eq!(out.stderr, "");
 }
 
 /// Verifies compiled PHP output for stream socket enable crypto reads peer name from context.
