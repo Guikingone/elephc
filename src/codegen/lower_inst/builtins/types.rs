@@ -751,7 +751,12 @@ fn emit_resource_kind_if_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> 
                     ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
                     ctx.emitter.label(&tag_ok_label);
                     for marker in [0_u64, 1, 3, 4, 9] {
-                        ctx.emitter.instruction(&format!("cmp rsi, {}", marker)); // compare a registry ownership marker
+                        // __rt_mixed_unbox returns tag in rax, payload low in rdi and the
+                        // ownership marker in RDX on x86_64 — rsi holds nothing of ours.
+                        // Comparing rsi never matched, so every boxed resource fell to the
+                        // legacy arm: `is_resource()` stayed true after fclose() and
+                        // get_resource_type() answered "stream" for everything.
+                        ctx.emitter.instruction(&format!("cmp rdx, {}", marker)); // compare a registry ownership marker
                         ctx.emitter.instruction(&format!("je {}", registry_label)); // registry resources resolve their authoritative kind
                     }
                     ctx.emitter.instruction(&format!("jmp {}", legacy_label));  // unmigrated tagged resources retain the legacy stream label
@@ -816,7 +821,12 @@ fn emit_resource_is_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resul
                     ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
                     ctx.emitter.label(&tag_ok_label);
                     for marker in [0_u64, 1, 3, 4, 9] {
-                        ctx.emitter.instruction(&format!("cmp rsi, {}", marker)); // compare the transitional registry ownership marker
+                        // __rt_mixed_unbox returns tag in rax, payload low in rdi and the
+                        // ownership marker in RDX on x86_64 — rsi holds nothing of ours.
+                        // Comparing rsi never matched, so every boxed resource fell to the
+                        // legacy arm: `is_resource()` stayed true after fclose() and
+                        // get_resource_type() answered "stream" for everything.
+                        ctx.emitter.instruction(&format!("cmp rdx, {}", marker)); // compare the transitional registry ownership marker
                         ctx.emitter.instruction(&format!("je {}", registry_label)); // registry-owned streams validate their generation
                     }
                     ctx.emitter.instruction(&format!("jmp {}", true_label));    // legacy tagged resources remain live by tag for now
