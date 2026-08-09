@@ -5459,6 +5459,50 @@ echo var_export(@fopen($p, "r"), true);
     assert_eq!(out, "false|false|false");
 }
 
+/// Verifies a run-time `php://` handle behaves like a literal one in the ways most likely to
+/// break: descriptor ownership, filters, and independence.
+///
+/// A descriptor-backed scheme must hand out a `dup()` — closing a `php://stdout` handle that WAS
+/// descriptor 1 would take the program's own output with it. A run-time handle must also accept a
+/// filter and honour the filtered-read buffer, and two handles to `php://temp` must not share a
+/// buffer.
+#[test]
+fn test_a_run_time_php_handle_behaves_like_a_literal_one() {
+    let out = compile_and_run(
+        r#"<?php
+$p = "php://";
+$o = fopen($p . "stdout", "w");
+fwrite($o, "via-handle ");
+fclose($o);
+echo "still-alive|";
+
+$f = fopen($p . "memory", "r+");
+fwrite($f, "abcdef");
+rewind($f);
+stream_filter_append($f, "string.toupper", STREAM_FILTER_READ);
+$parts = [];
+while (!feof($f)) {
+    $c = fread($f, 2);
+    if ($c === "") { break; }
+    $parts[] = $c;
+}
+echo implode(",", $parts), "|";
+fclose($f);
+
+$a = fopen($p . "temp", "r+");
+$b = fopen($p . "temp", "r+");
+fwrite($a, "AAA");
+fwrite($b, "BBB");
+rewind($a);
+rewind($b);
+echo fread($a, 3), fread($b, 3);
+fclose($a);
+fclose($b);
+"#,
+    );
+    assert_eq!(out, "via-handle still-alive|AB,CD,EF|AAABBB");
+}
+
 /// Pins the two wrapper schemes a run-time path still cannot open.
 ///
 /// IGNORED because both resolve at compile time in a way the run-time dispatcher does not yet
