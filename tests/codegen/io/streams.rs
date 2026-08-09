@@ -5215,14 +5215,20 @@ fclose($m);
 /// `<ABC><DEF><GHI>`. A filter that returns PSFS_PASS_ON on every dispatch is
 /// unaffected, which is why the rest of the filter suite stays green.
 ///
-/// Fixing it takes TWO changes that must land together:
+/// Fixing it takes THREE changes that must land together:
 ///   1. `PSFS_FEED_ME` must return nothing rather than the original input;
 ///   2. `__rt_fread` must then fetch more input and dispatch again instead of
 ///      reporting a short read — with (1) alone, `fread()` returns "" and every
 ///      caller written as `if ($chunk === "") break;` stops early, turning a data
-///      LEAK into data LOSS.
+///      LEAK into data LOSS;
+///   3. the StreamState needs a filtered-read buffer plus a closing flush at EOF.
+///      Measured against php 8.5.6: a filter that triples `"ab"` answers three
+///      `fread($f, 2)` calls with `ab|ab|ab`, so PHP caps the filtered result at
+///      `$length` and keeps the remainder; and a filter still holding bytes when the
+///      stream ends gets a `$closing` dispatch whose output reaches the reader. With
+///      only (1)+(2) this fixture prints `<ABCDEF>` — the leak becomes a loss.
 #[test]
-#[ignore = "PSFS_FEED_ME passes the raw input through; needs the fread re-read loop"]
+#[ignore = "PSFS_FEED_ME passes the raw input through; needs the fread re-read loop, a filtered-read buffer and a closing flush"]
 fn test_user_filter_psfs_feed_me_buffers_across_dispatches() {
     let out = compile_and_run(
         r#"<?php

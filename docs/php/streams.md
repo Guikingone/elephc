@@ -288,8 +288,13 @@ A filter that buffers across dispatches — returning `PSFS_FEED_ME` until it ha
 bytes — therefore leaks its unfiltered input to the caller: reading `abcdefghi` in
 three-byte chunks through such a filter yields `abc`, `ABCDEF`, `ghi` where PHP yields
 `ABC`, `DEF`, `GHI`. Filters that answer `PSFS_PASS_ON` on every dispatch are
-unaffected. The fix needs `PSFS_FEED_ME` to return nothing AND the read path to fetch
-more input and dispatch again, rather than reporting a short read to the caller.
+unaffected. The fix needs three things together: `PSFS_FEED_ME` returning nothing, the
+read path fetching more input and dispatching again rather than reporting a short read,
+and a filtered-read buffer on the stream so a filter that emits more than the caller
+asked for keeps the remainder — plus a closing dispatch at end-of-stream so bytes still
+held by the filter are flushed. Measured against php 8.5.6: a filter that triples `"ab"`
+answers three `fread($f, 2)` calls with `ab`, `ab`, `ab`, and a filter still buffering
+when the stream ends has its `$closing` output reach the reader.
 
 ## User stream wrappers
 
