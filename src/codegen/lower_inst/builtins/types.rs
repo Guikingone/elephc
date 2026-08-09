@@ -725,7 +725,14 @@ fn emit_resource_kind_if_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> 
                     ctx.emitter.instruction("mov x0, #0");                      // non-resource Mixed values have no resource kind
                     ctx.emitter.instruction(&format!("b {}", done_label));      // skip resource marker dispatch
                     ctx.emitter.label(&tag_ok_label);
-                    for marker in [1_u64, 3, 4, 9] {
+                    // Marker 0 is what `emit_box_current_value_as_mixed` writes when a
+                    // statically Resource-typed value is boxed at a value boundary, and on
+                    // this branch such a value IS a registry handle — a stream context taken
+                    // through an untyped parameter reported "stream" while a filter (boxed by
+                    // the legacy fd path with marker 3) reported correctly. Legacy raw
+                    // descriptors never reach here with 0: they are boxed by
+                    // `box_stream_fd_or_false_result_kind`, which writes 1, 3 or 4.
+                    for marker in [0_u64, 1, 3, 4, 9] {
                         ctx.emitter.instruction(&format!("cmp x2, #{}", marker)); // compare a registry ownership marker
                         ctx.emitter.instruction(&format!("b.eq {}", registry_label)); // registry resources resolve their authoritative kind
                     }
@@ -743,7 +750,7 @@ fn emit_resource_kind_if_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> 
                     ctx.emitter.instruction("xor eax, eax");                    // non-resource Mixed values have no resource kind
                     ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
                     ctx.emitter.label(&tag_ok_label);
-                    for marker in [1_u64, 3, 4, 9] {
+                    for marker in [0_u64, 1, 3, 4, 9] {
                         ctx.emitter.instruction(&format!("cmp rsi, {}", marker)); // compare a registry ownership marker
                         ctx.emitter.instruction(&format!("je {}", registry_label)); // registry resources resolve their authoritative kind
                     }
@@ -790,7 +797,7 @@ fn emit_resource_is_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resul
                     ctx.emitter.instruction("mov x0, #0");                      // non-resource Mixed values answer false
                     ctx.emitter.instruction(&format!("b {}", done_label));      // skip resource marker dispatch
                     ctx.emitter.label(&tag_ok_label);
-                    for marker in [1_u64, 3, 4, 9] {
+                    for marker in [0_u64, 1, 3, 4, 9] {
                         ctx.emitter.instruction(&format!("cmp x2, #{}", marker)); // compare the transitional registry ownership marker
                         ctx.emitter.instruction(&format!("b.eq {}", registry_label)); // registry-owned streams validate their generation
                     }
@@ -808,7 +815,7 @@ fn emit_resource_is_open(ctx: &mut FunctionContext<'_>, value: ValueId) -> Resul
                     ctx.emitter.instruction("xor eax, eax");                    // non-resource Mixed values answer false
                     ctx.emitter.instruction(&format!("jmp {}", done_label));    // skip resource marker dispatch
                     ctx.emitter.label(&tag_ok_label);
-                    for marker in [1_u64, 3, 4, 9] {
+                    for marker in [0_u64, 1, 3, 4, 9] {
                         ctx.emitter.instruction(&format!("cmp rsi, {}", marker)); // compare the transitional registry ownership marker
                         ctx.emitter.instruction(&format!("je {}", registry_label)); // registry-owned streams validate their generation
                     }

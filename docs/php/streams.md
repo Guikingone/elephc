@@ -356,7 +356,7 @@ wrapper exposes glob matches through the same directory-stream API.
 
 | Function | Signature | Description |
 |---|---|---|
-| `get_resource_type()` | `get_resource_type(resource $handle): string` | Return `"stream"` for every OPEN resource elephc produces, and `"Unknown"` once the handle has been closed. |
+| `get_resource_type()` | `get_resource_type(resource $handle): string` | Return the resource's PHP type name — `"stream"`, `"stream-context"` or `"stream filter"` — and `"Unknown"` once the handle has been closed. |
 | `get_resource_id()` | `get_resource_id(resource $handle): int` | Return the numeric id shown in `Resource id #N`. |
 | `stream_isatty()` | `stream_isatty(resource $stream): bool` | Report whether the stream is connected to an interactive terminal. |
 | `stream_is_local()` | `stream_is_local(resource\|string $stream): bool` | Return `true` for local streams. |
@@ -369,11 +369,9 @@ Closing a handle changes its reported type but not its id. After `fclose()`,
 which renames every closed resource that way regardless of what it was. The id
 `N` is unchanged, `get_resource_id()` still answers it, and `"$handle"` still
 renders `Resource id #N`, because php-src leaves `zend_resource.handle` alone on
-close. A resource held directly reports its own type name — `"stream"`,
-`"stream-context"` or `"stream filter"`. One that has travelled through an
-untyped parameter still reports `"stream"`: it survives the call as a resource
-with its id intact, but the kind it carries across that boundary is not
-distinguished yet.
+close. A resource reports its own type name — `"stream"`, `"stream-context"` or
+`"stream filter"` — whether it is held directly or has travelled through an
+untyped parameter, and `"Unknown"` once closed in either case.
 
 `stream_get_meta_data()` derives `eof`, `seekable`, `blocked`, and `mode` from
 the live descriptor. `wrapper_type` and `uri` are recorded per handle when the

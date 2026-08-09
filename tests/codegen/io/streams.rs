@@ -7605,6 +7605,30 @@ echo "n=" . $n . " kept=" . count($r);
     assert_eq!(out, "n=1 kept=1");
 }
 
+/// A resource keeps its PHP kind name when it travels through an untyped parameter.
+///
+/// `stream_context_create()` is statically `Resource`, so passing it to `mixed $r` boxes it
+/// through the generic value boxer — which writes ownership marker 0. The registry lookup
+/// only ran for markers 1/3/4/9, so a context answered `"stream"` while a filter (boxed by
+/// the legacy fd path, marker 3) answered correctly. Same emitted code for both, so the
+/// divergence was purely the marker. Oracle: php 8.5.6.
+#[test]
+fn test_resource_kind_name_survives_an_untyped_parameter() {
+    let out = compile_and_run(
+        r#"<?php
+function kind($r) { return get_resource_type($r); }
+function open_p($r) { return var_export(is_resource($r), true); }
+$ctx = stream_context_create([]);
+$f   = fopen("php://memory", "r+");
+$fl  = stream_filter_append($f, "string.toupper", STREAM_FILTER_WRITE);
+echo kind($ctx), "|", kind($fl), "|", kind($f), "|", open_p($ctx);
+fclose($f);
+echo "|", kind($f), "|", open_p($f);
+"#,
+    );
+    assert_eq!(out, "stream-context|stream filter|stream|true|Unknown|false");
+}
+
 /// `stream_select()` must actually wait for its timeout.
 ///
 /// The timeout arrives in caller-saved registers (x3/x4, rcx/r8) and the pollfd build
