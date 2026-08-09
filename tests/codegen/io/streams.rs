@@ -5242,6 +5242,27 @@ fclose($m);
     assert_eq!(out, "8192|4096|2048");
 }
 
+/// Pins PHP's own out-parameter idiom: `&$errno` / `&$errstr` passed undeclared.
+///
+/// IGNORED because the checker treats a variable passed to a by-ref BUILTIN parameter as a
+/// use rather than a definition, so it reports `Undefined variable: $errno` and the program
+/// does not compile. This is the form every PHP manual example uses — the callee is what
+/// writes the variable — so idiomatic socket code is rejected outright.
+///
+/// The gap is not specific to sockets: `flock($h, LOCK_SH, $would)` with an undeclared
+/// `$would` is rejected the same way, as is any builtin whose parameter is by-ref.
+#[test]
+#[ignore = "a variable passed to a by-ref builtin parameter is treated as a use, not a definition"]
+fn test_socket_out_parameters_may_be_undeclared() {
+    let out = compile_and_run(
+        r#"<?php
+$s = @stream_socket_client("tcp://127.0.0.1:1", $errno, $errstr, 1);
+echo var_export($s === false, true), "|", gettype($errno);
+"#,
+    );
+    assert_eq!(out, "true|integer");
+}
+
 /// Pins that a `php://filter` URL works when it is built at run time, not only written
 /// as a literal.
 ///
