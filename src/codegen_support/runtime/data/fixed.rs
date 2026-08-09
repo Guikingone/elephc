@@ -1161,6 +1161,8 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _pf_n_read\n_pf_n_read:\n    .ascii \"read=\"\n");
     out.push_str(".globl _pf_n_write\n_pf_n_write:\n    .ascii \"write=\"\n");
     out.push_str(".globl _pf_n_resource\n_pf_n_resource:\n    .ascii \"/resource=\"\n");
+    out.push_str(".globl _data_n_prefix\n_data_n_prefix:\n    .ascii \"data://\"\n");
+    out.push_str(".globl _data_n_b64\n_data_n_b64:\n    .ascii \";base64\"\n");
     out.push_str(&comm_directive("_protoent_buf", 32768, target));
     out.push_str(".globl _etc_protocols_path\n_etc_protocols_path:\n    .asciz \"/etc/protocols\"\n");
     out.push_str(&comm_directive("_servent_buf", 1048576, target));

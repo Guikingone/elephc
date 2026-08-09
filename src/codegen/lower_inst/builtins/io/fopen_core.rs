@@ -125,6 +125,54 @@ fn emit_dynamic_php_filter_attach(ctx: &mut FunctionContext<'_>) {
     abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
 }
 
+/// Opens a runtime filename that carries the `data://` prefix, falling through when it does not.
+///
+/// A literal `data://` URI is decoded during lowering and its bytes embedded, which left a
+/// run-time URI with no path at all. `__rt_data_stream_dynamic` decodes from the bytes instead,
+/// through the same base64 and percent decoders the rest of the runtime uses.
+fn emit_dynamic_data_branch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    done: &str,
+) -> Result<()> {
+    let not_data = ctx.next_label("fopen_dynamic_not_data");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #8");                              // "data://" plus at least a comma
+            ctx.emitter.instruction(&format!("b.lt {}", not_data));             // too short to carry the scheme
+            for (offset, byte) in b"data://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset)); // load one candidate scheme byte
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));         // compare against the canonical data:// byte
+                ctx.emitter.instruction(&format!("b.ne {}", not_data));         // a different prefix is not this wrapper
+            }
+            ctx.emitter.instruction("mov x0, x1");                              // pass the URI pointer
+            ctx.emitter.instruction("mov x1, x2");                              // pass the URI length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 8");                              // "data://" plus at least a comma
+            ctx.emitter.instruction(&format!("jl {}", not_data));               // too short to carry the scheme
+            for (offset, byte) in b"data://".iter().enumerate() {
+                ctx.emitter.instruction(&format!(
+                    "cmp BYTE PTR [rax + {}], {}", offset, byte
+                ));                                                             // compare one byte against the canonical data:// prefix
+                ctx.emitter.instruction(&format!("jne {}", not_data));          // a different prefix is not this wrapper
+            }
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the URI pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the URI length
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_data_stream_dynamic");
+    box_stream_fd_or_false_result(ctx, "fopen_data_dynamic");
+    emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL may wrap a data:// resource
+    emit_record_stream_meta_after_boxed_stashed(ctx, 2);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    finish_fopen_context_scope(ctx);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&not_data);
+    Ok(())
+}
+
 /// Opens a runtime filename that carries the `php://` prefix, falling through when it does not.
 ///
 /// The literal path resolves its wrapper at compile time; a runtime path had no such dispatch and
@@ -184,6 +232,7 @@ fn emit_dynamic_fopen_result(
     let done = ctx.next_label("fopen_dynamic_done");
     emit_dynamic_php_filter_swap(ctx);
     emit_dynamic_php_wrapper_branch(ctx, inst, &done)?;
+    emit_dynamic_data_branch(ctx, inst, &done)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x2, #7");                              // is the dynamic filename long enough for http://?

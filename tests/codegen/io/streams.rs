@@ -5559,25 +5559,61 @@ echo " nested=", var_export(@fopen($nested, "r"), true);
     let _ = fs::remove_dir_all(&dir);
 }
 
-/// Pins the one wrapper scheme a run-time path still cannot open.
+/// Verifies a `data://` URI built at RUN TIME decodes and opens.
 ///
-/// IGNORED because `data://` decodes its payload during lowering and embeds the bytes, so a
-/// run-time URL would need the base64 and percent decoders in the runtime. Every other scheme
-/// resolves from run-time bytes — see [`test_fopen_honours_a_php_scheme_built_at_run_time`] and
-/// [`test_php_filter_url_built_at_run_time_opens`].
-///
-/// Measured against php 8.5.6, which opens it.
+/// A literal URI is decoded during lowering and its bytes embedded, which left a run-time one
+/// with no path at all. Decoding needed nothing new in the runtime: `__rt_base64_decode` and
+/// `__rt_urldecode` already exist, and the latter's `+`-as-space rule is what the compile-time
+/// decoder applies to these URIs too.
 #[test]
-#[ignore = "data:// decodes its payload at compile time, so a run-time URI has no path yet"]
 fn test_fopen_honours_a_data_url_built_at_run_time() {
     let out = compile_and_run(
         r#"<?php
-$d = @fopen("data://text/plain," . "hi", "r");
-echo "data=", var_export($d !== false, true);
-if ($d !== false) { echo ":", stream_get_contents($d); fclose($d); }
+function probe(string $label, string $uri): void {
+    $h = @fopen($uri, "r");
+    echo $label, "=", var_export($h !== false, true);
+    if ($h !== false) { echo ":", stream_get_contents($h); fclose($h); }
+    echo " ";
+}
+$d = "data://";
+probe("plain", $d . "text/plain,hi");
+probe("pct", $d . "text/plain,a%20b%21");
+probe("b64", $d . "text/plain;base64,aGVsbG8=");
+probe("empty", $d . "text/plain,");
+probe("nocomma", $d . "text/plain");
 "#,
     );
-    assert_eq!(out, "data=true:hi");
+    assert_eq!(out, "plain=true:hi pct=true:a b! b64=true:hello empty=true: nocomma=false ");
+}
+
+/// Pins that `data://` should REFUSE a media type php-src does not accept.
+///
+/// IGNORED because elephc accepts any media type and only looks for a `;base64` suffix, matched
+/// case-insensitively. Measured against php 8.5.6, whose rule is narrower: the media type may be
+/// empty, `type/subtype`, `type/subtype;charset=...`, or `type/subtype;base64` with the marker in
+/// LOWER CASE. Anything else — `;bogus`, `;BASE64` — makes `fopen()` answer `false` rather than
+/// falling back to a percent-decoded payload.
+///
+/// elephc therefore opens two URIs PHP rejects, and for `;BASE64` it also base64-decodes where
+/// PHP would not. This is a pre-existing over-acceptance of the LITERAL path; the run-time path
+/// added beside it deliberately behaves the same way, so one fix corrects both.
+#[test]
+#[ignore = "data:// accepts any media type and matches ;base64 case-insensitively; php-src accepts only charset= or a lower-case base64"]
+fn test_data_url_rejects_a_media_type_php_refuses() {
+    let out = compile_and_run(
+        r#"<?php
+function probe(string $label, string $uri): void {
+    $h = @fopen($uri, "r");
+    echo $label, "=", var_export($h !== false, true), " ";
+    if ($h !== false) { fclose($h); }
+}
+$d = "data://";
+probe("charset", $d . "text/plain;charset=utf-8,aGVsbG8=");
+probe("bogus", $d . "text/plain;bogus,aGVsbG8=");
+probe("upper", $d . "text/plain;BASE64,aGVsbG8=");
+"#,
+    );
+    assert_eq!(out, "charset=true bogus=false upper=false ");
 }
 
 /// Pins that `fread($f, $n)` never hands back more than `$n` bytes through a filter.
