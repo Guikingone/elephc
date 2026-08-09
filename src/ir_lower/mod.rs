@@ -10,6 +10,7 @@
 //!   source order and emitting high-level EIR operations.
 //! - EIR is the only production backend; unsupported lowering must fail explicitly.
 
+mod array_pointer_scan;
 mod builtin_datetime;
 mod context;
 mod effect_refinement;

@@ -6,6 +6,8 @@
 //!
 //! Key details:
 //! - Static cells, include state, scope stacks, errors, timezone, HTTP status, and magic paths live here.
+//! - Internal array pointers live here too, because runtime array cells carry no
+//!   PHP-visible cursor of their own.
 
 use super::*;
 
@@ -99,6 +101,30 @@ impl ElephcEvalContext {
             .class_constants
             .insert((normalize_class_name(class_name), name.into()), cell);
         previous.filter(|previous| *previous != cell)
+    }
+
+    /// Returns the PHP internal array pointer tracked for one runtime array cell.
+    ///
+    /// Cells without a stored cursor answer `Position(0)`, matching PHP, where a
+    /// freshly built array points at its first element.
+    pub fn array_cursor(&self, array: RuntimeCellHandle) -> EvalArrayCursor {
+        self.array_cursors
+            .get(&(array.as_ptr() as usize))
+            .copied()
+            .unwrap_or(EvalArrayCursor::Position(0))
+    }
+
+    /// Stores the PHP internal array pointer for one runtime array cell.
+    ///
+    /// The default cursor is dropped instead of stored so a later array cell that
+    /// reuses this address starts from PHP's fresh-array state.
+    pub fn set_array_cursor(&mut self, array: RuntimeCellHandle, cursor: EvalArrayCursor) {
+        let key = array.as_ptr() as usize;
+        if cursor == EvalArrayCursor::Position(0) {
+            self.array_cursors.remove(&key);
+            return;
+        }
+        self.array_cursors.insert(key, cursor);
     }
 
     /// Returns true when an eval include key was already loaded by this context.

@@ -98,9 +98,32 @@ pub(crate) fn lower_stmt(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     });
 }
 
+/// Declares the hidden internal-array-pointer cursor slots used inside a loop body before
+/// that body is lowered.
+///
+/// Only loops need this. Everywhere else lowering order matches execution order, so a
+/// store lowered before the variable's first pointer call also runs before it and the
+/// entry-block seed of `0` is already the right cursor. A loop body re-executes, so its
+/// assignments must be able to rewind a cursor whose first call is lowered later; the
+/// rewind lives in `LoweringContext::store_local` and only fires once the slot exists.
+fn predeclare_loop_array_pointer_cursors(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
+    let body = match &stmt.kind {
+        StmtKind::While { body, .. }
+        | StmtKind::DoWhile { body, .. }
+        | StmtKind::For { body, .. }
+        | StmtKind::Foreach { body, .. } => body,
+        _ => return,
+    };
+    crate::ir_lower::array_pointer_scan::predeclare_loop_cursors(ctx, body);
+}
+
 /// Lowers one statement exactly once against the current local representations.
+///
+/// The terminated-block guard that used to live here now sits in `lower_stmt`, above the
+/// representation fixpoint that drives this function.
 fn lower_stmt_once(ctx: &mut LoweringContext<'_, '_>, stmt: &Stmt) {
     lower_statement_concat_reset(ctx, stmt.span);
+    predeclare_loop_array_pointer_cursors(ctx, stmt);
     match &stmt.kind {
         StmtKind::Echo(expr) => lower_echo(ctx, expr, stmt.span),
         StmtKind::Assign { name, value } => lower_assign(ctx, name, value, stmt.span),

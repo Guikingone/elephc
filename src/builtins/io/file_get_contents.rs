@@ -14,15 +14,27 @@
 //!   `ftps://` URL links `elephc_tls`; a non-literal path conservatively links
 //!   `elephc_tls`, `elephc_phar`, `z`, and `bz2` because the scheme and PHAR entry
 //!   flags are unknown until run time.
+//! - The signature matches reference PHP 8.4 exactly:
+//!   `file_get_contents(string $filename, bool $use_include_path = false,
+//!   ?resource $context = null, int $offset = 0, ?int $length = null)`.
+//!   `$context` has no `TypeSpec` for `resource`, so it is declared `Mixed` with a
+//!   `null` default exactly like `fopen()`'s `$context`; the backend rejects a
+//!   non-null one instead of ignoring it.
 
-use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
     name: "file_get_contents",
     area: Io,
-    params: [filename: Str],
+    params: [
+        filename: Str,
+        use_include_path: Bool = DefaultSpec::Bool(false),
+        context: Mixed = DefaultSpec::Null,
+        offset: Int = DefaultSpec::Int(0),
+        length: Mixed = DefaultSpec::Null
+    ],
     returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(

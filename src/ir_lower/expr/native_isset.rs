@@ -197,6 +197,10 @@ pub(super) fn lower_lazy_property_isset_operand(
             lower_expr(ctx, object);
             Some(emit_bool_literal(ctx, false, Some(arg.span)))
         }
+        IssetPropertyAction::Initialized => {
+            let object = lower_expr(ctx, object);
+            Some(lower_initialized_property_isset(ctx, object, property, arg))
+        }
     }
 }
 
@@ -205,6 +209,9 @@ pub(super) enum IssetPropertyAction {
     Fallback,
     Magic,
     AlwaysFalse,
+    /// A declared (typed) property slot, which can be uninitialized: probe the slot
+    /// before reading it so `isset()` never raises the uninitialized-read error.
+    Initialized,
 }
 
 /// Selects the PHP-visible `isset()` behavior for a statically known object property operand.
@@ -222,6 +229,9 @@ pub(super) fn property_isset_action(
         return Some(IssetPropertyAction::Fallback);
     }
     if property_is_accessible_for_ir(ctx, &class_name, class_info, property) {
+        if class_info.visible_property_is_declared(property) {
+            return Some(IssetPropertyAction::Initialized);
+        }
         return Some(IssetPropertyAction::Fallback);
     }
     if class_method_signature(ctx, &class_name, &php_symbol_key("__isset")).is_some() {

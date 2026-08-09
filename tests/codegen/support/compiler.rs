@@ -155,6 +155,72 @@ fn compile_source_to_asm_with_defines_repr_regex_and_php_version(
     with_regex: bool,
     php_version: elephc::php_version::PhpVersion,
 ) -> (String, String, TestLinkRequirements) {
+    let (user_asm, runtime_asm, link_requirements) = try_compile_source_to_asm_with_defines_repr(
+        source,
+        dir,
+        defines,
+        heap_size,
+        gc_stats,
+        heap_debug,
+        null_repr,
+        with_regex,
+        php_version,
+    );
+    (
+        user_asm.expect("EIR backend codegen failed for codegen fixture"),
+        runtime_asm,
+        link_requirements,
+    )
+}
+
+/// Compiles a snippet and returns the EIR backend's diagnostic text, asserting that the
+/// backend refused the program.
+///
+/// Backend refusals (`unsupported EIR backend feature: …`) are raised after type checking,
+/// so `tests/error_tests.rs` — which stops at the checker — cannot observe them. Use this
+/// for shapes elephc deliberately declines to compile.
+pub(crate) fn compile_source_expect_backend_error(source: &str) -> String {
+    let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
+    let tid = std::thread::current().id();
+    let pid = std::process::id();
+    let dir = std::env::temp_dir().join(format!("elephc_test_{}_{:?}_{}", pid, tid, id));
+    fs::create_dir_all(&dir).unwrap();
+    let (user_asm, _runtime_asm, _link_requirements) = try_compile_source_to_asm_with_defines_repr(
+        source,
+        &dir,
+        &HashSet::new(),
+        8_388_608,
+        false,
+        false,
+        default_null_repr(),
+        false,
+        elephc::php_version::PhpVersion::default(),
+    );
+    let _ = fs::remove_dir_all(&dir);
+    match user_asm {
+        Ok(_) => panic!("expected the EIR backend to reject this program, but it compiled"),
+        Err(error) => error.to_string(),
+    }
+}
+
+/// Runs the codegen-fixture pipeline and hands back the backend's `Result` instead of
+/// unwrapping it, so callers can assert on either outcome.
+#[allow(clippy::too_many_arguments)]
+fn try_compile_source_to_asm_with_defines_repr(
+    source: &str,
+    dir: &Path,
+    defines: &HashSet<String>,
+    heap_size: usize,
+    gc_stats: bool,
+    heap_debug: bool,
+    null_repr: elephc::codegen::NullRepr,
+    with_regex: bool,
+    php_version: elephc::php_version::PhpVersion,
+) -> (
+    std::result::Result<String, elephc::codegen::CodegenIrError>,
+    String,
+    TestLinkRequirements,
+) {
     elephc::codegen::set_null_repr(null_repr);
     let tokens = elephc::lexer::tokenize(source).expect("tokenize failed");
     let ast = elephc::parser::parse(&tokens).expect("parse failed");
@@ -175,6 +241,10 @@ fn compile_source_to_asm_with_defines_repr_regex_and_php_version(
     let resolved = elephc::name_resolver::resolve(resolved).expect("name resolve failed");
     let resolved =
         elephc::autoload::run(resolved, dir, &autoload_registry).expect("autoload failed");
+    // Mirrors `pipeline::compile`: `func_num_args`/`func_get_args`/`func_get_arg` are
+    // desugared into a hidden variadic parameter plus plain PHP after autoloading and
+    // before the optimizer, so the checker and the backend only ever see ordinary PHP.
+    let resolved = elephc::func_args::desugar(resolved).expect("func_args desugar failed");
     let resolved = elephc::optimize::fold_constants(resolved);
     let check_result =
         elephc::types::check_with_target(&resolved, target()).expect("type check failed");
@@ -204,8 +274,7 @@ fn compile_source_to_asm_with_defines_repr_regex_and_php_version(
         &exported_functions,
         regalloc_linear,
         false,
-    )
-    .expect("EIR backend codegen failed for codegen fixture");
+    );
     let runtime_features = ir_module.required_runtime_features;
     let runtime_asm =
         elephc::codegen::generate_runtime_with_features(heap_size, target(), runtime_features);

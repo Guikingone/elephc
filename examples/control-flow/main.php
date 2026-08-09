@@ -58,3 +58,33 @@ for ($row = 1; $row <= 5; $row++) {
     }
     echo "\n";
 }
+
+// Alternative syntax: `:` opens the body, `endif;`/`endforeach;`/`endswitch;` closes it.
+// Identical semantics to the braced forms above, and the two nest in either direction.
+echo "\nStock report:\n";
+$stock = ["widget" => 12, "gizmo" => 0, "doohickey" => 3];
+foreach ($stock as $item => $qty):
+    echo "  " . str_pad($item, 12);
+    if ($qty === 0):
+        echo "out of stock\n";
+    elseif ($qty < 5):
+        echo "low (" . $qty . ")\n";
+    else:
+        echo "in stock (" . $qty . ")\n";
+    endif;
+endforeach;
+
+$reorder = 0;
+foreach ($stock as $qty):
+    switch (true):
+        case $qty === 0:
+            $reorder += 20;
+            break;
+        case $qty < 5:
+            $reorder += 10;
+            break;
+        default:
+            // nothing to reorder
+    endswitch;
+endforeach;
+echo "Units to reorder: " . $reorder . "\n";

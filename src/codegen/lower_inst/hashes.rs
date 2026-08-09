@@ -6,8 +6,9 @@
 //! - `crate::codegen::lower_inst::lower_instruction()`.
 //!
 //! Key details:
-//! - Hash writes may copy-on-write or grow the table, so the returned pointer is
-//!   written back to the source SSA slot and local slot.
+//! - Hash writes may copy-on-write or grow the table, so the returned pointer is written back
+//!   to the source SSA slot and to the place the receiver was READ from (`ReceiverPlace`): a
+//!   plain frame slot for a local, the reference cell for a by-reference parameter.
 //! - `HashGetForWrite` is a lookup that also WRITES: it separates the container the
 //!   matching entry holds and republishes it into that entry's value slot, whose
 //!   address comes from `__rt_hash_get`'s entry-address output (issue #580).
@@ -16,10 +17,11 @@ use crate::codegen::{
     abi, emit_box_current_owned_value_as_mixed, emit_box_current_value_as_mixed,
 };
 use crate::codegen::platform::Arch;
-use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
+use crate::ir::{Immediate, Instruction, ValueId};
 use crate::types::PhpType;
 
 use super::super::context::FunctionContext;
+use super::receiver_place::ReceiverPlace;
 use super::{
     emit_mixed_string_for_persistent_store, expect_operand, load_value_to_first_int_arg,
     store_if_result,
@@ -308,8 +310,8 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     require_hash(hash_ty.clone(), inst)?;
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
-    let source_local = source_load_local_slot(ctx, hash)?;
-    if let Some(slot) = source_local {
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
     }
     match ctx.emitter.target.arch {
@@ -317,9 +319,7 @@ pub(super) fn lower_hash_set(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
         Arch::X86_64 => lower_hash_set_x86_64(ctx, hash, key, value, &value_ty, &storage_value_ty)?,
     }
     ctx.store_result_value(hash)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, hash)?;
-    }
+    receiver.store_back_value(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
@@ -336,8 +336,8 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
     let key = expect_operand(inst, 1)?;
     let hash_ty = ctx.value_php_type(hash)?;
     require_hash(hash_ty.clone(), inst)?;
-    let source_local = source_load_local_slot(ctx, hash)?;
-    if let Some(slot) = source_local {
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
     }
     match ctx.emitter.target.arch {
@@ -357,9 +357,7 @@ pub(super) fn lower_hash_unset(ctx: &mut FunctionContext<'_>, inst: &Instruction
         }
     }
     ctx.store_result_value(hash)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, hash)?;
-    }
+    receiver.store_back_value(ctx, hash)?;
     Ok(())
 }
 
@@ -371,8 +369,8 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
     require_hash(hash_ty.clone(), inst)?;
     let storage_value_ty = assoc_value_type(&hash_ty, inst)?;
     let value_ty = require_supported_hash_value(ctx.value_php_type(value)?, &storage_value_ty, inst)?;
-    let source_local = source_load_local_slot(ctx, hash)?;
-    if let Some(slot) = source_local {
+    let receiver = ReceiverPlace::resolve(ctx, hash)?;
+    if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, hash)?;
     }
     match ctx.emitter.target.arch {
@@ -380,9 +378,7 @@ pub(super) fn lower_hash_append(ctx: &mut FunctionContext<'_>, inst: &Instructio
         Arch::X86_64 => lower_hash_append_x86_64(ctx, hash, value, &value_ty, &storage_value_ty)?,
     }
     ctx.store_result_value(hash)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, hash)?;
-    }
+    receiver.store_back_value(ctx, hash)?;
     ctx.writeback_global_array_source(hash)?;
     Ok(())
 }
@@ -441,8 +437,8 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     let source = expect_operand(inst, 1)?;
     require_hash(ctx.value_php_type(dest)?, inst)?;
     require_hash(ctx.value_php_type(source)?, inst)?;
-    let source_local = source_load_local_slot(ctx, dest)?;
-    if let Some(slot) = source_local {
+    let receiver = ReceiverPlace::resolve(ctx, dest)?;
+    if let Some(slot) = receiver.slot() {
         ctx.release_mutated_source_local_owner(slot, dest)?;
     }
     match ctx.emitter.target.arch {
@@ -457,9 +453,7 @@ pub(super) fn lower_hash_spread(ctx: &mut FunctionContext<'_>, inst: &Instructio
     }
     abi::emit_call_label(ctx.emitter, "__rt_hash_spread");
     ctx.store_result_value(dest)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, dest)?;
-    }
+    receiver.store_back_value(ctx, dest)?;
     ctx.writeback_global_array_source(dest)?;
     Ok(())
 }
@@ -731,7 +725,7 @@ pub(super) fn materialize_hash_key_aarch64(ctx: &mut FunctionContext<'_>, key: V
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "d0")?;
-            ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float array keys to integer keys
+            abi::emit_php_float_to_int(ctx.emitter, "x1");
             abi::emit_load_int_immediate(ctx.emitter, "x2", -1);
             Ok(())
         }
@@ -767,7 +761,7 @@ pub(super) fn materialize_hash_key_x86_64(ctx: &mut FunctionContext<'_>, key: Va
         }
         PhpType::Float => {
             ctx.load_value_to_reg(key, "xmm0")?;
-            ctx.emitter.instruction("cvttsd2si rsi, xmm0");                     // PHP casts float array keys to integer keys
+            abi::emit_php_float_to_int(ctx.emitter, "rsi");
             abi::emit_load_int_immediate(ctx.emitter, "rdx", -1);
             Ok(())
         }
@@ -1720,32 +1714,6 @@ fn require_supported_hash_value(
         inst.op.name(),
         value_ty
     )))
-}
-
-/// Returns the stack/local slot loaded by a hash operand when it came from `load_local`.
-fn source_load_local_slot(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<LocalSlotId>> {
-    let Some(value_ref) = ctx.function.value(value) else {
-        return Err(CodegenIrError::missing_entry("value", value.as_raw()));
-    };
-    let ValueDef::Instruction { inst, .. } = value_ref.def else {
-        return Ok(None);
-    };
-    let Some(inst_ref) = ctx.function.instruction(inst) else {
-        return Err(CodegenIrError::missing_entry("instruction", inst.as_raw()));
-    };
-    // `Op::LoadRefCell` must be recognized alongside `Op::LoadLocal`, exactly as the
-    // indexed-array twin of this helper does (`lower_inst::arrays::source_load_local_slot`).
-    // Without it, a hash write through a reference-bound local (`$r = &$a; $r["k"] = 1;`)
-    // finds no destination slot, so the table pointer `__rt_hash_set` returns is thrown
-    // away. That pointer changes whenever the table rehashes past its load factor or is
-    // COW-split, and the stale one keeps being read: a 41-key hash built through a ref
-    // reported a garbage count instead of 41.
-    if matches!(inst_ref.op, Op::LoadLocal | Op::LoadRefCell) {
-        if let Some(Immediate::LocalSlot(slot)) = inst_ref.immediate {
-            return Ok(Some(slot));
-        }
-    }
-    Ok(None)
 }
 
 /// Returns the capacity immediate attached to a hash allocation.

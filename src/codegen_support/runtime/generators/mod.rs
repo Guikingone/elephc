@@ -23,7 +23,8 @@ use crate::codegen_support::emit::Emitter;
 
 /// Emits all `__rt_gen_*` runtime helpers for the current target.
 ///
-/// Emits the fiber-backed `yield` suspension primitive (`__rt_gen_suspend`)
+/// Emits the fiber-backed `yield` suspension primitive (`__rt_gen_suspend`,
+/// which falls through into its `__rt_gen_suspend_delegated` entry point)
 /// followed by the `Generator` method accessors. Both are target-aware
 /// internally.
 pub(crate) fn emit_generator_runtime(emitter: &mut Emitter) {

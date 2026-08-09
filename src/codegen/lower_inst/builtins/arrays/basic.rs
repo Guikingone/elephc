@@ -79,16 +79,39 @@ pub(crate) fn lower_array_push(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `array_chunk()` by splitting an indexed array into nested indexed arrays.
+///
+/// PHP's `bool $preserve_keys = false` keeps each chunk's source integer keys instead of
+/// renumbering it from zero. A dense indexed array cannot hold a window that does not start at
+/// key 0, so the key-preserving form lowers to `__rt_array_chunk_to_hash`, which builds one owned
+/// hash per chunk. The checker guarantees the flag is a literal (it decides the result's static
+/// shape), so a non-literal operand can only mean the checker and the backend disagree.
 pub(crate) fn lower_array_chunk(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_chunk", 2)?;
+    ensure_arg_count_between(inst, "array_chunk", 2, 3)?;
     let array = expect_operand(inst, 0)?;
     let length = expect_operand(inst, 1)?;
+    let preserve_keys = match inst.operands.get(2).copied() {
+        None => false,
+        Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
+            CodegenIrError::unsupported(
+                "array_chunk preserve_keys argument that is not a compile-time literal".to_string(),
+            )
+        })?,
+    };
     let source_elem_ty = array_chunk_source_element_type(ctx.value_php_type(array)?)?;
     let result_elem_ty =
         result_array_element_type("array_chunk", &inst.result_php_type.codegen_repr())?;
-    let result_inner_elem_ty = array_chunk_result_inner_element_type(&result_elem_ty)?;
+    let result_inner_elem_ty = if preserve_keys {
+        array_chunk_result_inner_hash_value_type(&result_elem_ty)?
+    } else {
+        array_chunk_result_inner_element_type(&result_elem_ty)?
+    };
     require_array_chunk_result_type(&source_elem_ty, &result_inner_elem_ty)?;
-    lower_array_chunk_call(ctx, array, length, &source_elem_ty)?;
+    let runtime_label = if preserve_keys {
+        "__rt_array_chunk_to_hash"
+    } else {
+        array_chunk_runtime_helper(&source_elem_ty)
+    };
+    lower_array_chunk_call(ctx, array, length, runtime_label)?;
     crate::codegen::emit_array_value_type_stamp(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
@@ -275,9 +298,28 @@ pub(super) fn hash_flip_result_value_type(result_ty: &PhpType) -> Result<PhpType
 }
 
 /// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
+/// Lowers `array_reverse()` for indexed arrays with 8-byte payload slots.
+///
+/// PHP's `bool $preserve_keys = false` keeps the source integer keys while reversing the
+/// iteration order. A dense indexed array cannot hold keys in descending order, so the
+/// key-preserving form lowers to `__rt_array_to_hash_reverse`, which builds an owned hash. The
+/// checker guarantees the flag is a literal (it decides the result's static shape), so a
+/// non-literal operand can only mean the checker and the backend disagree about this call.
 pub(crate) fn lower_array_reverse(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "array_reverse", 1)?;
+    ensure_arg_count_between(inst, "array_reverse", 1, 2)?;
     let array = expect_operand(inst, 0)?;
+    let preserve_keys = match inst.operands.get(1).copied() {
+        None => false,
+        Some(flag) => const_bool_operand(ctx, flag)?.ok_or_else(|| {
+            CodegenIrError::unsupported(
+                "array_reverse preserve_keys argument that is not a compile-time literal"
+                    .to_string(),
+            )
+        })?,
+    };
+    if preserve_keys {
+        return lower_array_reverse_preserve_keys(ctx, inst, array);
+    }
     let elem_ty =
         eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "array_reverse")?;
     ctx.load_value_to_result(array)?;
@@ -300,5 +342,63 @@ pub(crate) fn lower_array_unique(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
     abi::emit_call_label(ctx.emitter, array_unique_runtime_helper(&elem_ty));
     store_if_result(ctx, inst)
+}
+
+
+
+/// Lowers `array_reverse($array, true)` into an owned integer-keyed hash.
+///
+/// The runtime helper walks the source payload from the last slot to the first and inserts each
+/// element at its ORIGINAL index, persisting strings and retaining heap payloads, so the result
+/// is a freshly owned hash whose keys match PHP's `preserve_keys` output exactly. The checker
+/// types this call as `AssocArray { key: Int, value: T }`, which is re-verified here.
+fn lower_array_reverse_preserve_keys(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    let PhpType::Array(_) = ctx.value_php_type(array)?.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_reverse preserve_keys for PHP type {:?}",
+            ctx.value_php_type(array)?
+        )));
+    };
+    let PhpType::AssocArray { .. } = inst.result_php_type.codegen_repr() else {
+        return Err(CodegenIrError::unsupported(format!(
+            "array_reverse preserve_keys result PHP type {:?}",
+            inst.result_php_type
+        )));
+    };
+    ctx.load_value_to_result(array)?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the source indexed-array pointer as the key-preserving reverse helper argument
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_array_to_hash_reverse");
+    store_if_result(ctx, inst)
+}
+
+/// Reads a literal boolean operand produced by a constant instruction, or `None` when non-literal.
+///
+/// Accepts `ConstBool`, integer, float, and null const instructions using PHP truthiness, so any
+/// literal flag the frontend folds into an argument slot resolves at compile time.
+fn const_bool_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<bool>> {
+    let value_ref = ctx
+        .function
+        .value(value)
+        .ok_or_else(|| CodegenIrError::missing_entry("value", value.as_raw()))?;
+    let ValueDef::Instruction { inst, .. } = value_ref.def else {
+        return Ok(None);
+    };
+    let inst_ref = ctx
+        .function
+        .instruction(inst)
+        .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
+    match (inst_ref.op, inst_ref.immediate.as_ref()) {
+        (Op::ConstBool, Some(Immediate::Bool(value))) => Ok(Some(*value)),
+        (Op::ConstI64, Some(Immediate::I64(value))) => Ok(Some(*value != 0)),
+        (Op::ConstF64, Some(Immediate::F64(value))) => Ok(Some(*value != 0.0)),
+        (Op::ConstNull, _) => Ok(Some(false)),
+        _ => Ok(None),
+    }
 }
 

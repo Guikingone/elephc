@@ -12,7 +12,7 @@ use super::*;
 
 /// Lowers `parse_url(url, component?)` into the Mixed-returning runtime scanner.
 pub(crate) fn lower_parse_url(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count_between(inst, "parse_url", 1, 2)?;
+    super::super::ensure_arg_count_between(inst, "parse_url", 1, 2)?;
     let ptr_reg = string_ptr_reg(ctx);
     let len_reg = string_len_reg(ctx);
     load_string_arg_to_regs(ctx, inst, 0, "parse_url url", ptr_reg, len_reg)?;

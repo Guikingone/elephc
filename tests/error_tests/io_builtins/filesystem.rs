@@ -9,12 +9,17 @@
 
 use super::*;
 
-/// Verifies `file_get_contents()` rejects zero arguments with arity error.
+/// Verifies `file_get_contents()` rejects both ends of its PHP 8.4 arity range: `$filename` is
+/// required and `$length` is the last accepted argument.
 #[test]
 fn test_error_file_get_contents_wrong_args() {
     expect_error(
         "<?php file_get_contents();",
-        "file_get_contents() takes exactly 1 argument",
+        "file_get_contents() takes 1 to 5 arguments",
+    );
+    expect_error(
+        "<?php file_get_contents(\"a\", false, null, 0, 1, 2);",
+        "file_get_contents() takes 1 to 5 arguments",
     );
 }
 

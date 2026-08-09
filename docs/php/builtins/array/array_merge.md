@@ -2,7 +2,7 @@
 title: "array_merge()"
 description: "Merges the elements of two arrays."
 sidebar:
-  order: 23
+  order: 24
 ---
 
 ## array_merge()

@@ -81,4 +81,5 @@ mod iterators;
 mod spl;
 mod generators;
 mod dead_strip;
+mod stack_guard;
 mod zval;

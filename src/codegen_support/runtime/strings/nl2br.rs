@@ -7,20 +7,27 @@
 //!
 //! Key details:
 //! - String helpers use PHP pointer/length pairs and target ABI return registers; heap-backed results must remain refcount-compatible.
+//! - The worst-case `7 * len` expansion (an all-newline input becomes `<br />\n` per byte) is
+//!   reserved through `__rt_concat_reserve` before the first store, so long inputs fall back to
+//!   heap storage instead of running off the end of the 64 KiB concat scratch buffer.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
-use crate::codegen_support::abi;
 
 /// Emits the `__rt_nl2br` runtime helper for the nl2br PHP builtin.
 ///
 /// Dispatches to the platform-specific implementation (x86_64 Linux or ARM64).
 /// On ARM64 the helper reads the input string from x1 (ptr) and x2 (len), scans each
 /// byte, and inserts the literal `<br />` before every `0x0A` newline. The result
-/// pointer/length are returned in x1/x2. The concat-buffer write offset (`_concat_off`)
-/// is advanced by the total bytes written.
+/// pointer/length are returned in x1/x2.
 ///
-/// Traps: none. Clobbers: x6-x13, x8. Preserves: x0-x5, x29, x30.
+/// Reserves the worst-case `7 * len` expansion through `__rt_concat_reserve` (concat scratch
+/// while it fits, owned heap storage otherwise) and finishes through `__rt_concat_publish`,
+/// which advances `_concat_off` only for scratch-backed results.
+///
+/// Clobbers every caller-saved register, because the reservation can reach `__rt_heap_alloc`.
+/// A wrapped `7 * len` product reports PHP's allocation-overflow fatal through
+/// `__rt_alloc_overflow` instead of reserving a too-small destination.
 pub fn emit_nl2br(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_nl2br_linux_x86_64(emitter);
@@ -31,11 +38,19 @@ pub fn emit_nl2br(emitter: &mut Emitter) {
     emitter.comment("--- runtime: nl2br ---");
     emitter.label_global("__rt_nl2br");
 
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // destination pointer
-    emitter.instruction("mov x10, x9");                                         // save result start
+    // -- reserve the worst-case seven-bytes-per-input-byte expansion before writing anything --
+    emitter.instruction("sub sp, sp, #32");                                     // allocate spill space for the borrowed source string
+    emitter.instruction("stp x29, x30, [sp, #16]");                             // save frame pointer and return address across the reservation call
+    emitter.instruction("add x29, sp, #16");                                    // establish the nl2br helper frame pointer
+    emitter.instruction("stp x1, x2, [sp]");                                    // save the source pointer and length across the reservation call
+    emitter.instruction("mov x9, #7");                                          // worst-case expansion factor for an all-newline input (`<br />` plus the newline)
+    emitter.instruction("umulh x10, x2, x9");                                   // capture the high half of the 7 * length product
+    emitter.instruction("cbnz x10, __rt_nl2br_size_overflow");                  // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("mul x0, x2, x9");                                      // compute the worst-case expanded result size
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve scratch or heap storage for the expanded result
+    emitter.instruction("mov x9, x0");                                          // destination pointer
+    emitter.instruction("mov x10, x0");                                         // save result start
+    emitter.instruction("ldp x1, x2, [sp]");                                    // reload the borrowed source pointer and length
     emitter.instruction("mov x11, x2");                                         // remaining count
 
     emitter.label("__rt_nl2br_loop");
@@ -64,32 +79,43 @@ pub fn emit_nl2br(emitter: &mut Emitter) {
     emitter.label("__rt_nl2br_done");
     emitter.instruction("mov x1, x10");                                         // result pointer
     emitter.instruction("sub x2, x9, x10");                                     // result length
-    emitter.instruction("ldr x8, [x6]");                                        // reload offset
-    emitter.instruction("add x8, x8, x2");                                      // advance
-    emitter.instruction("str x8, [x6]");                                        // store updated offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #32");                                     // release the nl2br helper frame
     emitter.instruction("ret");                                                 // return
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_nl2br_size_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
 /// Emits the x86_64 Linux variant of the `__rt_nl2br` runtime helper.
 ///
 /// Reads the input string from rax (ptr) and rdx (len). Scans each byte and inserts
 /// the literal `<br />` before every `0x0A` newline. The result pointer/length are
-/// returned in rax/rdx. The concat-buffer write offset (`_concat_off`) is advanced
-/// by the total bytes written.
+/// returned in rax/rdx.
 ///
-/// Clobbers: r8-r11, rcx, rsi, rdx. Preserves: rbx, rbp, r12-r15.
+/// Reserves the worst-case `7 * len` expansion through `__rt_concat_reserve` and publishes the
+/// written length through `__rt_concat_publish`, so long inputs use owned heap storage instead
+/// of running off the end of the 64 KiB concat scratch buffer.
 fn emit_nl2br_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: nl2br ---");
     emitter.label_global("__rt_nl2br");
 
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load the current concat-buffer write offset before expanding newline bytes into HTML break tags
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r11, [r10 + r9]");                                 // compute the concat-buffer destination pointer where the nl2br() result begins
-    emitter.instruction("mov r8, r11");                                         // preserve the concat-backed result start pointer for the returned string value after the loop mutates the destination cursor
-    emitter.instruction("mov rcx, rdx");                                        // seed the remaining source length counter from the borrowed input string length
-    emitter.instruction("mov rsi, rax");                                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
+    // -- reserve the worst-case seven-bytes-per-input-byte expansion before writing anything --
+    emitter.instruction("push rbp");                                            // preserve the caller frame pointer across the reservation and publish calls
+    emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the borrowed source string
+    emitter.instruction("sub rsp, 32");                                         // reserve aligned spill slots for the source pointer and length
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the borrowed source pointer across the reservation call
+    emitter.instruction("mov QWORD PTR [rbp - 16], rdx");                       // save the borrowed source length across the reservation call
+    emitter.instruction("imul rax, rdx, 7");                                    // compute the worst-case expanded result size as 7 * source length
+    emitter.instruction("jo __rt_nl2br_size_overflow_linux_x86_64");            // reject a wrapped size instead of reserving a too-small destination
+    emitter.instruction("call __rt_concat_reserve");                            // reserve scratch or heap storage for the expanded result
+    emitter.instruction("mov r11, rax");                                        // compute the destination pointer where the nl2br() result begins
+    emitter.instruction("mov r8, r11");                                         // preserve the result start pointer for the returned string value after the loop mutates the destination cursor
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 16]");                       // seed the remaining source length counter from the borrowed input string length
+    emitter.instruction("mov rsi, QWORD PTR [rbp - 8]");                        // preserve the borrowed source string cursor in a dedicated register before the loop mutates caller-saved registers
 
     emitter.label("__rt_nl2br_loop_linux_x86_64");
     emitter.instruction("test rcx, rcx");                                       // stop once every source byte has been classified and copied into concat storage
@@ -118,11 +144,15 @@ fn emit_nl2br_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_nl2br_loop_linux_x86_64");                    // continue scanning the remaining source bytes until the input string is exhausted
 
     emitter.label("__rt_nl2br_done_linux_x86_64");
-    emitter.instruction("mov rax, r8");                                         // return the concat-backed result start pointer after nl2br() finishes expanding the input string
-    emitter.instruction("mov rdx, r11");                                        // copy the final concat-buffer destination cursor before computing the produced string length
+    emitter.instruction("mov rax, r8");                                         // return the reserved result start pointer after nl2br() finishes expanding the input string
+    emitter.instruction("mov rdx, r11");                                        // copy the final destination cursor before computing the produced string length
     emitter.instruction("sub rdx, r8");                                         // compute the produced string length as dest_end - dest_start for the returned x86_64 string value
-    abi::emit_load_symbol_to_reg(emitter, "rcx", "_concat_off", 0);             // reload the concat-buffer write offset before publishing the bytes that nl2br() appended
-    emitter.instruction("add rcx, rdx");                                        // advance the concat-buffer write offset by the produced string length that nl2br() just materialized
-    abi::emit_store_reg_to_symbol(emitter, "rcx", "_concat_off", 0);            // persist the updated concat-buffer write offset after finishing the nl2br() expansion
-    emitter.instruction("ret");                                                 // return the concat-backed nl2br() result in the standard x86_64 string result registers
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("add rsp, 32");                                         // release the nl2br spill slots before returning the expanded string
+    emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning the expanded string
+    emitter.instruction("ret");                                                 // return the nl2br() result in the standard x86_64 string result registers
+
+    // -- impossible result size: report the shared allocation-overflow fatal error --
+    emitter.label("__rt_nl2br_size_overflow_linux_x86_64");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }

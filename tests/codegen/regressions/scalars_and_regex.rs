@@ -175,12 +175,32 @@ fn test_modulo_normal() {
     assert_eq!(out, "0");
 }
 
-/// Verifies that modulo by zero returns 0 (no crash).
-/// Regression for issue #23 (modulo by zero).
+/// Verifies that an uncaught modulo by zero is a `DivisionByZeroError` fatal, not the value `0`.
+///
+/// Regression for issue #23 (modulo by zero). Reference PHP 8.4 raises
+/// `DivisionByZeroError: Modulo by zero`; elephc used to fall back to `mov result, 0` and hand
+/// back `0`. With no handler active the program still terminates — the diagnostic just names
+/// the PHP class now, matching `Fatal error: Uncaught DivisionByZeroError: Modulo by zero`.
 #[test]
-fn test_modulo_by_zero() {
-    let out = compile_and_run("<?php echo 5 % 0;");
-    assert_eq!(out, "0");
+fn test_modulo_by_zero_is_uncaught_fatal() {
+    let err = compile_and_run_expect_failure("<?php echo 5 % 0;");
+    assert!(
+        err.contains("Uncaught DivisionByZeroError: Modulo by zero"),
+        "modulo by zero should fatal as a DivisionByZeroError, got: {err}"
+    );
+}
+
+/// Verifies the modulo-by-zero error is catchable, which is the substantive half of PHP 8's
+/// behavior: the `catch` block runs and `getMessage()` carries php-src's own wording.
+///
+/// Regression for issue #23 (modulo by zero). While `%` produced a value, no `catch` clause
+/// could ever observe a zero divisor.
+#[test]
+fn test_modulo_by_zero_is_catchable() {
+    let out = compile_and_run(
+        "<?php try { echo 5 % 0; } catch (DivisionByZeroError $e) { echo get_class($e), ':', $e->getMessage(); }",
+    );
+    assert_eq!(out, "DivisionByZeroError:Modulo by zero");
 }
 
 /// Verifies normal modulo remainder: `7 % 3` returns 1.

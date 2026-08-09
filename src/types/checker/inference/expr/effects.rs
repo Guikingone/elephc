@@ -13,6 +13,7 @@ use crate::names::php_symbol_key;
 use crate::parser::ast::{BinOp, CallableTarget, Expr, ExprKind};
 use crate::types::{PhpType, TypeEnv};
 
+use super::super::super::null_probe;
 use super::super::super::Checker;
 use super::{merge_match_arm_result_type, merge_null_coalesce_result_type};
 
@@ -81,7 +82,9 @@ impl Checker {
             ExprKind::PreIncrement(name) | ExprKind::PreDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                // `int` can overflow to float and `string` can become int/float
+                // (`"9"++` is `int(10)`), so the local is dynamically typed afterwards.
+                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)
@@ -89,7 +92,9 @@ impl Checker {
             ExprKind::PostIncrement(name) | ExprKind::PostDecrement(name) => {
                 let old_ty = env.get(name).cloned();
                 let result_ty = self.infer_type(expr, env)?;
-                if matches!(old_ty, Some(PhpType::Int)) {
+                // Same retype as the pre-form: only the RESULT differs, and it was already
+                // computed above against the type the local held before the update.
+                if matches!(old_ty, Some(PhpType::Int) | Some(PhpType::Str)) {
                     env.insert(name.clone(), PhpType::Mixed);
                 }
                 Ok(result_ty)
@@ -107,7 +112,12 @@ impl Checker {
                 }
             }
             ExprKind::NullCoalesce { value, default } => {
-                let value_ty = self.infer_type_with_assignment_effects(value, env)?;
+                // `$neverDefined ?? $d` is a null probe: PHP answers `$d` without an
+                // undefined-variable warning, so the left chain root reads as `null`.
+                let probe = null_probe::begin_null_probe_root(self, value, env);
+                let value_ty = self.infer_null_probe_operand_with_effects(value, env);
+                null_probe::end_null_probe_root(probe, env);
+                let value_ty = value_ty?;
                 let default_ty = if value_ty == PhpType::Void {
                     self.infer_type_with_assignment_effects(default, env)?
                 } else {
@@ -228,27 +238,41 @@ impl Checker {
                     php_symbol_key(builtin_name).as_str(),
                     "isset" | "unset"
                 ) {
+                    // `isset($never)` / `unset($never)` are exactly the constructs PHP provides
+                    // for probing storage that may never have been declared, so a never-declared
+                    // chain root reads as `null` for the operand.
                     for arg in &expanded_args {
-                        self.infer_non_reading_arg_assignment_effects(arg, env)?;
+                        let probe = null_probe::begin_null_probe_root(self, arg, env);
+                        let effects = self.infer_non_reading_arg_assignment_effects(arg, env);
+                        null_probe::end_null_probe_root(probe, env);
+                        effects?;
                     }
                 } else if !builtin_name.eq_ignore_ascii_case("unset") {
+                    // `empty()` shares that tolerance, but its operand is still read (PHP
+                    // consults `__isset` then `__get`), so it stays on the eager path with only
+                    // the probe binding added.
+                    let is_empty = php_symbol_key(builtin_name) == "empty";
+                    // An array-callback builtin types its callback's unannotated parameters
+                    // from the array element/key inside `check_builtin`. Skip that argument
+                    // here: the eager pass would otherwise check the closure body against the
+                    // unhinted parameter fallback and reject valid PHP such as
+                    // `array_filter($strings, fn($v) => strlen($v) > 5)`.
+                    let contextual_callbacks =
+                        crate::types::checker::builtins::contextual_callback_arg_positions(
+                            builtin_name,
+                        );
                     for (idx, arg) in expanded_args.iter().enumerate() {
-                        if builtin_name.eq_ignore_ascii_case("preg_replace_callback") && idx == 1 {
+                        if contextual_callbacks.contains(&idx) {
                             continue;
                         }
                         if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
                             continue;
                         }
-                        // The user-sort comparator is type-checked by `check_builtin`
-                        // with its parameters typed from the array element (so an
-                        // unannotated object comparator type-checks). Skip the eager
-                        // pass here, which would otherwise check the comparator body
-                        // with default `Int` parameters and reject object access.
-                        if idx == 1
-                            && (builtin_name.eq_ignore_ascii_case("usort")
-                                || builtin_name.eq_ignore_ascii_case("uasort")
-                                || builtin_name.eq_ignore_ascii_case("uksort"))
-                        {
+                        if is_empty {
+                            let probe = null_probe::begin_null_probe_root(self, arg, env);
+                            let effects = self.infer_type_with_assignment_effects(arg, env);
+                            null_probe::end_null_probe_root(probe, env);
+                            effects?;
                             continue;
                         }
                         self.infer_type_with_assignment_effects(arg, env)?;

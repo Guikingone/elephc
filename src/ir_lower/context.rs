@@ -198,6 +198,10 @@ pub(crate) struct LoweringContext<'m, 'f> {
     pub builtin_call_types: &'m HashMap<Span, PhpType>,
     /// Checker-computed fixed-point storage contracts for loop-carried array locals.
     pub loop_storage_types: &'m crate::types::LoopStorageTypes,
+    /// Checker-recorded `(scope, local)` pairs for `string` locals used as a `++`/`--`
+    /// target. Those locals get boxed `Mixed` frame storage from their first store, so
+    /// every read of the slot is already a boxed load instead of an owned string detach.
+    pub string_incdec_locals: &'m HashSet<(String, String)>,
     /// Function-like scope key paired with loop spans for storage-contract lookup.
     pub loop_storage_scope: String,
     pub constants: HashMap<String, (ExprKind, PhpType)>,
@@ -273,6 +277,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         throw_access_sites: &'m HashMap<Span, ThrowAccessInfo>,
         builtin_call_types: &'m HashMap<Span, PhpType>,
         loop_storage_types: &'m crate::types::LoopStorageTypes,
+        string_incdec_locals: &'m HashSet<(String, String)>,
         loop_storage_scope: String,
         constants: &'m HashMap<String, (ExprKind, PhpType)>,
         top_level_env: TypeEnv,
@@ -305,6 +310,7 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             throw_access_sites,
             builtin_call_types,
             loop_storage_types,
+            string_incdec_locals,
             loop_storage_scope,
             constants: constants.clone(),
             top_level_env,
@@ -639,6 +645,27 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.declare_local_with_kind(name, php_type, LocalKind::PhpLocal)
     }
 
+    /// Returns the frame storage type a local must use, boxing `string` locals that PHP's
+    /// `++`/`--` can retype.
+    ///
+    /// `"9"++` is `int(10)`, so a local the checker recorded as a string increment/decrement
+    /// target cannot keep concrete `Str` storage. Widening the slot lazily at the increment
+    /// is not enough: the slot type is a whole-frame property, so every OTHER `Str`-typed
+    /// read of the same slot would then have to detach an owned copy out of the boxed cell
+    /// (`__rt_mixed_cast_string`), leaking one heap block per executed read. Boxing from the
+    /// first store — including the incoming-parameter store — keeps every access on the
+    /// ordinary boxed-Mixed path instead.
+    fn boxed_incdec_storage_type(&self, name: &str, php_type: PhpType) -> PhpType {
+        if !matches!(php_type.codegen_repr(), PhpType::Str) {
+            return php_type;
+        }
+        let key = (self.loop_storage_scope.clone(), name.to_string());
+        if self.string_incdec_locals.contains(&key) {
+            return PhpType::Mixed;
+        }
+        php_type
+    }
+
     /// Declares a local slot with the requested role if it does not already exist.
     pub(crate) fn declare_local_with_kind(
         &mut self,
@@ -649,13 +676,28 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if let Some(slot) = self.local_slots.get(name) {
             return *slot;
         }
+        let boxed_php_type = if kind == LocalKind::PhpLocal {
+            self.boxed_incdec_storage_type(name, php_type.clone())
+        } else {
+            php_type.clone()
+        };
+        // An incoming `string` parameter arrives with a `Str` entry already seeded from the
+        // signature environment, so the boxed contract has to REPLACE that fact rather than
+        // defer to it; otherwise every read of the parameter stays `Str`-typed against the
+        // boxed slot the increment needs.
+        let overrides_seeded_type = boxed_php_type != php_type;
+        let php_type = boxed_php_type;
         let ir_type = value_ir_type(&php_type);
         let slot = self
             .builder
             .add_local(Some(name.to_string()), ir_type, php_type.clone(), kind);
         self.local_slots.insert(name.to_string(), slot);
         self.local_kinds.insert(name.to_string(), kind);
-        self.local_types.entry(name.to_string()).or_insert(php_type);
+        if overrides_seeded_type {
+            self.local_types.insert(name.to_string(), php_type);
+        } else {
+            self.local_types.entry(name.to_string()).or_insert(php_type);
+        }
         slot
     }
 
@@ -742,11 +784,78 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         self.ref_bound_locals.contains(name)
     }
 
+    /// Returns the hidden internal-array-pointer cursor slot for `variable`, declaring it
+    /// on first use.
+    ///
+    /// PHP keeps the internal pointer on the hashtable itself. elephc's array and hash
+    /// headers have no room for it — widening either would shift every offset in every
+    /// runtime helper and inline lowering — so the cursor lives in a hidden `Int` frame
+    /// slot beside the array local, named after that local so repeated calls on the same
+    /// variable share one cursor.
+    ///
+    /// The slot is seeded with `0` at the END of the entry block, which is where PHP's
+    /// freshly-created array starts its pointer. Appending there (rather than at the call
+    /// site) is what makes `while (current($a) !== false) { next($a); }` work: a call-site
+    /// seed inside a loop body would rewind the cursor on every iteration. The entry block
+    /// stores its terminator separately from its instruction list, so appending after it
+    /// has been terminated still lands before the branch and dominates every use.
+    pub(crate) fn array_pointer_cursor_slot(&mut self, variable: &str) -> LocalSlotId {
+        let name = Self::array_pointer_cursor_name(variable);
+        if let Some(slot) = self.local_slots.get(&name) {
+            return *slot;
+        }
+        let slot = self.declare_local_with_kind(&name, PhpType::Int, LocalKind::HiddenTemp);
+        self.builder.seed_entry_int_local(slot, 0);
+        self.initialized_slots.insert(slot);
+        slot
+    }
+
+    /// Rewinds a local's internal-array-pointer cursor to the first element, if it has one.
+    ///
+    /// PHP resets the internal pointer whenever the variable is bound to a different array
+    /// (`$a = [1,2,3]; next($a); $a = [4,5,6];` leaves `key($a)` at `0`), because the new
+    /// value carries its own hashtable. Assignments lowered BEFORE the variable's first
+    /// pointer call see no slot yet and skip this, which is harmless: the cursor is still
+    /// sitting on its entry-block seed of `0` at that point.
+    pub(crate) fn reset_array_pointer_cursor(&mut self, variable: &str) {
+        let name = Self::array_pointer_cursor_name(variable);
+        let Some(slot) = self.local_slots.get(&name).copied() else {
+            return;
+        };
+        let zero = self.builder.emit_const_i64(0);
+        self.builder.emit_store_local(slot, zero);
+    }
+
+    /// Builds the reserved frame-slot name holding one local's internal-array-pointer cursor.
+    ///
+    /// The `__eir_` prefix cannot appear in PHP source, so the cursor can never collide
+    /// with a user variable.
+    fn array_pointer_cursor_name(variable: &str) -> String {
+        format!("__eir_aptr_{}", variable)
+    }
+
     /// Declares a fresh hidden temporary slot and returns its synthetic name.
     pub(crate) fn declare_hidden_temp(&mut self, php_type: PhpType) -> String {
         let name = format!("__eir_tmp{}", self.hidden_temp_counter);
         self.hidden_temp_counter += 1;
         self.declare_local_with_kind(&name, php_type, LocalKind::HiddenTemp);
+        name
+    }
+
+    /// Declares a fresh synthetic slot that follows ordinary PHP local-variable ownership.
+    ///
+    /// `declare_hidden_temp` uses `LocalKind::HiddenTemp`, whose store *moves* an already-owned
+    /// expression result into the slot without retaining it. A lowering that desugars a PHP
+    /// construct into `$tmp = <place>; ...; <place> = $tmp;` needs the opposite contract: the
+    /// read may be a borrowed pointer (a static-property load carries no reference of its own),
+    /// so the store must retain and function-exit cleanup must release. Declaring the slot as
+    /// `LocalKind::PhpLocal` gives it exactly the ownership rules the equivalent user-written
+    /// assignment would have. The `__eir_` prefix cannot appear in PHP source, so the name can
+    /// never collide with a user variable.
+    pub(crate) fn declare_synthetic_php_local(&mut self, php_type: PhpType) -> String {
+        let name = format!("__eir_place{}", self.hidden_temp_counter);
+        self.hidden_temp_counter += 1;
+        self.declare_local_with_kind(&name, php_type, LocalKind::PhpLocal);
         name
     }
 
@@ -1269,6 +1378,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         if self.should_store_to_eval_scope(name) {
             return self.store_eval_scope_name(name, value, span);
         }
+        // Binding the variable to a different array gives it a different hashtable, and
+        // PHP's internal pointer belongs to the hashtable: rewind the hidden cursor so
+        // `$a = [1,2,3]; next($a); $a = [4,5,6];` leaves `key($a)` at `0` like PHP.
+        self.reset_array_pointer_cursor(name);
         let previous_slot = self.local_slots.get(name).copied();
         let previous_type = self.local_type(name);
         let previous_kind = self
@@ -1279,6 +1392,10 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
         let uses_global = self.uses_global_storage(name, previous_kind);
         let php_type = if uses_global {
             self.global_alias_type(name)
+        } else if previous_kind == LocalKind::PhpLocal {
+            // A `string` local PHP's `++`/`--` can retype uses boxed Mixed storage from its
+            // FIRST store, so no read of the slot is ever typed `Str` against boxed storage.
+            self.boxed_incdec_storage_type(name, php_type)
         } else {
             php_type
         };
@@ -1955,9 +2072,11 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
                     | Op::HashToMixed
                     | Op::InvokerRefArg
                     | Op::MixedNumericBinop
+                    | Op::StrIncDec
                     | Op::ICheckedAdd
                     | Op::ICheckedSub
                     | Op::ICheckedMul
+                    | Op::ICheckedPow
                     | Op::MixedCastString
                     | Op::StrConcat
                     | Op::StrPersist
@@ -2098,7 +2217,14 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
     pub(crate) fn call_result_may_alias_arg(&self, argument: ValueId, result: ValueId) -> bool {
         if matches!(
             self.builder.value_defining_op(argument),
-            Some(Op::MixedNumericBinop | Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+            Some(
+                Op::MixedNumericBinop
+                    | Op::StrIncDec
+                    | Op::ICheckedAdd
+                    | Op::ICheckedSub
+                    | Op::ICheckedMul
+                    | Op::ICheckedPow
+            )
         ) {
             return false;
         }

@@ -19,7 +19,7 @@ eval_builtin! {
 
 use super::super::super::*;
 
-/// Evaluates PHP `strrpos(...)` over haystack and needle expressions.
+/// Evaluates PHP `strrpos(...)` over haystack, needle, and optional offset expressions.
 pub(in crate::interpreter) fn eval_builtin_strrpos(
     args: &[EvalExpr],
     context: &mut ElephcEvalContext,
@@ -29,11 +29,12 @@ pub(in crate::interpreter) fn eval_builtin_strrpos(
     super::strpos::eval_builtin_string_position_named("strrpos", args, context, scope, values)
 }
 
-/// Applies PHP `strrpos(...)` to evaluated haystack and needle values.
+/// Applies PHP `strrpos(...)` to evaluated haystack, needle, and optional offset values.
 pub(in crate::interpreter) fn eval_strrpos_result(
     haystack: RuntimeCellHandle,
     needle: RuntimeCellHandle,
+    offset: Option<RuntimeCellHandle>,
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
-    super::strpos::eval_string_position_named_result("strrpos", haystack, needle, values)
+    super::strpos::eval_string_position_named_result("strrpos", haystack, needle, offset, values)
 }

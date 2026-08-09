@@ -272,3 +272,39 @@ return true;"#
     );
     assert_eq!(values.get(result), FakeValue::Bool(true));
 }
+
+/// Verifies eval `file_get_contents()` honors PHP's `$offset`/`$length` window, its
+/// unreachable-seek warning, and its negative-`$length` `ValueError`.
+///
+/// The expected fragments are `LC_ALL=C php` 8.4 behavior for the same reads: a positive offset
+/// seeks forward, a negative one counts from the end, a too-far negative one warns and answers
+/// `false`, an offset past EOF answers `""`, and a `$length` past EOF is bounded by the file.
+#[test]
+fn execute_program_applies_file_get_contents_offset_and_length() {
+    let filename = format!("elephc_magician_fgc_range_{}.txt", std::process::id());
+    let source = format!(
+        r#"file_put_contents("{filename}", "ABCDEFGHIJ");
+echo file_get_contents("{filename}", false, null, 3) . ":";
+echo file_get_contents("{filename}", false, null, 3, 4) . ":";
+echo file_get_contents("{filename}", false, null, -3) . ":";
+echo file_get_contents("{filename}", false, null, -3, 2) . ":";
+echo file_get_contents("{filename}", false, null, 0, 100) . ":";
+echo file_get_contents("{filename}", false, null, 20) === "" ? "past-eof" : "bad"; echo ":";
+echo file_get_contents("{filename}", false, null, 0, 0) === "" ? "zero" : "bad"; echo ":";
+echo file_get_contents("{filename}", true, null, 4, 3) . ":";
+echo file_get_contents("{filename}", false, null, -30) === false ? "seek-false" : "bad"; echo ":";
+echo unlink("{filename}") ? "unlinked" : "bad";
+return function_exists("file_get_contents");"#
+    );
+    let program = parse_fragment(source.as_bytes()).expect("parse eval fragment");
+    let mut scope = ElephcEvalScope::new();
+    let mut values = FakeOps::default();
+
+    let result = execute_program(&program, &mut scope, &mut values).expect("execute eval ir");
+
+    assert_eq!(
+        values.output,
+        "DEFGHIJ:DEFG:HIJ:HI:ABCDEFGHIJ:past-eof:zero:EFG:seek-false:unlinked"
+    );
+    assert_eq!(values.get(result), FakeValue::Bool(true));
+}

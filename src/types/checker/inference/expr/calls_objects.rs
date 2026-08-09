@@ -60,7 +60,14 @@ impl Checker {
                 Ok(PhpType::Int)
             }
             ExprKind::NullCoalesce { value, default } => {
-                let vt = self.infer_type(value, env)?;
+                // `??` is a null probe: PHP evaluates `$neverDefined ?? $d` to `$d` without an
+                // undefined-variable warning, so a never-declared chain root reads as `null`
+                // here. The default operand keeps ordinary inference.
+                let probed =
+                    crate::types::checker::null_probe::null_probe_env(self, value, env);
+                let probed_env = probed.clone();
+                let vt = self
+                    .infer_null_probe_operand(value, probed_env.as_ref().unwrap_or(env))?;
                 let dt = self.infer_type(default, env)?;
                 let non_null_value = if Self::union_contains_void(&vt) {
                     self.strip_void_from_union(&vt)
@@ -173,6 +180,9 @@ impl Checker {
                 // object's type. Infer the name expression for its side
                 // effects + warnings, type-check the args generically, and
                 // return Mixed.
+                // The unpack-after-named shape is syntactic in
+                // PHP, so it is still rejected without a known constructor.
+                self.require_no_spread_after_named_args(args, "Dynamic constructor")?;
                 self.infer_type(name_expr, env)?;
                 for arg in args {
                     self.infer_type(arg, env)?;
@@ -209,7 +219,7 @@ impl Checker {
                 self.infer_dynamic_property_access_type(object, property, expr, env, true)
             }
             ExprKind::StaticPropertyAccess { receiver, property } => {
-                self.infer_static_property_access_type(receiver, property, expr)
+                self.infer_static_property_access_type(receiver, property, expr, env)
             }
             ExprKind::MethodCall {
                 object,
@@ -313,10 +323,18 @@ impl Checker {
             }
             ExprKind::YieldFrom(inner) => {
                 let inner_ty = self.infer_type(inner, env)?;
+                // `yield from` over an array is desugared by EIR lowering into an
+                // iterator loop that re-yields every key/value pair, and that loop
+                // handles indexed and keyed literals alike (`lower_yield_from_array`
+                // dispatches on `Array` *and* `AssocArray`). Accept a keyed literal
+                // (`[5 => "x", "s" => "y"]`, `[$i * 10 => "L"]`) the same way an
+                // indexed one is accepted; PHP accepts both.
                 let supported = match &inner.kind {
-                    ExprKind::ArrayLiteral(_) => true,
+                    ExprKind::ArrayLiteral(_) | ExprKind::ArrayLiteralAssoc(_) => true,
                     ExprKind::FunctionCall { .. } | ExprKind::Variable(_) => {
-                        self.type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty)
+                        matches!(inner_ty, PhpType::Array(_) | PhpType::AssocArray { .. })
+                            || self
+                                .type_accepts(&PhpType::Object("Generator".to_string()), &inner_ty)
                     }
                     _ => false,
                 };

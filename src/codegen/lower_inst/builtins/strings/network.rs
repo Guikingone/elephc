@@ -11,7 +11,7 @@ use super::*;
 
 /// Lowers `long2ip(value)` through the IPv4 formatting runtime helper.
 pub(crate) fn lower_long2ip(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "long2ip", 1)?;
+    super::super::ensure_arg_count(inst, "long2ip", 1)?;
     let value = expect_operand(inst, 0)?;
     load_as_int(ctx, value, "long2ip")?;
     if ctx.emitter.target.arch == Arch::X86_64 {

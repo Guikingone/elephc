@@ -23,7 +23,7 @@ pub(crate) fn lower_intdiv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "intdiv", 2)?;
+    super::super::ensure_arg_count(inst, "intdiv", 2)?;
     let zero_label = ctx.next_label("intdiv_zero");
     let overflow_label = ctx.next_label("intdiv_overflow");
     let done_label = ctx.next_label("intdiv_done");
@@ -68,7 +68,7 @@ pub(crate) fn lower_fdiv(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "fdiv", 2)?;
+    super::super::ensure_arg_count(inst, "fdiv", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "fdiv")?;
@@ -89,11 +89,16 @@ pub(crate) fn lower_fdiv(
 }
 
 /// Lowers `fmod()` for concrete integer-like and floating operands.
+///
+/// Both targets call libc `fmod`, which is IEEE-754 `remainder`-truncated: the result
+/// carries the sign of the *dividend*, so `fmod(-7.5, 2.5)` is `-0.0` and `echo`s as `-0`
+/// exactly like PHP. Recomputing it as `x - trunc(x / y) * y` loses that signed zero
+/// (the subtraction yields `+0.0`), which is why the AArch64 path is not open-coded.
 pub(crate) fn lower_fmod(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "fmod", 2)?;
+    super::super::ensure_arg_count(inst, "fmod", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "fmod")?;
@@ -101,10 +106,9 @@ pub(crate) fn lower_fmod(
     super::load_numeric_as_float(ctx, rhs, "fmod")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            abi::emit_pop_float_reg(ctx.emitter, "d1");
-            ctx.emitter.instruction("fdiv d2, d1, d0");                         // compute dividend divided by divisor for fmod truncation
-            ctx.emitter.instruction("frintz d2, d2");                           // truncate the quotient toward zero
-            ctx.emitter.instruction("fmsub d0, d2, d0, d1");                    // compute dividend minus truncated quotient times divisor
+            ctx.emitter.instruction("fmov d1, d0");                             // move the divisor into the second libc fmod argument
+            abi::emit_pop_float_reg(ctx.emitter, "d0");
+            ctx.emitter.bl_c("fmod");
         }
         Arch::X86_64 => {
             abi::emit_pop_float_reg(ctx.emitter, "xmm1");
@@ -122,7 +126,7 @@ pub(crate) fn lower_pow(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "pow", 2)?;
+    super::super::ensure_arg_count(inst, "pow", 2)?;
     let lhs = expect_operand(inst, 0)?;
     let rhs = expect_operand(inst, 1)?;
     super::load_numeric_as_float(ctx, lhs, "pow")?;

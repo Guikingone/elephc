@@ -71,3 +71,51 @@ echo $left . ":" . $right;
     );
     assert_eq!(out, "left:right");
 }
+
+/// Verifies `foreach` value destructuring in both spellings PHP accepts (`[...]` and
+/// `list(...)`), plus the `$key => [...]` form. Expected output matches `php -r` on 8.4.
+#[test]
+fn test_foreach_value_destructuring() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [[1, 2], [3, 4]];
+foreach ($m as [$a, $b]) { echo $a, "-", $b, ";"; }
+foreach ($m as list($a, $b)) { echo $a, "+", $b, ";"; }
+foreach ($m as $k => [$a, $b]) { echo $k, ":", $a, ",", $b, ";"; }
+"#,
+    );
+    assert_eq!(out, "1-2;3-4;1+2;3+4;0:1,2;1:3,4;");
+}
+
+/// Verifies keyed, skipped-element, and nested `foreach` destructuring patterns, which all
+/// reuse the same lowering as a standalone `[...] = $value;` assignment.
+#[test]
+fn test_foreach_destructuring_keyed_skipped_and_nested() {
+    let out = compile_and_run(
+        r#"<?php
+$pairs = [["name" => "ann", "age" => 30], ["name" => "bob", "age" => 40]];
+foreach ($pairs as ["name" => $n, "age" => $g]) { echo $n, "=", $g, ";"; }
+$skip = [[1, 2, 3], [4, 5, 6]];
+foreach ($skip as [, $second]) { echo $second, ";"; }
+$nested = [[1, [2, 3]], [4, [5, 6]]];
+foreach ($nested as [$x, [$y, $z]]) { echo $x, $y, $z, ";"; }
+"#,
+    );
+    assert_eq!(out, "ann=30;bob=40;2;5;123;456;");
+}
+
+/// Verifies destructuring `foreach` loops nest, and that the pattern also works with a
+/// single-statement body and inside a function over an `array`-hinted parameter.
+#[test]
+fn test_foreach_destructuring_nested_loops_and_bodies() {
+    let out = compile_and_run(
+        r#"<?php
+$m = [[1, 2], [3, 4]];
+foreach ($m as [$a, $b]) { foreach ($m as [$c, $d]) { echo $a, $b, $c, $d, "|"; } }
+foreach ($m as [$a, $b]) echo $a, $b, ";";
+function total(array $rows): int { $t = 0; foreach ($rows as [$x, $y]) { $t += $x * $y; } return $t; }
+echo total([[1, 2], [3, 4]]);
+"#,
+    );
+    assert_eq!(out, "1212|1234|3412|3434|12;34;14");
+}

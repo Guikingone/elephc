@@ -372,10 +372,34 @@ fn test_error_wrong_arg_count() {
     );
 }
 
-/// Verifies that increment/decrement on a string is rejected.
+/// Verifies the two `string` storage shapes that cannot take the boxed `mixed` contract
+/// PHP's string increment needs: a by-reference parameter aliases a caller slot whose
+/// declared `string` type must not change, and a `static` local's initializer writes its
+/// symbol with the declared `string` representation. Both must be source-level errors.
 #[test]
-fn test_error_increment_string() {
-    expect_error("<?php $x = \"hi\"; $x++;", "Cannot increment/decrement");
+fn test_error_increment_string_in_unboxable_storage() {
+    expect_error(
+        "<?php function f(string &$r): void { $r++; } $v = \"az\"; f($v);",
+        "it is a by-reference parameter",
+    );
+    expect_error(
+        "<?php function g(): string { static $s = \"aa\"; $s++; return $s; } g();",
+        "it is a static local",
+    );
+}
+
+/// Verifies that increment/decrement is still rejected on the local types PHP has no
+/// increment rule for, now that `string` locals have one (`"az"++` is `"ba"`).
+#[test]
+fn test_error_increment_unsupported_type() {
+    expect_error(
+        "<?php $x = [1, 2]; $x++;",
+        "Cannot increment/decrement $x of type",
+    );
+    expect_error(
+        "<?php $x = [1, 2]; --$x;",
+        "Cannot increment/decrement $x of type",
+    );
 }
 
 /// Verifies the kind predicates `is_array`/`is_object`/`is_scalar` reject a wrong argument
@@ -990,4 +1014,241 @@ fn test_scalar_match_merge_stays_mixed_and_rejects_array_use() {
         "<?php $r = match($argc) { 1 => 1, default => \"a\" }; echo array_sum($r);",
         "array_sum() argument must be array",
     );
+}
+
+/// Verifies the `Undefined variable` diagnostic still fires for an ordinary read, so the null-probe
+/// tolerance is scoped to `isset`/`empty`/`unset`/`??` and nothing else.
+#[test]
+fn test_undefined_variable_read_is_still_rejected() {
+    expect_error("<?php echo $neverDefined;", "Undefined variable: $neverDefined");
+}
+
+/// Verifies only the probe's chain SPINE is tolerated: PHP warns about `$b` in `isset($a[$b])`
+/// but not about `$a`, so the index subexpression keeps the diagnostic.
+#[test]
+fn test_null_probe_index_subexpression_still_requires_a_defined_variable() {
+    expect_error("<?php var_dump(isset($a[$b]));", "Undefined variable: $b");
+}
+
+/// Verifies `isset()`, `empty()`, `unset()` and `??` accept a never-declared variable, which is
+/// exactly what those constructs exist for. Runtime answers are pinned by codegen tests.
+#[test]
+fn test_null_probes_accept_a_never_declared_variable() {
+    expect_no_error("<?php var_dump(isset($neverA));");
+    expect_no_error("<?php var_dump(empty($neverB));");
+    expect_no_error(r#"<?php var_dump($neverC ?? "d");"#);
+    expect_no_error("<?php unset($neverD); echo 'ok';");
+    expect_no_error("<?php var_dump(isset($neverE['k']));");
+}
+
+/// Verifies a probed name that is ALSO assigned in the same scope keeps the diagnostic.
+///
+/// The tolerance is only sound while the variable stays `null` for the whole scope: main's local
+/// types come from the final global environment, so an assigned name gets that assigned type on a
+/// slot the probe would read before any store. Accepting it would miscompile, so the deferred
+/// check restores the original error.
+#[test]
+fn test_null_probe_on_a_later_assigned_variable_is_still_rejected() {
+    expect_error(
+        "<?php if (!isset($cfg)) { $cfg = 3; } var_dump($cfg);",
+        "Undefined variable: $cfg",
+    );
+}
+
+/// Verifies a lossy float constant at an `int` parameter is rejected instead of silently
+/// truncated. PHP passes `5` after emitting `Deprecated: Implicit conversion from float 5.5 to
+/// int loses precision`; elephc has no runtime deprecation channel, so it refuses the program
+/// rather than dropping the notice.
+#[test]
+fn test_error_int_parameter_rejects_lossy_float_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(5.5);",
+        "PHP emits `Deprecated: Implicit conversion from float 5.5 to int loses precision`",
+    );
+}
+
+/// Verifies a non-numeric string constant at an `int` parameter is rejected with PHP's
+/// failure mode named. PHP throws `TypeError` when the call runs.
+#[test]
+fn test_error_int_parameter_rejects_non_numeric_string_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(\"abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"abc\" at an `int` parameter",
+    );
+}
+
+/// Verifies a leading-numeric string constant is rejected too: PHP's `(int)` cast would give
+/// `42`, but parameter binding throws `TypeError` because the string is not fully numeric.
+#[test]
+fn test_error_int_parameter_rejects_leading_numeric_string_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(\"42abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"42abc\" at an `int` parameter",
+    );
+}
+
+/// Verifies a runtime float at an `int` parameter is rejected, because deciding between PHP's
+/// silent conversion, its deprecation notice and its `TypeError` needs a runtime check elephc
+/// cannot perform at a parameter boundary.
+#[test]
+fn test_error_int_parameter_rejects_runtime_float() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } $f = 5.5 * $argc; echo ti($f);",
+        "add an explicit cast at the call site",
+    );
+}
+
+/// Verifies a non-numeric string constant at a `float` parameter is rejected the same way.
+#[test]
+fn test_error_float_parameter_rejects_non_numeric_string_constant() {
+    expect_error(
+        "<?php function tf(float $f) { return $f; } echo tf(\"abc\");",
+        "PHP throws `TypeError` for the non-numeric string \"abc\" at a `float` parameter",
+    );
+}
+
+/// Verifies an out-of-range float constant at an `int` parameter reports PHP's `TypeError`
+/// rather than wrapping around.
+#[test]
+fn test_error_int_parameter_rejects_out_of_range_float_constant() {
+    expect_error(
+        "<?php function ti(int $i) { return $i; } echo ti(1e20);",
+        "PHP throws `TypeError` for the float",
+    );
+}
+
+/// Verifies a pass-by-reference parameter stays on the strict path. PHP converts the caller's
+/// variable in place and writes the converted value back; elephc's binding would pass a
+/// converted temporary and silently drop the callee's writes, so the call is rejected instead.
+#[test]
+fn test_error_by_ref_parameter_is_not_coerced() {
+    expect_error(
+        "<?php function f(string &$s) { $s = $s . \"!\"; } $n = 42; f($n);",
+        "Function 'f' parameter $s expects Str, got Int",
+    );
+}
+
+/// Verifies `declare(strict_types=1)` rejects the `bool`→`int` binding PHP's coercive mode
+/// performs silently, and that the diagnostic names the `TypeError` PHP would throw.
+///
+/// This is the audit repro: before the directive was honoured, elephc compiled `ti(true)` to
+/// `int(1)` while PHP 8.4.20 fatals with
+/// `TypeError: ti(): Argument #1 ($i) must be of type int, true given`.
+#[test]
+fn test_error_strict_types_rejects_bool_into_int_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies the strict diagnostic identifies the directive as the reason and suggests the cast
+/// that makes the call legal, rather than reading as a plain type mismatch.
+#[test]
+fn test_error_strict_types_diagnostic_names_the_directive() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(true);",
+        "`declare(strict_types=1)` is active in this file",
+    );
+}
+
+/// Verifies every scalar that binds to a `string` parameter in coercive mode is rejected under
+/// the directive: `int`, `float` and `bool` sources all throw `TypeError` in PHP 8.4.20.
+#[test]
+fn test_error_strict_types_rejects_scalars_into_string_parameter() {
+    for (argument, php_type) in [("42", "int"), ("4.5", "float"), ("true", "bool")] {
+        expect_error(
+            &format!(
+                "<?php declare(strict_types=1); function ts(string $s) {{ return $s; }} echo ts({});",
+                argument
+            ),
+            &format!("must be of type string, {} given", php_type),
+        );
+    }
+}
+
+/// Verifies every scalar that binds to a `bool` parameter in coercive mode is rejected under the
+/// directive.
+#[test]
+fn test_error_strict_types_rejects_scalars_into_bool_parameter() {
+    for (argument, php_type) in [("1", "int"), ("1.5", "float"), ("\"a\"", "string")] {
+        expect_error(
+            &format!(
+                "<?php declare(strict_types=1); function tb(bool $b) {{ return $b; }} echo tb({});",
+                argument
+            ),
+            &format!("must be of type bool, {} given", php_type),
+        );
+    }
+}
+
+/// Verifies the constant `float`/numeric-string arguments coercive mode folds into an `int`
+/// parameter are rejected under the directive instead.
+#[test]
+fn test_error_strict_types_rejects_constants_into_int_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(5.0);",
+        "must be of type int, float given",
+    );
+    expect_error(
+        "<?php declare(strict_types=1); function ti(int $i) { return $i; } echo ti(\"42\");",
+        "must be of type int, string given",
+    );
+}
+
+/// Verifies a numeric string is rejected at a `float` parameter under the directive, even though
+/// coercive mode binds it as a constant.
+#[test]
+fn test_error_strict_types_rejects_numeric_string_into_float_parameter() {
+    expect_error(
+        "<?php declare(strict_types=1); function tf(float $f) { return $f; } echo tf(\"1.5\");",
+        "must be of type float, string given",
+    );
+}
+
+/// Verifies the directive reaches method calls, not just plain functions.
+#[test]
+fn test_error_strict_types_rejects_method_argument() {
+    expect_error(
+        "<?php declare(strict_types=1); class C { public function m(int $i) { return $i; } } $c = new C(); echo $c->m(true);",
+        "Method C::m parameter $i expects Int, got Bool",
+    );
+}
+
+/// Verifies the directive reaches a closure invoked through a variable, which is validated on a
+/// different checker path from a named function call.
+#[test]
+fn test_error_strict_types_rejects_closure_argument() {
+    expect_error(
+        "<?php declare(strict_types=1); $f = function (int $i) { return $i; }; echo $f(true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies the directive reaches a declared variadic element type, which PHP checks exactly
+/// like a regular declared parameter.
+#[test]
+fn test_error_strict_types_rejects_variadic_element() {
+    expect_error(
+        "<?php declare(strict_types=1); function f(int ...$xs) { return count($xs); } echo f(true);",
+        "variadic parameter $xs expects Int, got Bool",
+    );
+}
+
+/// Verifies `call_user_func` stays on the strict path. Unlike `array_map`, it forwards the
+/// caller's frame, so PHP 8.4.20 throws `TypeError` for `call_user_func('g', true)` in a
+/// strict file.
+#[test]
+fn test_error_strict_types_reaches_call_user_func() {
+    expect_error(
+        "<?php declare(strict_types=1); function g(int $i) { return $i; } echo call_user_func('g', true);",
+        "must be of type int, bool given",
+    );
+}
+
+/// Verifies a coercive file is unaffected: the same `bool`→`int` call still binds, so the
+/// directive genuinely narrows only the files that declare it.
+#[test]
+fn test_strict_types_absent_keeps_coercive_binding() {
+    expect_no_error("<?php function ti(int $i) { return $i; } echo ti(true);");
 }

@@ -8,6 +8,9 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 
 use super::*;
+use super::sort_dispatch::KeySortOrder;
+use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
+use super::range_size;
 
 /// Lowers `array_values()` through the dedicated values-array builtin emitter.
 pub(crate) fn lower_array_values(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -33,31 +36,103 @@ pub(crate) fn lower_array_rand(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `range()` for integer endpoints through the shared runtime constructor.
+///
+/// PHP's optional `$step` becomes the helper's third argument. Its sign never chooses the
+/// direction (`start` vs `end` does), so the three `ValueError`s php-src raises for a bad step
+/// are emitted here, before the helper ever sees the arguments.
 pub(crate) fn lower_range(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "range", 2)?;
+    ensure_arg_count_between(inst, "range", 2, 3)?;
     let start = expect_operand(inst, 0)?;
     let end = expect_operand(inst, 1)?;
+    let step = inst.operands.get(2).copied();
     require_range_endpoint(ctx.value_php_type(start)?, "start")?;
     require_range_endpoint(ctx.value_php_type(end)?, "end")?;
+    if let Some(step) = step {
+        require_range_endpoint(ctx.value_php_type(step)?, "step")?;
+    }
     require_range_result_type(&inst.result_php_type.codegen_repr())?;
-    // Resolve each endpoint to a plain integer, unboxing a Mixed cell read from a heterogeneous
-    // array. The end resolution may call __rt_mixed_cast_int, which clobbers caller-saved registers,
-    // so the resolved start is spilled across it instead of being staged in an argument register.
+    // Resolve each argument to a plain integer, unboxing a Mixed cell read from a heterogeneous
+    // array. Each resolution may call __rt_mixed_cast_int, which clobbers caller-saved registers,
+    // so already-resolved values are spilled across it instead of being staged in argument registers.
     resolve_int_operand_to_result(ctx, start, "range start")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     resolve_int_operand_to_result(ctx, end, "range end")?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match step {
+        Some(step) => {
+            resolve_int_operand_to_result(ctx, step, "range step")?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction("mov x2, x0");                      // move the resolved range step into the third runtime argument
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdx, rax");                    // move the resolved range step into the third runtime argument
+                }
+            }
+        }
+        None => {
+            let step_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => "x2",
+                Arch::X86_64 => "rdx",
+            };
+            abi::emit_load_int_immediate(ctx.emitter, step_reg, 1);
+        }
+    }
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("mov x1, x0");                              // move the resolved range end into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "x1"); // restore the resolved range end into the second runtime argument
             abi::emit_pop_reg(ctx.emitter, "x0"); // restore the resolved range start into the first runtime argument
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov rsi, rax");                            // move the resolved range end into the second runtime argument
+            abi::emit_pop_reg(ctx.emitter, "rsi"); // restore the resolved range end into the second runtime argument
             abi::emit_pop_reg(ctx.emitter, "rdi"); // restore the resolved range start into the first runtime argument
         }
     }
+    emit_range_guards(ctx, step.is_some());
     abi::emit_call_label(ctx.emitter, "__rt_range");
     store_if_result(ctx, inst)
+}
+
+/// Raises every `range()` `ValueError` reference PHP checks before the runtime helper runs.
+///
+/// The guards read `start`/`end`/`step` while they still sit in their ABI argument registers, so
+/// one sequence covers every supported target. Reference PHP rejects, in this order: a zero step,
+/// a negative step when `$start < $end` (a decreasing range accepts either sign), a step whose
+/// magnitude exceeds the spanned interval — except when `$start === $end`, which always yields the
+/// single-element `[$start]` — and finally a requested element count past the maximum array size.
+/// The magnitude comparison is UNSIGNED so `PHP_INT_MIN`, whose negation is itself, still reads as
+/// wider than any span instead of wrapping back to a negative "magnitude".
+///
+/// `has_explicit_step` skips the three `$step` guards for a two-argument `range()`: the implicit
+/// step is the literal `1` this lowering just materialized, which none of them can reject. The
+/// size guard runs either way, because `range(1, 3000000000)` is oversized without any `$step`.
+fn emit_range_guards(ctx: &mut FunctionContext<'_>, has_explicit_step: bool) {
+    let (start_reg, end_reg, step_reg) = match ctx.emitter.target.arch {
+        Arch::AArch64 => ("x0", "x1", "x2"),
+        Arch::X86_64 => ("rdi", "rsi", "rdx"),
+    };
+    if has_explicit_step {
+        crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+            ctx,
+            crate::codegen::lower_inst::exceptions::ValueGuard::NotEqualToImmediate(step_reg, 0),
+            RANGE_ZERO_STEP_MESSAGE,
+        );
+        crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+            ctx,
+            crate::codegen::lower_inst::exceptions::ValueGuard::NonNegativeUnlessSignedBelow(
+                step_reg, start_reg, end_reg,
+            ),
+            RANGE_NEGATIVE_STEP_MESSAGE,
+        );
+        crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+            ctx,
+            crate::codegen::lower_inst::exceptions::ValueGuard::MagnitudeWithinSpan(
+                step_reg, start_reg, end_reg,
+            ),
+            RANGE_STEP_TOO_WIDE_MESSAGE,
+        );
+    }
+    range_size::emit_range_size_guard(ctx);
 }
 
 /// Lowers `array_pop()` for indexed arrays by mutating length and boxing `T|null` as Mixed.
@@ -66,11 +141,9 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
     let array = expect_operand(inst, 0)?;
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
     require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_array_pop_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => lower_array_pop_aarch64(ctx, array, &elem_ty)?,
         Arch::X86_64 => lower_array_pop_x86_64(ctx, array, &elem_ty)?,
@@ -99,23 +172,37 @@ pub(crate) fn lower_rsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers `asort()` for indexed integer arrays through the value-sort runtime wrapper.
+/// Lowers `asort()`, routing hash receivers to the insertion-order value sorter.
+///
+/// A hash-backed associative array keeps its key/value association while its iteration
+/// order changes, which `__rt_hash_asort` implements by relinking the table's chain.
+/// Indexed arrays have no separate key storage, so they keep using the slot permuter.
 pub(crate) fn lower_asort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count(inst, "asort", 1)?;
+    if sort_receiver_is_hash(ctx, inst)? {
+        return lower_hash_link_sort(ctx, inst, "__rt_hash_asort");
+    }
     lower_indexed_array_sort(ctx, inst, "asort", "__rt_asort", None)
 }
 
 /// Lowers `arsort()` for indexed integer arrays through the descending value-sort wrapper.
+/// Lowers `arsort()`, routing hash receivers to the descending insertion-order value sorter.
 pub(crate) fn lower_arsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::super::ensure_arg_count(inst, "arsort", 1)?;
+    if sort_receiver_is_hash(ctx, inst)? {
+        return lower_hash_link_sort(ctx, inst, "__rt_hash_arsort");
+    }
     lower_indexed_array_sort(ctx, inst, "arsort", "__rt_arsort", None)
 }
 
 /// Lowers `ksort()` through the key-sort helper surface.
 pub(crate) fn lower_ksort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_key_sort(ctx, inst, "ksort", "__rt_ksort")
+    lower_array_key_sort(ctx, inst, "ksort", KeySortOrder::Ascending)
 }
 
 /// Lowers `krsort()` through the reverse key-sort helper surface.
 pub(crate) fn lower_krsort(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    lower_array_key_sort(ctx, inst, "krsort", "__rt_krsort")
+    lower_array_key_sort(ctx, inst, "krsort", KeySortOrder::Descending)
 }
 
 /// Lowers `natsort()` for indexed integer arrays through the natural-sort runtime wrapper.

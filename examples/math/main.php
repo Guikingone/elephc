@@ -19,6 +19,17 @@ echo "\n=== Distance ===\n";
 $dist = hypot(3.0, 4.0);
 echo "distance(0,0 → 3,4) = " . $dist . "\n";
 
+echo "\n=== Base conversion ===\n";
+echo "base_convert('ff', 16, 10) = " . base_convert("ff", 16, 10) . "\n";
+echo "base_convert('255', 10, 2) = " . base_convert("255", 10, 2) . "\n";
+echo "base_convert('zz', 36, 10) = " . base_convert("zz", 36, 10) . "\n";
+// A base outside 2-36 is a catchable \ValueError
+try {
+    base_convert("ff", 16, 64);
+} catch (\ValueError $e) {
+    echo "caught: " . $e->getMessage() . "\n";
+}
+
 echo "\n=== Randomness ===\n";
 echo "rand(1, 10) = " . rand(1, 10) . "\n";
 echo "mt_rand(100, 105) = " . mt_rand(100, 105) . "\n";

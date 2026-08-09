@@ -6,7 +6,12 @@
 //! - `crate::parser::stmt::parse_stmt()` when the current token is `declare`.
 //!
 //! Key details:
-//! - Directives are compile-time syntax only because elephc always uses strict typing.
+//! - `strict_types` is recorded on the parser's per-file source profile
+//!   (`crate::source::declare_strict_types`), which stamps every statement parsed afterwards.
+//!   PHP requires the directive to be a file's first statement, so "afterwards" is exactly
+//!   "the rest of this file"; the type checker reads the stamp back per statement to pick
+//!   between PHP's strict and coercive parameter binding.
+//! - Every other directive (`ticks`, `encoding`) is compile-time syntax only.
 //! - Bodies lower through `Synthetic` so they execute in the enclosing scope.
 
 use crate::errors::CompileError;
@@ -28,7 +33,7 @@ pub(super) fn parse_declare(
     *pos += 1;
 
     expect_token(tokens, pos, &Token::LParen, "Expected '(' after 'declare'")?;
-    let has_strict_types = parse_directives(tokens, pos, span)?;
+    let strict_types = parse_directives(tokens, pos, span)?;
     expect_token(
         tokens,
         pos,
@@ -36,7 +41,7 @@ pub(super) fn parse_declare(
         "Expected ')' after declare directives",
     )?;
 
-    if has_strict_types && declare_pos != 1 {
+    if strict_types.is_some() && declare_pos != 1 {
         return Err(CompileError::new(
             span,
             "strict_types declaration must be the very first statement in the script",
@@ -48,10 +53,15 @@ pub(super) fn parse_declare(
         Some(Token::Semicolon)
     ) {
         *pos += 1;
+        // Applied only once the directive has passed every placement and form check, so a
+        // rejected `declare` never leaves the rest of the file typed under it.
+        if let Some(enabled) = strict_types {
+            crate::source::declare_strict_types(enabled);
+        }
         return Ok(Stmt::new(StmtKind::Synthetic(Vec::new()), span));
     }
 
-    if has_strict_types {
+    if strict_types.is_some() {
         return Err(CompileError::new(
             span,
             "strict_types declaration must not use block mode",
@@ -73,13 +83,17 @@ pub(super) fn parse_declare(
     Ok(Stmt::new(StmtKind::Synthetic(body), span))
 }
 
-/// Parses one or more directive/literal pairs and reports whether `strict_types` occurred.
+/// Parses one or more directive/literal pairs.
+///
+/// Returns `Some(true)` for `strict_types=1`, `Some(false)` for `strict_types=0`, and `None`
+/// when the list holds no `strict_types` directive at all. The caller needs the three-way answer
+/// because only a present directive is subject to PHP's placement and block-form restrictions.
 fn parse_directives(
     tokens: &[SpannedToken],
     pos: &mut usize,
     declare_span: Span,
-) -> Result<bool, CompileError> {
-    let mut has_strict_types = false;
+) -> Result<Option<bool>, CompileError> {
+    let mut strict_types = None;
 
     loop {
         let (name, name_span) = match tokens.get(*pos) {
@@ -112,12 +126,15 @@ fn parse_directives(
         }
 
         if name.eq_ignore_ascii_case("strict_types") {
-            has_strict_types = true;
-            if !matches!(integer_value, Some(0 | 1)) {
-                return Err(CompileError::new(
-                    name_span,
-                    "strict_types declaration must have 0 or 1 as its value",
-                ));
+            match integer_value {
+                Some(0) => strict_types = Some(false),
+                Some(1) => strict_types = Some(true),
+                _ => {
+                    return Err(CompileError::new(
+                        name_span,
+                        "strict_types declaration must have 0 or 1 as its value",
+                    ));
+                }
             }
         }
 
@@ -127,7 +144,7 @@ fn parse_directives(
         *pos += 1;
     }
 
-    Ok(has_strict_types)
+    Ok(strict_types)
 }
 
 /// Consumes a PHP declare literal and returns its integer value when it is an integer.

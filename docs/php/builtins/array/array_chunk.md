@@ -8,7 +8,7 @@ sidebar:
 ## array_chunk()
 
 ```php
-function array_chunk(array $array, int $length): array
+function array_chunk(array $array, int $length, bool $preserve_keys = false): array
 ```
 
 Splits an array into chunks of the given size.
@@ -16,6 +16,7 @@ Splits an array into chunks of the given size.
 **Parameters**:
 - `$array` (`array`)
 - `$length` (`int`)
+- `$preserve_keys` (`bool`), default `false`, optional
 
 **Returns**: `array`
 

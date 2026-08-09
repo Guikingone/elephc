@@ -9,17 +9,6 @@
 
 use super::*;
 
-/// Lowers a one-argument string builtin that directly delegates to a runtime helper.
-pub(crate) fn lower_unary_string_runtime(
-    ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
-    name: &str,
-    runtime_label: &str,
-) -> Result<()> {
-    load_single_string_arg(ctx, inst, name)?;
-    abi::emit_call_label(ctx.emitter, runtime_label);
-    store_if_result(ctx, inst)
-}
 
 /// Lowers `htmlspecialchars()` / `htmlentities()` — escapes the subject string (operand 0).
 /// `name` is the calling builtin's PHP name, used in argument-coercion diagnostics. The

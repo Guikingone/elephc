@@ -26,7 +26,8 @@ use crate::codegen::{
 };
 use crate::intrinsics::IntrinsicCall;
 use crate::ir::{Immediate, Instruction, LocalSlotId, Op, ValueDef, ValueId};
-use crate::names::{method_symbol, php_symbol_key};
+use crate::codegen_support::dynamic_new::known_dynamic_new_builtin_class_names;
+use crate::names::{label_fragment, method_symbol, php_symbol_key};
 use crate::parser::ast::Visibility;
 use crate::types::{ClassInfo, InterfaceInfo, PhpType};
 
@@ -48,8 +49,8 @@ use crate::codegen::literal_defaults::{
     emit_boxed_bool_literal_to_result, emit_boxed_float_literal_to_result,
     emit_boxed_int_literal_to_result, emit_boxed_null_literal_to_result,
     emit_boxed_string_literal_default_to_result, emit_empty_assoc_array_literal_to_result,
-    emit_string_literal_default_to_result, emit_tagged_null_literal_to_result,
-    literal_default_value, LiteralDefaultValue,
+    emit_string_literal_default_to_result, emit_tagged_int_literal_to_result,
+    emit_tagged_null_literal_to_result, literal_default_value, LiteralDefaultValue,
 };
 use crate::codegen::{CodegenIrError, Result};
 
@@ -199,5 +200,116 @@ pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,
     raw_value_php_type,
 };
-pub(super) use runtime_property_writes::{lower_dynamic_prop_set, lower_prop_set};
+pub(super) use runtime_property_writes::{
+    lower_dynamic_prop_set, lower_prop_set, lower_prop_unset,
+};
 pub(super) use clone_and_spl::lower_object_clone_shallow;
+
+/// Stamps a declared property slot with the uninitialized-typed-property marker.
+///
+/// The payload word is zeroed and the high word receives
+/// `UNINITIALIZED_TYPED_PROPERTY_SENTINEL`, the same encoding a typed property without
+/// a default carries, so every existing consumer (`PropInitialized`, the read guard,
+/// `__rt_obj_prop_name`/`__rt_obj_prop_value`) already understands the state.
+fn emit_property_uninitialized_marker(
+    ctx: &mut FunctionContext<'_>,
+    slot: &PropertySlot,
+    base_reg: &str,
+) {
+    let marker_reg = abi::secondary_scratch_reg(ctx.emitter);
+    abi::emit_store_zero_to_address(ctx.emitter, base_reg, slot.offset);
+    abi::emit_load_int_immediate(
+        ctx.emitter,
+        marker_reg,
+        UNINITIALIZED_TYPED_PROPERTY_SENTINEL,
+    );
+    abi::emit_store_to_address(ctx.emitter, marker_reg, base_reg, slot.offset + 8);
+}
+
+/// Removes a dynamic property from the receiver's property hash (`unset($obj->name)`).
+///
+/// The receiver stores its dynamic properties in a hash whose pointer lives at
+/// `hash_offset` — offset 8 for `stdClass`, just past the fixed slots for an
+/// `#[AllowDynamicProperties]` class. `__rt_hash_unset` copy-on-write splits the table,
+/// releases the removed key and the boxed `Mixed` value the entry owned, tombstones the
+/// slot so other probe chains survive, and returns the unique table pointer, which is
+/// stored back into the receiver. Removing an absent key is a no-op inside the helper,
+/// so `unset($obj->never_set)` and a repeated `unset()` both behave like PHP.
+///
+/// The receiver register is caller-saved, so it is parked on the temporary stack across
+/// the helper call and reloaded before the table pointer is stored back.
+fn lower_dynamic_prop_unset(
+    ctx: &mut FunctionContext<'_>,
+    object: ValueId,
+    property: &str,
+    hash_offset: usize,
+) -> Result<()> {
+    let object_reg = abi::symbol_scratch_reg(ctx.emitter);
+    let (key_label, key_len) = ctx.data.add_string(property.as_bytes());
+    ctx.load_value_to_reg(object, object_reg)?;
+    abi::emit_push_reg(ctx.emitter, object_reg);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("ldr x0, [{}, #{}]", object_reg, hash_offset)); // load the dynamic-property hash pointer from the receiver
+            abi::emit_symbol_address(ctx.emitter, "x1", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "x2", key_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "x0", object_reg, hash_offset);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!(
+                "mov rdi, QWORD PTR [{} + {}]",
+                object_reg, hash_offset
+            )); // load the dynamic-property hash pointer from the receiver
+            abi::emit_symbol_address(ctx.emitter, "rsi", &key_label);
+            abi::emit_load_int_immediate(ctx.emitter, "rdx", key_len as i64);
+            abi::emit_call_label(ctx.emitter, "__rt_hash_unset");
+            abi::emit_pop_reg(ctx.emitter, object_reg);
+            abi::emit_store_to_address(ctx.emitter, "rax", object_reg, hash_offset);
+        }
+    }
+    Ok(())
+}
+
+/// Names the reason a resolved fixed property slot cannot represent PHP's "removed"
+/// state, or `None` when the uninitialized marker is a faithful encoding for it.
+///
+/// Used only for the diagnostic text; the ordering matters because a slot can be both
+/// undeclared and by-reference, and the by-reference storage is the more specific
+/// obstacle to report.
+fn unset_unsupported_slot_reason(slot: &PropertySlot) -> Option<&'static str> {
+    if slot.is_packed {
+        return Some("packed class field");
+    }
+    if slot.is_reference {
+        return Some("by-reference property");
+    }
+    if !slot.is_declared {
+        return Some("untyped property slot");
+    }
+    None
+}
+
+/// Writes the tagged scalar currently held in the result registers into a property slot: the
+/// payload word at `offset` and the runtime tag word at `offset + 8`, matching the layout the
+/// tagged-scalar property load and store helpers use.
+fn emit_tagged_scalar_property_default_store(
+    ctx: &mut FunctionContext<'_>,
+    object_reg: &str,
+    offset: usize,
+) {
+    abi::emit_store_to_address(
+        ctx.emitter,
+        abi::int_result_reg(ctx.emitter),
+        object_reg,
+        offset,
+    );
+    abi::emit_store_to_address(
+        ctx.emitter,
+        crate::codegen::sentinels::tagged_scalar_tag_reg(ctx.emitter),
+        object_reg,
+        offset + 8,
+    );
+}

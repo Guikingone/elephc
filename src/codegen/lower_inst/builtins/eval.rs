@@ -32,7 +32,6 @@ use super::super::super::context::FunctionContext;
 use super::super::{
     expect_data, expect_global_name, expect_operand, function_signature_from_eir, store_if_result,
 };
-use super::ensure_arg_count;
 
 const EVAL_STATUS_PARSE_ERROR: i64 = 1;
 const EVAL_STATUS_UNCAUGHT_THROWABLE: i64 = 3;

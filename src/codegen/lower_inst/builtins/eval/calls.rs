@@ -11,7 +11,7 @@ use super::*;
 
 /// Lowers `eval($code)` through internal EIR AOT or the bridge ABI and leaves its result in registers.
 pub(in crate::codegen::lower_inst::builtins) fn lower_eval(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "eval", 1)?;
+    super::super::ensure_arg_count(inst, "eval", 1)?;
     if let Some(fragment) = eval_literal_fragment(ctx, inst)? {
         if lower_eval_literal_eir_function(ctx, inst, &fragment)? {
             return Ok(());

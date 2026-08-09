@@ -206,7 +206,11 @@ pub(super) fn load_as_float(ctx: &mut FunctionContext<'_>, value: ValueId, name:
 }
 
 /// Loads a concrete scalar value as an integer runtime argument.
-pub(super) fn load_as_int(ctx: &mut FunctionContext<'_>, value: ValueId, name: &str) -> Result<()> {
+pub(crate) fn load_as_int(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    name: &str,
+) -> Result<()> {
     match ctx.load_value_to_result(value)?.codegen_repr() {
         PhpType::Int | PhpType::Bool => Ok(()),
         PhpType::Void | PhpType::Never => {

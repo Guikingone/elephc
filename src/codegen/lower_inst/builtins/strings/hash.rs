@@ -68,7 +68,7 @@ pub(crate) fn lower_hash_algos(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers `hash_init(algo)` and returns a boxed HashContext resource.
 pub(crate) fn lower_hash_init(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "hash_init", 1)?;
+    super::super::ensure_arg_count(inst, "hash_init", 1)?;
     load_string_arg_to_regs(ctx, inst, 0, "hash_init", string_ptr_reg(ctx), string_len_reg(ctx))?;
     crate::codegen::hash_crypto::publish_elephc_crypto_function_pointers(
         ctx.emitter,
@@ -79,7 +79,7 @@ pub(crate) fn lower_hash_init(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 
 /// Lowers `hash_update(context, data)` through the incremental hash runtime helper.
 pub(crate) fn lower_hash_update(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "hash_update", 2)?;
+    super::super::ensure_arg_count(inst, "hash_update", 2)?;
     let context = expect_operand(inst, 0)?;
     super::io::load_stream_fd_to_result(ctx, context, "hash_update")?;
     match ctx.emitter.target.arch {
@@ -135,7 +135,7 @@ pub(crate) fn lower_hash_final(ctx: &mut FunctionContext<'_>, inst: &Instruction
 
 /// Lowers `hash_copy(context)` through the incremental hash clone helper.
 pub(crate) fn lower_hash_copy(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count(inst, "hash_copy", 1)?;
+    super::super::ensure_arg_count(inst, "hash_copy", 1)?;
     let context = expect_operand(inst, 0)?;
     super::io::load_stream_fd_to_result(ctx, context, "hash_copy")?;
     if ctx.emitter.target.arch == Arch::X86_64 {
@@ -159,7 +159,7 @@ pub(crate) fn lower_crc32(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 ///
 /// Omitted/null encodings use a null pointer plus zero length; explicit names stay byte strings for PHP-compatible case-insensitive lookup and `ValueError` handling.
 pub(crate) fn lower_mb_strlen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::ensure_arg_count_between(inst, "mb_strlen", 1, 2)?;
+    super::super::ensure_arg_count_between(inst, "mb_strlen", 1, 2)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             load_string_arg_to_regs(ctx, inst, 0, "mb_strlen", "x1", "x2")?;

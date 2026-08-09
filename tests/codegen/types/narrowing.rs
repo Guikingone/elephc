@@ -591,3 +591,136 @@ fn test_narrow_after_never_call_before_unreachable_code() {
     );
     assert_eq!(out, "a=b");
 }
+
+/// Verifies the classic singleton: a nullable static property narrowed by an `=== null` guard
+/// whose then-branch assigns it is non-null on both merge paths, so the `: S` return checks.
+#[test]
+fn test_nullable_static_property_singleton_narrows_after_if_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        if (self::$inst === null) { self::$inst = new S(); }
+        return self::$inst;
+    }
+}
+echo S::get()->v, S::get()->v;
+"#,
+    );
+    assert_eq!(out, "77");
+}
+
+/// Verifies `!isset(self::$p)` narrows the same way `self::$p === null` does.
+#[test]
+fn test_nullable_static_property_singleton_narrows_after_isset_guard() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        if (!isset(self::$inst)) { self::$inst = new S(); }
+        return self::$inst;
+    }
+}
+echo S::get()->v;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies `self::$p ??= new S();` leaves the static property non-null for the following return.
+#[test]
+fn test_nullable_static_property_narrows_after_null_coalescing_assign() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        self::$inst ??= new S();
+        return self::$inst;
+    }
+}
+echo S::get()->v;
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies the early-return singleton shape: `!== null` narrows the guarded return, and the
+/// assignment after the `if` narrows the fall-through return.
+#[test]
+fn test_nullable_static_property_narrows_after_strict_not_null_early_return() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        if (self::$inst !== null) { return self::$inst; }
+        self::$inst = new S();
+        return self::$inst;
+    }
+}
+echo S::get()->v, S::get()->v;
+"#,
+    );
+    assert_eq!(out, "77");
+}
+
+/// Verifies the same narrowing on an INSTANCE property, through both the guarded-assign and the
+/// `??=` shapes.
+///
+/// The two shapes live on separate classes on purpose: `$obj->prop ??= <expr>` currently
+/// miscompiles when the property is ALREADY set (an unrelated, pre-existing EIR gap that also
+/// reproduces without any narrowing), so each `??=` here runs exactly once on a null property.
+#[test]
+fn test_nullable_instance_property_lazy_initialization_narrows() {
+    let out = compile_and_run(
+        r#"<?php
+class Node { public int $v = 3; }
+class Holder {
+    private ?Node $n = null;
+    public function get(): Node {
+        if ($this->n === null) { $this->n = new Node(); }
+        return $this->n;
+    }
+}
+class Lazy {
+    private ?Node $n = null;
+    public function get(): Node {
+        $this->n ??= new Node();
+        return $this->n;
+    }
+}
+$h = new Holder();
+echo $h->get()->v, $h->get()->v;
+$l = new Lazy();
+echo $l->get()->v;
+"#,
+    );
+    assert_eq!(out, "333");
+}
+
+/// Verifies the branch join also fires when both arms assign: the merged fact is the union of the
+/// two branch-exit types, not the declared nullable type.
+#[test]
+fn test_nullable_static_property_join_across_both_branches() {
+    let out = compile_and_run(
+        r#"<?php
+class S {
+    private static ?S $inst = null;
+    public int $v = 7;
+    public static function get(): S {
+        if (self::$inst === null) { self::$inst = new S(); } else { self::$inst = new S(); }
+        return self::$inst;
+    }
+}
+echo S::get()->v;
+"#,
+    );
+    assert_eq!(out, "7");
+}

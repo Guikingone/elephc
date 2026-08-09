@@ -1574,3 +1574,146 @@ fn computed_debug_info_is_ignored_and_declared_properties_print_instead() {
         )
     );
 }
+
+// ---------------------------------------------------------------------------
+// ENUM CASES — `var_dump()` renders `enum(E::C)`, never an object body.
+//
+// REGRESSION ANCHOR (issue B16): every enum case used to fall through the tag-6
+// object path and print its backing storage, e.g.
+// `object(Status)#1 (1) { ["name"]=> string(6) "Active" }` for a pure enum and a
+// two-property body with `value` FIRST for a backed one. PHP prints one line:
+// `enum(Status::Active)`.
+//
+// The test is at the value level, not the builtin level: `__rt_vd_val_obj`
+// consults `__rt_obj_enum_name_offset` before writing anything object-shaped, so
+// a nested enum gets the same treatment at any depth and at the right indent.
+// Every expectation below is reference PHP 8.4.20's output for the same program.
+// ---------------------------------------------------------------------------
+
+/// A PURE enum case at top level. PHP: `enum(Status::Active)`.
+#[test]
+fn top_level_pure_enum_case() {
+    let out = run_php(
+        "vd_enum_pure",
+        "<?php enum Status { case Active; case Idle; }\nvar_dump(Status::Active);\n",
+    );
+    assert_eq!(out, "enum(Status::Active)\n");
+}
+
+/// A STRING-BACKED enum case. PHP prints the case name, never the backing value.
+#[test]
+fn top_level_string_backed_enum_case() {
+    let out = run_php(
+        "vd_enum_backed_str",
+        "<?php enum Suit: string { case Hearts = 'H'; }\nvar_dump(Suit::Hearts);\n",
+    );
+    assert_eq!(out, "enum(Suit::Hearts)\n");
+}
+
+/// An INT-BACKED enum case. Pinned separately from the string-backed one because
+/// the two lay their `name`/`value` slots out identically but hold different
+/// payload shapes, so a walker reading the wrong slot fails on exactly one.
+#[test]
+fn top_level_int_backed_enum_case() {
+    let out = run_php(
+        "vd_enum_backed_int",
+        "<?php enum Lvl: int { case Low = 3; }\nvar_dump(Lvl::Low);\n",
+    );
+    assert_eq!(out, "enum(Lvl::Low)\n");
+}
+
+/// Enum cases NESTED in an array — one indexed entry and one string key. Pins the
+/// indent: the `enum(...)` line sits where the element's value line would.
+#[test]
+fn enum_cases_nested_in_an_array() {
+    let out = run_php(
+        "vd_enum_in_array",
+        concat!(
+            "<?php\n",
+            "enum Status { case Active; }\n",
+            "enum Suit: string { case Hearts = 'H'; }\n",
+            "var_dump([Status::Active, 'k' => Suit::Hearts]);\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "array(2) {\n",
+            "  [0]=>\n",
+            "  enum(Status::Active)\n",
+            "  [\"k\"]=>\n",
+            "  enum(Suit::Hearts)\n",
+            "}\n",
+        )
+    );
+}
+
+/// An enum case held in an OBJECT PROPERTY. The property line indents like any
+/// other value line, and the sibling `int` property proves the walk continues.
+#[test]
+fn enum_case_in_an_object_property() {
+    let out = run_php(
+        "vd_enum_in_object",
+        concat!(
+            "<?php\n",
+            "enum Status { case Active; }\n",
+            "class H {\n",
+            "    public $e;\n",
+            "    public $n = 7;\n",
+            "    function __construct() { $this->e = Status::Active; }\n",
+            "}\n",
+            "var_dump(new H());\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "object(H)#1 (2) {\n",
+            "  [\"e\"]=>\n",
+            "  enum(Status::Active)\n",
+            "  [\"n\"]=>\n",
+            "  int(7)\n",
+            "}\n",
+        )
+    );
+}
+
+/// `var_dump()` is variadic: several values in ONE call, enums mixed with scalars,
+/// each dumped independently in source order.
+#[test]
+fn several_values_in_one_var_dump_call() {
+    let out = run_php(
+        "vd_enum_variadic",
+        concat!(
+            "<?php\n",
+            "enum Status { case Active; }\n",
+            "enum Suit: string { case Hearts = 'H'; }\n",
+            "var_dump(Status::Active, 42, Suit::Hearts);\n",
+        ),
+    );
+    assert_eq!(
+        out,
+        concat!(
+            "enum(Status::Active)\n",
+            "int(42)\n",
+            "enum(Suit::Hearts)\n",
+        )
+    );
+}
+
+/// An enum case reached through a `mixed`-typed local, i.e. the boxed Mixed
+/// (tag 7) path rather than a statically typed object operand. Both funnel into
+/// `__rt_var_dump_value`, and this pins that they agree.
+#[test]
+fn enum_case_through_a_mixed_local() {
+    let out = run_php(
+        "vd_enum_mixed_local",
+        concat!(
+            "<?php\n",
+            "enum Status { case Idle; }\n",
+            "function pick(mixed $v): mixed { return $v; }\n",
+            "var_dump(pick(Status::Idle));\n",
+        ),
+    );
+    assert_eq!(out, "enum(Status::Idle)\n");
+}

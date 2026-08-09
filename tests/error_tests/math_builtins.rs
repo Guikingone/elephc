@@ -22,9 +22,18 @@ fn test_error_ceil_wrong_args() {
 }
 
 /// Verifies round() rejects missing argument. Input: `round()` with no args.
+///
+/// `round()` gained PHP 8.4's third `$mode` parameter, so the arity diagnostic now spans
+/// `1 to 3` arguments.
 #[test]
 fn test_error_round_wrong_args() {
-    expect_error("<?php round();", "round() takes 1 or 2 arguments");
+    expect_error("<?php round();", "round() takes 1 to 3 arguments");
+}
+
+/// Verifies round() rejects a fourth argument. Input: `round(1.0, 2, 3, 4)`.
+#[test]
+fn test_error_round_too_many_args() {
+    expect_error("<?php echo round(1.0, 2, 3, 4);", "round() takes 1 to 3 arguments");
 }
 
 /// Verifies sqrt() rejects excess positional arguments. Input: `sqrt(1, 2)`.
@@ -39,16 +48,35 @@ fn test_error_pow_wrong_args() {
     expect_error("<?php pow(1);", "pow() takes exactly 2 arguments");
 }
 
-/// Verifies min() rejects single-argument call (requires at least 2). Input: `min(1)`.
+/// Verifies min() rejects a lone non-array argument with php-src's TypeError wording.
+/// PHP's single-argument form takes an array; `min(1)` is a TypeError there too.
 #[test]
 fn test_error_min_wrong_args() {
-    expect_error("<?php min(1);", "min() requires at least 2 arguments");
+    expect_error(
+        "<?php min(1);",
+        "min(): Argument #1 ($value) must be of type array, int given",
+    );
 }
 
-/// Verifies max() rejects single-argument call (requires at least 2). Input: `max(1)`.
+/// Verifies max() rejects a lone non-array argument with php-src's TypeError wording.
 #[test]
 fn test_error_max_wrong_args() {
-    expect_error("<?php max(1);", "max() requires at least 2 arguments");
+    expect_error(
+        "<?php max(1);",
+        "max(): Argument #1 ($value) must be of type array, int given",
+    );
+}
+
+/// Verifies min() with no argument at all still reports PHP's ArgumentCountError text.
+#[test]
+fn test_error_min_no_args() {
+    expect_error("<?php min();", "min() expects at least 1 argument, 0 given");
+}
+
+/// Verifies max() with no argument at all still reports PHP's ArgumentCountError text.
+#[test]
+fn test_error_max_no_args() {
+    expect_error("<?php max();", "max() expects at least 1 argument, 0 given");
 }
 
 /// Verifies clamp() rejects missing bound arguments. Input: `clamp(1, 2)`.
@@ -135,3 +163,57 @@ fn test_error_number_format_wrong_args() {
 }
 
 // --- String function errors ---
+
+/// Verifies that `dechex()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_dechex_wrong_args() {
+    expect_error("<?php dechex();", "dechex() takes exactly 1 argument");
+}
+
+/// Verifies that `decbin()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_decbin_too_many_args() {
+    expect_error("<?php decbin(1, 2);", "decbin() takes exactly 1 argument");
+}
+
+/// Verifies that `decoct()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_decoct_wrong_args() {
+    expect_error("<?php decoct();", "decoct() takes exactly 1 argument");
+}
+
+/// Verifies that `hexdec()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_hexdec_wrong_args() {
+    expect_error("<?php hexdec();", "hexdec() takes exactly 1 argument");
+}
+
+/// Verifies that `bindec()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_bindec_too_many_args() {
+    expect_error("<?php bindec(\"1\", 2);", "bindec() takes exactly 1 argument");
+}
+
+/// Verifies that `octdec()` with no arguments produces the correct arity error.
+#[test]
+fn test_error_octdec_wrong_args() {
+    expect_error("<?php octdec();", "octdec() takes exactly 1 argument");
+}
+
+/// Verifies that `base_convert()` with two arguments produces the correct arity error.
+#[test]
+fn test_error_base_convert_wrong_args() {
+    expect_error(
+        "<?php base_convert(\"ff\", 16);",
+        "base_convert() takes exactly 3 arguments",
+    );
+}
+
+/// Verifies that `base_convert()` with four arguments produces the correct arity error.
+#[test]
+fn test_error_base_convert_too_many_args() {
+    expect_error(
+        "<?php base_convert(\"ff\", 16, 10, 2);",
+        "base_convert() takes exactly 3 arguments",
+    );
+}

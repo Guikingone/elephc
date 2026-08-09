@@ -93,6 +93,7 @@ pub(super) fn fold_static_builtin_calls_in_stmt(stmt: Stmt) -> Stmt {
         kind,
         span: stmt.span,
         source_mode: stmt.source_mode,
+        strict_types: stmt.strict_types,
         attributes: stmt.attributes,
     }
 }

@@ -237,8 +237,8 @@ pub fn emit_heap_alloc(emitter: &mut Emitter) {
     emitter.instruction("add x12, x12, #16");                                   // x12 = offset + requested + header (16 bytes)
     crate::codegen_support::abi::emit_symbol_address(emitter, "x13", "_heap_max");
     emitter.instruction("ldr x13, [x13]");                                      // x13 = heap max size in bytes
-    emitter.instruction("cmp x12, x13");                                        // does the allocation fit?
-    emitter.instruction("b.gt __rt_heap_exhausted");                            // no — fatal error
+    emitter.instruction("cmp x12, x13");                                        // does the allocation fit (unsigned, so a wrapped size stays above the limit)?
+    emitter.instruction("b.hi __rt_heap_exhausted");                            // no — fatal error
 
     // -- compute base address of heap buffer --
     crate::codegen_support::abi::emit_symbol_address(emitter, "x11", "_heap_buf");

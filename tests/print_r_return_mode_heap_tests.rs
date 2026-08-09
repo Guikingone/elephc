@@ -285,3 +285,52 @@ echo $total, "\n";
     let expected = format!("{}\n", 39 * ITERATIONS);
     assert_output_and_no_leak("var_export_return_loop", &source, &expected);
 }
+
+/// OBJECT COVERAGE for BUG A's fix: `print_r($object, true)` in a loop.
+///
+/// `print_r` of an object only became possible at all with the C5 fix — it used to be the hard
+/// compile error `unsupported EIR backend feature: print_r for PHP type Object("…")` — so this
+/// is the first shape that exercises `__rt_print_r_object` through the CAPTURE buffer rather
+/// than stdout. Nesting an object and an array inside the object makes the walk recurse through
+/// `__rt_print_r_value` in both directions, and the loop separates a per-call capture-string
+/// leak from the one live result the program still owns at exit.
+///
+/// Reference PHP 8.4.20 renders 224 bytes for this object.
+#[test]
+fn print_r_object_return_mode_loop_frees_every_rendered_string() {
+    let source = format!(
+        r#"<?php
+class Foo {{ public $a = 1; public $b = 'xyz'; public $arr = [1, 2]; }}
+class Bar {{ public ?Foo $o = null; function __construct() {{ $this->o = new Foo; }} }}
+$total = 0;
+for ($i = 0; $i < {ITERATIONS}; $i++) {{
+    $s = print_r(new Bar, true);
+    $total += strlen($s);
+}}
+echo $total, "\n";
+echo $s;
+"#
+    );
+    let expected = format!(
+        concat!(
+            "{}\n",
+            "Bar Object\n",
+            "(\n",
+            "    [o] => Foo Object\n",
+            "        (\n",
+            "            [a] => 1\n",
+            "            [b] => xyz\n",
+            "            [arr] => Array\n",
+            "                (\n",
+            "                    [0] => 1\n",
+            "                    [1] => 2\n",
+            "                )\n",
+            "\n",
+            "        )\n",
+            "\n",
+            ")\n",
+        ),
+        224 * ITERATIONS
+    );
+    assert_output_and_no_leak("print_r_object_return_loop", &source, &expected);
+}

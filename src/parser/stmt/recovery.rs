@@ -37,7 +37,14 @@ pub(crate) fn recover_to_statement_boundary(tokens: &[SpannedToken], pos: &mut u
                 *pos += 1;
                 break;
             }
-            Token::RBrace | Token::EndDeclare | Token::Eof
+            Token::RBrace
+            | Token::EndDeclare
+            | Token::EndIf
+            | Token::EndWhile
+            | Token::EndFor
+            | Token::EndForeach
+            | Token::EndSwitch
+            | Token::Eof
                 if paren_depth == 0 && bracket_depth == 0 =>
             {
                 break;
@@ -69,6 +76,7 @@ pub(crate) fn recover_to_statement_boundary(tokens: &[SpannedToken], pos: &mut u
             | Token::Const
             | Token::Global
             | Token::Static
+            | Token::Goto
             | Token::Identifier(_)
             | Token::Self_
             | Token::Parent

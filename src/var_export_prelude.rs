@@ -25,8 +25,29 @@
 //!   `sprintf("%.{p}e", ...)` until `(float)` of the result equals the input, then
 //!   rebuilds the digit string per PHP's exponent thresholds — independent of the
 //!   default `(string)`/`echo` precision used elsewhere.
-//! - Objects are out of scope (PHP renders `\Class::__set_state(...)`); a non
-//!   scalar/array value renders as the empty string.
+//! - Objects render exactly as PHP does: `stdClass` as `(object) array( … )`, any
+//!   other class as `\Class::__set_state(array( … ))`, and an enum case as
+//!   `\Enum::Case`. PHP's object layout is NOT the array layout — an entry key sits
+//!   at `indent + 3` (arrays use `indent + 2`) while the value and the closing line
+//!   keep the array indents — which is why the object branch does not reuse the
+//!   array branch's padding. Property visibility is deliberately absent: unlike
+//!   `print_r`, PHP's `var_export` prints the bare property name.
+//! - Object properties are reached through four `internal: true` helpers
+//!   (`__elephc_object_is_enum`, `__elephc_object_prop_count`,
+//!   `__elephc_object_prop_name`, `__elephc_object_prop_value`) because elephc has
+//!   no `get_object_vars()`, no object-to-array cast, and no `foreach` over a plain
+//!   object — and because `enum_exists()` needs a string literal in AOT mode, so a
+//!   prelude holding a runtime `mixed` cannot ask whether it is an enum any other
+//!   way. They read the same per-class descriptor `print_r` and `var_dump` walk.
+//! - A value that is neither scalar, array nor object renders as the empty string.
+//! - KNOWN DIVERGENCE: dynamic (undeclared) properties are not exported, matching
+//!   what elephc's `var_dump`/`print_r` already do for the same objects.
+//! - `__elephc_var_export_escape` takes `string`, NOT `mixed`, and every caller
+//!   casts into a `string` local first. Passing a `string` value to a `mixed`
+//!   parameter boxes it into a fresh Mixed cell that nothing releases, so the
+//!   `mixed` spelling leaked one heap block per escaped string — one per exported
+//!   string VALUE and one per exported string KEY, in every program, long before
+//!   objects were in scope. `var_export_and_strstr_result_tests` pins the loop.
 //! - The `$return` flag is FLAG-AWARE at the call site, mirroring `print_r`: `name_resolver`
 //!   retargets a literal-flag call at [`RENDER_HELPER`] (`: string`) or [`ECHO_HELPER`]
 //!   (prints, returns `null`), and only a runtime flag keeps the two-mode `var_export` body
@@ -37,13 +58,15 @@ use crate::parser::ast::Program;
 mod detect;
 
 /// The elephc-PHP `var_export` prelude: the public `var_export($value, $return)`
-/// entry point plus two internal helpers (`__elephc_var_export_str` renders a value
-/// to its parsable text, `__elephc_var_export_escape` single-quote-escapes a string).
+/// entry point plus the internal helpers — `__elephc_var_export_str` renders a value
+/// to its parsable text, `__elephc_var_export_escape` single-quote-escapes a string,
+/// `__elephc_var_export_float` reproduces `serialize_precision = -1`, and
+/// `__elephc_var_export_prop` renders one object property (its own function so the
+/// boxed property value is a short-lived local rather than a loop-carried one).
 /// The helpers are prefixed so they cannot collide with user code, and `var_export`
 /// itself is injected only when the user does not define their own.
 pub const VAR_EXPORT_PRELUDE_SRC: &str = r#"<?php
-function __elephc_var_export_escape(mixed $s): string {
-    $s = (string) $s;
+function __elephc_var_export_escape(string $s): string {
     return str_replace("'", "\\'", str_replace("\\", "\\\\", $s));
 }
 function __elephc_var_export_float(float $f): string {
@@ -84,6 +107,13 @@ function __elephc_var_export_float(float $f): string {
     }
     return ($neg ? '-' : '') . $out;
 }
+function __elephc_var_export_prop(mixed $owner, int $index, int $indent, string $pad): string {
+    $pv = __elephc_object_prop_value($owner, $index);
+    if (is_array($pv) || is_object($pv)) {
+        return "\n" . $pad . '  ' . __elephc_var_export_str($pv, $indent + 2);
+    }
+    return __elephc_var_export_str($pv, $indent + 2);
+}
 function __elephc_var_export_str(mixed $value, int $indent): string {
     if (is_int($value)) {
         return (string) $value;
@@ -98,7 +128,8 @@ function __elephc_var_export_str(mixed $value, int $indent): string {
         return 'NULL';
     }
     if (is_string($value)) {
-        return "'" . __elephc_var_export_escape($value) . "'";
+        $text = (string) $value;
+        return "'" . __elephc_var_export_escape($text) . "'";
     }
     if (is_array($value)) {
         $pad = str_repeat(' ', $indent);
@@ -107,10 +138,11 @@ function __elephc_var_export_str(mixed $value, int $indent): string {
             if (is_int($k)) {
                 $key = (string) $k;
             } else {
-                $key = "'" . __elephc_var_export_escape($k) . "'";
+                $keytext = (string) $k;
+                $key = "'" . __elephc_var_export_escape($keytext) . "'";
             }
             $out = $out . $pad . '  ' . $key . ' => ';
-            if (is_array($v)) {
+            if (is_array($v) || is_object($v)) {
                 $out = $out . "\n" . $pad . '  ' . __elephc_var_export_str($v, $indent + 2);
             } else {
                 $out = $out . __elephc_var_export_str($v, $indent + 2);
@@ -119,6 +151,36 @@ function __elephc_var_export_str(mixed $value, int $indent): string {
         }
         $out = $out . $pad . ')';
         return $out;
+    }
+    if (is_object($value)) {
+        $class = get_class($value);
+        $pad = str_repeat(' ', $indent);
+        if (__elephc_object_is_enum($value)) {
+            $cases = __elephc_object_prop_count($value);
+            for ($c = 0; $c < $cases; $c++) {
+                if (__elephc_object_prop_name($value, $c) === 'name') {
+                    return '\\' . $class . '::' . __elephc_object_prop_value($value, $c);
+                }
+            }
+            return '\\' . $class;
+        }
+        if ($class === 'stdClass') {
+            $out = "(object) array(\n";
+            $close = ')';
+        } else {
+            $out = '\\' . $class . "::__set_state(array(\n";
+            $close = '))';
+        }
+        $count = __elephc_object_prop_count($value);
+        for ($i = 0; $i < $count; $i++) {
+            $name = __elephc_object_prop_name($value, $i);
+            if ($name === '') {
+                continue;
+            }
+            $out = $out . $pad . '   ' . "'" . __elephc_var_export_escape($name) . "' => ";
+            $out = $out . __elephc_var_export_prop($value, $i, $indent, $pad) . ",\n";
+        }
+        return $out . $pad . $close;
     }
     return '';
 }

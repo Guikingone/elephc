@@ -12,7 +12,7 @@ use super::*;
 
 /// Tests that constant propagation tracks scalar values unpacked from a `list()` assignment.
 /// The `base` and `exp` variables are initialized from a fixed array literal `[2, 3]`.
-/// After propagation, the subsequent `echo $base ** $exp` expression is folded to `8.0`.
+/// After propagation, the subsequent `echo $base ** $exp` expression is folded to `8`.
 #[test]
 fn test_propagate_constants_tracks_scalar_list_unpack() {
     let program = vec![
@@ -33,13 +33,13 @@ fn test_propagate_constants_tracks_scalar_list_unpack() {
 
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
 /// Tests that constant propagation tracks scalar values accessed from a numeric-indexed array literal.
 /// `$base` is assigned `&$arr[0]` where `$arr = [2, 9]`; after propagation `$base = 2`.
-/// The subsequent `echo $base ** 3` is folded to `8.0`.
+/// The subsequent `echo $base ** 3` is folded to `8`.
 #[test]
 fn test_propagate_constants_tracks_scalar_array_literal_access() {
     let program = vec![
@@ -64,13 +64,13 @@ fn test_propagate_constants_tracks_scalar_array_literal_access() {
     assert_eq!(propagated[0], Stmt::assign("base", Expr::int_lit(2)));
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
 /// Tests that constant propagation tracks scalar values accessed from an associative array literal.
 /// `$base` is assigned `&$arr["left"]` where `$arr = ["left" => 2, "right" => 9]`; after propagation `$base = 2`.
-/// The subsequent `echo $base ** 3` is folded to `8.0`.
+/// The subsequent `echo $base ** 3` is folded to `8`.
 #[test]
 fn test_propagate_constants_tracks_scalar_assoc_array_literal_access() {
     let program = vec![
@@ -98,13 +98,13 @@ fn test_propagate_constants_tracks_scalar_assoc_array_literal_access() {
     assert_eq!(propagated[0], Stmt::assign("base", Expr::int_lit(2)));
     assert_eq!(
         propagated[1],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
 /// Tests that constant propagation preserves scalar values that are not targeted by `unset()`.
 /// `$base = 2` and `$tmp = 9`; `unset($tmp)` invalidates `$tmp` but `$base` remains a constant.
-/// After propagation, `echo $base ** 3` is folded to `8.0` while `echo $tmp` is unaffected.
+/// After propagation, `echo $base ** 3` is folded to `8` while `echo $tmp` is unaffected.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_unset() {
     let program = vec![
@@ -127,13 +127,13 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_unset() {
 
     assert_eq!(
         propagated[3],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
 /// Tests that `unset()` with multiple targets correctly invalidates all named variables.
 /// `$base = 2`, `$tmp = 9`, `$other = 10`; `unset($tmp, $other)` invalidates `$tmp` and `$other`.
-/// After propagation, `echo $tmp` remains a variable (not folded) and `echo $base ** 3` is `8.0`.
+/// After propagation, `echo $tmp` remains a variable (not folded) and `echo $base ** 3` is `8`.
 #[test]
 fn test_propagate_constants_invalidates_multiple_unset_targets() {
     let program = vec![
@@ -159,7 +159,7 @@ fn test_propagate_constants_invalidates_multiple_unset_targets() {
     assert_eq!(propagated[4], Stmt::echo(Expr::var("tmp")));
     assert_eq!(
         propagated[5],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 

@@ -287,3 +287,69 @@ echo function_exists("is_scalar") ? "S" : "_";
 }
 
 // --- Exponentiation operator ** ---
+
+/// Verifies RUNTIME `is_numeric()` implements PHP 8's numeric-string grammar, not the old
+/// digits-and-one-dot scan: leading AND trailing whitespace (` `, `\t`, `\n`, `\v`, `\f`,
+/// `\r`) are allowed, a leading `+` is allowed, `.5` / `5.` / `1.2E+3` / `+.5e-2` are
+/// numeric, and hexadecimal, underscore separators, a bare `"1e"`, an empty string and a
+/// lone `"."`/`"-"` are not. The strings come out of a `foreach` so the runtime scanner
+/// (shared with the `(float)`/`(int)` casts) is what answers.
+#[test]
+fn test_is_numeric_follows_php_numeric_string_grammar() {
+    let out = compile_and_run(
+        r#"<?php
+$strings = [" 42 ", "42\t", "\n42", "\r\n 3.5 \v\f", "1e3", ".5", "5.", "+.5e-2", "0x1A", "1_000", "", " ", "1e", "1e+", ".", "-", "1.2E+3", "-0", "00012", "12abc"];
+foreach ($strings as $s) { echo is_numeric($s) ? "T" : "F"; }
+"#,
+    );
+    assert_eq!(out, "TTTTTTTTFFFFFFFFTTTF");
+}
+
+/// Verifies PHP's int-preserving `**` at RUNTIME: `int ** int` stays an `int` while the
+/// value fits (`2 ** 3` is `int(8)`, `10 ** 18` is `int(1000000000000000000)`), promotes
+/// to a `float` at the exact multiplication that overflows `i64` (`2 ** 63`), and is
+/// always a `float` for a negative exponent. `$argc` arithmetic keeps every operand off
+/// the constant-folding path, so this pins the `Op::ICheckedPow` lowering rather than the
+/// AST folder.
+#[test]
+fn test_runtime_int_power_keeps_int_like_php() {
+    let out = compile_and_run(
+        r#"<?php
+$b = $argc + 1;
+var_dump($b ** ($argc + 2));
+var_dump($b ** ($argc - 1));
+var_dump(($argc - 1) ** $b);
+var_dump($b ** ($argc + 61));
+var_dump($b ** ($argc + 62));
+var_dump(($argc * 10) ** ($argc + 17));
+var_dump(($argc * 10) ** ($argc + 18));
+var_dump($b ** (0 - $argc));
+var_dump((0 - $b) ** ($argc + 2));
+echo $b ** ($argc + 2), "|", $b ** ($argc + 62), "|";
+"#,
+    );
+    assert_eq!(
+        out,
+        "int(8)\nint(1)\nint(0)\nint(4611686018427387904)\nfloat(9.223372036854776E+18)\nint(1000000000000000000)\nfloat(1.0E+19)\nfloat(0.5)\nint(-8)\n8|9.2233720368548E+18|"
+    );
+}
+
+/// Verifies the runtime `**` lowering agrees with the constant folder: the same
+/// base/exponent pairs written as literals and reached through `$argc` must print the
+/// same `int(...)`/`float(...)` lines, so a literal and a runtime value never disagree.
+#[test]
+fn test_int_power_literal_and_runtime_paths_agree() {
+    let out = compile_and_run(
+        r#"<?php
+$two = $argc + 1;
+$ten = $argc * 10;
+var_dump(2 ** 3, 2 ** 62, 2 ** 63, 10 ** 18, 10 ** 19, 2 ** -1, (-2) ** 3, 0 ** 0);
+var_dump($two ** ($argc + 2), $two ** ($argc + 61), $two ** ($argc + 62), $ten ** ($argc + 17), $ten ** ($argc + 18), $two ** (0 - $argc), (0 - $two) ** ($argc + 2), ($argc - 1) ** ($argc - 1));
+"#,
+    );
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(lines.len(), 16, "expected 8 folded and 8 runtime lines: {out:?}");
+    assert_eq!(&lines[..8], &lines[8..], "folded and runtime `**` disagree");
+    assert_eq!(lines[0], "int(8)");
+    assert_eq!(lines[2], "float(9.223372036854776E+18)");
+}

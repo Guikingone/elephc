@@ -8,6 +8,9 @@
 //!
 //! Key details:
 //! - Source evaluation order is preserved separately from ABI/materialization order for codegen.
+//! - Ordering rules that PHP resolves syntactically (spread after a named
+//!   argument) are checked on the *raw* call-site arguments, before static
+//!   associative spreads are expanded into named arguments.
 
 use crate::parser::ast::{Expr, ExprKind};
 use crate::span::Span;
@@ -56,6 +59,7 @@ pub(crate) fn plan_call_args_with_regular_param_count(
     trim_trailing_defaults: bool,
     allow_unknown_named_variadic: bool,
 ) -> Result<CallArgPlan, CallArgPlanError> {
+    validate_no_spread_after_named(args)?;
     let expanded = expand_static_assoc_spread_args_with_origins(args);
     let assoc_spread_sources = vec![false; expanded.args.len()];
     let (source_args, source_origins, assoc_spread_sources) =
@@ -108,6 +112,7 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
     allow_unknown_named_variadic: bool,
     assoc_spread_sources: &[bool],
 ) -> Result<CallArgPlan, CallArgPlanError> {
+    validate_no_spread_after_named(args)?;
     let expanded = expand_static_assoc_spread_args_with_origins(args);
     let expanded_assoc_spread_sources = (0..expanded.args.len())
         .map(|idx| assoc_spread_sources.get(idx).copied().unwrap_or(false))
@@ -147,6 +152,37 @@ pub(crate) fn plan_call_args_with_regular_param_count_and_assoc_spreads(
         &source_origins,
         &assoc_spread_sources,
     )
+}
+
+/// Returns `Ok` unless an argument-unpacking (`...`) expression appears after a
+/// named argument, in which case it returns `SpreadAfterNamed` for the offending
+/// spread.
+///
+/// PHP raises "Cannot use argument unpacking after named arguments" while
+/// compiling the call, so the shape is rejected regardless of what the unpacked
+/// array contains, whether the callee exists, or whether the call is reachable.
+/// The check therefore runs on the *raw* call-site arguments: a static
+/// string-keyed unpack such as `f(c: 9, ...["a" => 1])` is later rewritten into
+/// named arguments by `expand_static_assoc_spread_args_with_origins`, which
+/// would otherwise hide the `Spread` node from the ordering check inside
+/// `plan_named_call_args`. Only literal `name:` syntax counts as a preceding
+/// named argument, matching PHP: `f(...["a" => 1], ...$rest)` stays legal.
+///
+/// Exposed so call surfaces whose callee is unknown at compile time (string
+/// callables, `new $class(...)`) can enforce the same rule without a signature
+/// to plan against; every other surface gets it through `plan_call_args*`.
+pub(crate) fn validate_no_spread_after_named(args: &[Expr]) -> Result<(), CallArgPlanError> {
+    let mut seen_named = false;
+    for arg in args {
+        match &arg.kind {
+            ExprKind::NamedArg { .. } => seen_named = true,
+            ExprKind::Spread(_) if seen_named => {
+                return Err(CallArgPlanError::SpreadAfterNamed { span: arg.span });
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Returns `Ok` if no positional argument appears after a spread expression,

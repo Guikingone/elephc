@@ -22,6 +22,82 @@ use super::super::super::context::FunctionContext;
 use super::super::predicates;
 use super::{expect_operand, load_value_to_first_int_arg, store_if_result};
 
+/// Lowers `intval($value, $base)`, PHP's two-argument integer conversion.
+///
+/// Reference PHP honors `$base` only when `$value` is a string, so the subject's checker type
+/// picks the path: a known string goes straight to `__rt_str_to_int_base`, a boxed `Mixed`
+/// goes to `__rt_mixed_intval_base` (which repeats that test at run time against the cell's
+/// tag), and every other scalar keeps the ordinary integer cast with the base discarded —
+/// `intval(42.9, 8) === 42`, not `34`.
+pub(crate) fn lower_intval_base(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count(inst, "intval", 2)?;
+    let value = expect_operand(inst, 0)?;
+    let base = expect_operand(inst, 1)?;
+    match ctx.value_php_type(value)?.codegen_repr() {
+        PhpType::Str => lower_intval_base_from_string(ctx, value, base)?,
+        PhpType::Mixed => lower_intval_base_from_mixed(ctx, value, base)?,
+        _ => super::strings::load_as_int(ctx, value, "intval")?,
+    }
+    store_if_result(ctx, inst)
+}
+
+/// Materializes a known-string `intval()` subject and parses it in the requested base.
+///
+/// The subject is staged first because materializing `$base` may itself need the result
+/// register, and the string pair is restored only after the base has reached its own
+/// argument register.
+fn lower_intval_base_from_string(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    base: ValueId,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            super::strings::load_value_as_string_to_regs(ctx, value, "intval", "x1", "x2")?;
+            ctx.emitter.instruction("stp x1, x2, [sp, #-16]!");                 // preserve the subject string while the base is materialized
+            super::strings::load_as_int(ctx, base, "intval base")?;
+            ctx.emitter.instruction("mov x3, x0");                              // pass the requested base as the parser's third argument
+            ctx.emitter.instruction("ldp x1, x2, [sp], #16");                   // restore the subject into the parser's string argument pair
+        }
+        Arch::X86_64 => {
+            super::strings::load_value_as_string_to_regs(ctx, value, "intval", "rax", "rdx")?;
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
+            super::strings::load_as_int(ctx, base, "intval base")?;
+            ctx.emitter.instruction("mov r8, rax");                             // park the requested base while the subject is restored
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");                  // restore the subject into the parser's SysV string arguments
+            ctx.emitter.instruction("mov rdx, r8");                             // pass the requested base as the parser's third argument
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_to_int_base");
+    Ok(())
+}
+
+/// Materializes a boxed `Mixed` `intval()` subject and defers the string test to run time.
+///
+/// The cell pointer stays in the canonical integer result register, which is exactly where
+/// `__rt_mixed_intval_base` and the `__rt_mixed_cast_int` it falls back to expect it.
+fn lower_intval_base_from_mixed(
+    ctx: &mut FunctionContext<'_>,
+    value: ValueId,
+    base: ValueId,
+) -> Result<()> {
+    let cell_reg = abi::int_result_reg(ctx.emitter);
+    ctx.load_value_to_result(value)?;
+    abi::emit_push_reg(ctx.emitter, cell_reg);
+    super::strings::load_as_int(ctx, base, "intval base")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x3, x0");                              // pass the requested base as the helper's second argument
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rax");                            // pass the requested base as the helper's second argument
+        }
+    }
+    abi::emit_pop_reg(ctx.emitter, cell_reg);
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_intval_base");
+    Ok(())
+}
+
 /// Lowers `settype($local, "type")` by mutating the resolved local slot and returning true.
 pub(crate) fn lower_settype(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::ensure_arg_count(inst, "settype", 2)?;
@@ -46,12 +122,31 @@ pub(crate) fn lower_class_alias(ctx: &mut FunctionContext<'_>, inst: &Instructio
 }
 
 /// Rejects `unset()` calls that were not converted into direct EIR unbind operations.
+///
+/// Reaching this lowering means `crate::ir_lower::expr` could not turn the target
+/// into a slot clear, a hash/array removal, an `offsetUnset()` call, a `__unset()`
+/// call or a dynamic-property removal, so the message lists the shapes that do lower
+/// directly and then names the one shape users hit most.
+///
+/// THE UNTYPED FIXED SLOT is that shape. `unset($obj->untypedProp)` on a property
+/// declared without a type (`public $foo = 1;`) truly REMOVES it in PHP: a later read
+/// warns `Undefined property` and answers `null`, and a later write recreates it.
+/// elephc gives each declared property a fixed, monomorphically typed slot, so a
+/// property the checker typed `Int` has no encoding for "removed and reading as null"
+/// — every candidate encoding answers `int(0)` or a raw marker word instead. A loud
+/// error beats a wrong value, so the shape is refused here. Untyped properties whose
+/// storage is a DYNAMIC hash (`stdClass`, undeclared names on
+/// `#[AllowDynamicProperties]` classes) are genuinely removable and lower fine.
 pub(super) fn lower_unset_builtin(
     _ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
     Err(CodegenIrError::unsupported(format!(
-        "unset target shape with {} lowered operands",
+        "unset target shape with {} lowered operands (supported: variables, \
+         array/hash elements, ArrayAccess offsets, __unset()-backed properties, \
+         declared typed object properties, and dynamic object properties). \
+         An UNTYPED declared property (`public $p = 1;`) is not supported: its fixed \
+         slot has no representation for PHP's removed-then-null read",
         inst.operands.len()
     )))
 }

@@ -12,7 +12,9 @@
 mod arrays;
 mod buffers;
 mod callables;
-mod data;
+/// PHP loose-equality (`==`) walkers for boxed Mixed values, arrays, and objects.
+mod compare;
+pub(crate) mod data;
 mod diagnostics;
 mod emitters;
 mod eval_bridge;
@@ -22,11 +24,15 @@ mod fibers;
 /// Runtime helpers for generator state management (yield, resume, stack frames).
 pub(crate) mod generators;
 mod io;
+/// The shared PHP `float`→`int` conversion (`__rt_php_float_to_int`).
+mod numeric;
 mod objects;
 /// PDO Tier-D callback adapters (`__rt_pdo_*`) re-entering compiled-PHP callables.
 mod pdo;
 mod pointers;
 mod resource_ids;
+/// PHP's `round($num, $precision, $mode)` runtime implementation (`__rt_round_mode`).
+mod round_mode;
 /// Standard PHP library constants, functions, and classes.
 pub(crate) mod spl;
 mod strings;
@@ -62,6 +68,9 @@ pub(crate) use emitters::emit_runtime;
 pub(crate) use arrays::{emit_nan_bool_coercion_probe, nan_bool_coercion_warning_enabled};
 /// The `__rt_hash_map` callback result-kind selector, chosen by the `array_map()` lowering.
 pub(crate) use arrays::HashMapResultKind;
+/// The call-stack overflow guard's shared symbol name. Codegen's prologue check and the
+/// runtime emitter must name the same `.comm` word or the guard silently never fires.
+pub(crate) use system::STACK_LIMIT_SYMBOL;
 /// Emit full runtime helpers (orchestrates all runtime sections).
 pub(crate) use fibers::{
     FIBER_CALLABLE_OFFSET, FIBER_PENDING_THROW_OFFSET, FIBER_STACK_BASE_OFFSET,

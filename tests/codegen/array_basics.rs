@@ -1579,3 +1579,52 @@ fn test_in_array_strict_distinguishes_bool_int_membership() {
     );
     assert_eq!(out, "101010");
 }
+
+/// Verifies `unset()` on a never-declared variable is accepted and is a silent no-op, the way
+/// PHP treats it — `unset()` exists to name storage that may not be there.
+#[test]
+fn test_unset_never_declared_variable_is_a_noop() {
+    let out = compile_and_run(
+        r#"<?php
+unset($neverDeclared);
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
+/// Verifies every null probe answers for a never-declared variable the way PHP does, instead of
+/// rejecting the program: `isset()` is `false`, `empty()` is `true`, `??` yields the default and
+/// `??=` installs it. Output matches `php 8.4`.
+#[test]
+fn test_null_probes_on_never_declared_variable_match_php() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(isset($neverA));
+var_dump(empty($neverB));
+var_dump($neverC ?? "dflt");
+$neverD ??= 5;
+var_dump($neverD);
+"#,
+    );
+    assert_eq!(
+        out,
+        "bool(false)
+bool(true)
+string(4) \"dflt\"
+int(5)
+"
+    );
+}
+
+/// Verifies `isset()` reaches through a never-declared variable's index without faulting, the
+/// way PHP does — the whole chain simply answers `false`.
+#[test]
+fn test_isset_index_of_never_declared_variable_is_false() {
+    let out = compile_and_run(
+        r#"<?php
+var_dump(isset($neverIndexed["k"]));
+"#,
+    );
+    assert_eq!(out, "bool(false)\n");
+}

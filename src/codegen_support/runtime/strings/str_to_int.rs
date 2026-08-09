@@ -7,6 +7,9 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::strings`.
 //!
 //! Key details:
+//! - `__rt_php_num_scan` clips the scratch string to PHP's leading numeric run before either
+//!   libc parser runs, so `"0x1A"` is `0` (not `26`), `"INF"`/`"NAN"` are `0`, and `"1_000"`
+//!   is `1` — libc's `strtoll`/`strtod` extensions never reach the value.
 //! - `strtoll` gives the exact 64-bit value and PHP's saturating overflow (LLONG_MAX/MIN == PHP_INT_MAX/MIN),
 //!   so large integer strings are not rounded through `f64`.
 //! - When `strtod` consumes more bytes than `strtoll`, the string has a `.`/`e` float part (e.g. `"1e3"`),
@@ -18,9 +21,10 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 ///
 /// Input follows the active string-result convention:
 /// AArch64 uses `x1`/`x2`; x86_64 uses `rax`/`rdx`.
-/// The helper copies the string into the C-string scratch buffer via `__rt_cstr`, then parses it
-/// with `strtoll` (exact + saturating) and `strtod`, returning the integer-form value unless the
-/// string is float-form, in which case the truncated double is returned.
+/// The helper copies the string into the C-string scratch buffer via `__rt_cstr`, clips it to PHP's
+/// leading numeric run with `__rt_php_num_scan`, then parses that run with `strtoll` (exact +
+/// saturating) and `strtod`, returning the integer-form value unless the run is float-form, in
+/// which case the truncated double is returned.
 pub fn emit_str_to_int(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_to_int_linux_x86_64(emitter);
@@ -36,18 +40,19 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
     emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address across the libc calls
     emitter.instruction("add x29, sp, #32");                                    // establish a stable helper frame pointer
 
-    // -- copy the PHP string into the C-string scratch buffer --
+    // -- copy the PHP string into the C-string scratch buffer and clip it to PHP's grammar --
     emitter.instruction("bl __rt_cstr");                                        // copy the bounded PHP string into the C-string scratch buffer
-    emitter.instruction("str x0, [sp, #24]");                                   // save the C-string pointer for the second parse
+    emitter.instruction("bl __rt_php_num_scan");                                // clip the scratch to PHP's leading numeric run
+    emitter.instruction("str x0, [sp, #24]");                                   // save the clipped run pointer for the second parse
 
-    // -- integer parse: strtoll(cstr, &end_i, 10) gives the exact, saturating 64-bit value --
+    // -- integer parse: strtoll(run, &end_i, 10) gives the exact, saturating 64-bit value --
     emitter.instruction("add x1, sp, #0");                                      // pass &end_i so strtoll reports where the integer prefix ended
     emitter.instruction("mov x2, #10");                                         // parse in base 10 like PHP string-to-int
     emitter.bl_c("strtoll");
     emitter.instruction("str x0, [sp, #16]");                                   // save the integer-form value (LLONG_MAX/MIN on overflow == PHP_INT_MAX/MIN)
 
     // -- float parse: strtod(cstr, &end_d) detects a '.'/'e' float continuation --
-    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the C-string pointer for strtod
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the clipped run pointer for strtod
     emitter.instruction("add x1, sp, #8");                                      // pass &end_d so strtod reports where the numeric value ended
     emitter.bl_c("strtod");
 
@@ -71,8 +76,9 @@ pub fn emit_str_to_int(emitter: &mut Emitter) {
 /// Emits the Linux x86_64 `__rt_str_to_int` runtime helper.
 ///
 /// The input string arrives in the elephc string-result registers (`rax`/`rdx`).
-/// Parses with `strtoll` (exact + saturating) and `strtod`, returning the integer-form value in
-/// `rax` unless `strtod` consumed a `.`/`e` float part, in which case the truncated double is used.
+/// Clips the scratch to PHP's leading numeric run with `__rt_php_num_scan`, then parses with
+/// `strtoll` (exact + saturating) and `strtod`, returning the integer-form value in `rax` unless
+/// `strtod` consumed a `.`/`e` float part, in which case the truncated double is used.
 fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_to_int ---");
@@ -83,19 +89,21 @@ fn emit_str_to_int_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbp, rsp");                                        // establish a stable helper frame pointer
     emitter.instruction("sub rsp, 48");                                         // allocate aligned slots for the C-string pointer, integer value, and end pointers
 
-    // -- copy the PHP string into the C-string scratch buffer --
+    // -- copy the PHP string into the C-string scratch buffer and clip it to PHP's grammar --
     emitter.instruction("call __rt_cstr");                                      // copy the bounded PHP string into the C-string scratch buffer
-    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the C-string pointer for the second parse
+    emitter.instruction("mov rdi, rax");                                        // pass the C-string pointer to the numeric-grammar scanner
+    emitter.instruction("call __rt_php_num_scan");                              // clip the scratch to PHP's leading numeric run
+    emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the clipped run pointer for the second parse
 
-    // -- integer parse: strtoll(cstr, &end_i, 10) gives the exact, saturating 64-bit value --
-    emitter.instruction("mov rdi, rax");                                        // strtoll arg1: the C-string pointer
+    // -- integer parse: strtoll(run, &end_i, 10) gives the exact, saturating 64-bit value --
+    emitter.instruction("mov rdi, rax");                                        // strtoll arg1: the clipped run pointer
     emitter.instruction("lea rsi, [rbp - 24]");                                 // strtoll arg2: &end_i
     emitter.instruction("mov edx, 10");                                         // strtoll arg3: parse in base 10 like PHP string-to-int
     emitter.instruction("call strtoll");                                        // rax = integer-form value (LLONG_MAX/MIN on overflow == PHP_INT_MAX/MIN)
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the integer-form value
 
     // -- float parse: strtod(cstr, &end_d) detects a '.'/'e' float continuation --
-    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the C-string pointer for strtod
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the clipped run pointer for strtod
     emitter.instruction("lea rsi, [rbp - 32]");                                 // strtod arg2: &end_d
     emitter.instruction("call strtod");                                         // xmm0 = parsed double value
 
