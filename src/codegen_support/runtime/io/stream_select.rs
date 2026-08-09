@@ -10,8 +10,10 @@
 //! - Descriptors are collected into a stack-allocated `struct pollfd` array
 //!   (capacity 256, 2048 bytes). Read entries use `POLLIN` (0x001), write
 //!   entries `POLLOUT` (0x004), except entries `POLLPRI` (0x002).
-//! - `poll(2)` is invoked via `bl _poll` on macOS (libSystem) and via the
-//!   native syscall on Linux (73 on ARM64, 7 on x86_64).
+//! - `poll(2)` is reached through libc on ARM64 (both platforms) because ARM64 Linux
+//!   has no `poll` syscall — 73 there is `ppoll`, which takes a `struct timespec *`
+//!   instead of a millisecond count. x86_64 Linux keeps the native syscall (7), where
+//!   `poll` does exist and does take milliseconds.
 //! - After `poll` returns, each resource array is compacted in place to the
 //!   ready subset by checking the corresponding `revents` field.
 //! - Synthetic user-wrapper descriptors (`fd & 0x40000000`) are resolved to a
@@ -93,12 +95,13 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     emitter.instruction("mov x0, sp");                                          // pollfds pointer = frame base
     emitter.instruction("ldr x1, [sp, #2096]");                                   // nfds
     emitter.instruction("ldr x2, [sp, #2112]");                                   // timeout in ms
-    if linux {
-        emitter.instruction("mov x8, #73");                                       // Linux ARM64 syscall number for poll
-        emitter.instruction("svc #0");                                          // invoke poll via the kernel
-    } else {
-        emitter.instruction("bl _poll");                                         // macOS: poll from libSystem
-    }
+    // ARM64 Linux has NO `poll` syscall: number 73 in the generic table is `ppoll`, whose
+    // third argument is a `struct timespec *`, not a millisecond count. A real millisecond
+    // value was therefore read as a pointer and faulted (EFAULT, so stream_select answered
+    // -1), while a zero was read as a NULL timespec, i.e. block forever — which is what hung
+    // the linux-aarch64 stream_select tests for 60s. libc's poll() takes exactly the
+    // millisecond contract this helper already computes, on both platforms.
+    emitter.bl_c("poll");
     emitter.instruction("str x0, [sp, #2104]");                                   // save the ready descriptor count
     emitter.instruction("cmp x0, #0");                                          // poll returned an error?
     emitter.instruction("b.lt __rt_stream_select_error");                        // negative → return -1

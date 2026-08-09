@@ -69,7 +69,7 @@ fn declared_builtin_registry_derives_filesystem_metadata() {        assert_eq!(
         );
         assert_eq!(
             eval_declared_builtin_param_names("file"),
-            Some(["filename", "flags"].as_slice())
+            Some(["filename", "flags", "context"].as_slice())
         );
         assert_eq!(
             eval_declared_builtin_param_names("file_get_contents"),
