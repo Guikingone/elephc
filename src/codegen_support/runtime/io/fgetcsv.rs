@@ -419,7 +419,10 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r15");                                        // rax = write_ptr
     emitter.instruction("sub rax, r14");                                        // rax = len = write_ptr - field_start
     emitter.instruction("mov [rbp - 40], rax");                                 // save len at [rbp-40]
-    emitter.instruction("mov rsi, r14");                                        // ptr = field_start
+    // __rt_str_persist takes the string in rax/rdx, not rsi/rdx: this passed the pointer
+    // in rsi and left rax holding the LENGTH, so the helper dereferenced the length as an
+    // address — 1 for a one-byte field — and every fgetcsv() segfaulted on x86_64.
+    emitter.instruction("mov rax, r14");                                        // ptr = field_start
     emitter.instruction("mov rdx, [rbp - 40]");                                 // len
     emitter.instruction("call __rt_str_persist");                               // rax = persisted string (heap copy)
     emitter.instruction("mov rsi, rax");                                        // rsi = persisted string ptr
@@ -436,7 +439,10 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, r15");                                        // rax = write_ptr
     emitter.instruction("sub rax, r14");                                        // rax = len = write_ptr - field_start
     emitter.instruction("mov [rbp - 40], rax");                                 // save len at [rbp-40]
-    emitter.instruction("mov rsi, r14");                                        // ptr = field_start
+    // __rt_str_persist takes the string in rax/rdx, not rsi/rdx: this passed the pointer
+    // in rsi and left rax holding the LENGTH, so the helper dereferenced the length as an
+    // address — 1 for a one-byte field — and every fgetcsv() segfaulted on x86_64.
+    emitter.instruction("mov rax, r14");                                        // ptr = field_start
     emitter.instruction("mov rdx, [rbp - 40]");                                 // len
     emitter.instruction("call __rt_str_persist");                               // rax = persisted string (heap copy)
     emitter.instruction("mov rsi, rax");                                        // rsi = persisted string ptr
