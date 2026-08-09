@@ -5503,33 +5503,81 @@ fclose($b);
     assert_eq!(out, "via-handle still-alive|AB,CD,EF|AAABBB");
 }
 
-/// Pins the two wrapper schemes a run-time path still cannot open.
+/// Verifies a `php://filter` URL built at RUN TIME opens and filters.
 ///
-/// IGNORED because both resolve at compile time in a way the run-time dispatcher does not yet
-/// reproduce: `data://` decodes its payload during lowering and embeds the bytes, so a run-time
-/// URL would need the base64 and percent decoders in the runtime; and `php://filter` attaches
-/// its filter through the lowering's chain-node emitter rather than a runtime helper. The
-/// `php://` family around them works — see
-/// [`test_fopen_honours_a_php_scheme_built_at_run_time`].
-///
-/// Measured against php 8.5.6, which opens both.
+/// A filter URL is "open this, then filter it", so the parse hands the open path the RESOURCE and
+/// the named filter is attached once the stream exists. That keeps the resource on whatever open
+/// path it deserves — this covers both a plain file and a nested `php://temp`, and checks that a
+/// plain open afterwards does not inherit the filter.
 #[test]
-#[ignore = "data:// decodes at compile time and php://filter attaches through the lowering, so neither has a run-time path yet"]
-fn test_fopen_honours_data_and_filter_urls_built_at_run_time() {
+fn test_php_filter_url_built_at_run_time_opens() {
     let (out, dir) = compile_and_run_in_dir(
         r#"<?php
 file_put_contents("pf.txt", "hello");
+$url = "php://filter/read=string.toupper/resource=" . "pf.txt";
+$f = fopen($url, "r");
+echo "file=", stream_get_contents($f), "|";
+fclose($f);
+
+$nested = "php://filter/read=string.toupper/resource=php://" . "temp";
+$g = fopen($nested, "r+");
+fwrite($g, "abc");
+rewind($g);
+echo "nested=", stream_get_contents($g), "|";
+fclose($g);
+
+$h = fopen("pf" . ".txt", "r");
+echo "plain=", stream_get_contents($h);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "file=HELLO|nested=ABC|plain=hello");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a run-time filter URL that names nothing usable opens the resource unfiltered or
+/// fails, rather than opening something else.
+///
+/// An unknown filter name is what php-src also tolerates by opening the resource plain; a URL with
+/// no `/resource=` names nothing at all.
+#[test]
+fn test_run_time_filter_url_edge_cases() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("pf.txt", "hello");
+$unknown = "php://filter/read=no.such.filter/resource=" . "pf.txt";
+$a = @fopen($unknown, "r");
+echo "unknown=", var_export($a !== false, true);
+if ($a !== false) { echo ":", stream_get_contents($a); fclose($a); }
+$nores = "php://filter/read=string." . "toupper";
+echo " noresource=", var_export(@fopen($nores, "r"), true);
+$nested = "php://filter/read=string.toupper/resource=php://filter/read=string." . "tolower";
+echo " nested=", var_export(@fopen($nested, "r"), true);
+"#,
+    );
+    assert_eq!(out, "unknown=true:hello noresource=false nested=false");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Pins the one wrapper scheme a run-time path still cannot open.
+///
+/// IGNORED because `data://` decodes its payload during lowering and embeds the bytes, so a
+/// run-time URL would need the base64 and percent decoders in the runtime. Every other scheme
+/// resolves from run-time bytes — see [`test_fopen_honours_a_php_scheme_built_at_run_time`] and
+/// [`test_php_filter_url_built_at_run_time_opens`].
+///
+/// Measured against php 8.5.6, which opens it.
+#[test]
+#[ignore = "data:// decodes its payload at compile time, so a run-time URI has no path yet"]
+fn test_fopen_honours_a_data_url_built_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
 $d = @fopen("data://text/plain," . "hi", "r");
 echo "data=", var_export($d !== false, true);
 if ($d !== false) { echo ":", stream_get_contents($d); fclose($d); }
-$url = "php://filter/read=string.toupper/resource=" . "pf.txt";
-$f = @fopen($url, "r");
-echo " filter=", var_export($f !== false, true);
-if ($f !== false) { echo ":", stream_get_contents($f); fclose($f); }
 "#,
     );
-    assert_eq!(out, "data=true:hi filter=true:HELLO");
-    let _ = fs::remove_dir_all(&dir);
+    assert_eq!(out, "data=true:hi");
 }
 
 /// Pins that `fread($f, $n)` never hands back more than `$n` bytes through a filter.

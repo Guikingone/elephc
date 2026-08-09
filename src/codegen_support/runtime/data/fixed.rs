@@ -1148,6 +1148,19 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // the `&$error_code` / `&$error_message` outputs of the four socket-opening builtins.
     out.push_str(&comm_directive("_socket_errno", 8, target));
     out.push_str(&emit_php_wrapper_scheme_table());
+    // A `php://filter/...` URL resolved at run time: the filter it names, the direction it asked
+    // for, and the resource to open. Published by the parse so the attach can run once that
+    // resource is open and boxed; cleared by the attach, so a later plain open cannot inherit
+    // them.
+    out.push_str(&comm_directive("_php_filter_pending_id", 8, target));
+    out.push_str(&comm_directive("_php_filter_pending_mode", 8, target));
+    out.push_str(&comm_directive("_php_filter_res_ptr", 8, target));
+    out.push_str(&comm_directive("_php_filter_res_len", 8, target));
+    // Needles the parse matches, kept as data so one spelling serves both assembly emitters.
+    out.push_str(".globl _pf_n_prefix\n_pf_n_prefix:\n    .ascii \"php://filter/\"\n");
+    out.push_str(".globl _pf_n_read\n_pf_n_read:\n    .ascii \"read=\"\n");
+    out.push_str(".globl _pf_n_write\n_pf_n_write:\n    .ascii \"write=\"\n");
+    out.push_str(".globl _pf_n_resource\n_pf_n_resource:\n    .ascii \"/resource=\"\n");
     out.push_str(&comm_directive("_protoent_buf", 32768, target));
     out.push_str(".globl _etc_protocols_path\n_etc_protocols_path:\n    .asciz \"/etc/protocols\"\n");
     out.push_str(&comm_directive("_servent_buf", 1048576, target));

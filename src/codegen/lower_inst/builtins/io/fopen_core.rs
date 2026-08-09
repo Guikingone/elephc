@@ -70,6 +70,61 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     emit_dynamic_fopen_result(ctx, inst)
 }
 
+/// Replaces a run-time `php://filter/...` filename with the RESOURCE it wraps.
+///
+/// A filter URL is "open this, then filter it", so the open that follows is the ordinary one for
+/// whatever the resource turns out to be — a file, `php://temp`, anything. The filter it named is
+/// parked by the parse and attached after boxing, which is why nothing here needs to know how to
+/// open the resource itself.
+fn emit_dynamic_php_filter_swap(ctx: &mut FunctionContext<'_>) {
+    let unchanged = ctx.next_label("fopen_dynamic_not_filter");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // Both pairs must be saved, not just the mode: the parse takes its argument in x0/x1
+            // and so destroys the filename pair the fall-through path still needs.
+            abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");                   // the filename
+            abi::emit_push_reg_pair(ctx.emitter, "x3", "x4");                   // the fopen mode
+            ctx.emitter.instruction("mov x0, x1");                              // the candidate filter URL
+            ctx.emitter.instruction("mov x1, x2");                              // and its length
+            abi::emit_call_label(ctx.emitter, "__rt_php_filter_parse");
+            ctx.emitter.instruction("mov x9, x0");                              // did it parse as a filter URL?
+            abi::emit_pop_reg_pair(ctx.emitter, "x3", "x4");
+            abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+            ctx.emitter.instruction(&format!("cbz x9, {}", unchanged));         // no: the filename stands
+            abi::emit_symbol_address(ctx.emitter, "x9", "_php_filter_res_ptr");
+            ctx.emitter.instruction("ldr x1, [x9]");                            // open the resource instead
+            abi::emit_symbol_address(ctx.emitter, "x9", "_php_filter_res_len");
+            ctx.emitter.instruction("ldr x2, [x9]");                            // with its length
+        }
+        Arch::X86_64 => {
+            // See the AArch64 counterpart: the parse takes rdi/rsi, so the filename pair in
+            // rax/rdx has to be saved as well as the mode.
+            abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");                 // the filename
+            abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");                 // the fopen mode
+            ctx.emitter.instruction("mov rdi, rax");                            // the candidate filter URL
+            ctx.emitter.instruction("mov rsi, rdx");                            // and its length
+            abi::emit_call_label(ctx.emitter, "__rt_php_filter_parse");
+            ctx.emitter.instruction("mov r9, rax");                             // did it parse as a filter URL?
+            abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+            abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+            ctx.emitter.instruction("test r9, r9");
+            ctx.emitter.instruction(&format!("jz {}", unchanged));              // no: the filename stands
+            abi::emit_symbol_address(ctx.emitter, "r9", "_php_filter_res_ptr");
+            ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                 // open the resource instead
+            abi::emit_symbol_address(ctx.emitter, "r9", "_php_filter_res_len");
+            ctx.emitter.instruction("mov rdx, QWORD PTR [r9]");                 // with its length
+        }
+    }
+    ctx.emitter.label(&unchanged);
+}
+
+/// Attaches the filter a run-time `php://filter` URL named, once the resource is open and boxed.
+///
+/// A no-op when nothing is pending, which is every open that did not come from a filter URL.
+fn emit_dynamic_php_filter_attach(ctx: &mut FunctionContext<'_>) {
+    abi::emit_call_label(ctx.emitter, "__rt_php_filter_attach_pending");
+}
+
 /// Opens a runtime filename that carries the `php://` prefix, falling through when it does not.
 ///
 /// The literal path resolves its wrapper at compile time; a runtime path had no such dispatch and
@@ -110,6 +165,7 @@ fn emit_dynamic_php_wrapper_branch(
     }
     abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
     box_stream_fd_or_false_result(ctx, "fopen_php_dynamic");
+    emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
     emit_record_stream_meta_after_boxed_stashed(ctx, 6);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     finish_fopen_context_scope(ctx);
@@ -126,6 +182,7 @@ fn emit_dynamic_fopen_result(
 ) -> Result<()> {
     let plain = ctx.next_label("fopen_dynamic_plain");
     let done = ctx.next_label("fopen_dynamic_done");
+    emit_dynamic_php_filter_swap(ctx);
     emit_dynamic_php_wrapper_branch(ctx, inst, &done)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
@@ -151,6 +208,7 @@ fn emit_dynamic_fopen_result(
         }
     }
     box_stream_fd_or_false_result(ctx, "fopen_http_dynamic");
+    emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
     emit_record_stream_meta_after_boxed_stashed(ctx, 1);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     finish_fopen_context_scope(ctx);
@@ -161,6 +219,7 @@ fn emit_dynamic_fopen_result(
     ctx.emitter.label(&plain);
     abi::emit_call_label(ctx.emitter, "__rt_fopen_maybe_phar");
     box_stream_fd_or_false_result(ctx, "fopen");
+    emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
     emit_record_stream_meta_after_boxed_stashed(ctx, 0);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     finish_fopen_context_scope(ctx);

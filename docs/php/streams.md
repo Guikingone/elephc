@@ -101,16 +101,20 @@ run time is resolved too, for `php://` and `http://`, so the common shape works:
 function readIt(string $path) { return fopen($path, "r"); }   // "php://memory" opens
 ```
 
-⚠️ **`data://` and `php://filter` are the exceptions** — they still require a literal URL, and a
-run-time string answers `false`. `data://` decodes its payload during lowering and embeds the
-bytes, and `php://filter` attaches its filter through the compile-time chain-node emitter.
+⚠️ **`data://` is the exception** — it still requires a literal URI, and a run-time string answers
+`false`, because it decodes its payload during lowering and embeds the bytes.
+
+A run-time `php://filter/...` URL opens the resource it names and attaches the filter afterwards,
+so the resource may itself be any scheme — `resource=php://temp` works. As with the literal form,
+only the first filter of a `|`-separated list is applied, an unrecognised filter name opens the
+resource unfiltered, and a resource that is itself a filter URL is refused.
 
 | Wrapper | Description |
 |---|---|
 | `file` | Normal filesystem streams. |
 | `php://stdin`, `php://stdout`, `php://stderr` | Standard descriptors 0, 1, and 2. `php://input` aliases stdin, and `php://output` aliases stdout. |
 | `php://memory`, `php://temp` | Seekable in-memory streams backed by an anonymous temporary buffer. `php://temp/maxmemory:N` is accepted and ignored. |
-| `php://filter` | Opens an underlying resource and attaches one built-in filter at open time, for example `php://filter/read=string.toupper/resource=php://temp`. The resource may be any path or wrapper URL. ⚠️ The URL must be a literal in the `fopen()` call. |
+| `php://filter` | Opens an underlying resource and attaches one built-in filter at open time, for example `php://filter/read=string.toupper/resource=php://temp`. The resource may be any path or wrapper URL, and the URL may be built at run time. |
 | `data://` | RFC 2397 inline payload streams. Base64 and percent-decoded payloads are supported. ⚠️ The URI must be a string literal. |
 | `phar://` | Read or write PHAR entries. Literal reads happen at compile time and embed the entry in the binary; non-literal reads happen at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native PHAR gzip/bzip2 entries and ZIP deflate entries are decoded transparently. |
 | `ftp://` | Anonymous binary passive FTP read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. Credentials in the URL are ignored in v1. |
