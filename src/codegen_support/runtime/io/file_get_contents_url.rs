@@ -167,6 +167,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // did the URL open fail?
     emitter.instruction("b.lt __rt_fgc_url_http_fail");                         // failed open returns PHP false
     emitter.instruction("str x0, [sp, #56]");                                   // save response-body fd
+    emitter.instruction("mov x1, #0");                                          // no state-owned chunk size: let the reader use its default
     emitter.instruction("bl __rt_stream_get_contents");                         // slurp the response fd into concat buffer
     emitter.instruction("stp x1, x2, [sp, #64]");                               // preserve response ptr/len across close
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload response-body fd
@@ -319,6 +320,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // did the URL open fail?
     emitter.instruction("b.lt __rt_fgc_url_https_fail");                        // failed open returns PHP false
     emitter.instruction("str x0, [sp, #72]");                                   // save response-body fd
+    emitter.instruction("mov x1, #0");                                          // no state-owned chunk size: let the reader use its default
     emitter.instruction("bl __rt_stream_get_contents");                         // slurp the response fd into concat buffer
     emitter.instruction("stp x1, x2, [sp, #80]");                               // preserve response ptr/len across close
     emitter.instruction("ldr x0, [sp, #72]");                                   // reload response-body fd
@@ -514,6 +516,7 @@ pub fn emit_file_get_contents_url(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // did the FTP open fail?
     emitter.instruction("b.lt __rt_fgc_url_ftp_fail");                          // failed open returns PHP false
     emitter.instruction("str x0, [sp, #56]");                                   // save FTP data fd
+    emitter.instruction("mov x1, #0");                                          // no state-owned chunk size: let the reader use its default
     emitter.instruction("bl __rt_stream_get_contents");                         // slurp the FTP data fd into concat buffer
     emitter.instruction("stp x1, x2, [sp, #64]");                               // preserve response ptr/len across close
     emitter.instruction("ldr x0, [sp, #56]");                                   // reload FTP data fd
@@ -675,6 +678,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_fgc_url_http_fail_x86");                       // failed open returns PHP false
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save response-body fd
     emitter.instruction("mov rdi, rax");                                        // fd for stream_get_contents
+    emitter.instruction("xor esi, esi");                                        // no state-owned chunk size: let the reader use its default
     emitter.instruction("call __rt_stream_get_contents");                       // slurp the response fd into concat buffer
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save response ptr across close
     emitter.instruction("mov QWORD PTR [rbp - 80], rdx");                       // save response length across close
@@ -819,6 +823,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_fgc_url_https_fail_x86");                      // failed open returns PHP false
     emitter.instruction("mov QWORD PTR [rbp - 80], rax");                       // save response-body fd
     emitter.instruction("mov rdi, rax");                                        // fd for stream_get_contents
+    emitter.instruction("xor esi, esi");                                        // no state-owned chunk size: let the reader use its default
     emitter.instruction("call __rt_stream_get_contents");                       // slurp the response fd into concat buffer
     emitter.instruction("mov QWORD PTR [rbp - 88], rax");                       // save response ptr across close
     emitter.instruction("mov QWORD PTR [rbp - 96], rdx");                       // save response length across close
@@ -991,6 +996,7 @@ fn emit_file_get_contents_url_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_fgc_url_ftp_fail_x86");                        // failed open returns PHP false
     emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // save FTP data fd
     emitter.instruction("mov rdi, rax");                                        // fd for stream_get_contents
+    emitter.instruction("xor esi, esi");                                        // no state-owned chunk size: let the reader use its default
     emitter.instruction("call __rt_stream_get_contents");                       // slurp the FTP data fd into concat buffer
     emitter.instruction("mov QWORD PTR [rbp - 72], rax");                       // save response ptr across close
     emitter.instruction("mov QWORD PTR [rbp - 80], rdx");                       // save response length across close

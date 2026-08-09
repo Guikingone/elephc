@@ -338,6 +338,7 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // did the phar read fail?
     emitter.instruction("b.lt __rt_fgc_phar_fail");                             // → boxed false
     emitter.instruction("str x0, [sp, #0]");                                    // save the fd for the close below
+    emitter.instruction("mov x1, #0");                                          // no state-owned chunk size: let the reader use its default
     emitter.instruction("bl __rt_stream_get_contents");                         // (x0=fd) → x1 = string ptr, x2 = length
     emitter.instruction("stp x1, x2, [sp, #8]");                                // save the slurped string ptr/len
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the fd
@@ -793,6 +794,7 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_fgc_phar_fail_x86");                           // → boxed false
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the fd for the close below
     emitter.instruction("mov rdi, rax");                                        // fd → __rt_stream_get_contents arg
+    emitter.instruction("xor esi, esi");                                        // no state-owned chunk size: let the reader use its default
     emitter.instruction("call __rt_stream_get_contents");                       // rax = string ptr, rdx = length
     emitter.instruction("mov QWORD PTR [rbp - 16], rax");                       // save the slurped string ptr
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the slurped string length
