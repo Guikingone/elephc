@@ -7605,6 +7605,29 @@ echo "n=" . $n . " kept=" . count($r);
     assert_eq!(out, "n=1 kept=1");
 }
 
+/// `stream_select()` must actually wait for its timeout.
+///
+/// The timeout arrives in caller-saved registers (x3/x4, rcx/r8) and the pollfd build
+/// calls `__rt_stream_fd` for every entry, so the computed timeout was whatever those
+/// registers happened to hold afterwards. On macOS that garbage rounded to zero and the
+/// call returned instantly; on Linux it hit the "negative seconds means infinite" arm and
+/// `poll(-1)` blocked forever, which is what timed this suite's wrapper test out at 60s.
+/// The lower bound is deliberately loose — the bug produced 0 ms, not 190 ms.
+#[test]
+fn test_stream_select_waits_for_its_timeout() {
+    let out = compile_and_run(
+        r#"<?php
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, 0);
+$r = [$pair[0]]; $w = []; $e = [];
+$t0 = microtime(true);
+$n = stream_select($r, $w, $e, 0, 200000);
+$ms = (int) round((microtime(true) - $t0) * 1000);
+echo "n=", var_export($n, true), " waited=", var_export($ms >= 150, true);
+"#,
+    );
+    assert_eq!(out, "n=0 waited=true");
+}
+
 /// A userspace wrapper that does not implement `stream_cast` cannot be
 /// represented as a select()-able descriptor, so `stream_select` excludes its
 /// synthetic fd (matching PHP) and drops it from the ready set without crashing.

@@ -41,7 +41,8 @@ pub fn emit_stream_select(emitter: &mut Emitter) {
 /// Frame layout (2304 bytes): `[0..2048]` pollfd array, `[2048]` read_arr,
 /// `[2056]` write_arr, `[2064]` except_arr, `[2072]` read_len, `[2080]` write_len,
 /// `[2088]` except_len, `[2096]` nfds, `[2104]` ready_count, `[2112]` timeout_ms,
-/// `[2120..2256]` spill slots for stream_cast, `[2256]` x29, `[2264]` x30.
+/// `[2120..2168]` spill slots for stream_cast, `[2168]` timeout seconds,
+/// `[2176]` timeout microseconds, `[2256]` x29, `[2264]` x30.
 fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     let linux = emitter.target.platform == Platform::Linux;
     emitter.blank();
@@ -57,6 +58,12 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #2048]");                                  // save the read resource array
     emitter.instruction("str x1, [sp, #2056]");                                  // save the write resource array
     emitter.instruction("str x2, [sp, #2064]");                                  // save the except resource array
+    // The timeout arrives in x3/x4, which are caller-saved: building the pollfd array
+    // calls __rt_stream_fd for every entry (and __rt_user_wrapper_stream_cast for a
+    // wrapper), so both are garbage by the time the timeout is computed. Spilling them
+    // here is what keeps `stream_select($r, $w, $e, 0, 200000)` from returning instantly.
+    emitter.instruction("str x3, [sp, #2168]");                                  // save the timeout seconds
+    emitter.instruction("str x4, [sp, #2176]");                                  // save the timeout microseconds
 
     // -- count total fds = read_len + write_len + except_len --
     emitter.instruction("ldr x9, [x0]");                                         // read array length
@@ -79,7 +86,7 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     emit_build_pollfd_aarch64(emitter, 2056, 2080, POLLOUT, "w");
     emit_build_pollfd_aarch64(emitter, 2064, 2088, POLLPRI, "e");
 
-    // -- compute the poll timeout in milliseconds (x3=seconds, x4=microseconds still live) --
+    // -- compute the poll timeout in milliseconds (reloaded from the frame) --
     emit_compute_timeout_aarch64(emitter, linux);
 
     // -- invoke poll(2) --
@@ -329,7 +336,9 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
 /// A sentinel null/infinite value (negative or >= 0x7fffffff) maps to `-1`
 /// (block forever); `seconds == 0 && microseconds == 0` maps to `0`.
 fn emit_compute_timeout_aarch64(emitter: &mut Emitter, _linux: bool) {
-    // x3 = seconds, x4 = microseconds (still in their original registers on entry)
+    // The pollfd build clobbered x3/x4, so the timeout comes back off the frame.
+    emitter.instruction("ldr x3, [sp, #2168]");                                 // reload the timeout seconds
+    emitter.instruction("ldr x4, [sp, #2176]");                                 // reload the timeout microseconds
     emitter.instruction("cmp x3, #0");                                          // seconds == 0?
     emitter.instruction("b.ne __rt_stream_select_ts_pos");                        // positive seconds → compute timeout
     emitter.instruction("cmp x4, #0");                                          // microseconds == 0 too?
@@ -375,6 +384,12 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 2064], rdi");                       // save the read resource array
     emitter.instruction("mov QWORD PTR [rbp - 2056], rsi");                       // save the write resource array
     emitter.instruction("mov QWORD PTR [rbp - 2048], rdx");                       // save the except resource array
+    // The timeout arrives in rcx/r8, which are caller-saved: building the pollfd array
+    // calls __rt_stream_fd for every entry (and __rt_user_wrapper_stream_cast for a
+    // wrapper), so both are garbage by the time the timeout is computed. Spilling them
+    // here is what keeps `stream_select($r, $w, $e, 0, 200000)` from returning instantly.
+    emitter.instruction("mov QWORD PTR [rbp - 2176], rcx");                       // save the timeout seconds
+    emitter.instruction("mov QWORD PTR [rbp - 2184], r8");                        // save the timeout microseconds
 
     // -- count total fds = read_len + write_len + except_len --
     emitter.instruction("mov r9, QWORD PTR [rdi]");                              // read array length
@@ -397,8 +412,7 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emit_build_pollfd_x86(emitter, 2056, 2080, POLLOUT, "w");
     emit_build_pollfd_x86(emitter, 2048, 2088, POLLPRI, "e");
 
-    // -- compute the poll timeout in milliseconds --
-    // rcx = seconds, r8 = microseconds (still in their original registers on entry)
+    // -- compute the poll timeout in milliseconds (reloaded from the frame) --
     emit_compute_timeout_x86(emitter, linux);
 
     // -- invoke poll(2) --
@@ -627,7 +641,9 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
 
 /// Computes the poll timeout in milliseconds (x86_64) and stores it at `[rbp-2112]`.
 fn emit_compute_timeout_x86(emitter: &mut Emitter, _linux: bool) {
-    // rcx = seconds, r8 = microseconds (still in their original registers on entry)
+    // The pollfd build clobbered rcx/r8, so the timeout comes back off the frame.
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 2176]");                      // reload the timeout seconds
+    emitter.instruction("mov r8, QWORD PTR [rbp - 2184]");                       // reload the timeout microseconds
     emitter.instruction("test rcx, rcx");                                        // seconds == 0?
     emitter.instruction("jnz __rt_stream_select_ts_pos_x");                      // positive seconds → compute timeout
     emitter.instruction("test r8, r8");                                          // microseconds == 0 too?
