@@ -5397,33 +5397,19 @@ flock($h, LOCK_SH, $would);
     );
 }
 
-/// Pins that `fopen()` honours a wrapper scheme in a path built at RUN TIME, not only in a
+/// Verifies `fopen()` honours a `php://` scheme in a path built at RUN TIME, not only in a
 /// literal.
 ///
-/// IGNORED because the wrapper dispatch is a compile-time chain over literal paths:
-/// `lower_fopen` matches `php://`, `data://`, `ftp://`, `phar://` and `compress.*://` on the
-/// constant-folded filename, while the dynamic path recognises `http://` alone and hands
-/// everything else to the generic file opener. Every other scheme therefore opens as a file
-/// name, fails to find it, and answers `false`.
+/// The wrapper dispatch is a compile-time chain over the constant-folded filename, and the
+/// dynamic path used to recognise `http://` alone — so every other scheme opened as a plain file
+/// name, failed to find it, and answered `false`. That is the shape real code takes: a function
+/// receives its path as a parameter, so the literal-only dispatch was invisible until a caller
+/// passed one in. `__rt_php_wrapper_open` now makes the same choices from the run-time bytes.
 ///
-/// Measured against php 8.5.6, which opens all of these — nine of the ten probes below fail
-/// under elephc today and only the plain file path works:
-///
-/// | path | php 8.5.6 | elephc |
-/// |---|---|---|
-/// | `php://memory`, `php://temp` | opens | `false` |
-/// | `php://stdout`, `php://stderr` | opens | `false` |
-/// | `php://input`, `php://output`, `php://fd/1` | opens | `false` |
-/// | `php://filter/read=…/resource=…` | opens | `false` |
-/// | `data://text/plain,hi` | opens | `false` |
-/// | a plain file name | opens | opens |
-///
-/// This is the common shape in real code — `function readIt(string $path)` receives its path
-/// as a variable — so the literal-only dispatch is invisible until a caller passes one in.
+/// Measured against php 8.5.6, which opens all of these.
 #[test]
-#[ignore = "the wrapper scheme dispatch runs at compile time over literal paths; a runtime-built path only recognises http://"]
-fn test_fopen_honours_a_wrapper_scheme_built_at_run_time() {
-    let (out, dir) = compile_and_run_in_dir(
+fn test_fopen_honours_a_php_scheme_built_at_run_time() {
+    let out = compile_and_run(
         r#"<?php
 function probe(string $label, string $path, string $mode): void {
     $h = @fopen($path, $mode);
@@ -5434,19 +5420,71 @@ $p = "php://";
 probe("memory", $p . "memory", "r+");
 probe("temp", $p . "temp", "r+");
 probe("stdout", $p . "stdout", "w");
+probe("stderr", $p . "stderr", "w");
+probe("input", $p . "input", "r");
+probe("output", $p . "output", "w");
 probe("fd1", $p . "fd/1", "w");
-file_put_contents("pf.txt", "hello");
-probe("data", "data://text/plain," . "hi", "r");
-$url = "php://filter/read=string.toupper/resource=" . "pf.txt";
-$f = @fopen($url, "r");
-echo "filter=", var_export($f !== false, true);
-if ($f !== false) { echo ":", stream_get_contents($f); fclose($f); }
+probe("maxmemory", $p . "temp/maxmemory:16", "r+");
+echo "|";
+$m = fopen($p . "memory", "r+");
+fwrite($m, "round trip");
+rewind($m);
+echo stream_get_contents($m);
+fclose($m);
 "#,
     );
     assert_eq!(
         out,
-        "memory=true temp=true stdout=true fd1=true data=true filter=true:HELLO"
+        "memory=true temp=true stdout=true stderr=true input=true output=true fd1=true \
+         maxmemory=true |round trip"
     );
+}
+
+/// Pins that a run-time `php://` URL naming no stream answers `false` rather than opening
+/// something.
+///
+/// The dispatcher walks a table and reports `-1` for anything it does not recognise, which boxes
+/// as PHP's `false`. Without this the unknown case would be indistinguishable from the schemes
+/// that work.
+#[test]
+fn test_fopen_rejects_an_unknown_php_scheme_built_at_run_time() {
+    let out = compile_and_run(
+        r#"<?php
+$p = "php://";
+echo var_export(@fopen($p . "nosuchstream", "r"), true), "|";
+echo var_export(@fopen($p . "fd/notanumber", "r"), true), "|";
+echo var_export(@fopen($p, "r"), true);
+"#,
+    );
+    assert_eq!(out, "false|false|false");
+}
+
+/// Pins the two wrapper schemes a run-time path still cannot open.
+///
+/// IGNORED because both resolve at compile time in a way the run-time dispatcher does not yet
+/// reproduce: `data://` decodes its payload during lowering and embeds the bytes, so a run-time
+/// URL would need the base64 and percent decoders in the runtime; and `php://filter` attaches
+/// its filter through the lowering's chain-node emitter rather than a runtime helper. The
+/// `php://` family around them works — see
+/// [`test_fopen_honours_a_php_scheme_built_at_run_time`].
+///
+/// Measured against php 8.5.6, which opens both.
+#[test]
+#[ignore = "data:// decodes at compile time and php://filter attaches through the lowering, so neither has a run-time path yet"]
+fn test_fopen_honours_data_and_filter_urls_built_at_run_time() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("pf.txt", "hello");
+$d = @fopen("data://text/plain," . "hi", "r");
+echo "data=", var_export($d !== false, true);
+if ($d !== false) { echo ":", stream_get_contents($d); fclose($d); }
+$url = "php://filter/read=string.toupper/resource=" . "pf.txt";
+$f = @fopen($url, "r");
+echo " filter=", var_export($f !== false, true);
+if ($f !== false) { echo ":", stream_get_contents($f); fclose($f); }
+"#,
+    );
+    assert_eq!(out, "data=true:hi filter=true:HELLO");
     let _ = fs::remove_dir_all(&dir);
 }
 

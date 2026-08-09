@@ -70,6 +70,55 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     emit_dynamic_fopen_result(ctx, inst)
 }
 
+/// Opens a runtime filename that carries the `php://` prefix, falling through when it does not.
+///
+/// The literal path resolves its wrapper at compile time; a runtime path had no such dispatch and
+/// went to the file opener, so `fopen($path, 'r')` with `php://memory` searched for a FILE of
+/// that name. This branch gives the runtime bytes the same treatment, through
+/// `__rt_php_wrapper_open`, and leaves everything else — including a `php://` URL the helper does
+/// not recognise, which answers `-1` and boxes as `false` — to the paths below.
+fn emit_dynamic_php_wrapper_branch(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    done: &str,
+) -> Result<()> {
+    let not_php = ctx.next_label("fopen_dynamic_not_php");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x2, #6");                              // is the filename long enough for php://?
+            ctx.emitter.instruction(&format!("b.lt {}", not_php));              // shorter filenames cannot carry the scheme
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!("ldrb w9, [x1, #{}]", offset)); // load one candidate scheme byte
+                ctx.emitter.instruction(&format!("cmp w9, #{}", byte));         // compare against the canonical php:// byte
+                ctx.emitter.instruction(&format!("b.ne {}", not_php));          // a different prefix is not this wrapper
+            }
+            ctx.emitter.instruction("mov x0, x1");                              // pass the filename pointer
+            ctx.emitter.instruction("mov x1, x2");                              // pass the filename length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rdx, 6");                              // is the filename long enough for php://?
+            ctx.emitter.instruction(&format!("jl {}", not_php));                // shorter filenames cannot carry the scheme
+            for (offset, byte) in b"php://".iter().enumerate() {
+                ctx.emitter.instruction(&format!(
+                    "cmp BYTE PTR [rax + {}], {}", offset, byte
+                ));                                                             // compare one byte against the canonical php:// prefix
+                ctx.emitter.instruction(&format!("jne {}", not_php));           // a different prefix is not this wrapper
+            }
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the filename pointer
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the filename length
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_php_wrapper_open");
+    box_stream_fd_or_false_result(ctx, "fopen_php_dynamic");
+    emit_record_stream_meta_after_boxed_stashed(ctx, 6);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    finish_fopen_context_scope(ctx);
+    store_if_result(ctx, inst)?;
+    abi::emit_jump(ctx.emitter, done);
+    ctx.emitter.label(&not_php);
+    Ok(())
+}
+
 /// Dispatches a runtime filename to the streaming HTTP opener or generic fopen helper.
 fn emit_dynamic_fopen_result(
     ctx: &mut FunctionContext<'_>,
@@ -77,6 +126,7 @@ fn emit_dynamic_fopen_result(
 ) -> Result<()> {
     let plain = ctx.next_label("fopen_dynamic_plain");
     let done = ctx.next_label("fopen_dynamic_done");
+    emit_dynamic_php_wrapper_branch(ctx, inst, &done)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("cmp x2, #7");                              // is the dynamic filename long enough for http://?

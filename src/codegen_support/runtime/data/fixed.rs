@@ -1147,6 +1147,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // Why the last socket connect/bind failed, published by the socket helpers and read back by
     // the `&$error_code` / `&$error_message` outputs of the four socket-opening builtins.
     out.push_str(&comm_directive("_socket_errno", 8, target));
+    out.push_str(&emit_php_wrapper_scheme_table());
     out.push_str(&comm_directive("_protoent_buf", 32768, target));
     out.push_str(".globl _etc_protocols_path\n_etc_protocols_path:\n    .asciz \"/etc/protocols\"\n");
     out.push_str(&comm_directive("_servent_buf", 1048576, target));
@@ -1335,6 +1336,48 @@ fn emit_php_uname_data() -> String {
          .globl _php_uname_mode_value_msg\n_php_uname_mode_value_msg:\n    .ascii {:?}\n",
         PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG
     )
+}
+
+/// Emits the `php://` sub-scheme table `__rt_php_wrapper_open` walks.
+///
+/// `fopen()` resolves a wrapper scheme from a literal path at compile time. A path built at run
+/// time has to make the same choices with the bytes in hand, and a table keeps the names and
+/// their actions declared once here rather than spelled out as a chain of inline comparisons in
+/// two hand-written assembly emitters.
+///
+/// Records are a fixed 16 bytes so the walk is a simple stride: name padded to 8 bytes, its
+/// length, the action, and whether the name matches as a prefix (`temp/maxmemory:N` and
+/// `fd/N` carry a suffix) or must match exactly. A zero length terminates the table.
+fn emit_php_wrapper_scheme_table() -> String {
+    // (name, action, prefix-match). Actions: 0/1/2 duplicate that descriptor, 3 opens an
+    // anonymous temporary buffer, 4 parses the descriptor number out of the rest of the name.
+    const SCHEMES: &[(&str, u8, bool)] = &[
+        ("stdin", 0, false),
+        ("input", 0, false),
+        ("stdout", 1, false),
+        ("output", 1, false),
+        ("stderr", 2, false),
+        ("memory", 3, false),
+        ("temp", 3, false),
+        ("temp/", 3, true),
+        ("fd/", 4, true),
+    ];
+    let mut out = String::new();
+    out.push_str(".p2align 3\n");
+    out.push_str(".globl _php_wrapper_schemes\n_php_wrapper_schemes:\n");
+    for (name, action, prefix) in SCHEMES {
+        assert!(name.len() <= 8, "php:// sub-scheme name must fit the 8-byte field");
+        let padded: String = name.chars().chain(std::iter::repeat('\0')).take(8).collect();
+        out.push_str(&format!("    .ascii {:?}\n", padded));
+        out.push_str(&format!("    .byte {}\n", name.len()));
+        out.push_str(&format!("    .byte {}\n", action));
+        out.push_str(&format!("    .byte {}\n", u8::from(*prefix)));
+        out.push_str("    .byte 0, 0, 0, 0, 0\n");
+    }
+    // Terminator: a zero name length ends the walk.
+    out.push_str("    .byte 0, 0, 0, 0, 0, 0, 0, 0\n");
+    out.push_str("    .byte 0, 0, 0, 0, 0, 0, 0, 0\n");
+    out
 }
 
 /// Emit the mutable globals backing `spl_autoload_extensions` runtime

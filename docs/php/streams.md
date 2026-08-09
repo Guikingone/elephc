@@ -94,26 +94,24 @@ streams are unbuffered, so the accepted buffer size does not change behavior.
 
 ## Built-in wrappers
 
-⚠️ **`fopen()` resolves the wrapper scheme from a LITERAL path.** The dispatch runs at compile
-time over the constant-folded filename; a path built at run time is recognised only for
-`http://` and otherwise opens as a plain file name. So `fopen("php://memory", "r+")` works while
+`fopen()` resolves most wrapper schemes at compile time, from the literal path. A path built at
+run time is resolved too, for `php://` and `http://`, so the common shape works:
 
 ```php
-function readIt(string $path) { return fopen($path, "r"); }   // "php://memory" → false
+function readIt(string $path) { return fopen($path, "r"); }   // "php://memory" opens
 ```
 
-does not — the call answers `false` for every scheme in this table except `file`. Measured
-against php 8.5.6, which opens all of them; pinned by
-`test_fopen_honours_a_wrapper_scheme_built_at_run_time`. `file_get_contents()` is not affected
-for the schemes noted below.
+⚠️ **`data://` and `php://filter` are the exceptions** — they still require a literal URL, and a
+run-time string answers `false`. `data://` decodes its payload during lowering and embeds the
+bytes, and `php://filter` attaches its filter through the compile-time chain-node emitter.
 
 | Wrapper | Description |
 |---|---|
 | `file` | Normal filesystem streams. |
 | `php://stdin`, `php://stdout`, `php://stderr` | Standard descriptors 0, 1, and 2. `php://input` aliases stdin, and `php://output` aliases stdout. |
 | `php://memory`, `php://temp` | Seekable in-memory streams backed by an anonymous temporary buffer. `php://temp/maxmemory:N` is accepted and ignored. |
-| `php://filter` | Opens an underlying resource and attaches one built-in filter at open time, for example `php://filter/read=string.toupper/resource=php://temp`. The resource may be any path or wrapper URL. Like every scheme here, the URL must be a literal in the `fopen()` call. |
-| `data://` | RFC 2397 inline payload streams. Base64 and percent-decoded payloads are supported. The URI must be a string literal. |
+| `php://filter` | Opens an underlying resource and attaches one built-in filter at open time, for example `php://filter/read=string.toupper/resource=php://temp`. The resource may be any path or wrapper URL. ⚠️ The URL must be a literal in the `fopen()` call. |
+| `data://` | RFC 2397 inline payload streams. Base64 and percent-decoded payloads are supported. ⚠️ The URI must be a string literal. |
 | `phar://` | Read or write PHAR entries. Literal reads happen at compile time and embed the entry in the binary; non-literal reads happen at runtime. Native PHAR, tar-based PHAR, and zip-based PHAR containers are readable; native PHAR gzip/bzip2 entries and ZIP deflate entries are decoded transparently. |
 | `ftp://` | Anonymous binary passive FTP read streams. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. Credentials in the URL are ignored in v1. |
 | `ftps://` | Explicit FTP over TLS using `AUTH TLS`, with TLS on both control and data channels. `fopen()` requires a literal URL; `file_get_contents()` also accepts runtime string URLs. |
