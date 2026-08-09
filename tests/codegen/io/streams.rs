@@ -5527,6 +5527,49 @@ echo $out;
     assert_eq!(out, "<ABC><DEF><GHI>");
 }
 
+/// Pins the third measured property of PHP's filtered reads: end of input triggers a `$closing`
+/// dispatch whose output reaches the reader.
+///
+/// IGNORED because nothing flushes a read filter at EOF. A filter holding every byte until
+/// `$closing` therefore never emits its result — and because `PSFS_FEED_ME` currently passes its
+/// input through, the reader gets the RAW `xyz` instead of the filter's `[xyz]`. Measured against
+/// php 8.5.6.
+///
+/// Kept separate from [`test_user_filter_psfs_feed_me_buffers_across_dispatches`] so the three
+/// properties can be fixed and verified one at a time: FEED_ME returning nothing, `fread()`
+/// capping and parking the remainder, and this closing flush. Landing the first two without this
+/// one turns the leak into silent data loss, so all three ship together.
+#[test]
+#[ignore = "nothing flushes a read filter at EOF, so a filter holding bytes until $closing never emits them"]
+fn test_read_filter_is_flushed_when_the_stream_ends() {
+    let out = compile_and_run(
+        r#"<?php
+class HoldUntilClose extends php_user_filter {
+    private string $buf = "";
+    public function filter($in, $out, &$consumed, $closing): int {
+        while ($b = stream_bucket_make_writeable($in)) {
+            $consumed += $b->datalen;
+            $this->buf .= $b->data;
+        }
+        if (!$closing) {
+            return PSFS_FEED_ME;
+        }
+        stream_bucket_append($out, stream_bucket_new($this->stream, "[" . $this->buf . "]"));
+        return PSFS_PASS_ON;
+    }
+}
+stream_filter_register("hold.until.close", "HoldUntilClose");
+$f = fopen("php://memory", "r+");
+fwrite($f, "xyz");
+rewind($f);
+stream_filter_append($f, "hold.until.close", STREAM_FILTER_READ);
+echo stream_get_contents($f);
+fclose($f);
+"#,
+    );
+    assert_eq!(out, "[xyz]");
+}
+
 /// Verifies `php_user_filter` declares the properties PHP declares.
 ///
 /// Only `$params` existed, so the manual's own filter idiom — building an output bucket
