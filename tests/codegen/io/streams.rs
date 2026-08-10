@@ -5586,6 +5586,31 @@ probe("nocomma", $d . "text/plain");
     assert_eq!(out, "plain=true:hi pct=true:a b! b64=true:hello empty=true: nocomma=false ");
 }
 
+/// Pins PHP's optional `fgets($handle, $length)`, which bounds the line.
+///
+/// IGNORED because the builtin is declared with a single parameter and the runtime accumulates
+/// until a newline with no caller-supplied bound, so the two-argument form is a COMPILE ERROR —
+/// `fgets() takes exactly 1 argument`. php 8.5.6 reads at most `$length - 1` bytes and leaves the
+/// remainder for the next read.
+///
+/// The documentation advertised the two-argument signature, so this gap was invisible from the
+/// docs alone; it surfaced while writing an HTTP probe, where `fgets($conn, 1024)` is the
+/// ordinary way to read a request line.
+#[test]
+#[ignore = "fgets() is declared with one parameter; PHP's optional $length bound is not accepted"]
+fn test_fgets_accepts_phps_length_bound() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+fwrite($h, "abcdefghij\nsecond\n");
+rewind($h);
+echo var_export(fgets($h, 5), true), "|", var_export(fgets($h), true);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "'abcd'|'efghij\n'");
+}
+
 /// Verifies `data://` refuses a media type php-src does not accept, and reads `;base64` the way
 /// php-src reads it.
 ///
