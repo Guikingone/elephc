@@ -45,6 +45,175 @@ pub(crate) fn lower_preg_match(ctx: &mut FunctionContext<'_>, inst: &Instruction
     super::store_if_result(ctx, inst)
 }
 
+/// Lowers `preg_grep(pattern, array, flags = 0)` through the key-preserving mixed filter runtime.
+///
+/// The synthetic predicate casts each boxed array value to PHP string form, invokes the shared
+/// PCRE matcher, and reverses the predicate when `PREG_GREP_INVERT` is set. Both indexed and
+/// associative inputs deliberately use the mixed filter so the returned array retains its
+/// original keys and insertion order instead of being compacted like `array_filter()`'s packed
+/// fast path.
+pub(crate) fn lower_preg_grep(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    super::ensure_arg_count_between(inst, "preg_grep", 2, 3)?;
+    let pattern = super::expect_operand(inst, 0)?;
+    let source = super::expect_operand(inst, 1)?;
+    let source_ty = ctx.value_php_type(source)?.codegen_repr();
+    let runtime_label = match source_ty {
+        PhpType::Array(_) | PhpType::AssocArray { .. } => "__rt_array_filter_mixed_raw",
+        PhpType::Mixed | PhpType::Union(_) => {
+            emit_preg_grep_mixed_source_guard(ctx, source)?;
+            "__rt_array_filter_mixed"
+        }
+        ref other => {
+            return Err(CodegenIrError::invalid_module(format!(
+                "preg_grep array operand has non-array EIR type {:?}",
+                other
+            )));
+        }
+    };
+
+    let predicate_label = emit_preg_grep_predicate_wrapper(ctx);
+    abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+    let flags_reg = match ctx.emitter.target.arch {
+        Arch::AArch64 => "x0",
+        Arch::X86_64 => "rax",
+    };
+    load_optional_int_option(
+        ctx,
+        inst.operands.get(2).copied(),
+        flags_reg,
+        0,
+        "preg_grep flags",
+    )?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("and x0, x0, #1");                          // retain only PHP's PREG_GREP_INVERT bit
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // store normalized inversion flag in predicate environment
+            load_string_arg(ctx, pattern, "x1", "x2", "preg_grep pattern")?;
+            ctx.emitter.instruction("stp x1, x2, [sp]");                        // store pattern pointer and length in predicate environment
+            abi::emit_symbol_address(ctx.emitter, "x0", &predicate_label);
+            ctx.load_value_to_reg(source, "x1")?;
+            abi::emit_temporary_stack_address(ctx.emitter, "x2", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "x3", 0);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("and rax, 1");                              // retain only PHP's PREG_GREP_INVERT bit
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rax");           // store normalized inversion flag in predicate environment
+            load_string_arg(ctx, pattern, "rax", "rdx", "preg_grep pattern")?;
+            ctx.emitter.instruction("mov QWORD PTR [rsp], rax");                // store pattern pointer in predicate environment
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");            // store pattern length in predicate environment
+            abi::emit_symbol_address(ctx.emitter, "rdi", &predicate_label);
+            ctx.load_value_to_reg(source, "rsi")?;
+            abi::emit_temporary_stack_address(ctx.emitter, "rdx", 0);
+            abi::emit_load_int_immediate(ctx.emitter, "rcx", 0);
+        }
+    }
+    abi::emit_call_label(ctx.emitter, runtime_label);
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    super::store_if_result(ctx, inst)
+}
+
+/// Validates that a boxed gradual `preg_grep()` source currently holds an array.
+fn emit_preg_grep_mixed_source_guard(
+    ctx: &mut FunctionContext<'_>,
+    source: ValueId,
+) -> Result<()> {
+    ctx.load_value_to_result(source)?;
+    abi::emit_call_label(ctx.emitter, "__rt_mixed_unbox");
+    let ok_label = ctx.next_label("preg_grep_mixed_array");
+    let wrong_label = ctx.next_label("preg_grep_mixed_wrong_type");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));
+            ctx.emitter.instruction("cmp x0, #5");                              // runtime tag 5 = associative array
+            ctx.emitter.instruction(&format!("b.eq {}", ok_label));
+            ctx.emitter.instruction(&format!("b {}", wrong_label));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 4");                              // runtime tag 4 = indexed array
+            ctx.emitter.instruction(&format!("je {}", ok_label));
+            ctx.emitter.instruction("cmp rax, 5");                              // runtime tag 5 = associative array
+            ctx.emitter.instruction(&format!("je {}", ok_label));
+            ctx.emitter.instruction(&format!("jmp {}", wrong_label));
+        }
+    }
+    super::arrays::union_type_guard::emit_mixed_wrong_tag_type_error_dispatch(
+        ctx,
+        &wrong_label,
+        &|given| {
+            format!(
+                "preg_grep(): Argument #2 ($array) must be of type array, {} given",
+                given
+            )
+        },
+    );
+    ctx.emitter.label(&ok_label);
+    Ok(())
+}
+
+/// Emits the target-specific mixed-value predicate used by `preg_grep()`.
+///
+/// The filter runtime owns and later releases the boxed value argument. This wrapper owns only
+/// the temporary string allocated by `__rt_mixed_cast_string`; `__rt_heap_free` is intentionally
+/// safe for the shared formatting scratch returned by non-string scalar casts.
+fn emit_preg_grep_predicate_wrapper(ctx: &mut FunctionContext<'_>) -> String {
+    let predicate_label = ctx.next_label("preg_grep_predicate");
+    let continuation_label = ctx.next_label("preg_grep_after_predicate");
+    abi::emit_jump(ctx.emitter, &continuation_label);
+    ctx.emitter.label(&predicate_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #64");                         // reserve aligned predicate spill slots
+            ctx.emitter.instruction("stp x29, x30, [sp, #48]");                 // preserve caller frame state
+            ctx.emitter.instruction("add x29, sp, #48");                        // establish predicate frame pointer
+            ctx.emitter.instruction("str x1, [sp]");                            // preserve pattern environment across runtime calls
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            ctx.emitter.instruction("stp x1, x2, [sp, #16]");                   // preserve temporary subject pointer and length
+            ctx.emitter.instruction("mov x3, x1");                              // pass subject pointer to regex runtime
+            ctx.emitter.instruction("mov x4, x2");                              // pass subject length to regex runtime
+            ctx.emitter.instruction("ldr x9, [sp]");                            // reload pattern environment
+            ctx.emitter.instruction("ldp x1, x2, [x9]");                        // load pattern pointer and length
+            abi::emit_call_label(ctx.emitter, "__rt_preg_match");
+            ctx.emitter.instruction("ldr x9, [sp]");                            // reload predicate environment after regex call
+            ctx.emitter.instruction("ldr x9, [x9, #16]");                       // load normalized inversion flag
+            ctx.emitter.instruction("eor x0, x0, x9");                          // invert match result when requested
+            ctx.emitter.instruction("str x0, [sp, #32]");                       // preserve predicate result across temporary release
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // load temporary cast-string allocation
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+            ctx.emitter.instruction("ldr x0, [sp, #32]");                       // restore predicate result
+            ctx.emitter.instruction("ldp x29, x30, [sp, #48]");                 // restore caller frame state
+            ctx.emitter.instruction("add sp, sp, #64");                         // release predicate frame
+            ctx.emitter.instruction("ret");                                     // return boolean predicate in x0
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("push rbp");                                // preserve caller frame pointer
+            ctx.emitter.instruction("mov rbp, rsp");                            // establish predicate frame pointer
+            ctx.emitter.instruction("sub rsp, 48");                             // reserve aligned predicate spill slots
+            ctx.emitter.instruction("mov QWORD PTR [rbp - 8], rsi");            // preserve pattern environment across runtime calls
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_string");
+            ctx.emitter.instruction("mov QWORD PTR [rbp - 16], rax");           // preserve temporary subject pointer
+            ctx.emitter.instruction("mov QWORD PTR [rbp - 24], rdx");           // preserve subject length
+            ctx.emitter.instruction("mov r10, QWORD PTR [rbp - 8]");            // reload pattern environment
+            ctx.emitter.instruction("mov rdi, QWORD PTR [r10]");                // pass pattern pointer to regex runtime
+            ctx.emitter.instruction("mov rsi, QWORD PTR [r10 + 8]");            // pass pattern length to regex runtime
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");           // pass subject pointer to regex runtime
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rbp - 24]");           // pass subject length to regex runtime
+            abi::emit_call_label(ctx.emitter, "__rt_preg_match");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rbp - 8]");            // reload predicate environment after regex call
+            ctx.emitter.instruction("xor rax, QWORD PTR [r10 + 16]");           // invert match result when requested
+            ctx.emitter.instruction("mov QWORD PTR [rbp - 32], rax");           // preserve predicate result across temporary release
+            ctx.emitter.instruction("mov rax, QWORD PTR [rbp - 16]");           // load temporary cast-string allocation
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rbp - 32]");           // restore predicate result
+            ctx.emitter.instruction("add rsp, 48");                             // release predicate spill slots
+            ctx.emitter.instruction("pop rbp");                                 // restore caller frame pointer
+            ctx.emitter.instruction("ret");                                     // return boolean predicate in rax
+        }
+    }
+    ctx.emitter.label(&continuation_label);
+    predicate_label
+}
+
 /// Lowers `mb_ereg_match(pattern, subject, options = null)` as a start-anchored regex match.
 ///
 /// The bare delimiter-less pattern and subject use the shared regex string loader. Optional

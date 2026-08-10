@@ -363,7 +363,7 @@ pub(crate) fn lower_array_multisort(
     abi::emit_load_int_immediate(
         ctx.emitter,
         abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
+        1,
     );
     store_if_result(ctx, inst)
 }
@@ -474,6 +474,26 @@ pub(super) fn lower_in_array_with_mode(
         InArrayCase::BoolNeedleStringArray => {
             lower_in_array_bool_needle_string_array(ctx, needle, array)?
         }
+        InArrayCase::ScalarArrayMixedNeedleStrict(element_ty) => {
+            lower_in_array_concrete_mixed_needle(
+                ctx,
+                needle,
+                array,
+                &element_ty,
+                "__rt_mixed_strict_eq",
+                false,
+            )?
+        }
+        InArrayCase::ScalarArrayMixedNeedleLoose(element_ty) => {
+            lower_in_array_concrete_mixed_needle(
+                ctx,
+                needle,
+                array,
+                &element_ty,
+                "__rt_php_compare",
+                true,
+            )?
+        }
         InArrayCase::MixedIntExact => lower_in_array_mixed_int(ctx, needle, array, true)?,
         InArrayCase::MixedIntLoose => lower_in_array_mixed_int(ctx, needle, array, false)?,
         InArrayCase::MixedStringExact => {
@@ -489,19 +509,21 @@ pub(super) fn lower_in_array_with_mode(
             lower_in_array_mixed_mixed(ctx, needle, array, "__rt_php_compare", true)?
         }
         InArrayCase::StrArrayMixedNeedleStrict => {
-            lower_in_array_string_mixed_needle(
+            lower_in_array_concrete_mixed_needle(
                 ctx,
                 needle,
                 array,
+                &PhpType::Str,
                 "__rt_mixed_strict_eq",
                 false,
             )?
         }
         InArrayCase::StrArrayMixedNeedleLoose => {
-            lower_in_array_string_mixed_needle(
+            lower_in_array_concrete_mixed_needle(
                 ctx,
                 needle,
                 array,
+                &PhpType::Str,
                 "__rt_php_compare",
                 true,
             )?

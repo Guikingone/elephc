@@ -14,6 +14,9 @@
 //!   is required because the return type depends on the inferred first-argument type.
 
 use crate::builtins::spec::BuiltinCheckCtx;
+use crate::builtins::semantics::{
+    runtime_fn_semantics, BuiltinResultType, BuiltinSemanticInput, BuiltinSemantics,
+};
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
@@ -26,11 +29,21 @@ builtin! {
     max_args: 2,
     returns: Mixed,
     check: check,
-    semantics: crate::builtins::semantics::runtime_fn_semantics(
-        crate::ir::RuntimeFnId::ArrayDiffKey,
-    ),
+    semantics: array_diff_key_semantics(),
     summary: "Computes the difference of arrays using keys for comparison.",
     php_manual: "https://www.php.net/manual/en/function.array-diff-key.php",
+}
+
+/// Builds semantics whose result follows the normalized first hash operand.
+const fn array_diff_key_semantics() -> BuiltinSemantics {
+    let mut semantics = runtime_fn_semantics(crate::ir::RuntimeFnId::ArrayDiffKey);
+    semantics.result_type = BuiltinResultType::Shared(eir_result_type);
+    semantics
+}
+
+/// Returns the normalized first operand type used by the key-set runtime.
+fn eir_result_type(input: &BuiltinSemanticInput<'_>) -> PhpType {
+    input.arg_types.first().cloned().unwrap_or(PhpType::Mixed)
 }
 
 /// Validates the first argument is an array and returns its (preserved) type.

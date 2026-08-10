@@ -223,6 +223,11 @@ pub(crate) fn lower_spl_object_id(
     inst: &Instruction,
 ) -> Result<()> {
     super::ensure_arg_count(inst, "spl_object_id", 1)?;
+    let value = expect_operand(inst, 0)?;
+    if ctx.value_php_type(value)?.codegen_repr() == PhpType::Callable {
+        ctx.load_value_to_result(value)?;
+        return store_if_result(ctx, inst);
+    }
     load_object_operand(ctx, inst, "spl_object_id")?;
     abi::emit_call_label(ctx.emitter, "__rt_object_handle_of");
     store_if_result(ctx, inst)

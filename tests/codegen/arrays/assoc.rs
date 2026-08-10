@@ -11,6 +11,53 @@ use crate::support::*;
 
 // --- Phase 12: v0.6 — Associative arrays, switch, match ---
 
+/// Verifies assigning PHP null to an already typed associative entry preserves a readable null.
+#[test]
+fn test_hash_set_accepts_null_after_concrete_value() {
+    let out = compile_and_run(
+        r#"<?php
+$values = ["name" => "elephc"];
+$values["name"] = null;
+var_dump($values["name"]);
+"#,
+    );
+    assert_eq!(out, "NULL\n");
+}
+
+/// Verifies an explicit string cast of a Stringable object can index an associative array.
+#[test]
+fn test_hash_key_accepts_explicitly_cast_stringable_object() {
+    let out = compile_and_run(
+        r#"<?php
+final class AliasKey {
+    public function __toString(): string {
+        return "service.alias";
+    }
+}
+$values = ["service.alias" => 7];
+$key = new AliasKey();
+echo $values[(string) $key];
+"#,
+    );
+    assert_eq!(out, "7");
+}
+
+/// Verifies a short-circuited nested key probe remains lowerable when flow typing models the
+/// unreachable second array operand as null.
+#[test]
+fn test_array_key_exists_unreachable_null_operand_is_lowerable() {
+    let out = compile_and_run(
+        r#"<?php
+$rows = [];
+if (isset($rows["missing"]) && array_key_exists("child", $rows["missing"])) {
+    echo "bad";
+}
+echo "ok";
+"#,
+    );
+    assert_eq!(out, "ok");
+}
+
 /// Compiles a PHP script with two static string-keyed entries and verifies the first value is echoed.
 #[test]
 fn test_assoc_array_basic() {
@@ -33,6 +80,28 @@ echo $m["a"] + $m["b"] + $m["c"];
 "#,
     );
     assert_eq!(out, "6");
+}
+
+/// Verifies nullable integer keys preserve their inline tag: integers stay integer keys and
+/// PHP null normalizes to the empty-string key rather than being rejected by hash lowering.
+#[test]
+fn test_assoc_array_nullable_integer_tagged_scalar_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function nullable_key(bool $useNull): ?int {
+    return $useNull ? null : 7;
+}
+$values = ["seed" => 0];
+unset($values["seed"]);
+$values[nullable_key(false)] = 11;
+$values[nullable_key(true)] = 22;
+foreach ($values as $key => $value) {
+    echo "[", $key, ":", $value, "]";
+}
+echo "|", $values[null];
+"#,
+    );
+    assert_eq!(out, "[7:11][:22]|22");
 }
 
 /// Verifies an associative literal stores the declared object result of a method call instead of

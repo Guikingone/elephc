@@ -153,9 +153,20 @@ pub(super) fn lower_nullable_prop_set(
     class_name: &str,
     property: &str,
 ) -> Result<()> {
-    let slot = resolve_property_slot_for_class(ctx, class_name, property, inst)?;
+    let slot = match resolve_property_slot_for_class(ctx, class_name, property, inst) {
+        Ok(slot) => slot,
+        Err(_) => {
+            return lower_nullable_runtime_object_prop_set(
+                ctx, inst, object, value, None, property,
+            )
+        }
+    };
     let value_ty = ctx.value_php_type(value)?;
-    ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
+    if ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_err() {
+        return lower_nullable_runtime_object_prop_set(
+            ctx, inst, object, value, None, property,
+        );
+    }
     let null_label = ctx.next_label("nullable_prop_set_null");
     let done_label = ctx.next_label("nullable_prop_set_done");
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);

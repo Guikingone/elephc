@@ -106,6 +106,9 @@ pub(super) fn lower_strict_eq(
         PhpType::Str => {
             emit_string_eq_call(ctx, lhs, rhs, is_equal, "__rt_str_eq")?;
         }
+        PhpType::Array(_) => {
+            emit_array_eq_call(ctx, lhs, rhs, is_equal)?;
+        }
         other => {
             return Err(CodegenIrError::unsupported(format!(
                 "{} for PHP type {:?}",
@@ -115,6 +118,34 @@ pub(super) fn lower_strict_eq(
         }
     }
     store_if_result(ctx, inst)
+}
+
+/// Compares two borrowed indexed arrays through PHP's recursive strict-equality helper.
+fn emit_array_eq_call(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    rhs: ValueId,
+    is_equal: bool,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.load_value_to_reg(lhs, "x0")?;
+            ctx.load_value_to_reg(rhs, "x1")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");                    // invert recursive strict equality for PHP !==
+            }
+        }
+        Arch::X86_64 => {
+            ctx.load_value_to_reg(lhs, "rdi")?;
+            ctx.load_value_to_reg(rhs, "rsi")?;
+            abi::emit_call_label(ctx.emitter, "__rt_array_strict_eq");
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");                        // invert recursive strict equality for PHP !==
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Emits a pointer-like identity comparison for strict equality.

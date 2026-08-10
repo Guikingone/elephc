@@ -32,6 +32,9 @@ pub(crate) const RANDOM_BYTES_NAME: &str = "__elephc_random_bytes";
 /// Reserved helper used for one-argument `sort()` calls on gradual indexed arrays.
 pub(crate) const SORT_MIXED_NAME: &str = "__elephc_sort_mixed";
 
+/// Reserved helper used for one-argument `array_unique()` calls on gradual associative arrays.
+pub(crate) const ARRAY_UNIQUE_ASSOC_MIXED_NAME: &str = "__elephc_array_unique_assoc_mixed";
+
 /// Reserved helper used for two-argument `array_diff()` calls.
 pub(crate) const ARRAY_DIFF_STRING_NAME: &str = "__elephc_array_diff_string";
 
@@ -43,6 +46,36 @@ pub(crate) const ARRAY_REVERSE_STRING_NAME: &str = "__elephc_array_reverse_strin
 
 /// Reserved helper used for `array_search()` calls on gradual indexed arrays.
 pub(crate) const ARRAY_SEARCH_MIXED_NAME: &str = "__elephc_array_search_mixed";
+
+/// Reserved helper used for `http_build_query()` calls on arrays.
+pub(crate) const HTTP_BUILD_QUERY_NAME: &str = "__elephc_http_build_query";
+
+/// Reserved helper used for `escapeshellarg()` calls.
+pub(crate) const ESCAPESHELLARG_NAME: &str = "__elephc_escapeshellarg";
+
+/// Reserved helper used for `cli_set_process_title()` calls outside a native CLI bridge.
+pub(crate) const CLI_SET_PROCESS_TITLE_NAME: &str = "__elephc_cli_set_process_title";
+
+/// Reserved helper used when `file_put_contents()` receives array payload pieces.
+pub(crate) const FILE_PUT_CONTENTS_ARRAY_NAME: &str = "__elephc_file_put_contents_array";
+
+/// Reserved helper used for value-callback sorting while preserving array keys.
+pub(crate) const UASORT_MIXED_NAME: &str = "__elephc_uasort_mixed";
+
+/// Reserved helper used for value-callback sorting with numeric reindexing.
+pub(crate) const USORT_MIXED_NAME: &str = "__elephc_usort_mixed";
+
+/// Reserved helper used for key-callback sorting while preserving associations.
+pub(crate) const UKSORT_MIXED_NAME: &str = "__elephc_uksort_mixed";
+
+/// Reserved helper used for ordinary ascending sorting while preserving keys.
+pub(crate) const ASORT_MIXED_NAME: &str = "__elephc_asort_mixed";
+
+/// Reserved helper used when `array_fill_keys()` receives a gradual array operand.
+pub(crate) const ARRAY_FILL_KEYS_MIXED_NAME: &str = "__elephc_array_fill_keys_mixed";
+
+/// Reserved helper used for `str_getcsv()` calls.
+pub(crate) const STR_GETCSV_NAME: &str = "__elephc_str_getcsv";
 
 /// Canonical name of PHP's randomizer class supplied by the compatibility prelude.
 pub(crate) const RANDOMIZER_CLASS_NAME: &str = "Random\\Randomizer";
@@ -124,7 +157,7 @@ function __elephc_is_countable(mixed $value): bool {
 
 /// Representation-neutral array slicing with PHP key-preservation rules.
 const ARRAY_SLICE_SRC: &str = r#"<?php
-function __elephc_array_slice(array $input, int $offset, mixed $length = null, bool $preserveKeys = false): array {
+function __elephc_array_slice(array $input, int $offset, ?int $length = null, bool $preserveKeys = false): array {
     $count = count($input);
     if ($offset < 0) {
         $start = $count + $offset;
@@ -240,7 +273,8 @@ final class Randomizer {
 
 /// Stable in-place ascending sort using PHP's ordinary comparison semantics.
 const SORT_MIXED_SRC: &str = r#"<?php
-function __elephc_sort_mixed(array &$values): bool {
+function __elephc_sort_mixed(mixed &$values): bool {
+    $values = array_values($values);
     $count = count($values);
     $outer = $count;
     while ($outer > 1) {
@@ -257,6 +291,24 @@ function __elephc_sort_mixed(array &$values): bool {
         $outer--;
     }
     return true;
+}
+"#;
+
+/// Default `SORT_STRING` de-duplication for gradual associative values, preserving first keys.
+const ARRAY_UNIQUE_ASSOC_MIXED_SRC: &str = r#"<?php
+function __elephc_array_unique_assoc_mixed(array $values): array {
+    $seen = ["__elephc_seed" => true];
+    unset($seen["__elephc_seed"]);
+    $result = ["__elephc_seed" => null];
+    unset($result["__elephc_seed"]);
+    foreach ($values as $key => $value) {
+        $comparison = (string) $value;
+        if (!isset($seen[$comparison])) {
+            $seen[$comparison] = true;
+            $result[$key] = $value;
+        }
+    }
+    return $result;
 }
 "#;
 
@@ -323,6 +375,207 @@ function __elephc_array_search_mixed(mixed $needle, array $haystack, bool $stric
 }
 "#;
 
+/// Recursive query-string builder covering PHP's RFC 1738 and RFC 3986 array encodings.
+const HTTP_BUILD_QUERY_SRC: &str = r#"<?php
+function __elephc_http_build_query_pairs(array $data, string $prefix, string $numericPrefix, int $encodingType): array {
+    $pairs = [];
+    foreach ($data as $key => $value) {
+        $keyText = is_int($key) ? $numericPrefix.(string) $key : (string) $key;
+        $fullKey = $prefix === '' ? $keyText : $prefix.'['.$keyText.']';
+        if (is_array($value)) {
+            $nested = __elephc_http_build_query_pairs($value, $fullKey, '', $encodingType);
+            foreach ($nested as $pair) {
+                $pairs[] = $pair;
+            }
+        } elseif ($value !== null) {
+            $text = is_bool($value) ? ($value ? '1' : '0') : (string) $value;
+            $encodedKey = $encodingType === 2 ? rawurlencode($fullKey) : urlencode($fullKey);
+            $encodedValue = $encodingType === 2 ? rawurlencode($text) : urlencode($text);
+            $pairs[] = $encodedKey.'='.$encodedValue;
+        }
+    }
+    return $pairs;
+}
+
+function __elephc_http_build_query(array $data, string $numericPrefix = '', mixed $argSeparator = null, int $encodingType = 1): string {
+    $separator = $argSeparator === null ? '&' : (string) $argSeparator;
+    return implode($separator, __elephc_http_build_query_pairs($data, '', $numericPrefix, $encodingType));
+}
+"#;
+
+/// POSIX shell argument quoting compatible with PHP on the supported Unix targets.
+const ESCAPESHELLARG_SRC: &str = r#"<?php
+function __elephc_escapeshellarg(string $argument): string {
+    $result = "'";
+    $length = strlen($argument);
+    $position = 0;
+    while ($position < $length) {
+        $character = $argument[$position];
+        $result .= $character === "'" ? "'\\''" : $character;
+        $position++;
+    }
+    return $result."'";
+}
+"#;
+
+/// Reports that process-title mutation is unavailable without changing observable process state.
+const CLI_SET_PROCESS_TITLE_SRC: &str = r#"<?php
+function __elephc_cli_set_process_title(string $title): bool {
+    return false;
+}
+"#;
+
+/// Concatenates array pieces before delegating to the native file writer, as PHP does.
+const FILE_PUT_CONTENTS_ARRAY_SRC: &str = r#"<?php
+function __elephc_file_put_contents_array(string $filename, array $data, int $flags = 0, mixed $context = null): int|false {
+    $contents = '';
+    foreach ($data as $piece) {
+        $contents .= (string) $piece;
+    }
+    return file_put_contents($filename, $contents, $flags, $context);
+}
+"#;
+
+/// Stable callback sorts for gradual arrays, with PHP's key-preservation distinctions.
+const CALLBACK_SORT_MIXED_SRC: &str = r#"<?php
+function __elephc_uasort_mixed(mixed &$values, callable $callback): bool {
+    $keys = [];
+    foreach ($values as $key => $value) {
+        $keys[] = $key;
+    }
+    $count = count($keys);
+    $outer = $count;
+    while ($outer > 1) {
+        $inner = 0;
+        while ($inner + 1 < $outer) {
+            $next = $inner + 1;
+            if ($callback($values[$keys[$inner]], $values[$keys[$next]]) > 0) {
+                $temporary = $keys[$inner];
+                $keys[$inner] = $keys[$next];
+                $keys[$next] = $temporary;
+            }
+            $inner++;
+        }
+        $outer--;
+    }
+    $sorted = ["__elephc_seed" => null];
+    unset($sorted["__elephc_seed"]);
+    foreach ($keys as $key) {
+        $sorted[$key] = $values[$key];
+    }
+    $values = $sorted;
+    return true;
+}
+
+function __elephc_usort_mixed(mixed &$values, callable $callback): bool {
+    $values = array_values($values);
+    $count = count($values);
+    $outer = $count;
+    while ($outer > 1) {
+        $inner = 0;
+        while ($inner + 1 < $outer) {
+            $next = $inner + 1;
+            if ($callback($values[$inner], $values[$next]) > 0) {
+                $temporary = $values[$inner];
+                $values[$inner] = $values[$next];
+                $values[$next] = $temporary;
+            }
+            $inner++;
+        }
+        $outer--;
+    }
+    return true;
+}
+
+function __elephc_uksort_mixed(mixed &$values, callable $callback): bool {
+    $keys = [];
+    foreach ($values as $key => $value) {
+        $keys[] = $key;
+    }
+    $count = count($keys);
+    $outer = $count;
+    while ($outer > 1) {
+        $inner = 0;
+        while ($inner + 1 < $outer) {
+            $next = $inner + 1;
+            if ($callback($keys[$inner], $keys[$next]) > 0) {
+                $temporary = $keys[$inner];
+                $keys[$inner] = $keys[$next];
+                $keys[$next] = $temporary;
+            }
+            $inner++;
+        }
+        $outer--;
+    }
+    $sorted = ["__elephc_seed" => null];
+    unset($sorted["__elephc_seed"]);
+    foreach ($keys as $key) {
+        $sorted[$key] = $values[$key];
+    }
+    $values = $sorted;
+    return true;
+}
+
+function __elephc_asort_mixed(mixed &$values): bool {
+    return __elephc_uasort_mixed($values, static fn(mixed $left, mixed $right): int => $left <=> $right);
+}
+"#;
+
+/// Builds an associative result from string-or-integer keys held behind a gradual array value.
+const ARRAY_FILL_KEYS_MIXED_SRC: &str = r#"<?php
+function __elephc_array_fill_keys_mixed(mixed $keys, mixed $value) {
+    $result = ["__elephc_seed" => null];
+    unset($result["__elephc_seed"]);
+    foreach ($keys as $key) {
+        $result[$key] = $value;
+    }
+    return $result;
+}
+"#;
+
+/// Parses one CSV record while preserving separators and doubled enclosures inside quoted fields.
+const STR_GETCSV_SRC: &str = r#"<?php
+function __elephc_str_getcsv(string $string, string $separator = ',', string $enclosure = '"', string $escape = "\\"): array {
+    if ($string === '') {
+        return [null];
+    }
+    $result = [];
+    $field = '';
+    $length = strlen($string);
+    $index = 0;
+    $quoted = false;
+    while ($index < $length) {
+        $character = $string[$index];
+        if ($quoted) {
+            if ($escape !== '' && $character === $escape && $index + 1 < $length) {
+                $field .= $character;
+                $index++;
+                $field .= $string[$index];
+            } elseif ($character === $enclosure) {
+                if ($index + 1 < $length && $string[$index + 1] === $enclosure) {
+                    $field .= $enclosure;
+                    $index++;
+                } else {
+                    $quoted = false;
+                }
+            } else {
+                $field .= $character;
+            }
+        } elseif ($character === $separator) {
+            $result[] = $field;
+            $field = '';
+        } elseif ($character === $enclosure && $field === '') {
+            $quoted = true;
+        } else {
+            $field .= $character;
+        }
+        $index++;
+    }
+    $result[] = $field;
+    return $result;
+}
+"#;
+
 /// Prepends each narrow helper whose corresponding PHP builtin is referenced.
 pub fn inject_if_used(program: Program) -> Program {
     let usage = crate::ast_usage::collect(&program);
@@ -356,6 +609,9 @@ pub fn inject_if_used(program: Program) -> Program {
     if usage.references("sort") {
         sources.push(SORT_MIXED_SRC);
     }
+    if usage.references("array_unique") {
+        sources.push(ARRAY_UNIQUE_ASSOC_MIXED_SRC);
+    }
     if usage.references("array_diff") {
         sources.push(ARRAY_DIFF_STRING_SRC);
     }
@@ -367,6 +623,27 @@ pub fn inject_if_used(program: Program) -> Program {
     }
     if usage.references("array_search") {
         sources.push(ARRAY_SEARCH_MIXED_SRC);
+    }
+    if usage.references("http_build_query") {
+        sources.push(HTTP_BUILD_QUERY_SRC);
+    }
+    if usage.references("escapeshellarg") {
+        sources.push(ESCAPESHELLARG_SRC);
+    }
+    if usage.references("cli_set_process_title") || usage.references("setproctitle") {
+        sources.push(CLI_SET_PROCESS_TITLE_SRC);
+    }
+    if usage.references("file_put_contents") {
+        sources.push(FILE_PUT_CONTENTS_ARRAY_SRC);
+    }
+    if usage.references("uasort") || usage.references("usort") || usage.references("uksort") || usage.references("asort") {
+        sources.push(CALLBACK_SORT_MIXED_SRC);
+    }
+    if usage.references("array_fill_keys") {
+        sources.push(ARRAY_FILL_KEYS_MIXED_SRC);
+    }
+    if usage.references("str_getcsv") {
+        sources.push(STR_GETCSV_SRC);
     }
     if sources.is_empty() && !inject_randomizer {
         return program;

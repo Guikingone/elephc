@@ -129,6 +129,26 @@ foreach ($scores as $score) {
     assert_eq!(out, "Ada Linus Grace |10 12 8 ");
 }
 
+/// Verifies `array_column()` accepts an indexed array whose rows were widened to boxed `Mixed`.
+#[test]
+fn test_array_column_boxed_mixed_rows() {
+    let output = compile_and_run(
+        r#"<?php
+function rows(bool $include): array {
+    $values = [];
+    $values[] = ["name" => "Alice"];
+    if ($include) {
+        $values[] = 42;
+        $values[] = ["name" => "Bob"];
+    }
+    return $values;
+}
+echo implode(",", array_column(rows(true), "name"));
+"#,
+    );
+    assert_eq!(output, "Alice,Bob");
+}
+
 /// Regression test for GC balance: after `array_column()` on mixed-type rows with all three arrays subsequently `unset`, allocations must equal frees.
 #[test]
 fn test_array_column_mixed_row_values_balances_gc_stats() {

@@ -936,6 +936,7 @@ fn ensure_static_property_default_type_supported(
         | PhpType::Void
         | PhpType::Never
         | PhpType::Mixed
+        | PhpType::Iterable
         | PhpType::Object(_)
         | PhpType::Array(_)
         | PhpType::AssocArray { .. }
@@ -1008,12 +1009,27 @@ fn emit_static_property_default_value(
             elements,
         } => {
             emit_array_literal_default_to_result(ctx, elem_type, elements)?;
+            if matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                crate::codegen::emit_box_current_value_as_mixed(
+                    ctx.emitter,
+                    &PhpType::Array(Box::new(elem_type.clone())),
+                );
+            }
         }
         LiteralDefaultValue::AssocArray {
             value_type,
             entries,
         } => {
             emit_assoc_array_literal_default_to_result(ctx, value_type, entries)?;
+            if matches!(php_type.codegen_repr(), PhpType::Mixed | PhpType::Union(_)) {
+                crate::codegen::emit_box_current_value_as_mixed(
+                    ctx.emitter,
+                    &PhpType::AssocArray {
+                        key: Box::new(PhpType::Mixed),
+                        value: Box::new(value_type.clone()),
+                    },
+                );
+            }
         }
         LiteralDefaultValue::EmptyAssocArray { value_type } => {
             emit_empty_assoc_array_literal_to_result(ctx, value_type);

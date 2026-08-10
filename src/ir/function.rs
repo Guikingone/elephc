@@ -53,6 +53,8 @@ impl LocalSlotId {
 pub struct Function {
     pub id: FunctionId,
     pub name: String,
+    /// Lexical PHP class scope retained by synthetic closure functions.
+    pub lexical_class: Option<String>,
     pub params: Vec<FunctionParam>,
     pub return_type: IrType,
     pub return_php_type: PhpType,
@@ -84,6 +86,7 @@ impl Function {
         Self {
             id: FunctionId::from_raw(0),
             name,
+            lexical_class: None,
             params: Vec::new(),
             return_type,
             return_php_type,

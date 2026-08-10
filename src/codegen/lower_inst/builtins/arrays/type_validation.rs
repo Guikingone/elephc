@@ -222,6 +222,7 @@ pub(super) fn array_map_callback_array_element_type(ty: PhpType) -> Result<PhpTy
                 PhpType::Int
                     | PhpType::Bool
                     | PhpType::Str
+                    | PhpType::Object(_)
                     | PhpType::Void
                     | PhpType::Never
                     | PhpType::Mixed

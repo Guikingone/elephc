@@ -272,7 +272,11 @@ pub(in crate::codegen::lower_inst) fn lower_member_exists(
             static_member_exists_on_class(ctx, &class_name, &member_name, name, true)
         }
         PhpType::Str => {
-            let class_name = const_string_operand(ctx, target)?;
+            let Some(class_name) = maybe_const_string_operand(ctx, target)? else {
+                return super::member_exists::lower_dynamic_member_exists(
+                    ctx, inst, target, member, name,
+                );
+            };
             static_member_exists_on_class(ctx, &class_name, &member_name, name, false)
         }
         PhpType::Mixed | PhpType::Union(_) => {

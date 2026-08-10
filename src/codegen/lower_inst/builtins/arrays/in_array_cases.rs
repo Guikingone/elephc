@@ -28,6 +28,8 @@ pub(super) enum InArrayCase {
     IntNeedleStringArray,
     StringNeedleBoolArray,
     BoolNeedleStringArray,
+    ScalarArrayMixedNeedleStrict(PhpType),
+    ScalarArrayMixedNeedleLoose(PhpType),
     MixedIntExact,
     MixedIntLoose,
     MixedStringExact,
@@ -90,6 +92,8 @@ pub(super) fn supported_in_array_scalar_case(
         InArrayMode::Strict => {
             if needle_ty == &elem_ty && matches!(needle_ty, PhpType::Int | PhpType::Bool) {
                 Ok(InArrayCase::ScalarExact)
+            } else if matches!(needle_ty, PhpType::Mixed) {
+                Ok(InArrayCase::ScalarArrayMixedNeedleStrict(elem_ty))
             } else if matches!(needle_ty, PhpType::Int | PhpType::Bool | PhpType::Str) {
                 Ok(InArrayCase::AlwaysFalse)
             } else {
@@ -108,6 +112,7 @@ pub(super) fn supported_in_array_scalar_case(
             }
             (PhpType::Str, PhpType::Int) => Ok(InArrayCase::StringNeedleIntArray),
             (PhpType::Str, PhpType::Bool) => Ok(InArrayCase::StringNeedleBoolArray),
+            (PhpType::Mixed, _) => Ok(InArrayCase::ScalarArrayMixedNeedleLoose(elem_ty)),
             _ => Err(CodegenIrError::unsupported(format!(
                 "loose in_array needle PHP type {:?} for indexed-array element PHP type {:?}",
                 needle_ty, elem_ty

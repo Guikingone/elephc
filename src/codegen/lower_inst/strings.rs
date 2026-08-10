@@ -183,13 +183,20 @@ fn emit_eval_native_frame_called_class_override_probe_x86_64(
     abi::emit_release_temporary_stack(ctx.emitter, 32);
 }
 
-/// Returns the generated/AOT class encoded in the current method frame name.
+/// Returns the generated/AOT lexical class retained by a closure or encoded in a method name.
 fn current_late_static_frame_class<'a>(ctx: &'a FunctionContext<'_>) -> Option<&'a str> {
-    ctx.function
-        .flags
-        .is_method
-        .then(|| ctx.function.name.rsplit_once("::").map(|(class_name, _)| class_name))
-        .flatten()
+    ctx.function.lexical_class.as_deref().or_else(|| {
+        ctx.function
+            .flags
+            .is_method
+            .then(|| {
+                ctx.function
+                    .name
+                    .rsplit_once("::")
+                    .map(|(class_name, _)| class_name)
+            })
+            .flatten()
+    })
 }
 
 /// Loads the late-static class id from the hidden static frame slot or `$this`.

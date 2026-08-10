@@ -396,3 +396,23 @@ echo "|" . $bytes;
     assert_eq!(out, "hi|2");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `flock()` coerces a gradual operation value to the runtime integer flag word.
+#[test]
+fn test_flock_gradual_operation() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+function lock_with(mixed $operation): bool {
+    $stream = fopen("gradual-lock.txt", "w+");
+    $locked = flock($stream, $operation);
+    flock($stream, LOCK_UN);
+    fclose($stream);
+    return $locked;
+}
+echo lock_with(LOCK_EX) ? "locked" : "failed";
+unlink("gradual-lock.txt");
+"#,
+    );
+    assert_eq!(out, "locked");
+    let _ = fs::remove_dir_all(&dir);
+}

@@ -50,6 +50,60 @@ echo accepts_lower_object($value) . "|" . accepts_mixed_case_object($value);
     assert_eq!(out, "lower|upper");
 }
 
+/// Verifies a namespaced bare `object` receiver dispatches property reads and writes by its
+/// concrete runtime class instead of resolving the pseudo-type as an empty class name.
+#[test]
+fn test_namespaced_generic_object_property_read_and_write_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+namespace GenericObjectProperty;
+
+class Box {
+    public string $value = 'before';
+}
+
+function rewrite(object $object): string {
+    $object->value = 'after';
+    return $object->value;
+}
+
+echo rewrite(new Box());
+"#,
+    );
+    assert_eq!(out, "after");
+}
+
+/// Verifies nullable bare-object receivers unbox and dispatch property reads and writes by the
+/// concrete runtime class, including the stdClass dynamic-property fallback and a nullsafe read.
+#[test]
+fn test_nullable_generic_object_property_read_and_write_dispatch() {
+    let out = compile_and_run(
+        r#"<?php
+namespace NullableGenericObjectProperty;
+
+class Box {
+    public string $value = 'before';
+}
+
+function rewrite(?object $object, string $value): mixed {
+    $object->value = $value;
+    return $object->value;
+}
+
+function peek(?object $object): mixed {
+    return $object?->value;
+}
+
+$dynamic = new \stdClass();
+$dynamic->value = 'initial';
+echo rewrite(new Box(), 'class') . '|';
+echo rewrite($dynamic, 'dynamic') . '|';
+echo null === peek(null) ? 'null' : 'bad';
+"#,
+    );
+    assert_eq!(out, "class|dynamic|null");
+}
+
 /// Tests that a Child class inheriting Base's constructor properly specializes the
 /// base class's string property type, so `new Child("Ada")` works without explicit
 /// constructor in the child.

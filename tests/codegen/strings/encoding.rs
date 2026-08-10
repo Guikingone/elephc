@@ -228,6 +228,22 @@ fn test_rawurlencode() {
     assert_eq!(out, "hello%20world");
 }
 
+/// Verifies the compatibility query builder handles nested arrays, custom separators, and RFC3986.
+#[test]
+fn test_http_build_query_nested_rfc3986() {
+    let out = compile_and_run(
+        r#"<?php
+echo http_build_query(
+    ["a" => "hello world", "nested" => ["x" => "a/b"]],
+    "",
+    ";",
+    PHP_QUERY_RFC3986,
+);
+"#,
+    );
+    assert_eq!(out, "a=hello%20world;nested%5Bx%5D=a%2Fb");
+}
+
 /// Verifies `rawurldecode()` decodes `%XX` sequences without touching `+` (leaves it as `+`).
 #[test]
 fn test_rawurldecode() {

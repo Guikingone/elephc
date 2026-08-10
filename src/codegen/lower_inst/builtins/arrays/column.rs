@@ -38,6 +38,7 @@ fn array_column_source_value_type(ty: PhpType) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(inner) => match inner.codegen_repr() {
             PhpType::AssocArray { value, .. } => Ok(value.codegen_repr()),
+            PhpType::Mixed | PhpType::Union(_) => Ok(PhpType::Mixed),
             other => Err(CodegenIrError::unsupported(format!(
                 "array_column row PHP type {:?}",
                 other

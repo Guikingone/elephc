@@ -188,6 +188,26 @@ unlink("rw.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies fread accepts an int-or-null tagged array lookup after narrowing its runtime int arm.
+#[test]
+fn test_fread_accepts_tagged_scalar_length_from_array_lookup() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$lengths = ["wanted" => 2];
+$key = $argc > 0 ? "wanted" : "missing";
+$f = fopen("tagged-fread.txt", "w");
+fwrite($f, "abcd");
+fclose($f);
+$f = fopen("tagged-fread.txt", "r");
+echo fread($f, $lengths[$key]);
+fclose($f);
+unlink("tagged-fread.txt");
+"#,
+    );
+    assert_eq!(out, "ab");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies fgets() reads one line from STDIN when piped input is provided.
 #[test]
 fn test_fgets_returns_false_at_eof() {
@@ -280,6 +300,20 @@ unlink("guarded.txt");
 "#,
     );
     assert_eq!(out, "safe");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `file_put_contents()` concatenates array payload pieces before writing.
+#[test]
+fn test_file_put_contents_array_payload() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("array-payload.txt", ["ab", 12, "cd"]);
+echo file_get_contents("array-payload.txt");
+unlink("array-payload.txt");
+"#,
+    );
+    assert_eq!(out, "ab12cd");
     let _ = fs::remove_dir_all(&dir);
 }
 

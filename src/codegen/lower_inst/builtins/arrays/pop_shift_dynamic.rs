@@ -273,3 +273,31 @@ pub(super) fn lower_array_shift_dynamic(
     store_if_result(ctx, inst)
 }
 
+/// Lowers `array_shift()` directly on associative hash storage and writes the rebuilt hash back.
+pub(super) fn lower_assoc_array_shift(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    array: ValueId,
+) -> Result<()> {
+    require_array_pop_result_type(&inst.result_php_type.codegen_repr())?;
+    let source_local = source_load_local_slot(ctx, array)?;
+    if let Some(slot) = source_local {
+        ctx.release_mutated_source_local_owner(slot, array)?;
+    }
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.load_value_to_reg(array, "x0")?,
+        Arch::X86_64 => ctx.load_value_to_reg(array, "rdi")?,
+    };
+    abi::emit_call_label(ctx.emitter, "__rt_hash_shift");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => abi::emit_push_reg(ctx.emitter, "x1"),
+        Arch::X86_64 => abi::emit_push_reg(ctx.emitter, "rdx"),
+    }
+    ctx.store_result_value(array)?;
+    if let Some(slot) = source_local {
+        ctx.store_mutated_container_to_local(slot, array)?;
+    }
+    ctx.writeback_global_array_source(array)?;
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    store_if_result(ctx, inst)
+}

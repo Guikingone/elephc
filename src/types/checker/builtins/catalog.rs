@@ -107,9 +107,20 @@ pub(crate) fn supported_builtin_function_names_for_profile(
     all_supported_builtin_function_names()
         .into_iter()
         .filter(|name| {
-            !strict_php_hidden_builtin_for_profile(&name.to_ascii_lowercase(), strict_php)
+            let canonical = name.to_ascii_lowercase();
+            !strict_php_hidden_builtin_for_profile(&canonical, strict_php)
+                && !is_recognition_only_platform_builtin(&canonical)
         })
         .collect()
+}
+
+/// Returns whether a legacy signature is retained only to type-check runtime-dead platform code.
+///
+/// PHP exposes the `sapi_windows_*` family only on Windows. Elephc currently recognizes direct
+/// calls so vendor method bodies can be checked, but none of its supported targets provides those
+/// functions. They must therefore stay out of `function_exists()` and callable discovery tables.
+fn is_recognition_only_platform_builtin(canonical: &str) -> bool {
+    canonical.starts_with("sapi_windows_")
 }
 
 /// Converts a function name to lowercase and returns it if it is a supported builtin.
@@ -145,7 +156,9 @@ pub(crate) fn is_php_visible_builtin_function_for_profile(
     strict_php: bool,
 ) -> bool {
     let canonical = name.to_ascii_lowercase();
-    if strict_php_hidden_builtin_for_profile(&canonical, strict_php) {
+    if strict_php_hidden_builtin_for_profile(&canonical, strict_php)
+        || is_recognition_only_platform_builtin(&canonical)
+    {
         return false;
     }
     COMPILER_RESIDENT_BUILTIN_FUNCTIONS.contains(&canonical.as_str())

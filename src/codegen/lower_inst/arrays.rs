@@ -137,6 +137,7 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
     let array = expect_operand(inst, 0)?;
     require_indexed_array(ctx.value_php_type(array)?.codegen_repr(), inst)?;
     let result_value_ty = require_array_to_hash_result(&inst.result_php_type.codegen_repr(), inst)?;
+    let release_source = ctx.value_can_transfer_ownership_to_consumer(array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             let already_hash = ctx.next_label("array_to_hash_already_hash");
@@ -163,19 +164,19 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             abi::emit_call_label(ctx.emitter, "__rt_hash_new");
             ctx.emitter.instruction("mov x1, x0");                              // pass the empty temporary hash as the right union operand
             abi::emit_pop_reg(ctx.emitter, "x0");
-            // Keep both the source indexed array and the empty temporary hash on
-            // the stack across the union so the conversion can release them after
-            // the copy: array_hash_union borrows both operands and returns a fresh
-            // result hash, so the source array (an owning temporary or a moved-out
-            // local reference) and the temporary hash both leak unless freed here.
+            // Keep both operands across the union so the fresh temporary hash can always be
+            // released and a source whose ownership is proven transferable can be consumed.
+            // Borrowed/local sources must remain alive for later reads.
             abi::emit_push_reg(ctx.emitter, "x0");
             abi::emit_push_reg(ctx.emitter, "x1");
             abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
             abi::emit_push_reg(ctx.emitter, "x0");
             ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the empty temporary hash from the stack
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
-            ctx.emitter.instruction("ldr x0, [sp, #32]");                       // reload the temporary source indexed array from the stack
-            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            if release_source {
+                ctx.emitter.instruction("ldr x0, [sp, #32]");                   // reload the transferable source indexed array from the stack
+                abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            }
             abi::emit_pop_reg(ctx.emitter, "x0");
             abi::emit_pop_reg(ctx.emitter, "x1");
             abi::emit_pop_reg(ctx.emitter, "x1");
@@ -210,19 +211,19 @@ pub(super) fn lower_array_to_hash(ctx: &mut FunctionContext<'_>, inst: &Instruct
             abi::emit_call_label(ctx.emitter, "__rt_hash_new");
             ctx.emitter.instruction("mov rsi, rax");                            // pass the empty temporary hash as the right union operand
             abi::emit_pop_reg(ctx.emitter, "rdi");
-            // Keep both the source indexed array and the empty temporary hash on
-            // the stack across the union so the conversion can release them after
-            // the copy: array_hash_union borrows both operands and returns a fresh
-            // result hash, so the source array (an owning temporary or a moved-out
-            // local reference) and the temporary hash both leak unless freed here.
+            // Keep both operands across the union so the fresh temporary hash can always be
+            // released and a source whose ownership is proven transferable can be consumed.
+            // Borrowed/local sources must remain alive for later reads.
             abi::emit_push_reg(ctx.emitter, "rdi");
             abi::emit_push_reg(ctx.emitter, "rsi");
             abi::emit_call_label(ctx.emitter, "__rt_array_hash_union");
             abi::emit_push_reg(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the empty temporary hash from the stack
             abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
-            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");           // reload the temporary source indexed array from the stack
-            abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            if release_source {
+                ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 32]");       // reload the transferable source indexed array from the stack
+                abi::emit_call_label(ctx.emitter, "__rt_decref_array");
+            }
             abi::emit_pop_reg(ctx.emitter, "rax");
             abi::emit_pop_reg(ctx.emitter, "rsi");
             abi::emit_pop_reg(ctx.emitter, "rsi");

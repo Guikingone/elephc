@@ -77,6 +77,22 @@ echo array_sum($a);
     assert_eq!(out, "515");
 }
 
+/// Verifies `shuffle()` mutates and writes back an array kept in boxed `mixed` storage.
+#[test]
+fn test_shuffle_guarded_mixed_array() {
+    let out = compile_and_run(
+        r#"<?php
+function shuffle_guarded(mixed $value): mixed {
+    echo is_array($value) ? (shuffle($value) ? "ok:" : "bad:") : "not-array:";
+    return $value;
+}
+$result = shuffle_guarded([42]);
+echo count($result), ":", $result[0];
+"#,
+    );
+    assert_eq!(out, "ok:1:42");
+}
+
 /// Verifies `array_diff_key()` removes entries by key; count of `["a"=>"1","b"=>"2"]` minus key "a" is 1.
 #[test]
 fn test_array_diff_key() {

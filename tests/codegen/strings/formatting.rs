@@ -16,6 +16,25 @@ fn test_sprintf_string() {
     assert_eq!(out, "Hello World");
 }
 
+/// Verifies string-typed builtin arguments invoke a concrete object's `__toString()` method for
+/// both printf-family packing and ordinary internal string-parameter coercion.
+#[test]
+fn test_string_builtins_coerce_stringable_objects() {
+    let out = compile_and_run(
+        r#"<?php
+class StringBuiltinValue {
+    public function __toString(): string {
+        return 'banana';
+    }
+}
+
+$value = new StringBuiltinValue();
+echo sprintf('[%s]', $value) . '|' . substr_count($value, 'an');
+"#,
+    );
+    assert_eq!(out, "[banana]|2");
+}
+
 /// Tests sprintf with %d integer formatting.
 #[test]
 fn test_sprintf_int() {

@@ -158,8 +158,14 @@ pub(crate) fn lower_array_pop(ctx: &mut FunctionContext<'_>, inst: &Instruction)
 pub(crate) fn lower_array_shift(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "array_shift", 1)?;
     let array = expect_operand(inst, 0)?;
-    if matches!(ctx.value_php_type(array)?.codegen_repr(), PhpType::Mixed) {
-        return pop_shift_dynamic::lower_array_shift_dynamic(ctx, inst, array);
+    match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::Mixed | PhpType::Union(_) => {
+            return pop_shift_dynamic::lower_array_shift_dynamic(ctx, inst, array);
+        }
+        PhpType::AssocArray { .. } => {
+            return pop_shift_dynamic::lower_assoc_array_shift(ctx, inst, array);
+        }
+        _ => {}
     }
     shift::lower_array_shift(ctx, inst)
 }

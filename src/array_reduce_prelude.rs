@@ -1,5 +1,5 @@
 //! Purpose:
-//! Injects an elephc-PHP implementation of `array_reduce()`'s two-argument form.
+//! Injects an elephc-PHP implementation of gradual `array_reduce()` forms.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` and the codegen test harness before type checking.
@@ -12,13 +12,13 @@
 
 use crate::parser::ast::Program;
 
-/// Reserved function name used for two-argument `array_reduce()` calls.
+/// Reserved function name used for gradual `array_reduce()` calls.
 pub(crate) const ARRAY_REDUCE_DEFAULT_NAME: &str = "__elephc_array_reduce_default";
 
-/// PHP source for the injected default-initial `array_reduce()` implementation.
+/// PHP source for the injected boxed-carry `array_reduce()` implementation.
 pub const ARRAY_REDUCE_PRELUDE_SRC: &str = r#"<?php
-function __elephc_array_reduce_default(mixed $array, callable $callback): mixed {
-    $carry = null;
+function __elephc_array_reduce_default(mixed $array, callable $callback, mixed $initial = null): mixed {
+    $carry = $initial;
     foreach ($array as $value) {
         $carry = $callback($carry, $value);
     }

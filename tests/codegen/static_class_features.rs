@@ -121,6 +121,35 @@ fn test_new_static_returns_instance_of_called_class() {
     assert_eq!(out, "Child");
 }
 
+/// Verifies `new static()` pads omitted constructor defaults before the late-static candidate
+/// dispatch, including when an inherited factory constructs the runtime-called child class.
+#[test]
+fn test_new_static_with_omitted_constructor_defaults() {
+    let out = compile_and_run(
+        r#"<?php
+class Handler {
+    public function __construct(
+        public ?string $logger = null,
+        public bool $debug = false,
+    ) {}
+
+    public static function register(?self $handler = null): self {
+        if (null === $handler) {
+            $handler = new static();
+        }
+        return $handler;
+    }
+}
+
+class ChildHandler extends Handler {}
+
+$handler = ChildHandler::register();
+echo $handler::class, "|", null === $handler->logger ? "null" : $handler->logger, "|", $handler->debug ? "debug" : "quiet";
+"#,
+    );
+    assert_eq!(out, "ChildHandler|null|quiet");
+}
+
 /// Verifies a static child override may narrow a parent-class return to `static`.
 #[test]
 fn test_static_override_covariant_self_return() {

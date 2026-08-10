@@ -31,6 +31,7 @@ mod control_flow;
 mod scalar_strings;
 mod array_basics;
 mod numeric_scalars;
+mod process_control;
 mod type_builtins;
 mod casts_and_constants;
 mod include_paths;

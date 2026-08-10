@@ -9,6 +9,63 @@
 
 use super::*;
 
+/// Verifies virtual/interface calls forward the hidden argc operand used by an overriding method.
+#[test]
+fn test_interface_dispatch_forwards_hidden_func_get_args_count() {
+    let out = compile_and_run(
+        r#"<?php
+interface ArityLoader { public function load(mixed $resource, ?string $type = null): mixed; }
+abstract class ArityLoaderBase implements ArityLoader {
+    public function proxy(): int { return $this->load('base', null); }
+}
+final class ArityLoaderImpl extends ArityLoaderBase {
+    public function load(mixed $resource, ?string $type = null): mixed {
+        return func_num_args();
+    }
+}
+function invokeArityLoader(ArityLoader $loader): int { return $loader->load('iface', null); }
+$loader = new ArityLoaderImpl();
+echo $loader->proxy(), '|', invokeArityLoader($loader);
+"#,
+    );
+    assert_eq!(out, "2|2");
+}
+
+/// Verifies a generic `object` receiver dispatches a method over closed-world class candidates.
+#[test]
+fn test_generic_object_receiver_dispatches_known_method_candidate() {
+    let out = compile_and_run(
+        r#"<?php
+final class GenericObjectStack {
+    private array $values = [];
+    public function push(int $value): void { $this->values[] = $value; }
+    public function count(): int { return count($this->values); }
+}
+function eraseStackType(GenericObjectStack $stack): object { return $stack; }
+$stack = eraseStackType(new GenericObjectStack());
+$stack->push(4);
+echo $stack->count();
+"#,
+    );
+    assert_eq!(out, "1");
+}
+
+/// Verifies an impossible narrowed-method branch compiles and remains unexecuted.
+#[test]
+fn test_impossible_instanceof_narrowed_method_branch_compiles() {
+    let out = compile_and_run(
+        r#"<?php
+interface OptionalWarmer { public function warmUp(string $directory): array; }
+class NonWarmableKernel {}
+function optionallyWarm(NonWarmableKernel $kernel): array {
+    return $kernel instanceof OptionalWarmer ? $kernel->warmUp('/tmp') : [];
+}
+echo 'cold';
+"#,
+    );
+    assert_eq!(out, "cold");
+}
+
 /// Verifies a concrete class can satisfy an interface contract by implementing all required methods.
 /// Fixture: interface `Named` with method `name()`, concrete `User` implementing `Named`.
 /// Asserts the method call on the concrete instance returns the expected string.

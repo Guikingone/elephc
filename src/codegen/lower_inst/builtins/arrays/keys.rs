@@ -461,6 +461,21 @@ fn emit_assoc_key_append_aarch64(
             ctx.emitter.instruction("ldp x9, x10, [sp], #16");                  // restore result array state after string-key persistence
             emit_append_string_key_aarch64(ctx, "x1", "x2");
         }
+        PhpType::Str if matches!(key_ty, PhpType::Mixed) => {
+            let string_key = ctx.next_label("akeys_assoc_string_result_key");
+            let persist_key = ctx.next_label("akeys_assoc_string_result_persist");
+            ctx.emitter.instruction("cmn x2, #1");                              // distinguish normalized integer keys from borrowed string keys
+            ctx.emitter.instruction(&format!("b.ne {}", string_key));           // keep string keys in their iterator pointer/length representation
+            ctx.emitter.instruction("mov x0, x1");                              // move the integer key payload into the itoa input register
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter.instruction(&format!("b {}", persist_key));             // share ownership conversion with the string-key path
+            ctx.emitter.label(&string_key);
+            ctx.emitter.label(&persist_key);
+            ctx.emitter.instruction("stp x9, x10, [sp, #-16]!");                // preserve result array state across string-key persistence
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.instruction("ldp x9, x10, [sp], #16");                  // restore result array state after string-key persistence
+            emit_append_string_key_aarch64(ctx, "x1", "x2");
+        }
         PhpType::Mixed => {
             emit_assoc_mixed_key_append_aarch64(ctx, key_ty)?;
         }
@@ -492,6 +507,28 @@ fn emit_assoc_key_append_x86_64(
             ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                // preserve the result keys array pointer across key persistence
             ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");            // preserve the current result keys array length across key persistence
             ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed string key pointer into the persist helper input
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // restore the result keys array pointer after key persistence
+            ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");            // restore the result keys array length after key persistence
+            ctx.emitter.instruction("add rsp, 16");                             // release the temporary result-array state slot
+            emit_append_string_key_x86_64(ctx, "rax", "rdx");
+        }
+        PhpType::Str if matches!(key_ty, PhpType::Mixed) => {
+            let string_key = ctx.next_label("akeys_assoc_string_result_key");
+            let persist_key = ctx.next_label("akeys_assoc_string_result_persist");
+            ctx.emitter.instruction("cmp rdx, -1");                             // distinguish normalized integer keys from borrowed string keys
+            ctx.emitter.instruction(&format!("jne {}", string_key));            // keep string keys in their iterator pointer/length representation
+            ctx.emitter.instruction("mov rax, rdi");                            // move the integer key payload into the itoa input register
+            abi::emit_call_label(ctx.emitter, "__rt_itoa");
+            ctx.emitter.instruction(&format!("jmp {}", persist_key));           // share ownership conversion with the string-key path
+            ctx.emitter.label(&string_key);
+            ctx.emitter.instruction("mov rax, rdi");                            // move the borrowed string pointer into the persist helper input
+            ctx.emitter.label(&persist_key);
+            ctx.emitter.instruction("sub rsp, 16");                             // reserve a temporary slot for result array state during key persistence
+            ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 32]");           // load the result keys array pointer from the fixed stack layout
+            ctx.emitter.instruction("mov r11, QWORD PTR [r10]");                // load the current result keys array length before persistence
+            ctx.emitter.instruction("mov QWORD PTR [rsp], r10");                // preserve the result keys array pointer across key persistence
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], r11");            // preserve the current result keys array length across key persistence
             abi::emit_call_label(ctx.emitter, "__rt_str_persist");
             ctx.emitter.instruction("mov r10, QWORD PTR [rsp]");                // restore the result keys array pointer after key persistence
             ctx.emitter.instruction("mov r11, QWORD PTR [rsp + 8]");            // restore the result keys array length after key persistence
@@ -674,7 +711,7 @@ fn require_supported_assoc_result_type(key_ty: &PhpType, result_elem_ty: &PhpTyp
     require_supported_source_key_type(key_ty)?;
     match result_elem_ty {
         PhpType::Mixed => Ok(()),
-        PhpType::Str if matches!(key_ty, PhpType::Str) => Ok(()),
+        PhpType::Str if matches!(key_ty, PhpType::Str | PhpType::Mixed) => Ok(()),
         PhpType::Int | PhpType::Bool | PhpType::Callable if is_int_like_key_type(key_ty) => Ok(()),
         other => Err(CodegenIrError::unsupported(format!(
             "array_keys associative key PHP type {:?} into result PHP type {:?}",

@@ -250,3 +250,23 @@ fn test_disk_free_space_invalid_path_returns_zero() {
     let out = compile_and_run(r#"<?php var_dump(disk_free_space("/no/such/path/xyz123"));"#);
     assert_eq!(out, "float(0)\n");
 }
+
+/// Verifies `glob()` accepts flags assembled at runtime and still splits `GLOB_ONLYDIR`.
+#[test]
+fn test_glob_runtime_flags() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+mkdir("glob-runtime");
+mkdir("glob-runtime/dir");
+file_put_contents("glob-runtime/file.txt", "x");
+function find_dirs(int $flags): array { return glob("glob-runtime/*", $flags); }
+$matches = find_dirs(GLOB_NOSORT | GLOB_ONLYDIR);
+echo count($matches).":".basename($matches[0]);
+unlink("glob-runtime/file.txt");
+rmdir("glob-runtime/dir");
+rmdir("glob-runtime");
+"#,
+    );
+    assert_eq!(out, "1:dir");
+    let _ = fs::remove_dir_all(&dir);
+}

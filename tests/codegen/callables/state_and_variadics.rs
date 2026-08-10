@@ -170,6 +170,23 @@ counter();
     assert_eq!(implicit, explicit);
 }
 
+/// Verifies a persistent associative static slot accepts a more precise string-keyed initializer
+/// while retaining the generic associative-array storage representation across calls.
+#[test]
+fn test_static_local_accepts_precise_assoc_initializer() {
+    let out = compile_and_run(
+        r#"<?php
+function offsetFor(string $name): int {
+    static $offsets = ["left" => 3, "right" => 7];
+    return $offsets[$name];
+}
+
+echo offsetFor("left"), ":", offsetFor("right"), ":", offsetFor("left");
+"#,
+    );
+    assert_eq!(out, "3:7:3");
+}
+
 /// Verifies that a static variable inside a closure links and persists across calls.
 #[test]
 fn test_closure_static_local_preserves_value_across_calls() {

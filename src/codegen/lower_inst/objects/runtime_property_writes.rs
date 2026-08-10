@@ -26,9 +26,16 @@ pub(in crate::codegen::lower_inst) fn lower_prop_set(ctx: &mut FunctionContext<'
     if let Some(offset) = dynamic_property_hash_offset_for_object(ctx, object, &property)? {
         return lower_allow_dynamic_prop_set(ctx, object, value, &property, offset);
     }
-    let slot = resolve_property_slot(ctx, object, &property, inst)?;
+    let slot = match resolve_property_slot(ctx, object, &property, inst) {
+        Ok(slot) => slot,
+        Err(_) => {
+            return super::lower_generic_object_prop_set(ctx, object, value, &property, inst)
+        }
+    };
     let value_ty = ctx.value_php_type(value)?;
-    ensure_property_value_supported(ctx, &slot, value, &value_ty, inst)?;
+    if ensure_property_value_supported(ctx, &slot, value, &value_ty, inst).is_err() {
+        return super::lower_generic_object_prop_set(ctx, object, value, &property, inst);
+    }
     let base_reg = abi::symbol_scratch_reg(ctx.emitter);
     ctx.load_value_to_reg(object, base_reg)?;
     if is_promoted_reference_property_bind(ctx, object, value, &slot)? {

@@ -334,4 +334,3 @@ pub(super) fn parse_static_method_target(target: &str) -> Result<(&str, &str)> {
         CodegenIrError::invalid_module(format!("invalid static method target '{}'", target))
     })
 }
-

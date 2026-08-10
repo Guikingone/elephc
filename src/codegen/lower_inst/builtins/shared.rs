@@ -47,7 +47,7 @@ pub(in crate::codegen::lower_inst) fn is_internal_synthetic_class_name(name: &st
     php_symbol_key(name).starts_with("__elephc")
 }
 
-/// Returns a string literal value defined by a `ConstStr` instruction.
+/// Returns a compile-time string value defined by `ConstStr` or `ConstClassName`.
 ///
 /// The remaining callers (`is_callable()` static-string folding, `method_exists()` /
 /// `property_exists()`) still require a compile-time name; `function_exists()` no longer does and
@@ -58,7 +58,7 @@ pub(in crate::codegen::lower_inst) fn const_string_operand(ctx: &FunctionContext
     })
 }
 
-/// Returns a string literal operand when a value is produced by `ConstStr`.
+/// Returns a compile-time string operand produced by `ConstStr` or `ConstClassName`.
 pub(in crate::codegen::lower_inst) fn maybe_const_string_operand(ctx: &FunctionContext<'_>, value: ValueId) -> Result<Option<String>> {
     let value_ref = ctx
         .function
@@ -71,21 +71,24 @@ pub(in crate::codegen::lower_inst) fn maybe_const_string_operand(ctx: &FunctionC
         .function
         .instruction(inst)
         .ok_or_else(|| CodegenIrError::missing_entry("instruction", inst.as_raw()))?;
-    if inst_ref.op != Op::ConstStr {
-        return Ok(None);
-    }
+    let values = match inst_ref.op {
+        Op::ConstStr => &ctx.module.data.strings,
+        Op::ConstClassName => &ctx.module.data.class_names,
+        _ => return Ok(None),
+    };
     let Some(Immediate::Data(data)) = inst_ref.immediate else {
         return Err(CodegenIrError::invalid_module(
-            "ConstStr operand has no data id",
+            "compile-time string operand has no data id",
         ));
     };
-    ctx.module
-        .data
-        .strings
+    let value = values
         .get(data.as_raw() as usize)
         .cloned()
-        .map(Some)
-        .ok_or_else(|| CodegenIrError::missing_entry("data string", data.as_raw()))
+        .ok_or_else(|| CodegenIrError::missing_entry("compile-time string", data.as_raw()))?;
+    if inst_ref.op == Op::ConstClassName && value == "static" {
+        return Ok(None);
+    }
+    Ok(Some(value))
 }
 
 /// Verifies that the builtin call has the expected number of lowered operands.

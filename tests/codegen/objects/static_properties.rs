@@ -235,6 +235,33 @@ echo Registry::$items[0] . ":" . Registry::$items[2];
     assert_eq!(out, "12:3");
 }
 
+/// Verifies an untyped static property widened to `mixed` can retain its literal array default
+/// and later accept another array through a dynamically typed parameter.
+#[test]
+fn test_mixed_static_property_materializes_literal_array_default() {
+    let out = compile_and_run(
+        r#"<?php
+class EncodingRegistry {
+    private static mixed $encodingList = ['ASCII', 'UTF-8'];
+
+    public static function replace($encodingList) {
+        self::$encodingList = $encodingList;
+    }
+
+    public static function dump() {
+        echo implode(',', self::$encodingList);
+    }
+}
+
+EncodingRegistry::dump();
+EncodingRegistry::replace(['ISO-8859-1']);
+echo ':';
+EncodingRegistry::dump();
+"#,
+    );
+    assert_eq!(out, "ASCII,UTF-8:ISO-8859-1");
+}
+
 /// Tests that the index expression in `Registry::$items[idx()] += 6` is evaluated exactly once.
 /// The side-effect function `idx()` echoes "i" and the result proves no double-evaluation.
 #[test]

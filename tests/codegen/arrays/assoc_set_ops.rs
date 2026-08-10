@@ -1,5 +1,6 @@
 //! Purpose:
-//! Integration tests for associative-array set/merge builtins: `array_replace`.
+//! Integration tests for associative-array set/merge builtins such as `array_replace` and
+//! `array_unique`.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
@@ -10,6 +11,39 @@
 //!   non-mutation of the source, string values, and case-insensitive calls.
 
 use crate::support::*;
+
+/// Verifies null values can be stored in and strictly searched within a mixed associative array.
+#[test]
+fn test_assoc_mixed_null_storage_and_membership() {
+    let output = compile_and_run(
+        r#"<?php
+$values = ["present" => null, "other" => 1];
+echo in_array(null, $values, true) ? "yes" : "no";
+"#,
+    );
+    assert_eq!(output, "yes");
+}
+
+/// Verifies `array_unique()` preserves the first associative keys for gradual Mixed values.
+#[test]
+fn test_array_unique_assoc_mixed_preserves_first_keys() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_unique_value(mixed $value): mixed { return $value; }
+$values = [
+    "first" => gradual_unique_value("alpha"),
+    "second" => gradual_unique_value("beta"),
+    "duplicate" => gradual_unique_value("alpha"),
+];
+$result = array_unique($values);
+echo count($result), ":";
+foreach ($result as $key => $value) {
+    echo $key, "=", $value, ";";
+}
+"#,
+    );
+    assert_eq!(out, "2:first=alpha;second=beta;");
+}
 
 /// Verifies array_replace() overwrites matching keys in place and appends new keys,
 /// preserving the first array's key order.
@@ -58,6 +92,56 @@ echo $r["role"];
 "#,
     );
     assert_eq!(out, "alice-admin");
+}
+
+/// Verifies `array_replace()` normalizes boxed gradual array operands to one Mixed-valued hash
+/// layout while preserving the source arrays and balanced temporary ownership.
+#[test]
+fn test_array_replace_gradual_mixed_operands() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+function gradual_array(mixed $value): mixed { return $value; }
+$base = gradual_array(["name" => "alice", "role" => "user"]);
+$over = gradual_array(["role" => "admin", "count" => 2]);
+$result = array_replace($base, $over);
+echo $result["name"], "|", $result["role"], "|", $result["count"], "|", $base["role"];
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "alice|admin|2|user");
+}
+
+/// Verifies `array_replace()` promotes an indexed Mixed-valued operand when another operand uses
+/// gradual associative storage.
+#[test]
+fn test_array_replace_mixed_hash_and_indexed_operand() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_replace_value(mixed $value): mixed { return $value; }
+function gradual_replace_array(mixed $value): mixed { return $value; }
+$base = gradual_replace_array(["name" => "alice"]);
+$indexed = [gradual_replace_value("first"), gradual_replace_value("second")];
+$result = array_replace($base, $indexed);
+echo $result["name"], "|", $result[0], "|", $result[1];
+"#,
+    );
+    assert_eq!(out, "alice|first|second");
+}
+
+/// Verifies key-set operations normalize gradual and indexed operands to associative storage.
+#[test]
+fn test_array_key_set_ops_with_gradual_and_indexed_operands() {
+    let out = compile_and_run(
+        r#"<?php
+function gradual_key_array(mixed $value): mixed { return $value; }
+$left = gradual_key_array([0 => "zero", 1 => "one", "name" => "alice"]);
+$mask = [gradual_key_array(true)];
+$diff = array_diff_key($left, $mask);
+$intersect = array_intersect_key($left, $mask);
+echo count($diff), "|", $diff[1], "|", $diff["name"], "|", count($intersect), "|", $intersect[0];
+"#,
+    );
+    assert_eq!(out, "2|one|alice|1|zero");
 }
 
 /// Verifies array_replace() result count reflects merged distinct keys.

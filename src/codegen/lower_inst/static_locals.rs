@@ -226,6 +226,9 @@ fn static_local_value_type_matches(value_ty: &PhpType, slot_ty: &PhpType) -> boo
         (value_ty, slot_ty),
         (PhpType::Array(value_elem), PhpType::Array(_))
             if matches!(value_elem.codegen_repr(), PhpType::Never | PhpType::Void)
+    ) || matches!(
+        (value_ty, slot_ty),
+        (PhpType::AssocArray { .. }, PhpType::AssocArray { .. })
     )
 }
 
