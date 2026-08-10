@@ -1,6 +1,6 @@
 //! Purpose:
 //! Bounded binary wire protocol between a web worker, its prestarted handler
-//! broker, and the disposable process that executes one PHP request.
+//! broker, and the pool/request process that executes one PHP request.
 //!
 //! Called from:
 //! - `crate::handler_broker`, for request dispatch and handler response frames.
@@ -173,14 +173,18 @@ pub(crate) async fn write_request_async(
         writer.write_all(value).await?;
     }
     writer.write_all(&request.remote_port.to_be_bytes()).await?;
-    writer.write_all(&request.server_port.to_be_bytes()).await?;
-    writer.shutdown().await
+    writer.write_all(&request.server_port.to_be_bytes()).await
 }
 
 /// Reads and validates one complete request snapshot in the broker process.
 pub(crate) fn read_request(reader: &mut impl Read) -> io::Result<HandlerRequest> {
     let mut magic = [0u8; 8];
-    reader.read_exact(&mut magic)?;
+    reader.read_exact(&mut magic).map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("request marker was incomplete: {error}"),
+        )
+    })?;
     if &magic != REQUEST_MAGIC {
         return Err(invalid_data("invalid broker request marker"));
     }

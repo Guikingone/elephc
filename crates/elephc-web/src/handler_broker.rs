@@ -1,71 +1,100 @@
 //! Purpose:
-//! Prestarts a single-threaded handler broker before Tokio exists, then routes
-//! request snapshots to disposable forked PHP handler processes.
+//! Starts a threadless isolated-handler broker before Tokio and exposes async
+//! request dispatch with reliable cancellation to each web worker.
 //!
 //! Called from:
-//! - `crate::worker::serve`, before it constructs the worker's Tokio runtime.
-//! - `crate::worker::run_handler_isolated`, for async request dispatch.
+//! - `crate::isolated_worker::serve`, before it constructs the Tokio runtime.
+//! - `crate::isolated_worker::run_handler_isolated`, for async request dispatch.
 //!
 //! Key details:
-//! - Only the broker calls `fork()`, and the broker never creates threads.
-//! - The worker starts a small post-fork monitor that reaps a dead broker and
-//!   exits the worker so the master can rebuild the pair safely.
-//! - A dedicated Unix stream per request carries bounded protocol frames; a
-//!   fixed Unix datagram control socket transfers descriptors atomically.
+//! - Pool and request isolation share dispatch IDs and response-stream framing.
+//! - Descriptor transfers are acknowledged before the sender releases its copy.
+//! - A response lease owns the concurrency permit and cancels its exact ID on drop.
+//! - The broker process owns and reaps every handler PID; it never ignores `SIGCHLD`.
 
-use std::fs::File;
+mod control;
+mod process;
+
 use std::io;
-use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::{mpsc, Arc};
 
 use tokio::io::unix::AsyncFd;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::handler_ipc::{self, HandlerRequest, ResponseFrame, ResponseStart};
-use crate::request_state::{self, RequestMeta};
 
-/// Bounds disposable handler processes and their per-response IPC buffers.
-const MAX_CONCURRENT_HANDLERS: usize = 8;
 /// Worker exit status reserved for a reaped handler-broker failure.
 const BROKER_FAILURE_EXIT_CODE: libc::c_int = 87;
 /// Small stack sufficient for the broker monitor's blocking `waitpid` loop.
 const BROKER_MONITOR_STACK_BYTES: usize = 64 * 1024;
-/// Per-request execution-time ceiling inherited by every disposable child.
-static MAX_EXEC_SECS: AtomicU32 = AtomicU32::new(0);
+/// Small stack sufficient for forwarding cancellation IDs through one socket.
+const CANCEL_SENDER_STACK_BYTES: usize = 64 * 1024;
+/// Per-request execution-time ceiling inherited by every handler process.
+pub(super) static MAX_EXEC_SECS: AtomicU32 = AtomicU32::new(0);
+
+/// Handler process model implemented by the threadless broker.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum BrokerMode {
+    /// Reuse a fixed set of persistent handler processes.
+    Pool,
+    /// Fork and reap one disposable handler for every request.
+    Request,
+}
+
+/// Immutable process-lifecycle settings inherited by the broker.
+#[derive(Clone, Copy)]
+pub(super) struct BrokerConfig {
+    mode: BrokerMode,
+    concurrency: usize,
+    max_handler_requests: usize,
+}
 
 /// Pre-runtime broker endpoint that becomes async only after Tokio is built.
 pub(crate) struct PrestartedBroker {
-    control: OwnedFd,
+    dispatch: OwnedFd,
+    cancel: mpsc::Sender<u64>,
+    concurrency: usize,
 }
 
 /// Cloneable async dispatch handle shared by the worker's connection tasks.
 #[derive(Clone)]
 pub(crate) struct HandlerBroker {
-    control: Arc<Mutex<AsyncFd<OwnedFd>>>,
+    dispatch: Arc<Mutex<AsyncFd<OwnedFd>>>,
+    cancel: mpsc::Sender<u64>,
     permits: Arc<Semaphore>,
+    next_id: Arc<AtomicU64>,
 }
 
-/// One accepted handler response stream and its concurrency permit.
+/// One accepted handler response stream and its concurrency lease.
 pub(crate) struct HandlerResponse {
     pub(crate) start: ResponseStart,
     reader: tokio::net::unix::OwnedReadHalf,
+    lease: RequestLease,
     _permit: OwnedSemaphorePermit,
 }
 
-/// Terminates an over-time handler child without affecting its broker.
+/// Drop guard that cancels an incomplete dispatch by its exact broker ID.
+struct RequestLease {
+    id: u64,
+    cancel: mpsc::Sender<u64>,
+    active: bool,
+}
+
+/// Terminates an over-time handler without affecting its broker or worker.
 extern "C" fn handle_exec_timeout(_signal: libc::c_int) {
     const MESSAGE: &[u8] =
-        b"elephc-web: handler exceeded --max-execution-time; terminating request\n";
+        b"elephc-web: handler exceeded --max-execution-time; terminating handler\n";
     unsafe {
         libc::write(2, MESSAGE.as_ptr().cast(), MESSAGE.len());
         libc::_exit(1);
     }
 }
 
-/// Installs the alarm handler before the broker process is created.
+/// Installs the alarm handler before the broker and handler processes are created.
 fn configure_execution_timeout(seconds: u32) {
     MAX_EXEC_SECS.store(seconds, Ordering::Relaxed);
     if seconds == 0 {
@@ -82,60 +111,91 @@ fn configure_execution_timeout(seconds: u32) {
 }
 
 impl PrestartedBroker {
-    /// Forks the dedicated single-threaded broker and keeps its control endpoint.
-    pub(crate) fn start(handler: extern "C" fn(), max_exec_secs: u32) -> io::Result<Self> {
+    /// Forks a broker with the requested isolation model and live-handler bound.
+    pub(crate) fn start(
+        handler: extern "C" fn(),
+        max_exec_secs: u32,
+        mode: BrokerMode,
+        concurrency: usize,
+        max_handler_requests: usize,
+    ) -> io::Result<Self> {
         configure_execution_timeout(max_exec_secs);
-        let mut controls = [-1; 2];
-        if unsafe {
-            libc::socketpair(
-                libc::AF_UNIX,
-                libc::SOCK_DGRAM,
-                0,
-                controls.as_mut_ptr(),
-            )
-        } != 0
-        {
-            return Err(io::Error::last_os_error());
-        }
-        let parent_control = unsafe { OwnedFd::from_raw_fd(controls[0]) };
-        let broker_control = unsafe { OwnedFd::from_raw_fd(controls[1]) };
-        set_close_on_exec(parent_control.as_raw_fd())?;
-        set_close_on_exec(broker_control.as_raw_fd())?;
-        set_no_sigpipe(parent_control.as_raw_fd())?;
-        set_no_sigpipe(broker_control.as_raw_fd())?;
+        let concurrency = concurrency.max(1);
+        let (worker_dispatch, broker_dispatch) = control::datagram_pair()?;
+        let (worker_cancel, broker_cancel) = control::datagram_pair()?;
         let worker_pid = unsafe { libc::getpid() };
+        let config = BrokerConfig {
+            mode,
+            concurrency,
+            max_handler_requests,
+        };
         let pid = unsafe { libc::fork() };
         if pid == 0 {
-            drop(parent_control);
+            drop(worker_dispatch);
+            drop(worker_cancel);
             unsafe {
-                broker_loop(broker_control.as_raw_fd(), worker_pid, handler);
+                process::broker_loop(
+                    broker_dispatch.as_raw_fd(),
+                    broker_cancel.as_raw_fd(),
+                    worker_pid,
+                    handler,
+                    config,
+                );
                 libc::_exit(0);
             }
         }
         if pid < 0 {
             return Err(io::Error::last_os_error());
         }
-        drop(broker_control);
-        if let Err(error) = set_nonblocking(parent_control.as_raw_fd()) {
+        drop(broker_dispatch);
+        drop(broker_cancel);
+        if let Err(error) = control::set_nonblocking(worker_dispatch.as_raw_fd()) {
             unsafe { terminate_and_reap_broker(pid) };
             return Err(error);
         }
+        let cancel = match start_cancel_sender(worker_cancel) {
+            Ok(cancel) => cancel,
+            Err(error) => {
+                unsafe { terminate_and_reap_broker(pid) };
+                return Err(error);
+            }
+        };
         if let Err(error) = start_broker_monitor(pid) {
             unsafe { terminate_and_reap_broker(pid) };
             return Err(error);
         }
         Ok(Self {
-            control: parent_control,
+            dispatch: worker_dispatch,
+            cancel,
+            concurrency,
         })
     }
 
     /// Registers the already-running broker endpoint with Tokio's readiness driver.
     pub(crate) fn into_async(self) -> io::Result<HandlerBroker> {
         Ok(HandlerBroker {
-            control: Arc::new(Mutex::new(AsyncFd::new(self.control)?)),
-            permits: Arc::new(Semaphore::new(MAX_CONCURRENT_HANDLERS)),
+            dispatch: Arc::new(Mutex::new(AsyncFd::new(self.dispatch)?)),
+            cancel: self.cancel,
+            permits: Arc::new(Semaphore::new(self.concurrency)),
+            next_id: Arc::new(AtomicU64::new(1)),
         })
     }
+}
+
+/// Starts the worker thread that sends cancellation IDs without blocking Tokio.
+fn start_cancel_sender(socket: OwnedFd) -> io::Result<mpsc::Sender<u64>> {
+    let (sender, receiver) = mpsc::channel::<u64>();
+    std::thread::Builder::new()
+        .name("elephc-web-cancel-sender".to_string())
+        .stack_size(CANCEL_SENDER_STACK_BYTES)
+        .spawn(move || {
+            while let Ok(id) = receiver.recv() {
+                if control::send_id(socket.as_raw_fd(), id).is_err() {
+                    break;
+                }
+            }
+        })?;
+    Ok(sender)
 }
 
 /// Starts the post-fork worker thread that owns reaping the dedicated broker.
@@ -144,7 +204,19 @@ fn start_broker_monitor(pid: libc::pid_t) -> io::Result<()> {
         .name("elephc-web-broker-monitor".to_string())
         .stack_size(BROKER_MONITOR_STACK_BYTES)
         .spawn(move || unsafe {
-            reap_broker(pid);
+            if let Some(status) = reap_broker(pid) {
+                if libc::WIFSIGNALED(status) {
+                    eprintln!(
+                        "elephc-web: handler broker terminated by signal {}",
+                        libc::WTERMSIG(status)
+                    );
+                } else if libc::WIFEXITED(status) {
+                    eprintln!(
+                        "elephc-web: handler broker exited with status {}",
+                        libc::WEXITSTATUS(status)
+                    );
+                }
+            }
             libc::_exit(BROKER_FAILURE_EXIT_CODE);
         })
         .map(|_| ())
@@ -153,28 +225,26 @@ fn start_broker_monitor(pid: libc::pid_t) -> io::Result<()> {
 /// Terminates a broker whose worker-side setup failed, then reaps it synchronously.
 unsafe fn terminate_and_reap_broker(pid: libc::pid_t) {
     libc::kill(pid, libc::SIGTERM);
-    reap_broker(pid);
+    let _ = reap_broker(pid);
 }
 
-/// Waits for the exact broker child, retrying interrupted waits until it is reaped.
-unsafe fn reap_broker(pid: libc::pid_t) {
+/// Waits for the exact broker child and returns its wait status when available.
+unsafe fn reap_broker(pid: libc::pid_t) -> Option<libc::c_int> {
     loop {
         let mut status = 0;
         let waited = libc::waitpid(pid, &mut status, 0);
         if waited == pid {
-            return;
+            return Some(status);
         }
         if waited < 0 && io::Error::last_os_error().raw_os_error() == Some(libc::EINTR) {
             continue;
         }
-        if waited < 0 {
-            return;
-        }
+        return None;
     }
 }
 
 impl HandlerBroker {
-    /// Dispatches one request and waits only until its status/headers are committed.
+    /// Dispatches one request and waits only until status and headers are committed.
     pub(crate) async fn dispatch(&self, request: HandlerRequest) -> io::Result<HandlerResponse> {
         let permit = Arc::clone(&self.permits)
             .acquire_owned()
@@ -182,22 +252,50 @@ impl HandlerBroker {
             .map_err(|_| io::Error::new(io::ErrorKind::BrokenPipe, "handler broker closed"))?;
         let (worker_stream, broker_stream) = UnixStream::pair()?;
         worker_stream.set_nonblocking(true)?;
-        set_close_on_exec(worker_stream.as_raw_fd())?;
-        set_close_on_exec(broker_stream.as_raw_fd())?;
-        set_no_sigpipe(worker_stream.as_raw_fd())?;
-        set_no_sigpipe(broker_stream.as_raw_fd())?;
-        self.send_channel(broker_stream.as_raw_fd()).await?;
+        control::set_close_on_exec(worker_stream.as_raw_fd())?;
+        control::set_close_on_exec(broker_stream.as_raw_fd())?;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let lease = RequestLease {
+            id,
+            cancel: self.cancel.clone(),
+            active: true,
+        };
+        let dispatch_control = self.dispatch.lock().await;
+        Self::send_channel(&dispatch_control, id, broker_stream.as_raw_fd()).await?;
         drop(broker_stream);
+        drop(dispatch_control);
 
         let stream = tokio::net::UnixStream::from_std(worker_stream)?;
         let (mut reader, mut writer) = stream.into_split();
-        handler_ipc::write_request_async(&mut writer, &request).await?;
-        drop(request);
+        handler_ipc::write_request_async(&mut writer, &request)
+            .await
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("could not write handler request {id}: {error}"),
+                )
+            })?;
+        writer.shutdown().await.map_err(|error| {
+            io::Error::new(
+                error.kind(),
+                format!("could not finish handler request {id}: {error}"),
+            )
+        })?;
         drop(writer);
-        match handler_ipc::read_response_frame(&mut reader).await? {
+        drop(request);
+        let first_frame = handler_ipc::read_response_frame(&mut reader)
+            .await
+            .map_err(|error| {
+                io::Error::new(
+                    error.kind(),
+                    format!("could not read handler response {id}: {error}"),
+                )
+            })?;
+        match first_frame {
             ResponseFrame::Start(start) => Ok(HandlerResponse {
                 start,
                 reader,
+                lease,
                 _permit: permit,
             }),
             ResponseFrame::Chunk(_) | ResponseFrame::End => Err(io::Error::new(
@@ -207,13 +305,39 @@ impl HandlerBroker {
         }
     }
 
-    /// Transfers one request-channel descriptor over the bounded control socket.
-    async fn send_channel(&self, channel: RawFd) -> io::Result<()> {
-        let control = self.control.lock().await;
+    /// Transfers one request channel and waits until the broker acknowledges ownership.
+    async fn send_channel(
+        dispatch: &AsyncFd<OwnedFd>,
+        id: u64,
+        channel: RawFd,
+    ) -> io::Result<()> {
         loop {
-            let mut writable = control.writable().await?;
-            match writable.try_io(|fd| send_fd(fd.get_ref().as_raw_fd(), channel)) {
-                Ok(result) => return result,
+            let mut writable = dispatch.writable().await?;
+            match writable.try_io(|fd| {
+                control::send_dispatch(fd.get_ref().as_raw_fd(), id, channel, true)
+            }) {
+                Ok(result) => {
+                    result?;
+                    break;
+                }
+                Err(_) => continue,
+            }
+        }
+        loop {
+            let mut readable = dispatch.readable().await?;
+            match readable.try_io(|fd| unsafe {
+                control::recv_id(fd.get_ref().as_raw_fd())?.ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::BrokenPipe, "handler broker closed before ACK")
+                })
+            }) {
+                Ok(Ok(acknowledged)) if acknowledged == id => return Ok(()),
+                Ok(Ok(acknowledged)) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("handler broker acknowledged request {acknowledged}, expected {id}"),
+                    ));
+                }
+                Ok(Err(error)) => return Err(error),
                 Err(_) => continue,
             }
         }
@@ -221,278 +345,22 @@ impl HandlerBroker {
 }
 
 impl HandlerResponse {
-    /// Reads the next chunk or successful end frame from the handler child.
+    /// Reads the next response frame and completes the lease only on an explicit end.
     pub(crate) async fn next_frame(&mut self) -> io::Result<ResponseFrame> {
-        handler_ipc::read_response_frame(&mut self.reader).await
+        let frame = handler_ipc::read_response_frame(&mut self.reader).await?;
+        if matches!(frame, ResponseFrame::End) {
+            self.lease.active = false;
+        }
+        Ok(frame)
     }
 }
 
-/// Runs the broker's blocking descriptor-accept loop in its threadless process.
-unsafe fn broker_loop(control: RawFd, worker_pid: libc::pid_t, handler: extern "C" fn()) {
-    ignore_signal(libc::SIGPIPE);
-    ignore_signal(libc::SIGCHLD);
-    while wait_for_control(control, worker_pid) {
-        let channel = match recv_fd(control) {
-            Ok(Some(channel)) => channel,
-            Ok(None) | Err(_) => break,
-        };
-        if set_close_on_exec(channel).is_err() {
-            libc::close(channel);
-            continue;
-        }
-        let mut stream = File::from_raw_fd(channel);
-        let request = match handler_ipc::read_request(&mut stream) {
-            Ok(request) => request,
-            Err(_) => {
-                write_failure_response(stream.as_raw_fd());
-                continue;
-            }
-        };
-        request_state::set_request(
-            request.method,
-            request.uri,
-            request.path,
-            request.query,
-            request.headers,
-            request.body,
-            RequestMeta {
-                remote_addr: request.remote_addr,
-                remote_port: request.remote_port,
-                server_addr: request.server_addr,
-                server_port: request.server_port,
-                protocol: request.protocol,
-            },
-        );
-        let pid = libc::fork();
-        if pid == 0 {
-            libc::close(control);
-            run_handler_child(handler, stream.as_raw_fd());
-        } else if pid < 0 {
-            write_failure_response(stream.as_raw_fd());
-        }
-        drop(stream);
-    }
-    libc::close(control);
-}
-
-/// Waits for one control datagram while also detecting an exited worker parent.
-unsafe fn wait_for_control(control: RawFd, worker_pid: libc::pid_t) -> bool {
-    loop {
-        let mut poll_fd = libc::pollfd {
-            fd: control,
-            events: libc::POLLIN,
-            revents: 0,
-        };
-        let ready = libc::poll(&mut poll_fd, 1, 1000);
-        if ready > 0 {
-            return poll_fd.revents & libc::POLLIN != 0;
-        }
-        if ready < 0 && io::Error::last_os_error().raw_os_error() != Some(libc::EINTR) {
-            return false;
-        }
-        if libc::getppid() != worker_pid {
-            return false;
+impl Drop for RequestLease {
+    /// Cancels a handler whose response did not reach its successful end frame.
+    fn drop(&mut self) {
+        if self.active {
+            let _ = self.cancel.send(self.id);
+            self.active = false;
         }
     }
-}
-
-/// Executes PHP in a disposable child and exits without unwinding broker state.
-unsafe fn run_handler_child(handler: extern "C" fn(), response_fd: RawFd) -> ! {
-    restore_default_signal(libc::SIGCHLD);
-    crate::session::elephc_web_session_reset();
-    request_state::begin_response_stream(response_fd);
-    request_state::set_capture(true);
-    let seconds = MAX_EXEC_SECS.load(Ordering::Relaxed);
-    if seconds > 0 {
-        libc::alarm(seconds);
-    }
-    handler();
-    if seconds > 0 {
-        libc::alarm(0);
-    }
-    let complete = request_state::finish_response_stream();
-    libc::close(response_fd);
-    libc::_exit(if complete { 0 } else { 1 });
-}
-
-/// Emits the bounded 500 response used when the broker cannot start a handler.
-unsafe fn write_failure_response(fd: RawFd) {
-    let headers = Vec::new();
-    let body = b"Internal Server Error";
-    let _ = handler_ipc::write_response_start(fd, 500, &headers)
-        && handler_ipc::write_response_chunks(fd, body)
-        && handler_ipc::write_response_end(fd);
-}
-
-/// Installs an ignored signal disposition in the single-threaded broker.
-unsafe fn ignore_signal(signal: libc::c_int) {
-    let mut action: libc::sigaction = std::mem::zeroed();
-    action.sa_sigaction = libc::SIG_IGN;
-    libc::sigemptyset(&mut action.sa_mask);
-    action.sa_flags = 0;
-    libc::sigaction(signal, &action, std::ptr::null_mut());
-}
-
-/// Restores child-reaping semantics inside a disposable PHP handler process.
-unsafe fn restore_default_signal(signal: libc::c_int) {
-    let mut action: libc::sigaction = std::mem::zeroed();
-    action.sa_sigaction = libc::SIG_DFL;
-    libc::sigemptyset(&mut action.sa_mask);
-    action.sa_flags = 0;
-    libc::sigaction(signal, &action, std::ptr::null_mut());
-}
-
-/// Marks an internal descriptor close-on-exec so user subprocesses cannot retain it.
-fn set_close_on_exec(fd: RawFd) -> io::Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFD) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFD, flags | libc::FD_CLOEXEC) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Marks the worker control descriptor nonblocking for `AsyncFd` readiness.
-fn set_nonblocking(fd: RawFd) -> io::Result<()> {
-    let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
-    if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(())
-}
-
-/// Prevents a closed internal socket from terminating a macOS worker via SIGPIPE.
-#[cfg(target_os = "macos")]
-fn set_no_sigpipe(fd: RawFd) -> io::Result<()> {
-    let enabled: libc::c_int = 1;
-    let result = unsafe {
-        libc::setsockopt(
-            fd,
-            libc::SOL_SOCKET,
-            libc::SO_NOSIGPIPE,
-            (&enabled as *const libc::c_int).cast(),
-            std::mem::size_of_val(&enabled) as libc::socklen_t,
-        )
-    };
-    if result == 0 {
-        Ok(())
-    } else {
-        Err(io::Error::last_os_error())
-    }
-}
-
-/// Leaves Linux sockets on their native MSG_NOSIGNAL send path.
-#[cfg(target_os = "linux")]
-fn set_no_sigpipe(_fd: RawFd) -> io::Result<()> {
-    Ok(())
-}
-
-/// Sends one descriptor as an atomic `SCM_RIGHTS` control message.
-fn send_fd(control: RawFd, channel: RawFd) -> io::Result<()> {
-    unsafe {
-        let mut byte = 0u8;
-        let mut iov = libc::iovec {
-            iov_base: (&mut byte as *mut u8).cast(),
-            iov_len: 1,
-        };
-        let control_len = usize::try_from(libc::CMSG_SPACE(
-            std::mem::size_of::<RawFd>() as _,
-        ))
-        .map_err(|_| io::Error::other("descriptor control message is too large"))?;
-        let word_count = control_len.div_ceil(std::mem::size_of::<usize>());
-        let mut ancillary = vec![0usize; word_count];
-        let mut message: libc::msghdr = std::mem::zeroed();
-        message.msg_iov = &mut iov;
-        message.msg_iovlen = 1;
-        message.msg_control = ancillary.as_mut_ptr().cast();
-        message.msg_controllen = control_len
-            .try_into()
-            .map_err(|_| io::Error::other("descriptor control length does not fit msghdr"))?;
-        let header = libc::CMSG_FIRSTHDR(&message);
-        if header.is_null() {
-            return Err(io::Error::other("failed to construct descriptor message"));
-        }
-        (*header).cmsg_level = libc::SOL_SOCKET;
-        (*header).cmsg_type = libc::SCM_RIGHTS;
-        (*header).cmsg_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as _)
-            .try_into()
-            .map_err(|_| io::Error::other("descriptor header length does not fit cmsghdr"))?;
-        std::ptr::write(libc::CMSG_DATA(header).cast::<RawFd>(), channel);
-        let flags = send_message_flags();
-        let written = libc::sendmsg(control, &message, flags);
-        if written == 1 {
-            Ok(())
-        } else {
-            Err(io::Error::last_os_error())
-        }
-    }
-}
-
-/// Receives one descriptor from the broker control socket, or `None` on EOF.
-unsafe fn recv_fd(control: RawFd) -> io::Result<Option<RawFd>> {
-    let mut byte = MaybeUninit::<u8>::uninit();
-    let mut iov = libc::iovec {
-        iov_base: byte.as_mut_ptr().cast(),
-        iov_len: 1,
-    };
-    let control_len = usize::try_from(libc::CMSG_SPACE(
-        std::mem::size_of::<RawFd>() as _,
-    ))
-    .map_err(|_| io::Error::other("descriptor control message is too large"))?;
-    let word_count = control_len.div_ceil(std::mem::size_of::<usize>());
-    let mut ancillary = vec![0usize; word_count];
-    let mut message: libc::msghdr = std::mem::zeroed();
-    message.msg_iov = &mut iov;
-    message.msg_iovlen = 1;
-    message.msg_control = ancillary.as_mut_ptr().cast();
-    message.msg_controllen = control_len
-        .try_into()
-        .map_err(|_| io::Error::other("descriptor control length does not fit msghdr"))?;
-    loop {
-        let received = libc::recvmsg(control, &mut message, 0);
-        if received == 0 {
-            return Ok(None);
-        }
-        if received < 0 {
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(libc::EINTR) {
-                continue;
-            }
-            return Err(error);
-        }
-        if received != 1 || message.msg_flags & (libc::MSG_CTRUNC | libc::MSG_TRUNC) != 0 {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "broker control message was truncated",
-            ));
-        }
-        let header = libc::CMSG_FIRSTHDR(&message);
-        let minimum_header_len = libc::CMSG_LEN(std::mem::size_of::<RawFd>() as _)
-            .try_into()
-            .map_err(|_| io::Error::other("descriptor header length does not fit cmsghdr"))?;
-        if header.is_null()
-            || (*header).cmsg_level != libc::SOL_SOCKET
-            || (*header).cmsg_type != libc::SCM_RIGHTS
-            || (*header).cmsg_len != minimum_header_len
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "broker control message omitted its request descriptor",
-            ));
-        }
-        return Ok(Some(std::ptr::read(
-            libc::CMSG_DATA(header).cast::<RawFd>(),
-        )));
-    }
-}
-
-/// Selects the nonblocking, no-SIGPIPE send flags available on this Unix target.
-#[cfg(target_os = "linux")]
-fn send_message_flags() -> libc::c_int {
-    libc::MSG_DONTWAIT | libc::MSG_NOSIGNAL
-}
-
-/// Selects nonblocking descriptor transfer flags on macOS.
-#[cfg(target_os = "macos")]
-fn send_message_flags() -> libc::c_int {
-    libc::MSG_DONTWAIT
 }

@@ -1,5 +1,5 @@
 //! Purpose:
-//! Architectural regressions for safe PHP handler isolation in the web worker.
+//! Architectural regressions for safe PHP handler isolation in broker-backed workers.
 //!
 //! Called from:
 //! - `cargo test -p elephc-web --test worker_architecture` through Rust's test harness.
@@ -11,7 +11,7 @@
 /// of calling `fork()` after the Tokio runtime and connection tasks exist.
 #[test]
 fn request_handler_path_does_not_fork_from_tokio() {
-    let source = include_str!("../src/worker.rs");
+    let source = include_str!("../src/isolated_worker.rs");
     let isolated = source
         .split("async fn run_handler_isolated")
         .nth(1)

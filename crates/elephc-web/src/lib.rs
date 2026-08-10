@@ -10,11 +10,12 @@
 //! - Tests: directly through the `rlib` crate type.
 //!
 //! Key details:
-//! - One process per prefork worker means no shared-thread state: per-worker
-//!   request/response data lives in plain process statics, not behind a mutex.
+//! - Every handler-owning process executes PHP serially, so request/response
+//!   data lives in process statics without cross-thread mutation.
 
 mod handler_broker;
 mod handler_ipc;
+mod isolated_worker;
 mod multipart;
 mod request_state;
 mod server;

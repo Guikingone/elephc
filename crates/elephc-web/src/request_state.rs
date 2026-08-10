@@ -9,12 +9,12 @@
 //! Called from:
 //! - The compiled `--web` runtime's `__rt_stdout_write` capture branch, which
 //!   calls `elephc_web_write(ptr, len)` when `elephc_web_capture` is non-zero.
-//! - `crate::handler_broker`, which installs one request snapshot and configures
-//!   the response stream before invoking a disposable PHP handler.
+//! - `crate::worker` for in-process requests and `crate::handler_broker` for
+//!   pool/request snapshots and response streams.
 //!
 //! Key details:
-//! - Request/response statics are accessed only by the threadless broker before
-//!   fork or by one disposable handler child, so they remain race-free.
+//! - Request/response statics are accessed by one handler at a time in every
+//!   owning process, so they remain race-free in all isolation models.
 //! - All access to `static mut` items goes through raw pointers
 //!   (`core::ptr::addr_of_mut!` / `core::ptr::addr_of!`), never `&mut`/`&`
 //!   references, to stay clear of the `static_mut_refs` lint (a hard error under
@@ -36,7 +36,7 @@ extern "C" {
 /// Process-static fallback body. Normal responses stream directly; trans-SID
 /// responses use this buffer because rewriting requires the complete plaintext.
 static mut RESPONSE_BODY: Vec<u8> = Vec::new();
-/// Dedicated handler-channel descriptor, or `-1` outside a disposable child.
+/// Dedicated handler-channel descriptor, or `-1` outside an isolated handler child.
 static mut RESPONSE_STREAM_FD: RawFd = -1;
 /// Whether status and headers were frozen by the first output operation.
 static mut RESPONSE_COMMITTED: bool = false;
@@ -60,7 +60,7 @@ unsafe fn warn_headers_already_sent_once(warned: *mut bool, message: &'static [u
     let _ = libc::write(2, message.as_ptr().cast(), message.len());
 }
 
-/// Terminates a disposable request child whose worker-side response channel closed.
+/// Terminates an isolated handler child whose worker-side response channel closed.
 unsafe fn abort_failed_response_stream() -> ! {
     core::ptr::write(core::ptr::addr_of_mut!(RESPONSE_STREAM_FAILED), true);
     libc::_exit(1);
@@ -79,7 +79,7 @@ pub fn set_capture(on: bool) {
     }
 }
 
-/// Clears the fallback response buffer before a disposable handler begins.
+/// Clears the fallback response buffer before a handler begins.
 pub fn clear_body() {
     // SAFETY: single-threaded per worker; the buffer is mutated through a raw
     // pointer to avoid forming a reference to the `static mut`.
@@ -131,7 +131,7 @@ pub unsafe extern "C" fn elephc_web_write(ptr: *const u8, len: usize) {
     }
 }
 
-/// Initializes response streaming for one disposable handler child.
+/// Initializes response streaming for one pool or request handler child.
 pub(crate) fn begin_response_stream(fd: RawFd) {
     clear_body();
     reset_response();
@@ -199,7 +199,7 @@ static mut RESPONSE_HEADERS: Vec<(String, String)> = Vec::new();
 /// committed response incomplete so the worker closes it without an end frame.
 ///
 /// # Safety
-/// Called only by the single-threaded disposable request child.
+/// Called only by a process executing one web handler at a time.
 #[no_mangle]
 pub unsafe extern "C" fn elephc_web_handle_uncaught_exception() {
     if *core::ptr::addr_of!(RESPONSE_COMMITTED) {
@@ -327,7 +327,6 @@ pub fn reset_response() {
 }
 
 /// Returns the current response status code.
-#[cfg(test)]
 pub fn take_status() -> u16 {
     // SAFETY: single-threaded per worker; read through a raw pointer.
     unsafe { *core::ptr::addr_of!(RESPONSE_STATUS) }
