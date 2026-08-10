@@ -16,6 +16,15 @@ use crate::support::*;
 const TLS_PROBE_ACCEPT_DEADLINE: std::time::Duration = std::time::Duration::from_secs(300);
 const TLS_PROBE_ACCEPT_POLL: std::time::Duration = std::time::Duration::from_millis(5);
 const TLS_PROBE_IO_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+/// How long a served connection waits for its trigger byte.
+///
+/// It cannot share the 5-second exchange timeout, because the fixtures that hold many sessions
+/// open send nothing until every session exists: connection 1 waits out the client's whole open
+/// loop. On a loaded runner opening 257 TLS sessions takes longer than that, the first worker
+/// timed out, and its error stopped the server for all the others — which is why CI saw every
+/// read fail and a session count that moved between runs. The wait is bounded by the accept
+/// deadline instead, which already covers the same loop.
+const TLS_PROBE_TRIGGER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
 /// The pool must cover every connection the probe holds open AT ONCE, not just the
 /// busiest moment of a sequential exchange: a worker completes its handshake and then
 /// blocks reading, while `supports_more_than_256_live_tls_sessions` opens all 257
@@ -146,7 +155,7 @@ fn serve_tls_probe_connection(
     // which is why this only ever showed up here.
     tcp.set_nonblocking(false)
         .map_err(|error| format!("connection {index}: clear nonblocking: {error}"))?;
-    tcp.set_read_timeout(Some(TLS_PROBE_IO_TIMEOUT))
+    tcp.set_read_timeout(Some(TLS_PROBE_TRIGGER_TIMEOUT))
         .map_err(|error| format!("connection {index}: set read timeout: {error}"))?;
     tcp.set_write_timeout(Some(TLS_PROBE_IO_TIMEOUT))
         .map_err(|error| format!("connection {index}: set write timeout: {error}"))?;
@@ -156,6 +165,11 @@ fn serve_tls_probe_connection(
     let mut trigger = [0u8; 1];
     tls.read_exact(&mut trigger)
         .map_err(|error| format!("connection {index}: read trigger: {error}"))?;
+    // The trigger has arrived, so the rest of the exchange is one round trip and goes back to
+    // the tight budget.
+    tls.get_ref()
+        .set_read_timeout(Some(TLS_PROBE_IO_TIMEOUT))
+        .map_err(|error| format!("connection {index}: restore read timeout: {error}"))?;
     let reply = match reply_mode {
         TlsReplyMode::FixedOk => b"ok".to_vec(),
         TlsReplyMode::ConnectionIndex => {
@@ -529,4 +543,54 @@ fclose($stream);
         "runtime assembly still publishes the fixed TLS session table"
     );
     let _ = fs::remove_dir_all(dir);
+}
+
+/// Pins that every target reads `ssl.verify_peer` before attaching TLS.
+///
+/// The option selects the non-verifying attach, which is what lets a fixture talk to its own
+/// self-signed server. It was read on AArch64 and ignored on x86_64, so all six TLS fixtures
+/// failed there and only there — a self-signed peer the host accepted was rejected on Linux
+/// x86_64. Asserting on the emitted assembly is what makes the guard reachable from an AArch64
+/// host, where the executing tests pass either way.
+#[test]
+fn test_enable_crypto_reads_verify_peer_on_every_target() {
+    for target in ["linux-x86_64", "linux-aarch64", "macos-aarch64"] {
+        let dir = make_cli_test_dir("elephc_tls_verify_peer_target");
+        let php_path = dir.join("main.php");
+        fs::write(
+            &php_path,
+            r#"<?php
+$ctx = stream_context_get_default();
+stream_context_set_option($ctx, "ssl", "verify_peer", false);
+$s = stream_socket_client("tcp://127.0.0.1:9");
+if ($s !== false) {
+    stream_socket_enable_crypto($s, true, STREAM_CRYPTO_METHOD_TLS_CLIENT);
+}
+echo "done";
+"#,
+        )
+        .unwrap();
+        let output = elephc_cli_command(&dir)
+            .arg("--target")
+            .arg(target)
+            .arg("--emit-asm")
+            .arg(&php_path)
+            .output()
+            .expect("failed to emit assembly for the TLS attach target");
+        assert!(
+            output.status.success(),
+            "{target}: --emit-asm failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let asm = fs::read_to_string(dir.join("main.s")).expect("target assembly");
+        assert!(
+            asm.contains("_ssl_verify_peer_key_str"),
+            "{target}: the TLS attach must read ssl.verify_peer"
+        );
+        assert!(
+            asm.contains("_elephc_tls_attach_fd_insecure_fn"),
+            "{target}: the TLS attach must be able to select the non-verifying variant"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
 }

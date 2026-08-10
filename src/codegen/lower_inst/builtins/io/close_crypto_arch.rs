@@ -393,7 +393,45 @@ pub(super) fn lower_stream_socket_enable_crypto_attach_x86_64(
     ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 64]");                   // reload fd as the first TLS attach argument
     ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 0]");                    // pass peer_name pointer
     ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");                    // pass peer_name byte length
+    // See the AArch64 counterpart: `ssl.verify_peer = false` selects the non-verifying attach.
+    // Without this probe the option was read on one architecture and ignored on the other, so a
+    // self-signed peer that AArch64 accepted was rejected on x86_64 — every TLS fixture sets it.
+    let insecure_attach = ctx.next_label("ssec_insecure_attach_x");
+    let verifying_attach = ctx.next_label("ssec_verifying_attach_x");
+    let do_attach = ctx.next_label("ssec_do_attach_x");
+    // The option lookup takes rdi/rsi/rdx itself, so the attach arguments are saved across it.
+    abi::emit_push_reg_pair(ctx.emitter, "rdi", "rsi");
+    abi::emit_push_reg(ctx.emitter, "rdx");
+    abi::emit_reserve_temporary_stack(ctx.emitter, 16);
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 0], 0");                      // out value default
+    abi::emit_symbol_address(ctx.emitter, "rdi", "_ssl_key_str");
+    ctx.emitter.instruction("mov rsi, 3");                                      // strlen("ssl")
+    abi::emit_symbol_address(ctx.emitter, "rdx", "_ssl_verify_peer_key_str");
+    ctx.emitter.instruction("mov rcx, 11");                                     // strlen("verify_peer")
+    ctx.emitter.instruction("lea r8, [rsp + 0]");                               // out value address
+    abi::emit_call_label(ctx.emitter, "__rt_get_int_context_option");
+    ctx.emitter.instruction("test rax, rax");                                   // did the context carry verify_peer?
+    ctx.emitter.instruction(&format!("jz {}", verifying_attach));               // option absent: keep verifying
+    ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 0]");                    // the verify_peer value
+    ctx.emitter.instruction("test r10, r10");
+    ctx.emitter.instruction(&format!("jz {}", insecure_attach));                // false/0 disables verification
+    ctx.emitter.label(&verifying_attach);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_pop_reg(ctx.emitter, "rdx");                                      // restore the attach arguments
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
     abi::emit_load_symbol_to_reg(ctx.emitter, "r9", "_elephc_tls_attach_fd_fn", 0); // load the default TLS attach function pointer
+    ctx.emitter.instruction(&format!("jmp {}", do_attach));
+    ctx.emitter.label(&insecure_attach);
+    abi::emit_release_temporary_stack(ctx.emitter, 16);
+    abi::emit_pop_reg(ctx.emitter, "rdx");                                      // restore the attach arguments
+    abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
+    abi::emit_load_symbol_to_reg(
+        ctx.emitter,
+        "r9",
+        "_elephc_tls_attach_fd_insecure_fn",
+        0,
+    );                                                                          // load the non-verifying attach function pointer
+    ctx.emitter.label(&do_attach);
     ctx.emitter.instruction("call r9");                                         // attach TLS and return a session handle
     ctx.emitter.label(&after_attach);
     ctx.emitter.instruction("mov r10, QWORD PTR [rsp + 80]");                   // reload the opaque stream handle before releasing the spill storage

@@ -549,3 +549,34 @@ foreach ([STDIN, STDOUT, STDERR] as $stream) {
         "PHP|php://stdin\nPHP|php://stdout\nPHP|php://stderr\n"
     );
 }
+
+/// Verifies a two-argument `stream_socket_accept()` leaves nothing behind.
+///
+/// The runtime renders the peer address into owned storage on every accept, because it cannot see
+/// whether the caller passed `&$peer_name`. Only the three-argument lowering reads that storage, so
+/// the common server-loop form leaked one block per connection — invisible to every functional
+/// test, and unbounded in a program that accepts for a living.
+#[test]
+fn test_accept_without_peer_name_releases_the_rendered_peer() {
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+$s = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($s, false);
+for ($i = 0; $i < 4; $i++) {
+    $c = stream_socket_client("tcp://" . $addr);
+    $a = stream_socket_accept($s);
+    fclose($a);
+    fclose($c);
+}
+fclose($s);
+echo "accepted";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "accepted");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "four accepts must leave no owned peer storage behind: {}",
+        out.stderr
+    );
+}

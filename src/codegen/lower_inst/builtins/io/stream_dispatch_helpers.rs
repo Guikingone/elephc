@@ -87,6 +87,37 @@ pub(super) fn lower_stream_socket_accept_timeout(
     Ok(())
 }
 
+/// Releases the peer address `stream_socket_accept()` stashed when nobody asked for it.
+///
+/// The runtime helper renders the peer into owned storage on every accept, because it cannot see
+/// whether the caller passed `&$peer_name`. Only the three-argument lowering reads that stash, so
+/// a two-argument accept left one owned block per connection with no owner — invisible to every
+/// functional test, and unbounded in a server loop.
+pub(super) fn emit_release_accept_peer_stash(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the boxed result outlives the release
+            abi::emit_symbol_address(ctx.emitter, "x9", "_accept_peer_ptr");
+            ctx.emitter.instruction("ldr x0, [x9]");                            // the stashed peer address
+            ctx.emitter.instruction("str xzr, [x9]");                           // detach before the free
+            abi::emit_symbol_address(ctx.emitter, "x9", "_accept_peer_len");
+            ctx.emitter.instruction("str xzr, [x9]");                           // and clear its length
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");           // release only live heap-backed storage
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the boxed result outlives the release
+            abi::emit_symbol_address(ctx.emitter, "r9", "_accept_peer_ptr");
+            ctx.emitter.instruction("mov rax, QWORD PTR [r9]");                 // the stashed peer address
+            ctx.emitter.instruction("mov QWORD PTR [r9], 0");                   // detach before the free
+            abi::emit_symbol_address(ctx.emitter, "r9", "_accept_peer_len");
+            ctx.emitter.instruction("mov QWORD PTR [r9], 0");                   // and clear its length
+            abi::emit_call_label(ctx.emitter, "__rt_heap_free_safe");           // release only live heap-backed storage
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+}
+
 /// Stores `_accept_peer_*` into a local string slot while preserving the result.
 pub(super) fn store_accept_peer_name(ctx: &mut FunctionContext<'_>, value: ValueId) -> Result<()> {
     let Some(slot) = source_load_local_slot(ctx, value)? else {

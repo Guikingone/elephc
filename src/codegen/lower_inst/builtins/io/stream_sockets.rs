@@ -97,6 +97,8 @@ pub(crate) fn lower_stream_socket_accept(
     if inst.operands.len() == 3 {
         let peer = expect_operand(inst, 2)?;
         store_accept_peer_name(ctx, peer)?;
+    } else {
+        emit_release_accept_peer_stash(ctx);
     }
     store_if_result(ctx, inst)
 }
