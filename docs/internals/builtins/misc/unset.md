@@ -2,14 +2,14 @@
 title: "unset() — internals"
 description: "Compiler internals for unset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 319
+  order: 318
 ---
 
 ## `unset()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
 - **Lowering**: [`src/codegen/lower_inst/builtins/types.rs`:140](https://github.com/illegalstudio/elephc/blob/main/src/codegen/lower_inst/builtins/types.rs#L140) (`lower_unset_builtin`)
 - **Function symbol**: `lower_unset_builtin()`
 
@@ -33,11 +33,11 @@ sidebar:
 
 ## Semantic descriptor
 
-_Compiler-resident construct; this name is intentionally outside the builtin registry._
+Shared contract with a dedicated compiler language-construct implementation.
 
 ## EIR and runtime boundary
 
-_Compiler-resident lowering; no registry-backed typed runtime target applies._
+_Lowered by a dedicated compiler language-construct path._
 
 ## Signature summary
 

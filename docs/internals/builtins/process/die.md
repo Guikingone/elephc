@@ -9,23 +9,27 @@ sidebar:
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
 - **Lowering**: [`(not lowered)`:0]()
 - **Function symbol**: `(none — type-checker only)()`
 
 
+### Lowering notes
+
+- Lowered through the compiler's dedicated language-construct path.
+
 ## Semantic descriptor
 
-_Compiler-resident construct; this name is intentionally outside the builtin registry._
+Shared contract with a dedicated compiler language-construct implementation.
 
 ## EIR and runtime boundary
 
-_Compiler-resident lowering; no registry-backed typed runtime target applies._
+_Lowered by a dedicated compiler language-construct path._
 
 ## Signature summary
 
 ```php
-function die(int $status): void
+function die(int $status = 0): void
 ```
 
 ## What the type checker enforces

@@ -29,6 +29,7 @@ python3 scripts/docs/extract_builtins.py --render --force
 ```bash
 python3 scripts/docs/audit_builtins.py
 python3 scripts/docs/elephc_builtins/validate_site_compat.py
+python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture
 ```
 
 4. Inspect generated changes before reporting or committing:

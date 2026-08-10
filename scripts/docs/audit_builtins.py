@@ -8,6 +8,7 @@ Checks:
 3. Every cross-link in a generated page resolves to an actual file.
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
+6. Backend availability and all 14 non-registry contract routes remain coherent.
 
 Exits 0 on success, 1 on any failure.
 """
@@ -65,6 +66,53 @@ def _check_links(path: Path, errors: list[str]) -> None:
             )
 
 
+def _check_backend_contracts(
+    raw: list[dict], errors: list[str], stats: dict[str, int]
+) -> None:
+    """Verify generated support metadata against the exceptional contract routes."""
+    non_registry = [b for b in raw if (b.get("aot") or {}).get("kind") != "registry"]
+    route_counts = Counter((b.get("aot") or {}).get("kind") for b in non_registry)
+    expected_counts = {
+        "language-construct": 5,
+        "dedicated-syntax": 1,
+        "prelude": 4,
+        "none": 4,
+    }
+    if len(non_registry) != 14:
+        errors.append(f"expected 14 non-registry contracts, found {len(non_registry)}")
+    if dict(route_counts) != expected_counts:
+        errors.append(
+            f"non-registry AOT route counts differ: expected {expected_counts}, "
+            f"found {dict(route_counts)}"
+        )
+
+    by_name = {b["name"]: b for b in raw}
+    for name in ("hash_init", "hash_update", "hash_final", "hash_copy"):
+        record = by_name.get(name)
+        if record is None:
+            errors.append(f"missing shared prelude contract for {name}")
+            continue
+        aot = record.get("aot") or {}
+        if not aot.get("supported") or aot.get("kind") != "prelude":
+            errors.append(f"{name} must be AOT-supported through the prelude route")
+        if record.get("eval_only"):
+            errors.append(f"{name} is incorrectly marked eval-only")
+
+    hash_init = by_name.get("hash_init") or {}
+    if (hash_init.get("aot") or {}).get("signature_override_reason") != "prelude-signature-subset":
+        errors.append("hash_init must document its narrower AOT prelude signature")
+    for name in ("exit", "die"):
+        params = ((by_name.get(name) or {}).get("sig") or {}).get("params") or []
+        if not params or params[0].get("default") != "0":
+            errors.append(f"{name} must derive its optional status default from the shared contract")
+
+    for record in raw:
+        supported = bool((record.get("aot") or {}).get("supported"))
+        if bool(record.get("eval_only")) == supported:
+            errors.append(f"{record['name']} has an inconsistent eval_only flag")
+    stats["backend_contract_checks"] = len(non_registry)
+
+
 def main() -> int:
     raw = json.loads(REGISTRY.read_text(encoding="utf-8"))
     builtins = [b for b in raw if b["in_catalog"]]
@@ -72,6 +120,8 @@ def main() -> int:
 
     errors: list[str] = []
     stats: dict[str, int] = defaultdict(int)
+
+    _check_backend_contracts(raw, errors, stats)
 
     # 1. Every non-internal builtin has a user page
     for b in user_builtins:
@@ -141,6 +191,7 @@ def main() -> int:
     print(f"Internals pages found:       {stats['internals_pages']}")
     print(f"Master index found:          {stats['master_index']}")
     print(f"Area index checks:           {stats['area_index_checks']}")
+    print(f"Backend contract checks:     {stats['backend_contract_checks']}")
     print(f"Errors:                      {len(errors)}")
     if errors:
         print()

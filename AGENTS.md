@@ -289,7 +289,9 @@ Key invariants:
   `cargo build --example gen_builtins`,
   `python3 scripts/docs/extract_builtins.py --render --force`,
   `python3 scripts/docs/audit_builtins.py`, and
-  `python3 scripts/docs/elephc_builtins/validate_site_compat.py`. Commit the
+  `python3 scripts/docs/elephc_builtins/validate_site_compat.py`, plus
+  `python3 scripts/audit_builtin_eir_boundary.py --enforce-target-architecture`.
+  Commit the
   generated docs and registry.
 
 ### Adding a new EIR optimization pass

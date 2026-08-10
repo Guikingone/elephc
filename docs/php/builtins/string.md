@@ -26,12 +26,12 @@ sidebar:
 | [`gzuncompress()`](./string/gzuncompress.md) | `(string $data, int $max_length = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`hash()`](./string/hash.md) | `(string $algo, string $data, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_algos()`](./string/hash_algos.md) | `(): array` | `array` | ✓ | ✓ |
-| [`hash_copy()`](./string/hash_copy.md) | `(mixed $context): mixed` | `mixed` | — | ✓ |
+| [`hash_copy()`](./string/hash_copy.md) | `(HashContext $context): HashContext` | `HashContext` | ✓ | ✓ |
 | [`hash_equals()`](./string/hash_equals.md) | `(string $known_string, string $user_string): bool` | `bool` | ✓ | ✓ |
-| [`hash_final()`](./string/hash_final.md) | `(mixed $context, mixed $binary = 'false'): mixed` | `mixed` | — | ✓ |
+| [`hash_final()`](./string/hash_final.md) | `(HashContext $context, bool $binary = false): string` | `string` | ✓ | ✓ |
 | [`hash_hmac()`](./string/hash_hmac.md) | `(string $algo, string $data, string $key, bool $binary = false): string` | `string` | ✓ | ✓ |
-| [`hash_init()`](./string/hash_init.md) | `(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed` | `mixed` | — | ✓ |
-| [`hash_update()`](./string/hash_update.md) | `(mixed $context, mixed $data): mixed` | `mixed` | — | ✓ |
+| [`hash_init()`](./string/hash_init.md) | `(string $algo): HashContext` | `HashContext` | ✓ | ✓ |
+| [`hash_update()`](./string/hash_update.md) | `(HashContext $context, string $data): bool` | `bool` | ✓ | ✓ |
 | [`hex2bin()`](./string/hex2bin.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`html_entity_decode()`](./string/html_entity_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`htmlentities()`](./string/htmlentities.md) | `(string $string, int $flags = 11, string $encoding = 'UTF-8'): string` | `string` | ✓ | ✓ |

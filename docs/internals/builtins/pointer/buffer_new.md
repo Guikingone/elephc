@@ -2,25 +2,29 @@
 title: "buffer_new() — internals"
 description: "Compiler internals for buffer_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 304
+  order: 320
 ---
 
 ## `buffer_new()` — internals
 
 ## Where it lives
 
-- **Signature**: [`src/types/signatures.rs`](https://github.com/illegalstudio/elephc/blob/main/src/types/signatures.rs)
+- **Signature**: [`crates/elephc-builtin-contract/src/catalog_surfaces.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-builtin-contract/src/catalog_surfaces.rs)
 - **Lowering**: [`(not lowered)`:0]()
 - **Function symbol**: `(none — type-checker only)()`
 
 
+### Lowering notes
+
+- Lowered through a dedicated AST/EIR syntax node.
+
 ## Semantic descriptor
 
-_Compiler-resident construct; this name is intentionally outside the builtin registry._
+Shared contract lowered through dedicated compiler syntax.
 
 ## EIR and runtime boundary
 
-_Compiler-resident lowering; no registry-backed typed runtime target applies._
+_Lowered through a dedicated AST/EIR syntax node._
 
 ## Signature summary
 
@@ -41,4 +45,4 @@ function buffer_new(int $length): mixed
 
 ## Cross-references
 
-- [User reference for `buffer_new()`](../../../php/builtins/misc/buffer_new.md)
+- [User reference for `buffer_new()`](../../../php/builtins/pointer/buffer_new.md)

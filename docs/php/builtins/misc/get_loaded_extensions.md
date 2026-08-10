@@ -2,7 +2,7 @@
 title: "get_loaded_extensions()"
 description: "Returns an array with the names of all loaded modules."
 sidebar:
-  order: 310
+  order: 309
 ---
 
 ## get_loaded_extensions()
