@@ -67,6 +67,16 @@ fn compile_web(dir: &Path, source: &str, stem: &str) -> PathBuf {
     compile_web_with_flags(dir, source, stem, &[])
 }
 
+/// Compiles one explicit web-isolation model for broker-specific tests.
+fn compile_isolated_web(dir: &Path, source: &str, stem: &str, mode: &str) -> PathBuf {
+    let flag = match mode {
+        "pool" => "--web-isolation=pool",
+        "request" => "--web-isolation=request",
+        other => panic!("unsupported isolated web test mode: {other}"),
+    };
+    compile_web_with_flags(dir, source, stem, &[flag])
+}
+
 /// Picks an ephemeral localhost port by binding :0 and releasing it.
 fn free_port() -> u16 {
     let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -167,10 +177,21 @@ impl Drop for ServerGuard {
 /// wrapped in the guard *before* `wait_until_ready`, so a readiness-timeout
 /// panic still reaps the process instead of orphaning it.
 fn spawn_server(bin: &Path, addr: &str, workers: &str) -> ServerGuard {
+    spawn_server_with_args(bin, addr, workers, &[])
+}
+
+/// Spawns a server with additional runtime options and waits for readiness.
+fn spawn_server_with_args(
+    bin: &Path,
+    addr: &str,
+    workers: &str,
+    extra_args: &[&str],
+) -> ServerGuard {
     let child = ServerGuard::new(
         Command::new(bin)
             .arg("--listen").arg(addr)
             .arg("--workers").arg(workers)
+            .args(extra_args)
             .spawn()
             .expect("failed to spawn web server"),
     );
@@ -289,8 +310,19 @@ fn web_test_client_normalizes_only_complete_chunked_responses() {
     );
 }
 
-/// Returns the process IDs whose parent matches `parent_pid` using the portable
-/// PID/PPID columns exposed by macOS and Linux `ps`.
+/// Returns direct child PIDs from procfs on supported Linux targets.
+#[cfg(target_os = "linux")]
+fn direct_child_process_ids(parent_pid: u32) -> Vec<u32> {
+    let path = format!("/proc/{parent_pid}/task/{parent_pid}/children");
+    fs::read_to_string(&path)
+        .unwrap_or_else(|error| panic!("failed to read {path}: {error}"))
+        .split_whitespace()
+        .filter_map(|pid| pid.parse::<u32>().ok())
+        .collect()
+}
+
+/// Returns direct child PIDs from the BSD process table on macOS.
+#[cfg(target_os = "macos")]
 fn direct_child_process_ids(parent_pid: u32) -> Vec<u32> {
     let output = Command::new("ps")
         .args(["-axo", "pid=,ppid="])
@@ -306,6 +338,49 @@ fn direct_child_process_ids(parent_pid: u32) -> Vec<u32> {
             (ppid == parent_pid).then_some(pid)
         })
         .collect()
+}
+
+/// Waits until a process has exactly `expected` direct children, returning their PIDs.
+fn wait_for_direct_child_count(parent_pid: u32, expected: usize) -> Vec<u32> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let children = direct_child_process_ids(parent_pid);
+        if children.len() == expected {
+            return children;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "PID {parent_pid} retained {} direct children; expected {expected}: {children:?}",
+            children.len()
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
+}
+
+/// Returns whether a PID still names a live or zombie process.
+fn process_exists(pid: u32) -> bool {
+    let result = unsafe { libc::kill(pid as libc::pid_t, 0) };
+    result == 0 || std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+/// Waits for every recorded descendant PID to disappear after master shutdown.
+fn wait_for_processes_to_exit(pids: &[u32]) {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        let live = pids
+            .iter()
+            .copied()
+            .filter(|pid| process_exists(*pid))
+            .collect::<Vec<_>>();
+        if live.is_empty() {
+            return;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "web shutdown left descendant PIDs alive: {live:?}"
+        );
+        std::thread::sleep(Duration::from_millis(25));
+    }
 }
 
 /// Sends a bounded HTTP request so a dead broker cannot hang the test harness.
@@ -361,12 +436,240 @@ fn web_compile_produces_binary() {
     assert!(bin.exists(), "expected binary at {}", bin.display());
 }
 
+/// Verifies each compile-time model produces its intended idle process topology.
+#[test]
+fn web_isolation_modes_have_expected_process_trees() {
+    for (mode, expected_handler_children) in [
+        ("worker", 0usize),
+        ("pool", 2usize),
+        ("request", 0usize),
+    ] {
+        let dir = make_test_dir(&format!("web_process_tree_{mode}"));
+        let bin = if mode == "worker" {
+            compile_web(&dir, "<?php echo 'ok';", "app")
+        } else {
+            compile_isolated_web(&dir, "<?php echo 'ok';", "app", mode)
+        };
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let extra = if mode == "worker" {
+            Vec::new()
+        } else {
+            vec!["--handler-concurrency", "2"]
+        };
+        let mut server = spawn_server_with_args(&bin, &addr, "1", &extra);
+        let worker = wait_for_direct_child_count(server.id(), 1)[0];
+        let mut descendants = vec![worker];
+        if mode == "worker" {
+            assert!(
+                direct_child_process_ids(worker).is_empty(),
+                "default worker isolation unexpectedly started a broker"
+            );
+        } else {
+            let broker = wait_for_direct_child_count(worker, 1)[0];
+            descendants.push(broker);
+            descendants.extend(wait_for_direct_child_count(
+                broker,
+                expected_handler_children,
+            ));
+        }
+        let response = http_get(&addr, "/");
+        assert!(
+            raw_response_body(&response).contains("ok"),
+            "{mode} isolation failed its smoke request: {response:?}"
+        );
+        let _ = server.kill();
+        let _ = server.wait();
+        wait_for_processes_to_exit(&descendants);
+    }
+}
+
+/// Verifies pool children persist across requests and retire at their exact quota.
+#[test]
+fn web_pool_reuses_and_recycles_handler_children() {
+    let dir = make_test_dir("web_pool_recycle");
+    let bin = compile_isolated_web(&dir, "<?php echo 'ok';", "app", "pool");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server_with_args(
+        &bin,
+        &addr,
+        "1",
+        &[
+            "--handler-concurrency",
+            "1",
+            "--max-handler-requests",
+            "2",
+        ],
+    );
+    let worker = wait_for_direct_child_count(server.id(), 1)[0];
+    let broker = wait_for_direct_child_count(worker, 1)[0];
+    let initial = wait_for_direct_child_count(broker, 1)[0];
+
+    assert!(raw_response_body(&http_get(&addr, "/")).contains("ok"));
+    assert_eq!(
+        wait_for_direct_child_count(broker, 1)[0],
+        initial,
+        "pool child was replaced before reaching its request quota"
+    );
+    assert!(raw_response_body(&http_get(&addr, "/")).contains("ok"));
+    let deadline = Instant::now() + Duration::from_secs(5);
+    let replacement = loop {
+        let children = direct_child_process_ids(broker);
+        if let Some(pid) = children.first().copied().filter(|pid| *pid != initial) {
+            break pid;
+        }
+        assert!(Instant::now() < deadline, "pool child did not retire at its quota");
+        std::thread::sleep(Duration::from_millis(25));
+    };
+    assert_ne!(replacement, initial);
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+/// Regression: concurrent pool traffic must surface closed IPC peers as I/O
+/// errors instead of letting SIGPIPE terminate and respawn the web worker.
+#[test]
+fn web_pool_worker_survives_concurrent_connection_load() {
+    let dir = make_test_dir("web_pool_sigpipe");
+    let bin = compile_isolated_web(&dir, "<?php echo 'ok';", "app", "pool");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server_with_args(
+        &bin,
+        &addr,
+        "1",
+        &[
+            "--handler-concurrency",
+            "8",
+            "--max-handler-requests",
+            "0",
+        ],
+    );
+    let worker = wait_for_direct_child_count(server.id(), 1)[0];
+    let clients = (0..8)
+        .map(|_| {
+            let addr = addr.clone();
+            std::thread::spawn(move || {
+                for request in 0..100 {
+                    let response = http_get(&addr, "/");
+                    assert!(
+                        response.starts_with("HTTP/1.1 200")
+                            && raw_response_body(&response).contains("ok"),
+                        "concurrent pool request {request} failed: {response:?}"
+                    );
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    for client in clients {
+        client.join().expect("concurrent pool client panicked");
+    }
+
+    assert_eq!(
+        wait_for_direct_child_count(server.id(), 1),
+        vec![worker],
+        "concurrent pool load unexpectedly recycled the web worker"
+    );
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+/// Regression: concurrent request-isolated traffic must acknowledge every
+/// descriptor transfer before either side closes its copy.
+#[test]
+fn web_request_worker_survives_concurrent_connection_load() {
+    let dir = make_test_dir("web_request_dispatch_ack");
+    let bin = compile_isolated_web(&dir, "<?php echo 'ok';", "app", "request");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server_with_args(
+        &bin,
+        &addr,
+        "1",
+        &["--handler-concurrency", "8"],
+    );
+    let worker = wait_for_direct_child_count(server.id(), 1)[0];
+    let clients = (0..8)
+        .map(|_| {
+            let addr = addr.clone();
+            std::thread::spawn(move || {
+                for request in 0..50 {
+                    let response = http_get(&addr, "/");
+                    assert!(
+                        response.starts_with("HTTP/1.1 200")
+                            && raw_response_body(&response).contains("ok"),
+                        "concurrent request-isolated request {request} failed: {response:?}"
+                    );
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    for client in clients {
+        client.join().expect("concurrent request client panicked");
+    }
+
+    assert_eq!(
+        wait_for_direct_child_count(server.id(), 1),
+        vec![worker],
+        "concurrent request load unexpectedly recycled the web worker"
+    );
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
+/// Reproduces disconnecting no-output handlers and proves request PIDs are cancelled and reaped.
+#[test]
+fn web_request_disconnect_cancels_and_reaps_no_output_handlers() {
+    let dir = make_test_dir("web_request_disconnect_cancel");
+    let src = r#"<?php
+if (($_SERVER['REQUEST_URI'] ?? '') === '/hang') { while (true) {} }
+echo 'ok';
+"#;
+    let bin = compile_isolated_web(&dir, src, "app", "request");
+    let port = free_port();
+    let addr = format!("127.0.0.1:{port}");
+    let mut server = spawn_server_with_args(
+        &bin,
+        &addr,
+        "1",
+        &["--handler-concurrency", "2", "--max-execution-time", "0"],
+    );
+    let worker = wait_for_direct_child_count(server.id(), 1)[0];
+    let broker = wait_for_direct_child_count(worker, 1)[0];
+
+    for _ in 0..8 {
+        let mut stream = TcpStream::connect(&addr).expect("connect no-output handler");
+        stream
+            .write_all(
+                format!("GET /hang HTTP/1.1\r\nHost: {addr}\r\nConnection: close\r\n\r\n")
+                    .as_bytes(),
+            )
+            .expect("dispatch no-output handler");
+        drop(stream);
+        assert!(
+            direct_child_process_ids(broker).len() <= 2,
+            "request broker exceeded --handler-concurrency after disconnect"
+        );
+    }
+    wait_for_direct_child_count(broker, 0);
+    let healthy = http_get(&addr, "/");
+    assert!(
+        raw_response_body(&healthy).contains("ok"),
+        "request broker did not recover after cancellations: {healthy:?}"
+    );
+
+    let _ = server.kill();
+    let _ = server.wait();
+}
+
 /// Verifies killing a worker's dedicated handler broker does not leave that
 /// worker permanently returning failures or hanging subsequent requests.
 #[test]
 fn web_worker_recovers_after_handler_broker_death() {
     let dir = make_test_dir("web_broker_recovery");
-    let bin = compile_web(&dir, "<?php echo 'alive';", "app");
+    let bin = compile_isolated_web(&dir, "<?php echo 'alive';", "app", "request");
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
     let mut server = spawn_server(&bin, &addr, "1");
@@ -813,10 +1116,11 @@ fn web_header_sets_response_header() {
 #[test]
 fn web_late_header_and_status_emit_headers_already_sent_warnings() {
     let dir = make_test_dir("web_late_headers_warning");
-    let bin = compile_web(
+    let bin = compile_isolated_web(
         &dir,
         "<?php echo 'body'; header('X-Late: ignored'); http_response_code(418);",
         "app",
+        "request",
     );
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
@@ -1014,7 +1318,7 @@ fn web_body_size_limit_returns_413() {
 fn web_body_read_timeout_returns_408_for_trickled_request() {
     let dir = make_test_dir("web_body_timeout");
     let src = "<?php echo strlen(file_get_contents('php://input'));";
-    let bin = compile_web(&dir, src, "app");
+    let bin = compile_isolated_web(&dir, src, "app", "request");
     let port = free_port();
     let addr = format!("127.0.0.1:{}", port);
     let mut child = Command::new(&bin)
@@ -1055,40 +1359,47 @@ fn web_body_read_timeout_returns_408_for_trickled_request() {
 /// request accepted by the same web worker.
 #[test]
 fn web_worker_keeps_serving_while_another_handler_is_slow() {
-    let dir = make_test_dir("web_handler_concurrency");
-    let src = r#"<?php
+    for mode in ["pool", "request"] {
+        let dir = make_test_dir(&format!("web_handler_concurrency_{mode}"));
+        let src = r#"<?php
 if (($_GET['slow'] ?? '0') === '1') { usleep(1000000); }
 echo $_GET['name'] ?? 'missing';
 "#;
-    let bin = compile_web(&dir, src, "app");
-    let port = free_port();
-    let addr = format!("127.0.0.1:{}", port);
-    let mut child = spawn_server(&bin, &addr, "1");
+        let bin = compile_isolated_web(&dir, src, "app", mode);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{}", port);
+        let mut child = spawn_server_with_args(
+            &bin,
+            &addr,
+            "1",
+            &["--handler-concurrency", "2"],
+        );
 
-    let slow_addr = addr.clone();
-    let slow = std::thread::spawn(move || {
-        http_request(&slow_addr, "GET", "/?slow=1&name=slow", &[], "")
-    });
-    std::thread::sleep(Duration::from_millis(100));
-    let started = Instant::now();
-    let quick = http_request(&addr, "GET", "/?name=quick", &[], "");
-    let quick_elapsed = started.elapsed();
-    let slow_response = slow.join().expect("slow request thread");
+        let slow_addr = addr.clone();
+        let slow = std::thread::spawn(move || {
+            http_request(&slow_addr, "GET", "/?slow=1&name=slow", &[], "")
+        });
+        std::thread::sleep(Duration::from_millis(100));
+        let started = Instant::now();
+        let quick = http_request(&addr, "GET", "/?name=quick", &[], "");
+        let quick_elapsed = started.elapsed();
+        let slow_response = slow.join().expect("slow request thread");
 
-    let _ = child.kill();
-    let _ = child.wait();
-    assert!(
-        raw_response_body(&quick).contains("quick"),
-        "quick response was not served: {quick:?}"
-    );
-    assert!(
-        raw_response_body(&slow_response).contains("slow"),
-        "slow response was not served: {slow_response:?}"
-    );
-    assert!(
-        quick_elapsed < Duration::from_millis(500),
-        "one blocking handler stalled an unrelated request for {quick_elapsed:?}"
-    );
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            raw_response_body(&quick).contains("quick"),
+            "{mode} quick response was not served: {quick:?}"
+        );
+        assert!(
+            raw_response_body(&slow_response).contains("slow"),
+            "{mode} slow response was not served: {slow_response:?}"
+        );
+        assert!(
+            quick_elapsed < Duration::from_millis(500),
+            "{mode} handler stalled an unrelated request for {quick_elapsed:?}"
+        );
+    }
 }
 
 /// Guards the prestarted broker's steady-state fork/IPC overhead with a small
@@ -1096,7 +1407,7 @@ echo $_GET['name'] ?? 'missing';
 #[test]
 fn web_handler_broker_dispatch_overhead_stays_bounded() {
     let dir = make_test_dir("web_broker_dispatch_benchmark");
-    let bin = compile_web(&dir, "<?php echo 'ok';", "app");
+    let bin = compile_isolated_web(&dir, "<?php echo 'ok';", "app", "request");
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
     let mut child = spawn_server(&bin, &addr, "1");
@@ -1129,7 +1440,7 @@ echo str_repeat("A", 4096);
 usleep(1000000);
 echo "done";
 "#;
-    let bin = compile_web(&dir, src, "app");
+    let bin = compile_isolated_web(&dir, src, "app", "request");
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
     let mut child = spawn_server(&bin, &addr, "1");
@@ -1226,30 +1537,32 @@ fn web_worker_respawns_after_crash() {
 /// poison the worker's ability to serve the following request.
 #[test]
 fn web_handler_crash_returns_500_and_next_request_survives() {
-    let dir = make_test_dir("web_handler_crash_500");
-    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { exit(1); } echo \"alive\";";
-    let bin = compile_web(&dir, src, "app");
-    let port = free_port();
-    let addr = format!("127.0.0.1:{port}");
-    let mut child = spawn_server(&bin, &addr, "1");
+    for mode in ["pool", "request"] {
+        let dir = make_test_dir(&format!("web_handler_crash_500_{mode}"));
+        let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') { exit(1); } echo \"alive\";";
+        let bin = compile_isolated_web(&dir, src, "app", mode);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server(&bin, &addr, "1");
 
-    let failed = http_request(&addr, "GET", "/crash", &[], "");
-    let healthy = http_request(&addr, "GET", "/", &[], "");
+        let failed = http_request(&addr, "GET", "/crash", &[], "");
+        let healthy = http_request(&addr, "GET", "/", &[], "");
 
-    let _ = child.kill();
-    let _ = child.wait();
-    assert!(
-        failed.starts_with("HTTP/1.1 500"),
-        "crashed handlers must produce an explicit 500 response: {failed:?}"
-    );
-    assert!(
-        failed.ends_with("Internal Server Error"),
-        "crashed handlers must return the bounded failure body: {failed:?}"
-    );
-    assert!(
-        raw_response_body(&healthy).contains("alive"),
-        "the worker did not recover after an isolated handler crash: {healthy:?}"
-    );
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            failed.starts_with("HTTP/1.1 500"),
+            "{mode} crashed handler did not produce an explicit 500: {failed:?}"
+        );
+        assert!(
+            failed.ends_with("Internal Server Error"),
+            "{mode} crashed handler returned an unbounded failure: {failed:?}"
+        );
+        assert!(
+            raw_response_body(&healthy).contains("alive"),
+            "{mode} worker did not recover after handler crash: {healthy:?}"
+        );
+    }
 }
 
 /// Verifies a handler that dies after committing output cannot be presented as
@@ -1264,7 +1577,7 @@ if (($_SERVER['REQUEST_URI'] ?? '') === '/crash') {
 }
 echo "healthy";
 "#;
-    let bin = compile_web(&dir, src, "app");
+    let bin = compile_isolated_web(&dir, src, "app", "request");
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
     let mut child = spawn_server(&bin, &addr, "1");
@@ -1315,7 +1628,7 @@ if (($_SERVER['REQUEST_URI'] ?? '') === '/stall') {
 }
 echo "fast";
 "#;
-    let bin = compile_web(&dir, src, "app");
+    let bin = compile_isolated_web(&dir, src, "app", "request");
     let port = free_port();
     let addr = format!("127.0.0.1:{port}");
     let mut child = Command::new(&bin)
@@ -1324,6 +1637,8 @@ echo "fast";
             &addr,
             "--workers",
             "1",
+            "--handler-concurrency",
+            "8",
             "--response-write-timeout",
             "1",
         ])
@@ -1531,12 +1846,22 @@ fn web_help_and_version() {
     );
     let help_text = String::from_utf8_lossy(&help.stdout);
     assert!(
-        help_text.contains("--response-write-timeout"),
-        "--help should expose the stalled-response safety bound: {help_text}"
+        help_text.contains("respawn a worker") && !help_text.contains("--handler-concurrency"),
+        "default --web help must describe the in-process worker model: {help_text}"
     );
+
+    let request_bin = compile_isolated_web(&dir, "<?php echo 'x';", "request-app", "request");
+    let request_help = Command::new(&request_bin)
+        .arg("--help")
+        .output()
+        .expect("request help");
+    let request_help_text = String::from_utf8_lossy(&request_help.stdout);
+    assert!(request_help.status.success(), "isolated --help should exit 0");
     assert!(
-        help_text.contains("request child") && !help_text.contains("respawn) a worker"),
-        "--max-execution-time help must describe the disposable request child: {help_text}"
+        request_help_text.contains("--response-write-timeout")
+            && request_help_text.contains("--handler-concurrency")
+            && request_help_text.contains("timed-out handler process"),
+        "request help must expose isolated-handler controls: {request_help_text}"
     );
     let ver = Command::new(&bin).arg("--version").output().expect("version");
     assert!(ver.status.success(), "--version should exit 0");
@@ -1681,6 +2006,55 @@ fn web_max_execution_time_kills_runaway_handler() {
     assert!(recovered, "worker did not recover after a runaway handler was killed");
 }
 
+/// Verifies isolated timeouts replace only the handler process, preserving worker and broker PIDs.
+#[test]
+fn web_isolated_max_execution_time_preserves_worker_and_broker() {
+    let src = "<?php if (($_SERVER['REQUEST_URI'] ?? '') === '/slow') { while (true) {} } echo 'fast';";
+    for mode in ["pool", "request"] {
+        let dir = make_test_dir(&format!("web_isolated_timeout_{mode}"));
+        let bin = compile_isolated_web(&dir, src, "app", mode);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut server = spawn_server_with_args(
+            &bin,
+            &addr,
+            "1",
+            &["--handler-concurrency", "1", "--max-execution-time", "1"],
+        );
+        let worker = wait_for_direct_child_count(server.id(), 1)[0];
+        let broker = wait_for_direct_child_count(worker, 1)[0];
+        assert!(raw_response_body(&http_get(&addr, "/")).contains("fast"));
+
+        let _ = http_get_with_timeout(&addr, "/slow", Duration::from_secs(3));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let recovered = loop {
+            if let Ok(response) = http_get_with_timeout(&addr, "/", Duration::from_millis(500)) {
+                if raw_response_body(&response).contains("fast") {
+                    break true;
+                }
+            }
+            if Instant::now() >= deadline {
+                break false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        assert!(recovered, "{mode} did not recover after handler timeout");
+        assert_eq!(
+            wait_for_direct_child_count(server.id(), 1)[0],
+            worker,
+            "{mode} timeout recycled the web worker"
+        );
+        assert_eq!(
+            wait_for_direct_child_count(worker, 1)[0],
+            broker,
+            "{mode} timeout recycled the handler broker"
+        );
+
+        let _ = server.kill();
+        let _ = server.wait();
+    }
+}
+
 /// Verifies --gzip compresses the response when the client sends Accept-Encoding:
 /// gzip (and only then) (C3).
 #[test]
@@ -1719,8 +2093,8 @@ fn web_gzip_compresses_when_accepted() {
     let _ = child.wait();
     assert!(gz_head.to_lowercase().contains("content-encoding: gzip"), "gzip not applied: {:?}", gz_head);
     assert!(
-        !gz_head.to_lowercase().contains("content-length:"),
-        "gzip streaming retained the handler's uncompressed Content-Length: {gz_head:?}"
+        !gz_head.to_lowercase().contains("content-length: 2000"),
+        "gzip retained the handler's uncompressed Content-Length: {gz_head:?}"
     );
     assert!(!plain.to_lowercase().contains("content-encoding"), "must not compress without Accept-Encoding");
     // The uncompressed response carries the full 2000-byte body.

@@ -21,6 +21,7 @@ use crate::codegen::emit::Emitter;
 use crate::codegen::emit_fiber_wrapper;
 use crate::codegen::platform::Arch;
 use crate::codegen::Emit;
+use crate::codegen::WebIsolation;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
 use crate::codegen_support::try_handlers::TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET;
 use crate::codegen_support::DeferredFiberWrapper;
@@ -54,7 +55,8 @@ use super::{CodegenIrError, Result};
 ///
 /// `web` restructures the entry point: the top-level body is emitted as the
 /// C-callable `_elephc_web_handler` and the real entry becomes a stub that calls
-/// `elephc_web_run`. When false the normal exit-based main is emitted unchanged.
+/// the bridge entry selected by `web_isolation`. When false the normal
+/// exit-based main is emitted unchanged.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn emit_module(
     module: &Module,
@@ -66,6 +68,7 @@ pub(super) fn emit_module(
     emit: Emit,
     regalloc_linear: bool,
     web: bool,
+    web_isolation: WebIsolation,
 ) -> Result<()> {
     let mut shared = SharedCodegenState::default();
     function_variants::emit_dispatchers(module, emitter, data);
@@ -116,6 +119,7 @@ pub(super) fn emit_module(
         requires_elephc_tls,
         regalloc_linear,
         web,
+        web_isolation,
     )?;
     // Generate the per-request reset routine only for `--web`, and only after the
     // handler body is emitted so every function static local (including any in the
@@ -788,6 +792,7 @@ fn emit_main_function(
     requires_elephc_tls: bool,
     regalloc_linear: bool,
     web: bool,
+    web_isolation: WebIsolation,
 ) -> Result<()> {
     let entry_symbol = if web {
         frame::WEB_HANDLER_SYMBOL
@@ -823,7 +828,7 @@ fn emit_main_function(
     }
     emit_endfn_marker(ctx.emitter, &function.name);
     if web {
-        frame::emit_web_entry_stub(&mut ctx);
+        frame::emit_web_entry_stub(&mut ctx, web_isolation);
     }
     Ok(())
 }

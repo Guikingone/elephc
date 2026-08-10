@@ -506,14 +506,19 @@ pub(super) fn emit_web_handler_epilogue(ctx: &mut FunctionContext<'_>) {
 /// and exits the process with the bridge's integer return value. The handler
 /// address (arg 2) is materialized last so a destination-register page load on
 /// AArch64 cannot clobber the already-loaded argc/argv argument registers.
-pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
+pub(super) fn emit_web_entry_stub(
+    ctx: &mut FunctionContext<'_>,
+    isolation: super::WebIsolation,
+) {
     let target = ctx.emitter.target;
     if target.arch == Arch::AArch64 {
         ctx.emitter.raw(".align 2");
     }
     ctx.emitter.blank();
-    ctx.emitter
-        .comment("--web process entry: call elephc_web_run(argc, argv, &handler)");
+    ctx.emitter.comment(&format!(
+        "--web process entry: call {}(argc, argv, &handler)",
+        isolation.bridge_symbol()
+    ));
     ctx.emitter.entry_label();
     abi::emit_frame_prologue(ctx.emitter, ctx.frame_size);
     ctx.emitter
@@ -536,10 +541,10 @@ pub(super) fn emit_web_entry_stub(ctx: &mut FunctionContext<'_>) {
     abi::emit_load_symbol_to_reg(ctx.emitter, argc_reg, "_global_argc", 0);
     abi::emit_load_symbol_to_reg(ctx.emitter, argv_reg, "_global_argv", 0);
     abi::emit_symbol_address(ctx.emitter, handler_reg, WEB_HANDLER_SYMBOL);
-    // `elephc_web_run` is a `#[no_mangle] extern "C"` Rust symbol in the bridge
+    // The selected entry is a `#[no_mangle] extern "C"` Rust symbol in the bridge
     // staticlib, so it carries the platform's C-ABI underscore: resolve it through
     // `extern_symbol` (`_elephc_web_run` on macOS, `elephc_web_run` on Linux).
-    let bridge_entry = target.extern_symbol("elephc_web_run");
+    let bridge_entry = target.extern_symbol(isolation.bridge_symbol());
     abi::emit_call_label(ctx.emitter, &bridge_entry);
     abi::emit_exit_with_result_reg(ctx.emitter);
 }

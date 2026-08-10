@@ -736,6 +736,41 @@ fn session_counter_persists() {
     );
 }
 
+/// Verifies file-backed sessions persist across the process boundary in both
+/// broker-backed isolation models.
+#[test]
+fn session_counter_persists_in_isolated_modes() {
+    let src = "<?php session_start(); if (!isset($_SESSION['hits'])) { $_SESSION['hits'] = 0; } $_SESSION['hits'] = $_SESSION['hits'] + 1; echo $_SESSION['hits'];";
+    for mode in ["pool", "request"] {
+        let dir = make_test_dir(&format!("sess_persist_{mode}"));
+        let isolation_flag = format!("--web-isolation={mode}");
+        let bin = compile_web_with_flags(&dir, src, "app", &[&isolation_flag]);
+        let port = free_port();
+        let addr = format!("127.0.0.1:{port}");
+        let mut child = spawn_server(&bin, &addr, "1");
+        let first = http_get(&addr, "/");
+        let cookie = extract_phpsessid(&first)
+            .expect("first isolated response should set a PHPSESSID cookie");
+        let second = http_request(
+            &addr,
+            "GET",
+            "/",
+            &[("Cookie", &format!("PHPSESSID={cookie}"))],
+            "",
+        );
+        let _ = child.kill();
+        let _ = child.wait();
+        assert!(
+            first.ends_with('1'),
+            "first {mode} request counter should be 1: {first:?}"
+        );
+        assert!(
+            second.ends_with('2'),
+            "second {mode} request counter should be 2: {second:?}"
+        );
+    }
+}
+
 /// Verifies `session.use_strict_mode=1` rejects a client-supplied session ID
 /// that has no backing session (session-fixation defense): the forged cookie
 /// ID is discarded, a fresh random ID is minted and reissued via `Set-Cookie`,
