@@ -1337,6 +1337,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_mode_rw\n_meta_mode_rw:\n    .ascii \"r+\"\n");
     out.push_str(".p2align 3\n");
     out.push_str(".globl _tmpfile_template\n_tmpfile_template:\n    .ascii \"/tmp/elephc-XXXXXX\\0\"\n    .byte 0,0,0,0,0\n");
+    // The name `mkstemp` resolved for the last `tmpfile()`. PHP reports the file it created
+    // as the stream URI, and the template above is consumed on the helper's stack, so the
+    // resolved name has to be published before the helper unlinks and returns.
+    out.push_str(&comm_directive("_tmpfile_last_path", 32, target));
     out.push_str(".globl _locale_utf8_name\n_locale_utf8_name:\n    .asciz \"C.UTF-8\"\n");
     out.push_str(".globl _locale_env_name\n_locale_env_name:\n    .asciz \"\"\n");
     out.push_str(&system::emit_json_data());

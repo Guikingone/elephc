@@ -9,6 +9,10 @@
 
 use super::*;
 
+/// Byte length of the path `tmpfile()` resolves, fixed by the `/tmp/elephc-XXXXXX` template
+/// the runtime helper hands to `mkstemp`, which substitutes the six Xs in place.
+const TMPFILE_PATH_LEN: i64 = 18;
+
 /// Lowers `getcwd()` through the target-aware runtime helper.
 pub(crate) fn lower_getcwd(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "getcwd", 0)?;
@@ -34,6 +38,9 @@ pub(crate) fn lower_tmpfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     super::super::ensure_arg_count(inst, "tmpfile", 0)?;
     abi::emit_call_label(ctx.emitter, "__rt_tmpfile");
     box_stream_fd_or_false_result(ctx, "tmpfile");
+    // PHP reports the file `tmpfile()` created as the stream URI. The name only exists in the
+    // buffer the helper published, because the file is unlinked before the handle comes back.
+    emit_record_stream_meta_after_boxed_symbol(ctx, 0, "_tmpfile_last_path", TMPFILE_PATH_LEN);
     emit_record_stream_mode_literal_after_boxed(ctx, "r+b");
     store_if_result(ctx, inst)
 }

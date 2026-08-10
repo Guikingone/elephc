@@ -277,6 +277,13 @@ pub fn emit_streams_ext(emitter: &mut Emitter) {
     emitter.instruction("b.lt __rt_tmpfile_fail");                              // mkstemp failed
     emitter.instruction("sxtw x0, w0");                                         // normalize the C int fd into the runtime's 64-bit descriptor value
     emitter.instruction("str x0, [sp, #24]");                                   // preserve fd on the stack across the unlink call (x9–x15 are caller-saved)
+    // Publish the resolved name before the unlink: PHP reports it as the stream URI, and this
+    // buffer is the only place it survives the helper's frame.
+    abi::emit_symbol_address(emitter, "x9", "_tmpfile_last_path");
+    emitter.instruction("ldp x10, x11, [sp, #0]");                              // the first 16 bytes of the resolved name
+    emitter.instruction("stp x10, x11, [x9]");
+    emitter.instruction("ldr x10, [sp, #16]");                                  // and its remaining bytes
+    emitter.instruction("str x10, [x9, #16]");
     emitter.instruction("add x0, sp, #0");                                      // unlink path argument (the now-resolved template)
     emitter.bl_c("unlink");                                                     // libc unlink — file auto-deletes when fd closes
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload fd as the return value
@@ -461,6 +468,14 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jl __rt_tmpfile_fail_x86");                            // mkstemp failed
     emitter.instruction("cdqe");                                                // normalize the C int fd into the runtime's 64-bit descriptor value
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve fd across unlink
+    // See the AArch64 counterpart: the resolved name is published before the unlink.
+    abi::emit_symbol_address(emitter, "r9", "_tmpfile_last_path");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                       // the first 8 bytes of the resolved name
+    emitter.instruction("mov QWORD PTR [r9], r10");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 24]");                       // the next 8
+    emitter.instruction("mov QWORD PTR [r9 + 8], r10");
+    emitter.instruction("mov r10, QWORD PTR [rbp - 16]");                       // and the remainder
+    emitter.instruction("mov QWORD PTR [r9 + 16], r10");
     emitter.instruction("lea rdi, [rbp - 32]");                                 // unlink path
     emitter.instruction("call unlink");                                         // libc unlink — file auto-deletes on close
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return fd

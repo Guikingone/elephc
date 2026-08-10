@@ -628,6 +628,45 @@ pub(super) fn emit_record_stream_mode_after_boxed(
     Ok(())
 }
 
+/// Records a URI held in a runtime buffer on the boxed stream's opaque handle.
+///
+/// For a stream whose path the program never wrote: `tmpfile()` creates its own file, and PHP
+/// reports that file as the URI where elephc reported nothing at all.
+pub(super) fn emit_record_stream_meta_after_boxed_symbol(
+    ctx: &mut FunctionContext<'_>,
+    wrapper_id: i64,
+    symbol: &str,
+    len: i64,
+) {
+    let done_label = ctx.next_label("stream_meta_symbol_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // a failed open has no metadata to publish
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // pass the opaque stream handle from the Mixed payload
+            ctx.emitter.instruction(&format!("mov x1, #{}", wrapper_id));
+            abi::emit_symbol_address(ctx.emitter, "x2", symbol);                // the buffer holding the URI
+            ctx.emitter.instruction(&format!("mov x3, #{}", len));              // and its byte length
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_meta");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", done_label));            // a failed open has no metadata to publish
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");            // pass the opaque stream handle from the Mixed payload
+            ctx.emitter.instruction(&format!("mov esi, {}", wrapper_id));
+            abi::emit_symbol_address(ctx.emitter, "rdx", symbol);               // the buffer holding the URI
+            ctx.emitter.instruction(&format!("mov rcx, {}", len));              // and its byte length
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_meta");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&done_label);
+}
+
 /// Records a fixed mode spelling on the boxed stream's opaque handle.
 ///
 /// For a stream whose mode is not a caller argument at all: `tmpfile()` takes none and PHP

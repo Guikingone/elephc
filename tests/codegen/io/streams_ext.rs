@@ -293,6 +293,25 @@ echo $wrote . "|" . $content;
     assert_eq!(out, "7|scratch");
 }
 
+/// Verifies `tmpfile()` reports the file it created as the stream URI.
+///
+/// PHP names the temporary file it made; elephc reported an empty string, because the resolved
+/// name lived on the helper's stack and the file is unlinked before the handle comes back. The
+/// path itself is not reproducible — PHP's is not either — so the assertion is on its shape.
+#[test]
+fn test_tmpfile_reports_the_file_it_created_as_its_uri() {
+    let out = compile_and_run(
+        r#"<?php
+$h = tmpfile();
+$uri = stream_get_meta_data($h)["uri"];
+echo $uri === "" ? "empty" : (str_starts_with($uri, "/") ? "absolute" : "relative");
+echo "|", strlen($uri) > 8 ? "named" : "short";
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "absolute|named");
+}
+
 /// Verifies `tmpfile()` reports the mode PHP reports for the handle it hands back.
 ///
 /// The handle takes no mode argument, so the metadata helper could only describe the descriptor's

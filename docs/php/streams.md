@@ -438,6 +438,5 @@ handles, and one of `tcp_socket/ssl`, `udp_socket`, `unix_socket` or
 `generic_socket` for a socket — the transport being read from the address the
 caller wrote, with an accepted connection taking its listener's.
 
-Known differences from PHP 8.5.6, all in reported names rather than behavior:
-- `uri` is empty for a stream with no user-supplied path, such as `tmpfile()`,
-  where PHP reports the temporary file it created.
+`uri` is the path the caller opened, and for a stream that made its own — `tmpfile()`
+— the file it created, as PHP reports.
