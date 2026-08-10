@@ -71,6 +71,10 @@ pub(super) fn emit_readfile_wrapper_dispatch(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("test rax, rax");
             ctx.emitter.instruction(&format!("jz {}", url_failed));             // still unreadable: keep the -2 failure
             ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rdx");            // preserve the byte count across the write
+            // `__rt_vd_write` takes its buffer in rsi, not in the string-result register: the
+            // AArch64 helper's x1/x2 happen to BE the string pair, which is why the missing move
+            // was invisible there and `readfile()` over HTTP wrote uninitialised memory here.
+            ctx.emitter.instruction("mov rsi, rax");                            // the bytes the URL reader returned
             abi::emit_call_label(ctx.emitter, "__rt_vd_write");                 // stream the bytes through the ob/web-aware sink
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // readfile() returns the byte count
             ctx.emitter.instruction(&format!("jmp {}", after));
