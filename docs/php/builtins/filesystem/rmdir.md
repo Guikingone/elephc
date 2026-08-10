@@ -2,7 +2,7 @@
 title: "rmdir()"
 description: "Removes a directory."
 sidebar:
-  order: 149
+  order: 156
 ---
 
 ## rmdir()

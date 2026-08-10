@@ -56,6 +56,36 @@ pub(super) fn lower_numeric_binary(
         }
     }
     if matches!(op, BinOp::Pow) {
+        // PHP's `**` is int-preserving (`2 ** 3` is `int(8)`), so an int/int power goes
+        // through the checked helper that reproduces `zend_pow_function_base`: it keeps an
+        // `i64` while the value fits and promotes to a double at the exact multiplication
+        // that overflows, or immediately for a negative exponent. Only that case can be an
+        // int, and the type checker marks it `Mixed` for the same reason it marks
+        // overflow-capable `+`/`-`/`*` operands `Mixed`.
+        if lhs.ir_type == IrType::I64
+            && rhs.ir_type == IrType::I64
+            && fallback_expr_type(expr) == PhpType::Mixed
+        {
+            return ctx.emit_value(
+                Op::ICheckedPow,
+                vec![lhs.value, rhs.value],
+                None,
+                PhpType::Mixed,
+                Op::ICheckedPow.default_effects(),
+                Some(expr.span),
+            );
+        }
+        // A boxed operand (any non-`I64`/`F64` storage, typically an overflow-capable
+        // `Mixed` int) keeps the int-preserving behavior through the runtime dispatcher,
+        // which only takes the integer path when both payloads really are integers.
+        if should_use_mixed_numeric_binop(lhs.ir_type, rhs.ir_type) {
+            let result = lower_mixed_numeric_binary(ctx, lhs, rhs, MixedNumericOp::Pow, expr);
+            release_binary_operand_temporary(ctx, lhs, expr.span);
+            if rhs.value != lhs.value {
+                release_binary_operand_temporary(ctx, rhs, expr.span);
+            }
+            return result;
+        }
         let lhs = coerce_to_float(ctx, lhs, expr);
         let rhs = coerce_to_float(ctx, rhs, expr);
         return ctx.emit_value(
@@ -75,7 +105,7 @@ pub(super) fn lower_numeric_binary(
             vec![lhs.value, rhs.value],
             None,
             PhpType::Int,
-            Op::ISMod.default_effects(),
+            arithmetic_effects(Op::ISMod, right),
             Some(expr.span),
         );
     }
@@ -98,7 +128,7 @@ pub(super) fn lower_numeric_binary(
             vec![lhs.value, rhs.value],
             None,
             PhpType::Int,
-            iop.default_effects(),
+            arithmetic_effects(iop, right),
             Some(expr.span),
         );
     }
@@ -122,7 +152,7 @@ pub(super) fn lower_numeric_binary(
             BinOp::Div => Op::FDiv,
             _ => Op::RuntimeCall,
         };
-        return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, fop.default_effects(), Some(expr.span));
+        return ctx.emit_value(fop, vec![lhs.value, rhs.value], None, PhpType::Float, arithmetic_effects(fop, right), Some(expr.span));
     }
     if matches!(op, BinOp::Div) && (lhs.ir_type != IrType::I64 || rhs.ir_type != IrType::I64) {
         let lhs = coerce_to_float(ctx, lhs, left);
@@ -132,7 +162,7 @@ pub(super) fn lower_numeric_binary(
             vec![lhs.value, rhs.value],
             None,
             PhpType::Float,
-            Op::FDiv.default_effects(),
+            arithmetic_effects(Op::FDiv, right),
             Some(expr.span),
         );
     }
@@ -190,7 +220,7 @@ pub(super) fn lower_numeric_binary(
         let ownership = Ownership::for_php_type(&php_type);
         let value = ctx
             .builder
-            .emit_with_effects(iop, vec![lhs.value, rhs.value], None, result_type, php_type, ownership, iop.default_effects(), Some(expr.span))
+            .emit_with_effects(iop, vec![lhs.value, rhs.value], None, result_type, php_type, ownership, arithmetic_effects(iop, right), Some(expr.span))
             .expect("numeric binary produces a value");
         return LoweredValue { value, ir_type: result_type };
     }
@@ -338,6 +368,7 @@ pub(super) fn mixed_numeric_op(op: &BinOp) -> Option<MixedNumericOp> {
         BinOp::Add => Some(MixedNumericOp::Add),
         BinOp::Sub => Some(MixedNumericOp::Sub),
         BinOp::Mul => Some(MixedNumericOp::Mul),
+        BinOp::Pow => Some(MixedNumericOp::Pow),
         _ => None,
     }
 }

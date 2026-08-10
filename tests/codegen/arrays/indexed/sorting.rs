@@ -51,18 +51,20 @@ echo count($a);
     assert_eq!(out, "3");
 }
 
-/// Verifies krsort sorts by keys in descending order, preserving values.
-/// Fixture: [1, 2, 3] with string keys → sorted descending → count remains 3.
+/// Verifies krsort sorts by keys in descending order, preserving key/value association.
+/// An indexed array stores its keys as slot positions, so the receiver must be a hash;
+/// fixture: [2 => 1, 1 => 2, 3 => 3] → descending key order 3, 2, 1 with values 3, 1, 2.
 #[test]
 fn test_krsort() {
     let out = compile_and_run(
         r#"<?php
-$a = [1, 2, 3];
+$a = [2 => 1, 1 => 2, 3 => 3];
 krsort($a);
 echo count($a);
+foreach ($a as $k => $v) { echo ":", $k, "=", $v; }
 "#,
     );
-    assert_eq!(out, "3");
+    assert_eq!(out, "3:3=3:2=1:1=2");
 }
 
 /// Verifies natsort sorts values naturally (human ordering), preserving key-value associations.

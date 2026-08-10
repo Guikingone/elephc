@@ -2,7 +2,7 @@
 title: "asort()"
 description: "Sorts an array and maintains index association."
 sidebar:
-  order: 48
+  order: 49
 ---
 
 ## asort()

@@ -114,4 +114,3 @@ pub(crate) fn lower_array_filter(ctx: &mut FunctionContext<'_>, inst: &Instructi
     }
     store_if_result(ctx, inst)
 }
-

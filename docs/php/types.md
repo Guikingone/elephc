@@ -181,6 +181,12 @@ $a = (array)42;      // [42]
 Cast names and aliases are case-insensitive, matching PHP. For example,
 `(INT)`, `(Integer)`, and `(integer)` are equivalent.
 
+`(int)` and `intval()` on a `float` follow PHP's `zend_dval_to_lval` rules on every supported
+target: `NAN` and `±INF` become `0`, an in-range value truncates toward zero, and any other
+out-of-range value is reduced modulo 2^64 before being read back as a signed 64-bit integer
+(so `(int)1e300` is `0` and `(int)1.5e19` is `-3446744073709551616`). The same conversion is
+used for float array keys, so `$a[NAN]` and `$a[INF]` both write index `0`.
+
 Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 
 ### Type functions
@@ -205,7 +211,7 @@ Aliases: `(integer)`, `(double)`, `(real)`, `(boolean)`.
 | `is_infinite()` | `is_infinite($val): bool`    | Returns true if INF or -INF    |
 | `boolval()`     | `boolval($val): bool`        | Convert to bool                |
 | `floatval()`    | `floatval($val): float`      | Convert to float               |
-| `intval()`      | `intval($val): int`          | Converts to integer            |
+| `intval()`      | `intval($value, $base = 10): int` | Converts to integer. `$base` applies only to a string `$value`; base `0` auto-detects `0x`/`0b`/a leading octal zero |
 | `strval()`      | `strval($val): string`       | Convert to string              |
 | `gettype()`     | `gettype($val): string`      | Returns type name              |
 | `empty()`       | `empty($val): bool`          | Returns true if value is falsy |
@@ -233,13 +239,119 @@ Narrowing is not tracked across a reassignment of the variable inside the branch
 
 Narrowing applies to function and method parameters. A parameter whose call sites pass incompatible types (e.g. `int` at one site and a class instance at another) is inferred as a union, and the guard narrows it inside each branch. This is **not** yet supported for closure parameters: a closure invoked with incompatible argument types is rejected at compile time rather than inferred as a union.
 
+### Parameter type coercion
+
+PHP's default (coercive) mode converts a scalar argument to a declared scalar parameter type when the call runs. elephc applies the same conversions, but only where it can reproduce PHP's result exactly. Everything in this section describes a file **without** `declare(strict_types=1)`; see [Strict types](#strict-types) for what the directive changes.
+
+**Always accepted.** These conversions are total (every value converts), produce no PHP diagnostic, and use the same code as the corresponding explicit cast, so they match PHP byte for byte for both literals and runtime values:
+
+| Declared parameter | Accepts | Example |
+|---|---|---|
+| `string` | `int`, `float`, `bool` | `f(42)` → `"42"`, `f(4.5)` → `"4.5"`, `f(false)` → `""` |
+| `bool` | `int`, `float`, `string` | `f("0")` → `false`, `f(-0.5)` → `true` |
+| `float` | `int`, `bool` | `f(5)` → `5.0` |
+| `int` | `bool` | `f(true)` → `1` |
+
+**Accepted for compile-time constants.** A `float` or numeric-string *literal* binds to an `int` or `float` parameter when PHP's conversion is exact:
+
+```php
+function takesInt(int $i) { return $i; }
+function takesFloat(float $f) { return $f; }
+
+echo takesInt(5.0);      // 5
+echo takesInt("42");     // 42
+echo takesInt(" 42 ");   // 42   — PHP allows surrounding whitespace
+echo takesFloat("1e3");  // 1000
+```
+
+**Rejected at compile time.** Every remaining `float`/`string` → `int` and `string` → `float` binding is a compile error naming the PHP behaviour, because PHP decides those cases at run time with a channel elephc does not have at a parameter boundary:
+
+- A **lossy** conversion. PHP emits `Deprecated: Implicit conversion from float 5.5 to int loses precision` and passes `5`; elephc has no runtime deprecation channel (the same gap documented for `++`/`--` below), so it refuses rather than dropping the notice.
+- A **non-numeric or partially numeric** string. PHP throws `TypeError` — note this differs from the `(int)` cast, where `(int)"42abc"` is `42`.
+- A **runtime-valued** `float` or `string`. Which of the three PHP outcomes applies is only knowable at run time.
+
+Add the explicit cast the call site means — `takesInt((int) $f)`, `takesFloat((float) $s)` — or `intval()`/`floatval()`.
+
+**Not covered.** Coercive binding applies to by-value declared parameters of user-declared functions, methods, static methods and constructors:
+
+- **Pass-by-reference parameters** (`function f(string &$s)`) stay strict. PHP converts the caller's variable in place and writes the converted value back; elephc would have to pass a converted temporary, silently dropping the callee's writes, so the call is rejected instead.
+- **Builtin functions** keep their own per-builtin argument rules.
+- **Classes injected by the compiler** (SPL, `Exception`, reflection) stay strict, because several of their members are lowered by dedicated emitters rather than the shared argument path.
+- **Nullable and union parameters** (`?string $s`, `int|string $v`) stay strict; only a plain declared scalar type binds coercively.
+
+### Strict types
+
+A file that opens with `declare(strict_types=1);` gets PHP's strict parameter binding: a declared scalar parameter accepts only an argument of exactly that type, plus the single widening of `int` into a declared `float`. Every conversion in the tables above becomes a compile error naming the `TypeError` PHP would throw at run time.
+
+| Argument type → | `int` | `float` | `string` | `bool` |
+|---|---|---|---|---|
+| **declared `int`** | accepted | rejected | rejected | rejected |
+| **declared `float`** | accepted (widened) | accepted | rejected | rejected |
+| **declared `string`** | rejected | rejected | accepted | rejected |
+| **declared `bool`** | rejected | rejected | rejected | accepted |
+
+```php
+<?php
+
+declare(strict_types=1);
+
+function takesInt(int $i) { return $i; }
+function takesFloat(float $f) { return $f; }
+
+echo takesFloat(42);       // 42   — the one implicit conversion strict mode keeps
+echo takesInt((int) "7");  // 7    — an explicit cast is always accepted
+echo takesInt(true);       // compile error: must be of type int, bool given
+echo takesInt("42");       // compile error: must be of type int, string given
+```
+
+The directive is scoped to the physical file it appears in, exactly as in PHP. It does not propagate into included files, and the file containing the **call site** decides — not the file declaring the callee:
+
+```php
+// lib.php  (no declare)
+function coerceHere(int $i) { return $i; }
+function fromLooseFile() { return coerceHere(true); }   // still coerces to 1
+
+// main.php
+declare(strict_types=1);
+require __DIR__ . '/lib.php';
+echo fromLooseFile();       // 1 — the call above lives in a coercive file
+echo coerceHere(true);      // compile error — this call lives in a strict file
+```
+
+**What the directive covers.** Declared by-value parameters of user functions, methods, static methods, constructors, closures, arrow functions, first-class callables, declared variadic element types, and `call_user_func`/`call_user_func_array` — which forward the caller's frame in PHP and therefore stay strict.
+
+**What it does not cover.**
+
+- **Callbacks invoked by other internal functions** (`array_map`, `usort`, `array_walk`, `preg_replace_callback`, …) keep coercive binding, matching PHP: the engine calls them from its own frame, which never carries the directive. `array_map('g', [true])` still passes `1` to `g(int $i)` in a strict file.
+- **Builtin function arguments** keep their own per-builtin rules; the directive does not tighten them. PHP throws `TypeError` for `strlen(42)` under `strict_types=1` while elephc still applies each builtin's own argument checking.
+- **Return types, typed property assignments and typed constants** are unaffected; PHP also applies `strict_types` to those.
+- **Positional spread arguments** (`f(...$args)`) and **variadic parameters of an inline closure literal** (`function (int ...$xs) {}`) are not checked against the declared parameter type, in strict or coercive mode.
+- **Values whose type is only known at run time** (`mixed`, union-typed and array-element values) are not rejected: elephc cannot raise PHP's runtime `TypeError` at a parameter boundary, so such a binding is left to the existing compatibility rules.
+
+### Callable strings
+
+PHP accepts a function-name string wherever a `callable` is declared and resolves it when the call runs. elephc resolves callables statically, so a callable string binds when it is a compile-time constant:
+
+```php
+function apply(callable $f, string $s) { return $f($s); }
+
+echo apply("strtoupper", "abc");        // ABC   — builtin name
+echo apply("my_helper", "abc");         //       — user function name
+echo apply("Formatter::wrap", "abc");   //       — "Class::method"
+```
+
+Names are matched case-insensitively and a leading `\` is allowed, matching PHP. A callable string that is only known at run time is rejected with `a callable string must be a compile-time constant here`; pass a first-class callable (`strtoupper(...)`), a closure, or a literal name instead. A constant string that names nothing is rejected too, where PHP throws `TypeError` when the call runs.
+
+Two gaps remain: array callables (`[$obj, "method"]`, `["Class", "method"]`) are still rejected at a `callable` parameter, and because elephc maps the `Closure` type hint onto the same internal callable type, a `Closure` parameter also accepts a callable string where PHP requires an actual `Closure`.
 
 ### Known incompatibilities with PHP
 
 - `$argv[0]` returns the compiled binary path, not the `.php` file path.
 - Integer `+`, `-`, and `*` overflow promotes to `float` for both constant-folded and runtime arithmetic, matching PHP on 64-bit builds. `intval()`/`(int)` of an integer-valued string near the 64-bit boundary (e.g. `intval("9223372036854775807")`) is still lossy at the string-conversion boundary.
+- The `**` operator is int-preserving like PHP (`2 ** 3` is `int(8)`), but the `pow()` **function** still always returns a `float` (`pow(2, 3)` is `float(8)` where PHP gives `int(8)`). `**` on a value that is only known to be a numeric *string* at runtime also stays a `float` (`"2" ** 2` is `float(4)`, PHP gives `int(4)`) — the same numeric-string gap that already affects `+`, `-`, and `*` on untyped operands.
 - Converting an array to a string (via `.` concatenation, `echo`, or string interpolation) yields the literal `"Array"`, matching PHP's value, but elephc does not emit PHP's `E_WARNING` "Array to string conversion".
 - Scalar loose comparison (`==`, `!=`) follows PHP-style bool truthiness, null-vs-empty-string, numeric-string, non-numeric string byte-comparison, and numeric `int`-vs-`float` rules for constant-folded literals and non-folded runtime scalar operands. One known gap: when an **untyped (`mixed`) operand holds a `float`** at runtime — e.g. `switch ($x)` over an untyped `$x = 1.5`, or `$x == 1` — the value is truncated to `int` before comparing, so `1.5` wrongly compares equal to `1`. Statically-typed `float` operands compare correctly; only untyped float-bearing values are affected.
+- Relational comparison (`<`, `<=`, `>`, `>=`, `<=>`) between two **runtime** string operands is rejected at compile time with "Comparison operators require numeric operands" / "Spaceship operator requires numeric operands", where PHP compares them (numerically when both look numeric, byte-wise otherwise). The constant-folded form is not affected: `"a" <=> "b"`, `"B" < "a"` and `"10" > "9"` are evaluated at compile time with PHP's exact rules and produce PHP's answer, so only comparisons whose operands are not compile-time constants hit the restriction.
 - `??=` is checked against typed assignment storage for variables, object properties, static properties, and non-append array elements. For concrete local variable types, the fallback must keep the same type or be a literal `null`.
 - Plain array numeric casts (`(int)$array`, `(float)$array`) follow elephc's existing array cast semantics (return the element count rather than PHP's `0`/`1`). Direct `iterable` numeric casts use PHP's empty/non-empty `0`/`1` semantics.
 - `__destruct` runs when an object's refcount reaches zero (scope exit, reassignment, `unset`, program end), matching PHP's timing, but **object resurrection is not supported**: re-storing `$this` so the object would outlive the destructor does not keep it alive — the object is still freed once `__destruct` returns.
@@ -251,7 +363,13 @@ Narrowing applies to function and method parameters. A parameter whose call site
   and synchronizing the affected native locals. Use an array keyed by the
   dynamic name in portable elephc code for now.
 - Reference aliases to array elements (`$b =& $a[0]`) are limited to **indexed arrays with integer indices**; associative arrays (`$b =& $a['key']`) are rejected at compile time. Referencing an out-of-range index binds the alias to a null cell instead of creating the element (PHP autovivifies it as `null`), and the alias points into the array's storage, so it is only valid while the array is alive and not reallocated by growth.
+- Reference *elements* inside array literals (`$r = [&$a, &$b];`, `['k' => &$a]`, `array(&$a)`) are rejected at compile time with `Reference elements in array literals ([&$x]) are not supported`. PHP stores such an element as a reference cell aliasing the source variable, so `$r[0] = 9` writes through to `$a`. elephc's arrays hold plain values and its only reference form points *into* array storage (the `$b =& $a[0]` case above), never out of it — an element aliasing a local would be a pointer to a stack slot the array can outlive. Assign the value and copy back, or alias an existing element with `$b =& $a[0]`.
+- `goto` and its target labels are not supported and are rejected at compile time (`` `goto` is not supported ``). elephc's termination analysis, flow-sensitive narrowing, loop/branch pruning, and constant propagation all read control flow from the statement tree, which an arbitrary intra-function jump invalidates. Use `break` (including `break 2;`), `continue`, a loop flag, or an early `return`. See [Control Structures](./control-structures.md#goto).
+- `++` / `--` on a `string` follows PHP exactly, including the perl-style alphanumeric carry (`"az"++` is `"ba"`, `"Zz"++` is `"AAa"`) and the numeric-string retype (`"9"++` is `int(10)`, `"3.5"++` is `float(4.5)`). Because the operator can change the value's type, a `string` local that is a `++`/`--` target is given boxed `mixed` frame storage for its whole lifetime, so its runtime type follows the value rather than the declaration. The one divergence: PHP raises `E_DEPRECATED` for `++` on a non-alphanumeric string and for `--` on a non-numeric string, and elephc has no runtime deprecation channel, so it produces the same value without the notice. `++` / `--` on an array, object, buffer, or pointer local is still rejected at compile time.
 - `print_r($value, true)` captures into a fixed 64 KiB buffer: rendered output longer than 65536 bytes is truncated at the cap (PHP returns the full string). Echo mode (`print_r($value)`) is unaffected.
+- `var_dump()`, `print_r()` and `var_export()` render an object's **declared** properties only. Dynamic (undeclared) properties — every property of a `stdClass` built with `$o->p = 1`, and any property added to an `#[\AllowDynamicProperties]` class — are not listed, so `print_r(new stdClass)` prints an empty body where PHP lists the assigned properties. All three renderers share one per-class descriptor, so they never disagree about which properties an object has.
+- `func_num_args()`, `func_get_args()` and `func_get_arg()` are compiled away rather than dispatched as builtin calls, so `function_exists()` reports `false` for the three names where PHP reports `true`. Their supported scopes are also narrower than PHP's: they are rejected in a function with an optional (defaulted) parameter, in a function that already declares its own variadic, and in a method that overrides a parent method or implements an interface method. Everywhere else — functions, methods, static methods, closures, arrow functions, generators — they match PHP, including reporting the current values of the declared parameters. See [Functions](./functions.md#argument-introspection).
+- Surplus *positional* arguments (PHP allows any user function to be called with more arguments than it declares, discarding the extras) are only accepted by functions that use one of the three argument-introspection constructs above. Every other user function keeps elephc's compile-time arity check, so `function f($a) {} f(1, 2);` is a compile error where PHP runs it.
 - `serialize()`/`unserialize()` cover scalars, arrays, and objects (including the `__serialize`/`__unserialize`/`__sleep`/`__wakeup` magic methods and `r:`/`R:` object back-references) byte-for-byte compatibly with PHP. Remaining gaps: a cyclic reference inside an object's own properties resolves to `null` on `unserialize()` (serialization handles cycles), the deprecated `Serializable` interface (`C:` wire form) is unsupported, writing a property of an unserialized object held in a `Mixed` does not persist (a separate `Mixed` property-write limitation), and `unserialize()` does not emit PHP's `E_WARNING` / `E_NOTICE` on malformed input — it just returns `false`.
 
 ### Filesystem functions not implemented

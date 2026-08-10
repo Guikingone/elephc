@@ -874,10 +874,87 @@ echo isset($config->debug) ? "on" : "off";  // off → __isset
 
 `isset($obj->prop)` returns the boolean result of `__isset`; `unset($obj->prop)`
 runs `__unset` for its side effects. Both fire only for properties the class does
-not declare — accessing a declared property uses it directly.
+not declare *or cannot access from the calling scope* — a property the caller can
+see is read, tested, and removed directly, exactly as in PHP.
 
 Contract: `__isset` and `__unset` must be non-static and public, and each takes
 exactly one argument (the property name). `__isset` returns `bool`.
+
+### `unset()` on a declared property
+
+`unset($obj->prop)` on a property the caller can see removes it from the instance
+without consulting `__unset`. For a **typed** property PHP returns the slot to its
+*uninitialized* state, and elephc reproduces that exactly:
+
+```php
+<?php
+class Row { public int $id = 3; public string $label = "a"; }
+$row = new Row();
+unset($row->id, $row->label);
+
+var_dump(isset($row->id));  // false
+print_r($row);              // Row Object ( )  — both properties are gone
+echo $row->id;              // Error: Typed property Row::$id must not be
+                            //        accessed before initialization
+$row->id = 9;               // assigning again brings the property back
+var_dump(isset($row->id));  // true
+```
+
+`isset()` on a typed property that was never initialized (or was unset) answers
+`false` without raising the uninitialized-read error, matching PHP.
+
+### `unset()` on a dynamic property
+
+A property that lives in the object's **dynamic-property hash** — every `stdClass`
+property, and any undeclared name on an `#[AllowDynamicProperties]` class — is
+genuinely removable, so `unset()` matches PHP exactly: the key disappears, `isset()`
+answers `false`, the value renderers stop listing it, unsetting the same name twice
+or unsetting a name that was never set are both no-ops, and a later write recreates
+the property at the end of the property order.
+
+```php
+<?php
+$o = new stdClass();
+$o->a = 1;
+$o->b = "two";
+unset($o->a);
+
+var_dump(isset($o->a));   // false
+echo json_encode($o);     // {"b":"two"}
+unset($o->a);             // no-op
+unset($o->never_set);     // no-op
+$o->a = 9;
+echo json_encode($o);     // {"b":"two","a":9}
+```
+
+Declared slots on an `#[AllowDynamicProperties]` class keep the fixed-slot rules
+above; only undeclared names go through the hash.
+
+One shape is refused here: a class that declares `__unset()` **and** allows dynamic
+properties. PHP calls `__unset()` only when the dynamic name is absent at the unset
+site and removes the entry silently when it is present, so the choice depends on
+runtime state that elephc resolves statically. It reports an unsupported-feature
+diagnostic instead of guessing.
+
+### `unset()` limitations
+
+`unset()` on an **untyped** declared property (`public $foo = 1;`) is rejected at
+compile time with an unsupported-feature diagnostic naming that shape. PHP truly
+removes such a property: a later read emits `Warning: Undefined property: C::$foo`
+and answers `null`, and a later write recreates it. elephc gives every declared
+property a fixed, monomorphically typed slot — `public $foo = 1;` is stored as an
+`int` — and that slot has no encoding for "removed, and reading as null": every
+candidate encoding answers `int(0)` or a raw marker word instead. A loud compile
+error beats a wrong value. Declare a type (`public mixed $foo = 1;` keeps the
+"anything goes" storage) when the property needs to be unset, or make the property
+dynamic. Note that the typed form follows PHP's *typed* rules afterwards: the slot
+becomes uninitialized, so a later read raises `Error: Typed property … must not be
+accessed before initialization` instead of warning and answering `null`.
+
+`unset()` on a **by-reference** property (`public function __construct(public int
+&$p) {}`) is rejected for the same reason: the slot holds an object-owned reference
+cell that the destructor still frees and that a later write would write *through*,
+which would revive the very alias `unset()` is supposed to break.
 
 ## Static call interception (`__callStatic`)
 
@@ -1454,5 +1531,6 @@ Constants are inherited from parents and implemented interfaces (transitively). 
 ## Limitations
 - `readonly static` properties are rejected to match PHP. Static properties in a `readonly class` are still mutable.
 - Backed property hooks may read and write their own backing slot.
+- `unset()` is supported on typed declared properties (the slot becomes uninitialized) and on dynamic properties (`stdClass`, undeclared names on `#[AllowDynamicProperties]` classes, where the entry is removed). It is rejected on untyped declared properties, on by-reference properties, and on dynamic names of a class that also declares `__unset()`. See "`unset()` limitations" above.
 - Class constants must be literal-or-foldable expressions; cyclic constant references are not supported.
 - Class and function attribute names and supported literal args are exposed at runtime through `class_attribute_names()`, `class_attribute_args()`, `class_get_attributes()`, and the supported `ReflectionClass`/`ReflectionFunction`/`ReflectionMethod`/`ReflectionProperty`/`ReflectionClassConstant`/`ReflectionEnumUnitCase`/`ReflectionEnumBackedCase::getAttributes()` APIs; function and method parameter names, counts, positions, optional/variadic/by-reference flags, declared-type presence, simple named, union, and intersection type metadata, function and method parameter attributes, supported scalar/null/class-constant/array/object parameter defaults, parameter declaring-class/function metadata, and reflected member/constant declaring-class metadata are exposed through the supported Reflection APIs. `#[\Override]`, `#[\Deprecated]`, and `#[\AllowDynamicProperties]` are enforced/diagnosed/honored at compile time and runtime; `#[\SensitiveParameter]` is parsed but not yet propagated to stack traces.

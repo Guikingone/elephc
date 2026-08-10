@@ -2,7 +2,7 @@
 title: "get_declared_traits() — internals"
 description: "Compiler internals for get_declared_traits(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 82
+  order: 89
 ---
 
 ## `get_declared_traits()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/get_declared_traits.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_declared_traits.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

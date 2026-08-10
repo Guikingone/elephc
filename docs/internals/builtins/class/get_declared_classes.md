@@ -2,7 +2,7 @@
 title: "get_declared_classes() — internals"
 description: "Compiler internals for get_declared_classes(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 80
+  order: 87
 ---
 
 ## `get_declared_classes()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/callables/get_declared_classes.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/callables/get_declared_classes.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

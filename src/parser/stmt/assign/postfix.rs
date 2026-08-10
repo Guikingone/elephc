@@ -595,7 +595,10 @@ fn lower_effectful_postfix_assignment(
 }
 
 /// Lowers discarded post-increment/decrement to the existing assignment statement forms.
-fn lower_postfix_incdec_assignment(
+///
+/// Statement position discards the operator's value, so prefix `++$obj->n;` lowers through
+/// here too: with the result unused, `++X` and `X++` are both `X += 1`.
+pub(in crate::parser::stmt::assign) fn lower_postfix_incdec_assignment(
     lhs_expr: Expr,
     is_increment: bool,
     span: Span,

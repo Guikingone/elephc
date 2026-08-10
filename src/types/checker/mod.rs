@@ -26,6 +26,7 @@ mod functions;
 mod inference;
 mod loop_storage;
 mod method_pass;
+pub(crate) mod null_probe;
 mod schema;
 mod stmt_check;
 mod type_compat;
@@ -83,6 +84,14 @@ pub(crate) struct Checker {
     /// Tracks callable signatures inferred for user-function callable parameters,
     /// keyed by (function_name, param_name).
     pub callable_param_sigs: HashMap<(String, String), FunctionSig>,
+    /// Whether the statement currently being checked was written in a file that opened with
+    /// `declare(strict_types=1)`.
+    ///
+    /// PHP scopes the directive to the file containing the *call site*, so this is installed
+    /// from `Stmt::strict_types` by `check_stmt` and restored afterwards. It is `false` outside
+    /// any statement check, which keeps class/constant/default-value checking on PHP's coercive
+    /// rules — the behaviour elephc had before the directive was honoured.
+    pub strict_types: bool,
     /// Tracks which undeclared function parameters have already had their type
     /// adopted from a real call site, keyed by (function_name, param_index). The
     /// first such call adopts the actual argument type; later disagreeing calls
@@ -167,6 +176,38 @@ pub(crate) struct Checker {
     /// Once set, unknown local reads are treated as dynamic `Mixed` values because
     /// eval fragments can create caller-scope variables at runtime.
     pub eval_barrier_active: bool,
+    /// Types recorded for `return <expr>;` statements at the moment each one was checked,
+    /// keyed by the statement node's address in the AST plus its span.
+    ///
+    /// `collect_return_infos` runs *after* a body has been checked and re-infers every return
+    /// against the body's FINAL environment. Without this side channel a flow-sensitive fact
+    /// that only holds on part of the body — a property narrowing established halfway down —
+    /// would be applied to returns that execute before it, silently accepting a nullable
+    /// return. The address key is exact because both passes borrow the same immutable AST; the
+    /// span is carried alongside so a recycled address can never be mistaken for a hit.
+    pub flow_typed_returns: HashMap<usize, (Span, PhpType)>,
+    /// Whether the statements being checked belong to the top-level (global) scope rather than a
+    /// function, method, or closure body. `with_local_storage_context` clears it for every local
+    /// scope, so `null_probe` only records deferred roots for the scope whose environment
+    /// actually becomes `CheckResult::global_env`.
+    pub null_probe_scope_is_top_level: bool,
+    /// Never-declared variables named by a null probe (`isset`/`empty`/`unset`/`??`) at top level,
+    /// with the span to blame if the tolerance turns out to be unjustified.
+    ///
+    /// PHP answers these probes without an `Undefined variable` warning, but EIR lowering can only
+    /// represent the storage when the variable stays `null` for the whole scope: main's local
+    /// types come from `global_env`, so a name that is *also* assigned somewhere at top level ends
+    /// up with that assigned type and its slot is read before any store. `check_top_level_program`
+    /// therefore defers the decision to the end of the pass, where `global_env` is authoritative.
+    pub pending_null_probe_roots: Vec<(String, Span)>,
+    /// Nesting depth of null-probe operand inference (`isset`/`empty`/`unset` arguments and the
+    /// left operand of `??`).
+    ///
+    /// Inside a probe, reaching through a `null` base is legal PHP — `isset($n['k'])` and
+    /// `$n->p ?? $d` answer `false`/`$d` for a null `$n` instead of faulting — so index and
+    /// property access on `PhpType::Void` yield `Void` rather than a diagnostic. Outside a probe
+    /// those accesses keep their errors.
+    pub null_probe_depth: usize,
     /// Active break/continue target depth in the current function or closure body.
     pub break_continue_depth: usize,
     /// Stacks of break/continue depths at each enclosing `finally` block boundary,
@@ -191,6 +232,14 @@ pub(crate) struct Checker {
     pub builtin_call_types: HashMap<Span, PhpType>,
     /// Fixed-point storage contracts keyed by function-like scope and loop span.
     pub loop_storage_types: crate::types::LoopStorageTypes,
+    /// `(scope, local)` pairs for `string` locals used as a `++`/`--` target.
+    ///
+    /// PHP's string increment can change the value's type (`"9"++` is `int(10)`), so EIR
+    /// lowering must give those locals boxed `Mixed` frame storage from their FIRST store
+    /// instead of widening the slot at the increment. Recorded here because the checker
+    /// already visits every expression with a typed environment, so no second AST walk is
+    /// needed. See `crate::ir_lower::context::LoweringContext::boxed_incdec_storage_type`.
+    pub string_incdec_locals: HashSet<(String, String)>,
 }
 
 #[derive(Clone)]
@@ -269,6 +318,7 @@ pub fn check_types(
         throw_access_sites: checker.throw_access_sites,
         builtin_call_types: checker.builtin_call_types,
         loop_storage_types: checker.loop_storage_types,
+        string_incdec_locals: checker.string_incdec_locals,
     })
 }
 

@@ -32,7 +32,12 @@ pub(crate) mod error_constants;
 mod ffi;
 /// JSON literal constant type inference.
 pub(crate) mod json_constants;
+/// PHP math integer constants (`PHP_ROUND_HALF_*` rounding modes).
+pub(crate) mod math_constants;
+/// OpenSSL option constants shared by checker and codegen.
 pub(crate) mod openssl_constants;
+/// PHP parameter-binding rules: coercive scalar binding and callable-name strings.
+pub(crate) mod param_binding;
 /// PHP type model and type environment for tracking variable types.
 mod model;
 /// Preg/PCRE flag constants shared by checker and codegen.
@@ -48,6 +53,7 @@ pub(crate) mod session_constants;
 /// Function signature representation and builtin signature helpers.
 mod signatures;
 pub(crate) mod stream_constants;
+pub(crate) mod string_constants;
 /// Type checker diagnostics and warnings.
 mod warnings;
 

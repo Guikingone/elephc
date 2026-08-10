@@ -33,6 +33,7 @@ pub(super) fn lower_array_fill_call(
                 ctx.load_string_value_to_regs(value, "rsi", "rdx")?;
             }
         }
+        emit_array_fill_count_guard(ctx, false);
         abi::emit_call_label(ctx.emitter, array_fill_runtime_helper(value_ty));
         return Ok(());
     }
@@ -48,8 +49,55 @@ pub(super) fn lower_array_fill_call(
             ctx.load_value_to_reg(value, "rdx")?;
         }
     }
+    emit_array_fill_count_guard(ctx, true);
     abi::emit_call_label(ctx.emitter, array_fill_runtime_helper(value_ty));
     Ok(())
+}
+
+/// php-src's verbatim `ValueError` wording for `array_fill()` with a negative `$count`.
+const ARRAY_FILL_NEGATIVE_COUNT_MESSAGE: &str =
+    "array_fill(): Argument #2 ($count) must be greater than or equal to 0";
+
+/// The largest `array_fill()` `$count` reference PHP will even attempt to build an array for.
+///
+/// php-src bounds the count against `INT_MAX` — not against the maximum array size — before it
+/// reaches the allocator, so `array_fill(0, 2147483647, …)` is accepted (and then fails on
+/// memory) while `array_fill(0, 2147483648, …)` is a `ValueError` for every `$start` and value.
+const ARRAY_FILL_MAX_COUNT: i64 = 2_147_483_647;
+
+/// php-src's verbatim `ValueError` wording for an oversized `array_fill()` `$count`.
+const ARRAY_FILL_COUNT_TOO_LARGE_MESSAGE: &str = "array_fill(): Argument #2 ($count) is too large";
+
+/// Rejects the `array_fill()` `$count` values reference PHP refuses to build an array for.
+///
+/// The fill helpers write `$count` straight into the array header's length field without
+/// clamping it, so a negative count produced an array whose header claimed a negative length
+/// — `count()` answered `-1` and every walk over it read past the payload. A count past
+/// `INT_MAX` is memory-safe today (the allocation guards catch it) but reported the process's
+/// uncatchable heap fatal where reference PHP throws, so `try { … } catch (ValueError $e)`
+/// could never see it; bounding the argument here raises PHP's own error instead.
+/// `second_arg_reg` selects which ABI register currently holds `$count`: the string fill helper
+/// takes `(count, ptr, len)`, every other fill helper takes `(start, count, value)`.
+fn emit_array_fill_count_guard(ctx: &mut FunctionContext<'_>, second_arg_reg: bool) {
+    let count_reg = match (ctx.emitter.target.arch, second_arg_reg) {
+        (Arch::AArch64, false) => "x0",
+        (Arch::AArch64, true) => "x1",
+        (Arch::X86_64, false) => "rdi",
+        (Arch::X86_64, true) => "rsi",
+    };
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::SignedAtLeast(count_reg, 0),
+        ARRAY_FILL_NEGATIVE_COUNT_MESSAGE,
+    );
+    crate::codegen::lower_inst::exceptions::emit_value_error_unless(
+        ctx,
+        crate::codegen::lower_inst::exceptions::ValueGuard::SignedAtMost(
+            count_reg,
+            ARRAY_FILL_MAX_COUNT,
+        ),
+        ARRAY_FILL_COUNT_TOO_LARGE_MESSAGE,
+    );
 }
 
 /// Calls the keyed `array_fill()` runtime helper after materializing the boxed payload fields.
@@ -75,6 +123,7 @@ pub(super) fn lower_array_fill_assoc_call(
             abi::emit_load_int_immediate(ctx.emitter, "r8", value_tag);
         }
     }
+    emit_array_fill_count_guard(ctx, true);
     abi::emit_call_label(ctx.emitter, "__rt_array_fill_assoc");
     Ok(())
 }

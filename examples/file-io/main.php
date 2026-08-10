@@ -8,6 +8,11 @@ file_put_contents("greeting.txt", "Hello from elephc!\n");
 $content = file_get_contents("greeting.txt");
 print $content;
 
+// Read only part of a file: $offset starts the read, $length caps it,
+// and a negative $offset counts back from the end of the file.
+echo "Bytes 6-9: " . file_get_contents("greeting.txt", false, null, 6, 4) . "\n";
+echo "Last line: " . file_get_contents("greeting.txt", false, null, -7);
+
 // Check file properties
 if (file_exists("greeting.txt")) {
     echo "File exists, size: " . filesize("greeting.txt") . " bytes\n";

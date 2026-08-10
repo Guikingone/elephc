@@ -2,7 +2,7 @@
 title: "str_pad()"
 description: "Pads a string to a certain length with another string."
 sidebar:
-  order: 412
+  order: 432
 ---
 
 ## str_pad()

@@ -311,6 +311,12 @@ impl Checker {
                 // so each one can be restored after the construct.
                 let mut saved_vars: Vec<(String, Option<PhpType>)> = Vec::new();
                 let mut applied_any_guard = false;
+                // Single-clause join state: the guarded key and the type it has where the
+                // then-branch falls out of the construct. `None` means "no usable fact" (the
+                // branch diverged, or a call inside it purged the narrowing).
+                let mut join_key: Option<String> = None;
+                let mut then_exit_ty: Option<PhpType> = None;
+                let single_clause = clauses.len() == 1;
 
                 for (cond, body) in &clauses {
                     self.infer_type_with_assignment_effects(cond, env)?;
@@ -330,6 +336,20 @@ impl Checker {
                                 errors.extend(error.flatten());
                             }
                         }
+                        // Join only when the then-branch WROTE the guarded place, i.e. when the
+                        // fact at branch exit is no longer the guard's own `then` type. That is
+                        // exactly the lazy-initialization shape; joining unconditionally would
+                        // instead publish a guard's narrowing (e.g. `instanceof`) to the code
+                        // after the `if`, where it does not hold.
+                        let branch_exit = env.get(&guard.var);
+                        if single_clause
+                            && Self::narrowed_place_key_is_property(&guard.var)
+                            && !self.body_cannot_fall_through(body)
+                            && branch_exit.is_some_and(|ty| *ty != guard.then_ty)
+                        {
+                            join_key = Some(guard.var.clone());
+                            then_exit_ty = branch_exit.cloned();
+                        }
                         restore_narrowed_var(env, &guard.var, &saved);
 
                         // The fallthrough env for the rest of the chain (next elseif or else)
@@ -346,11 +366,22 @@ impl Checker {
                 }
 
                 // Final else body (if present) is checked with the accumulated complement.
+                // `None` = the else path cannot reach the code after the `if`. `Some(None)` = it
+                // can, but the guarded fact was lost there. `Some(Some(ty))` = it can and the
+                // fact is `ty`.
+                let mut else_exit_ty: Option<Option<PhpType>> = None;
+                let mut else_falls_through = else_body.is_none();
                 if let Some(body) = else_body {
                     for s in body {
                         if let Err(error) = self.check_stmt(s, env) {
                             errors.extend(error.flatten());
                         }
+                    }
+                    else_falls_through = !self.body_cannot_fall_through(body);
+                }
+                if let Some(key) = &join_key {
+                    if else_falls_through {
+                        else_exit_ty = Some(env.get(key).cloned());
                     }
                 }
 
@@ -363,9 +394,27 @@ impl Checker {
                     && clauses
                         .iter()
                         .all(|(_, body)| self.body_cannot_fall_through(body));
+                // A single guarded clause whose then-branch also falls through joins the two
+                // exit facts instead of discarding both. `if (X === null) { X = new S(); }`
+                // leaves `S` on the then path (the write recorded it) and `S` on the else path
+                // (the guard complement), so the union is `S` — the singleton pattern.
+                let joined = join_key.as_ref().and_then(|key| {
+                    let then_ty = then_exit_ty.clone()?;
+                    let joined = match &else_exit_ty {
+                        None => then_ty,
+                        Some(Some(else_ty)) => {
+                            self.normalize_union_type(vec![then_ty, else_ty.clone()])
+                        }
+                        Some(None) => return None,
+                    };
+                    Some((key.clone(), joined))
+                });
                 if !keep_complement_after_if {
                     for (var, original) in &saved_vars {
                         restore_narrowed_var(env, var, original);
+                    }
+                    if let Some((key, joined)) = joined {
+                        env.insert(key, joined);
                     }
                 }
 

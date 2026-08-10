@@ -8,6 +8,7 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 
 use super::*;
+use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
 /// Loads an indexed array argument and calls the selected runtime aggregate helper.
 pub(super) fn lower_indexed_array_aggregate(
@@ -120,11 +121,9 @@ pub(super) fn lower_indexed_array_sort(
     let array = expect_operand(inst, 0)?;
     let elem_ty =
         indexed_sort_element_type(ctx.value_php_type(array)?, name, str_helper.is_some())?;
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -152,11 +151,9 @@ pub(super) fn lower_indexed_array_shuffle(ctx: &mut FunctionContext<'_>, inst: &
     super::super::ensure_arg_count(inst, "shuffle", 1)?;
     let array = expect_operand(inst, 0)?;
     eight_byte_indexed_array_element_type(ctx.value_php_type(array)?, "shuffle")?;
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.load_value_to_reg(array, "x0")?;
@@ -184,12 +181,11 @@ pub(super) fn lower_user_sort_static_callback(
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
     let elem_ty = user_sort_element_type(ctx.value_php_type(array)?, name)?;
+    let sort_helper = user_sort_runtime_label(&elem_ty);
     let callback_arg_types = [elem_ty.clone(), elem_ty];
-    let source_local = source_load_local_slot(ctx, array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_sort_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back_value(ctx, array)?;
     let callback_ty = ctx.value_php_type(callback)?.codegen_repr();
     let callback_owner = format!("{} callback", name);
     if callback_ty == PhpType::Callable && static_callback_operand_is_recoverable(ctx, callback) {
@@ -199,7 +195,13 @@ pub(super) fn lower_user_sort_static_callback(
             &callback_owner,
             Some(&callback_arg_types),
         )?;
-        return lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding);
+        return lower_user_sort_with_static_callback_binding(
+            ctx,
+            inst,
+            array,
+            callback_binding,
+            sort_helper,
+        );
     }
     match callback_ty {
         PhpType::Callable => {
@@ -215,7 +217,7 @@ pub(super) fn lower_user_sort_static_callback(
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_usort");
+                    abi::emit_call_label(ctx.emitter, sort_helper);
                     Ok(())
                 },
             )?;
@@ -234,7 +236,7 @@ pub(super) fn lower_user_sort_static_callback(
                 Some(&PhpType::Array(Box::new(callback_arg_types[0].clone()))),
                 callback_arg_types.to_vec(),
                 PhpType::Int,
-                super::super::super::instruction_strict_php_profile(inst),
+                super::super::instruction_strict_php_profile(inst),
                 name,
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -243,7 +245,7 @@ pub(super) fn lower_user_sort_static_callback(
                     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, wrapper_label);
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_usort");
+                    abi::emit_call_label(ctx.emitter, sort_helper);
                     Ok(())
                 },
             )?;
@@ -263,15 +265,20 @@ pub(super) fn lower_user_sort_static_callback(
         &callback_owner,
         Some(&callback_arg_types),
     )?;
-    lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding)
+    lower_user_sort_with_static_callback_binding(ctx, inst, array, callback_binding, sort_helper)
 }
 
 /// Calls the user-sort runtime with a statically recovered callback binding.
+///
+/// `sort_helper` selects the slot permuter matching the receiver's element
+/// width: `__rt_usort` for 8-byte payload slots, `__rt_usort_str` for the
+/// 16-byte `[ptr][len]` string descriptors.
 pub(super) fn lower_user_sort_with_static_callback_binding(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     array: ValueId,
     callback_binding: StaticSortCallbackBinding,
+    sort_helper: &str,
 ) -> Result<()> {
     let callback_label = sort_callback_label_returning_int(ctx, &callback_binding)?;
     let env_bytes = reserve_static_callback_env(ctx, callback_binding.env_source)?;
@@ -281,7 +288,7 @@ pub(super) fn lower_user_sort_with_static_callback_binding(
     abi::emit_symbol_address(ctx.emitter, callback_arg_reg, &callback_label);
     ctx.load_value_to_reg(array, array_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, "__rt_usort");
+    abi::emit_call_label(ctx.emitter, sort_helper);
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
@@ -374,30 +381,63 @@ pub(super) fn move_sort_callback_int_result_to_first_arg(ctx: &mut FunctionConte
 }
 
 /// Calls the key-sort helper for array-like values.
+/// Direction of a PHP key sort (`ksort` versus `krsort`).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum KeySortOrder {
+    /// Ascending key order, as produced by `ksort()`.
+    Ascending,
+    /// Descending key order, as produced by `krsort()`.
+    Descending,
+}
+
+/// Lowers `ksort()` / `krsort()` for every receiver shape the backend can represent.
+///
+/// Hash-backed associative arrays are reordered by `__rt_hash_ksort` / `__rt_hash_krsort`,
+/// which relink the table's insertion-order chain and therefore keep each key attached to
+/// its own value. An indexed array stores its keys implicitly as slot positions `0..n-1`,
+/// which are already in ascending key order, so `ksort()` on one is a genuine no-op, as is
+/// either sort over a statically empty indexed array. `krsort()` over a non-empty indexed
+/// array is rejected instead of silently leaving the receiver untouched, because that
+/// storage has no room for a descending key order.
 pub(super) fn lower_array_key_sort(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
     name: &str,
-    helper: &str,
+    order: KeySortOrder,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, name, 1)?;
     let array = expect_operand(inst, 0)?;
-    require_array_key_sort_type(ctx.value_php_type(array)?, name)?;
-    match ctx.emitter.target.arch {
-        Arch::AArch64 => {
-            ctx.load_value_to_reg(array, "x0")?;
+    match ctx.value_php_type(array)?.codegen_repr() {
+        PhpType::AssocArray { .. } => {
+            let helper = match order {
+                KeySortOrder::Ascending => "__rt_hash_ksort",
+                KeySortOrder::Descending => "__rt_hash_krsort",
+            };
+            lower_hash_link_sort(ctx, inst, helper)
         }
-        Arch::X86_64 => {
-            ctx.load_value_to_reg(array, "rdi")?;
+        PhpType::Array(elem)
+            if order == KeySortOrder::Ascending
+                || matches!(elem.codegen_repr(), PhpType::Never | PhpType::Void) =>
+        {
+            abi::emit_load_int_immediate(
+                ctx.emitter,
+                abi::int_result_reg(ctx.emitter),
+                0x7fff_ffff_ffff_fffe,
+            );
+            store_if_result(ctx, inst)
         }
+        PhpType::Array(elem) => Err(CodegenIrError::unsupported(format!(
+            "{} for indexed array<{:?}>: an indexed array stores its keys as slot \
+             positions 0..n-1, so descending key order has no representation; convert the \
+             receiver to an associative array (for example with array_reverse($a, true)) \
+             before sorting it by key",
+            name, elem
+        ))),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP type {:?}",
+            name, other
+        ))),
     }
-    abi::emit_call_label(ctx.emitter, helper);
-    abi::emit_load_int_immediate(
-        ctx.emitter,
-        abi::int_result_reg(ctx.emitter),
-        0x7fff_ffff_ffff_fffe,
-    );
-    store_if_result(ctx, inst)
 }
 
 /// Returns the indexed-array element type accepted by the selected sort helper.
@@ -432,6 +472,10 @@ pub(super) fn indexed_sort_element_type(ty: PhpType, name: &str, allow_strings: 
 /// String elements are rejected here exactly as before — their multi-word
 /// descriptors are not permuted by the 8-byte slot sorter — so they keep
 /// producing a clear unsupported-feature error rather than a corrupt sort.
+/// String elements are 16-byte `[ptr][len]` descriptors, so they are routed to
+/// the dedicated `__rt_usort_str` slot permuter instead; only `usort` accepts
+/// them because it is the sort that renumbers keys, which an indexed array
+/// without key storage can represent exactly.
 pub(super) fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType> {
     match ty.codegen_repr() {
         PhpType::Array(elem) => {
@@ -443,7 +487,8 @@ pub(super) fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType>
                     | PhpType::Never
                     | PhpType::Mixed
                     | PhpType::Object(_)
-            ) {
+            ) || (elem == PhpType::Str && name == "usort")
+            {
                 return Ok(elem);
             }
             Err(CodegenIrError::unsupported(format!(
@@ -458,14 +503,17 @@ pub(super) fn user_sort_element_type(ty: PhpType, name: &str) -> Result<PhpType>
     }
 }
 
-/// Verifies key-sort helpers only receive array-like PHP values.
-pub(super) fn require_array_key_sort_type(ty: PhpType, name: &str) -> Result<()> {
-    match ty.codegen_repr() {
-        PhpType::Array(_) | PhpType::AssocArray { .. } => Ok(()),
-        other => Err(CodegenIrError::unsupported(format!(
-            "{} for PHP type {:?}",
-            name, other
-        ))),
+
+/// Returns the user-sort runtime helper matching an indexed array's slot width.
+///
+/// String elements occupy 16-byte `[ptr][len]` slots and must be permuted by
+/// `__rt_usort_str`; every other supported element kind is a single 8-byte
+/// payload handled by `__rt_usort`.
+fn user_sort_runtime_label(elem_ty: &PhpType) -> &'static str {
+    if elem_ty.codegen_repr() == PhpType::Str {
+        "__rt_usort_str"
+    } else {
+        "__rt_usort"
     }
 }
 
@@ -483,3 +531,10 @@ pub(super) fn ensure_unique_sort_source(ctx: &mut FunctionContext<'_>, array: Va
     ctx.store_result_value(array)
 }
 
+/// Splits a shared hash table before a sort helper relinks its iteration order in place.
+pub(super) fn ensure_unique_hash_sort_source(ctx: &mut FunctionContext<'_>, array: ValueId) -> Result<()> {
+    let array_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
+    ctx.load_value_to_reg(array, array_arg_reg)?;
+    abi::emit_call_label(ctx.emitter, "__rt_hash_ensure_unique");
+    ctx.store_result_value(array)
+}

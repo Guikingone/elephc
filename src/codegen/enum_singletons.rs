@@ -75,7 +75,7 @@ use crate::codegen::data_section::DataSection;
 use crate::codegen::emit::Emitter;
 use crate::codegen::platform::Arch;
 use crate::ir::Module;
-use crate::names::enum_case_symbol;
+use crate::names::{enum_case_symbol, join_php_symbol};
 use crate::types::{ClassInfo, EnumCaseInfo, EnumCaseValue, EnumInfo};
 
 use super::context::FunctionContext;
@@ -107,22 +107,18 @@ const X86_64_SAVED: [&str; 9] = [
 
 /// Returns the materializer symbol for one enum case of a PURE enum.
 ///
-/// Format: `_enum_init_<mangled_enum>_<mangled_case>`. Reuses `enum_case_symbol`'s
-/// mangling so the two symbols always agree on how a name was escaped.
+/// Format: `_enum_init_<enum>_<case>`. Uses the same injective `join_php_symbol()` encoding as
+/// `enum_case_symbol()` so the two symbols always agree on how a name was escaped.
 fn enum_case_init_symbol(enum_name: &str, case_name: &str) -> String {
-    format!("_enum_init{}", &enum_case_symbol(enum_name, case_name)[10..])
+    join_php_symbol("_enum_init", &[enum_name, case_name])
 }
 
 /// Returns the whole-enum materializer symbol used by BACKED enums.
 ///
-/// Format: `_enum_init_all_<mangled_enum>_<mangled_first_case>` — derived from the
-/// first case so it needs no separate mangling helper and cannot collide with a
-/// per-case symbol.
+/// Format: `_enum_init_all_<enum>_<first_case>` — derived from the first case so it needs no
+/// separate mangling helper and cannot collide with a per-case symbol.
 fn enum_init_all_symbol(enum_name: &str, first_case: &str) -> String {
-    format!(
-        "_enum_init_all{}",
-        &enum_case_symbol(enum_name, first_case)[10..]
-    )
+    join_php_symbol("_enum_init_all", &[enum_name, first_case])
 }
 
 /// Returns the materializer to call before reading `enum_name::case_name`, or
@@ -527,14 +523,14 @@ mod tests {
     #[test]
     fn materializer_symbols_track_the_slot_mangling() {
         let slot = enum_case_symbol("App\\Suit", "Hearts");
-        assert_eq!(slot, "_enum_case_App_N_Suit_Hearts");
+        assert_eq!(slot, "_enum_case___App_N_Suit___Hearts");
         assert_eq!(
             enum_case_init_symbol("App\\Suit", "Hearts"),
-            "_enum_init_App_N_Suit_Hearts"
+            "_enum_init___App_N_Suit___Hearts"
         );
         assert_eq!(
             enum_init_all_symbol("App\\Suit", "Hearts"),
-            "_enum_init_all_App_N_Suit_Hearts"
+            "_enum_init_all___App_N_Suit___Hearts"
         );
     }
 

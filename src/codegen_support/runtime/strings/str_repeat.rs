@@ -6,7 +6,11 @@
 //! - `crate::codegen_support::runtime::emitters::emit_runtime()` via `crate::codegen_support::runtime::strings`.
 //!
 //! Key details:
-//! - Large repeated strings fall back to heap storage so they cannot overrun the fixed concat scratch buffer.
+//! - `length * times` is computed with an overflow check (`umulh` / `imul`+`jo`); a wrapped
+//!   product reports PHP's allocation-overflow fatal instead of writing `times * length`
+//!   bytes into a destination sized by the wrapped value.
+//! - Storage comes from `__rt_concat_reserve`, so large repeated strings fall back to heap
+//!   storage instead of overrunning the fixed 64 KiB concat scratch buffer.
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
@@ -31,11 +35,12 @@ use crate::codegen_support::runtime::data::STR_REPEAT_TIMES_MSG;
 ///
 /// # Behavior
 /// - If `times == 0` or source length is 0, returns an empty string (null pointer, zero length).
-/// - If the repeated result fits within concat scratch (64 KiB), writes directly there and
-///   advances the concat scratch write offset.
-/// - If the result exceeds concat scratch capacity, allocates a heap buffer, stamps it as
-///   an owned string, and does NOT update concat scratch offset.
+/// - Sizes the result through `__rt_concat_reserve`: concat scratch while it fits within the
+///   64 KiB buffer, an owned heap allocation otherwise. `__rt_concat_publish` then advances
+///   the concat scratch offset only for scratch-backed results.
 /// - On negative repetition count, emits a fatal error message and terminates the process.
+/// - When `length * times` overflows a machine word, branches to `__rt_alloc_overflow` and
+///   terminates with PHP's "Possible integer overflow in memory allocation" fatal error.
 pub fn emit_str_repeat(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_str_repeat_linux_x86_64(emitter);
@@ -46,10 +51,10 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
     emitter.comment("--- runtime: str_repeat ---");
     emitter.label_global("__rt_str_repeat");
 
-    // -- set up stack frame (80 bytes) --
-    emitter.instruction("sub sp, sp, #80");                                     // allocate spill space for inputs, result metadata, and heap fallback state
-    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+    // -- set up stack frame (64 bytes) --
+    emitter.instruction("sub sp, sp, #64");                                     // allocate spill space for inputs and result metadata
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
     emitter.instruction("stp x1, x2, [sp]");                                    // save source pointer and length
     emitter.instruction("str x3, [sp, #16]");                                   // save repetition count
 
@@ -59,31 +64,15 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
     emitter.instruction("cbz x3, __rt_str_repeat_empty");                       // return the canonical empty string when no repetitions are requested
     emitter.instruction("cbz x2, __rt_str_repeat_empty");                       // return the canonical empty string when the source has no bytes
 
-    // -- choose concat scratch storage when the repeated result fits --
+    // -- size the result, rejecting a wrapped length * times product --
+    emitter.instruction("umulh x5, x2, x3");                                    // capture the high half of the length * repetition-count product
+    emitter.instruction("cbnz x5, __rt_str_repeat_size_overflow");              // a non-zero high half means the byte count cannot be represented
     emitter.instruction("mul x4, x2, x3");                                      // compute result length = source length * repetition count
     emitter.instruction("str x4, [sp, #24]");                                   // save result length for finalization
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // load current concat scratch write offset
-    emitter.instruction("add x5, x8, x4");                                      // compute concat scratch end offset after this append
-    emitter.instruction("mov x12, #65536");                                     // load concat scratch capacity in bytes
-    emitter.instruction("cmp x5, x12");                                         // does the repeated result fit in concat scratch storage?
-    emitter.instruction("b.hi __rt_str_repeat_heap");                           // use heap fallback when concat scratch would overflow
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x7", "_concat_buf");
-    emitter.instruction("add x9, x7, x8");                                      // compute concat scratch destination pointer
-    emitter.instruction("str x9, [sp, #32]");                                   // save result start pointer for the return pair
-    emitter.instruction("str xzr, [sp, #40]");                                  // mark result as concat-backed for final offset publication
-    emitter.instruction("b __rt_str_repeat_copy_start");                        // skip heap allocation when scratch storage is enough
-
-    // -- heap fallback for results that do not fit in concat scratch storage --
-    emitter.label("__rt_str_repeat_heap");
-    emitter.instruction("mov x0, x4");                                          // pass requested payload size to the heap allocator
-    emitter.instruction("bl __rt_heap_alloc");                                  // allocate owned storage for the repeated string payload
-    emitter.instruction("mov x6, #1");                                          // heap kind 1 = owned elephc string
-    emitter.instruction("str x6, [x0, #-8]");                                   // stamp the heap allocation as a string payload
-    emitter.instruction("mov x9, x0");                                          // initialize destination cursor at the heap payload start
+    emitter.instruction("mov x0, x4");                                          // request storage for the full repeated payload
+    emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage for the repeated string
     emitter.instruction("str x0, [sp, #32]");                                   // save result start pointer for the return pair
-    emitter.instruction("mov x13, #1");                                         // mark result as heap-backed so concat offset is left unchanged
-    emitter.instruction("str x13, [sp, #40]");                                  // save result storage kind for finalization
+    emitter.instruction("mov x9, x0");                                          // initialize the destination cursor at the reserved payload start
 
     // -- outer loop: repeat N times --
     emitter.label("__rt_str_repeat_copy_start");
@@ -108,12 +97,7 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
     emitter.label("__rt_str_repeat_done");
     emitter.instruction("ldr x1, [sp, #32]");                                   // return the repeated string pointer
     emitter.instruction("ldr x2, [sp, #24]");                                   // return the precomputed repeated string length
-    emitter.instruction("ldr x13, [sp, #40]");                                  // load storage kind: zero means concat-backed, one means heap-backed
-    emitter.instruction("cbnz x13, __rt_str_repeat_return");                    // heap-backed results do not advance concat scratch offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "x6", "_concat_off");
-    emitter.instruction("ldr x8, [x6]");                                        // reload current concat scratch write offset
-    emitter.instruction("add x8, x8, x2");                                      // advance concat scratch offset by the repeated string length
-    emitter.instruction("str x8, [x6]");                                        // publish updated concat scratch offset
+    emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("b __rt_str_repeat_return");                            // skip the empty-string return setup
 
     // -- empty result: return null pointer with zero length --
@@ -123,8 +107,8 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.label("__rt_str_repeat_return");
-    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #80");                                     // deallocate the repeat-helper stack frame
+    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #64");                                     // deallocate the repeat-helper stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // -- fatal error: negative repetition count --
@@ -135,14 +119,18 @@ pub fn emit_str_repeat(emitter: &mut Emitter) {
     emitter.syscall(4);
     emitter.instruction("mov x0, #1");                                          // exit code 1 for the negative-repeat abort path
     emitter.syscall(1);
+
+    // -- fatal error: length * times does not fit a machine word --
+    emitter.label("__rt_str_repeat_size_overflow");
+    emitter.instruction("b __rt_alloc_overflow");                               // unconditional branch keeps the fatal trampoline cross-atom safe
 }
 
 /// Emits the `__rt_str_repeat` runtime helper for repeating a string N times on Linux x86_64.
 ///
 /// Uses the standard x86_64 System V ABI: source string in `rax/rdx`, repetition count in `rdi`.
 /// Result is returned in `rax/rdx` (pointer/length). Behavior mirrors the ARM64 variant:
-/// concat scratch fallback when the result fits within 64 KiB, heap allocation otherwise,
-/// fatal error on negative repetition count.
+/// `__rt_concat_reserve` picks concat scratch or heap storage, `imul`+`jo` rejects a wrapped
+/// `length * times` product, and a negative repetition count is a fatal error.
 fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: str_repeat ---");
@@ -162,31 +150,15 @@ fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rdx, rdx");                                       // check whether the source string contains any bytes to repeat
     emitter.instruction("jz __rt_str_repeat_empty_linux_x86_64");               // return an empty string when the source payload is empty
 
-    // -- choose concat scratch storage when the repeated result fits --
+    // -- size the result, rejecting a wrapped length * times product --
     emitter.instruction("mov rcx, rdx");                                        // seed result length from the source string length
     emitter.instruction("imul rcx, rdi");                                       // compute result length = source length * repetition count
+    emitter.instruction("jo __rt_str_repeat_size_overflow_linux_x86_64");       // a wrapped product cannot describe the bytes the copy loop would write
     emitter.instruction("mov QWORD PTR [rbp - 32], rcx");                       // save result length for finalization
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // load current concat scratch write offset
-    emitter.instruction("mov rdx, r9");                                         // copy the current offset before adding the requested result length
-    emitter.instruction("add rdx, rcx");                                        // compute concat scratch end offset after this append
-    emitter.instruction("cmp rdx, 65536");                                      // does the repeated result fit in concat scratch storage?
-    emitter.instruction("ja __rt_str_repeat_heap_linux_x86_64");                // use heap fallback when concat scratch would overflow
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_buf");
-    emitter.instruction("lea r11, [r10 + r9]");                                 // compute concat scratch destination pointer
-    emitter.instruction("mov QWORD PTR [rbp - 40], r11");                       // preserve the repeated-string start pointer for the return pair
-    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // mark result as concat-backed for final offset publication
-    emitter.instruction("jmp __rt_str_repeat_copy_start_linux_x86_64");         // skip heap allocation when scratch storage is enough
-
-    // -- heap fallback for results that do not fit in concat scratch storage --
-    emitter.label("__rt_str_repeat_heap_linux_x86_64");
-    emitter.instruction("mov rax, rcx");                                        // pass requested payload size to the heap allocator
-    emitter.instruction("call __rt_heap_alloc");                                // allocate owned storage for the repeated string payload
-    emitter.instruction(&format!("mov r10, 0x{:x}", crate::codegen_support::sentinels::x86_64_heap_kind_word(1))); // materialize the owned-string heap kind word with the x86_64 heap marker
-    emitter.instruction("mov QWORD PTR [rax - 8], r10");                        // stamp the heap allocation as a string payload
+    emitter.instruction("mov rax, rcx");                                        // request storage for the full repeated payload
+    emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the repeated string
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // preserve the repeated-string start pointer for the return pair
-    emitter.instruction("mov r11, rax");                                        // initialize the heap destination cursor at the result payload start
-    emitter.instruction("mov QWORD PTR [rbp - 48], 1");                         // mark result as heap-backed so concat offset is left unchanged
+    emitter.instruction("mov r11, rax");                                        // initialize the destination cursor at the reserved payload start
 
     // -- outer loop: repeat N times --
     emitter.label("__rt_str_repeat_copy_start_linux_x86_64");
@@ -216,13 +188,7 @@ fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_str_repeat_done_linux_x86_64");
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the repeated string pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // return the precomputed repeated string length
-    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // load storage kind: zero means concat-backed, one means heap-backed
-    emitter.instruction("test r8, r8");                                         // check whether the repeated result used heap fallback
-    emitter.instruction("jnz __rt_str_repeat_return_linux_x86_64");             // heap-backed results do not advance concat scratch offset
-    crate::codegen_support::abi::emit_symbol_address(emitter, "r8", "_concat_off");
-    emitter.instruction("mov r9, QWORD PTR [r8]");                              // reload current concat scratch write offset
-    emitter.instruction("add r9, rdx");                                         // advance concat scratch offset by the repeated string length
-    emitter.instruction("mov QWORD PTR [r8], r9");                              // publish updated concat scratch offset
+    emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
     emitter.instruction("jmp __rt_str_repeat_return_linux_x86_64");             // skip the empty-string return setup
 
     // -- empty result: return null pointer with zero length --
@@ -245,4 +211,8 @@ fn emit_str_repeat_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov edi, 1");                                          // exit code 1 for the negative-repeat abort path
     emitter.instruction("mov eax, 231");                                        // Linux x86_64 syscall 231 = exit_group
     emitter.instruction("syscall");                                             // terminate the process after reporting the invalid repeat count
+
+    // -- fatal error: length * times does not fit a machine word --
+    emitter.label("__rt_str_repeat_size_overflow_linux_x86_64");
+    emitter.instruction("jmp __rt_alloc_overflow");                             // unconditional branch keeps the fatal trampoline reachable from every caller
 }

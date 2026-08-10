@@ -6,8 +6,8 @@
 //!
 //! Key details:
 //! - The declared signature carries the full golden param list (`separator`, `string`,
-//!   `limit`), but `max_args: 2` caps `check_arity` so a third argument is rejected,
-//!   matching the legacy CHECK arm which enforced exactly two arguments.
+//!   `limit`); `$limit` defaults to `PHP_INT_MAX`, which is how php-src spells "no limit",
+//!   so `RuntimeFnId::Explode` sees one uniform three-argument contract.
 //! - `check` returns `PhpType::Array(Box::new(PhpType::Str))`. A check hook is required
 //!   because the `builtin!` macro `returns:` field cannot express an array type inline.
 //!   Argument types are inferred by the common registry dispatch path before the hook
@@ -21,7 +21,6 @@ builtin! {
     name: "explode",
     area: String,
     params: [separator: Str, string: Str, limit: Int = DefaultSpec::IntMax],
-    max_args: 2,
     returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
@@ -35,7 +34,7 @@ builtin! {
 ///
 /// A check hook is required because the `builtin!` macro cannot express array return
 /// types inline. Argument types are inferred by the common registry dispatch path before
-/// this hook fires; arity (capped to 2 via `max_args`) is validated by the registry.
+/// this hook fires; arity is validated by the registry from the declared parameter list.
 fn check(_cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     Ok(PhpType::Array(Box::new(PhpType::Str)))
 }

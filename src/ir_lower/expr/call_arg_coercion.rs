@@ -47,6 +47,11 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     let Some((_, param_ty)) = sig.params.get(index) else {
         return value;
     };
+    // A by-reference parameter must receive the caller's storage, not a converted temporary,
+    // so declared-parameter scalar binding never applies to one. The checker keeps those on
+    // the strict path for the same reason.
+    let bindable = sig.declared_params.get(index).copied().unwrap_or(false)
+        && !sig.ref_params.get(index).copied().unwrap_or(false);
     let param_ty = param_ty.codegen_repr();
     if value.ir_type == IrType::I64 && param_ty == PhpType::Float {
         return coerce_to_float(ctx, value, arg);
@@ -55,7 +60,31 @@ pub(super) fn coerce_scalar_arg_to_param_storage(
     if param_ty == PhpType::Str && matches!(source_ty, PhpType::Mixed | PhpType::Union(_)) {
         return coerce_to_string(ctx, value, arg);
     }
+    if bindable {
+        if let Some(cast) = crate::types::param_binding::scalar_param_cast(&param_ty, &source_ty) {
+            return apply_scalar_param_cast(ctx, cast, value, Some(arg.span));
+        }
+    }
     value
+}
+
+/// Applies a declared-parameter scalar binding to an already-lowered argument value.
+///
+/// The conversion is the one elephc emits for the equivalent explicit cast, which is why the
+/// binding is expressed as a `CastType`: `(string)` and `(bool)` are total over the scalar
+/// sources `crate::types::param_binding` admits, so no runtime failure path is needed here.
+fn apply_scalar_param_cast(
+    ctx: &mut LoweringContext<'_, '_>,
+    cast: CastType,
+    value: LoweredValue,
+    span: Option<crate::span::Span>,
+) -> LoweredValue {
+    match cast {
+        CastType::String => coerce_to_string_at_span(ctx, value, span),
+        CastType::Bool => lower_truthy_bool(ctx, value, span),
+        // `param_binding::scalar_param_cast` only ever reports the two total scalar casts.
+        CastType::Int | CastType::Float | CastType::Array => value,
+    }
 }
 
 /// Normalizes reordered call operands to their declared scalar parameter storage.
@@ -95,6 +124,19 @@ pub(super) fn coerce_operands_to_params(
                 ir_type: ctx.builder.value_type(value),
             };
             operands[index] = coerce_to_string_at_span(ctx, lowered, None).value;
+        } else if sig.declared_params.get(index).copied().unwrap_or(false) {
+            // Same declared-parameter scalar binding the positional path applies, run here in
+            // parameter order because named and spread arguments are lowered in source order
+            // and only reordered afterwards.
+            if let Some(cast) =
+                crate::types::param_binding::scalar_param_cast(&param_ty, &operand_ty)
+            {
+                let lowered = LoweredValue {
+                    value,
+                    ir_type: ctx.builder.value_type(value),
+                };
+                operands[index] = apply_scalar_param_cast(ctx, cast, lowered, None).value;
+            }
         }
     }
     operands
@@ -193,6 +235,7 @@ pub(super) fn by_ref_array_arg_needs_mixed_storage(
 }
 
 /// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
+/// Lowers positional call arguments with omitted optional defaults and variadic tail packing.
 pub(super) fn lower_args_with_signature(
     ctx: &mut LoweringContext<'_, '_>,
     sig: Option<&FunctionSig>,
@@ -201,6 +244,8 @@ pub(super) fn lower_args_with_signature(
     let Some(sig) = sig else {
         return lower_args(ctx, args);
     };
+    let literal_bound = rewrite_literal_param_bindings(sig, args);
+    let args = literal_bound.as_deref().unwrap_or(args);
     if crate::types::call_args::has_named_args(args) {
         let operands = lower_named_args_with_signature(ctx, sig, args);
         return coerce_operands_to_params(ctx, sig, operands);

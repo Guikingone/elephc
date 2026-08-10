@@ -2,7 +2,7 @@
 title: "ob_get_clean() — internals"
 description: "Compiler internals for ob_get_clean(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 195
+  order: 202
 ---
 
 ## `ob_get_clean()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/ob_get_clean.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/ob_get_clean.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

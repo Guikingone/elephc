@@ -2,7 +2,7 @@
 title: "lchgrp() — internals"
 description: "Compiler internals for lchgrp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 135
+  order: 142
 ---
 
 ## `lchgrp()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/lchgrp.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/lchgrp.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

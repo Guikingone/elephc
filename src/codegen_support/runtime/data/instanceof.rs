@@ -102,7 +102,7 @@ pub(super) fn escaped_ascii(value: &str) -> String {
 /// - `\\` for backslash
 /// - `\"` for double quote
 /// - `\NNN` (3-digit octal) for any other byte, including null and high bytes
-pub(super) fn escaped_bytes(bytes: &[u8]) -> String {
+pub(crate) fn escaped_bytes(bytes: &[u8]) -> String {
     let mut escaped = String::new();
     for &byte in bytes {
         match byte {

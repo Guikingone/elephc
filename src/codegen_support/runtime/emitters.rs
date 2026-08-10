@@ -11,7 +11,10 @@
 mod managed;
 mod platform;
 
-use super::{callables, diagnostics, exceptions, generators, strings, system};
+use super::{
+    callables, diagnostics, exceptions, generators, numeric, round_mode, strings,
+    system,
+};
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::RuntimeFeatures;
 
@@ -23,22 +26,33 @@ use crate::codegen_support::RuntimeFeatures;
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     diagnostics::emit_diagnostics(emitter);
 
+    // Shared numeric coercions. Emitted first because string, array, and cast helpers all
+    // branch into `__rt_php_float_to_int` for PHP's float→int rules.
+    numeric::emit_php_float_to_int(emitter);
+    round_mode::emit_round_mode(emitter);
+
     // String runtime functions
+    strings::emit_concat_scratch(emitter);
     strings::emit_itoa(emitter);
     strings::emit_resource_to_string(emitter);
     strings::emit_resource_type_name(emitter);
     strings::emit_resource_write_stdout(emitter);
+    strings::emit_php_num_scan(emitter);
     strings::emit_ftoa(emitter);
+    strings::emit_ftoa_repr(emitter);
     strings::emit_concat(emitter);
     strings::emit_atoi(emitter);
     strings::emit_str_eq(emitter);
     strings::emit_str_to_number(emitter);
     strings::emit_str_looks_like_int_for_coercion(emitter);
     strings::emit_str_to_int(emitter);
+    strings::emit_str_to_int_base(emitter);
     strings::emit_str_loose_eq(emitter);
     strings::emit_number_format(emitter);
     strings::emit_strcopy(emitter);
     strings::emit_str_persist(emitter);
+    strings::emit_str_inc_dec(emitter);
+    strings::emit_mixed_inc_dec(emitter);
     strings::emit_strtolower(emitter);
     strings::emit_strtoupper(emitter);
     strings::emit_trim(emitter);
@@ -46,12 +60,16 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_rtrim(emitter);
     strings::emit_strpos(emitter);
     strings::emit_strrpos(emitter);
+    strings::emit_stripos(emitter);
+    strings::emit_strripos(emitter);
     strings::emit_str_repeat(emitter);
     strings::emit_strrev(emitter);
     strings::emit_grapheme_strrev(emitter);
     strings::emit_chr(emitter);
     strings::emit_strcmp(emitter);
     strings::emit_strcasecmp(emitter);
+    strings::emit_strncmp(emitter);
+    strings::emit_strncasecmp(emitter);
     strings::emit_str_starts_with(emitter);
     strings::emit_str_ends_with(emitter);
     strings::emit_str_replace(emitter);
@@ -62,13 +80,23 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_ucwords(emitter);
     strings::emit_str_ireplace(emitter);
     strings::emit_substr_replace(emitter);
+    strings::emit_substr_count(emitter);
     strings::emit_str_pad(emitter);
     strings::emit_str_split(emitter);
     strings::emit_addslashes(emitter);
     strings::emit_stripslashes(emitter);
     strings::emit_nl2br(emitter);
+    strings::emit_chunk_split(emitter);
+    strings::emit_quotemeta(emitter);
+    strings::emit_quoted_printable_encode(emitter);
+    strings::emit_str_word_count(emitter);
+    strings::emit_count_chars(emitter);
+    strings::emit_strtr(emitter);
     strings::emit_wordwrap(emitter);
     strings::emit_bin2hex(emitter);
+    strings::emit_dec_to_base(emitter);
+    strings::emit_base_to_number(emitter);
+    strings::emit_base_convert(emitter);
     strings::emit_long2ip(emitter);
     strings::emit_ip2long(emitter);
     strings::emit_inet_ntop(emitter);
@@ -159,6 +187,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
         system::emit_preg_split(emitter);
     }
     system::emit_match_unhandled(emitter);
+    system::emit_stack_limit_init(emitter);
+    system::emit_stack_overflow(emitter);
 
     // Exception runtime functions
     exceptions::emit_exception_cleanup_frames(emitter);

@@ -2,7 +2,7 @@
 title: "ptr_offset() — internals"
 description: "Compiler internals for ptr_offset(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 310
+  order: 325
 ---
 
 ## `ptr_offset()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_offset.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_offset.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

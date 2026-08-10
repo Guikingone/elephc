@@ -55,7 +55,12 @@ pub(super) fn lower_static_callable_call(
                 source_prefers_extension_builtin(&function_name),
             );
             let operands = lower_builtin_call_args(ctx, &function_name, sig.as_ref(), callback_args);
-            let php_type = call_return_type(ctx, &function_name, &operands);
+            let php_type = static_callable_builtin_result_type(
+                ctx,
+                &function_name,
+                &operands,
+                expr.span,
+            );
             Some(emit_builtin_call_value(
                 ctx,
                 &function_name,

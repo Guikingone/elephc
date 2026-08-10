@@ -16,10 +16,12 @@ use crate::types::date_constants::DATE_INT_CONSTANTS;
 use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
+use crate::types::math_constants::MATH_INT_CONSTANTS;
 use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
+use crate::types::string_constants::STRING_INT_CONSTANTS;
 use crate::types::PhpType;
 
 use super::super::Checker;
@@ -93,10 +95,16 @@ impl Checker {
         for (name, _value) in JSON_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
+        for (name, _value) in MATH_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
         for (name, _value) in OPENSSL_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in STREAM_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in STRING_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in PREG_INT_CONSTANTS {
@@ -141,6 +149,7 @@ impl Checker {
             callable_sigs: HashMap::new(),
             callable_param_names: HashSet::new(),
             callable_param_sigs: HashMap::new(),
+            strict_types: false,
             param_specialization_seen: HashSet::new(),
             callable_return_sigs: HashMap::new(),
             callable_array_return_sigs: HashMap::new(),
@@ -172,6 +181,10 @@ impl Checker {
             active_statics: HashSet::new(),
             foreach_key_locals: HashSet::new(),
             eval_barrier_active: false,
+            flow_typed_returns: HashMap::new(),
+            null_probe_scope_is_top_level: false,
+            pending_null_probe_roots: Vec::new(),
+            null_probe_depth: 0,
             break_continue_depth: 0,
             finally_break_continue_bases: Vec::new(),
             current_loop_storage_scope: "main".to_string(),
@@ -180,6 +193,7 @@ impl Checker {
             throw_access_sites: HashMap::new(),
             builtin_call_types: HashMap::new(),
             loop_storage_types: HashMap::new(),
+            string_incdec_locals: HashSet::new(),
         }
     }
 }

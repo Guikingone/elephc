@@ -71,6 +71,45 @@ pub(super) fn lower_static_defined_call(
     ))
 }
 
+/// Lowers `constant("NAME")` to exactly the EIR a bare `NAME` reference produces.
+///
+/// PHP's `constant()` performs a GLOBAL constant lookup: the name is already fully qualified,
+/// so no namespace/`use` resolution applies and a leading `\` is stripped. Reusing
+/// [`lower_const_ref`] means the call inherits the constant's real type and value — including
+/// the prescanned `define()` metadata recorded earlier in source order — instead of an opaque
+/// `mixed`. The checker (`crate::builtins::system::constant`) has already refused a dynamic
+/// name, a `Foo::BAR` class constant, and an unknown constant, so this hook only ever sees a
+/// resolvable global name.
+pub(super) fn lower_static_constant_call(
+    ctx: &mut LoweringContext<'_, '_>,
+    name: &Name,
+    args: &[Expr],
+    expr: &Expr,
+) -> Option<LoweredValue> {
+    if php_symbol_key(name.as_str().trim_start_matches('\\')) != "constant" || args.len() != 1 {
+        return None;
+    }
+    let constant_name = static_constant_name_arg(&args[0])?;
+    let referenced = Name::unqualified(constant_name.trim_start_matches('\\'));
+    Some(lower_const_ref(ctx, &referenced, expr))
+}
+
+/// Returns the literal constant name from `constant()`'s single argument.
+///
+/// Accepts the positional form and the `name:` named-argument form; every other shape (a
+/// runtime string, a spread) yields `None` so the caller falls back to the registry path,
+/// which the checker has already rejected.
+fn static_constant_name_arg(arg: &Expr) -> Option<&str> {
+    match &arg.kind {
+        ExprKind::StringLiteral(value) => Some(value.as_str()),
+        ExprKind::NamedArg { name, value } if name == "name" => match &value.kind {
+            ExprKind::StringLiteral(value) => Some(value.as_str()),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
 /// Lowers a constant reference through prescanned metadata or global storage fallback.
 pub(super) fn lower_const_ref(
     ctx: &mut LoweringContext<'_, '_>,

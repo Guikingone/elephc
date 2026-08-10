@@ -24,6 +24,30 @@ pub(super) use calls::{
     static_method_call_effect,
 };
 
+/// Returns true when a binary operator can raise a catchable PHP error at runtime.
+///
+/// PHP 8 arithmetic is not exception-free: `/` and `%` raise `DivisionByZeroError` for a zero
+/// divisor, and `<<` / `>>` raise `ArithmeticError` for a negative shift count. Reporting these
+/// as pure would let the try/catch DCE pass (`optimize::control::dce::tries`) drop the very
+/// `catch` clause that is supposed to observe them. A literal right operand that is provably
+/// safe keeps the expression pure so ordinary arithmetic is not pessimized.
+fn binary_op_may_throw(op: &BinOp, right: &Expr) -> bool {
+    match op {
+        BinOp::Div | BinOp::Mod => !matches!(
+            &right.kind,
+            ExprKind::IntLiteral(value) if *value != 0
+        ) && !matches!(
+            &right.kind,
+            ExprKind::FloatLiteral(value) if *value != 0.0
+        ),
+        BinOp::ShiftLeft | BinOp::ShiftRight => !matches!(
+            &right.kind,
+            ExprKind::IntLiteral(value) if *value >= 0
+        ),
+        _ => false,
+    }
+}
+
 /// Returns true if any statement in `stmts` may throw an exception.
 /// Shorthand for checking `block_effect(stmts).may_throw`.
 pub(super) fn block_may_throw(stmts: &[Stmt]) -> bool {
@@ -228,7 +252,14 @@ pub(super) fn expr_effect(expr: &Expr) -> Effect {
         ExprKind::Clone(inner) => expr_effect(inner)
             .with_side_effects()
             .with_may_throw(),
-        ExprKind::BinaryOp { left, right, .. } => expr_effect(left).combine(expr_effect(right)),
+        ExprKind::BinaryOp { left, op, right } => {
+            let operands = expr_effect(left).combine(expr_effect(right));
+            if binary_op_may_throw(op, right) {
+                operands.with_may_throw()
+            } else {
+                operands
+            }
+        }
         ExprKind::InstanceOf { value, target } => {
             expr_effect(value).combine(instanceof_target_effect(target))
         }

@@ -2,7 +2,7 @@
 title: "is_long() — internals"
 description: "Compiler internals for is_long(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 455
+  order: 482
 ---
 
 ## `is_long()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_long.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_long.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

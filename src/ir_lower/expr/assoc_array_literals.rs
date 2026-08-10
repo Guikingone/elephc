@@ -267,7 +267,7 @@ pub(super) fn nullsafe_method_call_expr_type_for_ir(
 }
 
 /// Merges associative-array value types for EIR storage metadata.
-pub(super) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
+pub(crate) fn merge_ir_assoc_value_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 

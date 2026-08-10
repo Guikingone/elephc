@@ -14,7 +14,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "eval scope get", 1)?;
+    super::super::ensure_arg_count(inst, "eval scope get", 1)?;
     let scope = expect_operand(inst, 0)?;
     let name = eval_scope_instruction_name(ctx, inst)?;
     abi::emit_reserve_temporary_stack(ctx.emitter, EVAL_STACK_BYTES);
@@ -31,7 +31,7 @@ pub(in crate::codegen::lower_inst::builtins) fn lower_eval_scope_set(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    super::ensure_arg_count(inst, "eval scope set", 2)?;
+    super::super::ensure_arg_count(inst, "eval scope set", 2)?;
     let scope = expect_operand(inst, 0)?;
     let value = expect_operand(inst, 1)?;
     let name = eval_scope_instruction_name(ctx, inst)?;

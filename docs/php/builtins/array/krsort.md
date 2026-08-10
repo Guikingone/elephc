@@ -2,7 +2,7 @@
 title: "krsort()"
 description: "Sorts an array by key in descending order."
 sidebar:
-  order: 53
+  order: 57
 ---
 
 ## krsort()

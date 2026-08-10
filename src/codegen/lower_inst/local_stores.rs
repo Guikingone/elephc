@@ -59,8 +59,23 @@ pub(super) fn instruction_for_value<'a>(
 pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let slot = expect_local_slot(inst)?;
     let value = expect_operand(inst, 0)?;
+    store_value_through_ref_cell_slot(ctx, slot, value, &inst.result_php_type)
+}
+
+/// Writes `value` into a ref-cell slot, picking the slot's active storage representation.
+///
+/// Shared with the mutating array builtins: a by-reference parameter is read with
+/// `load_ref_cell`, so a builtin that RELOCATES its receiver (any growth path that reaches
+/// `__rt_array_grow`) has to publish the new pointer through the same slot the value came from.
+/// Writing only the raw frame slot would leave the caller's variable pointing at freed storage.
+pub(super) fn store_value_through_ref_cell_slot(
+    ctx: &mut FunctionContext<'_>,
+    slot: LocalSlotId,
+    value: ValueId,
+    value_php_type: &PhpType,
+) -> Result<()> {
     if ctx.local_ref_cell_representation_is_definite(slot) {
-        return store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type);
+        return store_value_to_ref_cell_as(ctx, slot, value, value_php_type);
     }
     if !ctx.local_ref_cell_representation_is_dynamic(slot) {
         return ctx.store_value_to_raw_local(slot, value);
@@ -94,7 +109,7 @@ pub(super) fn lower_store_ref_cell(ctx: &mut FunctionContext<'_>, inst: &Instruc
         }
     }
     ctx.emitter.label(&ref_cell);
-    store_value_to_ref_cell_as(ctx, slot, value, &inst.result_php_type)?;
+    store_value_to_ref_cell_as(ctx, slot, value, value_php_type)?;
     ctx.emitter.label(&done);
     Ok(())
 }

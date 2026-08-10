@@ -2,7 +2,7 @@
 title: "usort() — internals"
 description: "Compiler internals for usort(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 63
+  order: 70
 ---
 
 ## `usort()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/usort.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/usort.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

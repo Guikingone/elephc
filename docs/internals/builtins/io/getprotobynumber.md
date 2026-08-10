@@ -2,7 +2,7 @@
 title: "getprotobynumber() — internals"
 description: "Compiler internals for getprotobynumber(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 187
+  order: 194
 ---
 
 ## `getprotobynumber()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/getprotobynumber.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/getprotobynumber.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

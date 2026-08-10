@@ -311,7 +311,7 @@ call sites so runtime opacity does not erase the explicit integer-domain proof.
 PHP cross-check (`ELEPHC_PHP_CHECK=1`) on the e2e fixtures that have pure PHP
 surface — optional but preferred for relational edge cases.
 
-## Documentation / roadmap / changelog
+## Documentation / roadmap
 
 When implementation lands (not in the plan-only PR):
 
@@ -319,9 +319,6 @@ When implementation lands (not in the plan-only PR):
   Pass 5; remove the matching bullet from "What the optimizer does not do yet".
 - `ROADMAP.md` — mark the Guard reasoning v2 item `[x]` with a one-line
   summary in the existing style.
-- `CHANGELOG.md` — one terse `[Unreleased]` bullet
-  (e.g. "DCE guard reasoning understands integer ranges and cross-variable
-  relational facts").
 - No new `examples/` program required unless an existing optimizer example
   naturally showcases it; this is an optimizer refinement, not a new language
   construct. Skip example creation unless a tiny readable demo fits an
@@ -458,12 +455,11 @@ fn swap_rel(op: RelOp) -> RelOp; // for operand swap normalization
 - [x] `cargo test --test codegen_tests range_guards` and
   `… relational_guards` PASS; commit `test(optimize): e2e coverage for guard reasoning v2`.
 
-### Task 8: Docs + ROADMAP + CHANGELOG
+### Task 8: Docs + ROADMAP
 
 **Files:**
 - Modify: `docs/internals/the-optimizer.md`
 - Modify: `ROADMAP.md` (Guard reasoning v2 → `[x]`)
-- Modify: `CHANGELOG.md` (`[Unreleased]`)
 
 - [x] Update; `git diff --check`; commit `docs: guard reasoning v2 internals and ROADMAP`.
 

@@ -331,15 +331,47 @@ pub(super) fn reflection_parameter_lowered_object_class_name(
 }
 
 /// Lowers PHP `new $class(...)` into the generic dynamic-new EIR opcode.
+///
+/// Arguments go through the same shared normalization as every other call surface first:
+/// statically-known spreads are flattened to positional/named arguments (`f(...[1, 2])`
+/// behaves like `f(1, 2)` and `f(...["a" => 1])` like `f(a: 1)`). The generic dynamic-new
+/// opcode passes operands straight through to a runtime class-name dispatch that matches
+/// candidates by exact constructor arity, so any call shape that needs per-class planning
+/// (named arguments, omitted optional parameters, runtime spreads) is lowered as an
+/// explicit class-name dispatch chain instead, where each branch constructs a fixed class
+/// through `lower_new_object` and therefore reuses `plan_call_args` in full.
 pub(super) fn lower_new_dynamic(
     ctx: &mut LoweringContext<'_, '_>,
     name_expr: &Expr,
     args: &[Expr],
     expr: &Expr,
 ) -> LoweredValue {
-    let mut operands = vec![lower_expr(ctx, name_expr).value];
-    let uses_runtime_arg_container = args.iter().any(is_spread_arg)
-        || crate::types::call_args::has_named_args(args);
+    let args = expand_static_call_spread_args(args);
+    if let Some(value) = lower_new_dynamic_planned_dispatch(ctx, name_expr, &args, expr) {
+        return value;
+    }
+    let name_value = lower_expr(ctx, name_expr);
+    lower_new_dynamic_generic(ctx, name_value, &args, expr)
+}
+
+/// Emits the generic runtime class-name dispatch for `new $class(...)`.
+///
+/// The class-name operand is already lowered so both the direct path and the
+/// planned-dispatch fallback branch can share it.
+///
+/// Static spread flattening and planned dispatch run before this, so most call shapes
+/// arrive as plain positional arguments. What survives both — a spread whose operand is
+/// only known at runtime, or named arguments the planner could not resolve to a class —
+/// is passed through the runtime argument container rather than dropped on the floor.
+fn lower_new_dynamic_generic(
+    ctx: &mut LoweringContext<'_, '_>,
+    name_value: LoweredValue,
+    args: &[Expr],
+    expr: &Expr,
+) -> LoweredValue {
+    let mut operands = vec![name_value.value];
+    let uses_runtime_arg_container =
+        args.iter().any(is_spread_arg) || crate::types::call_args::has_named_args(args);
     if uses_runtime_arg_container {
         let arg_container = lower_untyped_descriptor_invoker_arg_container(ctx, args, expr.span)
             .expect("dynamic constructor arguments always have a runtime container form");

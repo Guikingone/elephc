@@ -320,6 +320,13 @@ pub(super) fn emit_stdclass_get_call(
 }
 
 /// Lowers a static-name read from an undeclared property on an allow-dynamic class.
+///
+/// OWNERSHIP: the miss path boxes a FRESH null cell, so the caller owns and releases the
+/// result. `__rt_hash_get` only BORROWS the stored cell, so the hit path has to retain it
+/// to match — exactly what `__rt_stdclass_get` does for the same storage. Without the
+/// retain each read handed the caller a reference it did not own, and the caller's release
+/// eventually freed a live hash entry, after which further reads of that property answered
+/// `NULL` (a use-after-free of the removed cell).
 pub(super) fn lower_allow_dynamic_prop_get(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -341,6 +348,7 @@ pub(super) fn lower_allow_dynamic_prop_get(
             abi::emit_call_label(ctx.emitter, "__rt_hash_get");
             ctx.emitter.instruction(&format!("cbz x0, {}", miss_label));        // missing dynamic properties read as PHP null
             ctx.emitter.instruction("mov x0, x1");                              // return the boxed Mixed cell stored in the hash entry
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the null fallback after a successful dynamic-property hit
         }
         Arch::X86_64 => {
@@ -354,6 +362,7 @@ pub(super) fn lower_allow_dynamic_prop_get(
             ctx.emitter.instruction("test rax, rax");                           // check whether the dynamic-property key was present
             ctx.emitter.instruction(&format!("je {}", miss_label));             // missing dynamic properties read as PHP null
             ctx.emitter.instruction("mov rax, rdi");                            // return the boxed Mixed cell stored in the hash entry
+            abi::emit_incref_if_refcounted(ctx.emitter, &PhpType::Mixed);
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the null fallback after a successful dynamic-property hit
         }
     }

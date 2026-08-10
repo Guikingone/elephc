@@ -2,7 +2,7 @@
 title: "is_dir()"
 description: "Tells whether the filename is a directory."
 sidebar:
-  order: 128
+  order: 135
 ---
 
 ## is_dir()

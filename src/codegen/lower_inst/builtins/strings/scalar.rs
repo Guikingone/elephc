@@ -206,7 +206,7 @@ pub(super) fn load_as_float(ctx: &mut FunctionContext<'_>, value: ValueId, name:
 }
 
 /// Loads a concrete scalar value as an integer runtime argument.
-pub(in crate::codegen::lower_inst::builtins) fn load_as_int(
+pub(crate) fn load_as_int(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     name: &str,

@@ -9,6 +9,9 @@
 //! Key details:
 //! - Cached labels are global assembly entries emitted at their first call site.
 //! - Receiver-bearing descriptors cache only immutable templates; each call still captures its object.
+//! - Owns the module-wide assembly label counter. It must not be per function: the readable part
+//!   of a label is a lossy fragment of the PHP function/block name, so only a module-unique
+//!   trailing id keeps two functions with similar names from emitting the same label.
 
 use crate::codegen::callable_dispatch::{RuntimeCallableCase, RuntimeStaticMethodCallableCase};
 use crate::types::{FunctionSig, PhpType};
@@ -25,6 +28,7 @@ pub(crate) struct SharedCodegenState {
     runtime_callable_invokers: Vec<RuntimeCallableInvokerCacheEntry>,
     runtime_builtin_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
     runtime_extern_wrappers: Vec<RuntimeCallWrapperCacheEntry>,
+    label_counter: usize,
 }
 
 /// Reusable static descriptor template for one public instance method.
@@ -58,6 +62,17 @@ struct RuntimeCallWrapperCacheEntry {
 }
 
 impl SharedCodegenState {
+    /// Reserves the next module-unique assembly label id.
+    ///
+    /// Every generated local label ends in `_<id>` taken from this counter. Because the id is a
+    /// decimal run terminated by the preceding `_`, it is recoverable from the finished label,
+    /// which makes the whole label unique no matter how ambiguous its readable prefix is.
+    pub(super) fn next_label_id(&mut self) -> usize {
+        let id = self.label_counter;
+        self.label_counter += 1;
+        id
+    }
+
     /// Returns cached runtime string-callable cases for the requested specialization.
     pub(super) fn runtime_string_descriptor_cases(
         &self,

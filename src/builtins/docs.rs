@@ -146,6 +146,8 @@ fn semantics_json(semantics: BuiltinSemantics) -> Value {
         BuiltinArgumentLowering::PositionalRegex => "positional_regex",
         BuiltinArgumentLowering::UserValueSort => "user_value_sort",
         BuiltinArgumentLowering::OpensslEncrypt => "openssl_encrypt",
+        BuiltinArgumentLowering::ArraySplice => "array_splice",
+        BuiltinArgumentLowering::ArrayInternalPointer(_) => "array_internal_pointer",
     };
     let callable = match semantics.callable {
         BuiltinCallablePolicy::Dynamic(_) => json!({"kind": "dynamic"}),

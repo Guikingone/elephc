@@ -524,6 +524,7 @@ pub(crate) fn build_if_stmt(
                         },
                         span,
                         source_mode: crate::source::current_parse_mode(),
+                        strict_types: crate::source::current_strict_types(),
                         attributes: Vec::new(),
                     };
                 }
@@ -540,6 +541,7 @@ pub(crate) fn build_if_stmt(
         },
         span,
         source_mode: crate::source::current_parse_mode(),
+        strict_types: crate::source::current_strict_types(),
         attributes: Vec::new(),
     }
 }

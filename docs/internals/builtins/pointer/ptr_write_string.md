@@ -2,7 +2,7 @@
 title: "ptr_write_string() — internals"
 description: "Compiler internals for ptr_write_string(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 320
+  order: 335
 ---
 
 ## `ptr_write_string()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/pointers/ptr_write_string.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/pointers/ptr_write_string.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

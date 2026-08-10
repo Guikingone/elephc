@@ -115,12 +115,14 @@ pub(super) fn lower_yield_from_array(
         Some(span),
     );
     // Re-yield the inner key/value pair through the outer generator. The sent
-    // value is discarded (arrays ignore it), exactly like a `yield $k => $v;`
-    // statement.
+    // value is discarded (arrays ignore it). The `Immediate::Bool(true)` marks
+    // the yield as *delegated*: PHP forwards `yield from` keys verbatim, so an
+    // integer key from the inner array must not advance the outer generator's
+    // implicit-key counter (`yield from [7 => "x"]` leaves it where it was).
     ctx.emit_value(
         Op::GeneratorYield,
         vec![key.value, element.value],
-        None,
+        Some(Immediate::Bool(true)),
         PhpType::Mixed,
         Op::GeneratorYield.default_effects(),
         Some(span),

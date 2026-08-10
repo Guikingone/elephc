@@ -75,9 +75,9 @@ pub(super) fn load_binary_string_args(
     inst: &Instruction,
     name: &str,
 ) -> Result<()> {
-    if inst.operands.len() != 2 {
+    if inst.operands.len() < 2 || inst.operands.len() > 3 {
         return Err(CodegenIrError::invalid_module(format!(
-            "{} expected 2 args, got {}",
+            "{} expected 2 or 3 args, got {}",
             name,
             inst.operands.len()
         )));

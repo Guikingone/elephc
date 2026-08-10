@@ -20,7 +20,9 @@ use crate::codegen_support::platform::Arch;
 /// and null/unsupported (falsy). Calls `__rt_mixed_unbox` to拆box the input pointer.
 ///
 /// ABI: ARM64 — input boxed mixed pointer in `x0`, result boolean in `x0`.
-/// ABI: x86_64 — input boxed mixed pointer in `rdi`, result boolean in `rax`.
+/// ABI: x86_64 — input boxed mixed pointer in `rax`, result boolean in `rax`. The input
+/// register is `rax` and not the SysV first argument register because the boxed cell is
+/// forwarded untouched to `__rt_mixed_unbox`, which reads it from `rax`.
 pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_mixed_cast_bool_linux_x86_64(emitter);
@@ -105,9 +107,10 @@ pub fn emit_mixed_cast_bool(emitter: &mut Emitter) {
 }
 
 /// Emits the `__rt_mixed_cast_bool` runtime helper for the x86_64 Linux target.
-/// Mirrors the ARM64 logic with x86_64 SysV ABI register conventions:
-/// input boxed mixed pointer in `rdi`, result boolean in `rax`.
-/// Uses `__rt_mixed_unbox` to拆box the input before tag-based dispatch.
+/// Mirrors the ARM64 logic: input boxed mixed pointer in `rax`, result boolean in `rax`.
+/// The input arrives in `rax` rather than in `rdi` because it is passed straight through to
+/// `__rt_mixed_unbox`, whose x86_64 input register is `rax`; callers that also set `rdi`
+/// merely happen to leave `rax` live from `load_value_to_first_int_arg`.
 fn emit_mixed_cast_bool_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: mixed_cast_bool ---");

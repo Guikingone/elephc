@@ -2,7 +2,7 @@
 title: "gmmktime()"
 description: "Returns the Unix timestamp for a GMT date."
 sidebar:
-  order: 97
+  order: 104
 ---
 
 ## gmmktime()

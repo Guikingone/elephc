@@ -304,6 +304,8 @@ pub(super) fn lower_loose_eq(
     } else if loose_intish_comparable(&lhs_ty, &rhs_ty) {
         let compare_truthiness = lhs_ty == PhpType::Bool || rhs_ty == PhpType::Bool;
         emit_intish_compare(ctx, lhs, rhs, is_equal, compare_truthiness)?;
+    } else if runtime_loose_comparable(&lhs_ty) && runtime_loose_comparable(&rhs_ty) {
+        emit_mixed_loose_compare(ctx, lhs, &lhs_ty, rhs, &rhs_ty, is_equal)?;
     } else {
         return Err(CodegenIrError::unsupported(format!(
             "{} for PHP types {:?} and {:?}",
@@ -313,6 +315,70 @@ pub(super) fn lower_loose_eq(
         )));
     }
     store_if_result(ctx, inst)
+}
+
+/// Returns true when a PHP type can be boxed into a `Mixed` cell and handed to
+/// `__rt_mixed_loose_eq`, the runtime implementation of PHP's full `==` table.
+///
+/// Compiler-only storage (raw pointers, buffers, packed structs) has no PHP value
+/// identity, so those keep the "unsupported" diagnostic instead of silently
+/// comparing as integers.
+fn runtime_loose_comparable(ty: &PhpType) -> bool {
+    !matches!(
+        ty,
+        PhpType::Pointer(_) | PhpType::Buffer(_) | PhpType::Packed(_)
+    )
+}
+
+/// Emits PHP loose equality through `__rt_mixed_loose_eq` for operand pairs whose
+/// rule cannot be decided from the static types alone: object vs object, array vs
+/// array, array vs anything, and every combination involving a boxed `Mixed`.
+///
+/// Concrete operands are boxed into temporary `Mixed` cells first (the same
+/// protocol `emit_mixed_strict_compare` uses) and released afterwards; operands
+/// that already are `Mixed` are passed straight through and stay borrowed.
+fn emit_mixed_loose_compare(
+    ctx: &mut FunctionContext<'_>,
+    lhs: ValueId,
+    lhs_ty: &PhpType,
+    rhs: ValueId,
+    rhs_ty: &PhpType,
+    is_equal: bool,
+) -> Result<()> {
+    let left_box_temp = !is_mixed_like(lhs_ty);
+    let right_box_temp = !is_mixed_like(rhs_ty);
+    materialize_value_as_mixed(ctx, lhs, lhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    materialize_value_as_mixed(ctx, rhs, rhs_ty)?;
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x0", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "x1", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_loose_eq");
+            if !is_equal {
+                ctx.emitter.instruction("eor x0, x0, #1");                      // invert the mixed loose-equality result for !=
+            }
+        }
+        Arch::X86_64 => {
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rdi", 16);
+            abi::emit_load_temporary_stack_slot(ctx.emitter, "rsi", 0);
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_loose_eq");
+            if !is_equal {
+                ctx.emitter.instruction("xor rax, 1");                          // invert the mixed loose-equality result for !=
+            }
+        }
+    }
+    abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    if left_box_temp {
+        decref_mixed_temp_at(ctx, 32);
+    }
+    if right_box_temp {
+        decref_mixed_temp_at(ctx, 16);
+    }
+    abi::emit_pop_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    abi::emit_release_temporary_stack(ctx.emitter, 32);
+    Ok(())
 }
 
 /// Returns true when loose equality must compare a bool with a string by PHP truthiness.

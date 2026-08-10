@@ -2,7 +2,7 @@
 title: "array_intersect_key() — internals"
 description: "Compiler internals for array_intersect_key(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 16
+  order: 17
 ---
 
 ## `array_intersect_key()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_intersect_key.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_intersect_key.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

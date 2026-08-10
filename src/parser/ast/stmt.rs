@@ -25,6 +25,10 @@ pub struct Stmt {
     pub span: Span,
     /// Physical source profile retained after includes and autoloaded statements are merged.
     pub source_mode: crate::source::SourceMode,
+    /// Whether the physical file this statement was parsed from opened with
+    /// `declare(strict_types=1)`. Retained alongside `source_mode` because the directive is
+    /// per-file and the type checker only ever sees the merged program.
+    pub strict_types: bool,
     /// PHP attributes attached to this statement. Only populated for
     /// declaration kinds (`ClassDecl`, `FunctionDecl`, etc.); the parser
     /// rejects attributes on non-declaration statements.
@@ -38,6 +42,7 @@ impl Stmt {
             kind,
             span,
             source_mode: crate::source::current_parse_mode(),
+            strict_types: crate::source::current_strict_types(),
             attributes: Vec::new(),
         }
     }
@@ -52,7 +57,20 @@ impl Stmt {
             kind,
             span,
             source_mode: crate::source::current_parse_mode(),
+            strict_types: crate::source::current_strict_types(),
             attributes,
+        }
+    }
+
+    /// Returns the physical-file profile this statement was parsed under.
+    ///
+    /// Statement-rewriting passes install it with `crate::source::scoped_parse_mode` before
+    /// rebuilding a statement, so the replacement inherits the original file's language mode
+    /// *and* its `strict_types` state instead of the compiler-internal defaults.
+    pub fn profile(&self) -> crate::source::SourceProfile {
+        crate::source::SourceProfile {
+            mode: self.source_mode,
+            strict_types: self.strict_types,
         }
     }
 }

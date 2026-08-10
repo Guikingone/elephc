@@ -490,3 +490,51 @@ mod tests {
         );
     }
 }
+
+impl Checker {
+
+    /// Rejects `++` / `--` on a `string` local whose storage cannot be boxed to `Mixed`.
+    ///
+    /// The operator can retype its target (`"9"++` is `int(10)`), which elephc implements by
+    /// giving the local boxed `Mixed` frame storage. Two storage shapes cannot take that
+    /// contract: a by-reference parameter aliases a caller slot whose declared `string` type
+    /// the callee must not change, and a `static` local's initializer writes its symbol with
+    /// the declared `string` representation before any boxing store runs. Both are rejected
+    /// here so the program gets a source-level diagnostic instead of a backend error or a
+    /// silently wrong value.
+    fn reject_unboxable_string_incdec(
+        &self,
+        name: &str,
+        span: Span,
+    ) -> Result<(), CompileError> {
+        let storage = if self.active_ref_params.contains(name) {
+            "a by-reference parameter"
+        } else if self.active_statics.contains(name) {
+            "a static local"
+        } else {
+            return Ok(());
+        };
+        Err(CompileError::new(
+            span,
+            &format!(
+                "Cannot increment/decrement ${} of type string: it is {}, and PHP's string \
+                 increment can change the value's type (\"9\"++ is int(10)), which that \
+                 storage cannot hold. Copy it into a plain local first.",
+                name, storage
+            ),
+        ))
+    }
+
+    /// Records that `name` is a `string` local used as a `++` / `--` target in the
+    /// function-like scope currently being checked.
+    ///
+    /// EIR lowering reads this contract (through `CheckResult::string_incdec_locals`) and
+    /// gives the local boxed `Mixed` frame storage from its first store. Without it the
+    /// slot only widens at the increment, and every earlier or later `string`-typed read
+    /// of the same slot has to detach an owned copy out of the boxed cell — one leaked
+    /// heap block per executed read, unbounded inside a loop.
+    fn record_string_incdec_local(&mut self, name: &str) {
+        self.string_incdec_locals
+            .insert((self.current_loop_storage_scope.clone(), name.to_string()));
+    }
+}

@@ -631,6 +631,17 @@ pub(super) fn parse_named_expr(
     {
         return super::prefix::parse_legacy_array_literal(tokens, pos, span);
     }
+    // `buffer_new<>` lexes as the single `<>` token (PHP's `!=` alias).
+    if name.parts.len() == 1
+        && name.parts[0] == "buffer_new"
+        && *pos < tokens.len()
+        && tokens[*pos].0 == Token::LessGreater
+    {
+        return Err(CompileError::new(
+            span,
+            "Expected buffer element type after 'buffer_new<'",
+        ));
+    }
     if name.parts.len() == 1
         && name.parts[0] == "buffer_new"
         && *pos < tokens.len()
@@ -660,6 +671,18 @@ pub(super) fn parse_named_expr(
                 len: Box::new(len),
             },
             span,
+        ));
+    }
+    // `ptr_cast<>` lexes as the single `<>` token (PHP's `!=` alias), so the empty
+    // type list is recognized here to keep reporting the missing type name.
+    if name.parts.len() == 1
+        && name.parts[0] == "ptr_cast"
+        && *pos < tokens.len()
+        && tokens[*pos].0 == Token::LessGreater
+    {
+        return Err(CompileError::new(
+            span,
+            "Expected type name after 'ptr_cast<'",
         ));
     }
     if name.parts.len() == 1

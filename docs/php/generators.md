@@ -45,17 +45,42 @@ foreach (gen() as $k => $v) {
 // Prints: 0=a 1=b 2=c
 ```
 
-Explicit keys are passed through `=>`. Keys can be ints or string literals
-and do not bump the auto counter:
+Explicit keys are passed through `=>`. A generator tracks the largest
+*integer* key it has yielded so far (starting below 0), and every keyless
+`yield` emits the next one after it. So an explicit integer key greater than
+every integer key yielded so far pushes the counter, and the following
+keyless yields continue from `key + 1`:
+
+```php
+<?php
+function gen() {
+    yield 5 => "five";    // explicit key 5 — counter moves to 6
+    yield "six";          // auto-key 6
+    yield "seven";        // auto-key 7
+}
+```
+
+Explicit keys that are *not* integers (string, float, bool, null) are yielded
+unchanged — generators do not apply array key coercion — and leave the
+counter alone. An integer key at or below the largest one already used is
+also yielded unchanged without rewinding the counter:
 
 ```php
 <?php
 function gen() {
     yield "header";       // auto-key 0
-    yield "k" => 42;      // explicit key — counter unchanged
+    yield "k" => 42;      // string key — counter unchanged
+    yield 3.5 => "half";  // float key, stays a float — counter unchanged
     yield "footer";       // auto-key 1
+    yield 10 => "ten";    // counter moves to 11
+    yield 2 => "two";     // lower than 10 — counter unchanged
+    yield "tail";         // auto-key 11
 }
 ```
+
+The counter is a signed 64-bit value that wraps exactly like PHP's: a
+`PHP_INT_MAX` key followed by a keyless `yield` produces `PHP_INT_MIN`.
+Each generator instance owns its counter.
 
 ## yield from
 
@@ -89,13 +114,27 @@ foreach (outer() as $v) { echo $v . " "; }
 // Prints: 0 1 2 3 99
 ```
 
+`yield from` forwards the delegate's keys verbatim: it neither renumbers
+them nor advances the outer generator's auto-key counter, so the outer and
+inner keys can collide, exactly as in PHP:
+
+```php
+<?php
+function inner() { yield 100 => "i1"; yield "i2"; }
+function outer() { yield 3 => "o1"; yield from inner(); yield "o2"; }
+foreach (outer() as $k => $v) { echo "$k=$v "; }
+// Prints: 3=o1 100=i1 101=i2 4=o2
+```
+
 `yield from <generator>` is driven by the `__rt_gen_delegate` runtime
 helper, which runs on the outer generator's coroutine stack: it advances
 the inner generator, re-yields each inner key/value through the outer
 suspend boundary, forwards sent values into the inner generator, and
 returns the inner generator's `getReturn()`. `yield from <array>` is
-desugared into an iterator loop. Invalid non-generator, non-iterable
-delegates are rejected at type-check time.
+desugared into an iterator loop. Both delegation paths enter the suspend
+primitive through `__rt_gen_suspend_delegated`, the entry point that skips
+the auto-key bookkeeping. Invalid non-generator, non-iterable delegates are
+rejected at type-check time.
 
 Like PHP, `yield from` also evaluates to the delegated generator's
 terminal `return` value, so the outer generator can capture and yield or
@@ -416,14 +455,18 @@ symbols:
   into the body's parameter registers, runs the body, and parks the body's
   return value in the `return_value` slot.
 
-Each `yield` lowers to `__rt_gen_suspend(key, value)`, which records the
-boxed key/value into the generator's `last_key`/`last_value` slots and then
+Each `yield` lowers to `__rt_gen_suspend(key, value)`, which applies the
+auto-key bookkeeping (a NULL key consumes the counter; an explicit integer
+key above the largest one used pushes it to `key + 1`), records the boxed
+key/value into the generator's `last_key`/`last_value` slots, and then
 suspends the coroutine. Because the suspend boundary re-raises a scheduled
 exception **inside** the coroutine's own stack, `Generator::throw()` lands
 in a `try`/`catch` inside the body. `yield from <generator>` is driven by
 `__rt_gen_delegate`, which forwards sent values into the inner generator and
 returns its `getReturn()`; `yield from <array>` is desugared into an
-iterator loop that re-yields each entry.
+iterator loop that re-yields each entry. Both enter the suspend primitive at
+`__rt_gen_suspend_delegated`, which stores the forwarded key without
+touching the counter.
 
 The synthetic `Generator` class has no PHP body — its method dispatch is
 intercepted in the codegen and routed directly to the `__rt_gen_*`

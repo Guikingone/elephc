@@ -2,7 +2,7 @@
 title: "is_infinite() — internals"
 description: "Compiler internals for is_infinite(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 271
+  order: 284
 ---
 
 ## `is_infinite()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/types/is_infinite.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/types/is_infinite.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

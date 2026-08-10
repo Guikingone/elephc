@@ -8,6 +8,7 @@
 //! - Preserves callback ABI, target parity, array storage, and ownership contracts.
 
 use super::*;
+use crate::codegen::lower_inst::receiver_place::ReceiverPlace;
 
 /// Lowers `array_reduce()` through the callback-driven runtime helper.
 pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
@@ -15,10 +16,10 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
     let array = expect_operand(inst, 0)?;
     let callback = expect_operand(inst, 1)?;
     let initial = expect_operand(inst, 2)?;
-    let elem_ty =
-        eight_byte_callback_array_element_type(ctx.value_php_type(array)?, "array_reduce")?;
+    let elem_ty = array_reduce_callback_array_element_type(ctx.value_php_type(array)?)?;
     let initial_ty =
         eight_byte_callback_value_type(ctx.value_php_type(initial)?, "array_reduce initial")?;
+    let reduce_helper = array_reduce_runtime_label(&elem_ty);
     match ctx.value_php_type(callback)?.codegen_repr() {
         PhpType::Callable => {
             lower_descriptor_callback_runtime(
@@ -35,7 +36,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     ctx.load_value_to_reg(initial, initial_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_array_reduce");
+                    abi::emit_call_label(ctx.emitter, reduce_helper);
                     Ok(())
                 },
             )?;
@@ -50,7 +51,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
                 Some(&PhpType::Array(Box::new(elem_ty.clone()))),
                 vec![initial_ty.clone(), elem_ty.clone()],
                 PhpType::Int,
-                super::super::super::instruction_strict_php_profile(inst),
+                super::super::instruction_strict_php_profile(inst),
                 "array_reduce",
                 |ctx, wrapper_label, env_bytes| {
                     let callback_arg_reg = abi::int_arg_reg_name(ctx.emitter.target, 0);
@@ -61,7 +62,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
                     ctx.load_value_to_reg(array, array_arg_reg)?;
                     ctx.load_value_to_reg(initial, initial_arg_reg)?;
                     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-                    abi::emit_call_label(ctx.emitter, "__rt_array_reduce");
+                    abi::emit_call_label(ctx.emitter, reduce_helper);
                     Ok(())
                 },
             )?;
@@ -86,7 +87,7 @@ pub(crate) fn lower_array_reduce(ctx: &mut FunctionContext<'_>, inst: &Instructi
     ctx.load_value_to_reg(array, array_arg_reg)?;
     ctx.load_value_to_reg(initial, initial_arg_reg)?;
     load_static_callback_env_arg(ctx, env_arg_reg, env_bytes);
-    abi::emit_call_label(ctx.emitter, "__rt_array_reduce");
+    abi::emit_call_label(ctx.emitter, reduce_helper);
     if env_bytes != 0 {
         abi::emit_release_temporary_stack(ctx.emitter, env_bytes);
     }
@@ -228,9 +229,25 @@ pub(crate) fn lower_array_intersect_key(
 }
 
 /// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
+///
+/// PHP's `bool $preserve_keys = false` keeps the source integer keys of the selected window
+/// instead of renumbering it from zero. A dense indexed array cannot hold a window that does not
+/// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
+/// owned hash. The checker guarantees the flag is a literal (it decides the result's static
+/// shape), so a non-literal operand can only mean the checker and the backend disagree.
+/// Lowers `array_slice()` for indexed arrays with pointer-sized payload slots.
+///
+/// PHP's `bool $preserve_keys = false` keeps the source integer keys of the selected window
+/// instead of renumbering it from zero. A dense indexed array cannot hold a window that does not
+/// start at key 0, so the key-preserving form lowers to `__rt_array_slice_to_hash`, which builds an
+/// owned hash. The checker guarantees the flag is a literal (it decides the result's static
+/// shape), so a non-literal operand can only mean the checker and the backend disagree.
 pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "array_slice", 2, 3)?;
+    ensure_arg_count_between(inst, "array_slice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
+    if slice_like_preserve_keys(ctx, inst, "array_slice")? {
+        return lower_array_slice_preserve_keys(ctx, inst, array);
+    }
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
         PhpType::Mixed | PhpType::Union(_)
@@ -238,11 +255,7 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
         return lower_mixed_array_slice(ctx, inst);
     }
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
-        Some(expect_operand(inst, 2)?)
-    } else {
-        None
-    };
+    let length = slice_like_length_operand(inst)?;
     let source_elem_ty = array_slice_source_element_type(ctx.value_php_type(array)?)?;
     let result_elem_ty =
         result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
@@ -256,11 +269,7 @@ pub(crate) fn lower_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instructio
 pub(super) fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
-        Some(expect_operand(inst, 2)?)
-    } else {
-        None
-    };
+    let length = slice_like_length_operand(inst)?;
     let result_elem_ty =
         result_array_element_type("array_slice", &inst.result_php_type.codegen_repr())?;
     require_array_slice_result_type(&PhpType::Mixed, &result_elem_ty)?;
@@ -273,8 +282,13 @@ pub(super) fn lower_mixed_array_slice(ctx: &mut FunctionContext<'_>, inst: &Inst
 }
 
 /// Lowers `array_splice()` by mutating an indexed source array and returning removed elements.
+///
+/// PHP's optional `$replacement` is written into the gap the removal opened, which can make the
+/// source array longer than it was. `__rt_array_splice_insert*` grows the payload for that, and a
+/// growth relocates the array, so the by-reference receiver is written back a second time after
+/// the insertion rather than only after the copy-on-write split.
 pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count_between(inst, "array_splice", 2, 3)?;
+    ensure_arg_count_between(inst, "array_splice", 2, 4)?;
     let array = expect_operand(inst, 0)?;
     if matches!(
         ctx.value_php_type(array)?.codegen_repr(),
@@ -283,18 +297,16 @@ pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instructi
         return lower_mixed_array_splice(ctx, inst);
     }
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
-        Some(expect_operand(inst, 2)?)
-    } else {
-        None
-    };
+    let length = inst.operands.get(2).copied();
     let elem_ty = array_pop_element_type(ctx.value_php_type(array)?)?;
-    let source_local = source_load_local_slot(ctx, array)?;
+    let replacement =
+        SpliceReplacement::resolve(ctx, inst.operands.get(3).copied(), &elem_ty)?;
+    let receiver_ty = ctx.value_php_type(array)?;
+    let receiver = ReceiverPlace::resolve(ctx, array)?;
     ensure_unique_array_pop_source(ctx, array)?;
-    if let Some(slot) = source_local {
-        ctx.store_value_to_local(slot, array)?;
-    }
+    receiver.store_back(ctx, array, &receiver_ty)?;
     lower_array_splice_call(ctx, array, offset, length, &elem_ty)?;
+    emit_splice_replacement_insert(ctx, array, receiver, &receiver_ty, &replacement, &elem_ty)?;
     normalize_array_splice_result(ctx, &elem_ty, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
@@ -303,16 +315,17 @@ pub(crate) fn lower_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instructi
 pub(super) fn lower_mixed_array_splice(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     let array = expect_operand(inst, 0)?;
     let offset = expect_operand(inst, 1)?;
-    let length = if inst.operands.len() == 3 {
-        Some(expect_operand(inst, 2)?)
-    } else {
-        None
-    };
+    let length = inst.operands.get(2).copied();
+    let replacement =
+        SpliceReplacement::resolve(ctx, inst.operands.get(3).copied(), &PhpType::Mixed)?;
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_mixed_array_splice_aarch64(ctx, array, offset, length)?,
-        Arch::X86_64 => lower_mixed_array_splice_x86_64(ctx, array, offset, length)?,
+        Arch::AArch64 => {
+            lower_mixed_array_splice_aarch64(ctx, array, offset, length, &replacement)?
+        }
+        Arch::X86_64 => {
+            lower_mixed_array_splice_x86_64(ctx, array, offset, length, &replacement)?
+        }
     }
     normalize_array_splice_result(ctx, &PhpType::Mixed, &inst.result_php_type.codegen_repr())?;
     store_if_result(ctx, inst)
 }
-

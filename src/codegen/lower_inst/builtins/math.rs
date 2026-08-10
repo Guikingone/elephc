@@ -22,6 +22,7 @@ use super::{expect_operand, store_if_result};
 
 mod binary;
 mod libm;
+mod min_max_array;
 mod random;
 
 pub(crate) use binary::{lower_fdiv, lower_fmod, lower_intdiv, lower_pow};
@@ -48,18 +49,14 @@ pub(crate) fn lower_abs(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Re
             emit_float_abs(ctx);
             PhpType::Float
         }
-        PhpType::Int | PhpType::Bool => {
-            emit_int_abs(ctx);
-            PhpType::Int
-        }
+        PhpType::Int | PhpType::Bool => emit_int_abs_for_result(ctx, inst)?,
         PhpType::Mixed | PhpType::Union(_) => {
             abi::emit_call_label(ctx.emitter, "__rt_abs_mixed");
             PhpType::Mixed
         }
         PhpType::TaggedScalar => {
             crate::codegen::sentinels::emit_tagged_scalar_to_int_null_as_zero(ctx.emitter);
-            emit_int_abs(ctx);
-            PhpType::Int
+            emit_int_abs_for_result(ctx, inst)?
         }
         PhpType::Void | PhpType::Never => {
             abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
@@ -217,6 +214,9 @@ pub(crate) fn lower_round(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 }
 
 /// Lowers numeric `min()` and `max()` over concrete integer-like or float operands.
+///
+/// PHP's one-argument form reduces a single array instead of comparing arguments,
+/// so it is routed to the dedicated array reduction before the variadic paths.
 pub(crate) fn lower_min_max(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -227,6 +227,9 @@ pub(crate) fn lower_min_max(
             "{} expected at least 1 arg, got 0",
             min_max_name(want_max)
         )));
+    }
+    if min_max_array::try_lower_single_array(ctx, inst, want_max)? {
+        return store_if_result(ctx, inst);
     }
     let result_ty = inst
         .result
@@ -792,6 +795,56 @@ fn emit_float_abs(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("movq xmm0, r10");                          // restore the absolute floating-point payload to the result register
         }
     }
+}
+
+/// Emits `abs()` for an integer operand already loaded in the integer result register.
+///
+/// Returns the PHP type actually materialized so the caller knows whether a boxing step is
+/// still required. When the EIR result type is `Mixed`, the overflowing input is honoured the
+/// way reference PHP does it: `abs(PHP_INT_MIN)` has no `int` value, so PHP returns
+/// `float(9.2233720368547758E+18)`. `abs($x)` for a negative `$x` is exactly `0 - $x`, so the
+/// existing checked-subtraction helper produces the boxed `int`-or-promoted-`float` result
+/// with the same overflow rule as `$a - $b`. Non-negative inputs never overflow and are boxed
+/// as plain integers.
+fn emit_int_abs_for_result(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+) -> Result<PhpType> {
+    if !matches!(
+        inst.result_php_type.codegen_repr(),
+        PhpType::Mixed | PhpType::Union(_)
+    ) {
+        emit_int_abs(ctx);
+        return Ok(PhpType::Int);
+    }
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let negative_label = ctx.next_label("abs_negative");
+    let done_label = ctx.next_label("abs_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("tbnz {}, #63, {}", result_reg, negative_label)); // negative inputs need the overflow-checked negation
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction(&format!("test {}, {}", result_reg, result_reg)); // inspect the sign of the integer operand
+            ctx.emitter.instruction(&format!("js {}", negative_label));         // negative inputs need the overflow-checked negation
+        }
+    }
+    crate::codegen::emit_box_current_value_as_mixed(ctx.emitter, &PhpType::Int);
+    abi::emit_jump(ctx.emitter, &done_label);
+    ctx.emitter.label(&negative_label);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, x0");                              // pass the negative operand as the checked-subtraction right operand
+            ctx.emitter.instruction("mov x0, #0");                              // abs(x) for x < 0 is 0 - x
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the negative operand as the checked-subtraction right operand
+            ctx.emitter.instruction("mov rdi, 0");                              // abs(x) for x < 0 is 0 - x
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_int_sub_checked");
+    ctx.emitter.label(&done_label);
+    Ok(PhpType::Mixed)
 }
 
 /// Emits absolute value for the loaded integer result.

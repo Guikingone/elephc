@@ -7,9 +7,14 @@
 //!
 //! Key details:
 //! - Buffer helpers enforce extension ownership rules, including live headers, bounds checks, and fatal paths before unsafe access.
+//! - `len * stride` is validated before allocating: an unchecked product wraps to a tiny block while
+//!   the header still advertises the pre-overflow length, and `buffer[i]` bounds checks trust that
+//!   header, so every in-"bounds" index past the real block would read and write foreign memory.
 
+use crate::codegen_support::abi;
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::platform::Arch;
+use crate::codegen_support::runtime::data::BUFFER_ALLOC_SIZE_MSG;
 
 /// Emits the `__rt_buffer_new` runtime helper for the current target.
 ///
@@ -29,6 +34,10 @@ use crate::codegen_support::platform::Arch;
 ///   - header[0..8]   = logical element count (set from input x0/rdi)
 ///   - header[8..16]  = element stride in bytes (set from input x1/rsi)
 ///   - header[16..]   = zero-initialized payload region (len * stride bytes)
+///
+/// Rejects negative lengths and any `len * stride + 16` that does not fit in a non-negative
+/// machine word by terminating through `__rt_buffer_new_size_fail`, so the stored header length
+/// always describes memory the buffer actually owns.
 pub fn emit_buffer_new(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_buffer_new_linux_x86_64(emitter);
@@ -46,9 +55,18 @@ pub fn emit_buffer_new(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #0]");                                    // save requested logical length
     emitter.instruction("str x1, [sp, #8]");                                    // save requested element stride
 
+    // -- reject negative lengths and unrepresentable payload sizes --
+    emitter.instruction("cmp x0, #0");                                          // is the requested logical length negative?
+    emitter.instruction("b.lt __rt_buffer_new_size_fail");                      // reject negative buffer lengths outright
+    emitter.instruction("umulh x9, x0, x1");                                    // x9 = high 64 bits of len * stride
+    emitter.instruction("cbnz x9, __rt_buffer_new_size_fail");                  // reject payload sizes that do not fit in one machine word
+    emitter.instruction("mul x9, x0, x1");                                      // x9 = low 64 bits of len * stride
+    emitter.instruction("adds x9, x9, #16");                                    // x9 = payload size plus the 16-byte buffer header
+    emitter.instruction("b.hs __rt_buffer_new_size_fail");                      // reject totals that carried out of the machine word
+    emitter.instruction("tbnz x9, #63, __rt_buffer_new_size_fail");             // reject totals the signed heap-size check would read as negative
+
     // -- allocate header + contiguous payload --
-    emitter.instruction("mul x2, x0, x1");                                      // compute payload byte count = len * stride
-    emitter.instruction("add x0, x2, #16");                                     // add the 16-byte buffer header
+    emitter.instruction("mov x0, x9");                                          // x0 = validated payload byte count plus the buffer header
     emitter.instruction("bl __rt_heap_alloc");                                  // allocate the full buffer payload on the shared heap
 
     // -- initialize header fields --
@@ -74,10 +92,23 @@ pub fn emit_buffer_new(emitter: &mut Emitter) {
     emitter.instruction("ldp x29, x30, [sp, #16]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the temporary frame
     emitter.instruction("ret");                                                 // return x0 = buffer header pointer
+
+    // -- fatal error: requested buffer length cannot be represented --
+    emitter.label("__rt_buffer_new_size_fail");
+    emitter.instruction("mov x0, #2");                                          // fd = stderr
+    abi::emit_symbol_address(emitter, "x1", "_buffer_alloc_size_msg");
+    emitter.instruction(&format!("mov x2, #{}", BUFFER_ALLOC_SIZE_MSG.len()));  // pass the exact buffer-length diagnostic byte count
+    emitter.syscall(4);
+    emitter.instruction("mov x0, #1");                                          // exit code 1
+    emitter.syscall(1);
 }
 
 /// Emits the `__rt_buffer_new` runtime helper for the x86_64 Linux target.
 /// Private; dispatcher lives in `emit_buffer_new`.
+///
+/// Applies the same length validation as the ARM64 path: negative lengths and any
+/// `len * stride + 16` that does not fit in a non-negative machine word terminate the process
+/// through `__rt_buffer_new_size_fail`.
 fn emit_buffer_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: buffer_new ---");
@@ -90,9 +121,15 @@ fn emit_buffer_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 8], rax");                        // save the requested logical length across the nested heap allocation call
     emitter.instruction("mov QWORD PTR [rbp - 16], rdi");                       // save the requested element stride across the nested heap allocation call
 
+    // -- reject negative lengths and unrepresentable payload sizes --
+    emitter.instruction("test rax, rax");                                       // is the requested logical length negative?
+    emitter.instruction("js __rt_buffer_new_size_fail");                        // reject negative buffer lengths outright
+
     // -- allocate header + contiguous payload --
     emitter.instruction("imul rax, rdi");                                       // compute payload byte count = len * stride in the x86_64 heap-allocation size register
+    emitter.instruction("jo __rt_buffer_new_size_fail");                        // reject payload sizes that do not fit in one machine word
     emitter.instruction("add rax, 16");                                         // add the 16-byte buffer header before requesting the backing allocation
+    emitter.instruction("jo __rt_buffer_new_size_fail");                        // reject totals the signed heap-size accounting would read as negative
     emitter.instruction("call __rt_heap_alloc");                                // allocate the buffer header plus contiguous payload through the shared x86_64 heap wrapper
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the allocated buffer header pointer while materializing the header fields
 
@@ -121,4 +158,15 @@ fn emit_buffer_new_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the temporary spill slots reserved for buffer_new
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer before returning to generated code
     emitter.instruction("ret");                                                 // return rax = buffer header pointer
+
+    // -- fatal error: requested buffer length cannot be represented --
+    emitter.label("__rt_buffer_new_size_fail");
+    emitter.instruction("mov edi, 2");                                          // fd = stderr for the buffer-length fatal error message
+    abi::emit_symbol_address(emitter, "rsi", "_buffer_alloc_size_msg");
+    emitter.instruction(&format!("mov edx, {}", BUFFER_ALLOC_SIZE_MSG.len()));  // pass the exact buffer-length diagnostic byte count
+    emitter.instruction("mov eax, 1");                                          // Linux x86_64 syscall 1 = write
+    emitter.instruction("syscall");                                             // print the fatal buffer-length message to stderr
+    emitter.instruction("mov edi, 1");                                          // exit code 1 for an unrepresentable buffer length
+    emitter.instruction("mov eax, 60");                                         // Linux x86_64 syscall 60 = exit
+    emitter.instruction("syscall");                                             // terminate the process after reporting the buffer-length failure
 }

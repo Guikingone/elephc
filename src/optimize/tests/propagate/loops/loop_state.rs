@@ -14,7 +14,7 @@ use super::*;
 /// through the loop when the loop contains a `switch` that could theoretically
 /// skip iterations. The variable `base` is assigned 2 outside the loop and
 /// never modified inside the loop body (which contains a switch on the loop
-/// index). After constant propagation, `base ^ 3` must be folded to `8.0`.
+/// index). After constant propagation, `base ^ 3` must be folded to `8`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_switch() {
     let program = vec![
@@ -54,7 +54,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_switch(
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -62,7 +62,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_switch(
 /// through the loop when the loop body contains a `try` statement. The variable
 /// `base` is assigned 2 outside the loop and never modified inside the loop body
 /// (which contains a try/catch on the loop index). After constant propagation,
-/// `base ^ 3` must be folded to `8.0`.
+/// `base ^ 3` must be folded to `8`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_try() {
     let program = vec![
@@ -100,7 +100,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_try() {
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -108,7 +108,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_with_try() {
 /// through the loops when the inner loop contains local statements. The variable
 /// `base` is assigned 2 before the outer for loop and never modified inside either
 /// loop (which modifies loop indices `i` and `j`). After constant propagation,
-/// `base ^ 3` must be folded to `8.0`.
+/// `base ^ 3` must be folded to `8`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_nested_loops() {
     let program = vec![
@@ -158,7 +158,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_nested_loops() {
 
     assert_eq!(
         propagated[3],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -167,7 +167,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_nested_loops() {
 /// (`items`). The variable `base` is assigned 2 outside the loop and never modified.
 /// The loop body performs `ArrayPush` and `ArrayAssign` on `items`, which must not
 /// be treated as modifications of `base`. After constant propagation, `base ^ 3`
-/// must be folded to `8.0`.
+/// must be folded to `8`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_loop_local_array_writes() {
     let program = vec![
@@ -210,7 +210,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_local_array_
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }
 
@@ -219,7 +219,7 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_local_array_
 /// (`box`). The variable `base` is assigned 2 outside the loop and never modified.
 /// The loop body performs `PropertyAssign`, `PropertyArrayPush`, and
 /// `PropertyArrayAssign` on `$box->...`, which must not be treated as modifications
-/// of `base`. After constant propagation, `base ^ 3` must be folded to `8.0`.
+/// of `base`. After constant propagation, `base ^ 3` must be folded to `8`.
 #[test]
 fn test_propagate_constants_preserves_unmodified_scalar_across_loop_property_writes() {
     let program = vec![
@@ -272,6 +272,6 @@ fn test_propagate_constants_preserves_unmodified_scalar_across_loop_property_wri
 
     assert_eq!(
         propagated[2],
-        Stmt::echo(Expr::new(ExprKind::FloatLiteral(8.0), Span::dummy()))
+        Stmt::echo(Expr::int_lit(8))
     );
 }

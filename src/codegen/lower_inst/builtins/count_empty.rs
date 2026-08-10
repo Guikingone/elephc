@@ -16,9 +16,13 @@ use super::*;
 /// (delegates to `__rt_mixed_count`), and Countable Object (calls the object's `count`
 /// method via intrinsic or dynamic dispatch).
 pub(crate) fn lower_count(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    ensure_arg_count(inst, "count", 1)?;
+    ensure_arg_count_between(inst, "count", 1, 2)?;
     let value = expect_operand(inst, 0)?;
     let ty = ctx.value_php_type(value)?.codegen_repr();
+    if inst.operands.len() == 2 {
+        require_recursive_count_is_flat(&ty)?;
+        emit_count_mode_guard(ctx, expect_operand(inst, 1)?)?;
+    }
     match ty {
         PhpType::Array(_) | PhpType::AssocArray { .. } => {
             ctx.load_value_to_result(value)?;
@@ -280,3 +284,79 @@ pub(in crate::codegen::lower_inst) fn invert_bool_result(ctx: &mut FunctionConte
     }
 }
 
+/// php-src's verbatim `ValueError` wording for an unknown `count()` mode.
+const COUNT_MODE_MESSAGE: &str =
+    "count(): Argument #2 ($mode) must be either COUNT_NORMAL or COUNT_RECURSIVE";
+
+/// Materializes `count()`'s `$mode` and raises PHP's `ValueError` for anything else.
+///
+/// PHP accepts only `COUNT_NORMAL` (`0`) and `COUNT_RECURSIVE` (`1`) and raises a catchable
+/// `ValueError` otherwise, so the guard runs before the receiver is even loaded. `$mode` can be
+/// a runtime value, which is why the check is emitted here instead of in the checker.
+fn emit_count_mode_guard(ctx: &mut FunctionContext<'_>, mode: ValueId) -> Result<()> {
+    match ctx.load_value_to_result(mode)?.codegen_repr() {
+        PhpType::Int | PhpType::Bool => {}
+        PhpType::Void | PhpType::Never => {
+            abi::emit_load_int_immediate(ctx.emitter, abi::int_result_reg(ctx.emitter), 0);
+        }
+        PhpType::Float => abi::emit_float_result_to_int_result(ctx.emitter),
+        PhpType::Mixed | PhpType::Union(_) => {
+            load_value_to_first_int_arg(ctx, mode)?;
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_cast_int");
+        }
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "count mode for PHP type {:?}",
+                other
+            )))
+        }
+    }
+    let mode_reg = abi::int_result_reg(ctx.emitter);
+    super::exceptions::emit_value_error_unless(
+        ctx,
+        super::exceptions::ValueGuard::SignedInRange(mode_reg, 0, 1),
+        COUNT_MODE_MESSAGE,
+    );
+    Ok(())
+}
+
+/// Rejects a `count($value, $mode)` receiver whose `COUNT_RECURSIVE` total is not the flat count.
+///
+/// `COUNT_RECURSIVE` adds the size of every nested array, so it only equals the flat count when
+/// the receiver provably cannot hold one. elephc's INDEXED arrays store their payload untagged
+/// (`[length][capacity][elem_size][elements...]`), so a runtime walk cannot tell an
+/// `array<int>` slot from an `array<array<int>>` slot; recursing anyway would either read
+/// integers as pointers or silently undercount. Until the array header carries an element tag,
+/// a receiver that CAN nest is refused with an explicit diagnostic instead.
+fn require_recursive_count_is_flat(ty: &PhpType) -> Result<()> {
+    let element = match ty {
+        PhpType::Array(elem) => elem.codegen_repr(),
+        PhpType::AssocArray { value, .. } => value.codegen_repr(),
+        // php-src ignores `$mode` entirely for Countable objects: it calls `count()` and
+        // returns that value, so every object receiver is already exact.
+        PhpType::Object(_) => return Ok(()),
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "count() with an explicit $mode for PHP type {:?} (COUNT_RECURSIVE needs a \
+                 statically known element type)",
+                other
+            )))
+        }
+    };
+    if matches!(
+        element,
+        PhpType::Array(_)
+            | PhpType::AssocArray { .. }
+            | PhpType::Mixed
+            | PhpType::Union(_)
+            | PhpType::Iterable
+            | PhpType::Object(_)
+    ) {
+        return Err(CodegenIrError::unsupported(format!(
+            "count() with an explicit $mode over an array of {:?} (COUNT_RECURSIVE over nested \
+             containers needs a runtime element tag in the array header)",
+            element
+        )));
+    }
+    Ok(())
+}

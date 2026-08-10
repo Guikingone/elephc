@@ -2,7 +2,7 @@
 title: "array_diff_assoc()"
 description: "Computes the difference of arrays with additional index check."
 sidebar:
-  order: 7
+  order: 8
 ---
 
 ## array_diff_assoc()

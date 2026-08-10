@@ -272,6 +272,95 @@ fn test_error_named_arguments_reject_spread_after_named() {
     );
 }
 
+/// Verifies that a *static string-keyed* unpack after a named argument is
+/// rejected as well. PHP raises "Cannot use argument unpacking after named
+/// arguments" while compiling the call, so the shape is illegal even though the
+/// unpacked keys are statically known and would otherwise be rewritten into
+/// named arguments before planning.
+#[test]
+fn test_error_named_arguments_reject_static_assoc_spread_after_named() {
+    expect_error(
+        "<?php function greet($name, $age = 0) { echo $name; } greet(name: \"Alice\", ...[\"age\" => 30]);",
+        "Function 'greet' cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches instance method calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_method() {
+    expect_error(
+        "<?php class C { function m($a, $b = 0) { echo $a; } } (new C)->m(a: 1, ...[\"b\" => 2]);",
+        "Method C::m cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches static method calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_static_method() {
+    expect_error(
+        "<?php class C { static function m($a, $b = 0) { echo $a; } } C::m(a: 1, ...[\"b\" => 2]);",
+        "Static method C::m cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches constructor calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_constructor() {
+    expect_error(
+        "<?php class C { function __construct($a, $b = 0) { echo $a; } } new C(a: 1, ...[\"b\" => 2]);",
+        "Constructor 'C::__construct' cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches builtin calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_builtin() {
+    expect_error(
+        "<?php echo str_pad(string: \"x\", ...[\"length\" => 3]);",
+        "Builtin 'str_pad' cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches closure calls.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_closure() {
+    expect_error(
+        "<?php $f = function ($a, $b = 0) { echo $a; }; $f(a: 1, ...[\"b\" => 2]);",
+        "callable $f cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule reaches first-class callables.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_first_class_callable() {
+    expect_error(
+        "<?php function f($a, $b = 0) { echo $a; } $c = f(...); $c(a: 1, ...[\"b\" => 2]);",
+        "first-class callable cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule still applies when the callee is a
+/// string callable resolved at run time, where no signature is available to plan
+/// against. PHP rejects the shape syntactically, so the callee being unknown is
+/// not an excuse to accept it.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_string_callable() {
+    expect_error(
+        "<?php function f($a, $b = 0) { echo $a; } $c = \"f\"; $c(a: 1, ...[\"b\" => 2]);",
+        "callable $c cannot use argument unpacking after named arguments",
+    );
+}
+
+/// Verifies that the unpack-after-named rule still applies to `new $class(...)`,
+/// where the constructor is not resolvable at compile time.
+#[test]
+fn test_error_named_arguments_reject_spread_after_named_on_dynamic_constructor() {
+    expect_error(
+        "<?php class C { function __construct($a, $b = 0) { echo $a; } } $k = \"C\"; new $k(a: 1, ...[\"b\" => 2]);",
+        "Dynamic constructor cannot use argument unpacking after named arguments",
+    );
+}
+
 /// Verifies that even when a spread provides positional arguments, named arguments
 /// are still processed, and a missing required parameter is still reported.
 #[test]

@@ -2,7 +2,7 @@
 title: "array_slice() — internals"
 description: "Compiler internals for array_slice(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 37
+  order: 38
 ---
 
 ## `array_slice()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/array/array_slice.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/array/array_slice.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 
@@ -24,7 +24,7 @@ sidebar:
 
 - **Target strategy**: `runtime_call`
 - **Validation**: `checker_hook`
-- **Result type source**: `shared`
+- **Result type source**: `checked`
 - **Result ownership**: `fresh`
 - **Effects**: `static (0 declared effects)`
 - **Requirements**: `static (0 requirements)`
@@ -39,12 +39,12 @@ sidebar:
 ## Signature summary
 
 ```php
-function array_slice(array $array, int $offset, int $length = null): array
+function array_slice(array $array, int $offset, int $length = null, bool $preserve_keys = false): array
 ```
 
 ## What the type checker enforces
 
-- **Arity**: takes 2–3 arguments (1 optional).
+- **Arity**: takes 2–4 arguments (2 optional).
 
 ## Eval interpreter (magician)
 

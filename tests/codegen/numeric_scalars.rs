@@ -440,3 +440,94 @@ fn test_float_separator_exponent_echo() {
     let out = compile_and_run("<?php echo 1e1_0;");
     assert_eq!(out, "10000000000");
 }
+
+// --- PHP float rendering: precision=14 vs serialize_precision=-1 ---
+
+/// Verifies `echo` of a RUNTIME float reproduces PHP's default `precision = 14`
+/// `zend_gcvt` layout, which C's `%.14G` does not: exponential form always keeps a
+/// mantissa fraction (`1.0E+300`, never `1E+300`) and the exponent is written without
+/// zero padding (`1.0E-7`, never `1E-07`). Multiplying by `$argc` keeps every value on
+/// the runtime path instead of the constant folder. Covers integral floats across
+/// magnitudes, the plain/exponential thresholds, a subnormal, `DBL_MAX`, `-0.0` and the
+/// three non-finite spellings.
+#[test]
+fn test_echo_float_uses_php_precision_14_gcvt_layout() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+$vals = [1e300, 1.0e-10, 0.0000001, 1e14, 1e13, 0.0001, 0.00001, 1.0, 100.0, 1.5, 3.14159265358979, -0.0, 4.9e-324, 1.7976931348623157e308, -1.5e-8, INF, -INF, NAN];
+foreach ($vals as $v) { echo $v * $n, "|"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "1.0E+300|1.0E-10|1.0E-7|1.0E+14|10000000000000|0.0001|1.0E-5|1|100|1.5|3.1415926535898|-0|4.9406564584125E-324|1.7976931348623E+308|-1.5E-8|INF|-INF|NAN|"
+    );
+}
+
+/// Verifies `var_dump()` of a RUNTIME float uses PHP's `serialize_precision = -1`
+/// rendering — the shortest decimal string that round-trips back to the same `double` —
+/// and prefers plain notation over a much wider range than `echo` does (`float(1e16)` is
+/// `10000000000000000`, `float(1e17)` is `1.0E+17`). Includes the 17-significant-digit
+/// cases, a value whose shortest digits must be zero-padded rather than expanded exactly
+/// (`39528480211503570`, not `39528480211503568`), a subnormal, `-0.0`, the non-finite
+/// spellings, and floats nested inside an array.
+#[test]
+fn test_var_dump_float_uses_serialize_precision_shortest_round_trip() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+$vals = [1e15, 1e16, 1e17, 9223372036854775808.0, 0.30000000000000004, 1.0, 100.0, -0.0, 4.9e-324, 12345678901234567.0, 39528480211503568.0, 1e20, 1e21, 0.0001, 0.00001, 0.6666666666666666, INF, -INF, NAN];
+foreach ($vals as $v) { var_dump($v * $n); }
+var_dump([1e15 * $n, -0.0 * $n]);
+"#,
+    );
+    assert_eq!(
+        out,
+        "float(1000000000000000)\nfloat(10000000000000000)\nfloat(1.0E+17)\nfloat(9.223372036854776E+18)\nfloat(0.30000000000000004)\nfloat(1)\nfloat(100)\nfloat(-0)\nfloat(5.0E-324)\nfloat(12345678901234568)\nfloat(39528480211503570)\nfloat(1.0E+20)\nfloat(1.0E+21)\nfloat(0.0001)\nfloat(1.0E-5)\nfloat(0.6666666666666666)\nfloat(INF)\nfloat(-INF)\nfloat(NAN)\narray(2) {\n  [0]=>\n  float(1000000000000000)\n  [1]=>\n  float(-0)\n}\n"
+    );
+}
+
+/// Verifies `var_dump()` and `var_export()` agree on the same float rendering: both
+/// implement `serialize_precision = -1`, one in the runtime (`__rt_ftoa_repr`) and one in
+/// the injected elephc-PHP prelude, so a divergence between them is a real bug. The only
+/// intended difference is `var_export`'s `.0` suffix on integer-valued floats.
+#[test]
+fn test_var_dump_and_var_export_float_rendering_agree() {
+    let out = compile_and_run(
+        r#"<?php
+$n = $argc;
+foreach ([1e15, 1e17, 0.1, 9223372036854775808.0, 39528480211503568.0] as $v) {
+    var_dump($v * $n);
+    var_export($v * $n);
+    echo "\n";
+}
+"#,
+    );
+    assert_eq!(
+        out,
+        "float(1000000000000000)\n1000000000000000.0\nfloat(1.0E+17)\n1.0E+17\nfloat(0.1)\n0.1\nfloat(9.223372036854776E+18)\n9.223372036854776E+18\nfloat(39528480211503570)\n39528480211503570.0\n"
+    );
+}
+
+/// Verifies floats stored in object properties render through the same two rules:
+/// `print_r()` uses the `precision = 14` form (`1.0E+17`, `0.3`) while `var_dump()` uses
+/// the shortest round-trip form (`float(0.30000000000000004)`, `float(1000000000000000)`),
+/// including `-0.0`. `* $argc` keeps the two rewritten properties off the folder.
+#[test]
+fn test_object_property_floats_use_both_php_float_rules() {
+    let out = compile_and_run(
+        r#"<?php
+class Holder { public float $big = 1e17; public float $eps = 0.30000000000000004; public float $flat = 1e15; public float $neg = -0.0; }
+$h = new Holder();
+$h->big = $h->big * $argc;
+$h->flat = $h->flat * $argc;
+print_r($h);
+foreach ([$h->big, $h->eps, $h->flat, $h->neg] as $v) { var_dump($v); }
+"#,
+    );
+    assert_eq!(
+        out,
+        "Holder Object\n(\n    [big] => 1.0E+17\n    [eps] => 0.3\n    [flat] => 1.0E+15\n    [neg] => -0\n)\nfloat(1.0E+17)\nfloat(0.30000000000000004)\nfloat(1000000000000000)\nfloat(-0)\n"
+    );
+}

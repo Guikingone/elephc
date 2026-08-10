@@ -2,7 +2,7 @@
 title: "array_uintersect()"
 description: "Computes the intersection of arrays using a callback comparator."
 sidebar:
-  order: 41
+  order: 42
 ---
 
 ## array_uintersect()

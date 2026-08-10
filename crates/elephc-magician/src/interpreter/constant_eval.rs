@@ -104,8 +104,15 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "ARRAY_FILTER_USE_VALUE" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_VALUE)),
         "ARRAY_FILTER_USE_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_BOTH)),
         "ARRAY_FILTER_USE_KEY" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_KEY)),
+        "STR_PAD_LEFT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_LEFT)),
+        "STR_PAD_RIGHT" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_RIGHT)),
+        "STR_PAD_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_STR_PAD_BOTH)),
         "COUNT_NORMAL" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_NORMAL)),
         "COUNT_RECURSIVE" => Some(EvalPredefinedConstant::Int(EVAL_COUNT_RECURSIVE)),
+        "PHP_ROUND_HALF_UP" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_UP)),
+        "PHP_ROUND_HALF_DOWN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_DOWN)),
+        "PHP_ROUND_HALF_EVEN" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_EVEN)),
+        "PHP_ROUND_HALF_ODD" => Some(EvalPredefinedConstant::Int(EVAL_PHP_ROUND_HALF_ODD)),
         "PREG_SPLIT_NO_EMPTY" => Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_NO_EMPTY)),
         "PREG_SPLIT_DELIM_CAPTURE" => {
             Some(EvalPredefinedConstant::Int(EVAL_PREG_SPLIT_DELIM_CAPTURE))

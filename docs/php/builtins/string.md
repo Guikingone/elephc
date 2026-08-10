@@ -10,11 +10,13 @@ sidebar:
 | Function | Signature | Returns | AOT | eval() |
 |---|---|---|:-:|:-:|
 | [`addslashes()`](./string/addslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
-| [`base64_decode()`](./string/base64_decode.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`base64_decode()`](./string/base64_decode.md) | `(string $string, bool $strict = false): mixed` | `mixed` | ✓ | ✓ |
 | [`base64_encode()`](./string/base64_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`bin2hex()`](./string/bin2hex.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`chop()`](./string/chop.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`chr()`](./string/chr.md) | `(int $codepoint): string` | `string` | ✓ | ✓ |
+| [`chunk_split()`](./string/chunk_split.md) | `(string $string, int $length = 76, string $separator = '\r\n'): string` | `string` | ✓ | ✓ |
+| [`count_chars()`](./string/count_chars.md) | `(string $string, int $mode = 0): array|string` | `array|string` | ✓ | ✓ |
 | [`crc32()`](./string/crc32.md) | `(string $string): int` | `int` | ✓ | ✓ |
 | [`explode()`](./string/explode.md) | `(string $separator, string $string, int $limit = PHP_INT_MAX): array` | `array` | ✓ | ✓ |
 | [`grapheme_strrev()`](./string/grapheme_strrev.md) | `(string $string): mixed` | `mixed` | ✓ | ✓ |
@@ -38,6 +40,7 @@ sidebar:
 | [`inet_ntop()`](./string/inet_ntop.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`inet_pton()`](./string/inet_pton.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
 | [`ip2long()`](./string/ip2long.md) | `(string $ip): mixed` | `mixed` | ✓ | ✓ |
+| [`join()`](./string/join.md) | `(mixed $separator, mixed $array = null): string` | `string` | ✓ | — |
 | [`lcfirst()`](./string/lcfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`long2ip()`](./string/long2ip.md) | `(int $ip): string` | `string` | ✓ | ✓ |
 | [`ltrim()`](./string/ltrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
@@ -52,6 +55,8 @@ sidebar:
 | [`ord()`](./string/ord.md) | `(string $character): int` | `int` | ✓ | ✓ |
 | [`parse_url()`](./string/parse_url.md) | `(string $url, int $component = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`printf()`](./string/printf.md) | `(string $format, ...$values): int` | `int` | ✓ | ✓ |
+| [`quoted_printable_encode()`](./string/quoted_printable_encode.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`quotemeta()`](./string/quotemeta.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurldecode()`](./string/rawurldecode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rawurlencode()`](./string/rawurlencode.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`rtrim()`](./string/rtrim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
@@ -66,17 +71,24 @@ sidebar:
 | [`str_replace()`](./string/str_replace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
 | [`str_split()`](./string/str_split.md) | `(string $string, int $length = 1): array` | `array` | ✓ | ✓ |
 | [`str_starts_with()`](./string/str_starts_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
+| [`str_word_count()`](./string/str_word_count.md) | `(string $string, int $format = 0, string $characters = null): array|int` | `array|int` | ✓ | ✓ |
 | [`strcasecmp()`](./string/strcasecmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
 | [`strcmp()`](./string/strcmp.md) | `(string $string1, string $string2): int` | `int` | ✓ | ✓ |
+| [`stripos()`](./string/stripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`stripslashes()`](./string/stripslashes.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strlen()`](./string/strlen.md) | `(string $string): int` | `int` | ✓ | ✓ |
+| [`strncasecmp()`](./string/strncasecmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
+| [`strncmp()`](./string/strncmp.md) | `(string $string1, string $string2, int $length): int` | `int` | ✓ | — |
 | [`strpos()`](./string/strpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrev()`](./string/strrev.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`strripos()`](./string/strripos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strrpos()`](./string/strrpos.md) | `(string $haystack, string $needle, int $offset = 0): mixed` | `mixed` | ✓ | ✓ |
 | [`strstr()`](./string/strstr.md) | `(string $haystack, string $needle, bool $before_needle = false): mixed` | `mixed` | ✓ | ✓ |
 | [`strtolower()`](./string/strtolower.md) | `(string $string): string` | `string` | ✓ | ✓ |
 | [`strtoupper()`](./string/strtoupper.md) | `(string $string): string` | `string` | ✓ | ✓ |
+| [`strtr()`](./string/strtr.md) | `(string $string, array|string $from, string $to = null): string` | `string` | ✓ | ✓ |
 | [`substr()`](./string/substr.md) | `(string $string, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
+| [`substr_count()`](./string/substr_count.md) | `(string $haystack, string $needle, int $offset = 0, mixed $length = null): int` | `int` | ✓ | — |
 | [`substr_replace()`](./string/substr_replace.md) | `(string $string, string $replace, int $offset, int $length = null): string` | `string` | ✓ | ✓ |
 | [`trim()`](./string/trim.md) | `(string $string, string $characters = ' \n\r\t\x0b\x0c\x00'): string` | `string` | ✓ | ✓ |
 | [`ucfirst()`](./string/ucfirst.md) | `(string $string): string` | `string` | ✓ | ✓ |

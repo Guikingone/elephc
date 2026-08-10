@@ -2,7 +2,7 @@
 title: "opendir() — internals"
 description: "Compiler internals for opendir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 204
+  order: 211
 ---
 
 ## `opendir()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/opendir.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/opendir.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:450](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L450) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -477,7 +477,7 @@ pub(super) fn materializable_array_element_type(return_type: PhpType) -> Option<
 }
 
 /// Returns the EIR array storage metadata type, preserving PHP resources.
-pub(super) fn ir_array_storage_type(php_type: PhpType) -> PhpType {
+pub(crate) fn ir_array_storage_type(php_type: PhpType) -> PhpType {
     let php_type = normalize_value_php_type(php_type);
     if matches!(php_type, PhpType::Resource(_)) {
         php_type
@@ -487,7 +487,7 @@ pub(super) fn ir_array_storage_type(php_type: PhpType) -> PhpType {
 }
 
 /// Merges indexed-array element types for EIR storage metadata.
-pub(super) fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
+pub(crate) fn merge_ir_indexed_element_type(left: PhpType, right: PhpType) -> PhpType {
     ir_array_storage_type(PhpType::widen_array_branch_element(left, right))
 }
 

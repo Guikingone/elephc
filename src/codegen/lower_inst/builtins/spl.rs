@@ -16,7 +16,7 @@ use crate::codegen::{
 use crate::codegen::platform::Arch;
 use crate::codegen::{CodegenIrError, Result};
 use crate::ir::{BlockId, Immediate, Instruction, Op, ValueDef, ValueId};
-use crate::names::function_symbol;
+use crate::names::{function_symbol, label_fragment};
 use crate::types::PhpType;
 
 use super::super::super::context::FunctionContext;
@@ -1450,11 +1450,11 @@ fn emit_integer_key_from_result(ctx: &mut FunctionContext<'_>) {
 fn emit_float_key_from_result(ctx: &mut FunctionContext<'_>) {
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
-            ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float iterator keys to integer array keys
+            abi::emit_php_float_to_int(ctx.emitter, "x1");
             ctx.emitter.instruction("mov x2, #-1");                             // key_hi sentinel marks an integer key
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // PHP casts float iterator keys to integer array keys
+            abi::emit_php_float_to_int(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rdx, -1");                             // key_hi sentinel marks an integer key
         }
     }
@@ -1499,7 +1499,7 @@ fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
             ctx.emitter.label(&float_label);
             ctx.emitter.instruction("fmov d0, x1");                             // reinterpret the unboxed float payload bits for casting
-            ctx.emitter.instruction("fcvtzs x1, d0");                           // PHP casts float array keys to integer keys
+            abi::emit_php_float_to_int(ctx.emitter, "x1");
             ctx.emitter.instruction("mov x2, #-1");                             // mark the converted float payload as an integer key
             ctx.emitter.instruction(&format!("b {}", done_label));              // finish normalized mixed-key handling
 
@@ -1539,7 +1539,7 @@ fn emit_mixed_key_from_result(ctx: &mut FunctionContext<'_>) -> Result<()> {
 
             ctx.emitter.label(&float_label);
             ctx.emitter.instruction("movq xmm0, rdi");                          // reinterpret the unboxed float payload bits for casting
-            ctx.emitter.instruction("cvttsd2si rax, xmm0");                     // PHP casts float array keys to integer keys
+            abi::emit_php_float_to_int(ctx.emitter, "rax");
             ctx.emitter.instruction("mov rdx, -1");                             // mark the converted float payload as an integer key
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // finish normalized mixed-key handling
 
@@ -1772,13 +1772,6 @@ fn emit_branch_if_saved_apply_callback_name_matches(
     }
 }
 
-/// Converts PHP function names into assembly-label-safe fragments.
-fn label_fragment(value: &str) -> String {
-    value
-        .chars()
-        .map(|ch| if ch.is_ascii_alphanumeric() { ch } else { '_' })
-        .collect()
-}
 
 /// Emits a case-insensitive compare against the saved `iterator_apply()` callback name.
 fn emit_apply_callback_name_compare(
