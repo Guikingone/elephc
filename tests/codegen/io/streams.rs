@@ -620,6 +620,28 @@ fn test_stream_is_local_and_supports_lock_are_true() {
     assert_eq!(out, "LS");
 }
 
+/// Verifies a refused write reports failure rather than its errno.
+///
+/// macOS returns a failed `write` as the POSITIVE errno with the carry flag set, which is
+/// indistinguishable from a byte count: writing to a read-only handle answered `int(9)`
+/// — EBADF — where PHP answers `false`. Asserting on the exact value matters, because
+/// `9` is truthy and every `if (fwrite(...))` guard read it as success.
+#[test]
+fn test_fwrite_to_a_read_only_stream_reports_false() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("fw_ro.txt", "seed");
+$h = fopen("fw_ro.txt", "r");
+var_dump(@fwrite($h, "XY"));
+fclose($h);
+echo file_get_contents("fw_ro.txt");
+unlink("fw_ro.txt");
+"#,
+    );
+    assert_eq!(out, "bool(false)\nseed");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `stream_is_local()` classifies a path that only exists at run time.
 ///
 /// A literal is folded at compile time, so the loop is what exercises the runtime

@@ -13,7 +13,7 @@
 //! - A payload larger than the 64 KiB scratch is written unfiltered; v1 stream
 //!   filters target the common small-write case.
 
-use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 const FILTER_BUF_SIZE: i64 = 65536;
 
@@ -181,6 +181,14 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fwrite_return");                                // continue at target label
     emitter.label("__rt_fwrite_syscall");
     emitter.syscall(4);
+    // macOS reports a failed write by setting the carry flag and leaving the POSITIVE
+    // errno in x0, which is indistinguishable from a byte count to every caller: writing
+    // to a read-only stream answered 9 (EBADF) instead of false. Linux already returns a
+    // negative, so normalise macOS onto the same shape.
+    if emitter.platform == Platform::MacOS {
+        emitter.instruction("b.cc __rt_fwrite_return");                         // carry clear: x0 really is a byte count
+        emitter.instruction("mov x0, #-1");                                     // a failed write reports failure, not its errno
+    }
     emitter.label("__rt_fwrite_return");
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the frame
