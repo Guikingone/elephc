@@ -207,7 +207,12 @@ pub(super) fn check_types_impl(
 
     let mut next_interface_id = 0u64;
     let mut building_interfaces = HashSet::new();
-    let interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    // Sorted: `interface_map` is a HashMap, whose iteration order is randomized per
+    // process. Interface ids are handed out in this order and are baked into the
+    // generated assembly, so an unsorted walk makes two compilations of the SAME
+    // source produce different output — which defeats any content-addressed cache.
+    let mut interface_names: Vec<String> = interface_map.keys().cloned().collect();
+    interface_names.sort();
     for interface_name in interface_names {
         if let Err(error) = build_interface_info_recursive(
             &interface_name,
@@ -223,7 +228,11 @@ pub(super) fn check_types_impl(
 
     let mut next_class_id = 0u64;
     let mut building = HashSet::new();
-    let class_names: Vec<String> = class_map.keys().cloned().collect();
+    // Sorted for the same reason as `interface_names` above: class ids are assigned in
+    // this walk order and end up as immediates and `.quad` values in the emitted
+    // assembly, so a HashMap-ordered walk is a reproducibility hole.
+    let mut class_names: Vec<String> = class_map.keys().cloned().collect();
+    class_names.sort();
     for class_name in class_names {
         if let Err(error) = build_class_info_recursive(
             &class_name,
