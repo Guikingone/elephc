@@ -96,6 +96,11 @@ pub(in crate::interpreter) fn eval_predefined_constant_value(
         "LOCK_EX" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_EX)),
         "LOCK_UN" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_UN)),
         "LOCK_NB" => Some(EvalPredefinedConstant::Int(EVAL_LOCK_NB)),
+        "OPENSSL_RAW_DATA" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_RAW_DATA)),
+        "OPENSSL_ZERO_PADDING" => Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_ZERO_PADDING)),
+        "OPENSSL_DONT_ZERO_PAD_KEY" => {
+            Some(EvalPredefinedConstant::Int(EVAL_OPENSSL_DONT_ZERO_PAD_KEY))
+        }
         "ARRAY_FILTER_USE_VALUE" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_VALUE)),
         "ARRAY_FILTER_USE_BOTH" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_BOTH)),
         "ARRAY_FILTER_USE_KEY" => Some(EvalPredefinedConstant::Int(EVAL_ARRAY_FILTER_USE_KEY)),

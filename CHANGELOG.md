@@ -4,6 +4,7 @@ All notable changes to elephc, a PHP-to-native compiler written in Rust.
 Releases are listed newest first.
 
 ## [Unreleased]
+- Added OpenSSL-compatible symmetric encryption across compiled and `eval()` code with `openssl_encrypt()`, `openssl_decrypt()`, `openssl_cipher_iv_length()`, and `openssl_get_cipher_methods()`: a pure-Rust, pay-for-use crypto bridge implements AES-128/192/256 CBC, CTR, ECB, and GCM; supports raw/Base64 data, PHP key and IV normalization, zero-padding flags, GCM AAD and 1–16 byte by-reference tags; and requires no system OpenSSL dependency on any supported target.
 - Added PHP-compatible `parse_url()` to native compilation and the Magician `eval()` runtime, including associative and component-selector return shapes, `PHP_URL_*` constants, IPv6/userinfo/port edge cases, catchable invalid-selector `ValueError`s, and identical support on macOS ARM64, Linux ARM64, and Linux x86_64.
 - Expanded PDO to an eleven-driver compatibility matrix: SQLite, PostgreSQL, and MySQL/MariaDB remain enabled by default, while optional DBLIB, Firebird, ODBC, Informix, IBM, SQLSRV, OCI, and CUBRID profiles add PHP 8.0–8.6 driver surfaces and live-database qualification with explicit external client requirements.
 - Fixed by-reference `foreach` over indexed and associative array elements silently discarding mutations or stopping early when the parent was replaced (issue #580).

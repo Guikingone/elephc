@@ -2,7 +2,7 @@
 title: "__elephc_phar_set_metadata() — internals"
 description: "Compiler internals for __elephc_phar_set_metadata(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 518
+  order: 522
 ---
 
 ## `__elephc_phar_set_metadata()` — internals
@@ -10,7 +10,7 @@ sidebar:
 ## Where it lives
 
 - **Signature**: [`src/builtins/io/__elephc_phar_set_metadata.rs`](https://github.com/illegalstudio/elephc/blob/main/src/builtins/io/__elephc_phar_set_metadata.rs)
-- **Lowering**: [`src/builtins/semantics.rs`:540](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L540) (`lower_registry_call`)
+- **Lowering**: [`src/builtins/semantics.rs`:542](https://github.com/illegalstudio/elephc/blob/main/src/builtins/semantics.rs#L542) (`lower_registry_call`)
 - **Function symbol**: `lower_registry_call()`
 
 

@@ -11,6 +11,15 @@
 
 use std::sync::atomic::AtomicU64;
 
+/// Requests raw binary output from the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_RAW_DATA: i64 = 1;
+
+/// Disables block-cipher padding in the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_ZERO_PADDING: i64 = 2;
+
+/// Prevents zero-padding short cipher keys in the OpenSSL compatibility builtins.
+pub(super) const EVAL_OPENSSL_DONT_ZERO_PAD_KEY: i64 = 4;
+
 /// `parse_url()` component selector for the scheme.
 pub(super) const EVAL_PHP_URL_SCHEME: i64 = 0;
 /// `parse_url()` component selector for the host.
