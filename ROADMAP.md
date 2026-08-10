@@ -1010,6 +1010,13 @@ statics, and static class properties all reset between requests). Run it with
   graceful `SIGINT`/`SIGTERM` shutdown (forward to workers, reap, exit 0), worker
   respawn on unexpected death, and a 30s header-read timeout bounding slow/idle
   keep-alive connections. Out of v1 scope: cookies, sessions, TLS, HTTP/2–3, multipart.
+- [x] **Phase 4.1** — compile-time handler isolation: plain `--web` preserves the
+  original in-process `worker` path and performance; `--web-isolation=pool`
+  selects persistent supervised handler children; `request` selects a tracked,
+  disposable child per request. Isolated modes add configurable handler
+  concurrency, body/response deadlines, streaming output, exact dispatch-ID
+  cancellation, PID reaping/replacement, pool-child quotas, and descendant-safe
+  shutdown without adding request-time branching or IPC to the default mode.
 - [x] **Phase 5** — session support: `session_start()`, `$_SESSION` superglobal,
   `session_id()`, `session_name()`, `session_status()`, `session_save_path()`,
   `session_write_close()` (auto-called at handler end via a finally block),

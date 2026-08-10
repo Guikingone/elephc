@@ -401,7 +401,7 @@ crates/
 ├── elephc-phar/               Pure-Rust PHAR/tar/zip archive bridge for `phar://` runtime paths
 ├── elephc-tls/                TLS bridge for the `https://` stream wrapper
 ├── elephc-tz/                 IANA timezone-introspection bridge staticlib with baked tz tables
-└── elephc-web/                Prefork HTTP server bridge for `--web` binaries
+└── elephc-web/                Prefork HTTP bridge with compile-time worker/pool/request isolation
 ```
 
 ## ARM64 calling conventions

@@ -733,7 +733,7 @@ Every terminal stdout write in a compiled program travels through one indirectio
 1. **print_r return-mode capture** — while `_print_r_mode` is set, append the bytes to `_print_r_buf` via `__rt_pr_append` instead of writing
 2. **user output-handler guard** — while `_ob_in_handler` is set, discard the bytes entirely (PHP discards output produced inside an `ob_start()` handler)
 3. **output-buffer capture** — while the `ob_*` stack is non-empty (`_ob_level` > 0), append the bytes to the top output buffer via `__rt_ob_append`
-4. **`--web` capture** — in `--web` builds only, a non-zero `elephc_web_capture` flag routes the bytes to `elephc_web_write` so the bridge can capture the per-request response body
+4. **`--web` capture** — in `--web` builds only, a non-zero `elephc_web_capture` flag routes the bytes to `elephc_web_write`; default worker isolation buffers them, while pool/request isolation frames them onto the handler response stream
 5. **plain `write(1, ptr, len)` syscall** — the universal fallback
 
 The `--web` capture branch is emitted only when compiling with `--web`, so ordinary binaries never reference the bridge symbols. A few related helpers are always emitted so their EIR calls resolve on every build, with bodies that differ under `--web`: `__rt_php_input` (reads the request body for `file_get_contents('php://input')`, false otherwise) and `__rt_http_response_code` / `__rt_header` (call the bridge setters under `--web`, no-ops otherwise). PHP session support (`session_*`) is **not** part of this runtime: it lives in the `--web` PHP prelude (`src/web_prelude.rs`) as `elephc_web_session_*` extern functions provided by the web bridge.

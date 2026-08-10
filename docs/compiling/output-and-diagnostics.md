@@ -161,8 +161,12 @@ elephc --gc-stats heavy.php
 ```
 
 Combined with `--web`, the server never reaches the process-exit report, so the
-counters are printed to stderr after every handled request instead — a growing
-`allocs - frees` gap across requests indicates a per-request leak.
+counters are printed to stderr after every handled request instead. In default
+`worker` isolation, a growing `allocs - frees` gap across requests handled by the
+same worker indicates a per-request leak. In `pool`, the counters belong to each
+persistent handler child and lines from several children may interleave. In
+`request`, each disposable child exits after one response, so compare the
+single-request result rather than looking for a cross-request trend.
 
 ### `--heap-debug`
 

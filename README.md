@@ -242,7 +242,9 @@ elephc --target linux-aarch64 hello.php
 elephc --target linux-x86_64 hello.php
 
 # Compile a standalone prefork HTTP server binary
-elephc --web app.php
+elephc --web app.php                          # fastest; trusted application code
+elephc --web --web-isolation=pool app.php     # crash containment + concurrent handlers
+elephc --web --web-isolation=request app.php  # discard all native state after each request
 ./app --listen 127.0.0.1:8080
 ./app --listen 0.0.0.0:8080 --workers 4
 ```
@@ -393,7 +395,7 @@ The full list of supported constructs, operators, and control structures is in t
 - **FFI**: extern functions, extern blocks, extern globals, extern classes, pointer builtins
 - **Database (PDO)**: `PDO`, `PDOStatement`, `PDOException` with SQLite, PostgreSQL, MySQL/MariaDB, optional FreeTDS PDO_DBLIB, pure-Rust PDO_FIREBIRD, system-driver-manager PDO_ODBC, Client SDK PDO_INFORMIX/PDO_IBM, Microsoft ODBC PDO_SQLSRV, Oracle Instant Client PDO_OCI, and official CCI PDO_CUBRID drivers, positional `?` and named `:name` binds, fetch modes, transactions, and `foreach` over result sets
 - **Date/time**: `DateTime`, `DateTimeImmutable`, `DateTimeInterface`, `DateTimeZone`, `DateInterval`, `DatePeriod`, the PHP 8.3 date exception hierarchy, DST-aware formatting via a bundled IANA timezone database, and `ext/calendar` Julian-Day functions
-- **Web server (`--web`)**: standalone prefork HTTP server binaries with `$_SERVER`/`$_GET`/`$_POST` and `php://input` request input, `header()`/`http_response_code()` response control, and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
+- **Web server (`--web`)**: standalone prefork HTTP server binaries with compile-time `worker` (default), persistent `pool`, or fork-per-`request` isolation; request superglobals and `php://input`; `header()`/`http_response_code()` response control; and PHP-compatible sessions — `$_SESSION`, the complete `session_*()` API, file persistence, custom save handlers, strict mode, cookies and cache limiters, and trans-SID rewriting
 - **Extensions**: `ifdef`, `packed class`, `buffer<T>`, `buffer_new<T>()`, `buffer_len()`, `buffer_free()`
 
 </details>

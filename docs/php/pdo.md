@@ -1073,10 +1073,14 @@ exposing a non-PHP constructor shape:
 
 ## Under `--web`
 
-Each prefork worker holds its own connections: N workers means N independent SQLite
-handles on the same database file, so concurrent writes contend. For a write-heavy
-`--web` app, open the database in WAL mode and set a busy timeout so a contended write
-waits instead of failing immediately:
+Connection ownership follows the compile-time web isolation model. In default
+`worker` mode, each prefork worker holds its own connections. In `pool`, each
+persistent handler child has an independent connection table. In `request`, the
+disposable child exits after the response, so native connections cannot persist
+across requests. In every model, concurrent SQLite handles target the same
+database file and writes can contend. For a write-heavy `--web` app, open the
+database in WAL mode and set a busy timeout so a contended write waits instead of
+failing immediately:
 
 ```php
 <?php
@@ -1084,12 +1088,20 @@ $db = new PDO("sqlite:/var/data/app.db", null, null, [PDO::ATTR_TIMEOUT => 5]);
 $db->exec("PRAGMA journal_mode=WAL");
 ```
 
-`ATTR_TIMEOUT` is expressed in seconds (mapped to SQLite's millisecond busy-timeout).
-`ATTR_PERSISTENT` connections live in a per-worker pool keyed by DSN, so they persist
-across requests handled by the same worker but are never shared across workers or across
-a worker respawn. The bridge's connection and result state lives outside the per-request
-PHP heap, so it is unaffected by the per-request heap reset the web runtime performs
-between requests.
+`ATTR_TIMEOUT` is expressed in seconds (mapped to SQLite's millisecond
+busy-timeout). `ATTR_PERSISTENT` is keyed by DSN inside the current handler
+process: it persists across requests handled by the same `worker` or `pool`
+child, but is never shared between processes and has request lifetime under
+`request` isolation. Recycling a worker or pool child drops its table. This
+bridge state lives outside the per-request PHP heap, so PHP global/static reset
+does not clear it while its owning process remains alive.
+
+For a throughput-oriented PDO service, prefer `worker`; choose `pool` when a
+driver crash must be contained to a replaceable handler or each web worker needs
+several concurrent PHP handlers. Use `request` only when discarding every native
+connection and driver-global state after each response is an explicit requirement.
+Pool requests are not pinned to one child, so application correctness must never
+depend on a later request reaching the same persistent connection table.
 
 ## Supported surface
 
