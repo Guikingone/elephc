@@ -101,6 +101,8 @@ mod stream_record_meta;
 mod socket_connect_warning;
 mod socket_gai_message;
 mod stream_record_mode;
+mod stream_transport;
+mod stream_type_name;
 mod stream_socket_accept;
 mod stream_socket_client;
 mod pclose;
@@ -243,6 +245,8 @@ pub(crate) use socket_connect_warning::{
 };
 pub(crate) use socket_gai_message::emit_gai_publish;
 pub(crate) use stream_record_mode::emit_stream_record_mode;
+pub(crate) use stream_transport::{emit_stream_record_transport, emit_stream_transport};
+pub(crate) use stream_type_name::emit_stream_type_name;
 pub(crate) use stream_socket_accept::emit_stream_socket_accept;
 pub(crate) use stream_socket_client::emit_stream_socket_client;
 pub(crate) use socket_errno::emit_socket_strerror;

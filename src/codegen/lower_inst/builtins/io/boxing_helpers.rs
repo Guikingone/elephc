@@ -668,6 +668,108 @@ pub(super) fn emit_record_stream_mode_literal_after_boxed(
     ctx.emitter.label(&done_label);
 }
 
+/// Records which transport a boxed socket was opened on, for `stream_type` metadata.
+///
+/// `address` is the operand the caller wrote, re-materialized here so the run-time scheme decides
+/// the name exactly as it decides what gets opened. `None` records `fallback` instead, which is how
+/// a socket pair and an accepted connection — neither of which names an address — get their name.
+pub(super) fn emit_record_stream_transport_after_boxed(
+    ctx: &mut FunctionContext<'_>,
+    address: Option<ValueId>,
+    fallback: u64,
+) -> Result<()> {
+    let done_label = ctx.next_label("stream_transport_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // a failed open has no transport
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the boxed result outlives the call
+            match address {
+                Some(address) => {
+                    load_string_to_result(ctx, address, "socket address")?;     // x1/x2 = the address bytes
+                }
+                None => {
+                    ctx.emitter.instruction("mov x1, #0");                      // no address of its own
+                    ctx.emitter.instruction("mov x2, #0");
+                }
+            }
+            ctx.emitter.instruction(&format!("mov x3, #{}", fallback));         // the name to use without one
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the boxed result
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // pass the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_transport");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", done_label));            // a failed open has no transport
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the boxed result outlives the call
+            match address {
+                Some(address) => {
+                    load_string_to_result(ctx, address, "socket address")?;     // rax/rdx = the address bytes
+                    ctx.emitter.instruction("mov rsi, rax");                    // pass the address pointer
+                }
+                None => {
+                    ctx.emitter.instruction("xor esi, esi");                    // no address of its own
+                    ctx.emitter.instruction("xor edx, edx");
+                }
+            }
+            ctx.emitter.instruction(&format!("mov rcx, {}", fallback));         // the name to use without one
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the boxed result
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");            // pass the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_transport");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Records on a boxed socket the transport its server handle was opened on.
+///
+/// An accepted connection has no address of its own, and php-src names it after the listener: an
+/// accept on a `unix://` server reports `unix_socket`, not `tcp_socket/ssl`.
+pub(super) fn emit_inherit_stream_transport_after_boxed(
+    ctx: &mut FunctionContext<'_>,
+    server: ValueId,
+) -> Result<()> {
+    let done_label = ctx.next_label("stream_transport_inherit_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // a failed accept has no transport
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the boxed result outlives the calls
+            load_stream_handle_to_result(ctx, server, "stream_socket_accept")?; // the listener's handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_transport");         // x0 = the listener's transport
+            ctx.emitter.instruction("mov x3, x0");                              // record it on the accepted socket
+            ctx.emitter.instruction("mov x1, #0");                              // which has no address of its own
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the boxed result
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // pass the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_transport");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", done_label));            // a failed accept has no transport
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the boxed result outlives the calls
+            load_stream_handle_to_result(ctx, server, "stream_socket_accept")?; // the listener's handle
+            ctx.emitter.instruction("mov rdi, rax");                            // pass it to the transport lookup
+            abi::emit_call_label(ctx.emitter, "__rt_stream_transport");         // rax = the listener's transport
+            ctx.emitter.instruction("mov rcx, rax");                            // record it on the accepted socket
+            ctx.emitter.instruction("xor esi, esi");                            // which has no address of its own
+            ctx.emitter.instruction("xor edx, edx");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the boxed result
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");            // pass the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_transport");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Persists a caller-stashed socket address host on the boxed stream's opaque handle.
 pub(super) fn emit_stash_connect_host_after_boxed_stashed(ctx: &mut FunctionContext<'_>) {
     let done_label = ctx.next_label("stream_connect_host_done");

@@ -183,6 +183,25 @@ pub(crate) const STREAM_MODE_PTR_OFFSET: i64 = 192;
 /// Byte offset of the recorded mode string's length.
 pub(crate) const STREAM_MODE_LEN_OFFSET: i64 = 200;
 
+/// Byte offset of the socket transport a stream was opened on, or 0 when it is not a socket.
+///
+/// `stream_get_meta_data()['stream_type']` names the transport, and the name is not derivable
+/// from the descriptor: a TCP, UDP, Unix and socketpair endpoint are all non-seekable sockets,
+/// and php-src calls them `tcp_socket/ssl`, `udp_socket`, `unix_socket` and `generic_socket`.
+pub(crate) const STREAM_TRANSPORT_OFFSET: i64 = 208;
+
+/// Transport value for a TCP endpoint, which php-src names after the ssl-capable transport.
+pub(crate) const STREAM_TRANSPORT_TCP: u64 = 1;
+
+/// Transport value for a UDP endpoint.
+pub(crate) const STREAM_TRANSPORT_UDP: u64 = 2;
+
+/// Transport value for a Unix-domain endpoint, stream or datagram.
+pub(crate) const STREAM_TRANSPORT_UNIX: u64 = 3;
+
+/// Transport value for a socket pair, which belongs to no named transport.
+pub(crate) const STREAM_TRANSPORT_GENERIC: u64 = 4;
+
 /// Byte offset of stream ownership flags.
 pub(crate) const STREAM_OWNERSHIP_FLAGS_OFFSET: i64 = 296;
 
@@ -298,6 +317,8 @@ const _: () = {
     assert!(STREAM_MODE_PTR_OFFSET > STREAM_FILTERED_FLUSHED_OFFSET);
     assert!(STREAM_MODE_LEN_OFFSET == STREAM_MODE_PTR_OFFSET + 8);
     assert!(STREAM_MODE_LEN_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
+    assert!(STREAM_TRANSPORT_OFFSET > STREAM_MODE_LEN_OFFSET);
+    assert!(STREAM_TRANSPORT_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(CONTEXT_STATE_SIZE == 32);
     assert!(CONTEXT_PARAMS_OFFSET == CONTEXT_OPTIONS_OFFSET + 8);
     assert!(CONTEXT_NOTIFIER_OFFSET == CONTEXT_PARAMS_OFFSET + 8);

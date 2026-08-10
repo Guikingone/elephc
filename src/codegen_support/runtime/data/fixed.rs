@@ -1305,6 +1305,21 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _meta_key_uri\n_meta_key_uri:\n    .ascii \"uri\"\n");
     out.push_str(".globl _meta_stype_stdio\n_meta_stype_stdio:\n    .ascii \"STDIO\"\n");
     out.push_str(".globl _meta_stype_socket\n_meta_stype_socket:\n    .ascii \"tcp_socket\"\n");
+    // The names php-src gives the stream kinds elephc can produce. They are wrapper and
+    // backend identities, not descriptor properties: `php://memory` reports MEMORY whether or
+    // not it is seekable, and a pipe from `popen()` reports STDIO although it is not.
+    out.push_str(".globl _meta_stype_memory\n_meta_stype_memory:\n    .ascii \"MEMORY\"\n");
+    out.push_str(".globl _meta_stype_temp\n_meta_stype_temp:\n    .ascii \"TEMP\"\n");
+    out.push_str(".globl _meta_stype_output\n_meta_stype_output:\n    .ascii \"Output\"\n");
+    out.push_str(".globl _meta_stype_input\n_meta_stype_input:\n    .ascii \"Input\"\n");
+    out.push_str(".globl _meta_stype_dir\n_meta_stype_dir:\n    .ascii \"dir\"\n");
+    out.push_str(".globl _meta_stype_glob\n_meta_stype_glob:\n    .ascii \"glob\"\n");
+    // php-src names a TCP socket after the ssl-capable transport whenever the ssl transport
+    // exists in the build, which for elephc is whenever a program can ask for TLS at all.
+    out.push_str(".globl _meta_stype_tcp\n_meta_stype_tcp:\n    .ascii \"tcp_socket/ssl\"\n");
+    out.push_str(".globl _meta_stype_udp\n_meta_stype_udp:\n    .ascii \"udp_socket\"\n");
+    out.push_str(".globl _meta_stype_unix\n_meta_stype_unix:\n    .ascii \"unix_socket\"\n");
+    out.push_str(".globl _meta_stype_generic\n_meta_stype_generic:\n    .ascii \"generic_socket\"\n");
     out.push_str(".globl _meta_wrapper_plainfile\n_meta_wrapper_plainfile:\n    .ascii \"plainfile\"\n");
     out.push_str(".globl _meta_wrapper_http\n_meta_wrapper_http:\n    .ascii \"http\"\n");
     out.push_str(".globl _meta_wrapper_https\n_meta_wrapper_https:\n    .ascii \"https\"\n");

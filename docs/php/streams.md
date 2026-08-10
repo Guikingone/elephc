@@ -430,13 +430,14 @@ and `rb` otherwise, while `php://output` always answers `wb`. A stream that
 records no mode, such as a socket or an accepted connection, still reports the
 descriptor's access bits.
 
-Known differences from PHP 8.5.6, all in reported names rather than behavior:
+`stream_type` names the wrapper and backend, as php-src does, rather than the
+descriptor: `STDIO` for a file, a process pipe and the standard streams, `MEMORY`
+for `php://memory`, `TEMP` for `php://temp`, `Output` and `Input` for the two
+matching wrappers, `RFC2397` for a `data:` URL, `dir` and `glob` for directory
+handles, and one of `tcp_socket/ssl`, `udp_socket`, `unix_socket` or
+`generic_socket` for a socket — the transport being read from the address the
+caller wrote, with an accepted connection taking its listener's.
 
-- `stream_type` is `"STDIO"` for seekable streams and `"tcp_socket"` for
-  non-seekable ones. PHP distinguishes further: `MEMORY` for `php://memory`,
-  `TEMP` for `php://temp`, `Output` for `php://output`, and `RFC2397` for a
-  `data:` URL.
+Known differences from PHP 8.5.6, all in reported names rather than behavior:
 - `uri` is empty for a stream with no user-supplied path, such as `tmpfile()`,
   where PHP reports the temporary file it created.
-- `php://` targets are resolved for LITERAL paths. `fopen($url, …)` with the URL
-  in a variable goes through the ordinary filesystem open and fails.

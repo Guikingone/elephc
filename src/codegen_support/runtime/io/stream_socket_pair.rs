@@ -14,6 +14,7 @@
 //!   as PHP `false`, matching PHP's `array|false` contract for the
 //!   domains the kernel refuses (typically `STREAM_PF_INET`).
 
+use crate::codegen_support::runtime::resources::layout::STREAM_TRANSPORT_GENERIC;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Creates a connected pair of opaque stream handles.
@@ -66,6 +67,19 @@ pub fn emit_stream_socket_pair(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_adopt_fd");                             // publish the second opaque stream handle
     emitter.instruction("cbz x0, __rt_ssp_second_adopt_fail");                  // release the first handle when its peer failed
     emitter.instruction("str x0, [sp, #24]");                                   // preserve the second owned registry handle
+
+    // -- name the transport: php-src calls a socket pair `generic_socket`, and nothing about the
+    //    descriptors says so — both ends look like any other non-seekable socket --
+    emitter.instruction("ldr x0, [sp, #16]");                                   // the first end
+    emitter.instruction("mov x1, #0");                                          // a pair has no address of its own
+    emitter.instruction("mov x2, #0");
+    emitter.instruction(&format!("mov x3, #{}", STREAM_TRANSPORT_GENERIC));
+    emitter.instruction("bl __rt_stream_record_transport");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // and the second
+    emitter.instruction("mov x1, #0");
+    emitter.instruction("mov x2, #0");
+    emitter.instruction(&format!("mov x3, #{}", STREAM_TRANSPORT_GENERIC));
+    emitter.instruction("bl __rt_stream_record_transport");
 
     // -- success: transfer both owned handles into the result array --
     emitter.instruction("mov x0, #2");                                          // result array capacity
@@ -129,6 +143,19 @@ fn emit_stream_socket_pair_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");                                       // did peer registry publication succeed?
     emitter.instruction("jz __rt_ssp_second_adopt_fail_x86");                   // release the first handle after peer failure
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // preserve the second owned registry handle
+
+    // See the AArch64 counterpart: php-src calls a socket pair `generic_socket`, and nothing about
+    // the descriptors says so.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // the first end
+    emitter.instruction("xor esi, esi");                                        // a pair has no address of its own
+    emitter.instruction("xor edx, edx");
+    emitter.instruction(&format!("mov rcx, {}", STREAM_TRANSPORT_GENERIC));
+    emitter.instruction("call __rt_stream_record_transport");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // and the second
+    emitter.instruction("xor esi, esi");
+    emitter.instruction("xor edx, edx");
+    emitter.instruction(&format!("mov rcx, {}", STREAM_TRANSPORT_GENERIC));
+    emitter.instruction("call __rt_stream_record_transport");
 
     // -- success: transfer both owned handles into the result array --
     emitter.instruction("mov edi, 2");                                          // result array capacity

@@ -74,6 +74,15 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emitter.instruction("mov x10, #5");                                         // length of "STDIO"
     emitter.instruction("str x10, [sp, #64]");                                  // save the stream_type length
     emitter.label("__rt_sgmd_seek_done");
+    // `stream_type` is a wrapper and backend identity in php-src, not a descriptor property. The
+    // derivation above only knows whether `lseek` worked, which called `php://memory` STDIO and a
+    // `popen()` pipe a socket; a stream that records an identity reports that instead.
+    emitter.instruction("ldr x0, [sp, #0]");                                    // the opaque stream handle
+    emitter.instruction("bl __rt_stream_type_name");                            // x0 = name or 0, x1 = length
+    emitter.instruction("cbz x0, __rt_sgmd_stype_kept");                        // nothing recorded: keep the derived name
+    emitter.instruction("str x0, [sp, #56]");                                   // report the recorded name
+    emitter.instruction("str x1, [sp, #64]");                                   // and its length
+    emitter.label("__rt_sgmd_stype_kept");
 
     // -- blocking mode + access mode: fcntl(fd, F_GETFL, 0) --
     emitter.instruction("ldr x0, [sp, #72]");                                   // reload the stream descriptor
@@ -329,6 +338,14 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 64], r10");                       // save the stream_type pointer
     emitter.instruction("mov QWORD PTR [rbp - 72], 5");                         // save the stream_type length
     emitter.label("__rt_sgmd_seek_done_x86");
+    // See the AArch64 counterpart: a recorded identity outranks the seekability-derived name.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_type_name");                          // rax = name or 0, rdx = length
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sgmd_stype_kept_x86");                         // nothing recorded: keep the derived name
+    emitter.instruction("mov QWORD PTR [rbp - 64], rax");                       // report the recorded name
+    emitter.instruction("mov QWORD PTR [rbp - 72], rdx");                       // and its length
+    emitter.label("__rt_sgmd_stype_kept_x86");
 
     // -- blocking mode + access mode: fcntl(fd, F_GETFL, 0) --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 80]");                       // reload the stream descriptor

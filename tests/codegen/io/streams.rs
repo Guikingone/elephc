@@ -8521,6 +8521,87 @@ echo ($c === false ? "false" : "resource");
     assert_eq!(out.stderr, "");
 }
 
+/// Verifies `stream_get_meta_data()['stream_type']` names the wrapper, not the descriptor.
+///
+/// It was derived from whether `lseek` worked, which is not what php-src reports: a memory stream
+/// came back as STDIO, `php://output` as a socket, and a `popen()` pipe as a socket too. The name
+/// is a wrapper and backend identity, so it comes from the recorded identity now.
+#[test]
+fn test_stream_get_meta_data_names_the_wrapper_not_the_descriptor() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("stype.txt", "seed");
+$names = [];
+$h = fopen("stype.txt", "r");
+$names[] = stream_get_meta_data($h)["stream_type"];
+fclose($h);
+$h = fopen("php://memory", "r+");
+$names[] = stream_get_meta_data($h)["stream_type"];
+fclose($h);
+$h = fopen("php://temp", "r+");
+$names[] = stream_get_meta_data($h)["stream_type"];
+fclose($h);
+$h = fopen("php://output", "w");
+$names[] = stream_get_meta_data($h)["stream_type"];
+$h = fopen("php://input", "r");
+$names[] = stream_get_meta_data($h)["stream_type"];
+$h = fopen("data://text/plain,hi", "r");
+$names[] = stream_get_meta_data($h)["stream_type"];
+fclose($h);
+$p = popen("printf hi", "r");
+$names[] = stream_get_meta_data($p)["stream_type"];
+pclose($p);
+$d = opendir(".");
+$names[] = stream_get_meta_data($d)["stream_type"];
+closedir($d);
+echo implode("|", $names);
+"#,
+    );
+    assert_eq!(out, "STDIO|MEMORY|TEMP|Output|Input|RFC2397|STDIO|dir");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies each socket transport is named the way php-src names it.
+///
+/// A TCP, UDP, Unix-domain and paired socket are all non-seekable descriptors, so nothing about
+/// them distinguishes the four names php-src gives them. The transport is recorded from the
+/// address the caller wrote, and an accepted connection takes its listener's.
+#[test]
+fn test_stream_get_meta_data_names_each_socket_transport() {
+    let out = compile_and_run(
+        r#"<?php
+$names = [];
+$s = stream_socket_server("tcp://127.0.0.1:0");
+$names[] = stream_get_meta_data($s)["stream_type"];
+$c = stream_socket_client("tcp://" . stream_socket_get_name($s, false));
+$names[] = stream_get_meta_data($c)["stream_type"];
+$a = stream_socket_accept($s);
+$names[] = stream_get_meta_data($a)["stream_type"];
+fclose($a);
+fclose($c);
+fclose($s);
+$u = stream_socket_server("udp://127.0.0.1:0", $e, $m, STREAM_SERVER_BIND);
+$names[] = stream_get_meta_data($u)["stream_type"];
+fclose($u);
+$path = "/tmp/elephc_stype_transport.sock";
+@unlink($path);
+$x = stream_socket_server("unix://" . $path);
+$names[] = stream_get_meta_data($x)["stream_type"];
+fclose($x);
+@unlink($path);
+$pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+$names[] = stream_get_meta_data($pair[0])["stream_type"];
+fclose($pair[0]);
+fclose($pair[1]);
+echo implode("|", $names);
+"#,
+    );
+    assert_eq!(
+        out,
+        "tcp_socket/ssl|tcp_socket/ssl|tcp_socket/ssl|udp_socket|unix_socket|generic_socket"
+    );
+}
+
 /// Verifies an unresolvable host produces the message php-src composes for it.
 ///
 /// This failure has no `errno` — php-src builds the text itself, which is why `&$error_code` stays

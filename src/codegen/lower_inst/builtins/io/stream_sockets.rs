@@ -32,6 +32,7 @@ pub(crate) fn lower_stream_socket_server(
     emit_socket_open_failure_warning(ctx, address, None, SOCKET_WARNING_SERVER)?;
     store_socket_error_outputs(ctx, inst, 1, 2, false)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_server");
+    emit_record_stream_transport_after_boxed(ctx, Some(address), 0)?;
     store_if_result(ctx, inst)
 }
 
@@ -64,6 +65,7 @@ pub(crate) fn lower_stream_socket_client(
     emit_socket_open_failure_warning(ctx, address, None, SOCKET_WARNING_CLIENT)?;
     store_socket_error_outputs(ctx, inst, 1, 2, true)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_client");
+    emit_record_stream_transport_after_boxed(ctx, Some(address), 0)?;
     emit_stash_connect_host_after_boxed_stashed(ctx);
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     store_if_result(ctx, inst)
@@ -91,6 +93,7 @@ pub(crate) fn lower_stream_socket_accept(
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_socket_accept");
     box_stream_fd_or_false_result(ctx, "stream_socket_accept");
+    emit_inherit_stream_transport_after_boxed(ctx, server)?;
     if inst.operands.len() == 3 {
         let peer = expect_operand(inst, 2)?;
         store_accept_peer_name(ctx, peer)?;
