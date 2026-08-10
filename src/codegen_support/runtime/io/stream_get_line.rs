@@ -12,13 +12,17 @@
 //! - Reads one byte at a time into that reservation until the byte budget is
 //!   spent, EOF is reached, or the trailing bytes match the ending delimiter
 //!   (which is consumed and stripped). EOF/read failure updates `StreamState`.
+//! - A third output reports whether ANY byte was consumed. PHP returns `false` only when
+//!   the call found nothing at all; a delimiter sitting at the read position yields an
+//!   empty string, so the stripped length alone cannot tell the two apart.
 
 use crate::codegen_support::{abi, abi::emit_symbol_address, emit::Emitter, platform::Arch};
 
 /// stream_get_line: read up to a length or an ending delimiter from a stream.
 /// Input:  x0=handle, x1=max length, x2=ending pointer, x3=ending length
 /// Output: x1=string pointer (concat scratch or owned heap storage), x2=length read
-///         (delimiter stripped)
+///         (delimiter stripped), x0=1 when any byte was consumed, 0 when nothing was
+///         (x86_64 returns the pair in rax/rdx and the consumed flag in rcx)
 pub fn emit_stream_get_line(emitter: &mut Emitter) {
     if emitter.target.arch == Arch::X86_64 {
         emit_stream_get_line_linux_x86_64(emitter);
@@ -48,6 +52,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_concat_reserve");                              // reserve concat scratch or owned heap storage for the whole budget
     emitter.instruction("str x0, [sp, #48]");                                   // save the result start pointer
     emitter.instruction("str xzr, [sp, #56]");                                  // running total starts at zero
+    emitter.instruction("str xzr, [sp, #72]");                                  // nothing consumed yet: the caller sees PHP false
 
     // -- user-wrapper fd: read via stream_read into _user_wrapper_drain_buf --
     emitter.instruction("ldr x0, [sp, #64]");                                   // reload the backend descriptor
@@ -91,6 +96,8 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldr x10, [sp, #56]");                                  // running total
     emitter.instruction("add x10, x10, #1");                                    // count the new byte
     emitter.instruction("str x10, [sp, #56]");                                  // store the running total
+    emitter.instruction("mov x11, #1");                                         // a byte reached the buffer
+    emitter.instruction("str x11, [sp, #72]");                                  // so the result is a string, even if the delimiter strips it empty
 
     // -- check whether the trailing bytes match the ending delimiter --
     emitter.instruction("ldr x3, [sp, #40]");                                   // ending-delimiter length
@@ -144,6 +151,8 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("strb w13, [x12, x10]");                                // append the byte to the line buffer
     emitter.instruction("add x10, x10, #1");                                    // advance the running total
     emitter.instruction("str x10, [sp, #56]");                                  // store the updated total
+    emitter.instruction("mov x11, #1");                                         // a byte reached the buffer
+    emitter.instruction("str x11, [sp, #72]");                                  // so the result is a string, even if the delimiter strips it empty
     emitter.instruction("mov x2, #0");                                          // release the whole chunk window
     emitter.instruction("bl __rt_concat_publish");                              // hand this chunk's scratch window back before the next read
     emitter.instruction("mov x0, x1");                                          // chunk ptr (byte already copied)
@@ -182,6 +191,7 @@ pub fn emit_stream_get_line(emitter: &mut Emitter) {
     emitter.instruction("ldr x1, [sp, #48]");                                   // return the result start pointer
     emitter.instruction("ldr x2, [sp, #56]");                                   // return the bytes read
     emitter.instruction("bl __rt_concat_publish");                              // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("ldr x0, [sp, #72]");                                   // report whether ANY byte was consumed, after the publish call
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #80");                                     // release the frame
     emitter.instruction("ret");                                                 // return the line slice
@@ -212,6 +222,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_concat_reserve");                            // reserve concat scratch or owned heap storage for the whole budget
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the result start pointer
     emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // running total starts at zero
+    emitter.instruction("mov QWORD PTR [rbp - 64], 0");                         // nothing consumed yet: the caller sees PHP false
 
     // -- user-wrapper fd: read via stream_read into _user_wrapper_drain_buf --
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // reload the backend descriptor
@@ -242,6 +253,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_stream_get_line_read_ok_x86");
     emitter.instruction("inc QWORD PTR [rbp - 48]");                            // count the new byte
+    emitter.instruction("mov QWORD PTR [rbp - 64], 1");                         // a byte reached the buffer, so the result is a string
 
     emitter.instruction("mov rcx, QWORD PTR [rbp - 32]");                       // ending-delimiter length
     emitter.instruction("test rcx, rcx");                                       // no delimiter configured?
@@ -302,6 +314,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov BYTE PTR [r11 + r10], cl");                        // append the byte to the line buffer
     emitter.instruction("inc r10");                                             // advance the running total
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // store the updated total
+    emitter.instruction("mov QWORD PTR [rbp - 64], 1");                         // a byte reached the buffer, so the result is a string
     emitter.instruction("xor edx, edx");                                        // release the whole chunk window
     emitter.instruction("call __rt_concat_publish");                            // hand this chunk's scratch window back before the next read
     emitter.instruction("call __rt_decref_any");                                // release the owned chunk (rax = chunk ptr)
@@ -341,6 +354,7 @@ fn emit_stream_get_line_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the result start pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 48]");                       // return the bytes read
     emitter.instruction("call __rt_concat_publish");                            // advance the concat scratch offset only for scratch-backed results
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 64]");                       // report whether ANY byte was consumed, after the publish call
     emitter.instruction("add rsp, 64");                                         // release the frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the line slice

@@ -42,6 +42,13 @@ pub(crate) fn lower_stream_copy_to_stream(
     store_if_result(ctx, inst)
 }
 
+/// php-src's verbatim `ValueError` wording for `stream_get_line()` with a negative `$length`.
+const STREAM_GET_LINE_NEGATIVE_LENGTH_MESSAGE: &str =
+    "stream_get_line(): Argument #2 ($length) must be greater than or equal to 0";
+
+/// php-src reads `PHP_SOCK_CHUNK_SIZE` bytes when the caller passes `$length` as zero.
+const STREAM_GET_LINE_DEFAULT_CHUNK: i64 = 8192;
+
 /// Lowers `stream_get_line(stream, length, ending?)`.
 pub(crate) fn lower_stream_get_line(
     ctx: &mut FunctionContext<'_>,
@@ -56,6 +63,28 @@ pub(crate) fn lower_stream_get_line(
         ctx.load_value_to_result(length)?.codegen_repr(),
         "stream_get_line length",
     )?;
+    // php-src rejects a negative budget outright, and reads its default chunk when the
+    // caller passes zero — zero does NOT mean "read nothing".
+    let length_reg = abi::int_result_reg(ctx.emitter);
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 0),
+        STREAM_GET_LINE_NEGATIVE_LENGTH_MESSAGE,
+    );
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter
+                .instruction(&format!("mov x9, #{}", STREAM_GET_LINE_DEFAULT_CHUNK)); // php-src's default chunk
+            ctx.emitter.instruction("cmp x0, #0");                              // did the caller ask for zero bytes?
+            ctx.emitter.instruction("csel x0, x9, x0, eq");                     // zero means the default chunk, not an empty read
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("mov ecx, {}", STREAM_GET_LINE_DEFAULT_CHUNK)); // php-src's default chunk
+            ctx.emitter.instruction("test rax, rax");                           // did the caller ask for zero bytes?
+            ctx.emitter.instruction("cmove rax, rcx");                          // zero means the default chunk, not an empty read
+        }
+    }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     if inst.operands.len() == 3 {
         let ending = expect_operand(inst, 2)?;
@@ -92,6 +121,7 @@ pub(crate) fn lower_stream_get_line(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_get_line");
+    box_stream_string_or_false_on_unconsumed_result(ctx, "stream_get_line");
     store_if_result(ctx, inst)
 }
 

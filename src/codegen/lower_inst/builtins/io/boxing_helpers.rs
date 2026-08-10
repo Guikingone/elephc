@@ -9,6 +9,50 @@
 
 use super::*;
 
+/// Boxes a raw stream string slice as Mixed, choosing false from a separate consumed
+/// flag rather than from the byte count.
+///
+/// `stream_get_line` can legitimately return an empty string — a delimiter sitting at
+/// the read position strips the segment to nothing — so an emptiness test would report
+/// EOF for a real, empty segment. The helper reports whether it consumed any byte at
+/// all (aarch64 `x0`, x86_64 `rcx`) and only that answers PHP's `string|false`.
+pub(super) fn box_stream_string_or_false_on_unconsumed_result(
+    ctx: &mut FunctionContext<'_>,
+    label_prefix: &str,
+) {
+    let false_label = ctx.next_label(&format!("{}_false", label_prefix));
+    let done_label = ctx.next_label(&format!("{}_done", label_prefix));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // nothing consumed at all: PHP reports false
+            ctx.emitter.instruction("mov x0, #1");                              // select runtime tag 1 for the stream string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the string result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload for stream EOF
+            ctx.emitter.instruction("mov x2, #0");                              // bool Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #3");                              // select runtime tag 3 for boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rcx, rcx");                           // nothing consumed at all?
+            ctx.emitter.instruction(&format!("jz {}", false_label));            // PHP reports false for an exhausted stream
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the stream string pointer as the Mixed low payload word
+            ctx.emitter.instruction("mov rsi, rdx");                            // pass the stream string length as the Mixed high payload word
+            ctx.emitter.instruction("mov eax, 1");                              // select runtime tag 1 for the stream string
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the string result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload for stream EOF
+            ctx.emitter.instruction("xor esi, esi");                            // bool Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 3");                              // select runtime tag 3 for boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
 /// Boxes a raw stream string slice or EOF result into Mixed string-or-false form.
 pub(super) fn box_stream_string_or_false_on_empty_result(
     ctx: &mut FunctionContext<'_>,

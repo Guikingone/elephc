@@ -3303,6 +3303,10 @@ unlink("sgl_cap.txt");
 }
 
 /// Verifies compiled PHP output for stream get line loop terminates at eof.
+///
+/// The trailing newline leaves the stream positioned before EOF, so the loop runs a
+/// third time and that read returns `false`. `false !== ""` holds, so reference PHP
+/// counts three — the count is 3, not 2, and `php -n` agrees.
 #[test]
 fn test_stream_get_line_loop_terminates_at_eof() {
     let (out, dir) = compile_and_run_in_dir(
@@ -3319,7 +3323,73 @@ fclose($f);
 unlink("sgl_eof.txt");
 "#,
     );
-    assert_eq!(out, "2");
+    assert_eq!(out, "3");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_get_line()` tells an empty segment apart from an exhausted stream.
+///
+/// A delimiter sitting at the read position strips the segment to nothing, which PHP
+/// still reports as a string; only a stream with no byte left is false. Testing this
+/// with `var_dump` rather than `.` concatenation is deliberate — string coercion turns
+/// both answers into "" and the divergence disappears.
+#[test]
+fn test_stream_get_line_returns_false_only_once_nothing_remains() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sgl_empty.txt", "a||||b");
+$f = fopen("sgl_empty.txt", "r");
+var_dump(stream_get_line($f, 100, "||"));
+var_dump(stream_get_line($f, 100, "||"));
+var_dump(stream_get_line($f, 100, "||"));
+var_dump(stream_get_line($f, 100, "||"));
+fclose($f);
+unlink("sgl_empty.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "string(1) \"a\"\nstring(0) \"\"\nstring(1) \"b\"\nbool(false)\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a zero `$length` reads php-src's default chunk instead of nothing.
+#[test]
+fn test_stream_get_line_treats_zero_length_as_the_default_chunk() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sgl_zero.txt", str_repeat("z", 9000));
+$f = fopen("sgl_zero.txt", "r");
+echo strlen(stream_get_line($f, 0)), "|", ftell($f);
+fclose($f);
+unlink("sgl_zero.txt");
+"#,
+    );
+    assert_eq!(out, "8192|8192");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a negative `$length` raises php-src's verbatim `ValueError`.
+#[test]
+fn test_stream_get_line_rejects_a_negative_length() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("sgl_neg.txt", "data");
+$f = fopen("sgl_neg.txt", "r");
+try {
+    stream_get_line($f, -1);
+} catch (ValueError $e) {
+    echo $e->getMessage();
+}
+fclose($f);
+unlink("sgl_neg.txt");
+"#,
+    );
+    assert_eq!(
+        out,
+        "stream_get_line(): Argument #2 ($length) must be greater than or equal to 0"
+    );
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -3381,7 +3451,9 @@ fwrite($pair[1], "ready\n");
 echo stream_get_line($pair[0], 8, "\n");
 "#,
     );
-    assert_eq!(out, "empty|open|ready");
+    // A nonblocking miss consumed no byte, so it reads as false rather than "" — the
+    // point of the test is the middle field: the miss must NOT latch EOF.
+    assert_eq!(out, "data|open|ready");
 }
 
 /// Verifies compiled PHP output for stream socket shutdown on connection.

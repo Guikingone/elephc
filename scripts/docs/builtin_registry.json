@@ -51324,7 +51324,7 @@
           "type": "string"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "stream_get_line",

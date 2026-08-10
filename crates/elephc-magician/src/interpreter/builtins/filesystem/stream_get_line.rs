@@ -9,6 +9,9 @@
 
 use super::super::spec::EvalBuiltinDefaultValue;
 
+/// php-src reads `PHP_SOCK_CHUNK_SIZE` bytes when the caller passes `$length` as zero.
+const STREAM_GET_LINE_DEFAULT_CHUNK: usize = 8192;
+
 eval_builtin! {
     name: "stream_get_line",
     area: Filesystem,
@@ -71,7 +74,12 @@ pub(in crate::interpreter) fn eval_stream_get_line_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let id = eval_stream_resource_id(stream, values)?;
-    let length = eval_nonnegative_usize(length, values)?;
+    // php-src reads its default chunk when the caller passes zero; zero does NOT mean
+    // "read nothing".
+    let length = match eval_nonnegative_usize(length, values)? {
+        0 => STREAM_GET_LINE_DEFAULT_CHUNK,
+        length => length,
+    };
     let ending = match ending {
         Some(ending) if values.type_tag(ending)? != EVAL_TAG_NULL => {
             Some(values.string_bytes(ending)?)
@@ -83,12 +91,13 @@ pub(in crate::interpreter) fn eval_stream_get_line_result(
     {
         return Ok(result);
     }
+    // An empty result is a string whenever the call consumed bytes — a delimiter sitting
+    // at the read position strips the segment to nothing. Only an exhausted stream is false.
     match context
         .stream_resources_mut()
-        .read_line(id, length, ending.as_deref(), false, false)
+        .read_line_consumed(id, length, ending.as_deref(), false, false)
     {
-        Some(bytes) if !bytes.is_empty() => values.string_bytes_value(&bytes),
-        Some(_) => values.bool_value(false),
-        None => values.bool_value(false),
+        Some((bytes, consumed)) if consumed > 0 => values.string_bytes_value(&bytes),
+        _ => values.bool_value(false),
     }
 }
