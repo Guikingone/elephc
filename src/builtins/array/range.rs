@@ -13,21 +13,16 @@
 //!   range, wider than the spanned interval) are runtime guards emitted by `lower_range`, because
 //!   the endpoints and the step can all be runtime values.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "range",
-    area: Array,
-    params: [start: Mixed, end: Mixed, step: Mixed = DefaultSpec::Int(1)],
-    returns: Mixed,
+    contract: "range",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Range,
     ),
-    summary: "Create an array containing a range of elements.",
-    php_manual: "https://www.php.net/manual/en/function.range.php",
 }
 
 /// Infers every argument and returns `Array(Int)`.

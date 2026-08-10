@@ -11,28 +11,18 @@
 //!   re-infer args[2..]. The source deliberately does not infer arg[1] in the
 //!   StringLiteral branch (harmless since the common path infers it side-effect-free).
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_filter_prepend",
-    area: Io,
-    params: [
-        stream: Mixed,
-        filtername: Str,
-        read_write: Int = DefaultSpec::Int(3),
-        params: Mixed = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "stream_filter_prepend",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamFilterPrepend,
     ),
     requirements: crate::builtins::semantics::stream_filter_requirements,
-    summary: "Attaches a filter to a stream (prepend).",
-    php_manual: "function.stream-filter-prepend",
 }
 
 /// Validates the stream resource and links required filter libraries for known literal filter names.

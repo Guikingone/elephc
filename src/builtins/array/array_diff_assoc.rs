@@ -18,19 +18,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_diff_assoc",
-    area: Array,
-    params: [array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_diff_assoc",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayDiffAssoc,
     ),
-    summary: "Computes the difference of arrays with additional index check.",
-    php_manual: "https://www.php.net/manual/en/function.array-diff-assoc.php",
 }
 
 /// Validates both arguments are hash-compatible arrays and returns the merged hash type.

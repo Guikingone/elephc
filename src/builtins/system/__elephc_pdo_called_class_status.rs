@@ -15,13 +15,8 @@ use crate::builtins::semantics::{
 use crate::ir::{Effects, Op};
 
 builtin! {
-    name: "__elephc_pdo_called_class_status",
-    area: System,
-    params: [class: Str],
-    returns: Int,
+    contract: "__elephc_pdo_called_class_status",
     semantics: internal_eir_semantics(lower, Effects::PURE, BuiltinResultOwnership::NonHeap),
-    summary: "Classifies PDO::connect's late-static called class by driver hierarchy.",
-    internal: true
 }
 
 /// Lowers the late-static PDO classifier to the dedicated AOT metadata EIR primitive.

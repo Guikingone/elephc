@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_socket_client",
-    area: Io,
-    params: [address: Str],
-    returns: Mixed,
+    contract: "stream_socket_client",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamSocketClient,
     ),
-    summary: "Open Internet or Unix domain socket connection.",
-    php_manual: "function.stream-socket-client",
 }
 
 /// Returns `Union(stream_resource, Bool)` reflecting PHP's false-on-failure return.

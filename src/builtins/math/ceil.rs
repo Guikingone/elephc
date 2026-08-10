@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "ceil",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "ceil",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ceil,
     ),
-    summary: "Rounds a number up to the nearest integer.",
-    php_manual: "https://www.php.net/manual/en/function.ceil.php",
 }

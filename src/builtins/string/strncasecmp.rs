@@ -15,13 +15,8 @@
 //!   `ValueError`, so the call must not be removable by dead-code elimination.
 
 builtin! {
-    name: "strncasecmp",
-    area: String,
-    params: [string1: Str, string2: Str, length: Int],
-    returns: Int,
+    contract: "strncasecmp",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strncasecmp,
     ),
-    summary: "Compares the first n bytes of two strings, ignoring ASCII case.",
-    php_manual: "https://www.php.net/manual/en/function.strncasecmp.php",
 }

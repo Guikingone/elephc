@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fileowner",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "fileowner",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fileowner,
     ),
-    summary: "Gets file owner.",
-    php_manual: "function.fileowner",
 }
 
 /// Returns `Union(Int, Bool)` reflecting that `fileowner` can return a user ID or `false`.

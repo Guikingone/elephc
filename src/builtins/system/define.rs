@@ -15,15 +15,11 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "define",
-    area: System,
-    params: [constant_name: Str, value: Mixed],
-    returns: Bool,
+    contract: "define",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Define,
     ),
-    summary: "Defines a named constant at compile time.",
 }
 
 /// Validates that the first argument is a string literal and registers the constant.

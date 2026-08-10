@@ -22,17 +22,9 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_map",
-    area: Array,
-    params: [callback: Mixed, array: Mixed],
-    variadic: "arrays",
-    min_args: 2,
-    max_args: 2,
-    returns: Mixed,
+    contract: "array_map",
     check: check,
     semantics: array_map_semantics(),
-    summary: "Applies a callback to the elements of an array.",
-    php_manual: "https://www.php.net/manual/en/function.array-map.php",
 }
 
 /// Builds semantics with a boxed Mixed result for runtime-selected callback shapes.

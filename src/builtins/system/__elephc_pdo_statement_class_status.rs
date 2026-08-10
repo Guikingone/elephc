@@ -16,13 +16,8 @@ use crate::builtins::semantics::{
 use crate::ir::{Effects, Op};
 
 builtin! {
-    name: "__elephc_pdo_statement_class_status",
-    area: System,
-    params: [class: Str],
-    returns: Int,
+    contract: "__elephc_pdo_statement_class_status",
     semantics: internal_eir_semantics(lower, Effects::PURE, BuiltinResultOwnership::NonHeap),
-    summary: "Classifies a dynamically named class for PDO statement construction.",
-    internal: true
 }
 
 /// Lowers PDO statement-class validation to the dedicated AOT metadata EIR primitive.

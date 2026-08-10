@@ -12,24 +12,18 @@
 //!   "touch() takes 1, 2, or 3 arguments" (the registry default for a 1-required,
 //!   3-max builtin produces "1 to 3 arguments").
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::Expr;
 use crate::types::checker::Checker;
 use crate::types::{PhpType, TypeEnv};
 
 builtin! {
-    name: "touch",
-    area: Io,
-    params: [filename: Str, mtime: Int = DefaultSpec::Null, atime: Int = DefaultSpec::Null],
-    arity_error: "touch() takes 1, 2, or 3 arguments",
-    returns: Bool,
+    contract: "touch",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Touch,
     ),
-    summary: "Sets access and modification time of a file.",
-    php_manual: "function.touch",
 }
 
 /// Returns `Bool` after validating `touch()` timestamp arguments via `check_touch`.

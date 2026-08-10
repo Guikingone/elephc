@@ -17,13 +17,8 @@
 //!   is a bounds-checked table load with no allocation and no class-name compare.
 
 builtin! {
-    name: "__elephc_object_is_enum",
-    area: Callables,
-    params: [value: Mixed],
-    returns: Bool,
+    contract: "__elephc_object_is_enum",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcObjectIsEnum,
     ),
-    summary: "Internal: reports whether a value is a PHP enum case.",
-    internal: true,
 }

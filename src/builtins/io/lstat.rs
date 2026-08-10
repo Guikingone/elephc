@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "lstat",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "lstat",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Lstat,
     ),
-    summary: "Gives information about a file or symbolic link.",
-    php_manual: "function.lstat",
 }
 
 /// Returns `assoc-array<mixed, int>|bool` reflecting that `lstat` returns a buffer or `false`.

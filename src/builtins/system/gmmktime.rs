@@ -11,12 +11,8 @@
 
 
 builtin! {
-    name: "gmmktime",
-    area: System,
-    params: [hour: Int, minute: Int, second: Int, month: Int, day: Int, year: Int],
-    returns: Int,
+    contract: "gmmktime",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Gmmktime,
     ),
-    summary: "Returns the Unix timestamp for a GMT date.",
 }

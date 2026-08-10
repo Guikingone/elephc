@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "shuffle",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Void,
+    contract: "shuffle",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Shuffle,
     ),
-    summary: "Shuffles an array into random order.",
-    php_manual: "https://www.php.net/manual/en/function.shuffle.php",
 }
 
 /// Validates the argument type for a `shuffle` call.

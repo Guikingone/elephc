@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_get_meta_data",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Mixed,
+    contract: "stream_get_meta_data",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamGetMetaData,
     ),
-    summary: "Retrieves metadata from streams/file pointers.",
-    php_manual: "function.stream-get-meta-data",
 }
 
 /// Validates the stream resource and returns `AssocArray{Str, Mixed}`.

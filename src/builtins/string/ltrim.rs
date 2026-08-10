@@ -12,16 +12,8 @@
 
 
 builtin! {
-    name: "ltrim",
-    area: String,
-    params: [
-        string: Str,
-        characters: Str = crate::builtins::spec::DefaultSpec::Str(" \n\r\t\u{000b}\u{000c}\0"),
-    ],
-    returns: Str,
+    contract: "ltrim",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ltrim,
     ),
-    summary: "Strips whitespace (or other characters) from the beginning of a string.",
-    php_manual: "https://www.php.net/manual/en/function.ltrim.php",
 }

@@ -13,16 +13,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "fflush",
-    area: Io,
-    params: [stream: Mixed],
-    returns: Bool,
+    contract: "fflush",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fflush,
     ),
-    summary: "Flushes the output to a file.",
-    php_manual: "function.fflush",
 }
 
 /// Validates the stream argument is a stream resource and returns `Bool`.

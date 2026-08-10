@@ -11,14 +11,9 @@
 use crate::ir::{RuntimeCallTarget, UnaryStringRuntime};
 
 builtin! {
-    name: "rawurldecode",
-    area: String,
-    params: [string: Str],
-    returns: Str,
+    contract: "rawurldecode",
     semantics: crate::builtins::semantics::unary_string_runtime(
         RuntimeCallTarget::UnaryString(UnaryStringRuntime::RawUrlDecode),
         crate::ir::Effects::PURE,
     ),
-    summary: "Decodes an RFC 3986 percent-encoded string without treating '+' as a space.",
-    php_manual: "https://www.php.net/manual/en/function.rawurldecode.php",
 }

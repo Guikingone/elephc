@@ -9,16 +9,10 @@
 //! - No check hook: the registry common path infers the optional argument and
 //!   returns the declared `Str` type.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "get_parent_class",
-    area: Callables,
-    params: [object_or_class: Mixed = DefaultSpec::Null],
-    returns: Str,
+    contract: "get_parent_class",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GetParentClass,
     ),
-    summary: "Returns the name of the parent class of an object or class.",
-    php_manual: "function.get-parent-class",
 }

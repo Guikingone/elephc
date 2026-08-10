@@ -12,21 +12,16 @@
 //!   works positionally and as a named argument, and is honoured by `lower_array_search`.
 //! - `strict` does not change the result type: PHP still returns the found key or `false`.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_search",
-    area: Array,
-    params: [needle: Mixed, haystack: Mixed, strict: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "array_search",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArraySearch,
     ),
-    summary: "Searches the array for a given value and returns the first corresponding key if successful.",
-    php_manual: "https://www.php.net/manual/en/function.array-search.php",
 }
 
 /// Validates haystack is an array and returns the key-or-false union type.

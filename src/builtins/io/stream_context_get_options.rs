@@ -15,16 +15,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "stream_context_get_options",
-    area: Io,
-    params: [context: Mixed],
-    returns: Mixed,
+    contract: "stream_context_get_options",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StreamContextGetOptions,
     ),
-    summary: "Retrieves options for the specified stream context.",
-    php_manual: "function.stream-context-get-options",
 }
 
 /// Returns `AssocArray{Str, Mixed}` reflecting the context options map structure.

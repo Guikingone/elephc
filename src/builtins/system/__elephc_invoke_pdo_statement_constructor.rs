@@ -16,17 +16,12 @@ use crate::builtins::semantics::{
 use crate::ir::{Effects, Op};
 
 builtin! {
-    name: "__elephc_invoke_pdo_statement_constructor",
-    area: System,
-    params: [class: Str, statement: Mixed, arguments: Mixed],
-    returns: Void,
+    contract: "__elephc_invoke_pdo_statement_constructor",
     semantics: internal_eir_semantics(
         lower,
         Effects::all().difference(Effects::REFCOUNT_OP),
         BuiltinResultOwnership::NonHeap,
     ),
-    summary: "Invokes a PDO statement subclass constructor after native initialization.",
-    internal: true
 }
 
 /// Lowers internal PDO constructor invocation to its dynamic-dispatch EIR primitive.

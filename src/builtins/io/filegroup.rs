@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "filegroup",
-    area: Io,
-    params: [filename: Str],
-    returns: Mixed,
+    contract: "filegroup",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Filegroup,
     ),
-    summary: "Gets file group.",
-    php_manual: "function.filegroup",
 }
 
 /// Returns `Union(Int, Bool)` reflecting that `filegroup` can return a group ID or `false`.

@@ -13,22 +13,17 @@
 //! - Arguments are pre-inferred by the registry before the hook runs; `operation` is
 //!   re-inferred inside the hook to obtain its type for validation.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "flock",
-    area: Io,
-    params: [stream: Mixed, operation: Int, ref would_block: Mixed = DefaultSpec::Null],
-    returns: Bool,
+    contract: "flock",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Flock,
     ),
-    summary: "Portable advisory file locking.",
-    php_manual: "function.flock",
 }
 
 /// Validates the stream resource, enforces strict Int type for operation, and

@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "random_int",
-    area: Math,
-    params: [min: Int, max: Int],
-    returns: Int,
+    contract: "random_int",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::RandomInt,
     ),
-    summary: "Get a cryptographically secure, uniformly selected integer.",
-    php_manual: "https://www.php.net/manual/en/function.random-int.php",
 }

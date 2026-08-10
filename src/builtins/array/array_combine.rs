@@ -18,16 +18,11 @@ use crate::errors::CompileError;
 use crate::types::{array_key_type_from_value_type, PhpType};
 
 builtin! {
-    name: "array_combine",
-    area: Array,
-    params: [keys: Mixed, values: Mixed],
-    returns: Mixed,
+    contract: "array_combine",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayCombine,
     ),
-    summary: "Creates an array by using one array for keys and another for values.",
-    php_manual: "https://www.php.net/manual/en/function.array-combine.php",
 }
 
 /// Returns the combined associative-array type for an `array_combine` call.

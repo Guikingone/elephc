@@ -11,22 +11,17 @@
 //!   compile time, a dynamic bool/int picks between the two baked lists at runtime.
 //! - The regular and Zend extension lists are resolved at codegen against compile-time-known sets.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "get_loaded_extensions",
-    area: System,
-    params: [zend_extensions: Bool = DefaultSpec::Bool(false)],
-    returns: Mixed,
+    contract: "get_loaded_extensions",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::GetLoadedExtensions,
     ),
-    summary: "Returns an array with the names of all loaded modules.",
-    php_manual: "function.get-loaded-extensions",
 }
 
 /// Validates the optional flag argument and narrows the return type to `Array<Str>`.

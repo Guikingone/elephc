@@ -9,17 +9,10 @@
 //! - The declared signature includes an optional `count` param, but `max_args: 3`
 //!   caps arity so only three arguments are accepted, matching PHP's practical use.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "str_ireplace",
-    area: String,
-    params: [search: Str, replace: Str, subject: Str, count: Mixed = DefaultSpec::Null],
-    max_args: 3,
-    returns: Str,
+    contract: "str_ireplace",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StrIreplace,
     ),
-    summary: "Case-insensitive version of str_replace().",
-    php_manual: "https://www.php.net/manual/en/function.str-ireplace.php",
 }

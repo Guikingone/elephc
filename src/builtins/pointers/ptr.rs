@@ -14,16 +14,11 @@ use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "ptr",
-    area: Pointers,
-    params: [value: Mixed],
-    returns: Mixed,
+    contract: "ptr",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Ptr,
     ),
-    summary: "Returns a raw pointer to the given variable.",
-    extension: true,
 }
 
 /// Validates that the argument is a variable and returns `PhpType::Pointer(None)`.

@@ -9,22 +9,17 @@
 //!   type: `true` → `Float`, `false` → `Str`, non-literal → `Union(Str, Float)`.
 //!   The registry's common path pre-infers arguments; the hook must not call `infer_type`.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "microtime",
-    area: System,
-    params: [as_float: Bool = DefaultSpec::Bool(false)],
-    arity_error: "microtime() takes 0 or 1 arguments",
-    returns: Mixed,
+    contract: "microtime",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Microtime,
     ),
-    summary: "Returns the current Unix timestamp with microseconds.",
 }
 
 /// Refines the return type of `microtime` based on the literal value of `as_float`.

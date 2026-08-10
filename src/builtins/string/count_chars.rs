@@ -15,25 +15,17 @@
 //!   catchable `ValueError` before the helper runs, so the runtime function is declared
 //!   `MAY_THROW` rather than pure.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "count_chars",
-    area: String,
-    params: [
-        string: Str,
-        mode: Int = DefaultSpec::Int(0)
-    ],
-    returns: Mixed,
+    contract: "count_chars",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::CountChars,
     ),
-    summary: "Returns byte-frequency information about a string as a tally or a byte list.",
-    php_manual: "https://www.php.net/manual/en/function.count-chars.php",
 }
 
 /// Returns the `$mode`-dependent result type for a `count_chars` call.

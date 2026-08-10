@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "asin",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "asin",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Asin,
     ),
-    summary: "Returns the arcsine of a number in radians.",
-    php_manual: "https://www.php.net/manual/en/function.asin.php",
 }

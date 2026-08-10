@@ -13,13 +13,8 @@
 
 
 builtin! {
-    name: "__elephc_phar_get_metadata",
-    area: Io,
-    params: [filename: Str],
-    returns: Str,
+    contract: "__elephc_phar_get_metadata",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ElephcPharGetMetadata,
     ),
-    summary: "Reads the serialized PHAR-level metadata blob.",
-    internal: true,
 }

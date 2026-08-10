@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "is_writable",
-    area: Io,
-    params: [filename: Str],
-    returns: Bool,
+    contract: "is_writable",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsWritable,
     ),
-    summary: "Tells whether the filename is writable.",
-    php_manual: "function.is-writable",
 }

@@ -14,21 +14,16 @@
 //!   a simple type identifier and cannot express a union inline. Argument types are
 //!   inferred by the common registry dispatch path before the hook fires.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "strpos",
-    area: String,
-    params: [haystack: Str, needle: Str, offset: Int = DefaultSpec::Int(0)],
-    returns: Mixed,
+    contract: "strpos",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Strpos,
     ),
-    summary: "Finds the numeric position of the first occurrence of a substring.",
-    php_manual: "https://www.php.net/manual/en/function.strpos.php",
 }
 
 /// Returns `PhpType::Union([Int, Bool])` for a `strpos` call (position, or `false`).

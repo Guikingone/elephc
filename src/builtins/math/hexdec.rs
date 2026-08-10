@@ -19,16 +19,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "hexdec",
-    area: Math,
-    params: [hex_string: Str],
-    returns: Mixed,
+    contract: "hexdec",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Hexdec,
     ),
-    summary: "Converts a hexadecimal string to its decimal number.",
-    php_manual: "https://www.php.net/manual/en/function.hexdec.php",
 }
 
 /// Returns `PhpType::Union([Int, Float])` for a `hexdec` call.

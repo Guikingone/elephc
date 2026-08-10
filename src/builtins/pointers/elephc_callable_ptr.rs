@@ -29,14 +29,9 @@ use crate::ir::{Effects, Op};
 use crate::types::PhpType;
 
 builtin! {
-    name: "__elephc_callable_ptr",
-    area: Pointers,
-    params: [value: Mixed],
-    returns: Mixed,
+    contract: "__elephc_callable_ptr",
     check: check,
     semantics: internal_eir_semantics(lower, Effects::PURE, BuiltinResultOwnership::NonHeap),
-    summary: "Reinterprets a closure / first-class callable as its raw descriptor pointer.",
-    internal: true
 }
 
 /// Infers the argument type and returns `PhpType::Pointer(None)`.

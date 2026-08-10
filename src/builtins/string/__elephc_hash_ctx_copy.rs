@@ -15,13 +15,8 @@
 //! - Arity (exactly 1 arg) is validated by the registry's `check_arity` before the hook fires.
 
 builtin! {
-    name: "__elephc_hash_ctx_copy",
-    area: String,
-    params: [context: Mixed],
-    returns: Mixed,
+    contract: "__elephc_hash_ctx_copy",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::HashCopy,
     ),
-    summary: "Clones a raw incremental hashing context for the hash prelude.",
-    internal: true,
 }

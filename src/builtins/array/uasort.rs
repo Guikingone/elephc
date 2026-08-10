@@ -16,18 +16,13 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "uasort",
-    area: Array,
-    params: [ref array: Mixed, callback: Mixed],
-    returns: Void,
+    contract: "uasort",
     check: check,
     lazy_check: true,
     semantics: crate::builtins::semantics::with_argument_lowering(
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Uasort),
         crate::builtins::semantics::BuiltinArgumentLowering::UserValueSort,
     ),
-    summary: "Sorts an array with a user-defined comparison function and maintains index association.",
-    php_manual: "https://www.php.net/manual/en/function.uasort.php",
 }
 
 /// Validates the array and comparator callback arguments for a `uasort` call.

@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "glob",
-    area: Io,
-    params: [pattern: Str],
-    returns: Mixed,
+    contract: "glob",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Glob,
     ),
-    summary: "Finds pathnames matching a pattern.",
-    php_manual: "function.glob",
 }
 
 /// Returns `Array<Str>` reflecting that `glob` yields the matched pathnames.

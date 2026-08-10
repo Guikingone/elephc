@@ -11,12 +11,8 @@
 
 
 builtin! {
-    name: "sleep",
-    area: System,
-    params: [seconds: Int],
-    returns: Int,
+    contract: "sleep",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Sleep,
     ),
-    summary: "Delays execution for a number of seconds.",
 }

@@ -12,13 +12,8 @@
 
 
 builtin! {
-    name: "floor",
-    area: Math,
-    params: [num: Float],
-    returns: Float,
+    contract: "floor",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Floor,
     ),
-    summary: "Rounds a number down to the nearest integer.",
-    php_manual: "https://www.php.net/manual/en/function.floor.php",
 }

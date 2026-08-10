@@ -13,16 +13,10 @@
 //!   *before* touching the context, so a rejected call has no side effect.
 //! - Arity (1–2 args) is validated by the registry's `check_arity` before the hook fires.
 
-use crate::builtins::spec::DefaultSpec;
 
 builtin! {
-    name: "__elephc_hash_ctx_final",
-    area: String,
-    params: [context: Mixed, binary: Bool = DefaultSpec::Bool(false)],
-    returns: Str,
+    contract: "__elephc_hash_ctx_final",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::HashFinal,
     ),
-    summary: "Finalizes a raw incremental hashing context for the hash prelude.",
-    internal: true,
 }

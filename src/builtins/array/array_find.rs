@@ -16,16 +16,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_find",
-    area: Array,
-    params: [array: Mixed, callback: Mixed],
-    returns: Mixed,
+    contract: "array_find",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayFind,
     ),
-    summary: "Returns the first element satisfying a predicate callback, or null.",
-    php_manual: "https://www.php.net/manual/en/function.array-find.php",
 }
 
 /// Validates the predicate callback for an `array_find` call and returns `PhpType::Mixed`.

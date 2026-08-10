@@ -10,22 +10,17 @@
 //! - The registry pre-infers arguments before calling the hook; the hook does not
 //!   call `infer_type` again.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "dirname",
-    area: Io,
-    params: [path: Str, levels: Int = DefaultSpec::Int(1)],
-    returns: Str,
+    contract: "dirname",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Dirname,
     ),
-    summary: "Returns a parent directory's path.",
-    php_manual: "function.dirname",
 }
 
 /// Returns `Str`, rejecting static integer `levels` arguments less than 1.

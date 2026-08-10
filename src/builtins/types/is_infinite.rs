@@ -10,13 +10,8 @@
 
 
 builtin! {
-    name: "is_infinite",
-    area: Types,
-    params: [num: Float],
-    returns: Bool,
+    contract: "is_infinite",
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::IsInfinite,
     ),
-    summary: "Checks whether a float is infinite.",
-    php_manual: "function.is-infinite",
 }

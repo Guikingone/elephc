@@ -16,17 +16,12 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "reset",
-    area: Array,
-    params: [ref array: Mixed],
-    returns: Mixed,
+    contract: "reset",
     check: check,
     semantics: crate::builtins::semantics::array_pointer_semantics(
         crate::builtins::semantics::ArrayPointerOp::Reset,
         crate::ir::RuntimeFnId::ArrayPtrSeek,
     ),
-    summary: "Rewinds the array's internal pointer to the first element and returns it.",
-    php_manual: "https://www.php.net/manual/en/function.reset.php",
 }
 
 /// Validates the receiver shape and type for `reset()` and returns `Mixed`.

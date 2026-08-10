@@ -21,8 +21,8 @@ categories = ["compilers", "command-line-utilities"]
 # (optional eval runtime) into target/<profile>/, where linker.rs locates them
 # for programs that use those features.
 [workspace]
-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
-default-members = [".", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
+default-members = [".", "crates/elephc-builtin-contract", "crates/elephc-tls", "crates/elephc-pdo", "crates/elephc-crypto", "crates/elephc-phar", "crates/elephc-tz", "crates/elephc-image", "crates/elephc-web", "crates/elephc-magician"]
 resolver = "2"
 
 [[bin]]
@@ -37,6 +37,7 @@ name = "gen_builtins"
 path = "tools/gen_builtins.rs"
 
 [dependencies]
+elephc-builtin-contract = { path = "crates/elephc-builtin-contract" }
 inventory = "0.3"
 # Grows the stack on demand inside the recursive-descent parser so deeply
 # nested expressions never overflow small (2 MiB test-thread) stacks.

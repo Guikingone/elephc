@@ -17,26 +17,17 @@
 //! - `$characters` is nullable in php-src; an omitted or empty character list produces the
 //!   same word mask, so the backend passes a zero-length list for both.
 
-use crate::builtins::spec::{BuiltinCheckCtx, DefaultSpec};
+use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
 use crate::parser::ast::ExprKind;
 use crate::types::PhpType;
 
 builtin! {
-    name: "str_word_count",
-    area: String,
-    params: [
-        string: Str,
-        format: Int = DefaultSpec::Int(0),
-        characters: Str = DefaultSpec::Null
-    ],
-    returns: Mixed,
+    contract: "str_word_count",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::StrWordCount,
     ),
-    summary: "Counts the words in a string, or returns them as a list or byte-offset map.",
-    php_manual: "https://www.php.net/manual/en/function.str-word-count.php",
 }
 
 /// Returns the `$format`-dependent result type for a `str_word_count` call.

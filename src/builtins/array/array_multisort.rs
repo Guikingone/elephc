@@ -14,16 +14,11 @@ use crate::errors::CompileError;
 use crate::types::PhpType;
 
 builtin! {
-    name: "array_multisort",
-    area: Array,
-    params: [ref array1: Mixed, ref array2: Mixed],
-    returns: Bool,
+    contract: "array_multisort",
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::ArrayMultisort,
     ),
-    summary: "Sorts multiple arrays or multi-dimensional arrays.",
-    php_manual: "https://www.php.net/manual/en/function.array-multisort.php",
 }
 
 /// Validates argument types for an `array_multisort` call.
