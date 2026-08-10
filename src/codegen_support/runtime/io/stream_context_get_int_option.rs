@@ -144,6 +144,26 @@ fn emit_get_int_context_option_linux_x86_64(emitter: &mut Emitter) {
 
     // Load top-level options hash.
     abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_context_options", 0); // prepare SysV call argument
+    // See the AArch64 counterpart: the active bridge is only published inside an fopen scope, and
+    // outside one — `stream_socket_client()` then `stream_socket_enable_crypto()` — the request
+    // default context still applies. Without this fallback x86_64 reported every option missing,
+    // so `ssl.verify_peer` never reached the TLS attach and a self-signed peer was always refused.
+    emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
+    emitter.instruction("jnz __rt_gico_have_options_x86");                      // an explicit scope wins
+    // An explicit but EMPTY context must mask the default, so the fallback only applies when no
+    // scope is active at all. The options pointer is null in both cases; the active-handle slot is
+    // what tells them apart.
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stream_current_context_handle", 0);
+    emitter.instruction("test r10, r10");                                       // is a context scope active?
+    emitter.instruction("jnz __rt_gico_have_options_x86");                      // a scope is active: its emptiness is meaningful
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_default_context_handle", 0);
+    emitter.instruction("test rdi, rdi");                                       // was a request default context ever created?
+    emitter.instruction("jz __rt_gico_have_options_x86");                       // no default context exists
+    emitter.instruction("call __rt_context_state");                             // resolve its ContextState
+    emitter.instruction("test rax, rax");                                       // did the default context resolve?
+    emitter.instruction("jz __rt_gico_have_options_x86");                       // a closed default context has no options
+    emitter.instruction("mov rdi, QWORD PTR [rax]");                            // CONTEXT_OPTIONS_OFFSET
+    emitter.label("__rt_gico_have_options_x86");
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gico_miss_x86");                               // branch when the checked value is zero or equal
 

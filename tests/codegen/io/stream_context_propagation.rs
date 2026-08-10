@@ -12,6 +12,8 @@
 //!   empty contexts mask defaults, while omitted and explicit null use them.
 
 use super::*;
+
+use elephc::codegen::platform::Target;
 use std::io::{Read, Write};
 
 /// Starts a deterministic HTTP server that returns each request method as its body.
@@ -357,4 +359,62 @@ echo stream_get_contents($stream);
     );
     server.join().expect("context test: server join");
     assert_eq!(out, "false|POST");
+}
+
+/// Pins that both context-option readers fall back to the request default context on every target.
+///
+/// The active option bridge is only published inside an `fopen` scope. Outside one — the
+/// `stream_socket_client()` then `stream_socket_enable_crypto()` sequence every TLS fixture writes
+/// — it is null, and the reader must fall back to the request default context or report every
+/// option missing. AArch64 did; x86_64 gave up, so `ssl.verify_peer` never reached the TLS
+/// handshake and a self-signed peer was refused there and only there, while `https://` kept
+/// working because it reads its options inside an open scope.
+///
+/// The guard is on the emitted runtime because the fallback is unreachable on a host whose
+/// architecture already has it: an executing test passes either way.
+#[test]
+fn test_context_option_readers_fall_back_to_the_default_context_on_every_target() {
+    for target in ["linux-x86_64", "linux-aarch64", "macos-aarch64"] {
+        let parsed = Target::parse(target).expect("supported target");
+        let runtime = elephc::codegen::generate_runtime(8_388_608, parsed);
+        for reader in ["__rt_get_int_context_option", "__rt_get_string_context_option"] {
+            let body = context_reader_body(&runtime, reader);
+            let bridge = body
+                .find("_stream_context_options")
+                .unwrap_or_else(|| panic!("{target}: {reader} never reads the option bridge"));
+            let fallback = body.find("_stream_default_context_handle").unwrap_or_else(|| {
+                panic!("{target}: {reader} must fall back to the request default context")
+            });
+            assert!(
+                body.contains("_stream_current_context_handle"),
+                "{target}: {reader} must let an explicit empty context mask the default"
+            );
+            // Emitting the fallback is not enough — a null bridge must REACH it. Anything that
+            // jumps to the miss label in between makes the block dead code, which is exactly the
+            // state x86_64 was in.
+            assert!(
+                fallback > bridge,
+                "{target}: {reader} reads the default context before the bridge"
+            );
+            let between = &body[bridge..fallback];
+            assert!(
+                !between.contains("miss"),
+                "{target}: {reader} gives up on a null bridge before reaching the fallback:\n{between}"
+            );
+        }
+    }
+}
+
+/// Returns one runtime helper's assembly, from its label to the next helper's comment banner.
+fn context_reader_body<'a>(runtime: &'a str, label: &str) -> &'a str {
+    let marker = format!("{label}:");
+    let start = runtime
+        .find(&marker)
+        .unwrap_or_else(|| panic!("missing assembly label {label}"));
+    let rest = &runtime[start..];
+    let end = rest[marker.len()..]
+        .find("# --- runtime:")
+        .map(|offset| offset + marker.len())
+        .unwrap_or(rest.len());
+    &rest[..end]
 }

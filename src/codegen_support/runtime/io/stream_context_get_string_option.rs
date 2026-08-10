@@ -149,6 +149,21 @@ fn emit_get_string_context_option_linux_x86_64(emitter: &mut Emitter) {
 
     // -- load top-level options hash --
     abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_context_options", 0); // prepare SysV call argument
+    // See the AArch64 counterpart: outside an fopen scope the request default context still
+    // applies, which is how `ssl.peer_name` reaches a `stream_socket_enable_crypto()` handshake.
+    emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
+    emitter.instruction("jnz __rt_gsco_have_options_x86");                      // an explicit scope wins
+    abi::emit_load_symbol_to_reg(emitter, "r10", "_stream_current_context_handle", 0);
+    emitter.instruction("test r10, r10");                                       // is a context scope active?
+    emitter.instruction("jnz __rt_gsco_have_options_x86");                      // a scope is active: its emptiness is meaningful
+    abi::emit_load_symbol_to_reg(emitter, "rdi", "_stream_default_context_handle", 0);
+    emitter.instruction("test rdi, rdi");                                       // was a request default context ever created?
+    emitter.instruction("jz __rt_gsco_miss_x86");                               // no default context was ever created
+    emitter.instruction("call __rt_context_state");                             // resolve its ContextState
+    emitter.instruction("test rax, rax");                                       // did the default context resolve?
+    emitter.instruction("jz __rt_gsco_miss_x86");                               // a closed default context has no options
+    emitter.instruction("mov rdi, QWORD PTR [rax]");                            // CONTEXT_OPTIONS_OFFSET
+    emitter.label("__rt_gsco_have_options_x86");
     emitter.instruction("test rdi, rdi");                                       // check whether the runtime value is zero
     emitter.instruction("jz __rt_gsco_miss_x86");                               // branch when the checked value is zero or equal
 
