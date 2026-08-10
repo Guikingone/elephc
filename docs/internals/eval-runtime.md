@@ -172,6 +172,16 @@ fatals, thrown values, early fragment returns, and function cleanup must all
 balance those cells. Persistent declarations and metadata live in the eval
 context until its owning generated function or process scope is destroyed.
 
+Builtin lookup is also shared at the contract boundary. Magician joins its
+implementation hooks to the same `BuiltinId` used by the compiler. For compatible
+boxed-cell operations it dispatches a typed `RuntimeBuiltinId` through
+`__elephc_runtime_builtin_call_v1`; arguments are borrowed and a successful result
+transfers one fresh cell through `result_out`. Unknown IDs and unsupported arities
+fail closed. The compiler emits target-aware wrappers for macOS ARM64, Linux ARM64,
+and Linux x86_64. By-reference/lvalue, callable, reflection, resource,
+eval-declaration, and partial-signature behavior remains on an explicit Magician
+adapter with a catalog-audited reason.
+
 Eval array reads use a dedicated owned shared-cell mode. Unlike an ordinary
 PHP array read, which detaches a boxed zval to preserve value semantics, the
 bridge must retain the exact stored cell because that handle can be the
@@ -217,7 +227,8 @@ register set or object format.
 
 The exhaustive language subset, reflection behavior, builtins, and known gaps
 belong in [Eval](../php/eval.md). Per-builtin AOT/eval availability is generated
-from the `builtin!` and `eval_builtin!` registries in the
+from the shared `elephc-builtin-contract` catalog joined to the `builtin!` and
+`eval_builtin!` backend registries in the
 [Builtin Reference](../php/builtins.md). [The Runtime](the-runtime.md) documents
 the shared `__rt_*` assembly families and links here for the optional eval
 boundary.

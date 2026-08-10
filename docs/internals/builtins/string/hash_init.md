@@ -35,6 +35,8 @@ function hash_init(mixed $algo, mixed $flags = '0', mixed $key = '""'): mixed
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/string/hash_init.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-language-surface`.
 - **Dispatch hooks**: `direct`, `values`
 
 ## Cross-references

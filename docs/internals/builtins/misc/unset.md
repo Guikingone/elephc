@@ -53,6 +53,8 @@ function unset(mixed $var, ...$vars): void
 ## Eval interpreter (magician)
 
 - **Declaration**: [`crates/elephc-magician/src/interpreter/builtins/symbols/unset.rs`](https://github.com/illegalstudio/elephc/blob/main/crates/elephc-magician/src/interpreter/builtins/symbols/unset.rs) (`eval_builtin!`)
+- **Execution**: Magician interpreter adapter.
+- **Adapter reason**: `dynamic-language-surface`.
 - **Dispatch hooks**: `direct`, `values`
 - **Variadic**: collects excess arguments into `$vars`.
 

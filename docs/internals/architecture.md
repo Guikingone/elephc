@@ -211,7 +211,7 @@ src/
 ├── timings.rs                 Phase timing collection/reporting
 ├── span.rs                    Source position (line, col)
 ├── intrinsics.rs              Compiler-recognized intrinsic method calls for runtime-managed core objects
-├── builtins/                  `builtin!` registry: single source of truth driving the builtin catalog, signatures, type checking, lowering dispatch, and docs
+├── builtins/                  AOT `builtin!` bindings: checker/EIR semantics joined to `elephc-builtin-contract`
 ├── builtin_metadata.rs        Public builtin metadata snapshots for parity tests and external audits
 ├── string_bytes.rs            Parser string-literal payload → PHP runtime bytes conversion
 ├── magic_constants.rs         Per-file lowering for PHP magic constants

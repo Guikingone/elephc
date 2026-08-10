@@ -321,9 +321,29 @@ def _eval_internals_section(b: dict) -> str:
     hooks = ev.get("hooks") or []
     lines = [
         f"- **Declaration**: [`{home}`](https://github.com/illegalstudio/elephc/blob/main/{home}) (`eval_builtin!`)",
-        "- **Dispatch hooks**: "
-        + (", ".join(f"`{h}`" for h in hooks) or "_none_"),
     ]
+    execution = ev.get("execution")
+    runtime_builtin_id = ev.get("runtime_builtin_id")
+    if execution == "shared-runtime":
+        lines.append(
+            f"- **Execution**: shared generated-runtime ABI (`RuntimeBuiltinId({runtime_builtin_id})`)."
+        )
+    elif execution == "hybrid-adapter":
+        lines.append(
+            f"- **Execution**: generated-runtime ABI (`RuntimeBuiltinId({runtime_builtin_id})`) with a Magician fallback adapter."
+        )
+    elif execution == "interpreter-adapter":
+        lines.append("- **Execution**: Magician interpreter adapter.")
+    if ev.get("adapter_reason"):
+        lines.append(f"- **Adapter reason**: `{ev['adapter_reason']}`.")
+    if ev.get("signature_override_reason"):
+        lines.append(
+            f"- **Eval signature compatibility**: `{ev['signature_override_reason']}`."
+        )
+    lines.append(
+        "- **Dispatch hooks**: "
+        + (", ".join(f"`{h}`" for h in hooks) or "_none_ (shared runtime dispatch)"),
+    )
     by_ref = [p["name"] for p in (ev.get("params") or []) if p.get("by_ref")]
     if by_ref:
         lines.append(

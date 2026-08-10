@@ -1,8 +1,9 @@
-"""Extract builtin metadata from the Elephc `builtin!` registry.
+"""Extract builtin metadata from Elephc's shared builtin contracts and bindings.
 
-Since the single-source builtin registry migration, every PHP builtin is declared
-once via `builtin!` in ``src/builtins/<area>/<name>.rs`` and collected through the
-`inventory` crate. The authoritative data is therefore read from the registry
+Every PHP builtin surface is declared once in ``elephc-builtin-contract``. The
+compiler's ``builtin!`` files and Magician's ``eval_builtin!`` files join their
+backend-specific behavior by stable contract ID and are collected through
+`inventory`. The authoritative assembled data is therefore read from the registry
 itself, via the ``gen_builtins`` example (``cargo run --example gen_builtins --
 --include-internal``), NOT by regex-scraping ``catalog.rs`` / ``signatures.rs``
 (which the migration emptied). The exporter also attaches, per builtin, the eval
@@ -73,6 +74,8 @@ def run_gen_builtins(repo: Path) -> list[dict]:
     cmd: list[str]
     source_inputs = [repo / "Cargo.toml", repo / "Cargo.lock", repo / "tools" / "gen_builtins.rs"]
     source_inputs.extend((repo / "src").rglob("*.rs"))
+    source_inputs.extend((repo / "crates" / "elephc-builtin-contract").rglob("*.rs"))
+    source_inputs.extend((repo / "crates" / "elephc-magician" / "src").rglob("*.rs"))
     newest_source_mtime = max(path.stat().st_mtime for path in source_inputs if path.exists())
     for profile in ("release", "debug"):
         exe = repo / "target" / profile / "examples" / "gen_builtins"
@@ -111,15 +114,16 @@ _NON_HOME_FILES = {
     "parity_tests.rs",
 }
 
-_NAME_RE = re.compile(r'name:\s*"([^"]+)"')
+_CONTRACT_RE = re.compile(r'contract:\s*"([^"]+)"')
 
 
 def build_home_file_map(repo: Path) -> dict[str, str]:
     """Map each registry builtin name to its single-source home file.
 
     Scans every builtin home file under ``src/builtins/`` (skipping the registry
-    machinery files) and reads its ``builtin!`` name. Backend lowering metadata
-    comes from the exported semantic descriptor, never from a Rust emitter path.
+    machinery files) and reads its ``builtin!`` shared-contract key. Backend
+    lowering metadata comes from the exported semantic descriptor, never from
+    a Rust emitter path.
     """
     out: dict[str, str] = {}
     builtins_root = repo / "src" / "builtins"
@@ -129,10 +133,10 @@ def build_home_file_map(repo: Path) -> dict[str, str]:
         text = path.read_text(encoding="utf-8")
         if "builtin!" not in text:
             continue
-        name_match = _NAME_RE.search(text)
-        if not name_match:
+        contract_match = _CONTRACT_RE.search(text)
+        if not contract_match:
             continue
-        canonical = name_match.group(1).lower()
+        canonical = contract_match.group(1).lower()
         out[canonical] = str(path.relative_to(repo))
     return out
 
