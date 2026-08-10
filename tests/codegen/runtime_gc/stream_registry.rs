@@ -580,3 +580,38 @@ echo "accepted";
         out.stderr
     );
 }
+
+/// Verifies `stream_socket_pair()` leaves nothing behind, however its result is used.
+///
+/// The helper creates the result array itself, so the array arrives holding a reference; boxing it
+/// as Mixed took a second one, and nobody dropped the first. Releasing the box then freed only the
+/// box, and the array plus both element cells stayed live — three blocks per call, growing with
+/// every pair, and invisible to every functional test. Discarding the result, closing both ends and
+/// unsetting the variable all leaked identically, because the fault is in constructing the result
+/// rather than in releasing it.
+#[test]
+fn test_socket_pair_result_releases_its_creator_reference() {
+    // The ends are bound to variables before use on purpose: passing a Mixed-array element
+    // straight to a call leaks the element cell, which is a separate defect in the general call
+    // path and would mask what this fixture measures.
+    let out = compile_and_run_with_heap_debug(
+        r#"<?php
+for ($i = 0; $i < 3; $i++) {
+    $pair = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+    $writer = $pair[0];
+    $reader = $pair[1];
+    fwrite($writer, "x");
+    echo fread($reader, 1);
+    fclose($writer);
+    fclose($reader);
+}
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "xxx");
+    assert!(
+        out.stderr.contains("HEAP DEBUG: leak summary: clean"),
+        "three socket pairs must leave no owned storage behind: {}",
+        out.stderr
+    );
+}

@@ -216,10 +216,18 @@ pub(super) fn box_stream_socket_pair_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // null pointer means socketpair failed
             ctx.emitter.instruction("mov x1, #9");                              // resource tag: each fd becomes Mixed(resource)
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the creator-owned array outlives the box
             emit_box_current_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(PhpType::Mixed)),
             );
+            // The box retained the array, so the reference the helper created it with has to go:
+            // without this the array and both element cells outlived the released box.
+            abi::emit_push_reg(ctx.emitter, "x0");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");                       // reload the creator-owned array
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
             ctx.emitter.instruction(&format!("b {}", done_label));              // skip the false boxing path after success
             ctx.emitter.label(&false_label);
             emit_bool_result(ctx, false);
@@ -232,10 +240,18 @@ pub(super) fn box_stream_socket_pair_result(ctx: &mut FunctionContext<'_>) {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the descriptor array to array_to_mixed
             ctx.emitter.instruction("mov esi, 9");                              // resource tag: each fd becomes Mixed(resource)
             abi::emit_call_label(ctx.emitter, "__rt_array_to_mixed");
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the creator-owned array outlives the box
             emit_box_current_value_as_mixed(
                 ctx.emitter,
                 &PhpType::Array(Box::new(PhpType::Mixed)),
             );
+            // See the AArch64 counterpart: the box retained the array, so the creator's reference
+            // has to go or the array and both element cells outlive the released box.
+            abi::emit_push_reg(ctx.emitter, "rax");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 16]");           // reload the creator-owned array
+            abi::emit_call_label(ctx.emitter, "__rt_decref_any");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+            abi::emit_release_temporary_stack(ctx.emitter, 16);
             ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip the false boxing path after success
             ctx.emitter.label(&false_label);
             emit_bool_result(ctx, false);
