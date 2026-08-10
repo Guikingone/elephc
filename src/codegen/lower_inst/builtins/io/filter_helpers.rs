@@ -293,7 +293,12 @@ pub(super) fn lower_user_stream_filter_attach(
             ctx.emitter.instruction("ldr x9, [sp, #16]");                       // resolved id, below the pushed handle
         }
         Arch::X86_64 => {
-            ctx.emitter.instruction("mov r13, QWORD PTR [rsp + 8]");            // resolved id, below the pushed handle
+            // 16, not 8: a push reserves a whole 16-byte slot, so the id pushed before the
+            // handle sits one full slot down. Reading at 8 picked up that slot's padding, so the
+            // node was created with a garbage filter id and the filter did nothing — silently,
+            // and only for a filter named by a run-time expression, which is why the literal and
+            // user-filter paths stayed green.
+            ctx.emitter.instruction("mov r13, QWORD PTR [rsp + 16]");           // resolved id, below the pushed handle
         }
     }
     emit_attach_filter_node(ctx, None, prepend, false);
