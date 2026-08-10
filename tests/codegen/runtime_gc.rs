@@ -25,6 +25,8 @@ mod foreach_object_source;
 mod stack_args;
 #[path = "runtime_gc/cow_and_cycles.rs"]
 mod cow_and_cycles;
+#[path = "runtime_gc/dom.rs"]
+mod dom;
 #[path = "runtime_gc/growth.rs"]
 mod growth;
 #[path = "runtime_gc/heap.rs"]
