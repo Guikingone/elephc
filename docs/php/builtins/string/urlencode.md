@@ -2,7 +2,7 @@
 title: "urlencode()"
 description: "URL-encodes a string using application/x-www-form-urlencoded rules."
 sidebar:
-  order: 464
+  order: 466
 ---
 
 ## urlencode()

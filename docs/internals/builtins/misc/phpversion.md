@@ -2,7 +2,7 @@
 title: "phpversion() — internals"
 description: "Compiler internals for phpversion(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 323
+  order: 325
 ---
 
 ## `phpversion()` — internals

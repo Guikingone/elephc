@@ -2,7 +2,7 @@
 title: "is_long() — internals"
 description: "Compiler internals for is_long(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 486
+  order: 488
 ---
 
 ## `is_long()` — internals

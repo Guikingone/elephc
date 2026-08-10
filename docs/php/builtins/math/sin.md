@@ -2,7 +2,7 @@
 title: "sin()"
 description: "Returns the sine of a number (radians)."
 sidebar:
-  order: 307
+  order: 309
 ---
 
 ## sin()

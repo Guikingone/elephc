@@ -2,7 +2,7 @@
 title: "log2()"
 description: "Returns the base-2 logarithm of a number."
 sidebar:
-  order: 296
+  order: 298
 ---
 
 ## log2()

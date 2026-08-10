@@ -2,7 +2,7 @@
 title: "is_float()"
 description: "Checks whether a variable is a floating-point number."
 sidebar:
-  order: 482
+  order: 484
 ---
 
 ## is_float()

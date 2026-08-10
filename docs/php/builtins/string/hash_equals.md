@@ -2,7 +2,7 @@
 title: "hash_equals()"
 description: "Compares two strings using a constant-time algorithm."
 sidebar:
-  order: 401
+  order: 403
 ---
 
 ## hash_equals()

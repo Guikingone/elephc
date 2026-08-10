@@ -26,6 +26,7 @@ sidebar:
 | [`fpassthru()`](./io/fpassthru.md) | `(resource $stream): int` | `int` | ✓ | ✓ |
 | [`fprintf()`](./io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`fputcsv()`](./io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int` | `int` | ✓ | ✓ |
+| [`fputs()`](./io/fputs.md) | `(mixed $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
 | [`fread()`](./io/fread.md) | `(resource $stream, int $length): string` | `string` | ✓ | ✓ |
 | [`fscanf()`](./io/fscanf.md) | `(resource $stream, string $format, ...$vars): array` | `array` | ✓ | ✓ |
 | [`fseek()`](./io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |
@@ -73,6 +74,7 @@ sidebar:
 | [`stream_context_get_params()`](./io/stream_context_get_params.md) | `(resource $context): array` | `array` | ✓ | ✓ |
 | [`stream_context_set_default()`](./io/stream_context_set_default.md) | `(array $options): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_context_set_option()`](./io/stream_context_set_option.md) | `(resource $context, string $wrapper_or_options, string $option_name = null, mixed $value = null): bool` | `bool` | ✓ | ✓ |
+| [`stream_context_set_options()`](./io/stream_context_set_options.md) | `(mixed $context, mixed $options): bool` | `bool` | ✓ | ✓ |
 | [`stream_context_set_params()`](./io/stream_context_set_params.md) | `(resource $context, array $params): bool` | `bool` | ✓ | ✓ |
 | [`stream_copy_to_stream()`](./io/stream_copy_to_stream.md) | `(resource $from, resource $to, int $length = null, int $offset = -1): mixed` | `mixed` | ✓ | ✓ |
 | [`stream_filter_register()`](./io/stream_filter_register.md) | `(string $filter_name, string $class): bool` | `bool` | ✓ | ✓ |

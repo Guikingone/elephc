@@ -2,7 +2,7 @@
 title: "addslashes()"
 description: "Adds backslashes before characters that need to be escaped."
 sidebar:
-  order: 383
+  order: 385
 ---
 
 ## addslashes()

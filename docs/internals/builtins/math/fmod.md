@@ -2,7 +2,7 @@
 title: "fmod() — internals"
 description: "Compiler internals for fmod(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 287
+  order: 289
 ---
 
 ## `fmod()` — internals

@@ -2,7 +2,7 @@
 title: "gethostname() — internals"
 description: "Compiler internals for gethostname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 193
+  order: 194
 ---
 
 ## `gethostname()` — internals

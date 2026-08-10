@@ -2,7 +2,7 @@
 title: "bin2hex()"
 description: "Converts binary data into its hexadecimal string representation."
 sidebar:
-  order: 386
+  order: 388
 ---
 
 ## bin2hex()

@@ -2,7 +2,7 @@
 title: "base_convert()"
 description: "Converts a number between two arbitrary bases from 2 to 36."
 sidebar:
-  order: 274
+  order: 276
 ---
 
 ## base_convert()

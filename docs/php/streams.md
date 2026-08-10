@@ -59,6 +59,7 @@ resources than the initial reservation holds grows the table on the heap as usua
 | `fclose()` | `fclose(resource $handle): bool` | Close a stream. Closing a `phar://` write stream finalizes the archive, and closing a filtered stream runs pending filter cleanup such as user-filter `onClose()`. |
 | `fread()` | `fread(resource $handle, $length): string` | Read up to `$length` bytes. Attached read filters and user-wrapper `stream_read()` methods are honored. On a filtered stream the result is capped at `$length` and the filter's remainder is kept for the next read. |
 | `fwrite()` | `fwrite(resource $handle, $data): int` | Write bytes and return the byte count. Attached write filters and user-wrapper `stream_write()` methods are honored. |
+| `fputs()` | `fputs(resource $handle, $data): int` | Alias of `fwrite()`. |
 | `fprintf()` | `fprintf(resource $handle, string $format, ...$values): int` | Format like `sprintf()` and write to the stream. |
 | `vfprintf()` | `vfprintf(resource $handle, string $format, array $values): int` | Like `fprintf()`, with format values supplied as an array. |
 | `fscanf()` | `fscanf(resource $handle, string $format): array` | Read one line and parse it with the `sscanf()` engine. v1 supports the two-argument array-returning form and conversions `%d`, `%f`, `%s`, and `%%`. |
@@ -220,6 +221,7 @@ its TLS 1.2/1.3 policy internally.
 | `stream_context_get_default()` | `stream_context_get_default(array $options = []): resource` | Return the default context resource. The optional arg is evaluated for side effects; v1 does not apply it. |
 | `stream_context_set_default()` | `stream_context_set_default(array $options): resource` | Merge `$options` into the request's default context and return it. Later opens without an explicit context read them. |
 | `stream_context_set_option()` | `stream_context_set_option(resource $context, ...): bool` | Accepts PHP's two forms: `(ctx, options_array)` replaces the persisted options hash, while `(ctx, wrapper, option, value)` sets one nested option. In the four-arg form, values are stored as strings in v1. |
+| `stream_context_set_options()` | `stream_context_set_options(resource $context, array $options): bool` | The two-argument spelling PHP 8.3 added for the array form above. |
 | `stream_context_set_params()` | `stream_context_set_params(resource $context, array $params): bool` | Captures a literal `notification` closure or first-class callable into the global notification slot and returns `true`. |
 | `stream_context_get_options()` | `stream_context_get_options(resource $context): array` | Return the persisted options hash, or an empty hash when no context has been created. |
 | `stream_context_get_params()` | `stream_context_get_params(resource $context): array` | Return the context's `options` (and `notification` when one is set). |

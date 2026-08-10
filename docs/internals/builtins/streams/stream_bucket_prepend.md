@@ -2,7 +2,7 @@
 title: "stream_bucket_prepend() — internals"
 description: "Compiler internals for stream_bucket_prepend(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 380
+  order: 382
 ---
 
 ## `stream_bucket_prepend()` — internals

@@ -2,7 +2,7 @@
 title: "php_uname()"
 description: "Returns information about the operating system PHP is running on."
 sidebar:
-  order: 322
+  order: 324
 ---
 
 ## php_uname()

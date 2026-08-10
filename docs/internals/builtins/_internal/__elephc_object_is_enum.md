@@ -2,7 +2,7 @@
 title: "__elephc_object_is_enum() — internals"
 description: "Compiler internals for __elephc_object_is_enum(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 508
+  order: 510
 ---
 
 ## `__elephc_object_is_enum()` — internals

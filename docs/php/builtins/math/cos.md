@@ -2,7 +2,7 @@
 title: "cos()"
 description: "Returns the cosine of a number (radians)."
 sidebar:
-  order: 278
+  order: 280
 ---
 
 ## cos()

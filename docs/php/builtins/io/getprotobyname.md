@@ -2,7 +2,7 @@
 title: "getprotobyname()"
 description: "Gets the protocol number associated with the given protocol name."
 sidebar:
-  order: 194
+  order: 195
 ---
 
 ## getprotobyname()

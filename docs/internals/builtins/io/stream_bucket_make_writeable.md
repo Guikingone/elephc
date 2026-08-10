@@ -2,7 +2,7 @@
 title: "stream_bucket_make_writeable() — internals"
 description: "Compiler internals for stream_bucket_make_writeable(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 222
+  order: 223
 ---
 
 ## `stream_bucket_make_writeable()` — internals

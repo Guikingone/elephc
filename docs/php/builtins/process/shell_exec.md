@@ -2,7 +2,7 @@
 title: "shell_exec()"
 description: "Executes a command via the shell and returns the complete output as a string."
 sidebar:
-  order: 355
+  order: 357
 ---
 
 ## shell_exec()

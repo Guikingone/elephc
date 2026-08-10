@@ -2,7 +2,7 @@
 title: "random_int()"
 description: "Get a cryptographically secure, uniformly selected integer."
 sidebar:
-  order: 305
+  order: 307
 ---
 
 ## random_int()

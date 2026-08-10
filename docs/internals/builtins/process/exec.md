@@ -2,7 +2,7 @@
 title: "exec() — internals"
 description: "Compiler internals for exec(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 349
+  order: 351
 ---
 
 ## `exec()` — internals

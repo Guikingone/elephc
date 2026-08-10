@@ -2,7 +2,7 @@
 title: "popen()"
 description: "Opens process file pointer."
 sidebar:
-  order: 353
+  order: 355
 ---
 
 ## popen()

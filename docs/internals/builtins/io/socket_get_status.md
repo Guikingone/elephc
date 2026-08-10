@@ -2,7 +2,7 @@
 title: "socket_get_status() — internals"
 description: "Compiler internals for socket_get_status(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 218
+  order: 219
 ---
 
 ## `socket_get_status()` — internals

@@ -2,7 +2,7 @@
 title: "socket_set_block()"
 description: "Set blocking mode on a socket stream (alias of stream_set_blocking)."
 sidebar:
-  order: 219
+  order: 220
 ---
 
 ## socket_set_block()

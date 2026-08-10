@@ -431,3 +431,39 @@ echo "|" . $bytes;
     assert_eq!(out, "hi|2");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `fputs()` writes like the `fwrite()` it aliases.
+///
+/// PHP has defined it since 4.0 and plenty of code still uses it; elephc refused to compile it
+/// at all, which is a harder failure than a wrong result.
+#[test]
+fn test_fputs_writes_like_fwrite() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("fputs.txt", "w");
+$n = fputs($h, "written by fputs");
+fclose($h);
+echo $n, "|", file_get_contents("fputs.txt");
+"#,
+    );
+    assert_eq!(out, "16|written by fputs");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_context_set_options()`, the plural spelling PHP 8.3 added.
+///
+/// It is the two-argument array form, which the singular name also accepts; only the arity
+/// differs, so it carries its own runtime id and lowers through the same helper.
+#[test]
+fn test_stream_context_set_options_applies_a_whole_array() {
+    let out = compile_and_run(
+        r#"<?php
+$ctx = stream_context_create();
+$ok = stream_context_set_options($ctx, ["ssl" => ["verify_peer" => false, "peer_name" => "a.test"]]);
+$opts = stream_context_get_options($ctx);
+echo $ok ? "true" : "false", "|", $opts["ssl"]["peer_name"], "|";
+echo $opts["ssl"]["verify_peer"] ? "on" : "off";
+"#,
+    );
+    assert_eq!(out, "true|a.test|off");
+}

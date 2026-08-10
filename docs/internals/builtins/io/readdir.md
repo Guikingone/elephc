@@ -2,7 +2,7 @@
 title: "readdir() — internals"
 description: "Compiler internals for readdir(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 213
+  order: 214
 ---
 
 ## `readdir()` — internals

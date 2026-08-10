@@ -2,7 +2,7 @@
 title: "htmlentities()"
 description: "Converts all applicable characters in a string into their HTML entities."
 sidebar:
-  order: 408
+  order: 410
 ---
 
 ## htmlentities()

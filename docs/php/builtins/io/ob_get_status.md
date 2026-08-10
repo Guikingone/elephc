@@ -2,7 +2,7 @@
 title: "ob_get_status()"
 description: "Gets status of output buffers."
 sidebar:
-  order: 208
+  order: 209
 ---
 
 ## ob_get_status()

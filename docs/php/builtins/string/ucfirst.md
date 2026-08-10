@@ -2,7 +2,7 @@
 title: "ucfirst()"
 description: "Uppercases the first character of a string."
 sidebar:
-  order: 461
+  order: 463
 ---
 
 ## ucfirst()

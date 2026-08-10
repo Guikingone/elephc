@@ -2,7 +2,7 @@
 title: "fdiv()"
 description: "Divides two numbers, according to IEEE 754."
 sidebar:
-  order: 285
+  order: 287
 ---
 
 ## fdiv()

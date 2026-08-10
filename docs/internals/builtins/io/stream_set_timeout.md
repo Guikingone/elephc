@@ -2,7 +2,7 @@
 title: "stream_set_timeout() — internals"
 description: "Compiler internals for stream_set_timeout(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 248
+  order: 250
 ---
 
 ## `stream_set_timeout()` — internals
