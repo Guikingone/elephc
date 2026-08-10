@@ -12,9 +12,62 @@
 use std::collections::BTreeSet;
 
 use elephc_builtin_contract::{
-    aot_support, contracts, eval_signature, eval_support, BackendImplementation, BackendSupport,
-    BuiltinSignature,
+    aot_signature_profile, aot_support, contracts, eval_signature, eval_support,
+    AotSignatureOverrideReason, BackendImplementation, BackendSupport, BuiltinSignature,
 };
+
+/// Verifies all contract surfaces outside the ordinary AOT registry have typed routes.
+#[test]
+fn non_registry_surfaces_have_complete_backend_contracts() {
+    let exceptional = contracts()
+        .iter()
+        .filter(|contract| {
+            !matches!(
+                aot_support(contract),
+                BackendSupport::Implemented(BackendImplementation::Registry)
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(exceptional.len(), 14);
+
+    let mut language_constructs = 0;
+    let mut dedicated_syntax = 0;
+    let mut preludes = BTreeSet::new();
+    let mut unsupported = 0;
+    for contract in exceptional {
+        match aot_support(contract) {
+            BackendSupport::Implemented(BackendImplementation::LanguageConstruct) => {
+                language_constructs += 1;
+            }
+            BackendSupport::Implemented(BackendImplementation::DedicatedSyntax) => {
+                dedicated_syntax += 1;
+            }
+            BackendSupport::Implemented(BackendImplementation::Prelude) => {
+                preludes.insert(contract.name);
+            }
+            BackendSupport::Unsupported(_) => unsupported += 1,
+            BackendSupport::Implemented(BackendImplementation::Registry) => unreachable!(),
+        }
+    }
+    assert_eq!(language_constructs, 5);
+    assert_eq!(dedicated_syntax, 1);
+    assert_eq!(unsupported, 4);
+    assert_eq!(
+        preludes,
+        BTreeSet::from(["hash_copy", "hash_final", "hash_init", "hash_update"])
+    );
+
+    let hash_init = contracts()
+        .iter()
+        .find(|contract| contract.name == "hash_init")
+        .expect("hash_init contract must exist");
+    let profile = aot_signature_profile(hash_init);
+    assert_eq!(profile.signature.params.len(), 1);
+    assert_eq!(
+        profile.override_reason,
+        Some(AotSignatureOverrideReason::PreludeSignatureSubset)
+    );
+}
 
 /// Verifies the public compiler and Magician name sets match shared support records.
 #[test]

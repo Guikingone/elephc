@@ -152,7 +152,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         PreludeProvided,
         [
             param!("context", Mixed),
-            param!("binary", Mixed = DefaultSpec::Bool(false)),
+            param!("binary", Bool = DefaultSpec::Bool(false)),
         ],
         None,
         Mixed,
@@ -163,9 +163,9 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         String,
         PreludeProvided,
         [
-            param!("algo", Mixed),
-            param!("flags", Mixed = DefaultSpec::Int(0)),
-            param!("key", Mixed = DefaultSpec::Str("")),
+            param!("algo", Str),
+            param!("flags", Int = DefaultSpec::Int(0)),
+            param!("key", Str = DefaultSpec::Str("")),
         ],
         None,
         Mixed,
@@ -175,7 +175,7 @@ pub(crate) static SURFACE_CONTRACTS: &[BuiltinContract] = &[
         "hash_update",
         String,
         PreludeProvided,
-        [param!("context", Mixed), param!("data", Mixed)],
+        [param!("context", Mixed), param!("data", Str)],
         None,
         Mixed,
         "Feeds data into an incremental hashing context."

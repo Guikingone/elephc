@@ -12,6 +12,7 @@
 //! - Builtin identities are derived from canonical lowercase PHP names and are
 //!   validated for uniqueness by catalog consumers.
 
+mod aot_profile;
 mod catalog_data;
 mod catalog_surfaces;
 mod eval_profile;
@@ -22,10 +23,13 @@ mod runtime_id;
 mod spec;
 mod support;
 
-pub use id::BuiltinId;
+pub use aot_profile::{
+    aot_signature, aot_signature_profile, AotSignatureOverrideReason, AotSignatureProfile,
+};
 pub use eval_profile::{
     eval_signature, eval_signature_profile, EvalSignatureOverrideReason, EvalSignatureProfile,
 };
+pub use id::BuiltinId;
 pub use registry::{contracts, lookup, lookup_id};
 pub use runtime_id::{runtime_builtin_id, RuntimeBuiltinId, RuntimeBuiltinStatus};
 pub use spec::{

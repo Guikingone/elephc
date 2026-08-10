@@ -110,7 +110,7 @@ pub struct ParamSpec {
 ///
 /// Most consumers use the canonical contract fields directly. A small number
 /// of runtime surfaces retain a deliberate compatibility profile while their
-/// implementation catches up with the canonical AOT signature.
+/// implementation differs from the canonical shared signature.
 #[derive(Clone, Copy, Debug)]
 pub struct BuiltinSignature {
     /// Fixed parameters in PHP source order.

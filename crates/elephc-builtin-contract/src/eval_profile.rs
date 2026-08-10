@@ -1,6 +1,6 @@
 //! Purpose:
 //! Defines the small set of eval-runtime signature compatibility profiles that
-//! intentionally differ from the canonical AOT builtin contract.
+//! intentionally differ from the canonical shared builtin contract.
 //!
 //! Called from:
 //! - Magician registry assembly when joining eval hooks to shared contracts.
@@ -12,7 +12,7 @@
 use crate::{BuiltinContract, BuiltinId, BuiltinSignature, DefaultSpec, ParamSpec, TypeSpec};
 
 /// Why Magician intentionally exposes a signature shape that differs from the
-/// canonical AOT contract while preserving existing runtime behavior.
+/// canonical shared contract while preserving existing runtime behavior.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum EvalSignatureOverrideReason {
     /// Eval retains a required parameter after an earlier optional slot.

@@ -117,7 +117,7 @@ pub struct BuiltinDocsMetadata {
     pub execution: &'static str,
     /// Machine-readable reason a Magician adapter remains.
     pub adapter_reason: Option<&'static str>,
-    /// Machine-readable reason eval's signature intentionally differs from AOT.
+    /// Machine-readable reason eval's signature differs from the canonical contract.
     pub signature_override_reason: Option<&'static str>,
     /// Workspace-relative home file that declared the builtin.
     pub home_file: String,
