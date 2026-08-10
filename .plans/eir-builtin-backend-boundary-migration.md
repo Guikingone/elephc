@@ -33,8 +33,8 @@
   and separate callable assembly wrappers.
 - [x] Add structural invariants plus registry, EIR, optimizer, ownership, callable,
   runtime/linking, and supported-target regression coverage.
-- [x] Update contributor and internal architecture documentation, regenerate builtin
-  documentation, and add the user-facing changelog entry.
+- [x] Update contributor and internal architecture documentation and regenerate
+  builtin documentation.
 - [x] Run all requested build, test, docs, assembly-comment, EIR, target, and diff
   gates; audit every objective requirement against current evidence.
 - [x] Package the completed, green migration as thematic local commits without
@@ -185,7 +185,7 @@ The intended local commit sequence is:
 4. complex/runtime/bridge builtin families;
 5. callable, eval, and runtime-requirement convergence;
 6. legacy-path removal and structural invariants;
-7. tests, generated docs, architecture docs, and changelog.
+7. tests, generated docs, and architecture docs.
 
 No temporary compatibility commit is a valid final state.
 

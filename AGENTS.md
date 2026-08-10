@@ -544,7 +544,7 @@ sidebar:
 
 `ROADMAP.md` is the planning document, organized by version. It stays as it is:
 
-- **Do not add entries to record implemented work.** Implementations are documented in `CHANGELOG.md` under `[Unreleased]` (see below). The roadmap only gains new items when work is being *planned*, under the appropriate future version.
+- **Do not add entries to record implemented work.** The roadmap only gains new items when work is being *planned*, under the appropriate future version.
 - When an implementation completes an item **already present** in the roadmap, mark it `[x]` in place. If no matching item exists, the roadmap is left untouched.
 - **Never remove completed items** from a version section. Mark them as `[x]` and leave them under the version they belong to. This preserves the history of what was delivered in each release.
 - When all items in a version are completed, the version is considered done — do not move items elsewhere.
@@ -552,12 +552,6 @@ sidebar:
 ## Changelog management
 
 `CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
-
-**Every implementation lands a bullet under the `## [Unreleased]` section in the same PR** — one terse, user-facing entry describing what shipped, not how it was implemented. If the `[Unreleased]` section does not exist, add it at the top of the file (under the header, above the newest version section) together with its compare link at the top of the link list at the end of the file:
-
-```
-[Unreleased]: https://github.com/illegalstudio/elephc/compare/v<latest>...HEAD
-```
 
 When cutting a release:
 
