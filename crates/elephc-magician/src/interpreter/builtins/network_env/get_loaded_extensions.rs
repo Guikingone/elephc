@@ -8,8 +8,6 @@
 //! - Returns a compile-time-known list of extension-name strings, matching native codegen.
 //! - The optional `$zend_extensions` flag selects the Zend extension list; it defaults to false.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::*;
 
 /// Regular (non-Zend) extension list returned by `get_loaded_extensions(false)`.
@@ -34,9 +32,8 @@ const CORE_LOADED_EXTENSIONS: &[&str] = &[
 const ZEND_LOADED_EXTENSIONS: &[&str] = &["Zend OPcache"];
 
 eval_builtin! {
-    name: "get_loaded_extensions",
+    contract: "get_loaded_extensions",
     area: NetworkEnv,
-    params: [zend_extensions = EvalBuiltinDefaultValue::Bool(false)],
     direct: NetworkEnv,
     values: NetworkEnv,
 }

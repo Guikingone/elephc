@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the stream write helper.
 
 eval_builtin! {
-    name: "fwrite",
+    contract: "fwrite",
     area: Filesystem,
-    params: [stream, data],
     direct: Filesystem,
     values: Filesystem,
 }

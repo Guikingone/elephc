@@ -13,9 +13,8 @@ use super::super::super::*;
 
 
 eval_builtin! {
-    name: "ptr_get",
+    contract: "ptr_get",
     area: RawMemory,
-    params: [pointer],
     direct: PtrGet,
     values: PtrGet,
 }

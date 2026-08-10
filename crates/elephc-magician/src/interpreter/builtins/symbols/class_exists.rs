@@ -8,12 +8,9 @@
 //! - Lookup checks eval declarations before generated/AOT runtime metadata.
 //! - `Closure` is treated as a built-in class-like symbol.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "class_exists",
+    contract: "class_exists",
     area: Symbols,
-    params: [r#class, autoload = EvalBuiltinDefaultValue::Bool(true)],
     direct: Symbols,
     values: Symbols,
 }

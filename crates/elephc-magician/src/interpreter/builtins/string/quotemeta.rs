@@ -9,9 +9,8 @@
 //!   compiled output stay identical for binary input.
 
 eval_builtin! {
-    name: "quotemeta",
+    contract: "quotemeta",
     area: String,
-    params: [string],
     direct: QuoteMeta,
     values: QuoteMeta,
 }

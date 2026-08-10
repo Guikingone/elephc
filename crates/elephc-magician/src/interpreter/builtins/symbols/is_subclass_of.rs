@@ -8,12 +8,9 @@
 //! - Relationship semantics are shared with `is_a()` because PHP only changes
 //!   the self-match and default string-allowance rules.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "is_subclass_of",
+    contract: "is_subclass_of",
     area: Symbols,
-    params: [object_or_class, r#class, allow_string = EvalBuiltinDefaultValue::Bool(true)],
     direct: Symbols,
     values: Symbols,
 }

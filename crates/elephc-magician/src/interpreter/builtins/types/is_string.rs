@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "is_string",
+    contract: "is_string",
     area: Types,
-    params: [value],
     direct: IsString,
     values: IsString,
 }

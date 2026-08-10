@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "sin",
+    contract: "sin",
     area: Math,
-    params: [num],
     direct: Sin,
     values: Sin,
 }

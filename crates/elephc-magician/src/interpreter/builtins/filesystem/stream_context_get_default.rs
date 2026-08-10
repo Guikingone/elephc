@@ -7,12 +7,9 @@
 //! Key details:
 //! - Returns eval's shared default stream context resource.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_context_get_default",
+    contract: "stream_context_get_default",
     area: Filesystem,
-    params: [options = EvalBuiltinDefaultValue::Null],
     direct: Filesystem,
     values: Filesystem,
 }

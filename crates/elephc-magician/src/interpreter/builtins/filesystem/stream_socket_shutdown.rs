@@ -8,9 +8,8 @@
 //! - Applies shutdown modes through eval's stream resource table.
 
 eval_builtin! {
-    name: "stream_socket_shutdown",
+    contract: "stream_socket_shutdown",
     area: Filesystem,
-    params: [stream, mode],
     direct: Filesystem,
     values: Filesystem,
 }

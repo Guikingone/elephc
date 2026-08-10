@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the existing URL decode hook.
 
 eval_builtin! {
-    name: "urldecode",
+    contract: "urldecode",
     area: String,
-    params: [string],
     direct: UrlDecode,
     values: UrlDecode,
 }

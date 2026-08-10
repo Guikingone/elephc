@@ -7,12 +7,9 @@
 //! Key details:
 //! - Implements the eval-supported shell glob grammar and flags locally.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "fnmatch",
+    contract: "fnmatch",
     area: Filesystem,
-    params: [pattern, filename, flags = EvalBuiltinDefaultValue::Int(0)],
     direct: Filesystem,
     values: Filesystem,
 }

@@ -9,12 +9,9 @@
 
 use super::exit::{eval_exit_status_value, eval_process_exit};
 use super::super::super::*;
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "die",
+    contract: "die",
     area: Core,
-    params: [status = EvalBuiltinDefaultValue::Int(0)],
     direct: Core,
     values: Core,
 }

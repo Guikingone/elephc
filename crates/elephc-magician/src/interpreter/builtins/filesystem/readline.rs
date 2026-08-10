@@ -7,12 +7,9 @@
 //! Key details:
 //! - Reads from host stdin and returns false at EOF.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "readline",
+    contract: "readline",
     area: Filesystem,
-    params: [prompt = EvalBuiltinDefaultValue::Null],
     direct: Filesystem,
     values: Filesystem,
 }

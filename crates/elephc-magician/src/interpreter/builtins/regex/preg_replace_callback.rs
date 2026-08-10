@@ -13,9 +13,8 @@ use super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "preg_replace_callback",
+    contract: "preg_replace_callback",
     area: Regex,
-    params: [pattern, callback, subject],
     direct: PregReplaceCallback,
     values: PregReplaceCallback,
 }

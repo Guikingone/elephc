@@ -11,9 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "cos",
+    contract: "cos",
     area: Math,
-    params: [num],
     direct: Cos,
     values: Cos,
 }

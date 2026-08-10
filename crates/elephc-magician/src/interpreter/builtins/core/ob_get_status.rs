@@ -11,13 +11,11 @@
 
 use super::super::super::*;
 
-use super::super::spec::EvalBuiltinDefaultValue;
 use super::super::time::{eval_array_set_string_int, eval_array_set_string_str};
 
 eval_builtin! {
-    name: "ob_get_status",
+    contract: "ob_get_status",
     area: Core,
-    params: [full_status = EvalBuiltinDefaultValue::Bool(false)],
     direct: Core,
     values: Core,
 }

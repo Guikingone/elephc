@@ -7,12 +7,9 @@
 //! Key details:
 //! - Runtime dispatch is declared here and delegated through the stream timeout-setting helper.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 eval_builtin! {
-    name: "stream_set_timeout",
+    contract: "stream_set_timeout",
     area: Filesystem,
-    params: [stream, seconds, microseconds = EvalBuiltinDefaultValue::Int(0)],
     direct: Filesystem,
     values: Filesystem,
 }

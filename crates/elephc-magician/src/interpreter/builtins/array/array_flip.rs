@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_flip",
+    contract: "array_flip",
     area: Array,
-    params: [array],
     direct: ArrayFlip,
     values: ArrayFlip,
 }

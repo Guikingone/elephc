@@ -7,14 +7,11 @@
 //! Key details:
 //! - Runtime behavior stays delegated to the array-reverse hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "array_reverse",
+    contract: "array_reverse",
     area: Array,
-    params: [array, preserve_keys = EvalBuiltinDefaultValue::Bool(false)],
     direct: ArrayReverse,
     values: ArrayReverse,
 }

@@ -11,9 +11,8 @@ use super::super::super::*;
 use super::super::*;
 
 eval_builtin! {
-    name: "usleep",
+    contract: "usleep",
     area: Time,
-    params: [microseconds],
     direct: Time,
     values: Time,
 }

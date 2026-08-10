@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and implemented through the string-compare hook.
 
 eval_builtin! {
-    name: "strcmp",
+    contract: "strcmp",
     area: String,
-    params: [string1, string2],
     direct: StringCompare,
     values: StringCompare,
 }

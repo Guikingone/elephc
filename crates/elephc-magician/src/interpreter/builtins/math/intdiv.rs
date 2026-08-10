@@ -10,9 +10,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "intdiv",
+    contract: "intdiv",
     area: Math,
-    params: [num1, num2],
     direct: Intdiv,
     values: Intdiv,
 }

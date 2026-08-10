@@ -11,10 +11,8 @@
 use super::super::super::*;
 
 eval_builtin! {
-    name: "printf",
+    contract: "printf",
     area: Formatting,
-    params: [format],
-    variadic: values,
     direct: Printf,
     values: Printf,
 }

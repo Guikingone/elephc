@@ -8,9 +8,8 @@
 //! - Runtime dispatch is declared here and delegated through the directory resource rewind helper.
 
 eval_builtin! {
-    name: "rewinddir",
+    contract: "rewinddir",
     area: Filesystem,
-    params: [dir_handle],
     direct: Filesystem,
     values: Filesystem,
 }

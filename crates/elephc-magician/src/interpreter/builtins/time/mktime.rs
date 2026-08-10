@@ -11,9 +11,8 @@ use super::super::*;
 use super::*;
 
 eval_builtin! {
-    name: "mktime",
+    contract: "mktime",
     area: Time,
-    params: [hour, minute, second, month, day, year],
     direct: Time,
     values: Time,
 }

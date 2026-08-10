@@ -9,9 +9,8 @@
 //!   resolver rewrites do not run inside runtime eval fragments.
 
 eval_builtin! {
-    name: "function_exists",
+    contract: "function_exists",
     area: Symbols,
-    params: [function],
     direct: Symbols,
     values: Symbols,
 }

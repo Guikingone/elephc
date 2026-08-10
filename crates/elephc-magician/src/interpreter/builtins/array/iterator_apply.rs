@@ -7,14 +7,11 @@
 //! Key details:
 //! - Runtime behavior stays delegated to the non-mutating array hook.
 
-use super::super::spec::EvalBuiltinDefaultValue;
-
 use super::super::super::*;
 
 eval_builtin! {
-    name: "iterator_apply",
+    contract: "iterator_apply",
     area: Array,
-    params: [iterator, callback, args = EvalBuiltinDefaultValue::Null],
     direct: Array,
     values: Array,
 }
