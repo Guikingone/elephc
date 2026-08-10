@@ -354,12 +354,49 @@ pub(crate) fn lower_fscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `fgets(stream)` through the shared line-read runtime helper.
+/// php-src's verbatim `ValueError` wording for `fgets()` with a non-positive `$length`.
+const FGETS_NON_POSITIVE_LENGTH_MESSAGE: &str =
+    "fgets(): Argument #2 ($length) must be greater than 0";
+
 pub(crate) fn lower_fgets(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
-    super::super::ensure_arg_count(inst, "fgets", 1)?;
+    super::super::ensure_arg_count_between(inst, "fgets", 1, 2)?;
     let stream = expect_operand(inst, 0)?;
-    load_open_stream_handle_to_result(ctx, stream, "fgets")?;
-    if ctx.emitter.target.arch == Arch::X86_64 {
-        ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque stream handle to the x86_64 fgets helper
+    // PHP's optional `$length` bounds the line at `$length - 1` bytes. Zero means unbounded here,
+    // which is what an omitted argument resolves to, so the helper needs no separate flag.
+    match inst.operands.get(1).copied() {
+        None => {
+            load_open_stream_handle_to_result(ctx, stream, "fgets")?;
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => ctx.emitter.instruction("mov x1, #0"),          // no bound
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");                     // the opaque stream handle
+                    ctx.emitter.instruction("xor esi, esi");                     // no bound
+                }
+            }
+        }
+        Some(length) => {
+            resolve_int_operand_to_result(ctx, length, "fgets length")?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+            load_open_stream_handle_to_result(ctx, stream, "fgets")?;
+            let bound_reg = match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_pop_reg(ctx.emitter, "x1");                        // the requested bound
+                    "x1"
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("mov rdi, rax");                     // the opaque stream handle
+                    abi::emit_pop_reg(ctx.emitter, "rsi");                       // the requested bound
+                    "rsi"
+                }
+            };
+            // Zero is what an omitted argument means to the helper, so a caller-supplied zero
+            // must never reach it. php-src rejects zero and negatives outright.
+            super::super::exceptions::emit_value_error_unless(
+                ctx,
+                super::super::exceptions::ValueGuard::SignedAtLeast(bound_reg, 1),
+                FGETS_NON_POSITIVE_LENGTH_MESSAGE,
+            );
+        }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgets");
     box_stream_string_or_false_on_empty_result(ctx, "fgets");

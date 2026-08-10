@@ -72,7 +72,8 @@ fn test_error_fwrite_requires_resource_handle() {
 /// Verifies fgets() produces correct error when called with no arguments.
 #[test]
 fn test_error_fgets_wrong_args() {
-    expect_error("<?php fgets();", "fgets() takes exactly 1 argument");
+    // `fgets()` carries PHP's optional `$length`, so the arity it reports is a range.
+    expect_error("<?php fgets();", "fgets() takes 1 or 2 arguments");
 }
 
 /// Verifies fgets() produces correct error when passed an int instead of a resource.

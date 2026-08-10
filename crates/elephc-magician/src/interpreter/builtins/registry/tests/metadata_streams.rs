@@ -38,7 +38,6 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         for name in [
             "fclose",
             "fgetc",
-            "fgets",
             "feof",
             "fflush",
             "fpassthru",
@@ -57,6 +56,11 @@ fn declared_builtin_registry_derives_stream_metadata() {        assert_eq!(
         }
         assert_eq!(
             eval_declared_builtin_param_names("fread"),
+            Some(["stream", "length"].as_slice())
+        );
+        // fgets() carries PHP's optional $length, which bounds the line at $length - 1 bytes.
+        assert_eq!(
+            eval_declared_builtin_param_names("fgets"),
             Some(["stream", "length"].as_slice())
         );
         assert_eq!(

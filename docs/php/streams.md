@@ -62,7 +62,7 @@ resources than the initial reservation holds grows the table on the heap as usua
 | `fprintf()` | `fprintf(resource $handle, string $format, ...$values): int` | Format like `sprintf()` and write to the stream. |
 | `vfprintf()` | `vfprintf(resource $handle, string $format, array $values): int` | Like `fprintf()`, with format values supplied as an array. |
 | `fscanf()` | `fscanf(resource $handle, string $format): array` | Read one line and parse it with the `sscanf()` engine. v1 supports the two-argument array-returning form and conversions `%d`, `%f`, `%s`, and `%%`. |
-| `fgets()` | `fgets(resource $handle): string\|false` | Read a line until newline or EOF; returns `false` at EOF. ⚠️ PHP's optional `$length` is **not accepted**: `fgets($h, 1024)` is a compile error, where PHP reads at most `$length - 1` bytes. |
+| `fgets()` | `fgets(resource $handle, int $length = null): string\|false` | Read a line until newline, EOF, or `$length`; returns `false` at EOF. `$length` bounds the line at `$length - 1` bytes and leaves the remainder for the next read; a non-positive `$length` raises `ValueError`. |
 | `fgetc()` | `fgetc(resource $handle): string\|false` | Read one byte, or `false` at EOF/failure. |
 | `feof()` | `feof(resource $handle): bool` | Report whether the stream is at EOF. |
 | `fseek()` | `fseek(resource $handle, $offset [, $whence]): int` | Seek a stream. User wrappers route through `stream_seek()`. |

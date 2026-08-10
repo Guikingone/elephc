@@ -45,9 +45,11 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     // -- set up stack frame --
     // Frame: [0]=opaque stream handle [8]=line length [16]=line buffer pointer
     //        [24]=line capacity [32]=wrapper byte scratch [40]=backend descriptor
-    emitter.instruction("sub sp, sp, #64");                                     // allocate 64 bytes on the stack
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish new frame pointer
+    //        [48]=caller's length bound (0 = unbounded)
+    emitter.instruction("sub sp, sp, #80");                                     // allocate the frame plus the bound slot
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish new frame pointer
+    emitter.instruction("str x1, [sp, #48]");                                   // preserve the caller's length bound
 
     // -- save the handle and resolve the backend descriptor --
     // Resolution is a call, so it has to happen inside the frame; an invalid stream
@@ -88,6 +90,17 @@ pub fn emit_fgets(emitter: &mut Emitter) {
 
     // -- read loop: one byte at a time until \n or EOF --
     emitter.label("__rt_fgets_loop");
+
+    // -- stop before reading once the caller's bound is reached --
+    // PHP reads at most `$length - 1` bytes, so a bound of 1 returns nothing and `fgets()`
+    // reports false. Zero means the caller passed no bound.
+    emitter.instruction("ldr x9, [sp, #48]");                                   // the caller's bound
+    emitter.instruction("cbz x9, __rt_fgets_unbounded");                        // no bound: read to newline or EOF
+    emitter.instruction("sub x9, x9, #1");                                      // at most bound - 1 bytes
+    emitter.instruction("ldr x10, [sp, #8]");                                   // bytes accumulated so far
+    emitter.instruction("cmp x10, x9");                                         // is the line already at the bound?
+    emitter.instruction("b.hs __rt_fgets_done");                                // hand back what we have
+    emitter.label("__rt_fgets_unbounded");
 
     // -- make room for one more byte before reading it --
     emitter.instruction("ldr x9, [sp, #8]");                                    // current line length
@@ -175,8 +188,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
     emitter.label("__rt_fgets_wrapper_done");
     crate::codegen_support::abi::emit_symbol_address(emitter, "x1", "_user_wrapper_drain_buf"); // line pointer
     emitter.instruction("ldr x2, [sp, #8]");                                    // line length
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return the wrapper line (ptr/len)
 
     // -- nonblocking read miss: return accumulated bytes without EOF --
@@ -202,8 +215,8 @@ pub fn emit_fgets(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.label("__rt_fgets_return");
-    emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
+    emitter.instruction("ldp x29, x30, [sp, #64]");                             // restore frame pointer and return address
+    emitter.instruction("add sp, sp, #80");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 }
 
@@ -218,13 +231,15 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
 
     // Frame: [rbp-8]=handle [rbp-16]=line length [rbp-24]=line pointer [rbp-32]=wrapper
     //        chunk pointer [rbp-40]=line capacity [rbp-48]=byte scratch [rbp-56]=descriptor
+    //        [rbp-64]=caller's length bound (0 = unbounded)
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer while fgets() uses local spill slots
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base for the saved handle and line metadata
-    emitter.instruction("sub rsp, 64");                                         // reserve aligned stack space for the stream read loop temporaries
+    emitter.instruction("sub rsp, 80");                                         // reserve the read-loop temporaries plus the bound slot
 
     // Resolution is a call, so it has to happen inside the frame; an invalid stream
     // therefore leaves through the framed epilogue rather than a bare `ret`.
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the opaque stream handle
+    emitter.instruction("mov QWORD PTR [rbp - 64], rsi");                       // preserve the caller's length bound
     emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
     emitter.instruction("mov QWORD PTR [rbp - 56], rax");                       // preserve the resolved backend descriptor
     emitter.instruction("test rax, rax");                                       // did descriptor resolution succeed?
@@ -255,6 +270,17 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jb __rt_fgets_wrapper_entry_x86");                     // wrappers read via the feof-gated stream_read loop below
 
     emitter.label("__rt_fgets_loop_x86");
+
+    // -- stop before reading once the caller's bound is reached --
+    // See the AArch64 counterpart: PHP reads at most `$length - 1` bytes, and zero means
+    // the caller passed no bound at all.
+    emitter.instruction("mov r9, QWORD PTR [rbp - 64]");                        // the caller's bound
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_fgets_unbounded_x86");                         // no bound: read to newline or EOF
+    emitter.instruction("sub r9, 1");                                           // at most bound - 1 bytes
+    emitter.instruction("cmp QWORD PTR [rbp - 16], r9");                        // is the line already at the bound?
+    emitter.instruction("jae __rt_fgets_done_x86");                             // hand back what we have
+    emitter.label("__rt_fgets_unbounded_x86");
 
     // -- make room for one more byte before reading it --
     emitter.instruction("mov r8, QWORD PTR [rbp - 16]");                        // current line length
@@ -297,7 +323,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // return the accumulated line length in the x86_64 elephc string-length result register
     emitter.instruction("call __rt_concat_publish");                            // shrink the claimed window down to the bytes actually read
     emitter.label("__rt_fgets_return_x86");
-    emitter.instruction("add rsp, 64");                                         // release the fgets() spill slots before returning the line slice
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 fgets() helper completes
     emitter.instruction("ret");                                                 // return the fgets() line slice to the caller
 
@@ -342,7 +368,7 @@ fn emit_fgets_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fgets_wrapper_done_x86");
     abi::emit_symbol_address(emitter, "rax", "_user_wrapper_drain_buf");        // line pointer
     emitter.instruction("mov rdx, QWORD PTR [rbp - 16]");                       // line length
-    emitter.instruction("add rsp, 64");                                         // release the fgets() spill slots
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper line (ptr/len)
 

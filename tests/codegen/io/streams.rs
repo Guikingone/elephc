@@ -5586,29 +5586,57 @@ probe("nocomma", $d . "text/plain");
     assert_eq!(out, "plain=true:hi pct=true:a b! b64=true:hello empty=true: nocomma=false ");
 }
 
-/// Pins PHP's optional `fgets($handle, $length)`, which bounds the line.
+/// Verifies PHP's optional `fgets($handle, $length)`, which bounds the line.
 ///
-/// IGNORED because the builtin is declared with a single parameter and the runtime accumulates
-/// until a newline with no caller-supplied bound, so the two-argument form is a COMPILE ERROR —
-/// `fgets() takes exactly 1 argument`. php 8.5.6 reads at most `$length - 1` bytes and leaves the
-/// remainder for the next read.
-///
-/// The documentation advertised the two-argument signature, so this gap was invisible from the
-/// docs alone; it surfaced while writing an HTTP probe, where `fgets($conn, 1024)` is the
-/// ordinary way to read a request line.
+/// php 8.5.6 reads at most `$length - 1` bytes, leaves the remainder for the next read, answers
+/// `false` when the bound leaves room for nothing, and rejects a non-positive bound with a
+/// `ValueError`. The builtin used to take a single parameter, so `fgets($conn, 1024)` — the
+/// ordinary way to read a request line — did not compile at all.
 #[test]
-#[ignore = "fgets() is declared with one parameter; PHP's optional $length bound is not accepted"]
 fn test_fgets_accepts_phps_length_bound() {
     let out = compile_and_run(
         r#"<?php
 $h = fopen("php://memory", "r+");
 fwrite($h, "abcdefghij\nsecond\n");
 rewind($h);
-echo var_export(fgets($h, 5), true), "|", var_export(fgets($h), true);
+echo var_export(fgets($h, 5), true), "|", var_export(fgets($h), true), "|";
+rewind($h);
+echo var_export(fgets($h, 2), true), "|", var_export(fgets($h, 1), true), "|";
+rewind($h);
+echo var_export(fgets($h, 100), true);
 fclose($h);
 "#,
     );
-    assert_eq!(out, "'abcd'|'efghij\n'");
+    assert_eq!(out, "'abcd'|'efghij\n'|'a'|false|'abcdefghij\n'");
+}
+
+/// Verifies a non-positive `$length` raises php-src's `ValueError` rather than reading unbounded.
+///
+/// Zero is what an omitted argument means to the runtime helper, so a caller-supplied zero has to
+/// be rejected before it reaches it — otherwise `fgets($h, 0)` would quietly read a whole line.
+#[test]
+fn test_fgets_rejects_a_non_positive_length() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+fwrite($h, "abcdefghij\n");
+rewind($h);
+foreach ([0, -1] as $len) {
+    try {
+        fgets($h, $len);
+        echo "no-throw|";
+    } catch (ValueError $e) {
+        echo $e->getMessage(), "|";
+    }
+}
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        "fgets(): Argument #2 ($length) must be greater than 0|\
+         fgets(): Argument #2 ($length) must be greater than 0|"
+    );
 }
 
 /// Verifies `data://` refuses a media type php-src does not accept, and reads `;base64` the way

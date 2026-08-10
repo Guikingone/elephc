@@ -17836,6 +17836,12 @@
           "default": null,
           "name": "stream",
           "optional": false
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true
         }
       ],
       "required_param_count": 1,
@@ -17925,6 +17931,13 @@
           "name": "stream",
           "optional": false,
           "type": "resource"
+        },
+        {
+          "by_ref": false,
+          "default": "null",
+          "name": "length",
+          "optional": true,
+          "type": "int"
         }
       ],
       "return_type": "mixed",
