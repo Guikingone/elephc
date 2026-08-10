@@ -820,8 +820,57 @@ pub(crate) fn run_binary_with_env(
     }
 }
 
+/// Raises this process's soft descriptor limit so every fixture it spawns inherits the higher one.
+///
+/// macOS ships a soft `RLIMIT_NOFILE` of 256, and a CI runner keeps it. A fixture that needs more
+/// live streams than that — the TLS-registry test opens 257 sessions on purpose — hit `EMFILE`
+/// part-way through and reported a short count, which reads as a registry defect and is not one.
+/// The limit is a property of the host, so raising it belongs to the harness rather than to the
+/// compiled program: PHP does not raise its own either. Where the limit is already generous this
+/// is a no-op, and a refused raise is left alone for the fixture to run into as before.
+#[cfg(unix)]
+fn raise_descriptor_limit_once() {
+    /// Descriptors a fixture may need at once. Comfortably under macOS `kern.maxfilesperproc`.
+    const WANTED: u64 = 8192;
+    /// `RLIMIT_NOFILE`, whose number differs between the BSD and Linux headers.
+    const RLIMIT_NOFILE: i32 = if cfg!(target_os = "linux") { 7 } else { 8 };
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct RLimit {
+        cur: u64,
+        max: u64,
+    }
+    extern "C" {
+        fn getrlimit(resource: i32, limit: *mut RLimit) -> i32;
+        fn setrlimit(resource: i32, limit: *const RLimit) -> i32;
+    }
+
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| {
+        let mut limit = RLimit { cur: 0, max: 0 };
+        // SAFETY: both calls take a pointer to a live, correctly shaped `struct rlimit`.
+        unsafe {
+            if getrlimit(RLIMIT_NOFILE, &mut limit) != 0 {
+                return;
+            }
+            let wanted = WANTED.min(limit.max);
+            if wanted <= limit.cur {
+                return;
+            }
+            let raised = RLimit { cur: wanted, max: limit.max };
+            let _ = setrlimit(RLIMIT_NOFILE, &raised);
+        }
+    });
+}
+
+/// Non-Unix hosts have no `rlimit` to raise.
+#[cfg(not(unix))]
+fn raise_descriptor_limit_once() {}
+
 /// Runs a child command with a timeout and captures stdout/stderr.
 fn run_command_with_timeout(mut cmd: Command) -> Output {
+    raise_descriptor_limit_once();
     let label = format!("{:?}", cmd);
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::piped());
