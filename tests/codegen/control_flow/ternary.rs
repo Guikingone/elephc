@@ -9,6 +9,37 @@
 
 use super::*;
 
+/// Pins a ternary that merges `false` with a STRING read from an inline-subscripted call.
+///
+/// IGNORED because the result collapses to the integer `0`: BOTH branches come back wrong, so
+/// `$c ? false : meta()["mode"]` prints `0` where php 8.5.6 prints `'r+'`, and the branch that
+/// should yield `false` prints `0` too.
+///
+/// The boundary is narrow and worth stating, because three neighbouring shapes are correct:
+///
+/// - `meta()["mode"]` on its own is right;
+/// - the same ternary reading the array through a VARIABLE is right;
+/// - the same ternary reading an INT element is right.
+///
+/// So it needs the subscript applied directly to a call result, inside the ternary, on a
+/// non-integer element. It reproduces with a plain user function and with a builtin, so it is
+/// specific to neither; it surfaced while probing `stream_get_meta_data()`.
+#[test]
+#[ignore = "a ternary merging false with a string read from an inline-subscripted call collapses to int 0"]
+fn test_ternary_merging_false_with_a_subscripted_call_keeps_the_string() {
+    let out = compile_and_run(
+        r#"<?php
+function meta(): array { return ["mode" => "r+", "n" => 7]; }
+$t = true;
+$f = false;
+echo var_export($t === false ? false : meta()["mode"], true), "|";
+echo var_export($f === false ? false : meta()["mode"], true), "|";
+echo var_export($t === false ? false : meta()["n"], true);
+"#,
+    );
+    assert_eq!(out, "'r+'|false|7");
+}
+
 /// Tests ternary true branch using equality comparison that evaluates to true.
 #[test]
 fn test_ternary_true() {
