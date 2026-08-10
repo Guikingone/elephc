@@ -553,6 +553,8 @@ sidebar:
 
 `CHANGELOG.md` records every released version, newest first, in *Keep a Changelog* style.
 
+Before cutting a release, run the `prepare-release-changelog` skill. It must reconcile every merged Pull Request and direct commit since the latest published release against the exact candidate `main` SHA, then prepare the approved user-facing bullets under `[Unreleased]`. An incomplete source ledger or unresolved commit is a release blocker.
+
 When cutting a release:
 
 - Add a new section at the top (under the header), above the previous version:
