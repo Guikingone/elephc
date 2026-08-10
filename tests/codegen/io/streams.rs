@@ -8355,3 +8355,244 @@ echo strlen($a), "|", substr($a, 0, 3), "|", $b;
     assert_eq!(out, "150000|QQQ|tail");
     let _ = fs::remove_dir_all(&dir);
 }
+
+/// Verifies `stream_get_meta_data()` reports the mode string the caller passed, not one derived
+/// from the descriptor's access bits.
+///
+/// The derivation could only ever answer `r`, `w` or `r+`: it read `F_GETFL`, which knows nothing
+/// of `a` (reported `w`), of `+` past a `b` flag, or of the `b` flag itself. A library that
+/// branches on `$meta['mode'][0] === 'a'` to decide whether a handle appends saw `w` and rewound.
+#[test]
+fn test_stream_get_meta_data_reports_the_mode_the_caller_passed() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("modes.txt", "seed");
+foreach (["r", "rb", "r+", "r+b", "w", "w+", "a", "a+", "c"] as $mode) {
+    $h = fopen("modes.txt", $mode);
+    echo stream_get_meta_data($h)["mode"], " ";
+    fclose($h);
+}
+"#,
+    );
+    assert_eq!(out, "r rb r+ r+b w w+ a a+ c ");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies the memory wrappers report the mode of the stream PHP built for them.
+///
+/// `php://memory` and `php://temp` do not echo the caller's mode: a read-only mode answers `rb`,
+/// an append mode `a+b`, and anything asking for write access `w+b`. Reference PHP 8.5.6 was the
+/// oracle for each of these.
+#[test]
+fn test_stream_get_meta_data_maps_the_memory_wrapper_modes() {
+    let out = compile_and_run(
+        r#"<?php
+foreach (["r", "rb", "r+", "w", "w+", "a", "c"] as $mode) {
+    $h = fopen("php://memory", $mode);
+    echo stream_get_meta_data($h)["mode"], " ";
+    fclose($h);
+}
+$t = fopen("php://temp", "r");
+echo stream_get_meta_data($t)["mode"], " ";
+fclose($t);
+$o = fopen("php://output", "w");
+echo stream_get_meta_data($o)["mode"];
+"#,
+    );
+    assert_eq!(out, "rb rb w+b w+b w+b a+b rb rb wb");
+}
+
+/// Verifies repeated `stream_get_meta_data()` calls keep reporting the same URI.
+///
+/// The array releases its string values, so handing it the StreamState's own URI allocation freed
+/// the state's copy. The first two calls still read the right bytes; by the third, the hash keys
+/// of the arrays built in between had reused the block, and `uri` came back as a fragment of
+/// `seekable` or `blocked`. The state's pointer was also left dangling for its own teardown.
+#[test]
+fn test_stream_get_meta_data_uri_survives_repeated_reads() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("uri_meta.txt", "seed");
+$h = fopen("uri_meta.txt", "r");
+echo stream_get_meta_data($h)["uri"], "|";
+echo stream_get_meta_data($h)["uri"], "|";
+echo stream_get_meta_data($h)["uri"], "|";
+echo stream_get_meta_data($h)["uri"];
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "uri_meta.txt|uri_meta.txt|uri_meta.txt|uri_meta.txt");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `c` opens a file for writing without truncating it, and creates it when absent.
+///
+/// The mode parser accepted only `r`, `w` and `a`, so `c` — which PHP added precisely to let a
+/// caller take an advisory lock before deciding to truncate — returned `false` with a warning.
+#[test]
+fn test_fopen_c_mode_creates_without_truncating() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("c_mode.txt", "abcdef");
+$h = fopen("c_mode.txt", "c");
+fwrite($h, "XY");
+fclose($h);
+echo file_get_contents("c_mode.txt"), "|";
+$fresh = fopen("c_mode_new.txt", "c");
+echo ($fresh === false ? "false" : "resource");
+fclose($fresh);
+"#,
+    );
+    assert_eq!(out, "XYcdef|resource");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `x` creates a file exclusively and refuses one that already exists.
+#[test]
+fn test_fopen_x_mode_refuses_an_existing_file() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$fresh = fopen("x_mode.txt", "x");
+echo ($fresh === false ? "false" : "resource"), "|";
+fwrite($fresh, "new");
+fclose($fresh);
+$again = @fopen("x_mode.txt", "x");
+echo ($again === false ? "false" : "resource"), "|";
+echo file_get_contents("x_mode.txt");
+"#,
+    );
+    assert_eq!(out, "resource|false|new");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a `+` after the `b` flag still opens the file for both reading and writing.
+///
+/// The parser only inspected the second mode byte, so `rb+` — an idiom PHP accepts and the manual
+/// spells out — stayed read-only and its writes failed silently.
+#[test]
+fn test_fopen_plus_is_honoured_after_the_b_flag() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("plus_after_b.txt", "abcdef");
+$h = fopen("plus_after_b.txt", "rb+");
+fwrite($h, "ZZ");
+fclose($h);
+echo file_get_contents("plus_after_b.txt");
+"#,
+    );
+    assert_eq!(out, "ZZcdef");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `stream_socket_client()` warns when the connection is refused.
+///
+/// PHP raises this Warning whether or not the caller passed `&$errno`/`&$errstr`; elephc filled
+/// the out-parameters and printed nothing, so a script that watched the warning to notice a dead
+/// endpoint saw a silent `false`. Port 9 (discard) is not served on a CI host.
+#[test]
+fn test_stream_socket_client_warns_when_the_connection_is_refused() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = stream_socket_client("tcp://127.0.0.1:9");
+echo ($c === false ? "false" : "resource");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert!(
+        out.stderr
+            .contains("Warning: stream_socket_client(): Unable to connect to tcp://127.0.0.1:9 ("),
+        "expected PHP's connect warning, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies `@` suppresses the connect-failure warning, as it does every other PHP diagnostic.
+#[test]
+fn test_error_control_suppresses_the_connect_failure_warning() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = @stream_socket_client("tcp://127.0.0.1:9");
+echo ($c === false ? "false" : "resource");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert_eq!(out.stderr, "");
+}
+
+/// Verifies an unresolvable host produces the message php-src composes for it.
+///
+/// This failure has no `errno` — php-src builds the text itself, which is why `&$error_code` stays
+/// `0` — so elephc, which only ever described an `errno`, left `&$error_message` empty and the
+/// caller had nothing but `false` to go on. `.invalid` is reserved by RFC 2606 and never resolves.
+#[test]
+fn test_socket_error_outputs_describe_an_unresolvable_host() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = @stream_socket_client("tcp://no-such-host.invalid:80", $errno, $errstr);
+echo ($c === false ? "false" : "resource"), "|", $errno, "|", $errstr;
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert!(
+        out.stdout.starts_with(
+            "false|0|php_network_getaddresses: getaddrinfo for no-such-host.invalid failed: "
+        ),
+        "expected php-src's composed resolver message, got stdout={}",
+        out.stdout
+    );
+}
+
+/// Verifies an unresolvable host raises the two Warnings PHP raises, in PHP's order.
+///
+/// php-src reports the resolver's own message first, then the connect line that repeats it as the
+/// reason.
+#[test]
+fn test_unresolvable_host_warns_twice_like_php() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = stream_socket_client("tcp://no-such-host.invalid:80");
+echo ($c === false ? "false" : "resource");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    let lines: Vec<&str> = out.stderr.lines().collect();
+    assert_eq!(lines.len(), 2, "expected two warnings, got stderr={}", out.stderr);
+    assert!(
+        lines[0].starts_with(
+            "Warning: stream_socket_client(): php_network_getaddresses: getaddrinfo for \
+             no-such-host.invalid failed: "
+        ),
+        "unexpected first warning: {}",
+        lines[0]
+    );
+    assert!(
+        lines[1].starts_with(
+            "Warning: stream_socket_client(): Unable to connect to tcp://no-such-host.invalid:80 \
+             (php_network_getaddresses: getaddrinfo for no-such-host.invalid failed: "
+        ),
+        "unexpected second warning: {}",
+        lines[1]
+    );
+}
+
+/// Verifies `fsockopen()` spells its refused endpoint the way PHP does, as `host:port`.
+#[test]
+fn test_fsockopen_warns_with_the_host_and_port() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$c = fsockopen("127.0.0.1", 9);
+echo ($c === false ? "false" : "resource");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false");
+    assert!(
+        out.stderr
+            .contains("Warning: fsockopen(): Unable to connect to 127.0.0.1:9 ("),
+        "expected PHP's connect warning, got stderr={}",
+        out.stderr
+    );
+}

@@ -98,6 +98,9 @@ mod stream_get_filters;
 mod stream_get_wrappers;
 mod http_response_headers;
 mod stream_record_meta;
+mod socket_connect_warning;
+mod socket_gai_message;
+mod stream_record_mode;
 mod stream_socket_accept;
 mod stream_socket_client;
 mod pclose;
@@ -234,6 +237,12 @@ pub(crate) use stream_get_filters::emit_stream_get_filters;
 pub(crate) use stream_get_wrappers::emit_stream_get_wrappers;
 pub(crate) use http_response_headers::emit_get_http_response_headers;
 pub(crate) use stream_record_meta::emit_stream_record_meta;
+pub(crate) use socket_connect_warning::{
+    emit_socket_connect_warning, SOCKET_WARNING_CLIENT, SOCKET_WARNING_FSOCKOPEN,
+    SOCKET_WARNING_SERVER,
+};
+pub(crate) use socket_gai_message::emit_gai_publish;
+pub(crate) use stream_record_mode::emit_stream_record_mode;
 pub(crate) use stream_socket_accept::emit_stream_socket_accept;
 pub(crate) use stream_socket_client::emit_stream_socket_client;
 pub(crate) use socket_errno::emit_socket_strerror;

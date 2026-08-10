@@ -42,6 +42,50 @@ pub(crate) const SWR_NEVER_CHANGED: &str = ":// was never changed, nothing to re
 /// Tail of the unknown-scheme Warning, after the scheme name.
 pub(crate) const SWR_NEVER_EXISTED: &str = ":// never existed, nothing to restore\n";
 
+/// PHP's Warning when a socket builtin cannot open its endpoint. The address and the reason are
+/// only known at run time, so each of these is a prefix the runtime completes.
+/// PHP uses the same "Unable to connect to" wording for a failed bind, which reads oddly but is
+/// what `stream_socket_server()` prints.
+pub(crate) const SOCKET_FAILED_CLIENT_PREFIX: &str = "Warning: stream_socket_client(): ";
+
+/// The `stream_socket_server()` form of [`SOCKET_FAILED_CLIENT_PREFIX`].
+pub(crate) const SOCKET_FAILED_SERVER_PREFIX: &str = "Warning: stream_socket_server(): ";
+
+/// The `fsockopen()` form of [`SOCKET_FAILED_CLIENT_PREFIX`]. Its address is a bare host, so the
+/// runtime appends `:` and the port to reach PHP's `host:port` spelling.
+pub(crate) const SOCKET_FAILED_FSOCKOPEN_PREFIX: &str = "Warning: fsockopen(): ";
+
+/// Head of the connect-failure line, after the `Warning: <fn>(): ` the three prefixes carry.
+pub(crate) const SOCKET_FAILED_UNABLE: &str = "Unable to connect to ";
+
+/// Head of the message PHP reports when a socket address names a host that does not resolve.
+///
+/// php-src composes this itself rather than using an `errno`, which is why the `&$error_code` of
+/// such a failure is `0` and only `&$error_message` says anything.
+pub(crate) const GAI_MSG_PREFIX: &str = "php_network_getaddresses: getaddrinfo for ";
+
+/// Middle of the unresolvable-host message, between the host name and the resolver's own text.
+pub(crate) const GAI_MSG_MIDDLE: &str = " failed: ";
+
+/// Bytes reserved for the composed unresolvable-host message.
+///
+/// Prefix, a host clamped to the 255 bytes a DNS name can hold, the middle, and the resolver text
+/// clamped to 200 all fit. The buffer is static so the message the caller receives needs no
+/// allocation and cannot dangle; a second failed resolution overwrites it.
+pub(crate) const SOCKET_GAI_MSG_CAPACITY: usize = 512;
+
+/// Longest host name copied into the composed message.
+pub(crate) const SOCKET_GAI_HOST_CLAMP: i64 = 255;
+
+/// Longest resolver text copied into the composed message.
+pub(crate) const SOCKET_GAI_REASON_CLAMP: i64 = 200;
+
+/// Separator between the socket warning's address and the reason for the failure.
+pub(crate) const SOCKET_FAILED_REASON_OPEN: &str = " (";
+
+/// Tail of the socket warning, after the reason.
+pub(crate) const SOCKET_FAILED_REASON_CLOSE: &str = ")\n";
+
 pub(crate) const OB_NTC_NO_END_FLUSH: &str =
     "Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n";
 /// ob_get_flush() no-buffer notice line.

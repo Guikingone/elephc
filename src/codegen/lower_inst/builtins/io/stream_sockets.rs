@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen_support::runtime::io::{SOCKET_WARNING_CLIENT, SOCKET_WARNING_SERVER};
 
 /// Lowers `stream_socket_server(address)` and boxes `resource|false`.
 pub(crate) fn lower_stream_socket_server(
@@ -28,6 +29,7 @@ pub(crate) fn lower_stream_socket_server(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_stream_socket_server");
+    emit_socket_open_failure_warning(ctx, address, None, SOCKET_WARNING_SERVER)?;
     store_socket_error_outputs(ctx, inst, 1, 2, false)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_server");
     store_if_result(ctx, inst)
@@ -59,6 +61,7 @@ pub(crate) fn lower_stream_socket_client(
             abi::emit_call_label(ctx.emitter, "__rt_stream_socket_client");
         }
     }
+    emit_socket_open_failure_warning(ctx, address, None, SOCKET_WARNING_CLIENT)?;
     store_socket_error_outputs(ctx, inst, 1, 2, true)?;
     box_stream_fd_or_false_result(ctx, "stream_socket_client");
     emit_stash_connect_host_after_boxed_stashed(ctx);

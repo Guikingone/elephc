@@ -591,6 +591,83 @@ pub(super) fn emit_record_stream_meta_after_boxed_stashed(
     ctx.emitter.label(&done_label);
 }
 
+/// Records the mode `stream_get_meta_data()` must report, on the boxed stream's opaque handle.
+///
+/// Runs after the URI has been recorded, because the runtime helper reads it to tell an echoing
+/// wrapper from one of the memory wrappers, which report a mode of their own choosing.
+pub(super) fn emit_record_stream_mode_after_boxed(
+    ctx: &mut FunctionContext<'_>,
+    mode: ValueId,
+) -> Result<()> {
+    let done_label = ctx.next_label("stream_mode_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed fopen result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // failed opens have no mode to report
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the boxed result outlives the mode load and the call
+            load_string_to_result(ctx, mode, "fopen mode")?;                    // re-materialize the caller's mode string
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the boxed result without dropping the slot
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // pass the opaque stream handle from the Mixed payload
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_mode");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", done_label));            // failed opens have no mode to report
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the boxed result outlives the mode load and the call
+            load_string_to_result(ctx, mode, "fopen mode")?;                    // re-materialize the caller's mode string
+            ctx.emitter.instruction("mov rsi, rax");                            // pass the mode pointer
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the boxed result without dropping the slot
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");            // pass the opaque stream handle from the Mixed payload
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_mode");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
+/// Records a fixed mode spelling on the boxed stream's opaque handle.
+///
+/// For a stream whose mode is not a caller argument at all: `tmpfile()` takes none and PHP
+/// reports `r+b` for the handle it hands back, where the descriptor's access bits can only say
+/// `r+`.
+pub(super) fn emit_record_stream_mode_literal_after_boxed(
+    ctx: &mut FunctionContext<'_>,
+    mode: &str,
+) {
+    let (label, len) = ctx.data.add_string(mode.as_bytes());
+    let mode_len = len as i64;
+    let done_label = ctx.next_label("stream_mode_literal_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // inspect the boxed result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("b.ne {}", done_label));           // failed opens have no mode to report
+            abi::emit_push_reg(ctx.emitter, "x0");
+            abi::emit_symbol_address(ctx.emitter, "x1", &label);                // the fixed mode spelling
+            ctx.emitter.instruction(&format!("mov x2, #{}", mode_len));         // and its byte length
+            ctx.emitter.instruction("ldr x0, [sp]");                            // reload the boxed result
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // pass the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_mode");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp QWORD PTR [rax], 9");                  // runtime tag 9 identifies a stream resource
+            ctx.emitter.instruction(&format!("jne {}", done_label));            // failed opens have no mode to report
+            abi::emit_push_reg(ctx.emitter, "rax");
+            abi::emit_symbol_address(ctx.emitter, "rsi", &label);               // the fixed mode spelling
+            ctx.emitter.instruction(&format!("mov rdx, {}", mode_len));         // and its byte length
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp]");                // reload the boxed result
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");            // pass the opaque stream handle
+            abi::emit_call_label(ctx.emitter, "__rt_stream_record_mode");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&done_label);
+}
+
 /// Persists a caller-stashed socket address host on the boxed stream's opaque handle.
 pub(super) fn emit_stash_connect_host_after_boxed_stashed(ctx: &mut FunctionContext<'_>) {
     let done_label = ctx.next_label("stream_connect_host_done");

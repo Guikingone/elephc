@@ -28,7 +28,7 @@ pub fn emit_stream_socket_server(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_socket_server");
     // Clear the stash before dispatching, for the reason spelled out in the client helper: the
     // unix:// / udg:// / IPv6 servers are tail calls that never record an error number.
-    socket_errno::emit_clear_socket_errno(emitter);
+    socket_errno::emit_reset_socket_error_state(emitter);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. Mirrors __rt_stream_socket_client's probe so both
@@ -247,7 +247,7 @@ fn emit_stream_socket_server_linux_x86_64(emitter: &mut Emitter) {
     emitter.label_global("__rt_stream_socket_server");
     // Clear the stash before dispatching, for the reason spelled out in the client helper: the
     // unix:// / udg:// / IPv6 servers are tail calls that never record an error number.
-    socket_errno::emit_clear_socket_errno(emitter);
+    socket_errno::emit_reset_socket_error_state(emitter);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. Mirrors __rt_stream_socket_client's probe so both

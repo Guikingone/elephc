@@ -204,6 +204,18 @@ impl Platform {
         }
     }
 
+    /// Returns the `O_WRONLY | O_CREAT | O_EXCL` flag combination for `open()`.
+    ///
+    /// Creates a new file for writing and fails when one already exists, which is what PHP's
+    /// `x` fopen mode asks for.
+    pub fn o_wronly_creat_excl(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0xA01,
+            Platform::Linux => 0xC1,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// Returns the `O_WRONLY | O_CREAT | O_APPEND` flag combination for `open()`.
     ///
     /// Opens or creates a file for writing, with all writes appended to the end.

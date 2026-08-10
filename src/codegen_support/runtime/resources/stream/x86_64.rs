@@ -19,6 +19,7 @@ use super::super::layout::{
     STREAM_CONNECT_HOST_PTR_OFFSET, STREAM_CONTEXT_HANDLE_OFFSET, STREAM_EOF_OFFSET, STREAM_FD_OFFSET,
     STREAM_FILTERED_BUF_CAP_OFFSET, STREAM_FILTERED_BUF_LEN_OFFSET, STREAM_FILTERED_BUF_POS_OFFSET,
     STREAM_FILTERED_BUF_PTR_OFFSET, STREAM_FILTERED_FLUSHED_OFFSET,
+    STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET,
     STREAM_OWNERSHIP_FLAGS_OFFSET, STREAM_READ_FILTER_HEAD_OFFSET, STREAM_STATE_SIZE,
     STREAM_TLS_SESSION_OFFSET,
     STREAM_URI_LEN_OFFSET,
@@ -639,6 +640,18 @@ fn emit_stream_destroy_state(emitter: &mut Emitter) {
         "mov QWORD PTR [r10 + {}], 0", STREAM_FILTERED_BUF_CAP_OFFSET
     ));                                                                         // and no capacity remains
     emitter.instruction("call __rt_heap_free_safe");                            // release the filtered-read buffer when present
+    // See the AArch64 counterpart: the reported mode string is persisted at open time like the URI.
+    emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload StreamState for mode-string teardown
+    emitter.instruction(&format!(
+        "mov rax, QWORD PTR [r10 + {}]", STREAM_MODE_PTR_OFFSET
+    ));                                                                         // load the owned reported-mode allocation
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], 0", STREAM_MODE_PTR_OFFSET
+    ));                                                                         // detach before the free so a re-entrant teardown cannot double-free
+    emitter.instruction(&format!(
+        "mov QWORD PTR [r10 + {}], 0", STREAM_MODE_LEN_OFFSET
+    ));                                                                         // clear the detached mode length
+    emitter.instruction("call __rt_heap_free_safe");                            // release owned mode storage when present
     emitter.instruction("mov r10, QWORD PTR [rbp - 8]");                        // reload StreamState for context teardown
     emitter.instruction(&format!(
         "mov rax, QWORD PTR [r10 + {}]", STREAM_CONTEXT_HANDLE_OFFSET

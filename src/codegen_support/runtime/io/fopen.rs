@@ -123,17 +123,38 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     // -- check for 'a' mode (append) --
     emitter.label("__rt_fopen_check_a");
     emitter.instruction("cmp w9, #0x61");                                       // compare with 'a'
-    emitter.instruction("b.ne __rt_fopen_fail");                                // reject unsupported fopen() mode letters
+    emitter.instruction("b.ne __rt_fopen_check_c");                             // if not 'a', check for 'c'
     emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_append())); // O_WRONLY|O_CREAT|O_APPEND
+    emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
+
+    // -- check for 'c' mode (create or open, never truncate) --
+    emitter.label("__rt_fopen_check_c");
+    emitter.instruction("cmp w9, #0x63");                                       // compare with 'c'
+    emitter.instruction("b.ne __rt_fopen_check_x");                             // if not 'c', check for 'x'
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat())); // O_WRONLY|O_CREAT
+    emitter.instruction("b __rt_fopen_check_plus");                             // proceed to check for '+' modifier
+
+    // -- check for 'x' mode (create exclusively) --
+    emitter.label("__rt_fopen_check_x");
+    emitter.instruction("cmp w9, #0x78");                                       // compare with 'x'
+    emitter.instruction("b.ne __rt_fopen_fail");                                // reject unsupported fopen() mode letters
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_excl())); // O_WRONLY|O_CREAT|O_EXCL
     // fall through to check_plus
 
-    // -- check if second char is '+' to enable read+write --
+    // -- a '+' anywhere in the mode enables read+write --
+    // PHP looks for the character across the whole mode, so `rb+` upgrades exactly like `r+`;
+    // inspecting only the second byte left `rb+` read-only and its writes silently failing.
     emitter.label("__rt_fopen_check_plus");
-    emitter.instruction("cmp x4, #1");                                          // check if mode string has more than 1 char
-    emitter.instruction("b.le __rt_fopen_do_open");                             // if only 1 char, skip '+' check
-    emitter.instruction("ldrb w10, [x3, #1]");                                  // load second character of mode string
-    emitter.instruction("cmp w10, #0x2B");                                      // compare with '+'
-    emitter.instruction("b.ne __rt_fopen_do_open");                             // if not '+', keep original flags
+    emitter.instruction("mov x10, #0");                                         // index of the mode byte under inspection
+    emitter.label("__rt_fopen_plus_scan");
+    emitter.instruction("cmp x10, x4");                                         // scanned the whole mode string?
+    emitter.instruction("b.ge __rt_fopen_do_open");                             // no '+' present: keep the base flags
+    emitter.instruction("ldrb w11, [x3, x10]");                                 // load one mode byte
+    emitter.instruction("cmp w11, #0x2B");                                      // compare with '+'
+    emitter.instruction("b.eq __rt_fopen_plus_found");                          // upgrade the access mode
+    emitter.instruction("add x10, x10, #1");                                    // advance to the next mode byte
+    emitter.instruction("b __rt_fopen_plus_scan");                              // keep scanning
+    emitter.label("__rt_fopen_plus_found");
     // -- upgrade to O_RDWR: clear O_RDONLY/O_WRONLY bits, set O_RDWR --
     emitter.instruction("and x1, x1, #0xFFFFFFFFFFFFFFFC");                     // clear lowest 2 bits (O_RDONLY/O_WRONLY)
     emitter.instruction("orr x1, x1, #0x2");                                    // set O_RDWR flag
@@ -370,12 +391,34 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.label("__rt_fopen_check_a_x86");
     emitter.instruction("cmp r11b, 0x61");                                      // does the mode string start with 'a' for append writes?
-    emitter.instruction("jne __rt_fopen_fail_x86");                             // reject unsupported fopen() mode letters
+    emitter.instruction("jne __rt_fopen_check_c_x86");                          // if not, fall through to the create-mode check
     emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_append())); // select O_WRONLY|O_CREAT|O_APPEND for the Linux append-mode fopen() path
+    emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
 
+    emitter.label("__rt_fopen_check_c_x86");
+    emitter.instruction("cmp r11b, 0x63");                                      // does the mode string start with 'c' for create-without-truncate writes?
+    emitter.instruction("jne __rt_fopen_check_x_x86");                          // if not, fall through to the exclusive-create check
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat())); // select O_WRONLY|O_CREAT for the Linux create-mode fopen() path
+    emitter.instruction("jmp __rt_fopen_check_plus_x86");                       // continue with the optional '+' upgrade after selecting the base flags
+
+    emitter.label("__rt_fopen_check_x_x86");
+    emitter.instruction("cmp r11b, 0x78");                                      // does the mode string start with 'x' for exclusive creation?
+    emitter.instruction("jne __rt_fopen_fail_x86");                             // reject unsupported fopen() mode letters
+    emitter.instruction(&format!("mov esi, 0x{:X}", emitter.platform.o_wronly_creat_excl())); // select O_WRONLY|O_CREAT|O_EXCL for the Linux exclusive-create fopen() path
+
+    // See the AArch64 counterpart: PHP looks for '+' across the whole mode, so `rb+` upgrades
+    // exactly like `r+`. The C mode string is null-terminated, which bounds the scan.
     emitter.label("__rt_fopen_check_plus_x86");
-    emitter.instruction("cmp BYTE PTR [r10 + 1], 0x2B");                        // does the mode string request the read-write '+' fopen() upgrade?
-    emitter.instruction("jne __rt_fopen_do_open_x86");                          // keep the base flags when the mode string does not contain '+'
+    emitter.instruction("mov r11, r10");                                        // walk the null-terminated C mode string
+    emitter.label("__rt_fopen_plus_scan_x86");
+    emitter.instruction("movzx eax, BYTE PTR [r11]");                           // load one mode byte
+    emitter.instruction("test al, al");                                         // reached the terminator?
+    emitter.instruction("jz __rt_fopen_do_open_x86");                           // no '+' present: keep the base flags
+    emitter.instruction("cmp al, 0x2B");                                        // does the mode string request the read-write '+' fopen() upgrade?
+    emitter.instruction("je __rt_fopen_plus_found_x86");                        // upgrade the access mode
+    emitter.instruction("inc r11");                                             // advance to the next mode byte
+    emitter.instruction("jmp __rt_fopen_plus_scan_x86");                        // keep scanning
+    emitter.label("__rt_fopen_plus_found_x86");
     emitter.instruction("and esi, 0xFFFFFFFC");                                 // clear the low access-mode bits before upgrading the Linux fopen() flags to O_RDWR
     emitter.instruction("or esi, 0x2");                                         // set O_RDWR so 'r+'/'w+'/'a+' open the file for both reading and writing
 

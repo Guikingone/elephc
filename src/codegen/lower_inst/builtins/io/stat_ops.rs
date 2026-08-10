@@ -34,6 +34,7 @@ pub(crate) fn lower_tmpfile(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     super::super::ensure_arg_count(inst, "tmpfile", 0)?;
     abi::emit_call_label(ctx.emitter, "__rt_tmpfile");
     box_stream_fd_or_false_result(ctx, "tmpfile");
+    emit_record_stream_mode_literal_after_boxed(ctx, "r+b");
     store_if_result(ctx, inst)
 }
 

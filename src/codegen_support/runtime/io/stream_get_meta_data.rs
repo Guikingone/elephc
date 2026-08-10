@@ -13,7 +13,8 @@
 
 use crate::codegen_support::abi;
 use crate::codegen_support::runtime::resources::layout::{
-    STREAM_FD_OFFSET, STREAM_URI_LEN_OFFSET, STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET,
+    STREAM_FD_OFFSET, STREAM_MODE_LEN_OFFSET, STREAM_MODE_PTR_OFFSET, STREAM_URI_LEN_OFFSET,
+    STREAM_URI_PTR_OFFSET, STREAM_WRAPPER_ID_OFFSET,
 };
 use crate::codegen_support::{emit::Emitter, platform::Arch};
 
@@ -100,8 +101,20 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     abi::emit_symbol_address(emitter, "x10", "_meta_mode_rw");                  // load page of the "r+" literal
     emitter.instruction("mov x11, #2");                                         // length of "r+"
     emitter.label("__rt_sgmd_mode_done");
-    emitter.instruction("str x10, [sp, #40]");                                  // save the mode pointer
-    emitter.instruction("str x11, [sp, #48]");                                  // save the mode length
+    // A mode recorded at open time is what PHP reports; the derivation above is only the
+    // fallback for streams that never recorded one, and it cannot spell `a`, `w+` or `rb`.
+    emitter.instruction("ldr x12, [sp, #0]");                                   // the opaque stream handle
+    emitter.instruction("str x10, [sp, #40]");                                  // save the derived mode pointer
+    emitter.instruction("str x11, [sp, #48]");                                  // save the derived mode length
+    emitter.instruction("mov x0, x12");
+    emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
+    emitter.instruction("cbz x0, __rt_sgmd_mode_kept");                         // no state: keep the derived spelling
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_MODE_PTR_OFFSET}]"));   // the recorded mode
+    emitter.instruction("cbz x9, __rt_sgmd_mode_kept");                         // nothing recorded: keep the derived spelling
+    emitter.instruction("str x9, [sp, #40]");                                   // report the recorded pointer
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_MODE_LEN_OFFSET}]"));
+    emitter.instruction("str x9, [sp, #48]");                                   // and its length
+    emitter.label("__rt_sgmd_mode_kept");
 
     // -- end-of-file flag from the authoritative StreamState --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload the opaque stream handle
@@ -121,7 +134,7 @@ pub fn emit_stream_get_meta_data(emitter: &mut Emitter) {
     emit_set_str_slots(emitter, "_meta_key_stream_type", 11, 56, 64);
     // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal --
     emit_set_wrapper_type_aarch64(emitter);
-    emit_set_str_slots(emitter, "_meta_key_mode", 4, 40, 48);
+    emit_set_owned_str_slots(emitter, "_meta_key_mode", 4, 40, 48);
     emit_set_bool_slot(emitter, "_meta_key_seekable", 8, 16);
     // -- uri: read the StreamState-owned URI pointer/length pair --
     emit_set_uri_aarch64(emitter);
@@ -193,6 +206,14 @@ fn emit_set_uri_aarch64(emitter: &mut Emitter) {
         "ldr x4, [x6, #{}]", STREAM_URI_LEN_OFFSET
     ));                                                                         // load the handle-keyed URI byte length
     emitter.instruction("cbz x3, __rt_sgmd_uri_empty");                         // null ptr → empty uri
+    // The array releases its string values, so handing it the StreamState's own URI allocation
+    // freed the state's copy: the third `stream_get_meta_data()` on a stream then read a block
+    // that intervening hash keys had already reused. Give the array a duplicate it can own.
+    emitter.instruction("mov x1, x3");                                          // duplicate the URI bytes
+    emitter.instruction("mov x2, x4");                                          // with their length
+    emitter.instruction("bl __rt_str_persist");                                 // into storage the array may release
+    emitter.instruction("mov x3, x1");                                          // value_lo = the owned duplicate
+    emitter.instruction("mov x4, x2");                                          // value_hi = its length
     emitter.instruction("mov x5, #1");                                          // value tag = string
     emitter.instruction("b __rt_sgmd_uri_put");                                 // insert the uri entry
     emitter.label("__rt_sgmd_uri_empty");
@@ -240,6 +261,26 @@ fn emit_set_int_const(emitter: &mut Emitter, key_sym: &str, key_len: i64) {
 fn emit_set_str_slots(emitter: &mut Emitter, key_sym: &str, key_len: i64, ptr_slot: i64, len_slot: i64) {
     emitter.instruction(&format!("ldr x3, [sp, #{}]", ptr_slot));               // value_lo = string pointer
     emitter.instruction(&format!("ldr x4, [sp, #{}]", len_slot));               // value_hi = string length
+    emitter.instruction("mov x5, #1");                                          // value tag = string
+    emit_hash_put_aarch64(emitter, key_sym, key_len);
+}
+
+/// Emits one `__rt_hash_set` whose string value is duplicated first.
+///
+/// See the URI insertion: a value the array may release must not be the StreamState's own
+/// allocation. A rodata fallback survives either way, so this is uniform for both.
+fn emit_set_owned_str_slots(
+    emitter: &mut Emitter,
+    key_sym: &str,
+    key_len: i64,
+    ptr_slot: i64,
+    len_slot: i64,
+) {
+    emitter.instruction(&format!("ldr x1, [sp, #{}]", ptr_slot));               // duplicate the recorded bytes
+    emitter.instruction(&format!("ldr x2, [sp, #{}]", len_slot));               // with their length
+    emitter.instruction("bl __rt_str_persist");                                 // into storage the array may release
+    emitter.instruction("mov x3, x1");                                          // value_lo = the owned duplicate
+    emitter.instruction("mov x4, x2");                                          // value_hi = its length
     emitter.instruction("mov x5, #1");                                          // value tag = string
     emit_hash_put_aarch64(emitter, key_sym, key_len);
 }
@@ -320,6 +361,23 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 48], r10");                       // save the mode pointer
     emitter.instruction("mov QWORD PTR [rbp - 56], 2");                         // save the mode length
     emitter.label("__rt_sgmd_mode_done_x86");
+    // See the AArch64 counterpart: a mode recorded at open time is what PHP reports, and the
+    // derivation above is only the fallback for streams that never recorded one.
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the opaque stream handle
+    emitter.instruction("call __rt_stream_state");                              // resolve the owning stream state
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_sgmd_mode_kept_x86");                          // no state: keep the derived spelling
+    emitter.instruction(&format!(
+        "mov r9, QWORD PTR [rax + {STREAM_MODE_PTR_OFFSET}]"
+    ));                                                                         // the recorded mode
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_sgmd_mode_kept_x86");                          // nothing recorded: keep the derived spelling
+    emitter.instruction("mov QWORD PTR [rbp - 48], r9");                        // report the recorded pointer
+    emitter.instruction(&format!(
+        "mov r9, QWORD PTR [rax + {STREAM_MODE_LEN_OFFSET}]"
+    ));
+    emitter.instruction("mov QWORD PTR [rbp - 56], r9");                        // and its length
+    emitter.label("__rt_sgmd_mode_kept_x86");
 
     // -- end-of-file flag from the authoritative StreamState --
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // reload the opaque stream handle
@@ -339,7 +397,7 @@ fn emit_stream_get_meta_data_linux_x86_64(emitter: &mut Emitter) {
     emit_set_str_slots_x86(emitter, "_meta_key_stream_type", 11, 64, 72);
     // -- wrapper_type: map the StreamState wrapper id to its PHP-visible literal --
     emit_set_wrapper_type_x86(emitter);
-    emit_set_str_slots_x86(emitter, "_meta_key_mode", 4, 48, 56);
+    emit_set_owned_str_slots_x86(emitter, "_meta_key_mode", 4, 48, 56);
     emit_set_bool_slot_x86(emitter, "_meta_key_seekable", 8, 24);
     // -- uri: read the StreamState-owned URI pointer/length pair --
     emit_set_uri_x86(emitter);
@@ -441,6 +499,13 @@ fn emit_set_uri_x86(emitter: &mut Emitter) {
     ));                                                                         // load the handle-keyed URI byte length
     emitter.instruction("test rcx, rcx");                                       // null ptr?
     emitter.instruction("jz __rt_sgmd_uri_empty_x");                            // → empty uri
+    // See the AArch64 counterpart: the array releases its string values, so it needs a duplicate
+    // rather than the StreamState's own URI allocation.
+    emitter.instruction("mov rax, rcx");                                        // duplicate the URI bytes
+    emitter.instruction("mov rdx, r8");                                         // with their length
+    emitter.instruction("call __rt_str_persist");                               // into storage the array may release
+    emitter.instruction("mov rcx, rax");                                        // value_lo = the owned duplicate
+    emitter.instruction("mov r8, rdx");                                         // value_hi = its length
     emitter.instruction("mov r9, 1");                                           // value tag = string
     emitter.instruction("jmp __rt_sgmd_uri_put_x");                             // insert the uri entry
     emitter.label("__rt_sgmd_uri_empty_x");
@@ -449,6 +514,23 @@ fn emit_set_uri_x86(emitter: &mut Emitter) {
     emitter.instruction("mov r9, 1");                                           // value tag = string
     emitter.label("__rt_sgmd_uri_put_x");
     emit_hash_put_x86(emitter, "_meta_key_uri", 3);
+}
+
+/// Emits one x86_64 `__rt_hash_set` whose string value is duplicated first.
+fn emit_set_owned_str_slots_x86(
+    emitter: &mut Emitter,
+    key_sym: &str,
+    key_len: i64,
+    ptr_slot: i64,
+    len_slot: i64,
+) {
+    emitter.instruction(&format!("mov rax, QWORD PTR [rbp - {}]", ptr_slot));   // duplicate the recorded bytes
+    emitter.instruction(&format!("mov rdx, QWORD PTR [rbp - {}]", len_slot));   // with their length
+    emitter.instruction("call __rt_str_persist");                               // into storage the array may release
+    emitter.instruction("mov rcx, rax");                                        // value_lo = the owned duplicate
+    emitter.instruction("mov r8, rdx");                                         // value_hi = its length
+    emitter.instruction("mov r9, 1");                                           // value tag = string
+    emit_hash_put_x86(emitter, key_sym, key_len);
 }
 
 /// Emits the set str slots x86 stream runtime helper.

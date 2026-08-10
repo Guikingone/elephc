@@ -20,6 +20,9 @@ use super::{
     OB_WARN_BAD_CALLBACK_PREFIX, OB_WARN_BAD_CALLBACK_SUFFIX,
     PHP_UNAME_MODE_LEN_MSG, PHP_UNAME_MODE_VALUE_MSG, SPRINTF_ARGCOUNT_MSG,
     SPRINTF_OVERFLOW_MSG, SPRINTF_UNKNOWN_SPEC_MSG, SPRINTF_WIDTH_MSG, STACK_OVERFLOW_MSG,
+    GAI_MSG_MIDDLE, GAI_MSG_PREFIX, SOCKET_GAI_MSG_CAPACITY,
+    SOCKET_FAILED_CLIENT_PREFIX, SOCKET_FAILED_FSOCKOPEN_PREFIX, SOCKET_FAILED_REASON_CLOSE,
+    SOCKET_FAILED_REASON_OPEN, SOCKET_FAILED_SERVER_PREFIX, SOCKET_FAILED_UNABLE,
     SWR_NEVER_CHANGED, SWR_NEVER_EXISTED, SWR_NTC_PREFIX, SWR_WRN_PREFIX,
     STR_REPEAT_TIMES_MSG,
 };
@@ -132,6 +135,14 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ("_swr_wrn_prefix", SWR_WRN_PREFIX),
         ("_swr_never_changed", SWR_NEVER_CHANGED),
         ("_swr_never_existed", SWR_NEVER_EXISTED),
+        ("_sock_fail_client", SOCKET_FAILED_CLIENT_PREFIX),
+        ("_sock_fail_server", SOCKET_FAILED_SERVER_PREFIX),
+        ("_sock_fail_fsockopen", SOCKET_FAILED_FSOCKOPEN_PREFIX),
+        ("_sock_fail_unable", SOCKET_FAILED_UNABLE),
+        ("_sock_fail_newline", "\n"),
+        ("_sock_fail_open", SOCKET_FAILED_REASON_OPEN),
+        ("_sock_fail_close", SOCKET_FAILED_REASON_CLOSE),
+        ("_sock_fail_colon", ":"),
         ("_ob_ntc_no_end_flush", OB_NTC_NO_END_FLUSH),
         ("_ob_ntc_no_get_flush", OB_NTC_NO_GET_FLUSH),
         ("_ob_ntc_no_end_clean", OB_NTC_NO_END_CLEAN),
@@ -1147,6 +1158,21 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // Why the last socket connect/bind failed, published by the socket helpers and read back by
     // the `&$error_code` / `&$error_message` outputs of the four socket-opening builtins.
     out.push_str(&comm_directive("_socket_errno", 8, target));
+    // The unresolvable-host message php-src composes instead of reporting an `errno`: the host
+    // the resolver was given, the code `getaddrinfo` answered, and the composed text itself. The
+    // text lives in a fixed buffer so the caller's `&$error_message` borrows something static,
+    // like the `strerror` pointer it borrows for every other failure.
+    out.push_str(&comm_directive("_socket_gai_err", 8, target));
+    out.push_str(&comm_directive("_socket_gai_host_ptr", 8, target));
+    out.push_str(&comm_directive("_socket_gai_host_len", 8, target));
+    out.push_str(&comm_directive("_socket_gai_msg_len", 8, target));
+    out.push_str(&comm_directive("_socket_gai_msg", SOCKET_GAI_MSG_CAPACITY, target));
+    out.push_str(&format!(
+        ".globl _gai_msg_prefix\n_gai_msg_prefix:\n    .ascii {GAI_MSG_PREFIX:?}\n"
+    ));
+    out.push_str(&format!(
+        ".globl _gai_msg_middle\n_gai_msg_middle:\n    .ascii {GAI_MSG_MIDDLE:?}\n"
+    ));
     out.push_str(&emit_php_wrapper_scheme_table());
     // A `php://filter/...` URL resolved at run time: the filter it names, the direction it asked
     // for, and the resource to open. Published by the parse so the attach can run once that

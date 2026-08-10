@@ -36,6 +36,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         } else {
             emit_literal_fopen_result(ctx, inst, path)?;
         }
+        emit_record_stream_mode_after_boxed(ctx, mode)?;
         finish_fopen_context_scope(ctx);
         store_if_result(ctx, inst)?;
         if path.starts_with("http://") {
@@ -165,6 +166,7 @@ fn emit_dynamic_data_branch(
     box_stream_fd_or_false_result(ctx, "fopen_data_dynamic");
     emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL may wrap a data:// resource
     emit_record_stream_meta_after_boxed_stashed(ctx, 2);
+    emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)?;
@@ -215,6 +217,7 @@ fn emit_dynamic_php_wrapper_branch(
     box_stream_fd_or_false_result(ctx, "fopen_php_dynamic");
     emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
     emit_record_stream_meta_after_boxed_stashed(ctx, 6);
+    emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)?;
@@ -259,6 +262,7 @@ fn emit_dynamic_fopen_result(
     box_stream_fd_or_false_result(ctx, "fopen_http_dynamic");
     emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
     emit_record_stream_meta_after_boxed_stashed(ctx, 1);
+    emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)?;
@@ -270,6 +274,7 @@ fn emit_dynamic_fopen_result(
     box_stream_fd_or_false_result(ctx, "fopen");
     emit_dynamic_php_filter_attach(ctx);                                        // a php://filter URL parked its filter; attach it now the stream exists
     emit_record_stream_meta_after_boxed_stashed(ctx, 0);
+    emit_record_stream_mode_after_boxed(ctx, expect_operand(inst, 1)?)?;
     abi::emit_release_temporary_stack(ctx.emitter, 16);
     finish_fopen_context_scope(ctx);
     store_if_result(ctx, inst)?;

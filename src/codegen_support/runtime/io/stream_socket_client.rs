@@ -29,7 +29,7 @@ pub fn emit_stream_socket_client(emitter: &mut Emitter) {
     // Clear the stash before dispatching: the unix:// / udg:// / IPv6 helpers below are reached
     // by a tail call and never record an error number, so without this a failure on one of those
     // paths would report whatever the PREVIOUS socket call left behind.
-    socket_errno::emit_clear_socket_errno(emitter);
+    socket_errno::emit_reset_socket_error_state(emitter);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. RFC 3986 hosts cannot contain '[', so this safely
@@ -234,7 +234,7 @@ fn emit_stream_socket_client_linux_x86_64(emitter: &mut Emitter) {
     // Clear the stash before dispatching: the unix:// / udg:// / IPv6 helpers below are reached
     // by a tail call and never record an error number, so without this a failure on one of those
     // paths would report whatever the PREVIOUS socket call left behind.
-    socket_errno::emit_clear_socket_errno(emitter);
+    socket_errno::emit_reset_socket_error_state(emitter);
 
     // -- bracketed-host detection: any '[' in the address routes us to the
     //    IPv6 helper. RFC 3986 hosts cannot contain '[', so this safely

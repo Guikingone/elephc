@@ -171,6 +171,18 @@ pub(crate) const STREAM_FILTERED_BUF_POS_OFFSET: i64 = 176;
 /// dispatch however many times the caller reads past EOF.
 pub(crate) const STREAM_FILTERED_FLUSHED_OFFSET: i64 = 184;
 
+/// Byte offset of the PHP mode string `stream_get_meta_data()` reports, or 0 when unrecorded.
+///
+/// PHP echoes the mode the caller passed — `rb` stays `rb`, `a` stays `a` — while `php://memory`
+/// and `php://temp` report a spelling of php-src's own. Deriving it from the descriptor's
+/// `F_GETFL` access bits cannot produce either: it collapses `a` to `w`, `w+` to `r+`, and drops
+/// the `b`. The bytes are persisted into owned storage, like the URI above and released beside it,
+/// so a mode built at run time cannot dangle.
+pub(crate) const STREAM_MODE_PTR_OFFSET: i64 = 192;
+
+/// Byte offset of the recorded mode string's length.
+pub(crate) const STREAM_MODE_LEN_OFFSET: i64 = 200;
+
 /// Byte offset of stream ownership flags.
 pub(crate) const STREAM_OWNERSHIP_FLAGS_OFFSET: i64 = 296;
 
@@ -283,6 +295,9 @@ const _: () = {
     assert!(STREAM_FILTERED_BUF_POS_OFFSET == STREAM_FILTERED_BUF_CAP_OFFSET + 8);
     assert!(STREAM_FILTERED_FLUSHED_OFFSET == STREAM_FILTERED_BUF_POS_OFFSET + 8);
     assert!(STREAM_FILTERED_FLUSHED_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
+    assert!(STREAM_MODE_PTR_OFFSET > STREAM_FILTERED_FLUSHED_OFFSET);
+    assert!(STREAM_MODE_LEN_OFFSET == STREAM_MODE_PTR_OFFSET + 8);
+    assert!(STREAM_MODE_LEN_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(CONTEXT_STATE_SIZE == 32);
     assert!(CONTEXT_PARAMS_OFFSET == CONTEXT_OPTIONS_OFFSET + 8);
     assert!(CONTEXT_NOTIFIER_OFFSET == CONTEXT_PARAMS_OFFSET + 8);

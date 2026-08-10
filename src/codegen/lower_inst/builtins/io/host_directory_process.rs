@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen_support::runtime::io::{SOCKET_WARNING_FSOCKOPEN};
 
 /// Lowers `disk_free_space(path)` through the shared disk-space runtime helper.
 pub(crate) fn lower_disk_free_space(
@@ -396,6 +397,7 @@ pub(crate) fn lower_fsockopen(ctx: &mut FunctionContext<'_>, inst: &Instruction)
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fsockopen");
+    emit_socket_open_failure_warning(ctx, host, Some(port), SOCKET_WARNING_FSOCKOPEN)?;
     store_socket_error_outputs(ctx, inst, 2, 3, true)?;
     box_stream_fd_or_false_result(ctx, "fsockopen");
     store_if_result(ctx, inst)

@@ -55,7 +55,7 @@ resources than the initial reservation holds grows the table on the heap as usua
 
 | Function | Signature | Description |
 |---|---|---|
-| `fopen()` | `fopen($filename, $mode, $use_include_path = false, $context = null): resource\|false` | Open a file, wrapper URL, socket-like wrapper, or temporary/memory stream. Modes `r`, `w`, `a`, `r+`, `w+`, and `a+` are supported. The optional args are evaluated in source order. `fopen()`, `file_get_contents()` and `readfile()` each publish their own `$context` for the duration of the call and restore the previous one afterwards. |
+| `fopen()` | `fopen($filename, $mode, $use_include_path = false, $context = null): resource\|false` | Open a file, wrapper URL, socket-like wrapper, or temporary/memory stream. PHP's modes are supported: `r`, `w`, `a`, `c` and `x`, each with an optional `+`, and the `b`/`t` flags anywhere in the string. The optional args are evaluated in source order. `fopen()`, `file_get_contents()` and `readfile()` each publish their own `$context` for the duration of the call and restore the previous one afterwards. |
 | `fclose()` | `fclose(resource $handle): bool` | Close a stream. Closing a `phar://` write stream finalizes the archive, and closing a filtered stream runs pending filter cleanup such as user-filter `onClose()`. |
 | `fread()` | `fread(resource $handle, $length): string` | Read up to `$length` bytes. Attached read filters and user-wrapper `stream_read()` methods are honored. On a filtered stream the result is capped at `$length` and the filter's remainder is kept for the next read. |
 | `fwrite()` | `fwrite(resource $handle, $data): int` | Write bytes and return the byte count. Attached write filters and user-wrapper `stream_write()` methods are honored. |
@@ -368,7 +368,7 @@ declared first.
 |---|---|---|
 | `stream_get_transports()` | `stream_get_transports(): array` | Return recognized socket transports: `tcp`, `udp`, `unix`, `udg`, `tls`, `ssl`, `sslv2`, `sslv3`, `tlsv1.0`, `tlsv1.1`, `tlsv1.2`, and `tlsv1.3`. TLS-version names all use rustls default negotiation. |
 | `stream_socket_server()` | `stream_socket_server($address, int &$error_code = null, string &$error_message = null): resource\|false` | Bind a server socket for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. TCP and Unix-stream sockets listen; UDP and Unix-datagram sockets only bind. `&$error_message` carries the reason a bind or listen failed; `&$error_code` stays `0`, as it does in php-src for this function. |
-| `stream_socket_client()` | `stream_socket_client($address, int &$error_code = null, string &$error_message = null): resource\|false` | Open a client stream for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. The two error outputs carry the real failure: the `errno` of the syscall that failed and its `strerror` text. Both may be passed undeclared, as in PHP — the call defines them as `int` and `string`. |
+| `stream_socket_client()` | `stream_socket_client($address, int &$error_code = null, string &$error_message = null): resource\|false` | Open a client stream for `[tcp://]host:port`, `udp://host:port`, `unix:///path`, or `udg:///path`. The two error outputs carry the real failure: the `errno` of the syscall that failed and its `strerror` text. Both may be passed undeclared, as in PHP — the call defines them as `int` and `string`. A failed open also raises PHP's `Unable to connect to <address> (<reason>)` Warning, whether or not the error outputs were passed; `@` suppresses it. A host that does not resolve reports php-src's own `php_network_getaddresses: getaddrinfo for <host> failed: <reason>` text — that failure has no `errno`, so `&$error_code` stays `0` — and warns twice, as PHP does. |
 | `stream_socket_accept()` | `stream_socket_accept($socket): resource\|false` | Accept the next pending connection from a listening stream. |
 | `stream_socket_enable_crypto()` | `stream_socket_enable_crypto(resource $stream, bool $enable, int $crypto_method = null, resource $session_stream = null): bool` | Attach TLS to an already-connected TCP fd. `$enable=false` unwinds the session (sends `close_notify` and detaches it from the stream), leaving the fd a plain TCP socket, and reports `false` as PHP does — php-src performs the shutdown and still returns -1. On a handle that never had crypto it is a no-op and reports `true`. |
 | `fsockopen()` | `fsockopen(string $hostname, int $port, int &$error_code = null, string &$error_message = null, float $timeout = null): resource\|false` | Open a TCP connection to `$hostname:$port`. The by-reference error outputs carry the real failure, as for `stream_socket_client()`. The timeout arg is evaluated but the OS default connect timeout is used in v1. |
@@ -416,11 +416,19 @@ close. A resource reports its own type name — `"stream"`, `"stream-context"` o
 `"stream filter"` — whether it is held directly or has travelled through an
 untyped parameter, and `"Unknown"` once closed in either case.
 
-`stream_get_meta_data()` derives `eof`, `seekable`, `blocked`, and `mode` from
-the live descriptor. `wrapper_type` and `uri` are recorded per handle when the
+`stream_get_meta_data()` derives `eof`, `seekable` and `blocked` from the live
+descriptor. `wrapper_type`, `uri` and `mode` are recorded per handle when the
 stream is opened, so a file reports `plainfile` with its path, a `php://` stream
 reports `PHP`, and a `data:` URL reports `RFC2397` — PHP's name for that wrapper,
 which is the RFC rather than the scheme.
+
+`mode` is the mode string the caller passed, unnormalised: `rb` stays `rb` and
+`a` stays `a`. The memory wrappers are the exception PHP itself makes — they
+report the mode of the stream php-src built, so `php://memory` and `php://temp`
+answer `a+b` for an append mode, `w+b` when the mode asks for any write access,
+and `rb` otherwise, while `php://output` always answers `wb`. A stream that
+records no mode, such as a socket or an accepted connection, still reports the
+descriptor's access bits.
 
 Known differences from PHP 8.5.6, all in reported names rather than behavior:
 

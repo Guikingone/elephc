@@ -293,6 +293,22 @@ echo $wrote . "|" . $content;
     assert_eq!(out, "7|scratch");
 }
 
+/// Verifies `tmpfile()` reports the mode PHP reports for the handle it hands back.
+///
+/// The handle takes no mode argument, so the metadata helper could only describe the descriptor's
+/// access bits — `r+`. php-src opens the file `w+b` and answers `r+b`.
+#[test]
+fn test_tmpfile_reports_the_php_mode() {
+    let out = compile_and_run(
+        r#"<?php
+$h = tmpfile();
+echo stream_get_meta_data($h)["mode"];
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "r+b");
+}
+
 /// Verifies `tmpfile` returns a resource type (not `false`) and `gettype` reports "resource".
 #[test]
 fn test_tmpfile_returns_resource_type() {

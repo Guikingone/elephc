@@ -242,6 +242,63 @@ pub(super) fn store_socket_error_outputs(
     Ok(())
 }
 
+/// Emits PHP's "Unable to connect to …" Warning when a socket-opening builtin failed.
+///
+/// Runs immediately after the runtime call, with the descriptor-or-`-1` still in the result
+/// register. PHP prints this whether or not the caller passed `&$errno`/`&$errstr`, so it is not
+/// tied to `store_socket_error_outputs`; only `@` suppresses it, which `__rt_diag_warning` handles.
+///
+/// `port` is `Some` only for `fsockopen()`, whose address argument is a bare host: PHP spells the
+/// endpoint `host:port`, so the runtime appends the suffix. The other builtins take an address
+/// that already carries its port and pass `-1` to skip it.
+pub(super) fn emit_socket_open_failure_warning(
+    ctx: &mut FunctionContext<'_>,
+    address: ValueId,
+    port: Option<ValueId>,
+    kind: i64,
+) -> Result<()> {
+    let done_label = ctx.next_label("socket_open_warning_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("cmp x0, #0");                              // did the socket call fail?
+            ctx.emitter.instruction(&format!("b.ge {}", done_label));           // a live descriptor warns about nothing
+            abi::emit_push_reg(ctx.emitter, "x0");                              // the result outlives the diagnostic
+            match port {
+                Some(port) => {
+                    ctx.load_value_to_result(port)?;                            // the port PHP appends to the host
+                }
+                None => ctx.emitter.instruction("mov x0, #-1"),                 // the address already carries its port
+            }
+            abi::emit_push_reg(ctx.emitter, "x0");
+            load_string_to_result(ctx, address, "socket address")?;             // re-materialize the endpoint the caller wrote
+            abi::emit_pop_reg(ctx.emitter, "x3");                               // the port argument
+            ctx.emitter.instruction(&format!("mov x0, #{}", kind));             // which builtin is reporting
+            abi::emit_call_label(ctx.emitter, "__rt_socket_connect_warning");
+            abi::emit_pop_reg(ctx.emitter, "x0");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("cmp rax, 0");                              // did the socket call fail?
+            ctx.emitter.instruction(&format!("jge {}", done_label));            // a live descriptor warns about nothing
+            abi::emit_push_reg(ctx.emitter, "rax");                             // the result outlives the diagnostic
+            match port {
+                Some(port) => {
+                    ctx.load_value_to_result(port)?;                            // the port PHP appends to the host
+                }
+                None => ctx.emitter.instruction("mov rax, -1"),                 // the address already carries its port
+            }
+            abi::emit_push_reg(ctx.emitter, "rax");
+            load_string_to_result(ctx, address, "socket address")?;             // re-materialize the endpoint the caller wrote
+            ctx.emitter.instruction("mov rsi, rax");                            // the address pointer
+            abi::emit_pop_reg(ctx.emitter, "rcx");                              // the port argument
+            ctx.emitter.instruction(&format!("mov rdi, {}", kind));             // which builtin is reporting
+            abi::emit_call_label(ctx.emitter, "__rt_socket_connect_warning");
+            abi::emit_pop_reg(ctx.emitter, "rax");
+        }
+    }
+    ctx.emitter.label(&done_label);
+    Ok(())
+}
+
 /// Stores an integer output into a local slot, boxing it when the slot is `Mixed`.
 ///
 /// Refuses a slot that holds neither an integer nor a boxed value. The raw store below writes a
