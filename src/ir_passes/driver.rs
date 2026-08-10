@@ -25,11 +25,13 @@
 use crate::ir::{DataPool, Function, Module};
 
 use super::branch_simplify::BranchSimplify;
+use super::checked_int_sink::CheckedIntSink;
 use super::const_fold::ConstFold;
 use super::cse::Cse;
 use super::dead_inst::DeadInst;
 use super::dead_store::DeadStore;
 use super::identity_arith::IdentityArith;
+use super::immutable_local_loads::ImmutableLocalLoads;
 use super::licm::Licm;
 use super::peephole::Peephole;
 
@@ -61,26 +63,27 @@ pub trait IrPass {
 }
 
 /// Builds the ordered set of transformation passes run on every function:
-/// identity arithmetic folding, peephole rewrites, constant folding,
-/// common-subexpression elimination, loop-invariant code motion, dead
-/// instruction elimination, dead store elimination, and branch simplification.
+/// identity arithmetic folding, peephole rewrites, immutable-local discovery,
+/// checked-arithmetic int-sink specialization, constant folding, common-subexpression
+/// elimination, loop-invariant code motion, dead instruction elimination, dead store
+/// elimination, and branch simplification.
 /// The cross-function small-function inliner is not a member here; it runs as a
 /// module-level phase in `optimize_module`, interleaved with these passes.
 ///
-/// Constant folding runs after peephole so the scalar load/store forwarding has
-/// already moved constants stored to local slots onto their `load_local` uses,
-/// exposing constant-operand operations for it to fold. CSE then runs after
-/// folding so it deduplicates pure computations over the already-canonicalized
-/// constants (the constants themselves are left for the backend to
-/// rematerialize). LICM then hoists loop-invariant pure computations into loop
+/// Constant folding runs after peephole and the two issue-623 passes: immutable
+/// scalar local loads become pure operands, and checked operations observed only
+/// through integer sinks become allocation-free `IChecked*ToInt` computations.
+/// CSE can then deduplicate those computations using canonical immutable loads,
+/// while LICM can move both the loads and their dependent arithmetic into loop
 /// preheaders. The redundant or relocated instructions these leave behind are
 /// cleaned up by dead instruction elimination, and any folded branch condition is
-/// collapsed by branch simplification — all converging through the fixed-point
-/// loop.
+/// collapsed by branch simplification — all converging through the fixed-point loop.
 fn default_passes() -> Vec<Box<dyn IrPass>> {
     vec![
         Box::new(IdentityArith),
         Box::new(Peephole),
+        Box::new(ImmutableLocalLoads),
+        Box::new(CheckedIntSink),
         Box::new(ConstFold),
         Box::new(Cse),
         Box::new(Licm),
