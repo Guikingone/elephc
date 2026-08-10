@@ -161,7 +161,21 @@ pub(super) fn lower_stream_bucket_insert(
     store_if_result(ctx, inst)
 }
 
-/// Lowers `stream_is_local(stream_or_path)` — returns false for http/https/ftp/ftps.
+/// The prefixes php-src resolves to a non-local wrapper. `data:` carries no slashes
+/// because the RFC 2397 wrapper is registered for the bare scheme too.
+const NON_LOCAL_PATH_PREFIXES: [&str; 5] = ["http://", "https://", "ftp://", "ftps://", "data:"];
+
+/// Answers `stream_is_local()` for a path whose bytes are known at compile time.
+///
+/// Kept beside the runtime classifier in `stream_is_local.rs`, which applies the same
+/// rule to a path that only exists at run time; the two must agree.
+fn const_path_is_local(path: &str) -> bool {
+    !NON_LOCAL_PATH_PREFIXES
+        .iter()
+        .any(|prefix| path.len() >= prefix.len() && path[..prefix.len()].eq_ignore_ascii_case(prefix))
+}
+
+/// Lowers `stream_is_local(stream_or_path)`, which accepts a stream resource or a path.
 pub(crate) fn lower_stream_is_local(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -170,11 +184,14 @@ pub(crate) fn lower_stream_is_local(
     let stream = expect_operand(inst, 0)?;
     // If the arg is a string literal, check the scheme prefix at compile time.
     if let Some(path) = optional_const_string_operand(ctx, stream)? {
-        let is_local = !(path.starts_with("http://")
-            || path.starts_with("https://")
-            || path.starts_with("ftp://")
-            || path.starts_with("ftps://"));
-        emit_bool_result(ctx, is_local);
+        emit_bool_result(ctx, const_path_is_local(&path));
+        return store_if_result(ctx, inst);
+    }
+    // A path that only exists at run time — an array element, a loop variable — goes to the
+    // runtime classifier, which applies the same rule to the bytes.
+    if matches!(ctx.value_php_type(stream)?, PhpType::Str) {
+        load_string_to_result(ctx, stream, "stream_is_local path")?;
+        abi::emit_call_label(ctx.emitter, "__rt_stream_is_local_path");
         return store_if_result(ctx, inst);
     }
     // For a resource argument, consume the URL identity frozen into its StreamState.

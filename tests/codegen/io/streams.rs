@@ -620,6 +620,31 @@ fn test_stream_is_local_and_supports_lock_are_true() {
     assert_eq!(out, "LS");
 }
 
+/// Verifies `stream_is_local()` classifies a path that only exists at run time.
+///
+/// A literal is folded at compile time, so the loop is what exercises the runtime
+/// classifier — before it existed this failed to compile rather than answering wrongly.
+/// The expectations are `php -n` 8.5.6's: `data:` is remote with or without slashes,
+/// scheme matching folds case, and the scheme needs its full `://`.
+#[test]
+fn test_stream_is_local_classifies_a_runtime_path() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = [
+    "plain.txt", "/etc/hosts", "file:///etc/hosts",
+    "http://example.com/x", "https://example.com/x",
+    "ftp://example.com/x", "ftps://example.com/x",
+    "php://memory", "glob://*.txt", "phar://a.phar/b.txt",
+    "compress.zlib://a.gz", "data://text/plain,hello", "data:text/plain,hello",
+    "HTTP://example.com/x", "hTTps://example.com", "FTP://x",
+    "httpx://x", "http:/one-slash", "http", "my.http://x", "",
+];
+foreach ($cases as $c) { echo stream_is_local($c) ? "L" : "r"; }
+"#,
+    );
+    assert_eq!(out, "LLLrrrrLLLLrrrrrLLLLL");
+}
+
 /// Verifies compiled PHP output for stream get wrappers lists known wrappers.
 #[test]
 fn test_stream_get_wrappers_lists_known_wrappers() {
