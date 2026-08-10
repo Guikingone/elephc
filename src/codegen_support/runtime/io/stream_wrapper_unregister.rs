@@ -142,6 +142,33 @@ fn emit_stream_wrapper_unregister_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_swu_scan_x86");                               // continue scanning
 
     emitter.label("__rt_swu_miss_x86");
-    emitter.instruction("xor eax, eax");                                        // return false when no slot matched
+    // PHP allows a built-in wrapper to be unregistered. Built-ins are not in the user table, so
+    // a miss falls through to the disabled-wrapper bitmask before reporting failure — the
+    // AArch64 counterpart has always done this, and its absence here left every built-in
+    // unregistration a no-op on x86_64, so `stream_wrapper_restore()` then reported the wrapper
+    // as never changed.
+    emitter.instruction("push rbp");                                            // align the stack for the probe call
+    emitter.instruction("mov rbp, rsp");                                        // establish a frame to return through
+    // rdi/rsi still hold the requested protocol: the scan above reads them but never writes them.
+    emitter.instruction("call __rt_builtin_wrapper_index");                     // rax = built-in index or -1
+    emitter.instruction("cmp rax, 0");
+    emitter.instruction("jl __rt_swu_really_miss_x86");                         // not a built-in either
+    emitter.instruction("mov rcx, rax");                                        // the index selects the bit
+    abi::emit_symbol_address(emitter, "r9", "_disabled_builtin_wrappers");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // current disabled mask
+    emitter.instruction("mov r11, 1");
+    emitter.instruction("shl r11, cl");                                         // bit for this wrapper
+    emitter.instruction("test r10, r11");                                       // already unregistered?
+    emitter.instruction("jnz __rt_swu_really_miss_x86");                        // PHP reports false on a second unregister
+    emitter.instruction("or r10, r11");                                         // mark the built-in disabled
+    emitter.instruction("mov QWORD PTR [r9], r10");
+    emitter.instruction("mov eax, 1");                                          // report a successful unregistration
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");                                                 // return to the caller
+    emitter.label("__rt_swu_really_miss_x86");
+    emitter.instruction("xor eax, eax");                                        // return false when nothing matched
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
     emitter.instruction("ret");                                                 // return to the caller
 }

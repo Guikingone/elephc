@@ -395,7 +395,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 1");                                          // publish the EOF state after consuming the stream
     emitter.instruction("call __rt_stream_eof_set");                            // update only this stream's stable state
     emitter.instruction("mov rax, QWORD PTR [rbp - 16]");                       // return total
-    emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return total
 
@@ -404,7 +404,7 @@ fn emit_streams_ext_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov esi, 1");                                          // publish the EOF state after read failure
     emitter.instruction("call __rt_stream_eof_set");                            // update only this stream's stable state
     emitter.instruction("mov rax, -1");                                         // read failure sentinel, matching PHP's -1 byte count
-    emitter.instruction(&format!("add rsp, {}", buf_size + 16));                // release frame
+    emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp so its size lives in one place
     emitter.instruction("pop rbp");                                             // restore caller frame pointer
     emitter.instruction("ret");                                                 // return read failure sentinel
 
