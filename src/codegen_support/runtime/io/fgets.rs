@@ -25,7 +25,11 @@ const INITIAL_LINE_CAPACITY: usize = 4096;
 /// path otherwise.
 ///
 /// ABI contract:
-///   - input:  x0 = opaque stream handle
+///   - input:  x0 = opaque stream handle, x1 = caller's length bound (0 = read a whole line)
+///     Both inputs are REQUIRED. `x1` was added with `fgets($length)`, and the two callers that
+///     read a whole line — `readline()` and `fscanf()` — kept passing only the handle, so the
+///     bound was whatever the register held: on linux-x86_64 `readline()` returned the first two
+///     bytes of its line.
 ///   - output: x1 = pointer to line start (concat scratch or owned heap storage),
 ///             x2 = line length (includes trailing `\n` if one was present before EOF)
 ///   - side effect: sets state-owned EOF when the stream is exhausted

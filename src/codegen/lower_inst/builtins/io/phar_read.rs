@@ -506,9 +506,11 @@ pub(crate) fn lower_readline(ctx: &mut FunctionContext<'_>, inst: &Instruction) 
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x0, #0");                              // pass stdin fd 0 to the shared line-reader helper
+            ctx.emitter.instruction("mov x1, #0");                              // readline() has no length bound; zero is how the helper is told so
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("xor edi, edi");                            // pass stdin fd 0 to the shared line-reader helper
+            ctx.emitter.instruction("xor esi, esi");                            // readline() has no length bound; zero is how the helper is told so
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgets");

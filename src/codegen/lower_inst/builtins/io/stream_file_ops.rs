@@ -332,6 +332,7 @@ pub(crate) fn lower_fscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
     load_open_stream_handle_to_result(ctx, stream, "fscanf")?;
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
+            ctx.emitter.instruction("mov x1, #0");                              // fscanf() reads a whole line; zero is the helper's "no bound"
             abi::emit_call_label(ctx.emitter, "__rt_fgets");
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
             load_string_to_result(ctx, format, "fscanf format")?;
@@ -341,6 +342,7 @@ pub(crate) fn lower_fscanf(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rdi, rax");                            // pass the opaque stream handle to fgets
+            ctx.emitter.instruction("xor esi, esi");                            // fscanf() reads a whole line; zero is the helper's "no bound"
             abi::emit_call_label(ctx.emitter, "__rt_fgets");
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
             load_string_to_result(ctx, format, "fscanf format")?;
