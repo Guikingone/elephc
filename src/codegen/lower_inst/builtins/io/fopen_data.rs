@@ -125,11 +125,47 @@ pub(super) fn decode_data_uri_for_fopen(path: &str) -> Option<Vec<u8>> {
     let comma = rest.find(',')?;
     let meta = &rest[..comma];
     let payload = &rest[comma + 1..];
-    if meta.to_ascii_lowercase().ends_with(";base64") {
+    if !data_uri_media_type_is_valid(meta) {
+        return None;
+    }
+    // `;base64` counts only as the LAST parameter and only in lower case, which is what
+    // `data_uri_media_type_is_valid` has just established.
+    if meta.ends_with(";base64") {
         base64_decode_for_data_uri(payload)
     } else {
         Some(percent_decode_for_data_uri(payload))
     }
+}
+
+/// Reports whether php-src would accept this `data://` media type.
+///
+/// Measured against php 8.5.6, which is stricter than "anything before the comma": the type is
+/// either empty or must carry a `/`, every parameter must be `name=value`, and `base64` is
+/// accepted only as the final parameter and only in lower case. So `text`, `text/plain;` and
+/// `text/plain;base64;charset=utf-8` are all refused, while `text/plain;bogus=1` is accepted —
+/// php-src validates the SHAPE, it does not police parameter names.
+///
+/// The same rule lives in `__rt_data_stream_dynamic` for a URI built at run time; one runs at
+/// compile time and the other on the bytes, so neither can serve both. They are pinned together.
+pub(super) fn data_uri_media_type_is_valid(meta: &str) -> bool {
+    if meta.is_empty() {
+        return true;
+    }
+    let mut segments = meta.split(';');
+    let first = segments.next().unwrap_or("");
+    if !first.is_empty() && !first.contains('/') {
+        return false;
+    }
+    let mut rest = segments.peekable();
+    while let Some(segment) = rest.next() {
+        if segment == "base64" && rest.peek().is_none() {
+            return true;
+        }
+        if !segment.contains('=') {
+            return false;
+        }
+    }
+    true
 }
 
 /// Decodes a base64 payload for a compile-time `data://` stream.

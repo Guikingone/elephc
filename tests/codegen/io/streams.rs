@@ -5586,34 +5586,55 @@ probe("nocomma", $d . "text/plain");
     assert_eq!(out, "plain=true:hi pct=true:a b! b64=true:hello empty=true: nocomma=false ");
 }
 
-/// Pins that `data://` should REFUSE a media type php-src does not accept.
+/// Verifies `data://` refuses a media type php-src does not accept, and reads `;base64` the way
+/// php-src reads it.
 ///
-/// IGNORED because elephc accepts any media type and only looks for a `;base64` suffix, matched
-/// case-insensitively. Measured against php 8.5.6, whose rule is narrower: the media type may be
-/// empty, `type/subtype`, `type/subtype;charset=...`, or `type/subtype;base64` with the marker in
-/// LOWER CASE. Anything else — `;bogus`, `;BASE64` — makes `fopen()` answer `false` rather than
-/// falling back to a percent-decoded payload.
+/// elephc used to accept ANY media type and look for a `;base64` suffix case-insensitively, so it
+/// opened URIs php-src refuses and base64-decoded a `;BASE64` php-src would not. Measuring the
+/// real rule was the point of this fixture, and it is narrower than "charset is special":
 ///
-/// elephc therefore opens two URIs PHP rejects, and for `;BASE64` it also base64-decodes where
-/// PHP would not. This is a pre-existing over-acceptance of the LITERAL path; the run-time path
-/// added beside it deliberately behaves the same way, so one fix corrects both.
+/// - the type is empty, or it must carry a `/` — `text` alone is refused;
+/// - every parameter must be `name=value`, whatever the name — `;bogus=1` is ACCEPTED, `;bogus`
+///   and a trailing empty `;` are not;
+/// - `base64` counts only as the LAST parameter and only in lower case, so
+///   `;charset=utf-8;base64` decodes while `;base64;charset=utf-8` is refused outright.
+///
+/// The rule lives twice — in `data_uri_media_type_is_valid` for a literal URI resolved at compile
+/// time, and in `__rt_data_uri_meta_ok` for one built at run time. Neither can serve both, so both
+/// forms are exercised here and a divergence fails this test.
 #[test]
-#[ignore = "data:// accepts any media type and matches ;base64 case-insensitively; php-src accepts only charset= or a lower-case base64"]
 fn test_data_url_rejects_a_media_type_php_refuses() {
     let out = compile_and_run(
         r#"<?php
 function probe(string $label, string $uri): void {
     $h = @fopen($uri, "r");
-    echo $label, "=", var_export($h !== false, true), " ";
-    if ($h !== false) { fclose($h); }
+    echo $label, "=", var_export($h !== false, true);
+    if ($h !== false) { echo ":", stream_get_contents($h); fclose($h); }
+    echo " ";
 }
+// Run-time URIs go through the runtime validator.
 $d = "data://";
-probe("charset", $d . "text/plain;charset=utf-8,aGVsbG8=");
-probe("bogus", $d . "text/plain;bogus,aGVsbG8=");
+probe("noslash", $d . "text,aGVsbG8=");
+probe("emptyparam", $d . "text/plain;,aGVsbG8=");
+probe("b64notlast", $d . "text/plain;base64;charset=utf-8,aGVsbG8=");
 probe("upper", $d . "text/plain;BASE64,aGVsbG8=");
+probe("namedparam", $d . "text/plain;bogus=1,aGVsbG8=");
+probe("b64last", $d . "text/plain;charset=utf-8;base64,aGVsbG8=");
+echo "|";
+// The same shapes as literals, which the compile-time decoder resolves instead.
+probe("lit-noslash", "data://text,aGVsbG8=");
+probe("lit-b64notlast", "data://text/plain;base64;charset=utf-8,aGVsbG8=");
+probe("lit-namedparam", "data://text/plain;bogus=1,aGVsbG8=");
+probe("lit-b64last", "data://text/plain;charset=utf-8;base64,aGVsbG8=");
 "#,
     );
-    assert_eq!(out, "charset=true bogus=false upper=false ");
+    assert_eq!(
+        out,
+        "noslash=false emptyparam=false b64notlast=false upper=false \
+         namedparam=true:aGVsbG8= b64last=true:hello \
+         |lit-noslash=false lit-b64notlast=false \
+         lit-namedparam=true:aGVsbG8= lit-b64last=true:hello "
+    );
 }
 
 /// Pins that `fread($f, $n)` never hands back more than `$n` bytes through a filter.

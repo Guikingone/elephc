@@ -107,10 +107,11 @@ so the resource may itself be any scheme — `resource=php://temp` works. As wit
 only the first filter of a `|`-separated list is applied, an unrecognised filter name opens the
 resource unfiltered, and a resource that is itself a filter URL is refused.
 
-⚠️ `data://` accepts any media type and matches its `;base64` marker case-insensitively, where
-php-src accepts only an empty type, `type/subtype`, `type/subtype;charset=…`, or a LOWER-CASE
-`type/subtype;base64`, and answers `false` for anything else. Both the literal and run-time forms
-share that latitude.
+`data://` validates its media type as php-src does: the type is empty or carries a `/`, every
+parameter is `name=value` whatever the name, and `base64` counts only as the LAST parameter and
+only in lower case. So `data://text,…`, `data://text/plain;,…` and
+`data://text/plain;base64;charset=utf-8,…` all answer `false`, while `;bogus=1` is accepted and
+`;charset=utf-8;base64` decodes.
 
 | Wrapper | Description |
 |---|---|
