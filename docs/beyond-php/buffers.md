@@ -11,7 +11,10 @@ sidebar:
 
 ## Why not PHP arrays?
 
-PHP arrays are hash tables. Every access goes through hashing, linear probing, entry comparison. `buffer<T>` compiles to a single `ldr` instruction: `base + 16 + index * stride`.
+PHP arrays are hash tables. Every access goes through hashing, probing, and entry
+comparison. `buffer<T>` instead uses a bounds-checked direct address calculation:
+`base + 16 + index * stride`, followed by a native load or store. Repeated immutable
+integer index arithmetic can be shared or moved out of loops by the EIR optimizer.
 
 ## Creating buffers
 
