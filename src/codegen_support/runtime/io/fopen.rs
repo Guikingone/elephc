@@ -336,6 +336,15 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jmp __rt_fopen_uw_slot_x86");                          // continue scanning slots
     emitter.label("__rt_fopen_uw_done_x86");
 
+    // -- refuse plain paths while the file:// wrapper is unregistered --
+    // The AArch64 helper has always done this; without it here,
+    // `stream_wrapper_unregister("file")` reported success on x86_64 and then changed nothing,
+    // so opens kept working. Index 0 is "file" in the built-in wrapper list.
+    abi::emit_symbol_address(emitter, "r9", "_disabled_builtin_wrappers");
+    emitter.instruction("mov r10, QWORD PTR [r9]");                             // disabled built-in mask
+    emitter.instruction("test r10, 1");                                         // is file:// unregistered?
+    emitter.instruction("jnz __rt_fopen_fail_x86");                             // report PHP false while it is
+
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the elephc mode pointer while the filename string is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the elephc mode length while the filename string is converted to a C string
     emitter.instruction("call __rt_cstr");                                      // convert the elephc filename in rax/rdx into a null-terminated C path in rax
