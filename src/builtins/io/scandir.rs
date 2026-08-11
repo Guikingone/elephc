@@ -27,6 +27,12 @@ builtin! {
 }
 
 /// Returns `Array<Str>` reflecting that `scandir` yields directory entry names.
+///
+/// PHP's signature is `array|false`, but declaring the union costs more than it buys here:
+/// `Mixed` makes `in_array($name, scandir($dir))` — ordinary, correct PHP — fail to compile,
+/// because the array-taking builtins require a declared array. The failure case is kept
+/// non-fatal instead (an empty listing rather than a crash) and the `false` divergence is
+/// left for a decision that can weigh it against that cost.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     cx.checker.infer_type(&cx.args[0], cx.env)?;
     Ok(PhpType::Array(Box::new(PhpType::Str)))

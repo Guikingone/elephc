@@ -159,6 +159,25 @@ rmdir("sd");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `scandir()` on an unopenable directory returns instead of killing the process.
+///
+/// AArch64 handed `opendir()`'s NULL straight to `readdir()`, so a missing path was a
+/// SIGSEGV; x86_64 already guarded it, which is why the crash was invisible to CI's
+/// x86_64 legs. The assertion is that execution CONTINUES — the empty listing is the
+/// pre-existing answer, and diverges from PHP's `false` for reasons recorded with the
+/// `array|false` family.
+#[test]
+fn test_scandir_on_a_missing_directory_does_not_crash() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$entries = @scandir("no_such_directory_here");
+echo "survived:", count($entries);
+"#,
+    );
+    assert_eq!(out, "survived:0");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies glob by creating two files matching a pattern, confirming both
 /// are returned with their full paths, and cleaning up.
 #[test]

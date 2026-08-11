@@ -495,6 +495,7 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_fgetcsv");                           // call the CSV row parser runtime
+    box_indexed_array_or_false_result(ctx, "fgetcsv");                           // EOF is the null pointer, and PHP calls that false
     store_if_result(ctx, inst)
 }
 

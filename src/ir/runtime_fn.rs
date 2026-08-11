@@ -611,9 +611,13 @@ impl RuntimeFnId {
                 key: Box::new(PhpType::Mixed),
                 value: Box::new(PhpType::Mixed),
             },
+            // `Fgetcsv` is deliberately absent: it boxes `array|false`, so its declared `Mixed`
+            // IS the representation the lowering builds. Refining it to `array<string>` here
+            // made a synthesized call — `SplFileObject::fgetcsv()`, whose prelude body has no
+            // checked call-site type — read the boxed Mixed cell as a raw array pointer and
+            // hand back its header words as integers.
             RuntimeFnId::ClassAttributeNames
             | RuntimeFnId::Explode
-            | RuntimeFnId::Fgetcsv
             | RuntimeFnId::File
             | RuntimeFnId::Glob
             | RuntimeFnId::Scandir

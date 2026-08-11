@@ -496,6 +496,52 @@ pub(super) fn box_stat_int_or_false_result(ctx: &mut FunctionContext<'_>) {
     }
 }
 
+/// Boxes a raw INDEXED array pointer into PHP `array|false` Mixed form.
+///
+/// A helper that answers with a pointer has only the null pointer left to signal failure,
+/// and storing that raw leaves the caller reading `null` — which is not `false`, so the
+/// idiomatic `while (($row = fgetcsv($h)) !== false)` never ends. Sibling of
+/// `box_stat_array_or_false_result`, which boxes a HASH payload (tag 5) rather than the
+/// indexed payload (tag 4) these helpers build.
+pub(super) fn box_indexed_array_or_false_result(
+    ctx: &mut FunctionContext<'_>,
+    label_prefix: &str,
+) {
+    let false_label = ctx.next_label(&format!("{}_arr_false", label_prefix));
+    let done_label = ctx.next_label(&format!("{}_arr_done", label_prefix));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x0, {}", false_label));       // a null array pointer is the helper's only failure signal
+            ctx.emitter.instruction("mov x1, x0");                              // pass the array as the Mixed payload
+            ctx.emitter.instruction("mov x2, #0");                              // indexed-array Mixed payloads do not use the high word
+            ctx.emitter.instruction("mov x0, #4");                              // runtime tag 4 = indexed array
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("b {}", done_label));              // skip false boxing after building the array result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("mov x1, #0");                              // use zero as the false payload
+            ctx.emitter.instruction("mov x2, #0");                              // bool Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov x0, #3");                              // runtime tag 3 = boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a null array pointer is the helper's only failure signal
+            ctx.emitter.instruction(&format!("jz {}", false_label));
+            ctx.emitter.instruction("mov rdi, rax");                            // pass the array as the Mixed payload
+            ctx.emitter.instruction("xor esi, esi");                            // indexed-array Mixed payloads do not use the high word
+            ctx.emitter.instruction("mov eax, 4");                              // runtime tag 4 = indexed array
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.instruction(&format!("jmp {}", done_label));            // skip false boxing after building the array result
+            ctx.emitter.label(&false_label);
+            ctx.emitter.instruction("xor edi, edi");                            // use zero as the false payload
+            ctx.emitter.instruction("xor esi, esi");                            // bool Mixed payloads do not use a high word
+            ctx.emitter.instruction("mov eax, 3");                              // runtime tag 3 = boolean false
+            abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+            ctx.emitter.label(&done_label);
+        }
+    }
+}
+
 /// Boxes the raw stat hash payload into PHP `array|false` Mixed form.
 pub(super) fn box_stat_array_or_false_result(ctx: &mut FunctionContext<'_>) {
     let false_label = ctx.next_label("stat_array_false");

@@ -620,6 +620,60 @@ fn test_stream_is_local_and_supports_lock_are_true() {
     assert_eq!(out, "LS");
 }
 
+/// Verifies `fgetcsv()` ends the manual's own read loop instead of spinning on it.
+///
+/// The runtime signals end-of-input with a null array pointer. Storing that raw left it
+/// reading as `null`, and `null !== false` holds, so
+/// `while (($row = fgetcsv($h)) !== false)` — the loop PHP's manual shows — ran forever;
+/// a loop that guarded itself fatalled on `count(null)` instead. The counter here is the
+/// point: a test that only checked the parsed fields passed throughout.
+#[test]
+fn test_fgetcsv_reports_false_at_end_of_input() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("csv_eof.csv", "a,b\nc,d\n");
+$f = fopen("csv_eof.csv", "r");
+$rows = 0;
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+}
+fclose($f);
+echo $rows;
+unlink("csv_eof.csv");
+"#,
+    );
+    assert_eq!(out, "2");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies `SplFileObject::fgetcsv()` still yields strings after `fgetcsv()` began boxing.
+///
+/// The SPL method body is synthesized, so it has no checked call-site type and takes the
+/// EIR fallback instead. While that fallback still claimed `array<string>`, the boxed
+/// `array|false` cell was read as a raw array pointer and every field came back as an
+/// integer — a silent corruption no `fgetcsv()` test could see.
+#[test]
+fn test_spl_file_object_fgetcsv_reads_fields_not_pointers() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("spl_csv.csv", "a,b\nc,d\n");
+$f = new SplFileObject("spl_csv.csv");
+$seen = "";
+while (!$f->eof()) {
+    $row = $f->fgetcsv(",", "\"", "\\");
+    if ($row === false) { break; }
+    foreach ($row as $field) { $seen = $seen . $field; }
+}
+unset($f);
+echo $seen;
+unlink("spl_csv.csv");
+"#,
+    );
+    assert_eq!(out, "abcd");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a refused write reports failure rather than its errno.
 ///
 /// macOS returns a failed `write` as the POSITIVE errno with the carry flag set, which is

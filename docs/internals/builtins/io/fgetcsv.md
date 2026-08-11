@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function fgetcsv(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array
+function fgetcsv(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed
 ```
 
 ## What the type checker enforces

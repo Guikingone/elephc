@@ -38,16 +38,22 @@ pub fn emit_scandir(emitter: &mut Emitter) {
 
     // -- null-terminate path --
     emitter.instruction("bl __rt_cstr");                                        // convert path to C string, x0=cstr
+    emitter.instruction("str x0, [sp, #24]");                                   // hold the C path across the result-array allocation
 
-    // -- open directory --
-    emitter.bl_c("opendir");                                         // opendir(cstr), x0=DIR* or NULL
-    emitter.instruction("str x0, [sp, #0]");                                    // save DIR pointer on stack
-
-    // -- create a new string array (capacity = 128 entries) --
+    // -- create the result array FIRST so an unopenable directory still has one to return --
     emitter.instruction("mov x0, #128");                                        // initial capacity of 128 elements
     emitter.instruction("mov x1, #16");                                         // element size = 16 bytes (ptr + len)
     emitter.instruction("bl __rt_array_new");                                   // create array, x0=array pointer
     emitter.instruction("str x0, [sp, #8]");                                    // save array pointer on stack
+
+    // -- open directory --
+    emitter.instruction("ldr x0, [sp, #24]");                                   // reload the C path for opendir()
+    emitter.bl_c("opendir");                                         // opendir(cstr), x0=DIR* or NULL
+    // A directory that cannot be opened returns NULL, and the loop below fed that straight to
+    // readdir(): scandir() on a missing path took the process down with it. x86_64 already
+    // guarded this, so the crash only ever happened on AArch64.
+    emitter.instruction("cbz x0, __rt_scandir_ret");                            // opendir() failed: return the empty listing
+    emitter.instruction("str x0, [sp, #0]");                                    // save DIR pointer on stack
 
     // -- read directory entries in a loop --
     emitter.label("__rt_scandir_loop");
@@ -80,10 +86,9 @@ pub fn emit_scandir(emitter: &mut Emitter) {
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload DIR pointer
     emitter.bl_c("closedir");                                        // closedir(DIR*)
 
-    // -- return array pointer --
-    emitter.instruction("ldr x0, [sp, #8]");                                    // return array pointer
-
     // -- restore frame and return --
+    emitter.label("__rt_scandir_ret");
+    emitter.instruction("ldr x0, [sp, #8]");                                    // return array pointer
     emitter.instruction("ldp x29, x30, [sp, #32]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #48");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller

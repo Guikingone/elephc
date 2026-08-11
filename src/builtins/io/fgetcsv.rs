@@ -5,7 +5,10 @@
 //! - Checker, EIR, optimizer, ownership, and callable consumers through `crate::builtins::registry`.
 //!
 //! Key details:
-//! - `check` validates the `stream` argument is a stream resource and returns `Array<Str>`.
+//! - `check` validates the `stream` argument is a stream resource and returns `Mixed`, which is
+//!   how the registry spells PHP's `array|false`. Declaring `Array<Str>` left the runtime's
+//!   end-of-input answer — a null array pointer — reading as `null`, and `null !== false`, so
+//!   the manual's own `while (($row = fgetcsv($h)) !== false)` loop never terminated.
 //! - `returns: Mixed` is used because the array type cannot be expressed through the
 //!   scalar `returns:` field. Arguments are pre-inferred by the registry before the hook runs.
 //! - PHP 8.4: `escape` defaults to `"\\"` (the `""` RFC 4180 doubling mode is PHP 9.0).
@@ -33,7 +36,7 @@ builtin! {
     php_manual: "function.fgetcsv",
 }
 
-/// Validates the stream argument is a stream resource and returns `Array<Str>`.
+/// Validates the stream argument is a stream resource and returns `Mixed` for `array|false`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -41,5 +44,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(PhpType::Array(Box::new(PhpType::Str)))
+    Ok(PhpType::Mixed)
 }

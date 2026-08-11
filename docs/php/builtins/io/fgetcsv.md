@@ -8,7 +8,7 @@ sidebar:
 ## fgetcsv()
 
 ```php
-function fgetcsv(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array
+function fgetcsv(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed
 ```
 
 Gets line from file pointer and parse for CSV fields.
@@ -20,7 +20,7 @@ Gets line from file pointer and parse for CSV fields.
 - `$enclosure` (`string`), default `'"'`, optional
 - `$escape` (`string`), default `'\\'`, optional
 
-**Returns**: `array`
+**Returns**: `mixed`
 
 ## Availability
 

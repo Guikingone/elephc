@@ -16,7 +16,7 @@ sidebar:
 | [`feof()`](./io/feof.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fflush()`](./io/fflush.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`fgetc()`](./io/fgetc.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |
-| [`fgetcsv()`](./io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array` | `array` | ✓ | ✓ |
+| [`fgetcsv()`](./io/fgetcsv.md) | `(resource $stream, int $length = null, string $separator = ',', string $enclosure = '"', string $escape = '\\'): mixed` | `mixed` | ✓ | ✓ |
 | [`fgets()`](./io/fgets.md) | `(resource $stream, int $length = null): mixed` | `mixed` | ✓ | ✓ |
 | [`file()`](./io/file.md) | `(string $filename, int $flags = 0, mixed $context = null): array` | `array` | ✓ | ✓ |
 | [`file_get_contents()`](./io/file_get_contents.md) | `(string $filename, bool $use_include_path = false, mixed $context = null, int $offset = 0, int $length = null): mixed` | `mixed` | ✓ | ✓ |
