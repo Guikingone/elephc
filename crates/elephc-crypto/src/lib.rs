@@ -1,7 +1,7 @@
 //! Purpose:
-//! Pure-Rust hashing/HMAC bridge staticlib for elephc's PHP hash() family.
-//! Exposes a C ABI of raw-digest functions keyed by algorithm name, consumed by
-//! compiled PHP binaries via function-pointer slots (see src/codegen runtime).
+//! Pure-Rust hashing/HMAC and symmetric-cipher bridge staticlib for elephc.
+//! Exposes C ABIs of raw-digest and AES cipher functions keyed by algorithm
+//! name, consumed by compiled PHP binaries via function-pointer slots.
 //! Also exposes an incremental streaming ABI: `init`/`init_hmac`/`update`/`final`/`clone`/`free`.
 //!
 //! Called from:
@@ -10,7 +10,8 @@
 //!
 //! Key details:
 //! - All ABI functions are `#[no_mangle] pub extern "C"`; raw digests are written
-//!   into a caller-provided 64-byte buffer (max digest size across supported algos).
+//!   into a caller-provided 64-byte buffer, while cipher calls use sized buffers
+//!   and stable negative status codes.
 //! - `ctx` handles are thin pointers to a boxed `HashCtx`. The boxed `Mixed`
 //!   resource cell owns the handle for its whole lifetime: `free` is the sole
 //!   destructor (driven by compiler scope-cleanup), while `final` finalizes a
@@ -27,9 +28,17 @@
 //!   modes.
 
 mod algos;
+mod cipher;
 mod hmac;
 
 pub use algos::HashState;
+pub use cipher::{
+    elephc_crypto_cipher_iv_length, elephc_crypto_cipher_methods, elephc_crypto_decrypt,
+    elephc_crypto_encrypt, CIPHER_ERR_BAD_IV, CIPHER_ERR_BAD_KEY,
+    CIPHER_ERR_BAD_PLAINTEXT_LENGTH, CIPHER_ERR_BAD_TAG_LENGTH, CIPHER_ERR_DECRYPT_FAILED,
+    CIPHER_ERR_INVALID_ARGUMENT, CIPHER_ERR_OUTPUT_TOO_SMALL, CIPHER_ERR_UNKNOWN, CIPHER_METHODS,
+    CIPHER_OK,
+};
 use algos::make;
 use std::os::raw::c_void;
 

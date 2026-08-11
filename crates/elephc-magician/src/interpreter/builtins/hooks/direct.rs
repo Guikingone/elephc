@@ -192,6 +192,8 @@ pub(in crate::interpreter) enum EvalDirectHook {
     NetworkEnv,
     /// Dispatches `number_format(...)`.
     NumberFormat,
+    /// Dispatches the bridge-backed OpenSSL cipher builtins.
+    Openssl,
     /// Dispatches `ord(...)`.
     Ord,
     /// Dispatches `parse_url(...)`.
@@ -459,6 +461,9 @@ impl EvalDirectHook {
             Self::MtRand => eval_builtin_mt_rand(args, context, scope, values),
             Self::NetworkEnv => eval_builtin_network_env_call(name, args, context, scope, values),
             Self::NumberFormat => eval_builtin_number_format(args, context, scope, values),
+            Self::Openssl => {
+                eval_builtin_openssl_declared_call(name, args, context, scope, values)
+            }
             Self::Ord => eval_builtin_ord(args, context, scope, values),
             Self::ParseUrl => eval_builtin_parse_url(args, context, scope, values),
             Self::Pi => eval_builtin_pi(args, values),

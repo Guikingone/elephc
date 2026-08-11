@@ -17,6 +17,7 @@ use crate::types::ent_constants::ENT_INT_CONSTANTS;
 use crate::types::error_constants::ERROR_LEVEL_CONSTANTS;
 use crate::types::json_constants::JSON_INT_CONSTANTS;
 use crate::types::math_constants::MATH_INT_CONSTANTS;
+use crate::types::openssl_constants::OPENSSL_INT_CONSTANTS;
 use crate::types::session_constants::SESSION_INT_CONSTANTS;
 use crate::types::preg_constants::PREG_INT_CONSTANTS;
 use crate::types::stream_constants::STREAM_INT_CONSTANTS;
@@ -95,6 +96,9 @@ impl Checker {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in MATH_INT_CONSTANTS {
+            constants.insert((*name).to_string(), PhpType::Int);
+        }
+        for (name, _value) in OPENSSL_INT_CONSTANTS {
             constants.insert((*name).to_string(), PhpType::Int);
         }
         for (name, _value) in STREAM_INT_CONSTANTS {

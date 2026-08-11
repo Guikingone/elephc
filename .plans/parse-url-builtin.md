@@ -285,13 +285,12 @@ git diff --check
 
 Do **not** run the full suite locally unless requested; CI owns the matrix.
 
-### Phase 6 — Docs, example, changelog, builtins registry
+### Phase 6 — Docs, example, builtins registry
 
 - [x] User docs: `docs/php/strings.md` table row + short semantics note (array vs component, constants, false/null).
 - [x] Generated builtins: run `update-builtin-docs` skill / CI sequence (`gen_builtins` → `extract_builtins.py --render --force` → audits). Commit `docs/php/builtins/**`, `docs/internals/builtins/**`, `scripts/docs/builtin_registry.json`.
 - [x] Internals: brief mention in `docs/internals/the-runtime.md` for `__rt_parse_url*` if that page lists helpers.
 - [x] Example: extend `examples/string-ops` or add `examples/parse-url/main.php` (+ `.gitignore` with `*.s`, `*.o`, `main`).
-- [x] `CHANGELOG.md` under `[Unreleased]`: one user-facing bullet (`parse_url()` + `PHP_URL_*`).
 - [x] `ROADMAP.md`: only mark `[x]` if an existing open item matches; otherwise leave untouched.
 - [x] README constant/builtin lists if they enumerate URL helpers / predefined constants.
 
@@ -329,7 +328,6 @@ Do **not** run the full suite locally unless requested; CI owns the matrix.
 - `docs/php/strings.md`
 - generated builtins docs + `scripts/docs/builtin_registry.json`
 - `examples/...`
-- `CHANGELOG.md`
 - `README.md` (constants list)
 
 ## Risks & decisions
@@ -357,7 +355,7 @@ Prefer a **single PR** if the runtime helper stays manageable; split only if rev
 - [x] Fixture corpus green on AOT codegen and magician/eval.
 - [x] Invalid component raises ValueError (AOT + eval).
 - [x] All three supported targets handled in runtime/lowering.
-- [x] Docs, example, CHANGELOG, generated builtin docs committed.
+- [x] Docs, example, and generated builtin docs committed.
 - [x] Focused tests + `git diff --check` clean; no new compiler warnings.
 
 ## Implementation order (recommended)
@@ -367,5 +365,5 @@ Prefer a **single PR** if the runtime helper stays manageable; split only if rev
 3. AOT `builtin!` + checker refinement + error tests.
 4. `RuntimeFnId` + Mixed lowering skeleton (can fail/link missing symbol briefly in WIP).
 5. Assembly runtime both arches + codegen fixture tests.
-6. Docs / example / changelog / `update-builtin-docs`.
+6. Docs / example / `update-builtin-docs`.
 7. Final focused verification commands above.
