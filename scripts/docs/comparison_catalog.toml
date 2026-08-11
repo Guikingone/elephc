@@ -166,6 +166,7 @@ php      = "https://www.php.net/manual/en/book.pdo.php"
 docs     = "docs/php/pdo.md"
 evidence = "tests/codegen/pdo.rs"
 notes    = "Driver matrix documented on the PDO page"
+modules  = ["pdo"]
 
 [[extensions]]
 feature  = "Sessions"
@@ -174,6 +175,7 @@ php      = "https://www.php.net/manual/en/book.session.php"
 docs     = "docs/php/sessions.md"
 evidence = "tests/web_session_tests.rs"
 notes    = "In --web binaries"
+modules  = ["session"]
 
 [[extensions]]
 feature  = "Streams"
@@ -202,6 +204,7 @@ status   = "partial"
 php      = "https://www.php.net/manual/en/book.datetime.php"
 docs     = "docs/php/datetime.md"
 evidence = "tests/codegen/oop/datetime.rs"
+modules  = ["date"]
 
 [[extensions]]
 feature  = "Calendar"
@@ -209,6 +212,7 @@ status   = "supported"
 php      = "https://www.php.net/manual/en/book.calendar.php"
 docs     = "docs/php/calendar.md"
 evidence = "tests/codegen/calendar.rs"
+modules  = ["calendar"]
 
 [[extensions]]
 feature  = "GD / image"

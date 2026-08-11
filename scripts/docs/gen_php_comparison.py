@@ -83,7 +83,7 @@ class EvidenceChecker:
         return f"fn {evidence}(" in self._corpus
 
 
-def validate_catalog(catalog: dict, repo_root: Path) -> list[str]:
+def validate_catalog(catalog: dict, repo_root: Path, baseline_extensions=()) -> list[str]:
     errors: list[str] = []
     checker = EvidenceChecker(repo_root)
     for section in ("language", "extensions"):
@@ -110,6 +110,16 @@ def validate_catalog(catalog: dict, repo_root: Path) -> list[str]:
             docs = entry.get("docs")
             if docs and not (repo_root / docs).exists():
                 errors.append(f"{where}: docs path '{docs}' does not exist")
+            if section == "extensions" and "modules" in entry:
+                modules = entry["modules"]
+                if not isinstance(modules, list) or not all(isinstance(m, str) for m in modules):
+                    errors.append(f"{where}: 'modules' must be a list of strings")
+                else:
+                    for m in modules:
+                        if m not in baseline_extensions:
+                            errors.append(
+                                f"{where}: modules entry '{m}' is not a baseline extension"
+                            )
     for i, entry in enumerate(catalog.get("limitations", []), start=1):
         if not entry.get("title") or not entry.get("notes"):
             errors.append(f"comparison_catalog.toml [[limitations]] #{i}: needs 'title' and 'notes'")
@@ -119,6 +129,13 @@ def validate_catalog(catalog: dict, repo_root: Path) -> list[str]:
 def match_builtins(registry: list, baseline_functions: dict):
     """Split registry entries into per-PHP-extension supported lists,
     elephc-specific extensions ('Beyond PHP'), and language constructs."""
+    # Staleness guard: NOT_IN_BASELINE is only correct while every name in it
+    # is genuinely absent from the baseline. If a baseline refresh adds one
+    # back (e.g. a new PHP release ships it), the escape hatch has gone
+    # stale and must be pruned rather than silently keep swallowing it.
+    dead = sorted(set(NOT_IN_BASELINE) & set(baseline_functions))
+    assert not dead, f"NOT_IN_BASELINE entries now exist in the baseline; remove them: {dead}"
+
     errors: list[str] = []
     per_ext: dict[str, list] = {}
     beyond: list = []
@@ -183,6 +200,16 @@ def render(baseline, per_ext, beyond, constructs, catalog) -> str:
     matched = sum(len(v) for v in per_ext.values())
     baseline_total = len(functions)
 
+    # Modules whose functions are (partly or fully) implemented outside the
+    # registry — via compiler rewrites or runtime preludes — so the registry
+    # count alone understates them. Curated per-entry in the catalog rather
+    # than hardcoded here, so this stays data-driven.
+    module_notes = {
+        m: entry["feature"]
+        for entry in catalog.get("extensions", [])
+        for m in entry.get("modules", [])
+    }
+
     lines = [
         "---",
         'title: "PHP Compatibility"',
@@ -210,10 +237,20 @@ def render(baseline, per_ext, beyond, constructs, catalog) -> str:
         supported = per_ext.get(ext, [])
         in_aot = sum(1 for b in supported if not b["eval_only"])
         in_eval = sum(1 for b in supported if b["eval"]["supported"])
+        marker = "†" if ext in module_notes else ""
         lines.append(
-            f"| `{ext}` | {len(supported)} / {totals[ext]} "
+            f"| `{ext}`{marker} | {len(supported)} / {totals[ext]} "
             f"| {_pct(len(supported), totals[ext])} | {in_aot} | {in_eval} |"
         )
+    if module_notes:
+        lines += [
+            "",
+            "The table counts functions implemented as native registry "
+            "builtins. Modules marked † have some or all of their functions "
+            "implemented through other elephc mechanisms (compiler rewrites "
+            "or runtime preludes); their real support status is tracked in "
+            "the Extensions section below.",
+        ]
     functionless = sorted(set(baseline["extensions"]) - set(totals))
     if functionless:
         names = ", ".join(f"`{e}`" for e in functionless)
@@ -290,7 +327,7 @@ def run(repo_root: Path = REPO_ROOT) -> int:
     if errors:
         return _fail(errors)
 
-    errors.extend(validate_catalog(catalog, repo_root))
+    errors.extend(validate_catalog(catalog, repo_root, baseline["extensions"]))
     per_ext, beyond, constructs, match_errors = match_builtins(
         registry, baseline["functions"]
     )

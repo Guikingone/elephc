@@ -18,11 +18,11 @@ Overall builtin coverage: **459 / 2030** (23%).
 |---|---|---|---|---|
 | `bcmath` | 0 / 14 | 0% | 0 | 0 |
 | `bz2` | 0 / 10 | 0% | 0 | 0 |
-| `calendar` | 0 / 18 | 0% | 0 | 0 |
+| `calendar`† | 0 / 18 | 0% | 0 | 0 |
 | `core` | 32 / 59 | 54% | 28 | 30 |
 | `ctype` | 4 / 11 | 36% | 4 | 4 |
 | `curl` | 0 / 33 | 0% | 0 | 0 |
-| `date` | 11 / 48 | 23% | 11 | 11 |
+| `date`† | 11 / 48 | 23% | 11 | 11 |
 | `dba` | 0 / 15 | 0% | 0 | 0 |
 | `dom` | 0 / 2 | 0% | 0 | 0 |
 | `exif` | 0 / 4 | 0% | 0 | 0 |
@@ -43,12 +43,12 @@ Overall builtin coverage: **459 / 2030** (23%).
 | `openssl` | 4 / 66 | 6% | 4 | 4 |
 | `pcntl` | 0 / 25 | 0% | 0 | 0 |
 | `pcre` | 5 / 11 | 45% | 5 | 5 |
-| `pdo` | 0 / 1 | 0% | 0 | 0 |
+| `pdo`† | 0 / 1 | 0% | 0 | 0 |
 | `pgsql` | 0 / 122 | 0% | 0 | 0 |
 | `posix` | 0 / 40 | 0% | 0 | 0 |
 | `random` | 3 / 9 | 33% | 3 | 3 |
 | `readline` | 1 / 13 | 8% | 1 | 1 |
-| `session` | 0 / 23 | 0% | 0 | 0 |
+| `session`† | 0 / 23 | 0% | 0 | 0 |
 | `shmop` | 0 / 6 | 0% | 0 | 0 |
 | `simplexml` | 0 / 3 | 0% | 0 | 0 |
 | `soap` | 0 / 2 | 0% | 0 | 0 |
@@ -65,6 +65,8 @@ Overall builtin coverage: **459 / 2030** (23%).
 | `zend opcache` | 0 / 7 | 0% | 0 | 0 |
 | `zip` | 0 / 10 | 0% | 0 | 0 |
 | `zlib` | 4 / 30 | 13% | 4 | 4 |
+
+The table counts functions implemented as native registry builtins. Modules marked † have some or all of their functions implemented through other elephc mechanisms (compiler rewrites or runtime preludes); their real support status is tracked in the Extensions section below.
 
 The remaining 10 baseline extensions expose classes but no procedural functions, so they have no row above: `ffi`, `mysqlnd`, `pdo_mysql`, `pdo_pgsql`, `pdo_sqlite`, `phar`, `reflection`, `sqlite3`, `xmlreader`, `xsl`.
 

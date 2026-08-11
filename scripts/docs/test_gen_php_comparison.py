@@ -128,6 +128,23 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("no procedural functions", out)
         self.assertIn("`reflection`", out)
 
+    def test_module_marker_from_catalog_modules_key(self):
+        catalog = (CATALOG_OK
+                   + '\n[[extensions]]\nfeature = "PCRE glue"\nstatus = "supported"\n'
+                     'evidence = "tests/codegen/generators.rs"\nmodules = ["pcre"]\n')
+        code, out = self.run_gen(registry=[public("strlen")], catalog=catalog)
+        self.assertEqual(code, 0)
+        self.assertIn("`pcre`†", out)
+        self.assertIn("compiler rewrites or runtime preludes", out)
+
+    def test_unknown_module_in_modules_key_fails(self):
+        catalog = (CATALOG_OK
+                   + '\n[[extensions]]\nfeature = "Bogus"\nstatus = "supported"\n'
+                     'evidence = "tests/codegen/generators.rs"\nmodules = ["nope"]\n')
+        code, out = self.run_gen(registry=[public("strlen")], catalog=catalog)
+        self.assertEqual(code, 1)
+        self.assertIsNone(out)
+
 
 class RenderTests(unittest.TestCase):
     def test_counts_and_determinism(self):
