@@ -60,11 +60,16 @@ pub fn emit_stream_record_meta(emitter: &mut Emitter) {
         "mov x14, #{}", STREAM_STATE_FLAG_IS_URL
     ));                                                                         // materialize the StreamState URL-wrapper bit
     emitter.instruction("bic x13, x13, x14");                                   // clear any previous URL-wrapper identity
+    // data:// carries its payload in the URI itself and php reports it as NOT local, so it
+    // joins the remote wrappers here even though it never leaves the process.
+    emitter.instruction("cmp x11, #7");                                         // the data:// wrapper id
+    emitter.instruction("b.eq __rt_stream_record_meta_builtin_url_mark");
     emitter.instruction("cmp x11, #1");                                         // built-in remote wrapper ids start at HTTP
     emitter.instruction("b.lo __rt_stream_record_meta_builtin_url_done");       // plainfile and unset wrappers are local
     emitter.instruction("cmp x11, #4");                                         // built-in remote wrapper ids end at FTPS
     emitter.instruction("b.hi __rt_stream_record_meta_builtin_url_done");       // all later built-in wrappers are local
-    emitter.instruction("orr x13, x13, x14");                                   // mark built-in HTTP(S)/FTP(S) instances as URL streams
+    emitter.label("__rt_stream_record_meta_builtin_url_mark");
+    emitter.instruction("orr x13, x13, x14");                                   // mark built-in HTTP(S)/FTP(S) and data:// as URL streams
     emitter.label("__rt_stream_record_meta_builtin_url_done");
     emitter.instruction(&format!(
         "str x13, [x9, #{}]", STREAM_OWNERSHIP_FLAGS_OFFSET
@@ -159,10 +164,14 @@ fn emit_stream_record_meta_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "and rdx, -{}", STREAM_STATE_FLAG_IS_URL + 1
     ));                                                                         // clear any previous URL-wrapper identity
+    // See the AArch64 half: data:// is reported as NOT local by php.
+    emitter.instruction("cmp rax, 7");                                          // the data:// wrapper id
+    emitter.instruction("je __rt_stream_record_meta_builtin_url_mark_x86");
     emitter.instruction("cmp rax, 1");                                          // built-in remote wrapper ids start at HTTP
     emitter.instruction("jb __rt_stream_record_meta_builtin_url_done_x86");     // plainfile and unset wrappers are local
     emitter.instruction("cmp rax, 4");                                          // built-in remote wrapper ids end at FTPS
     emitter.instruction("ja __rt_stream_record_meta_builtin_url_done_x86");     // all later built-in wrappers are local
+    emitter.label("__rt_stream_record_meta_builtin_url_mark_x86");
     emitter.instruction(&format!(
         "or rdx, {}", STREAM_STATE_FLAG_IS_URL
     ));                                                                         // mark built-in HTTP(S)/FTP(S) instances as URL streams

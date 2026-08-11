@@ -6185,6 +6185,38 @@ fclose($m);
     assert_eq!(out, "'H','o','o','H','','',bool(true)\n");
 }
 
+/// Verifies `data://` reports itself as neither local nor lockable, and that the wrappers
+/// around it keep their own answers.
+///
+/// `data://` carries its payload inside the URI, and php answers false to both questions for
+/// it. elephc answered true to both: the URL-identity test covered the remote wrappers
+/// (HTTP/HTTPS/FTP/FTPS) and `data://` is not one of them, while the lock test only knew the
+/// `php://` family.
+///
+/// The other four rows are the point of the test as much as the `data://` one — `php://temp`
+/// is local but not lockable, `php://stdout` is both, and a plain file is both, so this
+/// cannot pass by answering false more often.
+#[test]
+fn test_data_wrapper_is_neither_local_nor_lockable() {
+    let out = compile_and_run(
+        r#"<?php
+$p = tempnam(sys_get_temp_dir(), "wl");
+file_put_contents($p, "x");
+$file = fopen($p, "r");
+$mem  = fopen("php://memory", "r+");
+$tmp  = fopen("php://temp", "r+");
+$out  = fopen("php://stdout", "w");
+$data = fopen("data://text/plain,abc", "r");
+foreach (["file" => $file, "mem" => $mem, "tmp" => $tmp, "out" => $out, "data" => $data] as $k => $h) {
+    echo $k, ":", stream_supports_lock($h) ? "L" : "-", stream_is_local($h) ? "l" : "-", " ";
+}
+fclose($file); fclose($mem); fclose($tmp); fclose($out); fclose($data);
+unlink($p);
+"#,
+    );
+    assert_eq!(out, "file:Ll mem:-l tmp:-l out:Ll data:-- ");
+}
+
 /// Verifies `stream_select()` accepts `null` for the sets a caller does not watch.
 ///
 /// This is the call shape php.net documents — `stream_select($read, $write, $except, 0)` with

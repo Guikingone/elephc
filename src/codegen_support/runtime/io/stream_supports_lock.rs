@@ -22,6 +22,8 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 
 /// Wrapper id recorded for a `php://` stream.
 const WRAPPER_ID_PHP: u64 = 6;
+/// The `data://` wrapper id, which reports no lock option and is not local.
+const WRAPPER_ID_DATA: u64 = 7;
 
 /// Emits `__rt_stream_supports_lock(handle) -> 1 lockable / 0 not`.
 pub fn emit_stream_supports_lock(emitter: &mut Emitter) {
@@ -42,8 +44,10 @@ fn emit_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_stream_state");                                // resolve the owning stream state
     emitter.instruction("cbz x0, __rt_ssl_yes");                                // no state: keep the permissive answer
     emitter.instruction(&format!("ldr x9, [x0, #{STREAM_WRAPPER_ID_OFFSET}]")); // which wrapper opened it
+    emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_DATA}"));
+    emitter.instruction("b.eq __rt_ssl_no");                                    // data:// carries its payload in the URI: nothing to lock
     emitter.instruction(&format!("cmp x9, #{WRAPPER_ID_PHP}"));
-    emitter.instruction("b.ne __rt_ssl_yes");                                   // only the php:// wrappers lack the lock option
+    emitter.instruction("b.ne __rt_ssl_yes");                                   // otherwise only the php:// wrappers lack the lock option
     emitter.instruction(&format!("ldr x10, [x0, #{STREAM_URI_PTR_OFFSET}]"));   // the recorded URI
     emitter.instruction(&format!("ldr x11, [x0, #{STREAM_URI_LEN_OFFSET}]"));   // and its length
     emitter.instruction("cbz x10, __rt_ssl_yes");                               // no URI to classify
@@ -82,6 +86,8 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!(
         "mov r9, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]"
     ));                                                                         // which wrapper opened it
+    emitter.instruction(&format!("cmp r9, {WRAPPER_ID_DATA}"));
+    emitter.instruction("je __rt_ssl_no");                                      // data:// carries its payload in the URI: nothing to lock
     emitter.instruction(&format!("cmp r9, {WRAPPER_ID_PHP}"));
     emitter.instruction("jne __rt_ssl_yes_x86");                                // only the php:// wrappers lack the lock option
     emitter.instruction(&format!(
