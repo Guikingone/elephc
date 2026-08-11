@@ -319,10 +319,10 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
     emitter.instruction("add x17, x14, x11");                                    // pollfd index = section_offset + source_index
     emitter.instruction("lsl x17, x17, #3");                                    // byte offset = pollfd_index * 8
     emitter.instruction("add x17, sp, x17");                                     // pollfd address = frame base + offset
-    emitter.instruction("ldrh w18, [x17, #6]");                                  // load the revents field (16-bit)
+    emitter.instruction("ldrh w8, [x17, #6]");                                   // load revents (w8: x18 is reserved on Apple, and x9 holds the array)
     // -- keep only if revents has a requested event bit (POLLIN|POLLOUT|POLLPRI = 0x007) --
-    emitter.instruction("and w18, w18, #0x7");                                    // mask out POLLNVAL/POLLERR/POLLHUP
-    emitter.instruction(&format!("cbz w18, {}", next_l));                        // revents & 0x7 == 0 → drop the slot
+    emitter.instruction("and w8, w8, #0x7");                                      // mask out POLLNVAL/POLLERR/POLLHUP
+    emitter.instruction(&format!("cbz w8, {}", next_l));                         // revents & 0x7 == 0 → drop the slot
     // -- keep the slot: store the original value at the kept prefix --
     emitter.instruction("str x15, [x12, x13, lsl #3]");                          // keep the original slot value at the front
     emitter.instruction("add x13, x13, #1");                                     // advance the kept-descriptor index

@@ -21,12 +21,9 @@ use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Bytes reserved for the composed message.
 ///
-/// 1024 rather than the 512 this started at, and the difference is NOT about message size:
-/// at 512 the BSS layout shifts far enough to expose a latent bug elsewhere, and
-/// `str_ireplace()` on a result larger than the concat scratch loses 27 bytes. Nothing here
-/// writes near that buffer — the sensitivity is to ADDRESSES — so this size is avoiding a
-/// defect, not fixing one. See the tracked `str_ireplace` layout-sensitivity issue.
-pub(crate) const OPEN_FAILED_MSG_CAPACITY: usize = 1024;
+/// A prefix, a clamped path, the fixed middle, a clamped reason and a newline all fit
+/// comfortably; nothing here is sized around anything else.
+pub(crate) const OPEN_FAILED_MSG_CAPACITY: usize = 512;
 
 /// The most path bytes copied into the message.
 const PATH_CLAMP: usize = 300;
