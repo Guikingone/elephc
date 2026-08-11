@@ -74,6 +74,7 @@ mod closure_calls;
 mod descriptor_calls;
 mod object_construction;
 mod property_access;
+mod property_fetch_for_write;
 mod method_calls;
 mod reflection_class_calls;
 mod reflection_method_calls;
@@ -168,6 +169,7 @@ pub(crate) use merge_temps::emit_bool_literal;
 pub(crate) use property_access::{
     lower_ref_assign_array_elem, lower_ref_assign_call, lower_ref_assign_property,
 };
+pub(crate) use property_fetch_for_write::lower_by_ref_foreach_property_source;
 pub(crate) use string_concat::string_op_uses_scratch_storage;
 pub(super) use assoc_array_literals::{
     array_access_expr_value_type_for_ir, method_call_expr_type_for_ir,

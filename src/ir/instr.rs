@@ -421,6 +421,7 @@ pub enum Op {
     /// Initializes the private base state of a PDO statement subclass.
     DynamicPdoStatementInitialize,
     PropGet,
+    PropGetForWrite,
     PropInitialized,
     PropSet,
     /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
@@ -668,6 +669,13 @@ impl Op {
             }
             PropGet | NullsafePropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
+            }
+            // Not a pure read despite the name, exactly like `ArrayGetForWrite`: the
+            // copy-on-write split rewrites the receiver's PROPERTY slot, so it must never be
+            // treated as reorderable or redundant against the plain property reads around it.
+            PropGetForWrite => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+                    | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             DynamicPropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
@@ -961,6 +969,7 @@ impl Op {
             DynamicPdoStatementConstructorCall => "dynamic_pdo_statement_constructor_call",
             DynamicPdoStatementInitialize => "dynamic_pdo_statement_initialize",
             PropGet => "prop_get",
+            PropGetForWrite => "prop_get_for_write",
             PropInitialized => "prop_initialized",
             PropSet => "prop_set",
             PropUnset => "prop_unset",

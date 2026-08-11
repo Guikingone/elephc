@@ -610,6 +610,38 @@ mechanism exists to avoid; later than the last exit and the element outlives the
 program's need for it. PHP gets the same effect for free: its by-reference
 `foreach` holds a reference to the iterated array itself.
 
+`PropGetForWrite` is the same rule for an object PROPERTY receiver (issue #642).
+It splits the property's container and stores the separated container back into
+the property slot, returning it borrowed. The property case was not merely losing
+writes like the element case: `PropGet` retains, so the container sat at refcount
+2, `IterStart`'s split CONSUMED that reference, and the loop-exit `release`
+consumed a second one — taking the property's own container to refcount 0 and
+freeing storage the property still pointed at. Taking no reference at all is what
+removes both halves: refcount 1 leaves `IterStart` nothing to copy, and a borrowed
+result has no exit release. The op covers array and hash property slots whether or
+not the property is declared with a type, and covers a slot promoted to a
+reference cell by `$r = &$o->x` — there the container lives inside the cell, so the
+split reads and republishes through the cell and every alias of the reference sees
+the result.
+
+The receiver has to be reachable through stable backing storage: a variable or
+`$this`, optionally followed by a chain of plain declared object properties
+(`$o->inner->x`). Proving only that the syntactic ROOT is a variable is not enough,
+because an intermediate step can be a `get` hook or a `__get` returning a fresh
+object; the read drops its receiver as soon as it takes the borrow, which would
+free the container the loop is about to iterate. Dynamic property names, hooked
+properties, `Mixed` and nullable receivers, packed fields, and receivers over a
+temporary all keep the retaining read.
+
+The frontend gate in `src/ir_lower/expr/property_fetch_for_write.rs` and the lowering in
+`src/codegen/lower_inst/objects/property_fetch_for_write.rs` classify slots from the same `ClassInfo`
+metadata, and the backend has NO fallback: a slot it cannot split is a hard
+`unsupported` error rather than a plain read. A plain read there would be unsound,
+because the result is already marked `Borrowed` — skipping the split would leave
+the loop borrowing a shared container whose split inside `IterStart` consumes the
+reference the property itself holds. Failing loudly keeps the two sides from
+drifting apart silently.
+
 ### Iterables, SPL, and Foreach
 
 | Op | Operands | Result | Effects |
@@ -632,6 +664,7 @@ program's need for it. PHP gets the same effect for free: its by-reference
 | `ObjectNew(class_id, args)` | constructor args | `Heap(Object)` | `alloc_heap`, constructor effects |
 | `DynamicObjectNew(class_expr, fallback, required_parent, args)` | class-string and args | `Heap(Object)` | `reads_global`, `alloc_heap`, `may_fatal`, `may_deopt` |
 | `PropGet(class_id, property)` | object | property type | `reads_heap`, maybe `may_deopt` |
+| `PropGetForWrite(property)` | object | property type, **borrowed** | `reads_heap`, `writes_heap`, `alloc_heap`, `refcount_op`, `may_throw`, `may_warn`, `may_deopt` |
 | `PropSet(class_id, property, value)` | object, value | `Void` | `writes_heap`, `refcount_op`, maybe `may_deopt` |
 | `DynamicPropGet`, `DynamicPropSet` | object, property string/value | value or `Void` | `reads_heap`/`writes_heap`, `may_deopt`, maybe `may_warn` |
 | `NullsafePropGet`, `NullsafeMethodCall` | nullable object and metadata | nullable result | branch plus underlying op effects |

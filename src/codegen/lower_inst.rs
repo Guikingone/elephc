@@ -288,6 +288,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             builtins::system::lower_elephc_initialize_pdo_statement(ctx, &inst)
         }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropGetForWrite => objects::lower_prop_get_for_write(ctx, &inst),
         Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),
