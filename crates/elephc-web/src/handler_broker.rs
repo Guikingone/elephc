@@ -11,6 +11,8 @@
 //! - Descriptor transfers are acknowledged before the sender releases its copy.
 //! - A response lease owns the concurrency permit and cancels its exact ID on drop.
 //! - The broker process owns and reaps every handler PID; it never ignores `SIGCHLD`.
+//! - Worker `SIGTERM` is forwarded to the broker so descendants are reaped before
+//!   the worker exits, including under container PID 1 implementations that do not reap orphans.
 
 mod control;
 mod process;
@@ -18,7 +20,7 @@ mod process;
 use std::io;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use tokio::io::unix::AsyncFd;
@@ -35,6 +37,10 @@ const BROKER_MONITOR_STACK_BYTES: usize = 64 * 1024;
 const CANCEL_SENDER_STACK_BYTES: usize = 64 * 1024;
 /// Per-request execution-time ceiling inherited by every handler process.
 pub(super) static MAX_EXEC_SECS: AtomicU32 = AtomicU32::new(0);
+/// Exact broker PID owned by this isolated worker, read by its `SIGTERM` handler.
+static WORKER_BROKER_PID: AtomicI32 = AtomicI32::new(0);
+/// Records that broker exit is part of an intentional worker shutdown.
+static WORKER_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Handler process model implemented by the threadless broker.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,6 +116,34 @@ fn configure_execution_timeout(seconds: u32) {
     }
 }
 
+/// Forwards worker termination to its broker without exiting from the signal handler.
+extern "C" fn handle_worker_shutdown(_signal: libc::c_int) {
+    WORKER_SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+    let pid = WORKER_BROKER_PID.load(Ordering::SeqCst);
+    if pid > 0 {
+        unsafe {
+            libc::kill(pid, libc::SIGTERM);
+        }
+    }
+}
+
+/// Installs cooperative worker shutdown before the broker is forked.
+fn install_worker_shutdown_handler() -> io::Result<()> {
+    WORKER_BROKER_PID.store(0, Ordering::SeqCst);
+    WORKER_SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+    unsafe {
+        let mut action: libc::sigaction = std::mem::zeroed();
+        action.sa_sigaction =
+            handle_worker_shutdown as extern "C" fn(libc::c_int) as libc::sighandler_t;
+        libc::sigemptyset(&mut action.sa_mask);
+        action.sa_flags = 0;
+        if libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut()) != 0 {
+            return Err(io::Error::last_os_error());
+        }
+    }
+    Ok(())
+}
+
 impl PrestartedBroker {
     /// Forks a broker with the requested isolation model and live-handler bound.
     pub(crate) fn start(
@@ -119,6 +153,7 @@ impl PrestartedBroker {
         concurrency: usize,
         max_handler_requests: usize,
     ) -> io::Result<Self> {
+        install_worker_shutdown_handler()?;
         configure_execution_timeout(max_exec_secs);
         let concurrency = concurrency.max(1);
         let (worker_dispatch, broker_dispatch) = control::datagram_pair()?;
@@ -146,6 +181,12 @@ impl PrestartedBroker {
         }
         if pid < 0 {
             return Err(io::Error::last_os_error());
+        }
+        WORKER_BROKER_PID.store(pid, Ordering::SeqCst);
+        if WORKER_SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            unsafe {
+                libc::kill(pid, libc::SIGTERM);
+            }
         }
         drop(broker_dispatch);
         drop(broker_cancel);
@@ -205,7 +246,9 @@ fn start_broker_monitor(pid: libc::pid_t) -> io::Result<()> {
         .stack_size(BROKER_MONITOR_STACK_BYTES)
         .spawn(move || unsafe {
             if let Some(status) = reap_broker(pid) {
-                if libc::WIFSIGNALED(status) {
+                if WORKER_SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+                    libc::_exit(0);
+                } else if libc::WIFSIGNALED(status) {
                     eprintln!(
                         "elephc-web: handler broker terminated by signal {}",
                         libc::WTERMSIG(status)

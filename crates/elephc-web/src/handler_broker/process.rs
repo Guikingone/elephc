@@ -10,12 +10,14 @@
 //! - Both descriptor-transfer hops are acknowledged before sender-side close.
 //! - A no-op `SIGCHLD` handler interrupts broker polling as soon as a child exits.
 //! - Pool mode replaces crashed, cancelled, timed-out, and quota-retired children.
-//! - Parent loss terminates and reaps every descendant before the broker exits.
+//! - Parent loss or forwarded `SIGTERM` terminates and reaps every descendant
+//!   before the broker exits.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::fs::File;
 use std::io;
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::handler_ipc;
 use crate::request_state::{self, RequestMeta};
@@ -25,6 +27,8 @@ use super::{BrokerConfig, BrokerMode, MAX_EXEC_SECS};
 
 /// Poll interval used to notice parent death and reap children without a signal handler.
 const BROKER_POLL_MILLIS: libc::c_int = 100;
+/// Set by the broker's `SIGTERM` handler so its supervision loop can clean up.
+static BROKER_SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// One persistent handler process supervised by a pool broker.
 struct PoolSlot {
@@ -42,6 +46,8 @@ pub(super) unsafe fn broker_loop(
     handler: extern "C" fn(),
     config: BrokerConfig,
 ) {
+    BROKER_SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+    install_shutdown_handler();
     ignore_signal(libc::SIGPIPE);
     install_child_exit_handler();
     match config.mode {
@@ -77,6 +83,9 @@ unsafe fn request_broker_loop(
     let mut early_cancels = HashSet::<u64>::new();
     let mut greatest_dispatch = 0u64;
     loop {
+        if BROKER_SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            break;
+        }
         reap_request_children(&mut active);
         start_pending_requests(
             &mut pending,
@@ -283,6 +292,9 @@ unsafe fn pool_broker_loop(
     let mut early_cancels = HashSet::<u64>::new();
     let mut greatest_dispatch = 0u64;
     loop {
+        if BROKER_SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+            break;
+        }
         if let Err(error) = reap_and_replace_pool(
             &mut slots,
             &pending,
@@ -653,6 +665,7 @@ unsafe fn run_pool_child(
     max_handler_requests: usize,
 ) -> ! {
     restore_default_signal(libc::SIGCHLD);
+    restore_default_signal(libc::SIGTERM);
     ignore_signal(libc::SIGPIPE);
     let mut served = 0usize;
     loop {
@@ -688,6 +701,7 @@ unsafe fn run_pool_child(
 /// Reads and executes one request in a disposable child, then exits immediately.
 unsafe fn run_request_child(handler: extern "C" fn(), response_fd: RawFd, id: u64) -> ! {
     restore_default_signal(libc::SIGCHLD);
+    restore_default_signal(libc::SIGTERM);
     let stream = File::from_raw_fd(response_fd);
     let complete = execute_handler_request(handler, stream, id);
     libc::_exit(if complete { 0 } else { 1 });
@@ -774,6 +788,20 @@ unsafe fn reap_exact(pid: libc::pid_t) {
         }
         return;
     }
+}
+
+/// Records a broker shutdown request so normal loop cleanup can reap all children.
+extern "C" fn handle_shutdown(_signal: libc::c_int) {
+    BROKER_SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
+}
+
+/// Installs an interrupting `SIGTERM` handler for cooperative broker teardown.
+unsafe fn install_shutdown_handler() {
+    let mut action: libc::sigaction = std::mem::zeroed();
+    action.sa_sigaction = handle_shutdown as extern "C" fn(libc::c_int) as libc::sighandler_t;
+    libc::sigemptyset(&mut action.sa_mask);
+    action.sa_flags = 0;
+    libc::sigaction(libc::SIGTERM, &action, std::ptr::null_mut());
 }
 
 /// No-op signal hook used only to interrupt the broker's blocking `poll`.

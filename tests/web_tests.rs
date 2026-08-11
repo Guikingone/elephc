@@ -436,7 +436,8 @@ fn web_compile_produces_binary() {
     assert!(bin.exists(), "expected binary at {}", bin.display());
 }
 
-/// Verifies each compile-time model produces its intended idle process topology.
+/// Verifies each compile-time model produces its intended idle process topology
+/// and removes every recorded worker, broker, and handler PID during shutdown.
 #[test]
 fn web_isolation_modes_have_expected_process_trees() {
     for (mode, expected_handler_children) in [
