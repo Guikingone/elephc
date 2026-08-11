@@ -5832,8 +5832,15 @@ echo "after";
         "after"
     );
     let stderr = String::from_utf8(missing.stderr).expect("stderr should be utf8");
+    // php-src names the path and the reason: `file_get_contents(missing.txt): Failed to
+    // open stream: No such file or directory`. Asserting the whole message, rather than
+    // just the function name, is what would have caught the bare `file_get_contents()`
+    // form this test used to accept.
     assert!(
-        stderr.contains("Warning: file_get_contents()"),
+        stderr.contains(
+            "Warning: file_get_contents(missing.txt): Failed to open stream: \
+             No such file or directory"
+        ),
         "expected file_get_contents warning, got stderr={stderr}"
     );
 }
