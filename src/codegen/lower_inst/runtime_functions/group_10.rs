@@ -55,6 +55,9 @@ pub(super) fn lower(
         RuntimeFnId::StrContains => Some({
             crate::codegen::lower_inst::builtins::strings::lower_str_contains(ctx, inst)
         }),
+        RuntimeFnId::StrGetcsv => Some({
+            crate::codegen::lower_inst::builtins::io::lower_str_getcsv(ctx, inst)
+        }),
         RuntimeFnId::StrEndsWith => Some({
             crate::codegen::lower_inst::builtins::strings::lower_binary_string_runtime(
                     ctx,

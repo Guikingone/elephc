@@ -286,6 +286,7 @@ pub(in crate::interpreter) enum EvalValuesHook {
     /// Dispatches string position builtins.
     StringPosition,
     /// Dispatches string search predicate builtins.
+    StrGetcsv,
     StringSearch,
     /// Dispatches `explode(...)` and `implode(...)`.
     StringSplitJoin,
@@ -367,6 +368,14 @@ impl EvalValuesHook {
             | Self::Count
             | Self::Range => {
                 eval_array_declared_values_result(name, evaluated_args, context, values)
+            }
+            Self::StrGetcsv => {
+                let [subject, controls @ ..] = evaluated_args else {
+                    return Err(EvalStatus::RuntimeFatal);
+                };
+                crate::interpreter::builtins::string::str_getcsv::eval_str_getcsv_result(
+                    *subject, controls, values,
+                )
             }
             Self::Asin => one_arg(evaluated_args, values, eval_asin_result),
             Self::Atan => one_arg(evaluated_args, values, eval_atan_result),

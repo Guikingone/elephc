@@ -2,7 +2,7 @@
 title: "ctype_alpha()"
 description: "Checks if all characters in the string are alphabetic."
 sidebar:
-  order: 476
+  order: 477
 ---
 
 ## ctype_alpha()

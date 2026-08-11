@@ -65,6 +65,7 @@ sidebar:
 | [`sscanf()`](./string/sscanf.md) | `(string $string, string $format, ...$vars): array` | `array` | ✓ | ✓ |
 | [`str_contains()`](./string/str_contains.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
 | [`str_ends_with()`](./string/str_ends_with.md) | `(string $haystack, string $needle): bool` | `bool` | ✓ | ✓ |
+| [`str_getcsv()`](./string/str_getcsv.md) | `(string $string, string $separator = ',', string $enclosure = '"', string $escape = '\\'): array` | `array` | ✓ | ✓ |
 | [`str_ireplace()`](./string/str_ireplace.md) | `(string $search, string $replace, string $subject, int $count = null): string` | `string` | ✓ | ✓ |
 | [`str_pad()`](./string/str_pad.md) | `(string $string, int $length, string $pad_string = ' ', int $pad_type = 1): string` | `string` | ✓ | ✓ |
 | [`str_repeat()`](./string/str_repeat.md) | `(string $string, int $times): string` | `string` | ✓ | ✓ |

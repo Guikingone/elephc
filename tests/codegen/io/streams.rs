@@ -701,6 +701,38 @@ unlink("t_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `str_getcsv()` parses one record, with a newline as DATA rather than a break.
+///
+/// It is not `fgetcsv()` over a line, and the difference is not obvious: only a trailing
+/// newline is structural, and php-src strips one in two separate places. `"a\nb"` is one
+/// field containing a newline; `"a,b\n\n"` still yields two fields because both trailing
+/// newlines go. The expectations come from `php -n` 8.5.6.
+#[test]
+fn test_str_getcsv_treats_an_interior_newline_as_data() {
+    let out = compile_and_run(
+        r#"<?php
+$cases = ["a,b,\"c,d\"", "a,\"b\"\"c\",d", "a\nb", "a,b\n", "a,b\n\n", "\na,b", " \n", "a,b\r\n"];
+foreach ($cases as $c) { echo json_encode(str_getcsv($c, ",", "\"", "\\")), "|"; }
+"#,
+    );
+    assert_eq!(
+        out,
+        "[\"a\",\"b\",\"c,d\"]|[\"a\",\"b\\\"c\",\"d\"]|[\"a\\nb\"]|[\"a\",\"b\"]|[\"a\",\"b\"]|[\"\\na\",\"b\"]|[\" \"]|[\"a\",\"b\"]|"
+    );
+}
+
+/// Verifies `str_getcsv()` answers the same through `eval()` as it does compiled.
+#[test]
+fn test_str_getcsv_matches_between_compiled_and_eval() {
+    let out = compile_and_run(
+        r#"<?php
+echo json_encode(str_getcsv("a,\"b,c\",d", ",", "\"", "\\")), "|";
+eval('echo json_encode(str_getcsv("a,\"b,c\",d", ",", "\"", "\\\\"));');
+"#,
+    );
+    assert_eq!(out, "[\"a\",\"b,c\",\"d\"]|[\"a\",\"b,c\",\"d\"]");
+}
+
 /// Verifies a quoted CSV field may span newlines, as one field of one record.
 ///
 /// The reader took one line at a time, so `1,"line one\nline two"` came back as two

@@ -134,7 +134,7 @@ pub(crate) use stream_sockets::{
 pub(crate) use stream_file_ops::{
     lower_fclose, lower_fread, lower_fwrite, lower_fprintf,
     lower_vfprintf, lower_fscanf, lower_fgets, lower_fgetc,
-    lower_fgetcsv, lower_fputcsv, lower_fpassthru,
+    lower_fgetcsv, lower_fputcsv, lower_str_getcsv, lower_fpassthru,
 };
 pub(crate) use stream_file_dispatch::{
     lower_feof, lower_ftell, lower_fseek, lower_rewind,

@@ -2,7 +2,7 @@
 title: "strncasecmp() — internals"
 description: "Compiler internals for strncasecmp(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 453
+  order: 454
 ---
 
 ## `strncasecmp()` — internals

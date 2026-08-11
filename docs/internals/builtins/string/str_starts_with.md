@@ -2,7 +2,7 @@
 title: "str_starts_with() — internals"
 description: "Compiler internals for str_starts_with(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 446
+  order: 447
 ---
 
 ## `str_starts_with()` — internals

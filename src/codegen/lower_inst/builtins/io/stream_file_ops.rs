@@ -499,6 +499,90 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     store_if_result(ctx, inst)
 }
 
+/// Lowers `str_getcsv(string, separator?, enclosure?, escape?)` through the shared CSV
+/// state machine, packing separator/enclosure/escape into the same `csv_opts` word
+/// `fgetcsv()` uses.
+///
+/// The parser unescapes IN PLACE, so the runtime helper copies the subject first — the
+/// argument here may be a literal in read-only memory.
+pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
+    ensure_arg_count_between(inst, "str_getcsv", 1, 4)?;
+    let subject = expect_operand(inst, 0)?;
+    let arch = ctx.emitter.target.arch;
+
+    // -- pack csv_opts: (esc << 16) | (enc << 8) | sep, zero selecting each default --
+    let csv_indices: [(usize, &str); 3] = [
+        (1, "str_getcsv separator"),
+        (2, "str_getcsv enclosure"),
+        (3, "str_getcsv escape"),
+    ];
+    for (idx, name) in csv_indices {
+        if inst.operands.len() > idx {
+            let value = expect_operand(inst, idx)?;
+            load_string_to_result(ctx, value, name)?;
+            let empty_label = ctx.next_label("sgc_empty");
+            let done_label = ctx.next_label("sgc_done");
+            match arch {
+                Arch::AArch64 => {
+                    ctx.emitter.instruction(&format!("cbz x2, {}", empty_label)); // an empty string selects the default
+                    ctx.emitter.instruction("ldrb w0, [x1]");                    // the first byte is the delimiter
+                    ctx.emitter.instruction(&format!("b {}", done_label));
+                    ctx.emitter.label(&empty_label);
+                    ctx.emitter.instruction("mov w0, #0");
+                    ctx.emitter.label(&done_label);
+                }
+                Arch::X86_64 => {
+                    ctx.emitter.instruction("test rdx, rdx");                    // an empty string selects the default
+                    ctx.emitter.instruction(&format!("jz {}", empty_label));
+                    ctx.emitter.instruction("movzx eax, BYTE PTR [rax]");        // the first byte is the delimiter
+                    ctx.emitter.instruction(&format!("jmp {}", done_label));
+                    ctx.emitter.label(&empty_label);
+                    ctx.emitter.instruction("xor eax, eax");
+                    ctx.emitter.label(&done_label);
+                }
+            }
+        } else {
+            match arch {
+                Arch::AArch64 => ctx.emitter.instruction("mov w0, #0"),          // absent: the runtime picks the default
+                Arch::X86_64 => ctx.emitter.instruction("xor eax, eax"),         // absent: the runtime picks the default
+            }
+        }
+        abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+    }
+    match arch {
+        Arch::AArch64 => {
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // escape byte
+            ctx.emitter.instruction("lsl x0, x0, #16");
+            ctx.emitter.instruction("mov x9, x0");
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // enclosure byte
+            ctx.emitter.instruction("lsl x0, x0, #8");
+            ctx.emitter.instruction("orr x9, x9, x0");
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // separator byte
+            ctx.emitter.instruction("orr x9, x9, x0");
+            abi::emit_push_reg(ctx.emitter, "x9");                               // hold csv_opts across the subject load
+            load_string_to_result(ctx, subject, "str_getcsv string")?;
+            abi::emit_pop_reg(ctx.emitter, "x0");                                // csv_opts, with the subject in x1/x2
+        }
+        Arch::X86_64 => {
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // escape byte
+            ctx.emitter.instruction("shl rax, 16");
+            ctx.emitter.instruction("mov r9, rax");
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // enclosure byte
+            ctx.emitter.instruction("shl rax, 8");
+            ctx.emitter.instruction("or r9, rax");
+            abi::emit_pop_reg(ctx.emitter, "rax");                               // separator byte
+            ctx.emitter.instruction("or r9, rax");
+            abi::emit_push_reg(ctx.emitter, "r9");                               // hold csv_opts across the subject load
+            load_string_to_result(ctx, subject, "str_getcsv string")?;
+            ctx.emitter.instruction("mov rsi, rax");                             // subject pointer
+            ctx.emitter.instruction("mov rdx, rdx");                             // subject length already in rdx
+            abi::emit_pop_reg(ctx.emitter, "rdi");                               // csv_opts
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_str_getcsv");
+    store_if_result(ctx, inst)
+}
+
 /// Lowers `fputcsv(stream, fields, separator?, enclosure?, escape?, eol?)` for string arrays,
 /// php-src's wording when `$fields` is not an array — the only other thing an
 /// `array<string>|false` value can be at run time.
