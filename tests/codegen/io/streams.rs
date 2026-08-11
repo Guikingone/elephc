@@ -6155,6 +6155,155 @@ fclose($h);
     );
 }
 
+/// Verifies a string that arrives as a boxed `Mixed` can still be indexed.
+///
+/// `fgets()` and `fread()` report `string|false`, which is carried as a boxed Mixed, and the
+/// boxed reader knew arrays, hashes, stdClass and null — but not strings, so `$s[0]` fell
+/// through to NULL. Nothing announced it: `ord(null)` is 0 and `null` prints as nothing, so
+/// `$s = fgets($h); echo $s[0];` simply produced empty output.
+///
+/// The out-of-range rows matter as much as the in-range ones: php answers `""` there, not
+/// null, and it counts a negative offset back from the end.
+#[test]
+fn test_indexing_a_boxed_mixed_string_reads_the_byte() {
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+fwrite($m, "Hello");
+rewind($m);
+$s = fgets($m);              // string|false, so the value is boxed
+foreach ([0, 4, -1, -5] as $i) {
+    echo var_export($s[$i], true), ",";
+}
+foreach ([5, -6] as $i) {    // out of range in both directions
+    echo var_export(@$s[$i], true), ",";
+}
+var_dump($s[0] === "H");
+fclose($m);
+"#,
+    );
+    assert_eq!(out, "'H','o','o','H','','',bool(true)\n");
+}
+
+/// Verifies an out-of-range offset on a boxed string warns, and that the silent readers stay
+/// silent AND still see the offset as absent.
+///
+/// These two halves have to be pinned together. php answers `""` for an ordinary read of a
+/// missing offset but reports it as ABSENT to `isset()` and `??` — so returning `""` on every
+/// path makes `isset($s[9])` true and `$s[9] ?? "d"` answer `""`, which is how the first
+/// version of this fix was wrong. The warning flag the reader already receives is what
+/// separates the two callers.
+///
+/// The offset is named as the caller WROTE it: `$s[-9]` reports `-9`, not the resolved index.
+#[test]
+fn test_out_of_range_offset_on_a_boxed_string_warns_and_reads_as_absent() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$m = fopen("php://memory", "r+");
+fwrite($m, "Hello");
+rewind($m);
+$s = fgets($m);
+echo "[", $s[9], "]";
+echo "[", $s[-9], "]";
+echo "at:", @$s[9], ":";
+echo "isset:", isset($s[9]) ? "y" : "n", ":";
+echo "coalesce:", $s[9] ?? "dflt";
+fclose($m);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "[][]at::isset:n:coalesce:dflt");
+    assert!(
+        out.stderr
+            .contains("Warning: Uninitialized string offset 9"),
+        "expected the offset warning, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains("Warning: Uninitialized string offset -9"),
+        "expected the negative offset reported as written, got stderr={}",
+        out.stderr
+    );
+    // Exactly two: `@`, isset() and `??` must not add a third.
+    assert_eq!(
+        out.stderr.matches("Uninitialized string offset").count(),
+        2,
+        "silent readers must not warn, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies a FAILED `fread()` answers `false` while an empty one still answers `""`.
+///
+/// Reading a handle opened `'w'` fails at the OS, and php-src reports that as `false`;
+/// elephc answered `""`, so `fread(...) !== false` read the failure as an empty read. The
+/// hard part is that an exhausted stream answers `""` too and both carry zero bytes, so
+/// the cases have to be separated by more than emptiness.
+///
+/// The `php://memory` line is the other half of the rule and is what stops this being
+/// "anything empty is false": a memory stream has no OS read to fail, so php answers `""`
+/// there even though the handle is write-only.
+#[test]
+fn test_fread_returns_false_only_when_the_read_actually_fails() {
+    let out = compile_and_run(
+        r#"<?php
+// Two files on purpose: opening the first "w" TRUNCATES it, so reusing it would leave the
+// short-read case reading an empty file and quietly stop testing anything.
+$a = tempnam(sys_get_temp_dir(), "fra");
+$b = tempnam(sys_get_temp_dir(), "frb");
+file_put_contents($b, "hello");
+
+$w = fopen($a, "w");
+echo var_export(@fread($w, 5), true), "|";   // the read fails at the OS
+fclose($w);
+
+$r = fopen($b, "r");
+echo var_export(fread($r, 100), true), "|";  // a short read is not a failure
+echo var_export(fread($r, 5), true), "|";    // exhausted: "" and not false
+fclose($r);
+
+$m = fopen("php://memory", "w");
+echo var_export(@fread($m, 5), true);        // no OS read to fail
+fclose($m);
+unlink($a);
+unlink($b);
+"#,
+    );
+    assert_eq!(out, "false|'hello'|''|''");
+}
+
+/// Verifies `fread()` rejects a non-positive length the way php-src does.
+///
+/// elephc answered `""` for both, which is what a legitimate empty read looks like, so a
+/// caller could not tell a rejected argument from an exhausted stream. php-src refuses
+/// before it reads anything.
+#[test]
+fn test_fread_rejects_a_non_positive_length() {
+    let out = compile_and_run(
+        r#"<?php
+$h = fopen("php://memory", "r+");
+fwrite($h, "abcdefghij");
+rewind($h);
+foreach ([0, -1] as $len) {
+    try {
+        fread($h, $len);
+        echo "no-throw|";
+    } catch (ValueError $e) {
+        echo $e->getMessage(), "|";
+    }
+}
+echo fread($h, 3);
+fclose($h);
+"#,
+    );
+    assert_eq!(
+        out,
+        "fread(): Argument #2 ($length) must be greater than 0|\
+         fread(): Argument #2 ($length) must be greater than 0|abc"
+    );
+}
+
 /// Verifies `data://` refuses a media type php-src does not accept, and reads `;base64` the way
 /// php-src reads it.
 ///

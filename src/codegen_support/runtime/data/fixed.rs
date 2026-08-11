@@ -524,6 +524,12 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".globl _uncaught_exc_colon\n_uncaught_exc_colon:\n    .ascii \":\"\n");
     out.push_str(".globl _uncaught_exc_nl\n_uncaught_exc_nl:\n    .ascii \"\\n\"\n");
     out.push_str(".globl _instanceof_target_type_msg\n_instanceof_target_type_msg:\n    .ascii \"Fatal error: Class name must be a valid object or a string\\n\"\n");
+    // The composer copies exactly `STRING_OFFSET_PREFIX.len()` bytes from here, so the text
+    // and the length it copies come from the same constant and cannot drift apart.
+    out.push_str(&format!(
+        ".globl _str_offset_warn_prefix\n_str_offset_warn_prefix:\n    .ascii \"{}\"\n",
+        crate::codegen_support::runtime::objects::STRING_OFFSET_PREFIX
+    ));
     // -- php-src's unreachable-seek warning fragments, shared with `__rt_file_get_contents_range` --
     // The helper derives its `__rt_concat` length immediates from the same table, so the bytes
     // here and the immediates there can never drift apart.
@@ -1190,6 +1196,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_socket_gai_msg_len", 8, target));
     out.push_str(&comm_directive("_socket_gai_msg", SOCKET_GAI_MSG_CAPACITY, target));
     out.push_str(&comm_directive("_filter_missing_msg", crate::codegen_support::runtime::io::FILTER_MISSING_MSG_CAPACITY, target));
+    out.push_str(&comm_directive("_str_offset_msg", crate::codegen_support::runtime::objects::STRING_OFFSET_MSG_CAPACITY, target));
     out.push_str(&comm_directive("_open_failed_msg", crate::codegen_support::runtime::io::OPEN_FAILED_MSG_CAPACITY, target));
     out.push_str(&format!(
         ".globl _gai_msg_prefix\n_gai_msg_prefix:\n    .ascii {GAI_MSG_PREFIX:?}\n"

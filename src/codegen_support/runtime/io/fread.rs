@@ -59,6 +59,11 @@ pub fn emit_fread(emitter: &mut Emitter) {
     // -- save handle and requested length, then resolve the backend descriptor --
     emitter.instruction("str x0, [sp, #0]");                                    // save the opaque stream handle
     emitter.instruction("str x1, [sp, #8]");                                    // save requested read length
+    // A FAILED read and a legitimate zero-byte read both end with length 0, so length alone
+    // cannot tell PHP's `false` from its `""`. Slot 40 carries that distinction and leaves in
+    // x0, beside the x1/x2 string pair.
+    emitter.instruction("mov x9, #1");
+    emitter.instruction("str x9, [sp, #40]");                                   // "this is a real result" — cleared only by an actual read failure
     emitter.instruction("bl __rt_stream_fd");                                   // resolve the backend descriptor through StreamState
     emitter.instruction("str x0, [sp, #32]");                                   // preserve the resolved backend descriptor
     emitter.instruction("mov w9, #0x4000");                                     // load the high half of USER_WRAPPER_FD_BASE = 0x40000000
@@ -107,6 +112,7 @@ pub fn emit_fread(emitter: &mut Emitter) {
     emitter.instruction("cmp x0, #0");                                          // value-based check after the TLS call
     emitter.instruction("b.ge __rt_fread_read_ok");                             // continue when TLS read returned >= 0
     emitter.instruction("str xzr, [sp, #24]");                                  // TLS error: zero-length result
+    emitter.instruction("str xzr, [sp, #40]");                                  // a failed TLS read is a failed read
     emitter.instruction("b __rt_fread_mark_eof");                               // mark the stream exhausted
 
     emitter.label("__rt_fread_do_syscall");
@@ -125,7 +131,8 @@ pub fn emit_fread(emitter: &mut Emitter) {
         emitter.instruction(&format!("cmp x0, #{}", emitter.platform.would_block_errno())); // macOS: is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     }
     emitter.instruction("b.eq __rt_fread_would_block");                         // a transient nonblocking miss is not EOF
-    emitter.instruction("str xzr, [sp, #24]");                                  // failed reads return an empty result
+    emitter.instruction("str xzr, [sp, #24]");                                  // failed reads carry no bytes
+    emitter.instruction("str xzr, [sp, #40]");                                  // php answers false for a read that fails
     emitter.instruction("b __rt_fread_mark_eof");                               // mark the stream as exhausted after a read failure
     emitter.label("__rt_fread_read_ok");
 
@@ -199,6 +206,11 @@ pub fn emit_fread(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.label("__rt_fread_ret");
+    // The flag rides out in x0, beside the x1/x2 string pair, exactly as
+    // `__rt_stream_get_line` reports its own. The result pointer is deliberately NOT
+    // nulled: x86_64 already returns a null pointer for an ordinary EOF, so the pointer
+    // cannot mean "failed" on both arches, and every caller here tests the length first.
+    emitter.instruction("ldr x0, [sp, #40]");                                   // x0 = 0 only when the read failed
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
@@ -216,6 +228,9 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve the requested byte count across the concat-buffer address computation and libc read() call
+    // See the AArch64 half: a failed read and an empty one both end with length 0, so the
+    // difference travels in its own slot and leaves in rcx.
+    emitter.instruction("mov QWORD PTR [rbp - 48], 1");                         // "this is a real result" — cleared only by an actual read failure
     emitter.instruction("call __rt_stream_fd");                                 // resolve the backend descriptor through StreamState
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // preserve the resolved backend descriptor
     emitter.instruction("mov r9d, 0x40000000");                                 // materialize USER_WRAPPER_FD_BASE
@@ -269,8 +284,12 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_tls_read_fn", 0);      // prepare SysV call argument
     emitter.instruction("call r9");                                             // rax = bytes read (>=0) or -1
     emitter.instruction("cmp rax, 0");                                          // did the TLS bridge return bytes?
-    emitter.instruction("jle __rt_fread_eof_x86");                              // TLS errors and EOF still mark the stream as exhausted
+    emitter.instruction("jl __rt_fread_tls_failed_x86");                        // strictly negative is an error, not an exhausted stream
+    emitter.instruction("jz __rt_fread_eof_x86");                               // a zero-byte TLS read is an ordinary EOF
     emitter.instruction("jmp __rt_fread_read_ok_x86");                          // publish the successful TLS read
+    emitter.label("__rt_fread_tls_failed_x86");
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // a failed TLS read is a failed read
+    emitter.instruction("jmp __rt_fread_eof_x86");                              // it still leaves the stream exhausted
     emitter.label("__rt_fread_do_syscall_x86");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // pass the file descriptor as the first libc read() argument
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // pass the concat-buffer write pointer as the second libc read() argument
@@ -344,6 +363,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fread_builtin_slot1_x86");
     emitter.instruction("call __rt_apply_stream_filter");                       // transform in place
     emitter.label("__rt_fread_ret_x86");
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // rcx = 0 only when the read failed
     emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the successful string slice
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the successful fread() path
     emitter.instruction("ret");                                                 // return the borrowed concat-buffer string slice to the caller
@@ -353,11 +373,13 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10d, DWORD PTR [rax]");                           // load the thread-local errno value
     emitter.instruction("cmp r10d, 11");                                        // is this EAGAIN/EWOULDBLOCK from a nonblocking fd?
     emitter.instruction("je __rt_fread_would_block_x86");                       // transient nonblocking miss returns empty without EOF
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // php answers false for a read that fails
     emitter.instruction("jmp __rt_fread_eof_x86");                              // other read failures behave like an exhausted stream
 
     emitter.label("__rt_fread_would_block_x86");
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                       // return the concat-buffer start pointer for an empty transient read
     emitter.instruction("xor edx, edx");                                        // return a zero-length read result without setting EOF
+    emitter.instruction("mov ecx, 1");                                          // a would-block is an empty READ, not a failure
     emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the empty string
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the would-block fread() path
     emitter.instruction("ret");                                                 // return the empty non-EOF read result
@@ -368,6 +390,7 @@ fn emit_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("call __rt_stream_eof_set");                            // mark this stream exhausted after the zero-byte or failed read
     emitter.instruction("xor eax, eax");                                        // return an empty string pointer when libc read() reports EOF or failure
     emitter.instruction("xor edx, edx");                                        // return an empty string length when libc read() reports EOF or failure
+    emitter.instruction("mov rcx, QWORD PTR [rbp - 48]");                       // EOF and failure share this path; the slot tells them apart
     emitter.instruction("add rsp, 48");                                         // release the fread() spill slots before returning the empty-string result
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the EOF/error fread() path
     emitter.instruction("ret");                                                 // return the empty string result for the exhausted or failed stream read

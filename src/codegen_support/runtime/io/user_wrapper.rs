@@ -139,6 +139,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     // -- call stream_read($this, $count) → returns string in x1/x2 --
     emitter.instruction("ldr x1, [sp, #24]");                                   // reload the requested byte count
     emitter.instruction("blr x11");                                             // invoke stream_read on the wrapper object
+    emitter.instruction("mov x0, #1");                                          // fread's result flag: a wrapper read is a real result
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
@@ -146,6 +147,7 @@ pub fn emit_user_wrapper_fread(emitter: &mut Emitter) {
     emitter.label("__rt_uwfread_empty");
     emitter.instruction("mov x1, #0");                                          // empty-string pointer for the missing stream_read fallback
     emitter.instruction("mov x2, #0");                                          // empty-string length for the missing stream_read fallback
+    emitter.instruction("mov x0, #1");                                          // and a real (empty) result, not a failure
     emitter.instruction("ldp x29, x30, [sp, #0]");                              // restore frame pointer and return address
     emitter.instruction("add sp, sp, #32");                                     // release the helper frame
     emitter.instruction("ret");                                                 // return the empty-string result
@@ -169,6 +171,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     // -- call stream_read($this, $count) → returns string in rax/rdx --
     emitter.instruction("mov rsi, QWORD PTR [rbp - 16]");                       // reload the requested byte count
     emitter.instruction("call r11");                                            // invoke stream_read on the wrapper object
+    emitter.instruction("mov ecx, 1");                                          // fread's result flag: a wrapper read is a real result
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the wrapper's string result to the caller
@@ -176,6 +179,7 @@ fn emit_user_wrapper_fread_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uwfread_empty_x86");
     emitter.instruction("xor eax, eax");                                        // empty-string pointer for the missing stream_read fallback
     emitter.instruction("xor edx, edx");                                        // empty-string length for the missing stream_read fallback
+    emitter.instruction("mov ecx, 1");                                          // and a real (empty) result, not a failure
     emitter.instruction("add rsp, 16");                                         // release the helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the empty-string result

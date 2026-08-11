@@ -6,7 +6,9 @@
 //!
 //! Key details:
 //! - `check` calls `ensure_stream_resource` on the stream argument for validation and
-//!   returns `Str`. Arguments are pre-inferred by the registry before the hook runs.
+//!   returns `Mixed`, reflecting PHP's `string|false`: a read that FAILS answers false,
+//!   while an exhausted stream answers "". `returns: Mixed` is what `fgets()` uses for the
+//!   same shape — the precise union cannot be expressed through the scalar `returns:` field.
 
 use crate::builtins::spec::BuiltinCheckCtx;
 use crate::errors::CompileError;
@@ -16,7 +18,7 @@ builtin! {
     name: "fread",
     area: Io,
     params: [stream: Mixed, length: Int],
-    returns: Str,
+    returns: Mixed,
     check: check,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::Fread,
@@ -25,7 +27,7 @@ builtin! {
     php_manual: "function.fread",
 }
 
-/// Validates the stream argument is a stream resource and returns `Str`.
+/// Validates the stream argument is a stream resource and returns `Mixed` for `string|false`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -33,5 +35,5 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(PhpType::Str)
+    Ok(PhpType::Mixed)
 }

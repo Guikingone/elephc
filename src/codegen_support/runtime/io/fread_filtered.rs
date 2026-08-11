@@ -247,6 +247,7 @@ fn emit_fread_wrapper_aarch64(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x10, [x1, #{STREAM_FILTERED_BUF_POS_OFFSET}]")); // publish the cursor
     emitter.instruction("ldr x1, [sp, #32]");                                         // return the caller's storage
     emitter.instruction("ldr x2, [sp, #24]");                                   // and the served count
+    emitter.instruction("mov x0, #1");                                          // served bytes are a real result
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the wrapper frame
     emitter.instruction("ret");                                                 // return the filtered bytes
@@ -254,6 +255,7 @@ fn emit_fread_wrapper_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_freadb_empty");
     abi::emit_symbol_address(emitter, "x1", "_stream_filter_buf");              // a readable pointer for a zero-length result
     emitter.instruction("mov x2, #0");                                          // the stream is exhausted
+    emitter.instruction("mov x0, #1");                                          // exhausted is not failed: php answers "" here
     emitter.instruction("ldp x29, x30, [sp, #48]");                             // restore frame pointer and return address
     emitter.instruction("add sp, sp, #64");                                     // release the wrapper frame
     emitter.instruction("ret");                                                 // return the empty read
@@ -460,6 +462,7 @@ fn emit_fread_wrapper_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [rcx + {STREAM_FILTERED_BUF_POS_OFFSET}], r10")); // publish the cursor
     emitter.instruction("mov rax, QWORD PTR [rbp - 40]");                       // return the caller's storage
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // and the served count
+    emitter.instruction("mov ecx, 1");                                          // served bytes are a real result
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the filtered bytes
@@ -467,6 +470,7 @@ fn emit_fread_wrapper_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_freadb_empty_x");
     abi::emit_symbol_address(emitter, "rax", "_stream_filter_buf");             // a readable pointer for a zero-length result
     emitter.instruction("xor edx, edx");                                        // the stream is exhausted
+    emitter.instruction("mov ecx, 1");                                          // exhausted is not failed: php answers "" here
     emitter.instruction("mov rsp, rbp");                                        // release the frame from rbp
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return the empty read

@@ -217,6 +217,7 @@ pub(super) fn emit_managed_runtime(emitter: &mut Emitter, features: RuntimeFeatu
     objects::emit_mixed_property_set(emitter);
     objects::emit_mixed_cell_autovivify_array(emitter);
     objects::emit_mixed_array_get(emitter);
+    objects::emit_string_offset_warning(emitter);
     objects::emit_mixed_array_set(emitter);
     objects::emit_mixed_array_append(emitter);
     objects::emit_mixed_array_fetch_for_write(emitter);

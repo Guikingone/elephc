@@ -202,6 +202,10 @@ pub(crate) fn lower_fclose(ctx: &mut FunctionContext<'_>, inst: &Instruction) ->
 }
 
 /// Lowers `fread(stream, length)` using the shared runtime file-read helper.
+/// php-src's verbatim `ValueError` wording for `fread()` with a non-positive `$length`.
+const FREAD_NON_POSITIVE_LENGTH_MESSAGE: &str =
+    "fread(): Argument #2 ($length) must be greater than 0";
+
 pub(crate) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "fread", 2)?;
     let stream = expect_operand(inst, 0)?;
@@ -209,17 +213,29 @@ pub(crate) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     load_open_stream_handle_to_result(ctx, stream, "fread")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
     require_int(ctx.load_value_to_result(length)?.codegen_repr(), "fread length")?;
-    match ctx.emitter.target.arch {
+    let length_reg = match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, x0");                              // pass the requested byte count to the fread runtime helper
             abi::emit_pop_reg(ctx.emitter, "x0");
+            "x1"
         }
         Arch::X86_64 => {
             ctx.emitter.instruction("mov rsi, rax");                            // pass the requested byte count to the fread runtime helper
             abi::emit_pop_reg(ctx.emitter, "rdi");
+            "rsi"
         }
-    }
+    };
+    // php-src rejects zero and negatives outright, before it reads anything. elephc accepted
+    // both and answered "", which reads as a legitimate empty result.
+    super::super::exceptions::emit_value_error_unless(
+        ctx,
+        super::super::exceptions::ValueGuard::SignedAtLeast(length_reg, 1),
+        FREAD_NON_POSITIVE_LENGTH_MESSAGE,
+    );
     abi::emit_call_label(ctx.emitter, "__rt_fread");
+    // An exhausted stream answers "" and a FAILED read answers false, so emptiness cannot
+    // decide this: the helper reports which one it was in x0/rcx.
+    box_stream_string_or_false_on_unconsumed_result(ctx, "fread");
     store_if_result(ctx, inst)
 }
 

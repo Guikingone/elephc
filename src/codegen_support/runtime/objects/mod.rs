@@ -20,6 +20,7 @@ mod mixed_cell_autovivify;
 mod new_by_name;
 mod print_r_object;
 mod stdclass;
+mod string_offset_warning;
 
 pub(crate) use call_destructor::emit_call_object_destructor;
 pub(crate) use enum_debug::{
@@ -38,6 +39,9 @@ pub(crate) use mixed_array_get::emit_mixed_array_get;
 pub(crate) use mixed_array_set::emit_mixed_array_set;
 pub(crate) use mixed_cell_autovivify::emit_mixed_cell_autovivify_array;
 pub(crate) use new_by_name::emit_new_by_name;
+pub(crate) use string_offset_warning::{
+    emit_string_offset_warning, STRING_OFFSET_MSG_CAPACITY, STRING_OFFSET_PREFIX,
+};
 pub(crate) use stdclass::{
     emit_json_encode_stdclass, emit_mixed_property_get, emit_mixed_property_set,
     emit_stdclass_from_hash, emit_stdclass_get, emit_stdclass_new, emit_stdclass_set,
