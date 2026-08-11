@@ -39,6 +39,7 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
 
     // -- save data string for after cstr call --
     emitter.instruction("stp x3, x4, [sp, #16]");                               // save data ptr and len on stack
+    emitter.instruction("str x5, [sp, #40]");                                   // hold $flags across __rt_cstr, which is a call
 
     // -- null-terminate the filename --
     emitter.instruction("bl __rt_cstr");                                        // convert filename to C string, x0=cstr path
@@ -46,7 +47,14 @@ pub fn emit_file_put_contents(emitter: &mut Emitter) {
 
     // -- open file with write+create+truncate --
     emitter.instruction("ldr x0, [sp, #0]");                                    // reload null-terminated path
+    // FILE_APPEND (bit 3) selects O_APPEND. Without this the flag was accepted and ignored,
+    // so a call meant to EXTEND the file truncated it instead — and still answered the byte
+    // count, so the caller saw a success.
     emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_trunc())); // O_WRONLY|O_CREAT|O_TRUNC
+    emitter.instruction("ldr x9, [sp, #40]");                                   // reload $flags
+    emitter.instruction("tbz x9, #3, __rt_fpc_flags_ready");                    // FILE_APPEND clear → keep truncating
+    emitter.instruction(&format!("mov x1, #0x{:X}", emitter.platform.o_wronly_creat_append())); // O_WRONLY|O_CREAT|O_APPEND
+    emitter.label("__rt_fpc_flags_ready");
     emitter.instruction("mov x2, #0x1A4");                                      // file mode 0644 (octal)
     emitter.syscall(5);
     emitter.instruction("str x0, [sp, #8]");                                    // save fd on stack
@@ -93,11 +101,18 @@ fn emit_file_put_contents_linux_x86_64(emitter: &mut Emitter) {
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save the data pointer while the filename is converted to a C string
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the data length while the filename is converted to a C string
+    emitter.instruction("mov QWORD PTR [rbp - 48], rcx");                       // hold $flags across __rt_cstr, which is a call
     emitter.instruction("call __rt_cstr");                                      // convert the elephc filename in rax/rdx into a null-terminated C path in rax
     emitter.instruction("mov QWORD PTR [rbp - 24], rax");                       // save the C filename pointer for the later open() call
 
     emitter.instruction("mov rdi, QWORD PTR [rbp - 24]");                       // pass the C filename pointer as the first libc open() argument
+    // See the AArch64 half: FILE_APPEND (bit 3) selects O_APPEND.
     emitter.instruction(&format!("mov rsi, 0x{:X}", emitter.platform.o_wronly_creat_trunc())); // pass O_WRONLY|O_CREAT|O_TRUNC as the open() flags
+    emitter.instruction("mov r8, QWORD PTR [rbp - 48]");                        // reload $flags
+    emitter.instruction("test r8, 8");                                          // FILE_APPEND?
+    emitter.instruction("jz __rt_fpc_flags_ready_x");                           // clear → keep truncating
+    emitter.instruction(&format!("mov rsi, 0x{:X}", emitter.platform.o_wronly_creat_append())); // O_WRONLY|O_CREAT|O_APPEND
+    emitter.label("__rt_fpc_flags_ready_x");
     emitter.instruction("mov rdx, 0x1A4");                                      // pass mode 0644 for newly created files
     emitter.instruction("call open");                                           // open the destination file for overwriting through libc open()
     emitter.instruction("mov QWORD PTR [rbp - 32], rax");                       // save the opened file descriptor for the later write() and close() calls

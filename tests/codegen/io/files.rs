@@ -24,6 +24,31 @@ echo file_get_contents("test.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `FILE_APPEND` extends the file instead of replacing it.
+///
+/// The flag was accepted by the arity check and then discarded, so the one call whose entire
+/// purpose is to EXTEND a file truncated it — and still returned the byte count, so a caller
+/// checking the result saw a success while the previous contents were gone. Nothing covered
+/// FILE_APPEND on a file that already had content, which is the only way to see it.
+///
+/// The second write is the control: WITHOUT the flag the call must still truncate, so this
+/// cannot pass by making every write append.
+#[test]
+fn test_file_put_contents_append_extends_the_file() {
+    let out = compile_and_run(
+        r#"<?php
+$p = tempnam(sys_get_temp_dir(), "ap");
+file_put_contents($p, "xy");
+$n = file_put_contents($p, "z", FILE_APPEND);
+echo $n, ":", file_get_contents($p), "|";
+file_put_contents($p, "w");
+echo file_get_contents($p);
+unlink($p);
+"#,
+    );
+    assert_eq!(out, "1:xyz|w");
+}
+
 /// Verifies `file_get_contents` on a missing file emits a runtime warning to stderr and continues execution.
 /// Fixture: tries to read "missing.txt" which does not exist.
 /// Asserts: program exits successfully, stdout is "after" (execution continued), stderr contains the PHP warning.

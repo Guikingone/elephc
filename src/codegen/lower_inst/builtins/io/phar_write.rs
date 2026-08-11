@@ -29,9 +29,10 @@ pub(crate) fn lower_file_put_contents(
     } else {
         "__rt_file_put_contents"
     };
+    let flags = inst.operands.get(2).copied();
     match ctx.emitter.target.arch {
-        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, helper)?,
-        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, helper)?,
+        Arch::AArch64 => lower_file_put_contents_arm64(ctx, path, data, flags, helper)?,
+        Arch::X86_64 => lower_file_put_contents_x86_64(ctx, path, data, flags, helper)?,
     }
     store_if_result(ctx, inst)
 }

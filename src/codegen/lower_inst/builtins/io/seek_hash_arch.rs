@@ -194,14 +194,28 @@ pub(super) fn lower_file_put_contents_arm64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    flags: Option<ValueId>,
     helper: &str,
 ) -> Result<()> {
+    // $flags travels in x5, past the two string pairs. It was accepted and discarded before,
+    // so FILE_APPEND silently truncated the file it was meant to extend.
+    match flags {
+        Some(flags) => {
+            ctx.load_value_to_result(flags)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        }
+        None => {
+            ctx.emitter.instruction("mov x0, #0");                              // no flags: an ordinary truncating write
+            abi::emit_push_reg(ctx.emitter, "x0");
+        }
+    }
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
     load_string_to_result(ctx, data, "file_put_contents data")?;
     ctx.emitter.instruction("mov x3, x1");                                      // pass the data pointer in the runtime helper's second string slot
     ctx.emitter.instruction("mov x4, x2");                                      // pass the data length in the runtime helper's second string slot
     abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
+    abi::emit_pop_reg(ctx.emitter, "x5");                                       // the flags word
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }
@@ -211,14 +225,27 @@ pub(super) fn lower_file_put_contents_x86_64(
     ctx: &mut FunctionContext<'_>,
     path: ValueId,
     data: ValueId,
+    flags: Option<ValueId>,
     helper: &str,
 ) -> Result<()> {
+    // See the AArch64 half: $flags travels in rcx, past both string pairs.
+    match flags {
+        Some(flags) => {
+            ctx.load_value_to_result(flags)?;
+            abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));
+        }
+        None => {
+            ctx.emitter.instruction("xor eax, eax");                            // no flags: an ordinary truncating write
+            abi::emit_push_reg(ctx.emitter, "rax");
+        }
+    }
     load_string_to_result(ctx, path, "file_put_contents filename")?;
     abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
     load_string_to_result(ctx, data, "file_put_contents data")?;
     ctx.emitter.instruction("mov rdi, rax");                                    // pass the data pointer while the filename remains on the temporary stack
     ctx.emitter.instruction("mov rsi, rdx");                                    // pass the data length while the filename remains on the temporary stack
     abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
+    abi::emit_pop_reg(ctx.emitter, "rcx");                                      // the flags word
     abi::emit_call_label(ctx.emitter, helper);
     Ok(())
 }

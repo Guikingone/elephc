@@ -68,9 +68,21 @@ fn emit_stream_select_aarch64(emitter: &mut Emitter) {
     emitter.instruction("str x4, [sp, #2176]");                                  // save the timeout microseconds
 
     // -- count total fds = read_len + write_len + except_len --
+    emitter.instruction("mov x9, #0");                                           // a null set is an EMPTY set, not a fault
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "x0", "x12", "__rt_stream_select_len_r_done");
     emitter.instruction("ldr x9, [x0]");                                         // read array length
+    emitter.label("__rt_stream_select_len_r_done");
+    emitter.instruction("mov x10, #0");
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "x1", "x12", "__rt_stream_select_len_w_done");
     emitter.instruction("ldr x10, [x1]");                                        // write array length
+    emitter.label("__rt_stream_select_len_w_done");
+    emitter.instruction("mov x11, #0");
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "x2", "x12", "__rt_stream_select_len_e_done");
     emitter.instruction("ldr x11, [x2]");                                        // except array length
+    emitter.label("__rt_stream_select_len_e_done");
     emitter.instruction("str x9, [sp, #2072]");                                   // save original read length
     emitter.instruction("str x10, [sp, #2080]");                                  // save original write length
     emitter.instruction("str x11, [sp, #2088]");                                  // save original except length
@@ -142,6 +154,8 @@ fn emit_build_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64, 
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
     emitter.instruction(&format!("ldr x10, [sp, #{}]", len_off));               // load the section length
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "x9", "x4", &done_l);                                          // a null set has no header to read
     emitter.instruction("ldr x4, [x9, #-8]");                                    // load the packed indexed-array kind word
     emitter.instruction("lsr x4, x4, #8");                                       // shift the value_type tag into the low byte
     emitter.instruction("and x4, x4, #0x7f");                                     // isolate the value_type tag
@@ -228,9 +242,12 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
     let after_unbox_l = format!("__rt_stream_select_keep_{}_after_unbox", suffix);
     let cast_done_l = format!("__rt_stream_select_keep_{}_cast_done", suffix);
     let done_l = format!("__rt_stream_select_keep_{}_done", suffix);
+    let skip_l = format!("__rt_stream_select_keep_{}_skip", suffix);
 
     emitter.instruction(&format!("ldr x9, [sp, #{}]", arr_off));                // load the resource array pointer
     emitter.instruction(&format!("ldr x10, [sp, #{}]", len_off));               // load the original section length
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "x9", "x4", &skip_l);                                          // a null set has no header to read
     emitter.instruction("ldr x4, [x9, #-8]");                                    // load the packed indexed-array kind word
     emitter.instruction("lsr x4, x4, #8");                                       // shift the value_type tag into the low byte
     emitter.instruction("and x4, x4, #0x7f");                                     // isolate the value_type tag
@@ -331,6 +348,7 @@ fn emit_compact_pollfd_aarch64(emitter: &mut Emitter, arr_off: i64, len_off: i64
     emitter.instruction(&format!("b {}", loop_l));                              // continue compacting the array
     emitter.label(&done_l);
     emitter.instruction("str x13, [x9]");                                        // store the compacted array length
+    emitter.label(&skip_l);                                                      // a null set has no length to store back
 }
 
 /// Computes the poll timeout in milliseconds and stores it at `[sp, #2112]`.
@@ -399,9 +417,21 @@ fn emit_stream_select_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 2184], r8");                        // save the timeout microseconds
 
     // -- count total fds = read_len + write_len + except_len --
+    emitter.instruction("xor r9, r9");                                           // a null set is an EMPTY set, not a fault
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "rdi", "rax", "__rt_stream_select_len_r_done_x");
     emitter.instruction("mov r9, QWORD PTR [rdi]");                              // read array length
+    emitter.label("__rt_stream_select_len_r_done_x");
+    emitter.instruction("xor r10, r10");
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "rsi", "rax", "__rt_stream_select_len_w_done_x");
     emitter.instruction("mov r10, QWORD PTR [rsi]");                             // write array length
+    emitter.label("__rt_stream_select_len_w_done_x");
+    emitter.instruction("xor r11, r11");
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "rdx", "rax", "__rt_stream_select_len_e_done_x");
     emitter.instruction("mov r11, QWORD PTR [rdx]");                             // except array length
+    emitter.label("__rt_stream_select_len_e_done_x");
     emitter.instruction("mov QWORD PTR [rbp - 2072], r9");                        // save original read length
     emitter.instruction("mov QWORD PTR [rbp - 2080], r10");                      // save original write length
     emitter.instruction("mov QWORD PTR [rbp - 2088], r11");                      // save original except length
@@ -467,6 +497,8 @@ fn emit_build_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, even
 
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));     // load the resource array pointer
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", len_off));    // load the section length
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "r11", "r12", &done_l);                                        // a null set has no header to read
     emitter.instruction("mov r12, QWORD PTR [r11 - 8]");                         // load the packed indexed-array kind word
     emitter.instruction("shr r12, 8");                                          // shift the value_type tag into the low byte
     emitter.instruction("and r12, 0x7f");                                       // isolate the value_type tag
@@ -547,9 +579,12 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
     let after_unbox_l = format!("__rt_stream_select_keep_{}_after_unbox_x", suffix);
     let cast_done_l = format!("__rt_stream_select_keep_{}_cast_done_x", suffix);
     let done_l = format!("__rt_stream_select_keep_{}_done_x", suffix);
+    let skip_l = format!("__rt_stream_select_keep_{}_skip_x", suffix);
 
     emitter.instruction(&format!("mov r11, QWORD PTR [rbp - {}]", arr_off));     // load the resource array pointer
     emitter.instruction(&format!("mov rdi, QWORD PTR [rbp - {}]", len_off));    // load the original section length
+    crate::codegen_support::sentinels::emit_branch_if_null_container(
+        emitter, "r11", "r12", &skip_l);                                        // a null set has no header to read
     emitter.instruction("mov r12, QWORD PTR [r11 - 8]");                         // load the packed indexed-array kind word
     emitter.instruction("shr r12, 8");                                          // shift the value_type tag into the low byte
     emitter.instruction("and r12, 0x7f");                                       // isolate the value_type tag
@@ -644,6 +679,7 @@ fn emit_compact_pollfd_x86(emitter: &mut Emitter, arr_off: i64, len_off: i64, su
     emitter.instruction(&format!("jmp {}", loop_l));                             // continue compacting the array
     emitter.label(&done_l);
     emitter.instruction("mov QWORD PTR [r11], r9");                             // store the compacted array length
+    emitter.label(&skip_l);                                                     // a null set has no length to store back
 }
 
 /// Computes the poll timeout in milliseconds (x86_64) and stores it at `[rbp-2112]`.

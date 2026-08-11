@@ -6185,6 +6185,46 @@ fclose($m);
     assert_eq!(out, "'H','o','o','H','','',bool(true)\n");
 }
 
+/// Verifies `stream_select()` accepts `null` for the sets a caller does not watch.
+///
+/// This is the call shape php.net documents — `stream_select($read, $write, $except, 0)` with
+/// the unused sets passed as null — and it killed the process with SIGSEGV. Passing empty
+/// arrays worked, which is why no existing test caught it.
+///
+/// A null set is not a null POINTER: elephc's tagged null is an in-band sentinel, so the
+/// guards have to go through `emit_branch_if_null_container` rather than test for zero. Three
+/// places dereferenced it per set — the length read, the header read, and the compacted
+/// length written BACK after the loop, which a guard branching to the loop's own exit label
+/// still ran into.
+#[test]
+fn test_stream_select_accepts_null_for_the_unwatched_sets() {
+    let out = compile_and_run(
+        r#"<?php
+$srv = stream_socket_server("tcp://127.0.0.1:0");
+$addr = stream_socket_get_name($srv, false);
+$cli = stream_socket_client("tcp://" . $addr);
+$conn = stream_socket_accept($srv, 5);
+
+$r = [$conn];
+$w = null;
+$x = null;
+echo "ready=", var_export(stream_select($r, $w, $x, 0, 1000), true), "|";
+
+fwrite($cli, "hi");
+$r2 = [$conn];
+$w2 = null;
+$x2 = null;
+echo "after write=", var_export(stream_select($r2, $w2, $x2, 1, 0), true), "|";
+echo "kept=", count($r2);
+
+fclose($conn);
+fclose($cli);
+fclose($srv);
+"#,
+    );
+    assert_eq!(out, "ready=0|after write=1|kept=1");
+}
+
 /// Verifies an out-of-range offset on a boxed string warns, and that the silent readers stay
 /// silent AND still see the offset as absent.
 ///
