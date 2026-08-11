@@ -27,12 +27,6 @@ Finds the numeric position of the last occurrence of a substring.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strrpos` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strrpos.md).

@@ -26,12 +26,6 @@ Binary safe string comparison. Returns negative, zero, or positive.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strcmp` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strcmp.md).

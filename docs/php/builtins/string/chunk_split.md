@@ -27,12 +27,6 @@ Splits a string into fixed-length chunks separated by a given string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `chunk_split` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/chunk_split.md).

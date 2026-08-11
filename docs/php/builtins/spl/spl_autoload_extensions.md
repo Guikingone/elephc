@@ -25,12 +25,6 @@ Register and return default file extensions for spl_autoload.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `spl_autoload_extensions` is implemented in the compiler, see [the internals page](../../../internals/builtins/spl/spl_autoload_extensions.md).

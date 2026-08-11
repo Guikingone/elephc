@@ -26,12 +26,6 @@ Find highest value.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `max` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/max.md).

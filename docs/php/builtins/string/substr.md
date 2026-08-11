@@ -27,12 +27,6 @@ Returns a portion of a string specified by the offset and length.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `substr` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/substr.md).

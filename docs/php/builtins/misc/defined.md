@@ -25,12 +25,6 @@ Checks whether a given named constant exists.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `defined` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/defined.md).

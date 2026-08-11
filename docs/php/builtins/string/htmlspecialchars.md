@@ -27,12 +27,6 @@ Converts the HTML special characters in a string into their entities.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `htmlspecialchars` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/htmlspecialchars.md).

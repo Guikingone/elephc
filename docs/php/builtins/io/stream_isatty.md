@@ -25,12 +25,6 @@ Checks if a stream is a TTY.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_isatty` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_isatty.md).

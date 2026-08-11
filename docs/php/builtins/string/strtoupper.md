@@ -25,12 +25,6 @@ Converts a string to uppercase.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strtoupper` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strtoupper.md).

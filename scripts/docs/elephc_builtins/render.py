@@ -26,35 +26,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from registry import AREAS, slug  # noqa: E402
 
 
-USER_TEMPLATE = """---
+USER_FRONTMATTER_TEMPLATE = """---
 title: "{name}()"
 description: "{short_description}"
 sidebar:
   order: {order}
----
-
-## {name}()
-
-```php
-{signature}
-```
-
-{description}
-
-{parameters_section}
-
-{return_section}
-
-{availability_section}
-
-{examples_section}
-
-{notes_section}
-
-{see_also_section}
-
-{internals_link}
-"""
+---"""
 
 INTERNALS_TEMPLATE = """---
 title: "{name}() — internals"
@@ -166,9 +143,7 @@ def _return_section(b: dict) -> str:
 
 def _examples_section(b: dict) -> str:
     if not b.get("examples"):
-        return (
-            "_No examples yet — check `examples/` and `showcases/` for usage patterns._\n"
-        )
+        return "_No examples yet — check `examples/` and `showcases/` for usage patterns._"
     blocks = ["**Examples**:"]
     for ex in b["examples"]:
         blocks.append(ex)
@@ -428,36 +403,43 @@ def _internals_link(b: dict) -> str:
     if name.startswith("__elephc_"):
         target = f"../../../internals/builtins/_internal/{slug(name)}.md"
     return (
-        f"\n## Internals\n\n"
+        f"## Internals\n\n"
         f"For how `{name}` is implemented in the compiler, see "
-        f"[the internals page]({target}).\n"
+        f"[the internals page]({target})."
     )
+
+
+def _join_sections(*sections: str) -> str:
+    """Join non-empty page sections with one canonical blank line."""
+    return "\n\n".join(section.strip() for section in sections if section.strip()) + "\n"
 
 
 def render_user(b: dict, order: int, repo_root: Path) -> str:
     _ = repo_root  # reserved for future cross-repo links
     area_lower = b['area'].lower()
     article = "an" if area_lower[0] in "aeiou" else "a"
-    rendered = USER_TEMPLATE.format(
+    frontmatter = USER_FRONTMATTER_TEMPLATE.format(
         name=b["name"],
         short_description=_short_description(b).replace('"', '\\"'),
-        area=b["area"],
         order=order,
-        signature=_signature_line(b),
-        description=b.get("description")
-        or f"`{b['name']}()` is {article} {area_lower} builtin supported by Elephc. "
-           "Behavior matches the PHP manual unless noted below.",
-        parameters_section=_parameters_section(b),
-        return_section=_return_section(b),
-        availability_section=_availability_section(b),
-        examples_section=_examples_section(b),
-        notes_section=_notes_section(b),
-        see_also_section=_see_also_section(b),
-        internals_link=_internals_link(b),
     )
-    # Empty optional sections can stack trailing blank lines. Keep generated
-    # pages canonical with exactly one final newline.
-    return rendered.rstrip() + "\n"
+    description = b.get("description") or (
+        f"`{b['name']}()` is {article} {area_lower} builtin supported by Elephc. "
+        "Behavior matches the PHP manual unless noted below."
+    )
+    return _join_sections(
+        frontmatter,
+        f"## {b['name']}()",
+        f"```php\n{_signature_line(b)}\n```",
+        description,
+        _parameters_section(b),
+        _return_section(b),
+        _availability_section(b),
+        _examples_section(b),
+        _notes_section(b),
+        _see_also_section(b),
+        _internals_link(b),
+    )
 
 
 def render_internals(b: dict, order: int, repo_root: Path) -> str:

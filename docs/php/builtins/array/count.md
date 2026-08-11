@@ -26,12 +26,6 @@ Counts all elements in an array or Countable object.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `count` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/count.md).

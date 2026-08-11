@@ -9,6 +9,7 @@ Checks:
 4. Per-area indexes only contain builtins that belong to that area.
 5. No stray top-level files (everything should be inside an area folder).
 6. Backend availability and all 14 non-registry contract routes remain coherent.
+7. User-facing pages contain no runs of multiple blank lines.
 
 Exits 0 on success, 1 on any failure.
 """
@@ -33,6 +34,7 @@ INTERNALS_DIR = REPO / "docs" / "internals" / "builtins"
 #   [text](path/)           — dir is OK, ignore
 #   [text](https://...)     — external, skip
 LINK_RE = re.compile(r"\[([^\]]+)\]\(([^)]+)\)")
+EXCESSIVE_BLANK_LINES_RE = re.compile(r"\n(?:[ \t]*\n){2,}")
 
 
 def slug(name: str) -> str:
@@ -64,6 +66,18 @@ def _check_links(path: Path, errors: list[str]) -> None:
                 f"broken link in {path.relative_to(REPO)}: "
                 f"[{label}]({target}) → {abs_target}"
             )
+
+
+def _check_page_whitespace(path: Path, errors: list[str]) -> None:
+    """Reject more than one consecutive blank line in a generated user page."""
+    text = path.read_text(encoding="utf-8")
+    match = EXCESSIVE_BLANK_LINES_RE.search(text)
+    if match is None:
+        return
+    line = text.count("\n", 0, match.start()) + 1
+    errors.append(
+        f"excessive blank lines in {path.relative_to(REPO)} near line {line}"
+    )
 
 
 def _check_backend_contracts(
@@ -130,6 +144,7 @@ def main() -> int:
             errors.append(f"missing user page for {b['name']}: expected {path}")
         else:
             stats["user_pages"] += 1
+            _check_page_whitespace(path, errors)
 
     # 1b. The master index page exists at docs/php/builtins.md
     if not MASTER_INDEX.exists():

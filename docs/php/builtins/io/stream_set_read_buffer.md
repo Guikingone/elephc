@@ -26,12 +26,6 @@ Sets the read file buffering on a stream.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_set_read_buffer` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_set_read_buffer.md).

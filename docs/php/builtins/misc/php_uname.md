@@ -25,12 +25,6 @@ Returns information about the operating system PHP is running on.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `php_uname` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/php_uname.md).

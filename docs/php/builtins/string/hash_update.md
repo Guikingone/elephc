@@ -26,12 +26,6 @@ Feeds data into an incremental hashing context. Provided by the compiler-injecte
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `hash_update` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_update.md).

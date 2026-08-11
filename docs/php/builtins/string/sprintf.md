@@ -26,12 +26,6 @@ Returns a formatted string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `sprintf` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/sprintf.md).

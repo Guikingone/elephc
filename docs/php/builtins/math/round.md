@@ -27,12 +27,6 @@ Rounds a float.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `round` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/round.md).

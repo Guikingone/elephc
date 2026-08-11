@@ -28,12 +28,6 @@ Sends a message to a socket, whether it is connected or not.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stream_socket_sendto` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/stream_socket_sendto.md).

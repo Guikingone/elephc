@@ -25,12 +25,6 @@ Rounds a number down to the nearest integer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `floor` is implemented in the compiler, see [the internals page](../../../internals/builtins/math/floor.md).

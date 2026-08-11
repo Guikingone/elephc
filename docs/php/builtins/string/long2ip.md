@@ -25,12 +25,6 @@ Converts an IPv4 address from long integer to dotted string notation.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `long2ip` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/long2ip.md).

@@ -25,12 +25,6 @@ Sorts an array in descending order and maintains index association.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `arsort` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/arsort.md).

@@ -26,12 +26,6 @@ Creates a symbolic link.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `symlink` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/symlink.md).

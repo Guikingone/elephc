@@ -25,12 +25,6 @@ Decodes a hexadecimal string back into its binary representation.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `hex2bin` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hex2bin.md).

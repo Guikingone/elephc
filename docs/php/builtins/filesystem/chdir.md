@@ -25,12 +25,6 @@ Changes the current directory.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `chdir` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/chdir.md).

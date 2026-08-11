@@ -25,12 +25,6 @@ Encodes a string with the MIME quoted-printable transfer encoding.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `quoted_printable_encode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/quoted_printable_encode.md).

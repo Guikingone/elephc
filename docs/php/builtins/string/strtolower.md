@@ -25,12 +25,6 @@ Converts a string to lowercase.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strtolower` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strtolower.md).

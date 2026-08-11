@@ -25,12 +25,6 @@ Returns a null raw pointer.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ptr_null` is implemented in the compiler, see [the internals page](../../../internals/builtins/pointer/ptr_null.md).

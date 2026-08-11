@@ -25,12 +25,6 @@ Returns the type of a resource.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `get_resource_type` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/get_resource_type.md).

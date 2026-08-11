@@ -25,12 +25,6 @@ Returns an array with the names of all loaded modules.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `get_loaded_extensions` is implemented in the compiler, see [the internals page](../../../internals/builtins/misc/get_loaded_extensions.md).

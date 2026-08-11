@@ -25,12 +25,6 @@ Returns a one-character string from the given byte code point.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `chr` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/chr.md).

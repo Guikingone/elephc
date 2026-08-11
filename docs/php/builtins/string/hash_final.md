@@ -26,12 +26,6 @@ Finalizes an incremental hashing context and returns the digest (hex, or raw byt
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `hash_final` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/hash_final.md).

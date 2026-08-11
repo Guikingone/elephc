@@ -27,12 +27,6 @@ Translates bytes pairwise, or applies longest-match-first replacement pairs.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `strtr` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/strtr.md).

@@ -25,12 +25,6 @@ Tells whether the filename is readable.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `is_readable` is implemented in the compiler, see [the internals page](../../../internals/builtins/filesystem/is_readable.md).

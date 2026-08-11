@@ -25,12 +25,6 @@ Returns an integer identifier for the given resource.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `get_resource_id` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/get_resource_id.md).

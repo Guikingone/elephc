@@ -26,12 +26,6 @@ Returns an array with the elements in reverse order.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `array_reverse` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/array_reverse.md).

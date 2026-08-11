@@ -26,12 +26,6 @@ Parses a URL and returns its components.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `parse_url` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/parse_url.md).

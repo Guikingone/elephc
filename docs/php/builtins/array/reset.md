@@ -25,12 +25,6 @@ Rewinds the array's internal pointer to the first element and returns it.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `reset` is implemented in the compiler, see [the internals page](../../../internals/builtins/array/reset.md).

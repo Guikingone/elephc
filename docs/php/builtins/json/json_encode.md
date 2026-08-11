@@ -27,12 +27,6 @@ Returns the JSON representation of a value.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `json_encode` is implemented in the compiler, see [the internals page](../../../internals/builtins/json/json_encode.md).

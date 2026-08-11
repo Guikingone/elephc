@@ -25,12 +25,6 @@ Checks whether a variable is iterable.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `is_iterable` is implemented in the compiler, see [the internals page](../../../internals/builtins/type/is_iterable.md).

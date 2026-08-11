@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sys
+import tempfile
 import unittest
 from collections import Counter
 from pathlib import Path
@@ -15,6 +17,9 @@ sys.path.insert(0, str(HERE))
 import extract  # noqa: E402
 import render  # noqa: E402
 
+sys.path.insert(0, str(HERE.parent))
+import audit_builtins  # noqa: E402
+
 
 class ContractPipelineTests(unittest.TestCase):
     """Exercise exceptional support routes and presentation validation."""
@@ -24,6 +29,12 @@ class ContractPipelineTests(unittest.TestCase):
         """Load the prebuilt exporter once for all contract assertions."""
         cls.records = extract.run_gen_builtins(REPO)
         cls.by_name = {record["name"]: record for record in cls.records}
+        registry = json.loads(
+            (REPO / "scripts" / "docs" / "builtin_registry.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        cls.render_by_name = {record["name"]: record for record in registry}
 
     def test_all_non_registry_contract_routes_are_exported(self) -> None:
         """Keep the six constructs, four preludes, and four eval-only routes explicit."""
@@ -73,6 +84,28 @@ class ContractPipelineTests(unittest.TestCase):
         self.assertIn("compiler-injected hash prelude", rendered)
         self.assertIn('hash_init(string $algo, int $flags = 0, string $key = "")', rendered)
         self.assertNotIn("Compiled (AOT)**: not available", rendered)
+
+    def test_user_renderer_owns_section_spacing_once(self) -> None:
+        """Join empty optional sections without accumulating blank-line runs."""
+        builtin = {
+            **self.render_by_name["strlen"],
+            "examples": [],
+            "notes": [],
+            "see_also": [],
+        }
+        rendered = render.render_user(builtin, 1, REPO)
+        self.assertNotRegex(rendered, r"\n(?:[ \t]*\n){2,}")
+        self.assertIn("usage patterns._\n\n## Internals", rendered)
+
+    def test_docs_audit_rejects_excessive_blank_lines(self) -> None:
+        """Keep the generated-tree audit sensitive to whitespace regressions."""
+        with tempfile.TemporaryDirectory(dir=REPO) as tmp:
+            page = Path(tmp) / "builtin.md"
+            page.write_text("first\n\n\nsecond\n", encoding="utf-8")
+            errors: list[str] = []
+            audit_builtins._check_page_whitespace(page, errors)
+        self.assertEqual(len(errors), 1)
+        self.assertIn("excessive blank lines", errors[0])
 
 
 if __name__ == "__main__":

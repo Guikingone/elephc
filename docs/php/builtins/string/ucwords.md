@@ -26,12 +26,6 @@ Uppercases the first character of each word in a string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ucwords` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/ucwords.md).

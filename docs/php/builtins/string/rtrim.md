@@ -26,12 +26,6 @@ Strips whitespace (or other characters) from the end of a string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `rtrim` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/rtrim.md).

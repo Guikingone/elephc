@@ -28,12 +28,6 @@ Formats a number with grouped thousands.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `number_format` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/number_format.md).

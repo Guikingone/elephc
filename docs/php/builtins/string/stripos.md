@@ -27,12 +27,6 @@ Finds the numeric position of the first case-insensitive occurrence of a substri
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `stripos` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/stripos.md).

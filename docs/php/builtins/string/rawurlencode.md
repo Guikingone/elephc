@@ -25,12 +25,6 @@ URL-encodes a string using RFC 3986 percent-encoding (no '+' for spaces).
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `rawurlencode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/rawurlencode.md).

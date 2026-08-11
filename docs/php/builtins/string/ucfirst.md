@@ -25,12 +25,6 @@ Uppercases the first character of a string.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `ucfirst` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/ucfirst.md).

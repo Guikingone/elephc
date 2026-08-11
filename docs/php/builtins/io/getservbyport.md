@@ -26,12 +26,6 @@ Gets the Internet service that corresponds to a port and protocol.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `getservbyport` is implemented in the compiler, see [the internals page](../../../internals/builtins/io/getservbyport.md).

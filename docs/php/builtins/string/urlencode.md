@@ -25,12 +25,6 @@ URL-encodes a string using application/x-www-form-urlencoded rules.
 
 _No examples yet — check `examples/` and `showcases/` for usage patterns._
 
-
-
-
-
-
-
 ## Internals
 
 For how `urlencode` is implemented in the compiler, see [the internals page](../../../internals/builtins/string/urlencode.md).
