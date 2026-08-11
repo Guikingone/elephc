@@ -261,17 +261,18 @@ fn emit_aarch64_zero_arg_boxed_int_case(emitter: &mut Emitter, _id: RuntimeBuilt
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed integer result
 }
 
-/// Emits the AArch64 nullable `ob_get_length` result arm.
+/// Emits the AArch64 length-or-false `ob_get_length` result arm.
 fn emit_aarch64_ob_length_case(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_ob_get_length");
     emitter.instruction("cbnz x21, __elephc_runtime_builtin_v1_unsupported");   // require zero PHP arguments
     emitter.bl_c("__elephc_eval_ob_length");
-    emitter.instruction("tbnz x0, #63, __elephc_runtime_builtin_v1_ob_length_null"); // negative sentinel means no active buffer
+    emitter.instruction("tbnz x0, #63, __elephc_runtime_builtin_v1_ob_length_false"); // negative sentinel means no active buffer
     emitter.bl_c("__elephc_eval_value_int");
     emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer the boxed length
-    emitter.label("__elephc_runtime_builtin_v1_ob_length_null");
-    emitter.bl_c("__elephc_eval_value_null");
-    emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer boxed PHP null
+    emitter.label("__elephc_runtime_builtin_v1_ob_length_false");
+    emitter.instruction("mov x0, #0");                                          // materialize raw false for the boolean boxer
+    emitter.bl_c("__elephc_eval_value_bool");
+    emitter.instruction("b __elephc_runtime_builtin_v1_result");                // transfer boxed PHP false
 }
 
 /// Emits one AArch64 zero-argument boolean result arm.
@@ -376,20 +377,21 @@ fn emit_x86_64_zero_arg_boxed_int_case(emitter: &mut Emitter, _id: RuntimeBuilti
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed integer result
 }
 
-/// Emits the x86_64 nullable `ob_get_length` result arm.
+/// Emits the x86_64 length-or-false `ob_get_length` result arm.
 fn emit_x86_64_ob_length_case(emitter: &mut Emitter) {
     emitter.label("__elephc_runtime_builtin_v1_ob_get_length_x86");
     emitter.instruction("test r13, r13");                                       // require zero PHP arguments
     emitter.instruction("jnz __elephc_runtime_builtin_v1_unsupported_x86");     // reject unsupported arity
     emitter.bl_c("__elephc_eval_ob_length");
     emitter.instruction("test rax, rax");                                       // negative sentinel means no active buffer
-    emitter.instruction("js __elephc_runtime_builtin_v1_ob_length_null_x86");   // select boxed PHP null
+    emitter.instruction("js __elephc_runtime_builtin_v1_ob_length_false_x86");  // select boxed PHP false
     emitter.instruction("mov rdi, rax");                                        // pass the byte length to the integer boxer
     emitter.bl_c("__elephc_eval_value_int");
     emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer the boxed length
-    emitter.label("__elephc_runtime_builtin_v1_ob_length_null_x86");
-    emitter.bl_c("__elephc_eval_value_null");
-    emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer boxed PHP null
+    emitter.label("__elephc_runtime_builtin_v1_ob_length_false_x86");
+    emitter.instruction("xor edi, edi");                                        // materialize raw false for the boolean boxer
+    emitter.bl_c("__elephc_eval_value_bool");
+    emitter.instruction("jmp __elephc_runtime_builtin_v1_result_x86");          // transfer boxed PHP false
 }
 
 /// Emits one x86_64 zero-argument boolean result arm.
@@ -454,6 +456,49 @@ mod tests {
             "runtime_builtin_v1_ob_get_level_x86",
         ] {
             assert!(asm.contains(label), "missing {label}:\n{asm}");
+        }
+    }
+
+    /// Verifies the generated runtime preserves PHP's false sentinel for
+    /// `ob_get_length()` when no output buffer is active on both architectures.
+    #[test]
+    fn ob_get_length_boxes_false_without_an_active_buffer() {
+        for (target, label, next_label, zero_instruction) in [
+            (
+                Target::new(Platform::Linux, Arch::AArch64),
+                "__elephc_runtime_builtin_v1_ob_length_false:\n",
+                "__elephc_runtime_builtin_v1_result:\n",
+                "mov x0, #0",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "__elephc_runtime_builtin_v1_ob_length_false_x86:\n",
+                "__elephc_runtime_builtin_v1_result_x86:\n",
+                "xor edi, edi",
+            ),
+        ] {
+            let asm = emit_for(target);
+            let false_arm = asm
+                .split(label)
+                .nth(1)
+                .unwrap_or_else(|| panic!("missing false arm for {target:?}:\n{asm}"))
+                .split(next_label)
+                .next()
+                .expect("false arm precedes the shared result arm");
+            let bool_boxer = target.extern_symbol("__elephc_eval_value_bool");
+            let null_boxer = target.extern_symbol("__elephc_eval_value_null");
+            assert!(
+                false_arm.contains(zero_instruction),
+                "false arm must materialize zero for {target:?}:\n{false_arm}"
+            );
+            assert!(
+                false_arm.contains(&bool_boxer),
+                "false arm must use the boolean boxer for {target:?}:\n{false_arm}"
+            );
+            assert!(
+                !false_arm.contains(&null_boxer),
+                "false arm must not use the null boxer for {target:?}:\n{false_arm}"
+            );
         }
     }
 }

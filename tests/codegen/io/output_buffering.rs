@@ -97,6 +97,23 @@ var_dump($len);
     assert_eq!(out, "bool(false)\nint(5)\n");
 }
 
+/// Verifies eval's typed runtime bridge preserves the same length-or-false
+/// result as the AOT `ob_get_length()` lowering.
+#[test]
+fn test_eval_ob_get_length_and_false_case() {
+    let out = compile_and_run(
+        r#"<?php
+eval('var_dump(ob_get_length());
+ob_start();
+echo "12345";
+$len = ob_get_length();
+ob_end_clean();
+var_dump($len);');
+"#,
+    );
+    assert_eq!(out, "bool(false)\nint(5)\n");
+}
+
 /// Verifies the no-buffer failure modes return false with PHP's notices
 /// (`ob_get_contents`/`ob_get_clean` stay silent, the rest raise E_NOTICE).
 #[test]

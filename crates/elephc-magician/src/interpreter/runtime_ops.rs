@@ -63,7 +63,7 @@ pub trait RuntimeValueOps {
             }
             (RuntimeBuiltinId::ObGetLength, []) => match self.ob_length()? {
                 Some(length) => self.int(length)?,
-                None => self.null()?,
+                None => self.bool_value(false)?,
             },
             (RuntimeBuiltinId::ObClean, []) => {
                 let cleaned = self.ob_clean()?;
