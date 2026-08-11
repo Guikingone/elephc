@@ -500,6 +500,56 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 }
 
 /// Lowers `fputcsv(stream, fields, separator?, enclosure?, escape?, eol?)` for string arrays,
+/// php-src's wording when `$fields` is not an array — the only other thing an
+/// `array<string>|false` value can be at run time.
+const FPUTCSV_FIELDS_NOT_ARRAY_MESSAGE: &str =
+    "fputcsv(): Argument #2 ($fields) must be of type array, false given";
+
+/// Reports whether a declared type is a boxed union whose only non-`false` member is a
+/// string array — the shape `fgetcsv()` returns.
+fn boxed_string_array_union(ty: &PhpType) -> bool {
+    let PhpType::Union(members) = ty else {
+        return false;
+    };
+    let mut saw_string_array = false;
+    for member in members {
+        match member {
+            PhpType::False => {}
+            PhpType::Array(element) if element.codegen_repr() == PhpType::Str => {
+                saw_string_array = true;
+            }
+            _ => return false,
+        }
+    }
+    saw_string_array
+}
+
+/// Replaces a boxed `array<string>|false` in the result register with its array pointer.
+///
+/// A value that is `false` at run time has no array to write, which PHP reports as a
+/// `TypeError` rather than writing an empty row.
+fn emit_unwrap_boxed_string_array(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
+    let ok = ctx.next_label(&format!("{}_fields_array", label_prefix));
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed value's runtime tag
+            ctx.emitter.instruction("cmp x9, #4");                              // tag 4 = indexed array
+            ctx.emitter.instruction(&format!("b.eq {}", ok));
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r10, QWORD PTR [rax]");                // the boxed value's runtime tag
+            ctx.emitter.instruction("cmp r10, 4");                              // tag 4 = indexed array
+            ctx.emitter.instruction(&format!("je {}", ok));
+        }
+    }
+    super::super::super::exceptions::emit_type_error(ctx, FPUTCSV_FIELDS_NOT_ARRAY_MESSAGE);
+    ctx.emitter.label(&ok);
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => ctx.emitter.instruction("ldr x0, [x0, #8]"),           // the array the box carries
+        Arch::X86_64 => ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]"), // the array the box carries
+    }
+}
+
 /// passing separator/enclosure/escape as a packed `csv_opts` word and eol as (ptr, len).
 pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fputcsv", 2, 6)?;
@@ -509,7 +559,17 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 
     load_stream_fd_to_result(ctx, stream, "fputcsv")?;
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save stream fd on stack
-    require_string_array(ctx.load_value_to_result(fields)?.codegen_repr(), "fputcsv fields")?;
+    // `fgetcsv()` answers `array<string>|false`, which is stored boxed. Its rows are exactly
+    // what gets written back — `while (($row = fgetcsv($in)) !== false) fputcsv($out, $row);`
+    // is the whole point of the pair — so the boxed form is unwrapped here rather than
+    // rejected. The union guarantees the payload IS a string array, so the existing writer
+    // works on it unchanged once the box is off.
+    if boxed_string_array_union(&ctx.raw_value_php_type(fields)?) {
+        ctx.load_value_to_result(fields)?;
+        emit_unwrap_boxed_string_array(ctx, "fputcsv");
+    } else {
+        require_string_array(ctx.load_value_to_result(fields)?.codegen_repr(), "fputcsv fields")?;
+    }
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save fields array pointer
 
     // -- extract first byte of separator / enclosure / escape (or default) --

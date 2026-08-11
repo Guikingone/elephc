@@ -647,6 +647,60 @@ unlink("csv_eof.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a row read by `fgetcsv()` can be written straight back by `fputcsv()`.
+///
+/// This is the pair's whole point, and it is the shape that broke when `fgetcsv()` started
+/// reporting `array<string>|false`: the row is stored boxed, and the writer accepted only
+/// an unboxed string array, so the read-transform-write pipeline stopped COMPILING. The
+/// union is what makes unwrapping safe — it guarantees the payload is a string array.
+#[test]
+fn test_fgetcsv_row_can_be_written_back_by_fputcsv() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("pipe_in.csv", "1,x\n2,\"y,z\"\n");
+$in = fopen("pipe_in.csv", "r");
+$out = fopen("pipe_out.csv", "w");
+while (($rec = fgetcsv($in, 0, ",", "\"", "\\")) !== false) {
+    fputcsv($out, $rec, ",", "\"", "\\");
+}
+fclose($in);
+fclose($out);
+echo file_get_contents("pipe_out.csv");
+unlink("pipe_in.csv");
+unlink("pipe_out.csv");
+"#,
+    );
+    assert_eq!(out, "1,x\n2,\"y,z\"\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies writing an end-of-input `fgetcsv()` result raises php-src's own `TypeError`.
+#[test]
+fn test_fputcsv_rejects_a_false_fields_argument() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("empty_in.csv", "");
+$in = fopen("empty_in.csv", "r");
+$out = fopen("t_out.csv", "w");
+$rec = fgetcsv($in, 0, ",", "\"", "\\");
+try {
+    fputcsv($out, $rec, ",", "\"", "\\");
+} catch (TypeError $e) {
+    echo $e->getMessage();
+}
+fclose($in);
+fclose($out);
+unlink("empty_in.csv");
+unlink("t_out.csv");
+"#,
+    );
+    assert_eq!(
+        out,
+        "fputcsv(): Argument #2 ($fields) must be of type array, false given"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a quoted CSV field may span newlines, as one field of one record.
 ///
 /// The reader took one line at a time, so `1,"line one\nline two"` came back as two

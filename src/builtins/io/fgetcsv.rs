@@ -36,7 +36,13 @@ builtin! {
     php_manual: "function.fgetcsv",
 }
 
-/// Validates the stream argument is a stream resource and returns `Mixed` for `array|false`.
+/// Validates the stream argument is a stream resource and returns `array<string>|false`.
+///
+/// The union is spelled out rather than collapsed to `Mixed` so that `!== false` narrows it
+/// back to the array: `while (($row = fgetcsv($h)) !== false) { fputcsv($out, $row); }` has to
+/// keep compiling, and an array-taking builtin cannot accept a bare `Mixed`. `False` is the
+/// exact member the narrowing removes — `Bool` would not match. Storage is unchanged: a union
+/// uses the same boxed payload as `Mixed`.
 fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
     crate::types::checker::builtins::io::common::ensure_stream_resource(
         cx.checker,
@@ -44,5 +50,8 @@ fn check(cx: &mut BuiltinCheckCtx) -> Result<PhpType, CompileError> {
         &cx.args[0],
         cx.env,
     )?;
-    Ok(PhpType::Mixed)
+    Ok(PhpType::Union(vec![
+        PhpType::Array(Box::new(PhpType::Str)),
+        PhpType::False,
+    ]))
 }
