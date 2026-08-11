@@ -3564,6 +3564,36 @@ fclose($srv);
     assert_eq!(out, "true|0|''|0|''");
 }
 
+/// Verifies a server can rebind a port its own previous run has left in TIME_WAIT.
+///
+/// php-src sets `SO_REUSEADDR` on every socket it binds; elephc set it on the IPv6 path
+/// only, so an IPv4 server that restarted answered `false` for roughly a minute. That is
+/// the ordinary lifecycle of any server — stop it, change something, start it again — and
+/// it is also why `test_stream_set_timeout_on_socket` failed four runs out of five when
+/// run back to back, which is what surfaced this.
+///
+/// Binding, connecting and closing inside one program leaves the port in TIME_WAIT for the
+/// second bind, which is the state SO_REUSEADDR exists for. A LIVE listener is a different
+/// case and must still be refused — `test_stream_socket_server_reports_a_bind_failure_...`
+/// above pins that, and the two together say SO_REUSEADDR without saying SO_REUSEPORT.
+#[test]
+fn test_stream_socket_server_rebinds_a_port_left_in_time_wait() {
+    let out = compile_and_run(
+        r#"<?php
+$srv = stream_socket_server("tcp://127.0.0.1:0", $e1, $s1);
+$addr = stream_socket_get_name($srv, false);
+$cli = stream_socket_client("tcp://" . $addr);
+$conn = stream_socket_accept($srv);
+fclose($conn);
+fclose($cli);
+fclose($srv);
+$again = @stream_socket_server("tcp://" . $addr, $e2, $s2);
+echo var_export($again !== false, true), "|", $s2;
+"#,
+    );
+    assert_eq!(out, "true|");
+}
+
 /// Verifies `stream_socket_server()` describes a bind failure the way php-src does.
 ///
 /// php-src is measurably the odd one out here: it leaves `&$error_code` at `0` for every bind

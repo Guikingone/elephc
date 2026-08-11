@@ -139,6 +139,17 @@ impl Platform {
         }
     }
 
+    /// `SO_REUSEADDR` setsockopt option name. Differs between BSD (macOS) and
+    /// Linux: macOS uses 0x0004, Linux uses 2. php-src sets this on every socket
+    /// it binds, so a server that restarts can rebind a port still in TIME_WAIT.
+    pub fn so_reuseaddr(&self) -> u32 {
+        match self {
+            Platform::MacOS => 0x0004,
+            Platform::Linux => 2,
+            Platform::Windows => panic!("Windows target is not yet supported (see issue #379)"),
+        }
+    }
+
     /// `SO_BROADCAST` setsockopt option name. Differs between BSD (macOS) and
     /// Linux: macOS uses 0x0020, Linux uses 6. Enables sending to broadcast
     /// addresses on a UDP socket.
