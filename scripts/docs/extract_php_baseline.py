@@ -19,13 +19,27 @@ from pathlib import Path
 
 OUTPUT = Path(__file__).resolve().parent / "php_baseline.json"
 
-# Extensions loaded on a contributor's machine that are NOT bundled with
-# php-src (PECL / third-party / vendor tooling). Dropped from the snapshot so
-# the baseline represents PHP itself, whichever local PHP produced it.
-# (imap moved from php-src to PECL in PHP 8.4.)
-NON_BUNDLED_EXTENSIONS = frozenset({
-    "herd", "igbinary", "imagick", "imap", "mongodb", "pdo_sqlsrv",
-    "redis", "sqlsrv", "swephp", "zstd",
+# Extensions bundled with php-src 8.4 — its in-tree ext/ directory minus the
+# Windows-only (com_dotnet) and test-harness (dl_test, skeleton, zend_test)
+# entries — plus the two surfaces Reflection reports under other names:
+# "core" (Zend) and "zend opcache". The snapshot keeps ONLY functions owned by
+# these extensions, so a contributor's PECL / third-party modules can never
+# contaminate the baseline, whatever they are named. Bundled extensions the
+# local PHP does not load are recorded in the snapshot's "missing_bundled"
+# field so an incomplete local build is visible in review instead of silently
+# shrinking PHP's surface.
+BUNDLED_EXTENSIONS = frozenset({
+    "core", "zend opcache",
+    "bcmath", "bz2", "calendar", "ctype", "curl", "date", "dba", "dom",
+    "enchant", "exif", "ffi", "fileinfo", "filter", "ftp", "gd", "gettext",
+    "gmp", "hash", "iconv", "intl", "json", "ldap", "libxml", "mbstring",
+    "mysqli", "mysqlnd", "odbc", "openssl", "pcntl", "pcre", "pdo",
+    "pdo_dblib", "pdo_firebird", "pdo_mysql", "pdo_odbc", "pdo_pgsql",
+    "pdo_sqlite", "pgsql", "phar", "posix", "random", "readline",
+    "reflection", "session", "shmop", "simplexml", "snmp", "soap", "sockets",
+    "sodium", "spl", "sqlite3", "standard", "sysvmsg", "sysvsem", "sysvshm",
+    "tidy", "tokenizer", "xml", "xmlreader", "xmlwriter", "xsl", "zip",
+    "zlib",
 })
 
 PHP_PROGRAM = r"""
@@ -65,27 +79,37 @@ def main() -> int:
 
     raw = json.loads(proc.stdout)
 
-    # Count what we're dropping
     original_funcs = len(raw["functions"])
-    original_exts = len(raw["extensions"])
-
-    # Filter out non-bundled extensions and their functions
-    raw["extensions"] = [e for e in raw["extensions"] if e not in NON_BUNDLED_EXTENSIONS]
-    raw["functions"] = {
+    loaded = raw["extensions"]
+    dropped_exts = sorted(set(loaded) - BUNDLED_EXTENSIONS)
+    missing_bundled = sorted(BUNDLED_EXTENSIONS - set(loaded))
+    kept_exts = [e for e in loaded if e in BUNDLED_EXTENSIONS]
+    kept_funcs = {
         name: ext for name, ext in raw["functions"].items()
-        if ext not in NON_BUNDLED_EXTENSIONS
+        if ext in BUNDLED_EXTENSIONS
     }
-
-    n_dropped = original_funcs - len(raw["functions"])
+    n_dropped = original_funcs - len(kept_funcs)
 
     data = {
         "php_version": raw["php_version"],
         "generated_at": datetime.date.today().isoformat(),
-        "extensions": raw["extensions"],
-        "functions": raw["functions"],
+        "extensions": kept_exts,
+        "missing_bundled": missing_bundled,
+        "functions": kept_funcs,
     }
     OUTPUT.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"wrote {OUTPUT} (PHP {data['php_version']}, {len(data['functions'])} functions, dropped {n_dropped} functions from non-bundled extensions)")
+    print(
+        f"wrote {OUTPUT} (PHP {data['php_version']}, {len(kept_funcs)} functions; "
+        f"dropped {n_dropped} functions from {len(dropped_exts)} non-bundled extensions"
+        + (f": {', '.join(dropped_exts)}" if dropped_exts else "")
+        + ")"
+    )
+    if missing_bundled:
+        print(
+            f"warning: {len(missing_bundled)} bundled extensions are not loaded by this PHP "
+            f"and are absent from the snapshot: {', '.join(missing_bundled)}",
+            file=sys.stderr,
+        )
     return 0
 
 

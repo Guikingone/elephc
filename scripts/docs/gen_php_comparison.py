@@ -260,6 +260,15 @@ def render(baseline, per_ext, beyond, constructs, catalog) -> str:
             f"classes but no procedural functions, so they have no row above: "
             f"{names}.",
         ]
+    missing_bundled = baseline.get("missing_bundled", [])
+    if missing_bundled:
+        names = ", ".join(f"`{e}`" for e in missing_bundled)
+        lines += [
+            "",
+            f"{len(missing_bundled)} extensions bundled with php-src were not "
+            f"loaded by the PHP build that produced this snapshot and are not "
+            f"counted: {names}.",
+        ]
     if constructs:
         names = ", ".join(f"`{b['name']}()`" for b in sorted(constructs, key=lambda b: b["name"]))
         lines += [

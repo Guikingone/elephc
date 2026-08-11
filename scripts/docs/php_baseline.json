@@ -62,6 +62,15 @@
   "zip",
   "zlib"
  ],
+ "missing_bundled": [
+  "enchant",
+  "odbc",
+  "pdo_dblib",
+  "pdo_firebird",
+  "pdo_odbc",
+  "snmp",
+  "tidy"
+ ],
  "functions": {
   "_": "gettext",
   "abs": "standard",

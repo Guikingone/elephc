@@ -128,6 +128,14 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("no procedural functions", out)
         self.assertIn("`reflection`", out)
 
+    def test_missing_bundled_extensions_are_disclosed(self):
+        baseline = dict(BASELINE, missing_bundled=["snmp", "tidy"])
+        code, out = self.run_gen(registry=[public("strlen")], baseline=baseline)
+        self.assertEqual(code, 0)
+        self.assertIn("were not loaded", out)
+        self.assertIn("`snmp`", out)
+        self.assertIn("`tidy`", out)
+
     def test_module_marker_from_catalog_modules_key(self):
         catalog = (CATALOG_OK
                    + '\n[[extensions]]\nfeature = "PCRE glue"\nstatus = "supported"\n'

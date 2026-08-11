@@ -70,6 +70,8 @@ The table counts functions implemented as native registry builtins. Modules mark
 
 The remaining 10 baseline extensions expose classes but no procedural functions, so they have no row above: `ffi`, `mysqlnd`, `pdo_mysql`, `pdo_pgsql`, `pdo_sqlite`, `phar`, `reflection`, `sqlite3`, `xmlreader`, `xsl`.
 
+7 extensions bundled with php-src were not loaded by the PHP build that produced this snapshot and are not counted: `enchant`, `odbc`, `pdo_dblib`, `pdo_firebird`, `pdo_odbc`, `snmp`, `tidy`.
+
 In addition, elephc implements 3 PHP language constructs that PHP does not count as functions: `empty()`, `isset()`, `unset()`.
 
 ## Language constructs
