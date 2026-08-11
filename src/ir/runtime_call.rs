@@ -31,6 +31,28 @@ pub enum RuntimeCallSignature {
     },
 }
 
+/// PHP key-sort operation that requested a guarded nested-array promotion.
+///
+/// The runtime storage conversion is identical for both directions, but retaining the typed
+/// operation lets the backend emit the correct builtin name when a dynamic cell is not an array.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArrayKeySort {
+    /// Ascending key order requested by `ksort()`.
+    Ascending,
+    /// Descending key order requested by `krsort()`.
+    Descending,
+}
+
+impl ArrayKeySort {
+    /// Returns the PHP builtin name used in runtime diagnostics.
+    pub fn php_name(self) -> &'static str {
+        match self {
+            Self::Ascending => "ksort",
+            Self::Descending => "krsort",
+        }
+    }
+}
+
 /// Typed runtime operation selected by backend-neutral EIR lowering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum RuntimeCallTarget {
@@ -39,10 +61,10 @@ pub enum RuntimeCallTarget {
     ArrayFetchForWrite,
     /// Promotes an indexed-array payload stored in a boxed Mixed cell to a
     /// Mixed-entry hash and installs the new payload back into that same cell.
-    MixedCellPromoteToHash,
+    MixedCellPromoteToHash(ArrayKeySort),
     /// Promotes a boxed Mixed cell fetched for write from its parent and marks the returned hash
     /// as already published into that parent-owned cell.
-    MixedCellPromoteAttachedToHash,
+    MixedCellPromoteAttachedToHash(ArrayKeySort),
     /// Creates an independently mutable boxed Mixed cell from one stored
     /// Mixed cell while retaining its tag-4/tag-5 payload ownership.
     MixedCellClone,
@@ -67,8 +89,8 @@ impl RuntimeCallTarget {
                 min_operands: 2,
                 max_operands: Some(2),
             }),
-            RuntimeCallTarget::MixedCellPromoteToHash
-            | RuntimeCallTarget::MixedCellPromoteAttachedToHash => {
+            RuntimeCallTarget::MixedCellPromoteToHash(_)
+            | RuntimeCallTarget::MixedCellPromoteAttachedToHash(_) => {
                 Some(RuntimeCallSignature::Fixed {
                     parameters: &[IrType::Heap(IrHeapKind::Mixed)],
                     result: IrType::Heap(IrHeapKind::Hash),
@@ -95,8 +117,16 @@ impl RuntimeCallTarget {
     pub fn as_eir(self) -> &'static str {
         match self {
             RuntimeCallTarget::ArrayFetchForWrite => "array.fetch_for_write",
-            RuntimeCallTarget::MixedCellPromoteToHash => "array.mixed_cell_promote_to_hash",
-            RuntimeCallTarget::MixedCellPromoteAttachedToHash => {
+            RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Ascending) => {
+                "array.mixed_cell_promote_to_hash_ksort"
+            }
+            RuntimeCallTarget::MixedCellPromoteToHash(ArrayKeySort::Descending) => {
+                "array.mixed_cell_promote_to_hash"
+            }
+            RuntimeCallTarget::MixedCellPromoteAttachedToHash(ArrayKeySort::Ascending) => {
+                "array.mixed_cell_promote_attached_to_hash_ksort"
+            }
+            RuntimeCallTarget::MixedCellPromoteAttachedToHash(ArrayKeySort::Descending) => {
                 "array.mixed_cell_promote_attached_to_hash"
             }
             RuntimeCallTarget::MixedCellClone => "array.mixed_cell_clone",

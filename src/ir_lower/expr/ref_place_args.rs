@@ -32,7 +32,7 @@
 //!   this module cannot resolve falls through to the pre-existing lowering unchanged.
 
 use crate::ir_lower::context::{LoweredValue, LoweringContext};
-use crate::ir::{Immediate, Op};
+use crate::ir::{ArrayKeySort, Immediate, Op};
 use crate::names::{
     php_symbol_key, property_hook_get_method, property_hook_set_method, Name,
 };
@@ -86,11 +86,20 @@ pub(super) fn lower_builtin_ref_place_call(
         // into a by-reference parameter, and the checker already reports that.
         return None;
     }
-    if php_symbol_key(canonical.trim_start_matches('\\')) == "krsort" {
-        if let Some(result) = lower_direct_property_krsort(ctx, canonical, &sig, args, expr) {
-            return Some(result);
+    let key_sort = match php_symbol_key(canonical.trim_start_matches('\\')).as_str() {
+        "ksort" => Some(ArrayKeySort::Ascending),
+        "krsort" => Some(ArrayKeySort::Descending),
+        _ => None,
+    };
+    if let Some(sort) = key_sort {
+        if sort == ArrayKeySort::Descending {
+            if let Some(result) = lower_direct_property_krsort(ctx, canonical, &sig, args, expr) {
+                return Some(result);
+            }
         }
-        if let Some(result) = lower_mixed_array_element_krsort(ctx, canonical, &sig, args, expr) {
+        if let Some(result) =
+            lower_mixed_array_element_key_sort(ctx, canonical, &sig, args, expr, sort)
+        {
             return Some(result);
         }
     }
@@ -241,12 +250,13 @@ fn property_requires_generic_write_context(
 /// store Mixed cells instead clone and republish only the selected cell, preventing shallow parent
 /// aliases from observing promotion. The guarded runtime accepts tag 4 (promote), tag 5 (borrow),
 /// and raises `TypeError` for every other tag.
-fn lower_mixed_array_element_krsort(
+fn lower_mixed_array_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     sig: &FunctionSig,
     args: &[Expr],
     expr: &Expr,
+    sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
     let [arg] = args else {
         return None;
@@ -259,7 +269,10 @@ fn lower_mixed_array_element_krsort(
         return None;
     };
     if let PhpType::Array(element_ty) = ctx.local_type(parent_name).codegen_repr() {
-        return lower_mixed_packed_array_element_krsort(
+        if sort == ArrayKeySort::Ascending && element_ty.codegen_repr() != PhpType::Mixed {
+            return None;
+        }
+        return lower_mixed_packed_array_element_key_sort(
             ctx,
             name,
             parent_name,
@@ -267,12 +280,16 @@ fn lower_mixed_array_element_krsort(
             index,
             expr,
             *element_ty,
+            sort,
         );
     }
     let PhpType::AssocArray { key, value } = ctx.local_type(parent_name).codegen_repr() else {
         return None;
     };
     let value_repr = value.codegen_repr();
+    if sort == ArrayKeySort::Ascending && value_repr != PhpType::Mixed {
+        return None;
+    }
     if !matches!(
         &value_repr,
         PhpType::Array(_) | PhpType::AssocArray { .. } | PhpType::Mixed
@@ -324,9 +341,11 @@ fn lower_mixed_array_element_krsort(
         Some(expr.span),
     );
     if value_repr == PhpType::Mixed {
-        return lower_shared_mixed_hash_element_krsort(ctx, name, parent, key, cell, expr);
+        return lower_shared_mixed_hash_element_key_sort(
+            ctx, name, parent, key, cell, expr, sort,
+        );
     }
-    lower_attached_mixed_cell_krsort(ctx, name, cell, expr)
+    lower_attached_mixed_cell_key_sort(ctx, name, cell, expr, sort)
 }
 
 /// Sorts one packed-parent Mixed cell, widening the parent only when it is still concrete.
@@ -335,7 +354,7 @@ fn lower_mixed_array_element_krsort(
 /// parent for copy-on-write. Later sibling sorts reuse the resulting `array<mixed>` directly so
 /// `ArrayToMixed` never receives an already-Mixed input and the guarded cell promotion remains the
 /// sole authority for accepting a packed child, borrowing a promoted hash, or raising `TypeError`.
-fn lower_mixed_packed_array_element_krsort(
+fn lower_mixed_packed_array_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     parent_name: &str,
@@ -343,6 +362,7 @@ fn lower_mixed_packed_array_element_krsort(
     index: &Expr,
     expr: &Expr,
     element_ty: PhpType,
+    sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
     let element_repr = element_ty.codegen_repr();
     if !matches!(&element_repr, PhpType::Array(_) | PhpType::Mixed)
@@ -392,9 +412,11 @@ fn lower_mixed_packed_array_element_krsort(
         Some(expr.span),
     );
     if element_repr == PhpType::Mixed {
-        return lower_shared_mixed_array_element_krsort(ctx, name, parent, key, cell, expr);
+        return lower_shared_mixed_array_element_key_sort(
+            ctx, name, parent, key, cell, expr, sort,
+        );
     }
-    lower_attached_mixed_cell_krsort(ctx, name, cell, expr)
+    lower_attached_mixed_cell_key_sort(ctx, name, cell, expr, sort)
 }
 
 /// Detaches one shared associative-parent cell before publishing and sorting its promoted hash.
@@ -402,16 +424,17 @@ fn lower_mixed_packed_array_element_krsort(
 /// Parent COW is performed by `HashSet`; cloning first prevents a shallow parent split from
 /// exposing an in-place cell promotion through aliases. Failed promotion occurs before insertion,
 /// so missing or scalar elements keep the guarded `TypeError` path without autovivification.
-fn lower_shared_mixed_hash_element_krsort(
+fn lower_shared_mixed_hash_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     parent: LoweredValue,
     key: LoweredValue,
     cell: LoweredValue,
     expr: &Expr,
+    sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
     let cloned = clone_mixed_cell(ctx, cell, expr);
-    let hash = promote_mixed_cell_to_hash(ctx, cloned, expr);
+    let hash = promote_mixed_cell_to_hash(ctx, cloned, expr, sort);
     ctx.emit_void(
         Op::HashSet,
         vec![parent.value, key.value, cloned.value],
@@ -435,16 +458,17 @@ fn lower_shared_mixed_hash_element_krsort(
 ///
 /// `ArraySet` performs the parent COW split only after guarded promotion succeeds, preserving the
 /// absent/scalar failure behavior while installing an independently owned cell for mutation.
-fn lower_shared_mixed_array_element_krsort(
+fn lower_shared_mixed_array_element_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     parent: LoweredValue,
     key: LoweredValue,
     cell: LoweredValue,
     expr: &Expr,
+    sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
     let cloned = clone_mixed_cell(ctx, cell, expr);
-    let hash = promote_mixed_cell_to_hash(ctx, cloned, expr);
+    let hash = promote_mixed_cell_to_hash(ctx, cloned, expr, sort);
     ctx.emit_void(
         Op::ArraySet,
         vec![parent.value, key.value, cloned.value],
@@ -484,17 +508,18 @@ fn clone_mixed_cell(
     cloned
 }
 
-/// Promotes a guarded Mixed cell to the borrowed hash representation consumed by `krsort()`.
+/// Promotes a guarded Mixed cell to the borrowed hash representation consumed by a key sort.
 fn promote_mixed_cell_to_hash(
     ctx: &mut LoweringContext<'_, '_>,
     cell: LoweredValue,
     expr: &Expr,
+    sort: ArrayKeySort,
 ) -> LoweredValue {
     ctx.emit_value(
         Op::RuntimeCall,
         vec![cell.value],
         Some(Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::MixedCellPromoteToHash,
+            crate::ir::RuntimeCallTarget::MixedCellPromoteToHash(sort),
         )),
         PhpType::AssocArray {
             key: Box::new(PhpType::Int),
@@ -510,12 +535,13 @@ fn promote_attached_mixed_cell_to_hash(
     ctx: &mut LoweringContext<'_, '_>,
     cell: LoweredValue,
     expr: &Expr,
+    sort: ArrayKeySort,
 ) -> LoweredValue {
     ctx.emit_value(
         Op::RuntimeCall,
         vec![cell.value],
         Some(Immediate::RuntimeCall(
-            crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash,
+            crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort),
         )),
         PhpType::AssocArray {
             key: Box::new(PhpType::Int),
@@ -527,13 +553,14 @@ fn promote_attached_mixed_cell_to_hash(
 }
 
 /// Promotes and sorts a cell fetched for write after its concrete parent was widened.
-fn lower_attached_mixed_cell_krsort(
+fn lower_attached_mixed_cell_key_sort(
     ctx: &mut LoweringContext<'_, '_>,
     name: &str,
     cell: LoweredValue,
     expr: &Expr,
+    sort: ArrayKeySort,
 ) -> Option<LoweredValue> {
-    let hash = promote_attached_mixed_cell_to_hash(ctx, cell, expr);
+    let hash = promote_attached_mixed_cell_to_hash(ctx, cell, expr, sort);
     let result = super::emit_builtin_call_value(
         ctx,
         name,

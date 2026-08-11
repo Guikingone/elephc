@@ -27,9 +27,9 @@ pub(super) fn lower(
         RuntimeCallTarget::ArrayFetchForWrite => {
             super::lower_array_fetch_for_write_runtime_call(ctx, inst)
         }
-        RuntimeCallTarget::MixedCellPromoteToHash
-        | RuntimeCallTarget::MixedCellPromoteAttachedToHash => {
-            lower_mixed_cell_promote_to_hash(ctx, inst)
+        RuntimeCallTarget::MixedCellPromoteToHash(sort)
+        | RuntimeCallTarget::MixedCellPromoteAttachedToHash(sort) => {
+            lower_mixed_cell_promote_to_hash(ctx, inst, sort)
         }
         RuntimeCallTarget::MixedCellClone => lower_mixed_cell_clone(ctx, inst),
         RuntimeCallTarget::UnaryString(runtime) => lower_unary_string(ctx, inst, runtime),
@@ -83,7 +83,7 @@ fn lower_mixed_cell_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     store_if_result(ctx, inst)
 }
 
-/// Promotes or borrows the array payload of a boxed Mixed cell for nested `krsort`.
+/// Promotes or borrows the array payload of a boxed Mixed cell for a nested key sort.
 ///
 /// The helper mutates tag-4 cells in place, borrows tag-5 payloads unchanged, and returns zero
 /// for a null/scalar/missing cell. Its valid hash result remains borrowed from the cell, so EIR
@@ -91,6 +91,7 @@ fn lower_mixed_cell_clone(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 fn lower_mixed_cell_promote_to_hash(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
+    sort: crate::ir::ArrayKeySort,
 ) -> Result<()> {
     if inst.operands.len() != 1 {
         return Err(CodegenIrError::invalid_module(format!(
@@ -122,7 +123,10 @@ fn lower_mixed_cell_promote_to_hash(
     }
     super::exceptions::emit_type_error(
         ctx,
-        "krsort(): Argument #1 ($array) must be of type array, non-array value given",
+        &format!(
+            "{}(): Argument #1 ($array) must be of type array, non-array value given",
+            sort.php_name()
+        ),
     );
     ctx.emitter.label(&valid);
     store_if_result(ctx, inst)

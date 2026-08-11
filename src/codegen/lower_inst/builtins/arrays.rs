@@ -548,7 +548,7 @@ fn lower_array_slice_preserve_keys(
 /// Ordinary receivers are split with `__rt_hash_ensure_unique` first, so an aliased copy taken
 /// before the call keeps the original iteration order, and the possibly relocated pointer is
 /// written back to the source local before the sorter runs. A hash returned by
-/// `MixedCellPromoteAttachedToHash` is already unique and published into its parent-owned Mixed
+/// `MixedCellPromoteAttachedToHash(_)` is already unique and published into its parent-owned Mixed
 /// cell; splitting it again would create an opaque clone that cannot be republished. The helpers
 /// only rewrite the table's `prev`/`next`/`head`/`tail` links, so no key or value changes ownership.
 fn lower_hash_link_sort(
@@ -602,7 +602,7 @@ fn hash_sort_source_is_attached_mixed_cell(
         (
             Op::RuntimeCall,
             Some(Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash
+                crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_)
             ))
         )
     ))

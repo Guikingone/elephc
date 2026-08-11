@@ -110,7 +110,7 @@ fn emit_mixed_cell_promote_to_hash_aarch64(emitter: &mut Emitter) {
     emitter.instruction("cmp x9, #5");                                          // is the cell already an associative array?
     emitter.instruction("b.eq __rt_mixed_cell_promote_to_hash_hash");           // ensure and republish an installed hash before returning its borrow
     emitter.instruction("cmp x9, #4");                                          // is the cell an indexed array eligible for promotion?
-    emitter.instruction("b.ne __rt_mixed_cell_promote_to_hash_invalid");        // scalars and null cells are invalid krsort receivers
+    emitter.instruction("b.ne __rt_mixed_cell_promote_to_hash_invalid");        // scalars and null cells are invalid key-sort receivers
     emitter.instruction("ldr x0, [x0, #8]");                                    // load the indexed-array payload from the tag-4 cell
     emit_branch_if_null_container(
         emitter,
@@ -432,7 +432,7 @@ fn emit_mixed_cell_promote_to_hash_x86_64(emitter: &mut Emitter) {
     emitter.instruction("cmp r10, 5");                                          // is the cell already an associative array?
     emitter.instruction("je __rt_mixed_cell_promote_to_hash_hash");             // ensure and republish an installed hash before returning its borrow
     emitter.instruction("cmp r10, 4");                                          // is the cell an indexed array eligible for promotion?
-    emitter.instruction("jne __rt_mixed_cell_promote_to_hash_invalid");         // scalars and null cells are invalid krsort receivers
+    emitter.instruction("jne __rt_mixed_cell_promote_to_hash_invalid");         // scalars and null cells are invalid key-sort receivers
     emitter.instruction("mov rdi, QWORD PTR [rdi + 8]");                        // load the indexed-array payload from the tag-4 cell
     emit_branch_if_null_container(
         emitter,

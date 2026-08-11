@@ -2024,8 +2024,8 @@ impl<'m, 'f> LoweringContext<'m, 'f> {
             self.builder.value_defining_instruction(value.value)
                 .and_then(|inst| inst.immediate.as_ref()),
             Some(Immediate::RuntimeCall(
-                crate::ir::RuntimeCallTarget::MixedCellPromoteToHash
-                    | crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash,
+                crate::ir::RuntimeCallTarget::MixedCellPromoteToHash(_)
+                    | crate::ir::RuntimeCallTarget::MixedCellPromoteAttachedToHash(_),
             ))
         ) {
             // This helper installs the hash in an owned Mixed cell and returns only a borrow of
