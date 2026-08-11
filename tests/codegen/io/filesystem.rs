@@ -99,17 +99,24 @@ if (strlen($cwd) > 0) { echo "ok"; }
     assert_eq!(out, "ok");
 }
 
-/// Verifies sys_get_temp_dir returns a path containing "tmp" (case-insensitive
-/// check to cover Linux, macOS, and Windows temp naming).
+/// Verifies sys_get_temp_dir returns a usable absolute directory.
+///
+/// This used to require the answer to CONTAIN "tmp", which is not true of php: on macOS it
+/// hands out a private per-user directory such as `/var/folders/xc/…/T`, with no "tmp" in it
+/// anywhere. The assertion only held because elephc answered a hardcoded `/tmp`, so the test
+/// pinned the divergence rather than the behaviour.
+///
+/// What the answer must satisfy on every platform is checked instead; the relationship to
+/// `TMPDIR` is pinned separately by `test_sys_get_temp_dir_follows_tmpdir`.
 #[test]
 fn test_sys_get_temp_dir() {
     let out = compile_and_run(
         r#"<?php
 $tmp = sys_get_temp_dir();
-echo $tmp;
+echo var_export($tmp !== "" && is_dir($tmp), true);
 "#,
     );
-    assert!(out.contains("tmp") || out.contains("Tmp"));
+    assert_eq!(out, "true");
 }
 
 /// Verifies chdir changes the working directory and getcwd reflects the new

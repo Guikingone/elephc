@@ -596,8 +596,6 @@ pub(super) fn lower_substr_aarch64(
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
         ctx.emitter.instruction("mov x3, x0");                                  // move the explicit substring length into the clamp register
-    } else {
-        ctx.emitter.instruction("mov x3, #-1");                                 // use -1 as the sentinel for an omitted substring length
     }
     ctx.emitter.instruction("ldr x0, [sp], #16");                               // restore the substring offset after optional length materialization
     ctx.emitter.instruction("ldp x1, x2, [sp], #16");                           // restore the source string pointer and length
@@ -611,12 +609,19 @@ pub(super) fn lower_substr_aarch64(
     ctx.emitter.instruction("csel x0, x2, x0, gt");                             // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add x1, x1, x0");                                  // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub x2, x2, x0");                                  // compute the remaining byte length after the selected offset
-    ctx.emitter.instruction("cmn x3, #1");                                      // check whether the optional length argument was omitted
-    ctx.emitter.instruction(&format!("b.eq {}", len_done));                     // keep the full remaining tail when no explicit length was provided
-    ctx.emitter.instruction("cmp x3, #0");                                      // check whether the requested substring length is negative
-    ctx.emitter.instruction("csel x3, xzr, x3, lt");                            // clamp negative requested lengths to zero
-    ctx.emitter.instruction("cmp x3, x2");                                      // compare requested length against the remaining tail length
-    ctx.emitter.instruction("csel x2, x3, x2, lt");                             // shrink the result length when the requested length is shorter
+    // Whether a length was passed is known HERE, at compile time, so nothing has to be
+    // encoded in the value — which is what let an explicit -1 read as "argument omitted".
+    if inst.operands.len() >= 3 {
+        let keep_tail = ctx.next_label("substr_len_nonneg");
+        ctx.emitter.instruction("cmp x3, #0");                                  // is the requested length negative?
+        ctx.emitter.instruction(&format!("b.ge {}", keep_tail));                // no: it is an ordinary maximum
+        ctx.emitter.instruction("add x3, x2, x3");                              // php omits that many bytes from the END of the tail
+        ctx.emitter.instruction("cmp x3, #0");                                  // did the omission consume the whole tail?
+        ctx.emitter.instruction("csel x3, xzr, x3, lt");                        // then nothing is left
+        ctx.emitter.label(&keep_tail);
+        ctx.emitter.instruction("cmp x3, x2");                                  // compare requested length against the remaining tail
+        ctx.emitter.instruction("csel x2, x3, x2, lt");                         // shrink the result when the request is shorter
+    }
     ctx.emitter.label(len_done);
     Ok(())
 }
@@ -646,8 +651,6 @@ pub(super) fn lower_substr_x86_64(
         let length = expect_operand(inst, 2)?;
         load_as_int(ctx, length, "substr length")?;
         ctx.emitter.instruction("mov rcx, rax");                                // move the explicit substring length into the clamp register
-    } else {
-        abi::emit_load_int_immediate(ctx.emitter, "rcx", -1);
     }
     abi::emit_pop_reg(ctx.emitter, "rax");
     abi::emit_pop_reg_pair(ctx.emitter, "rdi", "rsi");
@@ -662,13 +665,19 @@ pub(super) fn lower_substr_x86_64(
     ctx.emitter.instruction("cmovg rax, rsi");                                  // clamp offsets past the end to the source-string length
     ctx.emitter.instruction("add rdi, rax");                                    // advance the result pointer to the selected substring start
     ctx.emitter.instruction("sub rsi, rax");                                    // compute the remaining byte length after the selected offset
-    ctx.emitter.instruction("cmp rcx, -1");                                     // check whether the optional length argument was omitted
-    ctx.emitter.instruction(&format!("je {}", len_done));                       // keep the full remaining tail when no explicit length was provided
-    ctx.emitter.instruction("cmp rcx, 0");                                      // check whether the requested substring length is negative
-    ctx.emitter.instruction("mov r8, 0");                                       // materialize zero for negative length clamping
-    ctx.emitter.instruction("cmovl rcx, r8");                                   // clamp negative requested lengths to zero
-    ctx.emitter.instruction("cmp rcx, rsi");                                    // compare requested length against the remaining tail length
-    ctx.emitter.instruction("cmovl rsi, rcx");                                  // shrink the result length when the requested length is shorter
+    // See the AArch64 half: the argument count decides, not a value smuggled in the register.
+    if inst.operands.len() >= 3 {
+        let keep_tail = ctx.next_label("substr_len_nonneg_x");
+        ctx.emitter.instruction("cmp rcx, 0");                                  // is the requested length negative?
+        ctx.emitter.instruction(&format!("jge {}", keep_tail));                 // no: it is an ordinary maximum
+        ctx.emitter.instruction("add rcx, rsi");                                // php omits that many bytes from the END of the tail
+        ctx.emitter.instruction("cmp rcx, 0");                                  // did the omission consume the whole tail?
+        ctx.emitter.instruction("mov r8, 0");
+        ctx.emitter.instruction("cmovl rcx, r8");                               // then nothing is left
+        ctx.emitter.label(&keep_tail);
+        ctx.emitter.instruction("cmp rcx, rsi");                                // compare requested length against the remaining tail
+        ctx.emitter.instruction("cmovl rsi, rcx");                              // shrink the result when the request is shorter
+    }
     ctx.emitter.label(len_done);
     ctx.emitter.instruction("mov rax, rdi");                                    // return the selected substring pointer in the string result register
     ctx.emitter.instruction("mov rdx, rsi");                                    // return the selected substring length in the string result register
@@ -830,7 +839,7 @@ pub(super) fn materialize_substr_replace_length_aarch64(
         load_as_int(ctx, length, "substr_replace length")?;
         ctx.emitter.instruction("mov x7, x0");                                  // pass the explicit replacement length to the runtime helper
     } else {
-        ctx.emitter.instruction("mov x7, #-1");                                 // use -1 sentinel so replacement runs through the subject end
+        abi::emit_load_int_immediate(ctx.emitter, "x7", i64::MAX);              // i64::MAX runs through the subject end; -1 is a real php length
     }
     Ok(())
 }
@@ -845,7 +854,7 @@ pub(super) fn materialize_substr_replace_length_x86_64(
         load_as_int(ctx, length, "substr_replace length")?;
         ctx.emitter.instruction("mov r8, rax");                                 // pass the explicit replacement length to the runtime helper
     } else {
-        abi::emit_load_int_immediate(ctx.emitter, "r8", -1);
+        abi::emit_load_int_immediate(ctx.emitter, "r8", i64::MAX);              // i64::MAX runs through the subject end; -1 is a real php length
     }
     Ok(())
 }
