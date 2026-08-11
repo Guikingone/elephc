@@ -535,6 +535,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _diag_define_already_defined_msg\n_diag_define_already_defined_msg:\n    .ascii \"Warning: define(): Constant already defined\\n\"\n");
+    // The prefix ends with the OPENING quote php-src puts around the filter name; the
+    // composer appends the name, the closing quote and the newline.
+    out.push_str(".globl _diag_filter_missing_append_prefix\n_diag_filter_missing_append_prefix:\n    .ascii \"Warning: stream_filter_append(): Unable to locate filter \\\"\"\n");
+    out.push_str(".globl _diag_filter_missing_prepend_prefix\n_diag_filter_missing_prepend_prefix:\n    .ascii \"Warning: stream_filter_prepend(): Unable to locate filter \\\"\"\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fgetcsv_msg\n_diag_csv_escape_deprecated_fgetcsv_msg:\n    .ascii \"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
     out.push_str(".globl _diag_csv_escape_deprecated_fputcsv_msg\n_diag_csv_escape_deprecated_fputcsv_msg:\n    .ascii \"Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
     out.push_str(".globl _diag_csv_escape_deprecated_str_getcsv_msg\n_diag_csv_escape_deprecated_str_getcsv_msg:\n    .ascii \"Deprecated: str_getcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
@@ -1184,6 +1188,7 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_socket_gai_host_len", 8, target));
     out.push_str(&comm_directive("_socket_gai_msg_len", 8, target));
     out.push_str(&comm_directive("_socket_gai_msg", SOCKET_GAI_MSG_CAPACITY, target));
+    out.push_str(&comm_directive("_filter_missing_msg", crate::codegen_support::runtime::io::FILTER_MISSING_MSG_CAPACITY, target));
     out.push_str(&format!(
         ".globl _gai_msg_prefix\n_gai_msg_prefix:\n    .ascii {GAI_MSG_PREFIX:?}\n"
     ));

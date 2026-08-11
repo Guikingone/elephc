@@ -701,6 +701,43 @@ unlink("t_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a filter name that resolves to nothing is REPORTED, naming the filter.
+///
+/// Returning `false` silently left a misspelled filter indistinguishable from one that
+/// attached — the caller's data simply came through untransformed. php-src names both the
+/// function and the filter, and `@` suppresses it like any warning.
+#[test]
+fn test_stream_filter_attach_warns_and_names_an_unknown_filter() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$h = fopen("php://memory", "w+");
+var_dump(stream_filter_append($h, "no.such.filter"));
+var_dump(stream_filter_prepend($h, "also.missing"));
+var_dump(@stream_filter_append($h, "suppressed.one"));
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "bool(false)\nbool(false)\nbool(false)\n");
+    assert!(
+        out.stderr
+            .contains("Warning: stream_filter_append(): Unable to locate filter \"no.such.filter\""),
+        "missing the append warning, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains("Warning: stream_filter_prepend(): Unable to locate filter \"also.missing\""),
+        "missing the prepend warning, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        !out.stderr.contains("suppressed.one"),
+        "`@` must suppress the warning, got stderr={}",
+        out.stderr
+    );
+}
+
 /// Verifies the CSV family deprecates an OMITTED `$escape`, and only an omitted one.
 ///
 /// PHP 8.5 raises it because 9.0 changes the default from `"\\"` to `""`, which silently

@@ -253,7 +253,50 @@ pub(super) fn materialize_stream_filter_params(
     Ok(())
 }
 
+/// Reports a filter name that resolves to nothing, the way php-src does.
+///
+/// The message names the filter, so it is composed at run time. Each function names
+/// ITSELF in the prefix, chosen here, so the runtime composer needs no branch.
+fn emit_missing_filter_warning(
+    ctx: &mut FunctionContext<'_>,
+    filter: ValueId,
+    prepend: bool,
+) -> Result<()> {
+    let (symbol, text): (&str, &str) = if prepend {
+        (
+            "_diag_filter_missing_prepend_prefix",
+            "Warning: stream_filter_prepend(): Unable to locate filter \"",
+        )
+    } else {
+        (
+            "_diag_filter_missing_append_prefix",
+            "Warning: stream_filter_append(): Unable to locate filter \"",
+        )
+    };
+    load_string_to_result(ctx, filter, "stream_filter_append filter")?;
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            // The name arrives in x1/x2 and the prefix has to land in x0/x1, so the name
+            // moves up FIRST — length before pointer, or the pointer move clobbers it.
+            ctx.emitter.instruction("mov x3, x2");                              // name length
+            ctx.emitter.instruction("mov x2, x1");                              // name pointer
+            ctx.emitter.adrp("x0", symbol);
+            ctx.emitter.add_lo12("x0", "x0", symbol);
+            ctx.emitter.instruction(&format!("mov x1, #{}", text.len()));       // prefix length
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov rcx, rdx");                            // name length
+            ctx.emitter.instruction("mov rdx, rax");                            // name pointer
+            ctx.emitter.instruction(&format!("lea rdi, [rip + {symbol}]"));     // prefix pointer
+            ctx.emitter.instruction(&format!("mov esi, {}", text.len()));       // prefix length
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_filter_missing_warning");
+    Ok(())
+}
+
 /// Attaches a user-defined stream filter through the runtime registry.
+
 pub(super) fn lower_user_stream_filter_attach(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
@@ -386,6 +429,9 @@ fn lower_user_stream_filter_attach_node(
 
     ctx.emitter.label(&fail);
     abi::emit_release_temporary_stack(ctx.emitter, 16);                         // drop the parked stream handle
+    // php-src names the filter it could not find. Returning false silently left a
+    // misspelled name indistinguishable from one that attached.
+    emit_missing_filter_warning(ctx, filter, prepend)?;
     emit_boxed_bool(ctx, false);
     ctx.emitter.label(&done);
     Ok(())
