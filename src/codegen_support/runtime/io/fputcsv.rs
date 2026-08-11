@@ -38,8 +38,10 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fputcsv ---");
     emitter.label_global("__rt_fputcsv");
 
-    // -- set up stack frame: 128 bytes (fd, arr, total, index, sep, enc, esc, eol_ptr, eol_len, arrlen, field_ptr, field_len, scratch, scratch2, fp, lr) --
-    emitter.instruction("sub sp, sp, #128");                                    // allocate 128 bytes on the stack
+    // -- set up stack frame: 144 bytes (fd, arr, total, index, sep, enc, esc, eol_ptr, eol_len, arrlen, field_ptr, field_len, scratch, scratch2, fp, lr, escaped) --
+    //    The last 16 bytes carry the `escaped` flag the enclosure-doubling loop needs; fp/lr
+    //    stay at #112 so every other offset in this helper is unchanged.
+    emitter.instruction("sub sp, sp, #144");                                    // allocate 144 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish new frame pointer
 
@@ -154,71 +156,52 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("add x9, x9, x0");                                          // add bytes written
     emitter.instruction("str x9, [sp, #16]");                                       // save updated total
 
-    // -- write field contents, escaping internal quotes/escapes --
+    // -- write field contents, doubling an unescaped enclosure --
+    //
+    // php-src writes the enclosure TWICE for an embedded one and leaves the escape
+    // character alone; it never uses the escape character to escape anything on output.
+    // The one subtlety is `escaped`: an enclosure that FOLLOWS the escape character is
+    // emitted verbatim, so `back\"quote` stays `back\"quote` rather than gaining a
+    // doubled quote. Writing `\"` instead of `""` produced files neither PHP nor any
+    // other CSV reader parses back to the value that was written.
     emitter.instruction("ldp x3, x4, [sp, #80]");                                   // reload field ptr and len
     emitter.instruction("mov x6, #0");                                              // byte index = 0
+    emitter.instruction("str xzr, [sp, #128]");                                     // escaped = 0
     emitter.label("__rt_fputcsv_qloop");
     emitter.instruction("cmp x6, x4");                                              // check if all bytes written
     emitter.instruction("b.hs __rt_fputcsv_close_q");                                // if done, write closing quote
     emitter.instruction("ldrb w7, [x3, x6]");                                        // load current byte
     emitter.instruction("add x6, x6, #1");                                           // advance index
-    emitter.instruction("str x6, [sp, #104]");                                        // save current index (scratch2 slot, safe: not used by loop bounds)
-    emitter.instruction("ldr w8, [sp, #40]");                                        // load enc
-    emitter.instruction("cmp w7, w8");                                                // byte == enc?
-    emitter.instruction("b.ne __rt_fputcsv_qesc_chk");                                // if not enc, check esc
-    // -- byte is enc: escape via doubling or escape char --
+    emitter.instruction("str x6, [sp, #104]");                                        // save current index
     emitter.instruction("ldr w8, [sp, #48]");                                        // load esc
-    emitter.instruction("cbnz w8, __rt_fputcsv_q_escape");                            // esc != 0 -> write esc + enc
-    // -- doubling mode: write enc twice --
-    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
-    emitter.instruction("ldr w1, [sp, #40]");                                         // load enc
-    emitter.instruction("and x1, x1, #0xff");                                          // zero-extend enc
-    emitter.instruction("strb w1, [sp, #96]");                                         // store first enc in scratch
-    emitter.instruction("strb w1, [sp, #97]");                                         // store second enc in scratch
-    emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
-    emitter.instruction("mov x2, #2");                                                // write 2 bytes (enc enc)
-    emitter.instruction("bl __rt_fd_write");                                          // write doubled quote
-    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                            // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                         // save updated total
-    emitter.instruction("b __rt_fputcsv_qloop_next");                                 // continue loop
-
-    emitter.label("__rt_fputcsv_q_escape");
-    // -- escape mode: write esc + enc --
-    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
-    emitter.instruction("ldr w1, [sp, #48]");                                         // load esc
-    emitter.instruction("and x1, x1, #0xff");                                          // zero-extend esc
-    emitter.instruction("ldr w2, [sp, #40]");                                         // load enc
-    emitter.instruction("and x2, x2, #0xff");                                          // zero-extend enc
-    emitter.instruction("strb w1, [sp, #96]");                                         // store esc in scratch
-    emitter.instruction("strb w2, [sp, #97]");                                         // store enc in scratch
-    emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
-    emitter.instruction("mov x2, #2");                                                // write 2 bytes (esc enc)
-    emitter.instruction("bl __rt_fd_write");                                          // write escaped quote
-    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                            // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                         // save updated total
-    emitter.instruction("b __rt_fputcsv_qloop_next");                                 // continue loop
-
-    emitter.label("__rt_fputcsv_qesc_chk");
-    // -- check if byte == esc (and esc != 0): double the esc --
-    emitter.instruction("ldr w8, [sp, #48]");                                          // load esc
-    emitter.instruction("cbz w8, __rt_fputcsv_qchar");                                 // esc == 0 -> no esc doubling
+    emitter.instruction("cbz w8, __rt_fputcsv_q_chk_enc");                            // no escape character configured
     emitter.instruction("cmp w7, w8");                                                // byte == esc?
-    emitter.instruction("b.ne __rt_fputcsv_qchar");                                    // if not esc, write byte as-is
-    // -- byte is esc: write esc twice --
-    emitter.instruction("ldr x0, [sp, #0]");                                          // reload fd
-    emitter.instruction("ldr w1, [sp, #48]");                                         // load esc
-    emitter.instruction("and x1, x1, #0xff");                                          // zero-extend esc
-    emitter.instruction("strb w1, [sp, #96]");                                         // store first esc in scratch
-    emitter.instruction("strb w1, [sp, #97]");                                         // store second esc in scratch
+    emitter.instruction("b.ne __rt_fputcsv_q_chk_enc");                               // not the escape character
+    // -- the escape character is emitted verbatim, and shields the NEXT byte --
+    emitter.instruction("mov x9, #1");
+    emitter.instruction("str x9, [sp, #128]");                                        // escaped = 1
+    emitter.instruction("b __rt_fputcsv_qchar");                                       // write it unchanged
+
+    emitter.label("__rt_fputcsv_q_chk_enc");
+    emitter.instruction("ldr w8, [sp, #40]");                                          // load enc
+    emitter.instruction("cmp w7, w8");                                                 // byte == enc?
+    emitter.instruction("b.ne __rt_fputcsv_q_plain");                                  // ordinary byte
+    emitter.instruction("ldr x9, [sp, #128]");                                         // was it shielded by the escape character?
+    emitter.instruction("cbnz x9, __rt_fputcsv_q_plain");                              // yes: php-src does NOT double it
+    // -- double it: emit one extra enclosure before the byte itself --
+    emitter.instruction("ldr x0, [sp, #0]");                                           // reload fd
+    emitter.instruction("ldr w1, [sp, #40]");                                          // load enc
+    emitter.instruction("and x1, x1, #0xff");                                          // zero-extend enc
+    emitter.instruction("strb w1, [sp, #96]");                                         // store enc in scratch
     emitter.instruction("add x1, sp, #96");                                            // ptr = scratch slot
-    emitter.instruction("mov x2, #2");                                                // write 2 bytes (esc esc)
-    emitter.instruction("bl __rt_fd_write");                                          // write doubled escape
-    emitter.instruction("ldr x9, [sp, #16]");                                         // reload total bytes
-    emitter.instruction("add x9, x9, x0");                                            // add bytes written
-    emitter.instruction("str x9, [sp, #16]");                                         // save updated total
-    emitter.instruction("b __rt_fputcsv_qloop_next");                                 // continue loop
+    emitter.instruction("mov x2, #1");                                                 // write 1 byte
+    emitter.instruction("bl __rt_fd_write");                                           // write the doubling enclosure
+    emitter.instruction("ldr x9, [sp, #16]");                                          // reload total bytes
+    emitter.instruction("add x9, x9, x0");                                             // add bytes written
+    emitter.instruction("str x9, [sp, #16]");                                          // save updated total
+
+    emitter.label("__rt_fputcsv_q_plain");
+    emitter.instruction("str xzr, [sp, #128]");                                        // escaped = 0
 
     emitter.label("__rt_fputcsv_qchar");
     // -- write the actual character --
@@ -301,7 +284,7 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #112]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #128");                                    // deallocate stack frame
+    emitter.instruction("add sp, sp, #144");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // -- literal data for newline --
@@ -319,10 +302,12 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fputcsv ---");
     emitter.label_global("__rt_fputcsv");
 
-    // -- prologue: 112-byte frame with rbp --
+    // -- prologue: 128-byte frame with rbp --
+    //    The extra 16 bytes carry the `escaped` flag at [rbp - 120] that the
+    //    enclosure-doubling loop needs; every other offset is unchanged.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 112");                                         // reserve aligned stack space for writer state
+    emitter.instruction("sub rsp, 128");                                         // reserve aligned stack space for writer state
 
     // -- save inputs --
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                         // preserve the destination file descriptor
@@ -427,7 +412,12 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                        // accumulate the opening-quote byte count
     emitter.instruction("mov QWORD PTR [rbp - 112], 0");                         // current byte index inside the quoted field
 
-    // -- write field contents, escaping internal quotes/escapes --
+    // -- write field contents, doubling an unescaped enclosure --
+    //
+    // Mirrors the AArch64 loop: php-src doubles the enclosure and never emits the escape
+    // character as an escape, and an enclosure that FOLLOWS the escape character is left
+    // alone.
+    emitter.instruction("mov QWORD PTR [rbp - 120], 0");                         // escaped = 0
     emitter.label("__rt_fputcsv_x_qloop");
     emitter.instruction("mov rcx, QWORD PTR [rbp - 112]");                       // reload the current byte index
     emitter.instruction("cmp rcx, QWORD PTR [rbp - 96]");                         // have we emitted every byte from the field?
@@ -435,56 +425,28 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r8, QWORD PTR [rbp - 88]");                         // reload the current field string pointer
     emitter.instruction("movzx edx, BYTE PTR [r8 + rcx]");                        // load the current field byte
     emitter.instruction("add QWORD PTR [rbp - 112], 1");                         // advance the byte index
+    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                          // is an escape character configured?
+    emitter.instruction("jz __rt_fputcsv_x_chk_enc");                            // none: it cannot shield anything
+    emitter.instruction("cmp dl, BYTE PTR [rbp - 56]");                          // byte == esc?
+    emitter.instruction("jne __rt_fputcsv_x_chk_enc");                           // not the escape character
+    // -- the escape character is emitted verbatim, and shields the NEXT byte --
+    emitter.instruction("mov QWORD PTR [rbp - 120], 1");                         // escaped = 1
+    emitter.instruction("jmp __rt_fputcsv_x_qchar");                             // write it unchanged
+
+    emitter.label("__rt_fputcsv_x_chk_enc");
     emitter.instruction("cmp dl, BYTE PTR [rbp - 48]");                          // is the byte the enclosure?
-    emitter.instruction("jne __rt_fputcsv_x_qesc_chk");                          // skip to esc check if not enclosure
-    // -- byte is enc: escape via doubling or escape char --
-    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                          // esc == 0?
-    emitter.instruction("jne __rt_fputcsv_x_q_escape");                          // esc != 0 -> write esc + enc
-    // -- doubling mode: write enc twice --
+    emitter.instruction("jne __rt_fputcsv_x_q_plain");                           // ordinary byte
+    emitter.instruction("cmp QWORD PTR [rbp - 120], 0");                         // was it shielded by the escape character?
+    emitter.instruction("jne __rt_fputcsv_x_q_plain");                           // yes: php-src does NOT double it
+    // -- double it: emit one extra enclosure before the byte itself --
     emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
     emitter.instruction("lea rsi, [rbp - 48]");                                  // ptr = address of enc byte
     emitter.instruction("mov edx, 1");                                          // write one enc
-    emitter.instruction("call __rt_fd_write");                                  // emit first enc
+    emitter.instruction("call __rt_fd_write");                                  // emit the doubling enclosure
     emitter.instruction("add QWORD PTR [rbp - 24], rax");                        // accumulate
-    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
-    emitter.instruction("lea rsi, [rbp - 48]");                                 // ptr = address of enc byte
-    emitter.instruction("mov edx, 1");                                          // write second enc
-    emitter.instruction("call __rt_fd_write");                                  // emit second enc
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate
-    emitter.instruction("jmp __rt_fputcsv_x_qloop");                            // continue the quoted field loop
 
-    emitter.label("__rt_fputcsv_x_q_escape");
-    // -- escape mode: write esc + enc --
-    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
-    emitter.instruction("lea rsi, [rbp - 56]");                                  // ptr = address of esc byte
-    emitter.instruction("mov edx, 1");                                          // write one esc
-    emitter.instruction("call __rt_fd_write");                                  // emit esc
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate
-    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                         // pass the destination fd
-    emitter.instruction("lea rsi, [rbp - 48]");                                 // ptr = address of enc byte
-    emitter.instruction("mov edx, 1");                                          // write one enc
-    emitter.instruction("call __rt_fd_write");                                  // emit enc
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                       // accumulate
-    emitter.instruction("jmp __rt_fputcsv_x_qloop");                            // continue the quoted field loop
-
-    emitter.label("__rt_fputcsv_x_qesc_chk");
-    // -- check if byte == esc (and esc != 0): double the esc --
-    emitter.instruction("cmp QWORD PTR [rbp - 56], 0");                         // esc == 0?
-    emitter.instruction("jz __rt_fputcsv_x_qchar");                             // skip esc doubling if esc disabled
-    emitter.instruction("cmp dl, BYTE PTR [rbp - 56]");                         // byte == esc?
-    emitter.instruction("jne __rt_fputcsv_x_qchar");                            // if not esc, write byte as-is
-    // -- byte is esc: write esc twice --
-    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                        // pass the destination fd
-    emitter.instruction("lea rsi, [rbp - 56]");                                 // ptr = address of esc byte
-    emitter.instruction("mov edx, 1");                                         // write one esc
-    emitter.instruction("call __rt_fd_write");                                 // emit first esc
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
-    emitter.instruction("mov edi, DWORD PTR [rbp - 8]");                        // pass the destination fd
-    emitter.instruction("lea rsi, [rbp - 56]");                                // ptr = address of esc byte
-    emitter.instruction("mov edx, 1");                                         // write second esc
-    emitter.instruction("call __rt_fd_write");                                 // emit second esc
-    emitter.instruction("add QWORD PTR [rbp - 24], rax");                      // accumulate
-    emitter.instruction("jmp __rt_fputcsv_x_qloop");                           // continue the quoted field loop
+    emitter.label("__rt_fputcsv_x_q_plain");
+    emitter.instruction("mov QWORD PTR [rbp - 120], 0");                         // escaped = 0
 
     emitter.label("__rt_fputcsv_x_qchar");
     // -- write the actual character --

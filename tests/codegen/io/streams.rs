@@ -647,6 +647,34 @@ unlink("csv_eof.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `fputcsv()` doubles an embedded enclosure instead of backslash-escaping it.
+///
+/// elephc wrote `"with\"quote"` where PHP writes `"with""quote"` — not valid CSV, and PHP
+/// itself reads it back as a different value. php-src also tracks whether the escape
+/// character shielded the enclosure: `back\"quote` keeps its single quote rather than
+/// gaining a doubled one, and the escape character is never doubled on output. The whole
+/// existing fputcsv suite passed either way, because none of it wrote an embedded quote.
+#[test]
+fn test_fputcsv_doubles_an_embedded_enclosure() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$h = fopen("fp_dq.csv", "w");
+fputcsv($h, ["with\"quote"], ",", "\"", "\\");
+fputcsv($h, ["a\"b\"c"], ",", "\"", "\\");
+fputcsv($h, ["back\\slash"], ",", "\"", "\\");
+fputcsv($h, ["back\\\"shielded"], ",", "\"", "\\");
+fclose($h);
+echo file_get_contents("fp_dq.csv");
+unlink("fp_dq.csv");
+"#,
+    );
+    assert_eq!(
+        out,
+        "\"with\"\"quote\"\n\"a\"\"b\"\"c\"\n\"back\\slash\"\n\"back\\\"shielded\"\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `SplFileObject::fgetcsv()` still yields strings after `fgetcsv()` began boxing.
 ///
 /// The SPL method body is synthesized, so it has no checked call-site type and takes the
