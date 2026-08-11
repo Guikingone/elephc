@@ -80,7 +80,7 @@ class EvidenceChecker:
                 for rs in sorted(tests_dir.rglob("*.rs")):
                     parts.append(rs.read_text(encoding="utf-8", errors="ignore"))
             self._corpus = "\n".join(parts)
-        return f"fn {evidence}" in self._corpus
+        return f"fn {evidence}(" in self._corpus
 
 
 def validate_catalog(catalog: dict, repo_root: Path) -> list[str]:
@@ -214,6 +214,15 @@ def render(baseline, per_ext, beyond, constructs, catalog) -> str:
             f"| `{ext}` | {len(supported)} / {totals[ext]} "
             f"| {_pct(len(supported), totals[ext])} | {in_aot} | {in_eval} |"
         )
+    functionless = sorted(set(baseline["extensions"]) - set(totals))
+    if functionless:
+        names = ", ".join(f"`{e}`" for e in functionless)
+        lines += [
+            "",
+            f"The remaining {len(functionless)} baseline extensions expose "
+            f"classes but no procedural functions, so they have no row above: "
+            f"{names}.",
+        ]
     if constructs:
         names = ", ".join(f"`{b['name']}()`" for b in sorted(constructs, key=lambda b: b["name"]))
         lines += [
@@ -256,6 +265,7 @@ def render(baseline, per_ext, beyond, constructs, catalog) -> str:
     table_total = sum(totals.values())
     assert table_supported == matched, (table_supported, matched)
     assert table_total == baseline_total, (table_total, baseline_total)
+    assert set(totals) <= set(baseline["extensions"]), sorted(set(totals) - set(baseline["extensions"]))
 
     return "\n".join(lines).rstrip() + "\n"
 

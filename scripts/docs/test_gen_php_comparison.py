@@ -121,6 +121,13 @@ class ValidationTests(unittest.TestCase):
         self.assertIn("lfc_special", out)          # Beyond PHP section
         self.assertNotIn("__elephc_ptr", out)      # internals never rendered
 
+    def test_functionless_extensions_are_mentioned(self):
+        baseline = dict(BASELINE, extensions=[*BASELINE["extensions"], "reflection"])
+        code, out = self.run_gen(registry=[public("strlen")], baseline=baseline)
+        self.assertEqual(code, 0)
+        self.assertIn("no procedural functions", out)
+        self.assertIn("`reflection`", out)
+
 
 class RenderTests(unittest.TestCase):
     def test_counts_and_determinism(self):

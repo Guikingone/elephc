@@ -66,6 +66,8 @@ Overall builtin coverage: **459 / 2030** (23%).
 | `zip` | 0 / 10 | 0% | 0 | 0 |
 | `zlib` | 4 / 30 | 13% | 4 | 4 |
 
+The remaining 10 baseline extensions expose classes but no procedural functions, so they have no row above: `ffi`, `mysqlnd`, `pdo_mysql`, `pdo_pgsql`, `pdo_sqlite`, `phar`, `reflection`, `sqlite3`, `xmlreader`, `xsl`.
+
 In addition, elephc implements 3 PHP language constructs that PHP does not count as functions: `empty()`, `isset()`, `unset()`.
 
 ## Language constructs
