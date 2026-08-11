@@ -721,7 +721,7 @@ fn test_link_plan(
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
     }
-    plan
+    plan.without_redundant_embedded_bridges()
 }
 
 /// Appends every typed search path before archive and named-library inputs.

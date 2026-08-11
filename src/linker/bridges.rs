@@ -190,6 +190,7 @@ fn resolve_with<F>(
 where
     F: FnMut(&BridgeStaticlib) -> Result<PathBuf, LinkError>,
 {
+    let plan = plan.without_redundant_embedded_bridges();
     let mut located: HashMap<&'static str, PathBuf> = HashMap::new();
     let mut bridge_paths = Vec::new();
     let mut seen_paths = HashSet::new();
@@ -669,6 +670,36 @@ mod tests {
             .plan
             .items()
             .contains(&LinkItem::Framework("SystemConfiguration".to_string())));
+    }
+
+    /// Verifies bridge resolution keeps Magician as the sole provider of its embedded crates.
+    #[test]
+    fn magician_replaces_standalone_embedded_bridge_archives() {
+        let plan = LinkPlan::from_items(vec![
+            LinkItem::named_runtime("elephc_crypto"),
+            LinkItem::named_runtime("elephc_phar"),
+            LinkItem::named_runtime("elephc_magician"),
+        ]);
+        let executable = std::env::current_exe().expect("test executable path");
+        let resolution = resolve_with(&plan, &[], |_| Ok(executable.clone()))
+            .expect("embedded bridge plan must resolve");
+        let bridge_names: Vec<&str> = resolution
+            .plan
+            .items()
+            .iter()
+            .filter_map(|item| match item {
+                LinkItem::StaticArchive {
+                    origin: LinkOrigin::Bridge { name },
+                    ..
+                } => Some(name.as_str()),
+                LinkItem::StaticArchive { .. }
+                | LinkItem::NamedLibrary { .. }
+                | LinkItem::SearchPath(_)
+                | LinkItem::Framework(_) => None,
+            })
+            .collect();
+
+        assert_eq!(bridge_names, vec!["elephc_magician"]);
     }
 
     /// Verifies a missing named bridge returns a structured error instead of a `-l` fallback.

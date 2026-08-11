@@ -18947,6 +18947,39 @@ fn test_eval_rejects_invalid_magic_unserialize_arity_contract() {
     );
 }
 
+/// Verifies AOT and dynamic eval OpenSSL calls share Magician's embedded crypto objects.
+#[test]
+fn test_eval_and_aot_openssl_share_one_crypto_bridge() {
+    let dir = make_cli_test_dir("elephc_eval_aot_openssl_bridge_dedup");
+    fs::write(
+        dir.join("main.php"),
+        r#"<?php
+echo openssl_cipher_iv_length("aes-128-cbc") . ":";
+$code = $argc > 1
+    ? $argv[1]
+    : 'echo openssl_cipher_iv_length("aes-256-gcm");';
+eval($code);
+"#,
+    )
+    .expect("write AOT and eval OpenSSL fixture");
+
+    let compile = elephc_cli_command(&dir)
+        .args(["--quiet", "main.php"])
+        .output()
+        .expect("compile AOT and eval OpenSSL fixture");
+    assert!(
+        compile.status.success(),
+        "AOT and eval OpenSSL link failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = Command::new(dir.join("main"))
+        .output()
+        .expect("run AOT and eval OpenSSL fixture");
+
+    assert!(run.status.success(), "AOT and eval OpenSSL fixture failed");
+    assert_eq!(String::from_utf8_lossy(&run.stdout), "16:12");
+}
+
 /// Verifies eval rejects non-array `__debugInfo` return declarations.
 #[test]
 fn test_eval_rejects_invalid_magic_debug_info_return_contract() {
