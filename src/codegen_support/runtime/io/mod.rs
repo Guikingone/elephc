@@ -105,6 +105,7 @@ mod stream_transport;
 mod stream_is_local;
 mod stream_supports_lock;
 mod filter_missing_warning;
+mod open_failed_warning;
 mod stream_type_name;
 mod stream_socket_accept;
 mod stream_socket_client;
@@ -252,6 +253,7 @@ pub(crate) use stream_transport::{emit_stream_record_transport, emit_stream_tran
 pub(crate) use stream_is_local::emit_stream_is_local_path;
 pub(crate) use stream_supports_lock::emit_stream_supports_lock;
 pub(crate) use filter_missing_warning::{emit_filter_missing_warning, FILTER_MISSING_MSG_CAPACITY};
+pub(crate) use open_failed_warning::{emit_open_failed_warning, OPEN_FAILED_MSG_CAPACITY};
 pub(crate) use stream_type_name::emit_stream_type_name;
 pub(crate) use stream_socket_accept::emit_stream_socket_accept;
 pub(crate) use stream_socket_client::emit_stream_socket_client;

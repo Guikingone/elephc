@@ -10,9 +10,6 @@
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
-/// The fixed warning text emitted when `fopen()` fails to open a file.
-const FOPEN_FAILED_WARNING: &str = "Warning: fopen(): Failed to open stream\n";
-
 /// fopen: open a file and return its file descriptor.
 /// Input:  x1/x2=filename string, x3/x4=mode string
 /// Output: x0=file descriptor (or negative on error)
@@ -171,7 +168,18 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     }
     emitter.instruction(&emitter.platform.branch_on_syscall_success("__rt_fopen_opened")); // branch if syscall succeeded
     emitter.label("__rt_fopen_fail");
-    emit_fopen_failed_warning(emitter);
+    // php-src names the path and the reason. x0 still carries the failed syscall result and
+    // the NUL-terminated path is at [sp, #0]; the two platforms report the failure
+    // differently, so the errno is normalised here rather than inside the composer.
+    if emitter.platform.needs_cmp_before_error_branch() {
+        emitter.instruction("neg x3, x0");                                      // Linux answers -errno
+    } else {
+        emitter.instruction("mov x3, x0");                                      // macOS answers the errno itself
+    }
+    emitter.instruction("ldr x2, [sp, #0]");                                    // the null-terminated path
+    abi::emit_symbol_address(emitter, "x0", "_diag_open_failed_fopen_prefix");
+    emitter.instruction(&format!("mov x1, #{}", "Warning: fopen(".len()));      // prefix length
+    emitter.instruction("bl __rt_open_failed_warning");
     emitter.instruction("mov x0, #-1");                                         // return -1 to indicate failure
     emitter.instruction("b __rt_fopen_return");                                 // skip eof-flag reset on failed opens
 
@@ -429,7 +437,14 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test eax, eax");                                       // did libc open() return a negative C int descriptor?
     emitter.instruction("jns __rt_fopen_opened_x86");                           // skip the warning when fopen() succeeded
     emitter.label("__rt_fopen_fail_x86");
-    emit_fopen_failed_warning(emitter);
+    // The libc wrappers report failure through errno rather than the return value, so the
+    // reason is fetched here and the composer only formats.
+    emitter.instruction("call __errno_location");
+    emitter.instruction("movsxd rcx, DWORD PTR [rax]");                         // the errno to describe
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 24]");                       // the null-terminated path
+    abi::emit_symbol_address(emitter, "rdi", "_diag_open_failed_fopen_prefix");
+    emitter.instruction("mov esi, 15");                                          // prefix length
+    emitter.instruction("call __rt_open_failed_warning");
     emitter.instruction("mov rax, -1");                                         // normalize all open failures to the PHP false sentinel path
     emitter.instruction("jmp __rt_fopen_return_x86");                           // skip eof-flag reset on failed opens
     emitter.label("__rt_fopen_silent_fail_x86");
@@ -555,23 +570,4 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 32");                                         // release the temporary pathname and mode spill slots before returning the file descriptor
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer after the x86_64 fopen() helper completes
     emitter.instruction("ret");                                                 // return the libc open() file descriptor or negative error value in rax
-}
-
-/// Emits the fixed "fopen() failed" warning via the diagnostic runtime helper.
-/// AArch64: passes pointer in x1, length in x2, calls `__rt_diag_warning`.
-/// x86_64: passes pointer in rdi, length in esi, calls `__rt_diag_warning`.
-/// Uses `FOPEN_FAILED_WARNING` as the diagnostic text.
-fn emit_fopen_failed_warning(emitter: &mut Emitter) {
-    match emitter.target.arch {
-        Arch::AArch64 => {
-            abi::emit_symbol_address(emitter, "x1", "_diag_fopen_failed_msg");  // pass the fopen() warning text pointer to the diagnostic helper
-            emitter.instruction(&format!("mov x2, #{}", FOPEN_FAILED_WARNING.len())); // pass the fopen() warning byte length to the diagnostic helper
-            emitter.instruction("bl __rt_diag_warning");                        // emit or suppress the fopen() failure warning
-        }
-        Arch::X86_64 => {
-            abi::emit_symbol_address(emitter, "rdi", "_diag_fopen_failed_msg"); // pass the fopen() warning text pointer to the diagnostic helper
-            emitter.instruction(&format!("mov esi, {}", FOPEN_FAILED_WARNING.len())); // pass the fopen() warning byte length to the diagnostic helper
-            emitter.instruction("call __rt_diag_warning");                      // emit or suppress the fopen() failure warning
-        }
-    }
 }

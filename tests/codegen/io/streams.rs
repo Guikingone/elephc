@@ -83,9 +83,13 @@ echo $f === false ? "false" : "resource";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "false");
+    // php-src puts the PATH inside the parentheses and the reason after it; the bare
+    // `fopen()` this used to assert named neither.
     assert!(
-        out.stderr.contains("Warning: fopen()"),
-        "expected fopen warning, got stderr={}",
+        out.stderr.contains(
+            "Warning: fopen(no_such_file.txt): Failed to open stream: No such file or directory"
+        ),
+        "expected the path and reason in the warning, got stderr={}",
         out.stderr
     );
 }
@@ -699,6 +703,39 @@ unlink("t_out.csv");
         "fputcsv(): Argument #2 ($fields) must be of type array, false given"
     );
     let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a failed open names WHICH path failed and WHY, as php-src does.
+///
+/// The message was a bare `fopen(): Failed to open stream` — neither the path nor the
+/// reason, which is most of what it exists for when several opens share a line. The
+/// remaining difference from PHP is the ` in FILE on line N` suffix elephc never adds.
+#[test]
+fn test_failed_open_warning_names_the_path_and_the_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+$f = fopen("/no/such/dir/missing.txt", "r");
+echo $f === false ? "false" : "open";
+$c = file_get_contents("/no/such/dir/other.txt");
+echo $c === false ? "|false" : "|read";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|false");
+    assert!(
+        out.stderr.contains(
+            "Warning: fopen(/no/such/dir/missing.txt): Failed to open stream: No such file or directory"
+        ),
+        "fopen warning lost the path or the reason, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr.contains(
+            "Warning: file_get_contents(/no/such/dir/other.txt): Failed to open stream: No such file or directory"
+        ),
+        "file_get_contents warning lost the path or the reason, got stderr={}",
+        out.stderr
+    );
 }
 
 /// Verifies a filter name that resolves to nothing is REPORTED, naming the filter.

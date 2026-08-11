@@ -56,6 +56,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_stream_is_local_path(emitter);
     io::emit_stream_supports_lock(emitter);
     io::emit_filter_missing_warning(emitter);
+    io::emit_open_failed_warning(emitter);
     io::emit_stream_type_name(emitter);
     io::emit_socket_connect_warning(emitter);
     io::emit_gai_publish(emitter);

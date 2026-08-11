@@ -38,9 +38,13 @@ echo "after";
     );
     assert!(out.success, "program failed: {}", out.stderr);
     assert_eq!(out.stdout, "after");
+    // php-src puts the PATH inside the parentheses and the reason after it; the bare
+    // `file_get_contents()` this used to assert named neither.
     assert!(
-        out.stderr.contains("Warning: file_get_contents()"),
-        "expected runtime warning, got stderr={}",
+        out.stderr.contains(
+            "Warning: file_get_contents(missing.txt): Failed to open stream: No such file or directory"
+        ),
+        "expected the path and reason in the warning, got stderr={}",
         out.stderr
     );
 }
