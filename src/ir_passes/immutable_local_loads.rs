@@ -14,7 +14,9 @@
 
 use std::collections::HashSet;
 
-use crate::ir::{DataPool, Effects, Function, Immediate, InstId, IrType, LocalKind, LocalSlotId, Op};
+use crate::ir::{
+    DataPool, Effects, Function, Immediate, InstId, Instruction, IrType, LocalKind, LocalSlotId, Op,
+};
 use crate::types::PhpType;
 
 use super::cfg::predecessors;
@@ -30,9 +32,24 @@ impl IrPass for ImmutableLocalLoads {
         "immutable_local_loads"
     }
 
+    /// Skips functions without an effectful concrete integer local load to refine.
+    fn is_applicable(&self, function: &Function) -> bool {
+        function.instructions.iter().any(|inst| {
+            matches!(inst.op, Op::ICheckedAdd | Op::ICheckedSub | Op::ICheckedMul)
+        }) && function
+            .instructions
+            .iter()
+            .any(|inst| actionable_integer_load_slot(function, inst).is_some())
+    }
+
     /// Refines effects for every load whose local slot satisfies the immutable contract.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
-        let eligible = immutable_integer_slots(function);
+        let candidates = actionable_integer_load_slots(function);
+        if candidates.is_empty() {
+            return false;
+        }
+
+        let eligible = immutable_integer_slots(function, &candidates);
         if eligible.is_empty() {
             return false;
         }
@@ -54,21 +71,43 @@ impl IrPass for ImmutableLocalLoads {
     }
 }
 
-/// Returns integer PHP-local slots whose contents are immutable for the whole function.
-fn immutable_integer_slots(function: &Function) -> HashSet<LocalSlotId> {
-    let mut eligible: HashSet<LocalSlotId> = function
-        .locals
+/// Returns concrete integer slots that still have at least one effectful load to refine.
+fn actionable_integer_load_slots(function: &Function) -> HashSet<LocalSlotId> {
+    function
+        .instructions
         .iter()
+        .filter_map(|inst| actionable_integer_load_slot(function, inst))
+        .collect()
+}
+
+/// Returns the concrete integer slot for an effectful load that this pass may refine.
+fn actionable_integer_load_slot(
+    function: &Function,
+    inst: &Instruction,
+) -> Option<LocalSlotId> {
+    if inst.op != Op::LoadLocal || inst.effects.is_pure() {
+        return None;
+    }
+    let Some(Immediate::LocalSlot(slot)) = inst.immediate else {
+        return None;
+    };
+    function
+        .locals
+        .get(slot.as_raw() as usize)
         .filter(|local| {
             local.kind == LocalKind::PhpLocal
                 && local.ir_type == IrType::I64
                 && matches!(local.php_type.codegen_repr(), PhpType::Int)
         })
-        .map(|local| local.id)
-        .collect();
-    if eligible.is_empty() {
-        return eligible;
-    }
+        .map(|_| slot)
+}
+
+/// Returns integer PHP-local slots whose contents are immutable for the whole function.
+fn immutable_integer_slots(
+    function: &Function,
+    candidates: &HashSet<LocalSlotId>,
+) -> HashSet<LocalSlotId> {
+    let mut eligible = candidates.clone();
 
     let mut loads: Vec<Vec<InstId>> = vec![Vec::new(); function.locals.len()];
     let mut stores: Vec<Vec<InstId>> = vec![Vec::new(); function.locals.len()];
@@ -90,25 +129,41 @@ fn immutable_integer_slots(function: &Function) -> HashSet<LocalSlotId> {
         }
     }
 
-    let dominance = compute_dominance(function);
-    let locations = instruction_locations(function);
+    let mut immutable = HashSet::new();
+    let mut single_store = Vec::new();
+    for slot in eligible {
+        let slot_loads = &loads[slot.as_raw() as usize];
+        if slot_loads.is_empty() {
+            continue;
+        }
+        match stores[slot.as_raw() as usize].as_slice() {
+            [] if slot_is_read_only_input(function, slot) => {
+                immutable.insert(slot);
+            }
+            [store] => single_store.push((slot, *store)),
+            _ => {}
+        }
+    }
+    if single_store.is_empty() {
+        return immutable;
+    }
+
     let entry_has_no_predecessor = predecessors(function)
         .get(function.entry.as_raw() as usize)
         .is_some_and(Vec::is_empty);
-    eligible.retain(|slot| {
+    if !entry_has_no_predecessor {
+        return immutable;
+    }
+
+    let dominance = compute_dominance(function);
+    let locations = instruction_locations(function);
+    for (slot, store) in single_store {
         let slot_loads = &loads[slot.as_raw() as usize];
-        if slot_loads.is_empty() {
-            return false;
+        if store_dominates_loads(function, store, slot_loads, &locations, &dominance) {
+            immutable.insert(slot);
         }
-        match stores[slot.as_raw() as usize].as_slice() {
-            [] => slot_is_read_only_input(function, *slot),
-            [store] if entry_has_no_predecessor => {
-                store_dominates_loads(function, *store, slot_loads, &locations, &dominance)
-            }
-            _ => false,
-        }
-    });
-    eligible
+    }
+    immutable
 }
 
 /// Maps every instruction table id to its current block and in-block position.

@@ -83,6 +83,10 @@ fn specializes_all_checked_integer_opcodes_at_cast_sinks() {
             builder.terminate(Terminator::Return { value: Some(cast) });
         }
 
+        assert!(
+            CheckedIntSink.is_applicable(&function),
+            "{source_op:?} should reach an integer sink"
+        );
         assert!(specialize(&mut function), "{source_op:?} should specialize");
         assert_eq!(function.instructions[2].op, specialized_op);
         assert_eq!(function.instructions[2].result_type, IrType::I64);
@@ -277,6 +281,10 @@ fn rejects_mixed_output_observer() {
         builder.terminate(Terminator::Return { value: None });
     }
 
+    assert!(
+        !CheckedIntSink.is_applicable(&function),
+        "a mixed-only observer should skip the sink pass"
+    );
     assert!(!specialize(&mut function));
     assert_eq!(function.instructions[2].op, Op::ICheckedAdd);
     assert!(

@@ -94,6 +94,7 @@ fn emit_aarch64_checked(
     overflow_label: &str,
     done_label: &str,
 ) {
+    // -- compute the scalar result and detect signed overflow --
     ctx.emitter.instruction(&format!("mov {}, {}", saved_lhs_reg, result_reg)); // preserve the original left operand for overflow promotion
     match op {
         CheckedIntOp::Add => {
@@ -125,6 +126,7 @@ fn emit_x86_64_checked(
     overflow_label: &str,
     done_label: &str,
 ) {
+    // -- compute the scalar result and detect signed overflow --
     ctx.emitter.instruction(&format!("mov {}, {}", saved_lhs_reg, result_reg)); // preserve the original left operand for overflow promotion
     let mnemonic = match op {
         CheckedIntOp::Add => "add",
@@ -144,6 +146,7 @@ fn emit_overflow_conversion(
     rhs_reg: &str,
 ) {
     let mnemonic = op.float_mnemonic(ctx.emitter.target.arch);
+    // -- reproduce PHP's overflow promotion in floating-point registers --
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction(&format!("scvtf d0, {}", lhs_reg));         // promote the original left integer operand to double

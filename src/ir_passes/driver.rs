@@ -1,7 +1,7 @@
 //! Purpose:
 //! Fixed-point driver for mutating EIR transformation passes. Runs the
-//! registered passes over each function repeatedly until none reports a change,
-//! re-validating the function after every pass in debug/test builds.
+//! applicable registered passes over each function repeatedly until none reports
+//! a change, re-validating the function after every pass that runs in debug/test builds.
 //!
 //! Called from:
 //! - `crate::pipeline::compile()` via `optimize_module`, after AST-to-EIR
@@ -17,10 +17,10 @@
 //!   (or expose calls) so the next round can inline more. The first round
 //!   reproduces the previous "inline once, then optimize" behavior; later rounds
 //!   only add optimization, never change semantics.
-//! - Validation after each pass and the per-function non-convergence panic are
-//!   gated on `debug_assertions`, so they are active in `cargo build`/`cargo test`
-//!   and compile out of `--release`. In release, hitting either iteration cap
-//!   simply stops and proceeds with the current IR.
+//! - Validation after each applicable pass and the per-function non-convergence
+//!   panic are gated on `debug_assertions`, so they are active in `cargo build`/
+//!   `cargo test` and compile out of `--release`. In release, hitting either
+//!   iteration cap simply stops and proceeds with the current IR.
 
 use crate::ir::{DataPool, Function, Module};
 
@@ -54,6 +54,14 @@ pub trait IrPass {
     /// dead in `--release` where those guards compile out.
     #[cfg_attr(not(debug_assertions), allow(dead_code))]
     fn name(&self) -> &'static str;
+
+    /// Returns whether this pass can possibly transform the current function.
+    /// The default keeps existing passes unconditional; candidate-driven passes
+    /// override it to avoid both their analysis and post-pass validation when no
+    /// relevant opcode or storage shape exists.
+    fn is_applicable(&self, _function: &Function) -> bool {
+        true
+    }
 
     /// Runs the pass over one function, returning true if it changed the IR.
     /// `data` is the module's shared literal pool, used by passes that materialize
@@ -159,9 +167,9 @@ pub fn optimize_module(module: &mut Module) {
 
 /// Runs the given passes over one function to a fixed point, returning whether the
 /// function was modified at all (so the module-level loop can detect convergence).
-/// After each pass, in debug/test builds, the function is re-validated and any
-/// malformed IR panics naming the offending pass. Non-convergence within the cap
-/// panics in debug and stops (keeping current IR) in release.
+/// After each pass that runs, in debug/test builds, the function is re-validated
+/// and any malformed IR panics naming the offending pass. Non-convergence within
+/// the cap panics in debug and stops (keeping current IR) in release.
 pub fn run_function_passes(
     function: &mut Function,
     passes: &[Box<dyn IrPass>],
@@ -171,6 +179,9 @@ pub fn run_function_passes(
     for _ in 0..MAX_PASS_ITERATIONS {
         let mut changed = false;
         for pass in passes {
+            if !pass.is_applicable(function) {
+                continue;
+            }
             let pass_changed = pass.run(function, data);
             #[cfg(debug_assertions)]
             if let Err(error) = crate::ir::validate_function(function) {

@@ -884,7 +884,8 @@ Textual syntax requirements:
 
 Validation has two modes:
 
-- **Structural mode:** cheap, runs after builder operations and after every pass.
+- **Structural mode:** cheap, runs after builder operations and every pass that
+  declares itself applicable to the current function.
 - **Full mode:** structural + dominance + ownership + effects, runs before
   printing for tests and before EIR backend codegen.
 
@@ -961,10 +962,12 @@ A pass implements the `IrPass` trait: a stable `name()` and a
 reports whether it changed anything. The `DataPool` is the module's shared
 literal pool, threaded through so passes that materialize new constants (the
 peephole string-literal fold interns the joined string) can do so; passes that
-need no new literals ignore it. The driver runs the registered passes over each
-function-like body (functions, methods, closures, trampolines, invokers)
-repeatedly until a full sweep reports no change, capped at a fixed iteration
-budget.
+need no new literals ignore it. The driver runs the applicable registered passes
+over each function-like body (functions, methods, closures, trampolines,
+invokers) repeatedly until a full sweep reports no change, capped at a fixed
+iteration budget. Candidate-driven passes can cheaply declare themselves
+inapplicable to a function; skipped passes perform neither analysis nor the
+debug-build post-pass validation.
 
 The whole pipeline runs to a **module-level fixed point**: `optimize_module`
 interleaves the cross-function [small-function inliner](#small-function-inlining)
@@ -976,8 +979,9 @@ candidates. The first round reproduces the prior "inline once, then optimize"
 behavior, so later rounds only optimize further and never change semantics.
 
 In debug and test builds (`debug_assertions`), the driver re-validates the
-function with `validate_function` after every pass and panics — naming the
-offending pass — if any pass produced malformed IR. The same builds panic if a
+function with `validate_function` after every pass that runs and panics — naming
+the offending pass — if it produced malformed IR. A pass skipped by its
+applicability predicate cannot mutate the function. The same builds panic if a
 pass set fails to converge within the cap, which only happens for a
 non-converging pass bug. Both guards compile out of `--release`, where hitting
 the cap simply stops and proceeds with the current IR.
@@ -1043,9 +1047,57 @@ phase commits them, sharing `replace_all_uses`, `resolve_chains`, and
   `persistent` so cleanup never frees the literal. Nested concats converge across
   driver sweeps.
 
+### Immutable Integer-Local Loads
+
+The third registered transform (`src/ir_passes/immutable_local_loads.rs`) refines
+the effect of a concrete integer `load_local` from a frame read to `pure` only
+when the slot cannot change for the lifetime of the function. It accepts two
+closed-world cases:
+
+- an unwritten, non-reference, non-variadic integer parameter, or the top-level
+  `$argc` slot; and
+- a concrete integer PHP local with exactly one store in the entry block, where
+  that store dominates every load and the entry block has no predecessor.
+
+Hidden temporaries, Mixed storage, reference cells, static locals, multiple or
+non-entry stores, and any alias or otherwise unknown local-slot operation fail
+closed. The pass changes only the load's effect metadata; its result value,
+storage type, and ownership are unchanged. This gives CSE and LICM a sound way
+to reuse or hoist integer reads that lowering represents through frame slots.
+
+The analysis starts from effectful integer loads that could actually be refined.
+Already-pure loads and functions without eligible loads return before dominance
+analysis. The default issue-623 pipeline schedules this pass only for functions
+that also contain boxed checked integer arithmetic, keeping unrelated functions
+out of both the analysis and its debug-build validation.
+
+### Checked Integer Sink Specialization
+
+The fourth registered transform (`src/ir_passes/checked_int_sink.rs`) removes the
+transient Mixed allocation from checked integer add, subtract, and multiply when
+the producer's complete use graph observes only a PHP integer. It rewrites
+`ichecked_add`/`ichecked_sub`/`ichecked_mul` to the corresponding
+`ichecked_*_to_int` operation, changes the result to non-owning `I64`, redirects
+integer casts to that value, and removes the now-redundant acquire/release
+scaffolding.
+
+The proof accepts explicit integer casts, stores into concrete integer locals or
+integer ref cells, and unpinned acquire/release chains. A terminator use, output,
+call, comparison, Mixed store, lifetime pin, or unknown opcode rejects the whole
+candidate, preserving the original boxed result whenever overflow promotion can
+still be observed. Before running the full use-graph proof, the driver requires
+an integer cast/store whose value traces through transparent acquires to checked
+arithmetic. The pass also returns before building its use graph when a function
+contains no checked-arithmetic candidate.
+
+Codegen keeps the in-range path in scalar registers. On signed overflow it
+recomputes the operation as a double and applies the shared PHP float-to-int
+conversion, so removing the box does not change PHP's overflow semantics. The
+typed opcode is implemented for macOS AArch64, Linux AArch64, and Linux x86_64.
+
 ### Constant Folding
 
-The third registered transform (`src/ir_passes/const_fold.rs`) folds operations
+The fifth registered transform (`src/ir_passes/const_fold.rs`) folds operations
 whose operands are all compile-time constants into a single `const_*`
 instruction, rewriting the instruction in place and keeping its result value id
 (no use-rewrite needed). A single forward scan over the instruction table tracks
@@ -1074,7 +1126,7 @@ instruction elimination.
 
 ### Common Subexpression Elimination
 
-The fourth registered transform (`src/ir_passes/cse.rs`) removes a pure
+The sixth registered transform (`src/ir_passes/cse.rs`) removes a pure
 computation whose identical predecessor already dominates it, redirecting the
 redundant result to the earlier value (RAUW) and neutralizing it to `nop`. It
 covers per-block and cross-block redundancy in one dominator-tree value-numbering
@@ -1104,7 +1156,7 @@ redirect unsound — the same restriction branch simplification uses. CSE uses t
 
 ### Loop-Invariant Code Motion
 
-The fifth registered transform (`src/ir_passes/licm.rs`) moves a pure computation
+The seventh registered transform (`src/ir_passes/licm.rs`) moves a pure computation
 whose operands do not change across a loop out of the loop body into the loop
 preheader, so it runs once instead of per iteration. It builds the
 [loop forest](#loop-analysis) on the [dominator tree](#dominance-analysis), then
@@ -1130,7 +1182,7 @@ pass's reach grows as more values flow as SSA across loops.)
 
 ### Dead Instruction Elimination
 
-The sixth registered transform (`src/ir_passes/dead_inst.rs`) removes
+The eighth registered transform (`src/ir_passes/dead_inst.rs`) removes
 result-producing instructions whose values are not live over the CFG and whose
 effect metadata says they are pure. It computes liveness with successor live-in
 sets, initializes each block's backward walk with those live-out values plus
@@ -1146,7 +1198,7 @@ through the fixed-point pass driver after liveness is recomputed.
 
 ### Dead Store Elimination
 
-The seventh registered transform (`src/ir_passes/dead_store.rs`) removes
+The ninth registered transform (`src/ir_passes/dead_store.rs`) removes
 `store_local` instructions whose stored value is never read on any path before
 the slot is overwritten or the function exits. Unlike dead instruction
 elimination, which works at SSA-value granularity, this pass reasons about local
@@ -1191,7 +1243,7 @@ instruction elimination on a later driver sweep.
 
 ### Branch Simplification
 
-The eighth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
+The tenth registered transform (`src/ir_passes/branch_simplify.rs`) prunes the
 CFG in three ways:
 
 - **Constant-condition folding** — a `cond_br` whose condition resolves to a

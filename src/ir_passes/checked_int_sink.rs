@@ -31,16 +31,25 @@ impl IrPass for CheckedIntSink {
         "checked_int_sink"
     }
 
+    /// Skips functions without an integer sink reachable from checked arithmetic.
+    fn is_applicable(&self, function: &Function) -> bool {
+        has_potential_integer_sink(function)
+    }
+
     /// Specializes every independently proven checked-arithmetic producer in the function.
     fn run(&self, function: &mut Function, _data: &mut DataPool) -> bool {
-        let uses = instruction_uses(function);
-        let terminator_uses = terminator_used_values(function);
         let candidates: Vec<InstId> = function
             .instructions
             .iter()
             .enumerate()
             .filter_map(|(raw, inst)| checked_to_int_op(inst.op).map(|_| InstId::from_raw(raw as u32)))
             .collect();
+        if candidates.is_empty() {
+            return false;
+        }
+
+        let uses = instruction_uses(function);
+        let terminator_uses = terminator_used_values(function);
         let mut changed = false;
 
         for candidate in candidates {
@@ -98,6 +107,51 @@ fn terminator_used_values(function: &Function) -> HashSet<ValueId> {
         .filter_map(|block| block.terminator.as_ref())
         .flat_map(super::liveness::terminator_uses)
         .collect()
+}
+
+/// Returns whether an accepted integer sink is fed by checked arithmetic through acquires.
+fn has_potential_integer_sink(function: &Function) -> bool {
+    function.instructions.iter().any(|user| {
+        let accepts_integer = match user.op {
+            Op::Cast => matches!(user.immediate, Some(Immediate::CastTarget(IrType::I64))),
+            Op::StoreLocal | Op::StoreStaticLocal | Op::InitStaticLocal => {
+                local_store_is_integer(function, user.immediate.as_ref())
+            }
+            Op::StoreRefCell => matches!(user.result_php_type.codegen_repr(), PhpType::Int),
+            _ => false,
+        };
+        accepts_integer
+            && user
+                .operands
+                .iter()
+                .any(|operand| value_originates_from_checked(function, *operand))
+    })
+}
+
+/// Follows transparent acquire definitions back to a boxed checked-arithmetic producer.
+fn value_originates_from_checked(function: &Function, mut value: ValueId) -> bool {
+    for _ in 0..function.values.len() {
+        let Some(value_ref) = function.values.get(value.as_raw() as usize) else {
+            return false;
+        };
+        let crate::ir::ValueDef::Instruction { inst, .. } = value_ref.def else {
+            return false;
+        };
+        let Some(definition) = function.instruction(inst) else {
+            return false;
+        };
+        if checked_to_int_op(definition.op).is_some() {
+            return true;
+        }
+        if definition.op != Op::Acquire || definition.immediate.is_some() {
+            return false;
+        }
+        let Some(operand) = definition.operands.first() else {
+            return false;
+        };
+        value = *operand;
+    }
+    false
 }
 
 /// Proves that every use of `value` is an accepted integer sink or removable scaffold.
