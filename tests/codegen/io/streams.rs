@@ -705,6 +705,35 @@ unlink("t_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a `php://filter` chain runs EVERY filter, in order.
+///
+/// Only the first name was applied, so `read=a|b` silently produced `a`'s output — which
+/// looks plausible and is wrong. `convert.base64-encode` and `string.toupper` do not
+/// commute, so swapping them proves the ORDER is right rather than just the count.
+#[test]
+fn test_php_filter_chain_applies_every_filter_in_order() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("fchain.txt", "Hello World");
+$a = fopen("php://filter/read=convert.base64-encode|string.toupper/resource=fchain.txt", "r");
+echo stream_get_contents($a), "|";
+fclose($a);
+$b = fopen("php://filter/read=string.toupper|convert.base64-encode/resource=fchain.txt", "r");
+echo stream_get_contents($b), "|";
+fclose($b);
+$c = fopen("php://filter/read=string.toupper|no.such.filter/resource=fchain.txt", "r");
+echo stream_get_contents($c);
+fclose($c);
+unlink("fchain.txt");
+"#,
+    );
+    // The third case pins what an UNKNOWN name does: `php -n` skips it, keeps its
+    // neighbours, and still opens. Cancelling the whole chain reads as just as plausible,
+    // which is why it is measured rather than reasoned about.
+    assert_eq!(out, "SGVSBG8GV29YBGQ=|SEVMTE8gV09STEQ=|HELLO WORLD");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a failed open names WHICH path failed and WHY, as php-src does.
 ///
 /// The message was a bare `fopen(): Failed to open stream` — neither the path nor the

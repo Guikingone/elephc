@@ -591,20 +591,24 @@ pub(super) fn emit_literal_php_filter_fopen_result(
     inst: &Instruction,
     path: &str,
 ) -> Result<()> {
-    let Some((mode_bits, filter_id, resource)) = parse_php_filter_url(path) else {
+    let Some((mode_bits, filter_ids, resource)) = parse_php_filter_url(path) else {
         emit_fd_result(ctx, -1);
         box_stream_fd_or_false_result(ctx, "fopen_php_filter");
         return Ok(());
     };
     emit_literal_fopen_result(ctx, inst, &resource)?;
     if mode_bits != 0 {
-        emit_php_filter_table_stamps(ctx, mode_bits, filter_id);
+        emit_php_filter_table_stamps(ctx, mode_bits, &filter_ids);
     }
     Ok(())
 }
 
-/// Parses `php://filter/[read=|write=]filter/resource=path` for literal `fopen`.
-pub(super) fn parse_php_filter_url(path: &str) -> Option<(u8, u8, String)> {
+/// Parses `php://filter/[read=|write=]a|b|.../resource=path` for literal `fopen`.
+///
+/// Every name in the `|` chain is resolved, in order: php-src runs the record through all
+/// of them. An unrecognised name is skipped and the rest still apply, which is what
+/// `php -n` does — it is not an error and it does not cancel the chain.
+pub(super) fn parse_php_filter_url(path: &str) -> Option<(u8, Vec<u8>, String)> {
     let spec = path.strip_prefix("php://filter/")?;
     let (filter_part, resource) = spec.split_once("/resource=")?;
     if resource.is_empty() || resource.starts_with("php://filter") {
@@ -617,9 +621,11 @@ pub(super) fn parse_php_filter_url(path: &str) -> Option<(u8, u8, String)> {
     } else {
         (3u8, filter_part)
     };
-    let first_filter = filters.split('|').next().unwrap_or("");
-    let filter_id = stream_filter_id(first_filter).unwrap_or(0);
-    let mode_bits = if filter_id == 0 { 0 } else { mode_bits };
-    Some((mode_bits, filter_id, resource.to_string()))
+    // An unrecognised name is SKIPPED, not fatal, and does not cancel its neighbours:
+    // `php -n` 8.5.6 opens `read=string.toupper|no.such.filter` successfully and returns the
+    // uppercased bytes. Measured, because the opposite reading is just as plausible.
+    let filter_ids: Vec<u8> = filters.split('|').filter_map(stream_filter_id).collect();
+    let mode_bits = if filter_ids.is_empty() { 0 } else { mode_bits };
+    Some((mode_bits, filter_ids, resource.to_string()))
 }
 

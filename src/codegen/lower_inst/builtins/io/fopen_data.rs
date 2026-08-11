@@ -18,7 +18,21 @@ use super::*;
 /// an index. Since the registry migration that payload is an opaque handle, not
 /// a descriptor, so indexing a 512-byte table with it wrote far out of bounds and
 /// crashed every `php://filter` open.
-pub(super) fn emit_php_filter_table_stamps(ctx: &mut FunctionContext<'_>, mode_bits: u8, filter_id: u8) {
+pub(super) fn emit_php_filter_table_stamps(
+    ctx: &mut FunctionContext<'_>,
+    mode_bits: u8,
+    filter_ids: &[u8],
+) {
+    // `php://filter/a|b/resource=x` runs a THROUGH b. Each name gets its own node appended
+    // at the chain tail, so applying only the first — which is what this used to do — both
+    // dropped a transform and left the output looking plausible.
+    for &filter_id in filter_ids {
+        emit_one_php_filter_stamp(ctx, mode_bits, filter_id);
+    }
+}
+
+/// Links one built-in filter onto the freshly opened stream's chain.
+fn emit_one_php_filter_stamp(ctx: &mut FunctionContext<'_>, mode_bits: u8, filter_id: u8) {
     let done_label = ctx.next_label("php_filter_done");
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
