@@ -57,6 +57,8 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_fgetcsv_enc_done");
 
     // -- read one line via __rt_fgets -> x1=ptr, x2=len --
+    emitter.instruction("str x0, [sp, #96]");                                   // keep the stream handle for continuation reads
+    emitter.instruction("mov x1, #0");                                          // no length bound; x1 still held csv_opts otherwise
     emitter.instruction("bl __rt_fgets");                                       // x1 = line ptr, x2 = line len
 
     // -- EOF check: len == 0 -> return 0 (false) --
@@ -205,7 +207,29 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fgetcsv_done");                                 // -> epilogue
 
     // -- end of line (scan_ptr reached end_ptr without trailing newline) --
+    // -- end of buffer: a field still inside its enclosure CONTINUES on the next line --
+    //
+    // A newline between enclosures is data, so php-src keeps reading until the enclosure
+    // closes. Reading one line and stopping split such a record across two rows and lost
+    // the field boundary. `__rt_fgets` reserves from the shared concat scratch, so the
+    // next line normally lands exactly where this one ended and the parse can simply be
+    // extended; when it does not, the record ends here as before.
     emitter.label("__rt_fgetcsv_end_line");
+    emitter.instruction("cmp w25, #2");                                        // still inside a quoted field?
+    emitter.instruction("b.eq __rt_fgetcsv_continue_line");
+    emitter.instruction("cmp w25, #3");                                        // or holding an escape inside one?
+    emitter.instruction("b.ne __rt_fgetcsv_push_end");                         // no: the record really ends here
+    emitter.label("__rt_fgetcsv_continue_line");
+    emitter.instruction("ldr x0, [sp, #96]");                                  // the stream handle saved at entry
+    emitter.instruction("mov x1, #0");                                         // no length bound
+    emitter.instruction("bl __rt_fgets");                                      // x1 = next line ptr, x2 = its length
+    emitter.instruction("cbz x2, __rt_fgetcsv_push_end");                      // EOF closes an unterminated field
+    emitter.instruction("cmp x1, x22");                                        // did it land right after this buffer?
+    emitter.instruction("b.ne __rt_fgetcsv_push_end");                         // not contiguous: keep the old behaviour
+    emitter.instruction("add x22, x22, x2");                                   // extend the parse over the new bytes
+    emitter.instruction("b __rt_fgetcsv_loop");                                // and keep going
+
+    emitter.label("__rt_fgetcsv_push_end_from_line");
     emitter.instruction("b __rt_fgetcsv_push_end");                            // push last field, then return
 
     // -- done: return array_ptr in x0 --
@@ -271,6 +295,8 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fgetcsv_x_enc_done");
 
     // -- read one line via __rt_fgets -> rax=ptr, rdx=len --
+    emitter.instruction("mov QWORD PTR [rbp - 88], rdi");                       // keep the stream handle for continuation reads
+    emitter.instruction("xor esi, esi");                                        // no length bound; rsi still held csv_opts otherwise
     emitter.instruction("call __rt_fgets");                                    // rax = line ptr, rdx = line len
 
     // -- EOF check: len == 0 -> return 0 (false) --
@@ -452,9 +478,27 @@ fn emit_fgetcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov rbx, rax");                                        // update array_ptr
     emitter.instruction("jmp __rt_fgetcsv_x_done");                             // -> epilogue
 
-    // -- end of line (scan_ptr reached end_ptr without trailing newline) --
+    // -- end of buffer: a field still inside its enclosure CONTINUES on the next line --
+    //
+    // Mirrors the AArch64 path: a newline between enclosures is data, so the record only
+    // ends once the enclosure closes. `__rt_fgets` reserves from the shared concat
+    // scratch, so the next line normally lands exactly where this one ended; when it does
+    // not, the record ends here as before.
     emitter.label("__rt_fgetcsv_x_end_line");
-    emitter.instruction("jmp __rt_fgetcsv_x_push_end");                         // push last field, then return
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 2");                         // still inside a quoted field?
+    emitter.instruction("je __rt_fgetcsv_x_continue_line");
+    emitter.instruction("cmp QWORD PTR [rbp - 32], 3");                         // or holding an escape inside one?
+    emitter.instruction("jne __rt_fgetcsv_x_push_end");                         // no: the record really ends here
+    emitter.label("__rt_fgetcsv_x_continue_line");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 88]");                       // the stream handle saved at entry
+    emitter.instruction("xor esi, esi");                                        // no length bound
+    emitter.instruction("call __rt_fgets");                                    // rax = next line ptr, rdx = its length
+    emitter.instruction("test rdx, rdx");
+    emitter.instruction("jz __rt_fgetcsv_x_push_end");                          // EOF closes an unterminated field
+    emitter.instruction("cmp rax, r13");                                        // did it land right after this buffer?
+    emitter.instruction("jne __rt_fgetcsv_x_push_end");                         // not contiguous: keep the old behaviour
+    emitter.instruction("add r13, rdx");                                        // extend the parse over the new bytes
+    emitter.instruction("jmp __rt_fgetcsv_x_loop");                             // and keep going
 
     // -- done: return array_ptr in rax --
     emitter.label("__rt_fgetcsv_x_done");

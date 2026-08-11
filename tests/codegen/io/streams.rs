@@ -647,6 +647,34 @@ unlink("csv_eof.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a quoted CSV field may span newlines, as one field of one record.
+///
+/// The reader took one line at a time, so `1,"line one\nline two"` came back as two
+/// records with the field cut in half and a stray quote left on the second — silent
+/// corruption of a legal, common export shape. The record count is what pins it: a test
+/// that only inspected the first row saw nothing wrong.
+#[test]
+fn test_fgetcsv_continues_a_quoted_field_across_newlines() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("ml.csv", "id,note\n1,\"line one\nline two\"\n2,plain\n");
+$f = fopen("ml.csv", "r");
+$rows = 0;
+$note = "";
+while (($row = fgetcsv($f, 0, ",", "\"", "\\")) !== false) {
+    $rows = $rows + 1;
+    if ($rows > 8) { echo "RUNAWAY"; break; }
+    if ($rows == 2) { $note = $row[1]; }
+}
+fclose($f);
+echo $rows, "|", strlen($note), "|", $note;
+unlink("ml.csv");
+"#,
+    );
+    assert_eq!(out, "3|17|line one\nline two");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies `fputcsv()` doubles an embedded enclosure instead of backslash-escaping it.
 ///
 /// elephc wrote `"with\"quote"` where PHP writes `"with""quote"` — not valid CSV, and PHP
