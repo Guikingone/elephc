@@ -831,6 +831,31 @@ foreach ($cases as $c) { echo stream_is_local($c) ? "L" : "r"; }
     assert_eq!(out, "LLLrrrrLLLLrrrrrLLLLL");
 }
 
+/// Verifies `stream_supports_lock()` answers per wrapper rather than always true.
+///
+/// php-src answers from the stream's ops: a descriptor-backed stream carries the lock
+/// option, the memory and output wrappers do not. elephc answered a blanket `true`, which
+/// told a caller that `flock()` on `php://memory` would serialise something. A descriptor
+/// test cannot decide it, because elephc backs `php://memory` with a real temporary file.
+#[test]
+fn test_stream_supports_lock_is_false_for_the_memory_wrappers() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("lk.txt", "x");
+echo stream_supports_lock(fopen("lk.txt", "r")) ? "L" : "n";
+echo stream_supports_lock(fopen("php://memory", "w+")) ? "L" : "n";
+echo stream_supports_lock(fopen("php://temp", "w+")) ? "L" : "n";
+echo stream_supports_lock(fopen("php://output", "w")) ? "L" : "n";
+echo stream_supports_lock(fopen("php://stdout", "w")) ? "L" : "n";
+echo stream_supports_lock(tmpfile()) ? "L" : "n";
+echo stream_supports_lock(STDIN) ? "L" : "n";
+unlink("lk.txt");
+"#,
+    );
+    assert_eq!(out, "LnnnLLL");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies compiled PHP output for stream get wrappers lists known wrappers.
 #[test]
 fn test_stream_get_wrappers_lists_known_wrappers() {
@@ -846,14 +871,17 @@ fn test_stream_get_wrappers_lists_known_wrappers() {
 /// Verifies compiled PHP output for stream get transports and filters.
 #[test]
 fn test_stream_get_transports_and_filters() {
-    // Full PHP-published transport and filter lists. tlsv1.0/1.1/1.2/1.3
-    // + sslv2/3 route through the same enable_crypto path; the extended
-    // filter list registers strip_tags / base64-* / qp-* / dechunk as
-    // passthrough stubs so stream_filter_append succeeds.
+    // The transport list is php-src's exactly: ten entries, tlsv1.0/1.1/1.2/1.3 routing
+    // through the same enable_crypto path. `sslv2`/`sslv3` used to be listed and are not
+    // any more — PHP 8.5.6 does not publish them and the protocols are dead.
+    //
+    // The filter list still diverges deliberately: PHP publishes nine WILDCARD names
+    // (`zlib.*`, `convert.*`, …) while elephc publishes the fourteen concrete filters it
+    // actually registers, so `stream_filter_append()` on any listed name succeeds.
     let out = compile_and_run(
         r#"<?php echo count(stream_get_transports()) . "," . count(stream_get_filters());"#,
     );
-    assert_eq!(out, "12,14");
+    assert_eq!(out, "10,14");
 }
 
 /// Verifies compiled PHP output for stream filter rot13 on read.

@@ -230,8 +230,14 @@ pub(crate) fn lower_stream_supports_lock(
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "stream_supports_lock", 1)?;
     let stream = expect_operand(inst, 0)?;
-    load_stream_fd_to_result(ctx, stream, "stream_supports_lock")?;
-    emit_bool_result(ctx, true);
+    // Not every stream locks: php-src answers from the stream's ops, and the memory and
+    // output wrappers carry no lock option. Answering a blanket true told a caller that
+    // `flock()` on `php://memory` would serialise anything.
+    load_open_stream_handle_to_result(ctx, stream, "stream_supports_lock")?;
+    if ctx.emitter.target.arch == Arch::X86_64 {
+        ctx.emitter.instruction("mov rdi, rax");                                // pass the opaque stream handle
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_stream_supports_lock");
     store_if_result(ctx, inst)
 }
 

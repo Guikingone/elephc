@@ -30,15 +30,17 @@ pub(crate) const STREAM_WRAPPERS: &[&str] = &[
     "glob",
 ];
 
+/// The transports `stream_get_transports()` advertises, in php-src's own order.
+///
+/// `sslv2` and `sslv3` are deliberately absent: PHP 8.5.6 does not list them, the
+/// protocols are dead, and advertising a transport tells a caller it may open one.
 pub(crate) const STREAM_TRANSPORTS: &[&str] = &[
     "tcp",
     "udp",
     "unix",
     "udg",
-    "tls",
     "ssl",
-    "sslv2",
-    "sslv3",
+    "tls",
     "tlsv1.0",
     "tlsv1.1",
     "tlsv1.2",
