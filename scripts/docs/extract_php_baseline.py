@@ -19,6 +19,15 @@ from pathlib import Path
 
 OUTPUT = Path(__file__).resolve().parent / "php_baseline.json"
 
+# Extensions loaded on a contributor's machine that are NOT bundled with
+# php-src (PECL / third-party / vendor tooling). Dropped from the snapshot so
+# the baseline represents PHP itself, whichever local PHP produced it.
+# (imap moved from php-src to PECL in PHP 8.4.)
+NON_BUNDLED_EXTENSIONS = frozenset({
+    "herd", "igbinary", "imagick", "imap", "mongodb", "pdo_sqlsrv",
+    "redis", "sqlsrv", "swephp", "zstd",
+})
+
 PHP_PROGRAM = r"""
 $map = [];
 foreach (get_defined_functions()["internal"] as $f) {
@@ -55,6 +64,20 @@ def main() -> int:
         return 1
 
     raw = json.loads(proc.stdout)
+
+    # Count what we're dropping
+    original_funcs = len(raw["functions"])
+    original_exts = len(raw["extensions"])
+
+    # Filter out non-bundled extensions and their functions
+    raw["extensions"] = [e for e in raw["extensions"] if e not in NON_BUNDLED_EXTENSIONS]
+    raw["functions"] = {
+        name: ext for name, ext in raw["functions"].items()
+        if ext not in NON_BUNDLED_EXTENSIONS
+    }
+
+    n_dropped = original_funcs - len(raw["functions"])
+
     data = {
         "php_version": raw["php_version"],
         "generated_at": datetime.date.today().isoformat(),
@@ -62,7 +85,7 @@ def main() -> int:
         "functions": raw["functions"],
     }
     OUTPUT.write_text(json.dumps(data, indent=1, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"wrote {OUTPUT} (PHP {data['php_version']}, {len(data['functions'])} functions)")
+    print(f"wrote {OUTPUT} (PHP {data['php_version']}, {len(data['functions'])} functions, dropped {n_dropped} functions from non-bundled extensions)")
     return 0
 
 
