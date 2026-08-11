@@ -701,6 +701,46 @@ unlink("t_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the CSV family deprecates an OMITTED `$escape`, and only an omitted one.
+///
+/// PHP 8.5 raises it because 9.0 changes the default from `"\\"` to `""`, which silently
+/// changes how existing files parse. It keys on the argument being absent, so passing the
+/// default explicitly stays quiet — the count is what pins that: three calls omit it and
+/// three pass it, and exactly three notices come out.
+#[test]
+fn test_csv_family_deprecates_an_omitted_escape_argument() {
+    let out = compile_and_run_capture(
+        r#"<?php
+file_put_contents("dep.csv", "a,b\n");
+$r = fopen("dep.csv", "r");
+fgetcsv($r);
+fgetcsv($r, 0, ",", "\"", "\\");
+fclose($r);
+$w = fopen("dep_out.csv", "w");
+fputcsv($w, ["a"]);
+fputcsv($w, ["a"], ",", "\"", "\\");
+fclose($w);
+str_getcsv("a,b");
+str_getcsv("a,b", ",", "\"", "\\");
+echo "done";
+unlink("dep.csv");
+unlink("dep_out.csv");
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    let notices = out.stderr.matches("the $escape parameter must be provided").count();
+    assert_eq!(notices, 3, "expected three notices, got stderr={}", out.stderr);
+    for name in ["fgetcsv", "fputcsv", "str_getcsv"] {
+        assert!(
+            out.stderr
+                .contains(&format!("Deprecated: {name}(): the $escape parameter")),
+            "missing the {name} notice, got stderr={}",
+            out.stderr
+        );
+    }
+}
+
 /// Verifies `str_getcsv()` parses one record, with a newline as DATA rather than a break.
 ///
 /// It is not `fgetcsv()` over a line, and the difference is not obvious: only a trailing

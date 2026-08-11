@@ -422,6 +422,7 @@ pub(crate) fn lower_fgetc(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
 /// runtime helper, passing separator/enclosure/escape as a packed `csv_opts` word.
 pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fgetcsv", 1, 5)?;
+    emit_csv_escape_deprecation(ctx, inst, "fgetcsv", 4);
     let stream = expect_operand(inst, 0)?;
     let arch = ctx.emitter.target.arch;
     load_open_stream_handle_to_result(ctx, stream, "fgetcsv")?;
@@ -507,6 +508,7 @@ pub(crate) fn lower_fgetcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
 /// argument here may be a literal in read-only memory.
 pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "str_getcsv", 1, 4)?;
+    emit_csv_escape_deprecation(ctx, inst, "str_getcsv", 3);
     let subject = expect_operand(inst, 0)?;
     let arch = ctx.emitter.target.arch;
 
@@ -584,6 +586,40 @@ pub(crate) fn lower_str_getcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction
 }
 
 /// Lowers `fputcsv(stream, fields, separator?, enclosure?, escape?, eol?)` for string arrays,
+/// The `$escape` argument index for each CSV function that takes one.
+///
+/// PHP 8.5 deprecates omitting it, because 9.0 changes the default from `"\\"` to `""` —
+/// a silent behaviour change for anyone relying on today's value. The notice fires on the
+/// ARGUMENT being absent, not on its value, so passing the default explicitly is quiet.
+fn emit_csv_escape_deprecation(
+    ctx: &mut FunctionContext<'_>,
+    inst: &Instruction,
+    function: &str,
+    escape_index: usize,
+) {
+    if inst.operands.len() > escape_index {
+        return;
+    }
+    let symbol = format!("_diag_csv_escape_deprecated_{function}_msg");
+    let length = format!(
+        "Deprecated: {function}(): the $escape parameter must be provided as its default value will change\n"
+    )
+    .len();
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.adrp("x1", &symbol);
+            ctx.emitter.add_lo12("x1", "x1", &symbol);
+            ctx.emitter.instruction(&format!("mov x2, #{length}"));              // the notice byte length
+        }
+        Arch::X86_64 => {
+            ctx.emitter
+                .instruction(&format!("lea rdi, [rip + {symbol}]"));             // the notice pointer
+            ctx.emitter.instruction(&format!("mov esi, {length}"));              // the notice byte length
+        }
+    }
+    abi::emit_call_label(ctx.emitter, "__rt_diag_warning");                      // stderr, and `@` suppresses it
+}
+
 /// php-src's wording when `$fields` is not an array — the only other thing an
 /// `array<string>|false` value can be at run time.
 const FPUTCSV_FIELDS_NOT_ARRAY_MESSAGE: &str =
@@ -637,6 +673,7 @@ fn emit_unwrap_boxed_string_array(ctx: &mut FunctionContext<'_>, label_prefix: &
 /// passing separator/enclosure/escape as a packed `csv_opts` word and eol as (ptr, len).
 pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fputcsv", 2, 6)?;
+    emit_csv_escape_deprecation(ctx, inst, "fputcsv", 4);
     let stream = expect_operand(inst, 0)?;
     let fields = expect_operand(inst, 1)?;
     let arch = ctx.emitter.target.arch;

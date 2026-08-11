@@ -535,6 +535,9 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
     out.push_str(".globl _diag_define_already_defined_msg\n_diag_define_already_defined_msg:\n    .ascii \"Warning: define(): Constant already defined\\n\"\n");
+    out.push_str(".globl _diag_csv_escape_deprecated_fgetcsv_msg\n_diag_csv_escape_deprecated_fgetcsv_msg:\n    .ascii \"Deprecated: fgetcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
+    out.push_str(".globl _diag_csv_escape_deprecated_fputcsv_msg\n_diag_csv_escape_deprecated_fputcsv_msg:\n    .ascii \"Deprecated: fputcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
+    out.push_str(".globl _diag_csv_escape_deprecated_str_getcsv_msg\n_diag_csv_escape_deprecated_str_getcsv_msg:\n    .ascii \"Deprecated: str_getcsv(): the $escape parameter must be provided as its default value will change\\n\"\n");
     out.push_str(".globl _diag_undefined_array_key_prefix\n_diag_undefined_array_key_prefix:\n    .ascii \"Warning: Undefined array key \"\n");
     out.push_str(".globl _diag_undefined_array_key_quote\n_diag_undefined_array_key_quote:\n    .ascii \"\\\"\"\n");
     out.push_str(".globl _diag_undefined_array_key_suffix\n_diag_undefined_array_key_suffix:\n    .ascii \"\\n\"\n");
