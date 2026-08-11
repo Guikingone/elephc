@@ -24,6 +24,34 @@ echo file_get_contents("test.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `filesize()` and `filemtime()` answer `false` for a path they cannot stat.
+///
+/// Seven of the nine stat readers already did; these two were left behind. `filesize()`
+/// answered `0` — a legitimate size for an empty file, so `filesize($f) === false` never
+/// fired and arithmetic silently used zero. `filemtime()` was worse: the AArch64 helper read
+/// the stat buffer WITHOUT checking whether the syscall had filled it, so a missing path
+/// returned uninitialised stack — a different large integer each run.
+///
+/// The success half is the control: both must still behave as plain ints, since declaring
+/// them `int|false` changes how the value is carried.
+#[test]
+fn test_filesize_and_filemtime_report_false_for_an_unstattable_path() {
+    let out = compile_and_run(
+        r#"<?php
+echo var_export(@filesize("/no/such/file"), true), "|";
+echo var_export(@filemtime("/no/such/file"), true), "|";
+
+$p = tempnam(sys_get_temp_dir(), "sz");
+file_put_contents($p, "0123456789");
+$s = filesize($p);
+echo $s, ",", $s + 1, ",", var_export(is_int($s), true), "|";
+echo var_export(filemtime($p) > 0, true);
+unlink($p);
+"#,
+    );
+    assert_eq!(out, "false|false|10,11,true|true");
+}
+
 /// Verifies `FILE_APPEND` extends the file instead of replacing it.
 ///
 /// The flag was accepted by the arity check and then discarded, so the one call whose entire

@@ -58,7 +58,7 @@ pub(crate) fn lower_filemtime(
     ctx: &mut FunctionContext<'_>,
     inst: &Instruction,
 ) -> Result<()> {
-    lower_unary_path_int(ctx, inst, "filemtime", "__rt_filemtime")
+    lower_unary_path_stat_int_or_false(ctx, inst, "filemtime", "__rt_filemtime")
 }
 
 /// Lowers `linkinfo(path)` through the target-aware runtime lstat helper.

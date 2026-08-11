@@ -169,6 +169,7 @@ pub(super) fn lower_filesize_with_wrapper(ctx: &mut FunctionContext<'_>, inst: &
     let path = expect_operand(inst, 0)?;
     load_string_to_result(ctx, path, "filesize")?;
     emit_url_stat_field_or_fallback(ctx, "__rt_filesize", 0);
+    box_stat_int_or_false_result(ctx);
     store_if_result(ctx, inst)
 }
 
@@ -201,6 +202,7 @@ pub(super) fn emit_url_stat_field_or_fallback(
             abi::emit_symbol_address(ctx.emitter, "x9", "_url_stat_matched");
             ctx.emitter.instruction("ldrb w9, [x9]");                           // read whether a registered wrapper scheme matched
             ctx.emitter.instruction(&format!("cbz w9, {}", fallback));          // fall back to filesystem stat when no wrapper matched
+            ctx.emitter.instruction("mov x1, #1");                              // a matched wrapper is a successful stat for int|false consumers
             ctx.emitter.instruction(&format!("b {}", done));                    // keep the wrapper field result
             ctx.emitter.label(&fallback);
             ctx.emitter.instruction("ldr x1, [sp, #0]");                        // restore the path pointer for filesystem fallback
@@ -221,6 +223,7 @@ pub(super) fn emit_url_stat_field_or_fallback(
             ctx.emitter.instruction("movzx r9d, BYTE PTR [r9]");                // read whether a registered wrapper scheme matched
             ctx.emitter.instruction("test r9d, r9d");                           // test the url_stat matched flag
             ctx.emitter.instruction(&format!("jz {}", fallback));               // fall back to filesystem stat when no wrapper matched
+            ctx.emitter.instruction("mov rdx, 1");                              // a matched wrapper is a successful stat for int|false consumers
             ctx.emitter.instruction(&format!("jmp {}", done));                  // keep the wrapper field result
             ctx.emitter.label(&fallback);
             ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");            // restore the path pointer for filesystem fallback
