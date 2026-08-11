@@ -182,17 +182,6 @@ The managed variants must prepare the project before spawning Elephc, set
 target/triple selection, flags, current directories, stdout/stderr assertions,
 runtime arguments, and cleanup.
 
-### 4. Changelog
-
-Add one terse entry at the top of `CHANGELOG.md` under `## [Unreleased]`:
-
-```markdown
-- Fixed the supported-target test matrix for managed-PCRE2 programs so eval, dynamic `instanceof`, and regex regressions are validated hermetically without relying on the removed system-library fallback.
-```
-
-This satisfies the repository's same-PR changelog policy without claiming a new
-production fallback or PHP-visible feature.
-
 ## Invariants and non-goals
 
 - No new branch or worktree.

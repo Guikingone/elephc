@@ -108,6 +108,16 @@ pub(super) fn lower_builtin_call_args(
         crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort => {
             lower_reverse_key_sort_args(ctx, sig, args)
         }
+        crate::builtins::semantics::BuiltinArgumentLowering::OpensslEncrypt => {
+            prepare_openssl_encrypt_tag_local(ctx, args);
+            if !crate::types::call_args::has_named_args(args)
+                && !args.iter().any(is_spread_arg)
+            {
+                lower_positional_builtin_args_with_signature(ctx, sig, args)
+            } else {
+                lower_args_with_signature(ctx, sig, args)
+            }
+        }
         crate::builtins::semantics::BuiltinArgumentLowering::ArraySplice
             if !args.iter().any(is_spread_arg) =>
         {
@@ -120,6 +130,32 @@ pub(super) fn lower_builtin_call_args(
         }
         _ => lower_args_with_signature(ctx, sig, args),
     }
+}
+
+/// Promotes the OpenSSL encrypt tag target to string-capable storage before lowering its load.
+fn prepare_openssl_encrypt_tag_local(ctx: &mut LoweringContext<'_, '_>, args: &[Expr]) {
+    let expanded = crate::types::call_args::expand_static_assoc_spread_args(args);
+    let tag = expanded
+        .iter()
+        .find_map(|arg| match &arg.kind {
+            ExprKind::NamedArg { name, value } if php_symbol_key(name) == "tag" => {
+                Some(value.as_ref())
+            }
+            _ => None,
+        })
+        .or_else(|| {
+            expanded
+                .get(5)
+                .filter(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        });
+    let Some(Expr {
+        kind: ExprKind::Variable(name),
+        ..
+    }) = tag
+    else {
+        return;
+    };
+    ctx.set_local_type(name, PhpType::Str);
 }
 
 /// Lowers plain positional builtin operands without materializing omitted defaults or packing tails.

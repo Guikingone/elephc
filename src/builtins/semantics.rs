@@ -163,6 +163,8 @@ pub enum BuiltinArgumentLowering {
     UserValueSort,
     /// Promote a packed by-reference array before reverse key sorting preserves its keys.
     ReverseKeySort,
+    /// Promote the by-reference OpenSSL tag target before ordinary argument planning.
+    OpensslEncrypt,
     /// Promote a typed `array_splice()` receiver whose `$replacement` changes the element type.
     ///
     /// PHP's `array_splice($a, 1, 1, ["x"])` on `$a = [1, 2, 3]` leaves a heterogeneous

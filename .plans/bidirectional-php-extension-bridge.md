@@ -35,7 +35,7 @@ The following items are already implemented and landed:
 - [ ] Example of a complete, loadable elephc-generated PHP extension (with at least scalar + string + array arguments/returns)
 - [ ] Documentation and user guide for both directions (how to call PHP extensions, and how to build + load an elephc PHP extension)
 - [ ] Bidirectional PoC / test: an elephc-produced PHP extension that itself uses the consumer bridge to call another PHP extension
-- [ ] Update ROADMAP (v0.28 and beyond), CHANGELOG entries, and any related CLI / pipeline docs
+- [ ] Update ROADMAP (v0.28 and beyond) and any related CLI / pipeline docs
 - [ ] Test harness / CI coverage for produced extensions (loading + execution from PHP where the environment has PHP; otherwise focused compile+dlopen tests)
 - [ ] All changes respect project rules (EIR-only paths, all supported targets in the same change or explicitly isolated, `//!` preambles, `///` docblocks, assembly `//` comments at column 81, one runtime emitter per leaf file, focused tests before landing, etc.)
 
@@ -212,7 +212,6 @@ This proves the zval bridge is sufficient for both roles and that the two tracks
 - Update the zval-bridge page to cover the consumer use case.
 - Update `docs/compiling/cli-reference.md` and output docs for the new emit kind.
 - Mark the corresponding items in `ROADMAP.md` (move or add under v0.28 / v0.29 as appropriate).
-- Add user-facing bullets to `CHANGELOG.md` when pieces land.
 - Add a "how to" or internals note if the generated Zend structures are interesting for future work.
 
 ### Task 11 — Polish, constraints, and CI

@@ -413,6 +413,10 @@ pub enum RuntimeFnId {
     HashHmac,
     HashInit,
     HashUpdate,
+    OpensslCipherIvLength,
+    OpensslDecrypt,
+    OpensslEncrypt,
+    OpensslGetCipherMethods,
     Htmlentities,
     Htmlspecialchars,
     Implode,
@@ -622,6 +626,7 @@ impl RuntimeFnId {
                 "ReflectionAttribute".to_string(),
             ))),
             RuntimeFnId::ElephcPharListEntries => PhpType::Array(Box::new(PhpType::Str)),
+            RuntimeFnId::OpensslGetCipherMethods => PhpType::Array(Box::new(PhpType::Str)),
             RuntimeFnId::PregSplit => PhpType::Array(Box::new(PhpType::Mixed)),
             RuntimeFnId::Range => PhpType::Array(Box::new(PhpType::Int)),
             _ => declared.clone(),
@@ -1068,6 +1073,12 @@ impl RuntimeFnId {
             RuntimeFnId::HashHmac => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::HashInit => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::HashUpdate => &[BuiltinRequirement::Bridge("elephc_crypto")],
+            RuntimeFnId::OpensslCipherIvLength
+            | RuntimeFnId::OpensslDecrypt
+            | RuntimeFnId::OpensslEncrypt
+            | RuntimeFnId::OpensslGetCipherMethods => {
+                &[BuiltinRequirement::Bridge("elephc_crypto")]
+            }
             RuntimeFnId::MbStrlen => &[BuiltinRequirement::MacOsLibrary("iconv")],
             RuntimeFnId::Md5 => &[BuiltinRequirement::Bridge("elephc_crypto")],
             RuntimeFnId::Sha1 => &[BuiltinRequirement::Bridge("elephc_crypto")],
@@ -1298,6 +1309,10 @@ impl RuntimeFnId {
                 | RuntimeFnId::ObGetLength
                 | RuntimeFnId::ObGetStatus
                 | RuntimeFnId::ObListHandlers
+                | RuntimeFnId::OpensslCipherIvLength
+                | RuntimeFnId::OpensslDecrypt
+                | RuntimeFnId::OpensslEncrypt
+                | RuntimeFnId::OpensslGetCipherMethods
                 | RuntimeFnId::ParseUrl
                 | RuntimeFnId::PregSplit
                 // print_r renders into the `_print_r_buf` capture buffer and `__rt_pr_finish`
@@ -1734,6 +1749,10 @@ impl RuntimeFnId {
             RuntimeFnId::HashHmac => "hash_hmac",
             RuntimeFnId::HashInit => "__elephc_hash_ctx_init",
             RuntimeFnId::HashUpdate => "__elephc_hash_ctx_update",
+            RuntimeFnId::OpensslCipherIvLength => "openssl_cipher_iv_length",
+            RuntimeFnId::OpensslDecrypt => "openssl_decrypt",
+            RuntimeFnId::OpensslEncrypt => "openssl_encrypt",
+            RuntimeFnId::OpensslGetCipherMethods => "openssl_get_cipher_methods",
             RuntimeFnId::Htmlentities => "htmlentities",
             RuntimeFnId::Htmlspecialchars => "htmlspecialchars",
             RuntimeFnId::Implode => "implode",

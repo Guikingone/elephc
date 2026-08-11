@@ -43,6 +43,7 @@ mod builtins_stream_wrapper_path_ops;
 mod builtins_stream_wrappers;
 mod builtins_strings_binary;
 mod builtins_strings_encoding;
+mod builtins_strings_openssl;
 mod builtins_strings_text;
 mod builtins_symbols;
 mod builtins_system_network;

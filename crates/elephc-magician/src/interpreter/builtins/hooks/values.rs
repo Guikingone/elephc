@@ -195,6 +195,8 @@ pub(in crate::interpreter) enum EvalValuesHook {
     NetworkEnv,
     /// Dispatches `number_format(...)`.
     NumberFormat,
+    /// Dispatches the bridge-backed OpenSSL cipher builtins.
+    Openssl,
     /// Dispatches `ord(...)`.
     Ord,
     /// Dispatches `parse_url(...)`.
@@ -525,6 +527,9 @@ impl EvalValuesHook {
             Self::NetworkEnv => eval_network_env_values_result(name, evaluated_args, values),
             Self::NumberFormat => {
                 eval_number_format_declared_values_result(evaluated_args, values)
+            }
+            Self::Openssl => {
+                eval_openssl_declared_values_result(name, evaluated_args, context, values)
             }
             Self::Ord => one_arg(evaluated_args, values, eval_ord_result),
             Self::ParseUrl => {
