@@ -56,13 +56,26 @@ pub(in crate::interpreter) fn eval_base64_decode_result(
     values: &mut impl RuntimeValueOps,
 ) -> Result<RuntimeCellHandle, EvalStatus> {
     let input = values.string_bytes(value)?;
+    let Some(output) = eval_base64_decode_bytes_mode(&input, strict) else {
+        return values.bool_value(false);
+    };
+    values.string_bytes_value(&output)
+}
+
+/// Decodes raw Base64 text with PHP's permissive non-strict behavior.
+pub(in crate::interpreter) fn eval_base64_decode_bytes(input: &[u8]) -> Vec<u8> {
+    eval_base64_decode_bytes_mode(input, false).unwrap_or_default()
+}
+
+/// Decodes raw Base64 bytes, returning `None` when strict PHP validation fails.
+fn eval_base64_decode_bytes_mode(input: &[u8], strict: bool) -> Option<Vec<u8>> {
     let mut output: Vec<u8> = Vec::with_capacity((input.len() / 4) * 3);
     // `accepted` is php-src's `i`: it counts only characters that entered the accumulator, so
     // a skipped byte never rotates the quartet lane. `padding` is reset by an accepted
     // character in the lax mode and rejected outright in the strict one.
     let mut accepted: usize = 0;
     let mut padding: usize = 0;
-    for byte in input {
+    for byte in input.iter().copied() {
         if byte == b'=' {
             padding += 1;
             continue;
@@ -74,14 +87,14 @@ pub(in crate::interpreter) fn eval_base64_decode_result(
                     continue;
                 }
                 if strict {
-                    return values.bool_value(false);
+                    return None;
                 }
                 continue;
             }
         };
         if padding > 0 {
             if strict {
-                return values.bool_value(false);
+                return None;
             }
             padding = 0;
         }
@@ -116,13 +129,13 @@ pub(in crate::interpreter) fn eval_base64_decode_result(
     output.truncate(complete);
     if strict {
         if accepted % 4 == 1 {
-            return values.bool_value(false);
+            return None;
         }
         if padding > 0 && (padding > 2 || (accepted + padding) % 4 != 0) {
-            return values.bool_value(false);
+            return None;
         }
     }
-    values.string_bytes_value(&output)
+    Some(output)
 }
 
 /// Returns the six-bit Base64 value for one encoded byte.

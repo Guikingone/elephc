@@ -374,8 +374,7 @@ Update:
 - the strict-PHP documentation, including mixed projects and `--define`;
 - include/autoload documentation to mention `.lfc`;
 - source-map and OPcache wording where “PHP source file” currently means every
-  compiled source;
-- `CHANGELOG.md`.
+  compiled source.
 
 Add a focused user-facing page under `docs/beyond-php/` if the overview and CLI
 reference would otherwise need to repeat the complete LFC contract.

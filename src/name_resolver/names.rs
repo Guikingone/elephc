@@ -410,6 +410,7 @@ fn is_builtin_global_constant(name: &str) -> bool {
     // Shared source-of-truth slices for JSON, stream/socket, session, array, and math constants.
     crate::types::json_constants::JSON_INT_CONSTANTS
         .iter()
+        .chain(crate::types::openssl_constants::OPENSSL_INT_CONSTANTS.iter())
         .chain(crate::types::stream_constants::STREAM_INT_CONSTANTS.iter())
         .chain(crate::types::session_constants::SESSION_INT_CONSTANTS.iter())
         .chain(crate::types::error_constants::ERROR_LEVEL_CONSTANTS.iter())

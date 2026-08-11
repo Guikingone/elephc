@@ -41,7 +41,7 @@ checksum, cache identity, transactional publication).
 - [x] Supported targets in the same change: `macos-aarch64`, `linux-aarch64`, `linux-x86_64`
 - [x] Reproducible example with committed manifest/lock: `examples/date-json-regex`
 - [x] User-facing docs (native guide, CLI/env, linking, pipeline, regex, architecture, runtime, …)
-- [x] CHANGELOG `[Unreleased]` entry; ROADMAP alignment where applicable
+- [x] ROADMAP alignment where applicable
 - [x] Focused test suites (native manager, link planning, CLI, runtime features, shim ABI, regex)
 - [x] Managed-PCRE2 CI smoke (including locked offline reinstall) across supported targets
 - [x] Explicit four-mechanism separation documented: native packages ≠ Composer ≠ Rust bridges ≠ toolchains
@@ -1056,7 +1056,7 @@ Update:
   instructions;
 - `docs/php/spl.md`, `docs/php/strings.md`, `docs/php/system-and-io.md` references;
 - `docs/internals/the-runtime.md` for the opaque shim;
-- relevant architecture/README/roadmap/changelog text without claiming native
+- relevant architecture/README/roadmap text without claiming native
   packages cover Composer, Rust bridges or toolchains.
 
 Update the existing `examples/date-json-regex/` rather than creating a redundant

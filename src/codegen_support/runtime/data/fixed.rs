@@ -692,6 +692,20 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     // linked, in which case the guards skip the question exactly like every other
     // elephc-crypto call in this family.
     out.push_str(&comm_directive("_elephc_crypto_is_finalized_fn", 8, target));
+    // Symmetric-cipher bridge slots. OpenSSL call sites publish these separately
+    // from the hash family so hash-only programs never reference cipher symbols.
+    out.push_str(&comm_directive(
+        "_elephc_crypto_cipher_iv_length_fn",
+        8,
+        target,
+    ));
+    out.push_str(&comm_directive(
+        "_elephc_crypto_cipher_methods_fn",
+        8,
+        target,
+    ));
+    out.push_str(&comm_directive("_elephc_crypto_encrypt_fn", 8, target));
+    out.push_str(&comm_directive("_elephc_crypto_decrypt_fn", 8, target));
     // _elephc_phar_extract_url_fn: indirect pointer to the elephc-phar bridge
     // reader. Dynamic phar:// paths publish it before calling the runtime
     // reader; literal phar:// paths are still decoded at compile time.

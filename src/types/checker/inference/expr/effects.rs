@@ -271,7 +271,10 @@ impl Checker {
                         if contextual_callbacks.contains(&idx) {
                             continue;
                         }
-                        if builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2 {
+                        if (builtin_name.eq_ignore_ascii_case("preg_match") && idx == 2)
+                            || (builtin_name.eq_ignore_ascii_case("openssl_encrypt")
+                                && is_openssl_encrypt_tag_arg(arg, idx))
+                        {
                             continue;
                         }
                         if write_only.iter().any(|out| out.index == idx) {
@@ -293,7 +296,7 @@ impl Checker {
                 Self::purge_property_narrowings(env);
                 if builtin_name.eq_ignore_ascii_case("preg_match") {
                     if let Some(arg) = expanded_args.get(2) {
-                        if let Some(name) = preg_match_output_var(arg) {
+                        if let Some(name) = output_variable(arg) {
                             env.insert(name.clone(), PhpType::Array(Box::new(PhpType::Str)));
                         }
                     }
@@ -306,6 +309,13 @@ impl Checker {
                     crate::types::checker::stmt_check::assignments::locals::merge_local_assignment_type(
                         self, &out.variable, &out.written, out.span, env,
                     )?;
+                }
+                if builtin_name.eq_ignore_ascii_case("openssl_encrypt") {
+                    if let Some(arg) = openssl_encrypt_tag_arg(&expanded_args) {
+                        if let Some(name) = output_variable(arg) {
+                            env.insert(name.clone(), PhpType::Str);
+                        }
+                    }
                 }
                 if builtin_name.eq_ignore_ascii_case("unset") {
                     for arg in &expanded_args {
@@ -564,13 +574,36 @@ fn assignment_may_write_property(target: &Expr) -> bool {
     }
 }
 
-/// Returns the variable name used as `preg_match()`'s output `$matches` argument.
-fn preg_match_output_var(arg: &Expr) -> Option<&String> {
+/// Returns the variable name used by a builtin output argument.
+fn output_variable(arg: &Expr) -> Option<&String> {
     match &arg.kind {
         ExprKind::Variable(name) => Some(name),
-        ExprKind::NamedArg { value, .. } => preg_match_output_var(value),
+        ExprKind::NamedArg { value, .. } => output_variable(value),
         _ => None,
     }
+}
+
+/// Returns true when one source-order argument is OpenSSL encrypt's by-reference tag.
+fn is_openssl_encrypt_tag_arg(arg: &Expr, index: usize) -> bool {
+    match &arg.kind {
+        ExprKind::NamedArg { name, .. } => php_symbol_key(name) == "tag",
+        _ => index == 5,
+    }
+}
+
+/// Finds OpenSSL encrypt's tag argument across positional and reordered named calls.
+fn openssl_encrypt_tag_arg(args: &[Expr]) -> Option<&Expr> {
+    args.iter()
+        .find(|arg| {
+            matches!(
+                &arg.kind,
+                ExprKind::NamedArg { name, .. } if php_symbol_key(name) == "tag"
+            )
+        })
+        .or_else(|| {
+            args.get(5)
+                .filter(|arg| !matches!(arg.kind, ExprKind::NamedArg { .. }))
+        })
 }
 
 /// Promotes a packed indexed-array local to an associative array when one of its elements is

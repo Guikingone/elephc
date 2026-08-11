@@ -304,8 +304,26 @@ fn emit_print_r_tagged_scalar(ctx: &mut FunctionContext<'_>) -> Result<()> {
 /// the recursive `(\n ... )\n` body emitted by the runtime `walker`. The array
 /// pointer is preserved across the header write (the write syscall clobbers the
 /// integer result register), then passed with a base indent of 0.
+///
+/// Both null container shapes — the zero pointer and the in-band null-container
+/// sentinel a missed element read materializes — skip the whole rendering (issue
+/// #647). This lowering previously had no null branch at all, so `Array` was
+/// written and the sentinel was then handed to the walker as a live container.
+/// The guard jumps PAST the header write as well as the walk: PHP renders null as
+/// EMPTY output here, unlike `var_dump`, which prints `NULL`. Skipping every write
+/// is what makes all three modes correct at once — echo mode prints nothing and
+/// still returns `true`, and the capture modes leave the buffer empty so
+/// `print_r($null, true)` finalizes to `""`.
 fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: &str) -> Result<()> {
     let result_reg = abi::int_result_reg(ctx.emitter);
+    let skip_label = ctx.next_label("print_r_skip_null_array");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &skip_label,
+    );
     abi::emit_push_reg(ctx.emitter, result_reg);
     emit_write_literal(ctx, b"Array\n");
     abi::emit_pop_reg(ctx.emitter, result_reg);
@@ -319,6 +337,7 @@ fn emit_print_r_array(ctx: &mut FunctionContext<'_>, walker: &str) -> Result<()>
         }
     }
     abi::emit_call_label(ctx.emitter, walker);
+    ctx.emitter.label(&skip_label);
     Ok(())
 }
 
@@ -351,8 +370,18 @@ fn emit_print_r_mixed(ctx: &mut FunctionContext<'_>) {
 /// a top-level render and a render at depth cannot drift apart. That helper owns
 /// the whole layout: the `ClassName Object` header (or PHP's `ClassName Enum[:t]`
 /// for an enum case), the `(` / `)` lines, the per-property body and the
-/// `*RECURSION*` guard.
+/// `*RECURSION*` guard. A zero pointer or the in-band null-container sentinel from
+/// a missed object read skips the walker entirely, matching `print_r(null)`.
 fn emit_print_r_object(ctx: &mut FunctionContext<'_>) {
+    let result_reg = abi::int_result_reg(ctx.emitter);
+    let skip_label = ctx.next_label("print_r_skip_null_object");
+    let scratch_reg = abi::secondary_scratch_reg(ctx.emitter);
+    crate::codegen::sentinels::emit_branch_if_null_container(
+        ctx.emitter,
+        result_reg,
+        scratch_reg,
+        &skip_label,
+    );
     match ctx.emitter.target.arch {
         Arch::AArch64 => {
             ctx.emitter.instruction("mov x1, #0");                              // base indent = 0 for the top-level object
@@ -363,6 +392,7 @@ fn emit_print_r_object(ctx: &mut FunctionContext<'_>) {
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_print_r_object");
+    ctx.emitter.label(&skip_label);
 }
 
 /// Emits `var_dump` output for a boxed Mixed payload in the integer result register.
