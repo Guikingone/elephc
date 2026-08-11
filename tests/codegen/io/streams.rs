@@ -6185,6 +6185,49 @@ fclose($m);
     assert_eq!(out, "'H','o','o','H','','',bool(true)\n");
 }
 
+/// Verifies a stream opened read-only refuses a write, and that every writable mode still
+/// writes.
+///
+/// `php://memory` and `php://temp` are backed by a temporary FILE that elephc opens
+/// read-write whatever the caller asked, so `fopen("php://memory", "r")` accepted writes and
+/// the bytes were really there to read back. A file opened `'r'` was already refused, but by
+/// the OS rather than by elephc.
+///
+/// The mode elephc records on the stream is the authority — the same string
+/// `stream_get_meta_data()['mode']` reports — so the two cannot disagree about what a stream
+/// allows. The second half of the test is the one that matters: a guard that refuses too much
+/// would break every ordinary write, and `a`/`c`/`x` do not start with `r` while `r+` does.
+#[test]
+fn test_a_read_only_stream_refuses_writes() {
+    let out = compile_and_run(
+        r#"<?php
+$m = fopen("php://memory", "r");
+echo var_export(@fwrite($m, "X"), true), ",";
+rewind($m);
+echo var_export(fread($m, 10), true), "|";
+fclose($m);
+
+$t = fopen("php://temp", "r");
+echo var_export(@fwrite($t, "X"), true), "|";
+fclose($t);
+
+$p = tempnam(sys_get_temp_dir(), "wr");
+foreach (["w", "a", "r+", "w+", "a+", "c"] as $mode) {
+    @unlink($p);
+    file_put_contents($p, "seed");
+    $h = fopen($p, $mode);
+    echo var_export(fwrite($h, "Z"), true), ",";
+    fclose($h);
+}
+$mm = fopen("php://memory", "w+");
+echo var_export(fwrite($mm, "ok"), true);
+fclose($mm);
+@unlink($p);
+"#,
+    );
+    assert_eq!(out, "false,''|false|1,1,1,1,1,1,2");
+}
+
 /// Verifies `data://` reports itself as neither local nor lockable, and that the wrappers
 /// around it keep their own answers.
 ///

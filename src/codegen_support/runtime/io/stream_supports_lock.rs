@@ -87,7 +87,7 @@ fn emit_x86_64(emitter: &mut Emitter) {
         "mov r9, QWORD PTR [rax + {STREAM_WRAPPER_ID_OFFSET}]"
     ));                                                                         // which wrapper opened it
     emitter.instruction(&format!("cmp r9, {WRAPPER_ID_DATA}"));
-    emitter.instruction("je __rt_ssl_no");                                      // data:// carries its payload in the URI: nothing to lock
+    emitter.instruction("je __rt_ssl_no_x86");                                  // data:// carries its payload in the URI: nothing to lock
     emitter.instruction(&format!("cmp r9, {WRAPPER_ID_PHP}"));
     emitter.instruction("jne __rt_ssl_yes_x86");                                // only the php:// wrappers lack the lock option
     emitter.instruction(&format!(

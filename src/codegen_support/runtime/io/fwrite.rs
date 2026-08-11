@@ -13,6 +13,10 @@
 //! - A payload larger than the 64 KiB scratch is written unfiltered; v1 stream
 //!   filters target the common small-write case.
 
+use crate::codegen_support::runtime::resources::layout::{
+    STREAM_BACKEND_KIND_OFFSET, STREAM_BACKEND_USER_WRAPPER, STREAM_MODE_LEN_OFFSET,
+    STREAM_MODE_PTR_OFFSET,
+};
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch, platform::Platform};
 
 const FILTER_BUF_SIZE: i64 = 65536;
@@ -49,6 +53,37 @@ pub fn emit_fwrite(emitter: &mut Emitter) {
     emitter.instruction("str x0, [sp, #24]");                                   // save the incoming handle or raw descriptor
     emitter.instruction("str x1, [sp, #8]");                                    // save the payload pointer
     emitter.instruction("str x2, [sp, #16]");                                   // save the payload length
+
+    // -- a read-only stream refuses the write, before anything is attempted --
+    emitter.instruction("bl __rt_stream_state");                                // x0 = the owning state, zero for a raw descriptor
+    emitter.instruction("cbz x0, __rt_fwrite_mode_ok");                         // no state: keep the descriptor-only behaviour
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_BACKEND_KIND_OFFSET}]")); // which backend owns this stream
+    emitter.instruction(&format!("cmp x9, #{STREAM_BACKEND_USER_WRAPPER}"));
+    emitter.instruction("b.eq __rt_fwrite_mode_ok");                            // a user wrapper's stream_write() decides for itself
+    emitter.instruction(&format!("ldr x9, [x0, #{STREAM_MODE_PTR_OFFSET}]"));   // the recorded mode string
+    emitter.instruction(&format!("ldr x10, [x0, #{STREAM_MODE_LEN_OFFSET}]"));  // and its length
+    emitter.instruction("cbz x9, __rt_fwrite_mode_ok");                         // no mode recorded: nothing to refuse on
+    emitter.instruction("cbz x10, __rt_fwrite_mode_ok");
+    emitter.instruction("ldrb w11, [x9]");                                      // the access letter
+    emitter.instruction("cmp w11, #114");                                       // 'r' — the only read-only opener
+    emitter.instruction("b.ne __rt_fwrite_mode_ok");                            // 'w'/'a'/'x'/'c' all write
+    emitter.instruction("mov x12, #0");
+    emitter.label("__rt_fwrite_mode_scan");
+    emitter.instruction("cmp x12, x10");
+    emitter.instruction("b.hs __rt_fwrite_mode_refuse");                        // scanned it all with no '+': read-only
+    emitter.instruction("ldrb w13, [x9, x12]");
+    emitter.instruction("cmp w13, #43");                                        // '+' anywhere grants write access
+    emitter.instruction("b.eq __rt_fwrite_mode_ok");
+    emitter.instruction("add x12, x12, #1");
+    emitter.instruction("b __rt_fwrite_mode_scan");
+    emitter.label("__rt_fwrite_mode_refuse");
+    emitter.instruction("mov x0, #-1");                                         // negative: the caller boxes PHP false
+    emitter.instruction("ldp x29, x30, [sp, #48]");
+    emitter.instruction("add sp, sp, #64");
+    emitter.instruction("ret");
+    emitter.label("__rt_fwrite_mode_ok");
+    emitter.instruction("ldr x0, [sp, #24]");                                   // the session lookup below still needs the handle
+
     emitter.instruction("bl __rt_stream_tls_session");                          // resolve the session while the handle is available
     emitter.instruction("str x0, [sp, #32]");                                   // save the attached TLS session, zero when plain
     emitter.instruction("ldr x0, [sp, #24]");                                   // reload the handle for descriptor resolution
@@ -219,6 +254,40 @@ fn emit_fwrite_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 32], rdi");                       // save the incoming handle or raw descriptor
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save the payload pointer
     emitter.instruction("mov QWORD PTR [rbp - 24], rdx");                       // save the payload length
+
+    // -- a read-only stream refuses the write, before anything is attempted --
+    emitter.instruction("call __rt_stream_state");                              // rax = the owning state, zero for a raw descriptor
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_fwrite_mode_ok_x86");                          // no state: keep the descriptor-only behaviour
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_BACKEND_KIND_OFFSET}]")); // which backend owns this stream
+    emitter.instruction(&format!("cmp r9, {STREAM_BACKEND_USER_WRAPPER}"));
+    emitter.instruction("je __rt_fwrite_mode_ok_x86");                          // a user wrapper's stream_write() decides for itself
+    emitter.instruction(&format!("mov r9, QWORD PTR [rax + {STREAM_MODE_PTR_OFFSET}]")); // the recorded mode string
+    emitter.instruction(&format!("mov r10, QWORD PTR [rax + {STREAM_MODE_LEN_OFFSET}]")); // and its length
+    emitter.instruction("test r9, r9");
+    emitter.instruction("jz __rt_fwrite_mode_ok_x86");                          // no mode recorded: nothing to refuse on
+    emitter.instruction("test r10, r10");
+    emitter.instruction("jz __rt_fwrite_mode_ok_x86");
+    emitter.instruction("movzx r11d, BYTE PTR [r9]");                           // the access letter
+    emitter.instruction("cmp r11d, 114");                                       // 'r' — the only read-only opener
+    emitter.instruction("jne __rt_fwrite_mode_ok_x86");                         // 'w'/'a'/'x'/'c' all write
+    emitter.instruction("xor r11, r11");
+    emitter.label("__rt_fwrite_mode_scan_x86");
+    emitter.instruction("cmp r11, r10");
+    emitter.instruction("jae __rt_fwrite_mode_refuse_x86");                     // scanned it all with no '+': read-only
+    emitter.instruction("movzx eax, BYTE PTR [r9 + r11]");
+    emitter.instruction("cmp eax, 43");                                         // '+' anywhere grants write access
+    emitter.instruction("je __rt_fwrite_mode_ok_x86");
+    emitter.instruction("add r11, 1");
+    emitter.instruction("jmp __rt_fwrite_mode_scan_x86");
+    emitter.label("__rt_fwrite_mode_refuse_x86");
+    emitter.instruction("mov rax, -1");                                         // negative: the caller boxes PHP false
+    emitter.instruction("mov rsp, rbp");
+    emitter.instruction("pop rbp");
+    emitter.instruction("ret");
+    emitter.label("__rt_fwrite_mode_ok_x86");
+    emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // the session lookup below still needs the handle
+
     emitter.instruction("call __rt_stream_tls_session");                        // resolve the session while the handle is available
     emitter.instruction("mov QWORD PTR [rbp - 40], rax");                       // save the attached TLS session, zero when plain
     emitter.instruction("mov rdi, QWORD PTR [rbp - 32]");                       // reload the handle for descriptor resolution

@@ -24,6 +24,64 @@ echo file_get_contents("test.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `sys_get_temp_dir()` derives its answer from `TMPDIR`, as php does.
+///
+/// It used to answer a hardcoded `/tmp`. On macOS php hands out a private per-user directory,
+/// so a program falling back to the shared `/tmp` changed behaviour and not merely its output.
+///
+/// The assertion is a RELATIONSHIP rather than a literal, because the right answer depends on
+/// the machine: whatever `TMPDIR` holds, minus exactly one trailing slash — php removes one,
+/// not all, which is why `/tmp///` must not collapse to `/tmp`. With `TMPDIR` unset the test
+/// falls back to checking the answer is a usable directory, since the constant differs
+/// between macOS (`/var/tmp/`) and Linux (`/tmp`).
+#[test]
+fn test_sys_get_temp_dir_follows_tmpdir() {
+    let out = compile_and_run(
+        r#"<?php
+$env = getenv("TMPDIR");
+$tmp = sys_get_temp_dir();
+if ($env === false || $env === "") {
+    echo var_export(is_dir($tmp), true);
+} else {
+    // Copy every byte but a single trailing slash. Deliberately NOT substr($env, 0, -1):
+    // a negative substr length is itself wrong on this branch, so using it here would make
+    // this test measure that defect instead of this one.
+    $keep = strlen($env);
+    if ($env[$keep - 1] === "/") {
+        $keep--;
+    }
+    $expected = "";
+    for ($i = 0; $i < $keep; $i++) {
+        $expected .= $env[$i];
+    }
+    echo var_export($tmp === $expected, true);
+}
+echo "|", var_export(is_dir($tmp), true);
+"#,
+    );
+    assert_eq!(out, "true|true");
+}
+
+/// Verifies `file_get_contents()` reads a literal `data://` URI.
+///
+/// `fopen("data://…")` already decoded these at compile time, but `file_get_contents()` went
+/// through the filesystem helper and answered `false` with `No such file or directory` —
+/// naming a "path" that was never meant to be one. The `$offset`/`$length` window applies to
+/// the decoded bytes, and a malformed URI still answers `false`, both as php does.
+#[test]
+fn test_file_get_contents_reads_a_literal_data_uri() {
+    let out = compile_and_run(
+        r#"<?php
+echo var_export(file_get_contents("data://text/plain,hello"), true), "|";
+echo var_export(file_get_contents("data://text/plain;base64,aGVsbG8="), true), "|";
+echo var_export(file_get_contents("data://text/plain,a%20b"), true), "|";
+echo var_export(@file_get_contents("data://bogus"), true), "|";
+echo var_export(file_get_contents("data://text/plain,offset", false, null, 2, 3), true);
+"#,
+    );
+    assert_eq!(out, "'hello'|'hello'|'a b'|false|'fse'");
+}
+
 /// Verifies `filesize()` and `filemtime()` answer `false` for a path they cannot stat.
 ///
 /// Seven of the nine stat readers already did; these two were left behind. `filesize()`

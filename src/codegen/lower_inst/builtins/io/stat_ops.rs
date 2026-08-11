@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen_support::platform::Platform;
 
 /// Byte length of the path `tmpfile()` resolves, fixed by the `/tmp/elephc-XXXXXX` template
 /// the runtime helper hands to `mkstemp`, which substitutes the six Xs in place.
@@ -26,10 +27,53 @@ pub(crate) fn lower_sys_get_temp_dir(
     inst: &Instruction,
 ) -> Result<()> {
     super::super::ensure_arg_count(inst, "sys_get_temp_dir", 0)?;
-    let (label, len) = ctx.data.add_string(b"/tmp");
+    // php answers TMPDIR when it is set and non-empty, with exactly ONE trailing slash
+    // removed — `/tmp///` becomes `/tmp//`, not `/tmp` — and otherwise P_tmpdir, which keeps
+    // its trailing slash. A hardcoded `/tmp` is not just a different string: on macOS php
+    // hands out a private per-user directory, so every program sharing /tmp instead is a
+    // behaviour change as well as a compliance one.
+    let (name_label, name_len) = ctx.data.add_string(b"TMPDIR");
+    let fallback: &[u8] = match ctx.emitter.target.platform {
+        Platform::MacOS => b"/var/tmp/",
+        _ => b"/tmp",
+    };
+    let (fallback_label, fallback_len) = ctx.data.add_string(fallback);
+    let use_fallback = ctx.next_label("tmpdir_fallback");
+    let done = ctx.next_label("tmpdir_done");
     let (ptr_reg, len_reg) = abi::string_result_regs(ctx.emitter);
-    abi::emit_symbol_address(ctx.emitter, ptr_reg, &label);
-    abi::emit_load_int_immediate(ctx.emitter, len_reg, len as i64);
+    abi::emit_symbol_address(ctx.emitter, ptr_reg, &name_label);
+    abi::emit_load_int_immediate(ctx.emitter, len_reg, name_len as i64);
+    abi::emit_call_label(ctx.emitter, "__rt_getenv");                           // answers "" when unset
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbz x2, {}", use_fallback));      // unset or empty: P_tmpdir
+            ctx.emitter.instruction("sub x9, x2, #1");                          // index of the last byte
+            ctx.emitter.instruction("ldrb w10, [x1, x9]");
+            ctx.emitter.instruction("cmp w10, #47");                            // '/'
+            ctx.emitter.instruction(&format!("b.ne {}", done));                 // no trailing slash to drop
+            ctx.emitter.instruction("mov x2, x9");                              // drop exactly one
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&use_fallback);
+            abi::emit_symbol_address(ctx.emitter, "x1", &fallback_label);
+            ctx.emitter.instruction(&format!("mov x2, #{}", fallback_len));
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rdx, rdx");
+            ctx.emitter.instruction(&format!("jz {}", use_fallback));           // unset or empty: P_tmpdir
+            ctx.emitter.instruction("mov r9, rdx");
+            ctx.emitter.instruction("sub r9, 1");                               // index of the last byte
+            ctx.emitter.instruction("movzx r10d, BYTE PTR [rax + r9]");
+            ctx.emitter.instruction("cmp r10d, 47");                            // '/'
+            ctx.emitter.instruction(&format!("jne {}", done));                  // no trailing slash to drop
+            ctx.emitter.instruction("mov rdx, r9");                             // drop exactly one
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&use_fallback);
+            abi::emit_symbol_address(ctx.emitter, "rax", &fallback_label);
+            ctx.emitter.instruction(&format!("mov rdx, {}", fallback_len));
+            ctx.emitter.label(&done);
+        }
+    }
     store_if_result(ctx, inst)
 }
 

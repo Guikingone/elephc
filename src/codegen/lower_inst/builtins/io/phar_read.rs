@@ -60,6 +60,14 @@ fn emit_file_get_contents_bytes(
             emit_literal_phar_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
             return Ok(false);
         }
+        if path_literal.starts_with("php://filter/") {
+            emit_literal_php_filter_file_get_contents_bytes(ctx, path_literal)?;
+            return Ok(false);
+        }
+        if path_literal.starts_with("data://") {
+            emit_literal_data_uri_file_get_contents_bytes(ctx, path_literal, persist_literal_bytes);
+            return Ok(false);
+        }
         if path_literal == "php://input" {
             // file_get_contents('php://input'): under --web `__rt_php_input` copies
             // the captured request body into an owned string; in a non-web build it

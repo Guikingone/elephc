@@ -134,10 +134,10 @@ sidebar:
 | [`filectime()`](./builtins/filesystem/filectime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filegroup()`](./builtins/filesystem/filegroup.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileinode()`](./builtins/filesystem/fileinode.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`filemtime()`](./builtins/filesystem/filemtime.md) | `(string $filename): int` | `int` | ✓ | ✓ |
+| [`filemtime()`](./builtins/filesystem/filemtime.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileowner()`](./builtins/filesystem/fileowner.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fileperms()`](./builtins/filesystem/fileperms.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
-| [`filesize()`](./builtins/filesystem/filesize.md) | `(string $filename): int` | `int` | ✓ | ✓ |
+| [`filesize()`](./builtins/filesystem/filesize.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`filetype()`](./builtins/filesystem/filetype.md) | `(string $filename): mixed` | `mixed` | ✓ | ✓ |
 | [`fnmatch()`](./builtins/filesystem/fnmatch.md) | `(string $pattern, string $filename, int $flags = 0): bool` | `bool` | ✓ | ✓ |
 | [`getcwd()`](./builtins/filesystem/getcwd.md) | `(): string` | `string` | ✓ | ✓ |
@@ -192,7 +192,7 @@ sidebar:
 | [`fprintf()`](./builtins/io/fprintf.md) | `(resource $stream, string $format, ...$values): int` | `int` | ✓ | ✓ |
 | [`fputcsv()`](./builtins/io/fputcsv.md) | `(resource $stream, array $fields, string $separator = ',', string $enclosure = '"', string $escape = '\\', string $eol = '\n'): int` | `int` | ✓ | ✓ |
 | [`fputs()`](./builtins/io/fputs.md) | `(mixed $stream, string $data): mixed` | `mixed` | ✓ | ✓ |
-| [`fread()`](./builtins/io/fread.md) | `(resource $stream, int $length): string` | `string` | ✓ | ✓ |
+| [`fread()`](./builtins/io/fread.md) | `(resource $stream, int $length): mixed` | `mixed` | ✓ | ✓ |
 | [`fscanf()`](./builtins/io/fscanf.md) | `(resource $stream, string $format, ...$vars): array` | `array` | ✓ | ✓ |
 | [`fseek()`](./builtins/io/fseek.md) | `(resource $stream, int $offset, int $whence = 0): int` | `int` | ✓ | ✓ |
 | [`fstat()`](./builtins/io/fstat.md) | `(resource $stream): mixed` | `mixed` | ✓ | ✓ |

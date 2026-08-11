@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function filesize(string $filename): int
+function filesize(string $filename): mixed
 ```
 
 ## What the type checker enforces

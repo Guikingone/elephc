@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function filemtime(string $filename): int
+function filemtime(string $filename): mixed
 ```
 
 ## What the type checker enforces

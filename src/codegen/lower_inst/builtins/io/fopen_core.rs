@@ -17,8 +17,9 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
     let filename_literal = optional_const_string_operand(ctx, filename)?;
     begin_fopen_context_scope(ctx, inst.operands.get(3).copied())?;
     if let Some(path) = filename_literal.as_deref() {
+        let open_mode = LiteralOpenMode::Operand(mode);
         if path.starts_with("php://filter/") {
-            emit_literal_php_filter_fopen_result(ctx, inst, path)?;
+            emit_literal_php_filter_fopen_result(ctx, open_mode, path)?;
         } else if let Some(underlying) = path.strip_prefix("compress.zlib://") {
             emit_literal_compress_wrapper_fopen_result(
                 ctx,
@@ -34,7 +35,7 @@ pub(crate) fn lower_fopen(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
                 CompressWrapper::Bzip2,
             )?;
         } else {
-            emit_literal_fopen_result(ctx, inst, path)?;
+            emit_literal_fopen_result(ctx, open_mode, path)?;
         }
         emit_record_stream_mode_after_boxed(ctx, mode)?;
         finish_fopen_context_scope(ctx);
@@ -516,12 +517,34 @@ pub(super) fn emit_request_default_stream_context_handle(ctx: &mut FunctionConte
 }
 
 /// Emits the boxed `fopen()` result for a compile-time literal path without storing it.
+/// Where a literal open gets its mode.
+///
+/// `fopen()` reads it from the call's second argument. `file_get_contents()` has no such
+/// argument, and its second operand is `$use_include_path` — reading that as a mode is how
+/// this helper stayed unusable from there.
+#[derive(Clone, Copy)]
+pub(super) enum LiteralOpenMode {
+    /// The mode string the call passed.
+    Operand(ValueId),
+    /// A read-only open, fixed by a caller that has no `$mode` argument.
+    ReadOnly,
+}
+
+impl LiteralOpenMode {
+    /// Whether this open writes. A caller-fixed read-only open never does.
+    fn is_write(self, ctx: &mut FunctionContext<'_>) -> Result<bool> {
+        match self {
+            LiteralOpenMode::Operand(mode) => literal_fopen_mode_is_write(ctx, mode),
+            LiteralOpenMode::ReadOnly => Ok(false),
+        }
+    }
+}
+
 pub(super) fn emit_literal_fopen_result(
     ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
+    mode: LiteralOpenMode,
     path: &str,
 ) -> Result<()> {
-    let mode = expect_operand(inst, 1)?;
     if let Some(fd) = php_standard_stream_fd(path).or_else(|| php_fd_stream(path)) {
         emit_dup_fd_result(ctx, fd);
         box_stream_fd_or_false_result(ctx, "fopen");
@@ -541,7 +564,7 @@ pub(super) fn emit_literal_fopen_result(
         return emit_literal_ftp_fopen_result(ctx, path);
     }
     if path.starts_with("phar://") {
-        if literal_fopen_mode_is_write(ctx, mode)? {
+        if mode.is_write(ctx)? {
             return emit_literal_phar_fopen_write_result(ctx, path);
         }
         return emit_literal_phar_fopen_read_result(ctx, path);
@@ -553,10 +576,35 @@ pub(super) fn emit_literal_fopen_result(
 }
 
 /// Emits a runtime `fopen()` call for a literal path and the caller's mode operand.
+/// Loads the open mode into the string result registers, materializing `"r"` for a
+/// caller-fixed read-only open.
+fn emit_literal_open_mode_string(
+    ctx: &mut FunctionContext<'_>,
+    mode: LiteralOpenMode,
+) -> Result<()> {
+    match mode {
+        LiteralOpenMode::Operand(mode) => load_string_to_result(ctx, mode, "fopen mode"),
+        LiteralOpenMode::ReadOnly => {
+            let (label, len) = ctx.data.add_string(b"r");
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_symbol_address(ctx.emitter, "x1", &label);
+                    ctx.emitter.instruction(&format!("mov x2, #{}", len));      // the fixed read-only mode
+                }
+                Arch::X86_64 => {
+                    abi::emit_symbol_address(ctx.emitter, "rax", &label);
+                    ctx.emitter.instruction(&format!("mov rdx, {}", len));      // the fixed read-only mode
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 pub(super) fn emit_runtime_fopen_literal_result(
     ctx: &mut FunctionContext<'_>,
     path: &str,
-    mode: ValueId,
+    mode: LiteralOpenMode,
 ) -> Result<()> {
     let (path_label, path_len) = ctx.data.add_string(path.as_bytes());
     match ctx.emitter.target.arch {
@@ -564,7 +612,7 @@ pub(super) fn emit_runtime_fopen_literal_result(
             abi::emit_symbol_address(ctx.emitter, "x1", &path_label);
             ctx.emitter.instruction(&format!("mov x2, #{}", path_len));         // pass the literal fopen path byte length
             abi::emit_push_reg_pair(ctx.emitter, "x1", "x2");
-            load_string_to_result(ctx, mode, "fopen mode")?;
+            emit_literal_open_mode_string(ctx, mode)?;
             ctx.emitter.instruction("mov x3, x1");                              // pass the fopen mode pointer with the literal path
             ctx.emitter.instruction("mov x4, x2");                              // pass the fopen mode length with the literal path
             abi::emit_pop_reg_pair(ctx.emitter, "x1", "x2");
@@ -573,7 +621,7 @@ pub(super) fn emit_runtime_fopen_literal_result(
             abi::emit_symbol_address(ctx.emitter, "rax", &path_label);
             ctx.emitter.instruction(&format!("mov rdx, {}", path_len));         // pass the literal fopen path byte length
             abi::emit_push_reg_pair(ctx.emitter, "rax", "rdx");
-            load_string_to_result(ctx, mode, "fopen mode")?;
+            emit_literal_open_mode_string(ctx, mode)?;
             ctx.emitter.instruction("mov rdi, rax");                            // pass the fopen mode pointer with the literal path
             ctx.emitter.instruction("mov rsi, rdx");                            // pass the fopen mode length with the literal path
             abi::emit_pop_reg_pair(ctx.emitter, "rax", "rdx");
@@ -588,7 +636,7 @@ pub(super) fn emit_runtime_fopen_literal_result(
 /// Emits a literal `fopen("php://filter/...", ...)` result without storing it.
 pub(super) fn emit_literal_php_filter_fopen_result(
     ctx: &mut FunctionContext<'_>,
-    inst: &Instruction,
+    mode: LiteralOpenMode,
     path: &str,
 ) -> Result<()> {
     let Some((mode_bits, filter_ids, resource)) = parse_php_filter_url(path) else {
@@ -596,7 +644,7 @@ pub(super) fn emit_literal_php_filter_fopen_result(
         box_stream_fd_or_false_result(ctx, "fopen_php_filter");
         return Ok(());
     };
-    emit_literal_fopen_result(ctx, inst, &resource)?;
+    emit_literal_fopen_result(ctx, mode, &resource)?;
     if mode_bits != 0 {
         emit_php_filter_table_stamps(ctx, mode_bits, &filter_ids);
     }

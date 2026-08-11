@@ -19088,7 +19088,7 @@
           "type": "string"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "filemtime",
@@ -19432,7 +19432,7 @@
           "type": "string"
         }
       ],
-      "return_type": "int",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "filesize",
@@ -20958,7 +20958,7 @@
           "type": "int"
         }
       ],
-      "return_type": "string",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "fread",

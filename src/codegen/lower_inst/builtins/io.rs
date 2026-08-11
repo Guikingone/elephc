@@ -94,7 +94,8 @@ use close_crypto_arch::*;
 use stream_read_helpers::*;
 use context_result_helpers::*;
 use stream_context::*;
-use fopen_core::{begin_fopen_context_scope, emit_request_default_stream_context_handle, finish_fopen_context_scope};
+use fopen_core::{begin_fopen_context_scope, emit_literal_php_filter_fopen_result,
+    emit_request_default_stream_context_handle, finish_fopen_context_scope, LiteralOpenMode};
 use resource_handles::*;
 use seek_hash_arch::*;
 use boxing_helpers::*;
@@ -185,6 +186,114 @@ pub(super) use string_validation::load_string_to_result;
 /// The extracted bytes live in read-only `.data`, so a following `$offset`/`$length` window — which
 /// trims its input in place and frees a failed read — would move and free a rodata pointer.
 /// `persist` therefore copies the entry into an owned heap string before the window runs.
+/// Emits a literal `php://filter/…` read: open, read to the end, close.
+///
+/// `fopen()` on the same URI already worked — it parses the URL, opens the wrapped resource
+/// and stamps the filter chain — so this reuses that opener rather than teaching the
+/// filesystem helper about filters. The bytes are taken into owned storage BEFORE the close,
+/// because the read answers with the stream's own buffer and closing it takes that away.
+fn emit_literal_php_filter_file_get_contents_bytes(
+    ctx: &mut FunctionContext<'_>,
+    path: &str,
+) -> Result<()> {
+    emit_literal_php_filter_fopen_result(ctx, LiteralOpenMode::ReadOnly, path)?;
+    let fail = ctx.next_label("fgc_filter_failed");
+    let done = ctx.next_label("fgc_filter_done");
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            ctx.emitter.instruction("ldr x9, [x0]");                            // the boxed open result tag
+            ctx.emitter.instruction("cmp x9, #9");                              // did it answer a resource?
+            ctx.emitter.instruction(&format!("b.ne {}", fail));                 // a failed open reads as PHP false
+            ctx.emitter.instruction("ldr x0, [x0, #8]");                        // the opaque stream handle
+            ctx.emitter.instruction("str x0, [sp, #0]");                        // keep it for the close
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // x1/x2 = the filtered bytes
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");              // own them before the close reclaims the buffer
+            ctx.emitter.instruction("str x1, [sp, #8]");
+            ctx.emitter.instruction("str x2, [sp, #16]");
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // php closes the stream it opened for us
+            ctx.emitter.instruction("ldr x0, [sp, #0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("ldr x1, [sp, #8]");                        // the owned bytes are the result
+            ctx.emitter.instruction("ldr x2, [sp, #16]");
+            ctx.emitter.instruction(&format!("b {}", done));
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("mov x1, #0");                              // null string pointer asks the boxer for PHP false
+            ctx.emitter.instruction("mov x2, #0");
+            ctx.emitter.label(&done);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+        }
+        Arch::X86_64 => {
+            abi::emit_reserve_temporary_stack(ctx.emitter, 32);
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax]");                 // the boxed open result tag
+            ctx.emitter.instruction("cmp r9, 9");                               // did it answer a resource?
+            ctx.emitter.instruction(&format!("jne {}", fail));                  // a failed open reads as PHP false
+            ctx.emitter.instruction("mov rax, QWORD PTR [rax + 8]");            // the opaque stream handle
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // keep it for the close
+            ctx.emitter.instruction("mov rdi, rax");
+            abi::emit_call_label(ctx.emitter, "__rt_stream_get_contents");      // rax/rdx = the filtered bytes
+            abi::emit_call_label(ctx.emitter, "__rt_str_persist");              // own them before the close reclaims the buffer
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rdx");
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_mark_closed");     // php closes the stream it opened for us
+            ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");
+            abi::emit_call_label(ctx.emitter, "__rt_resource_release");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");            // the owned bytes are the result
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 16]");
+            ctx.emitter.instruction(&format!("jmp {}", done));
+            ctx.emitter.label(&fail);
+            ctx.emitter.instruction("xor eax, eax");                            // null string pointer asks the boxer for PHP false
+            ctx.emitter.instruction("xor edx, edx");
+            ctx.emitter.label(&done);
+            abi::emit_release_temporary_stack(ctx.emitter, 32);
+        }
+    }
+    Ok(())
+}
+
+/// Emits the decoded payload of a literal `data://` URI as the read's bytes.
+///
+/// `fopen("data://…")` already decodes these at compile time; `file_get_contents()` went
+/// through the filesystem helper instead and answered false with "No such file or directory",
+/// naming a path that was never meant to be one. A malformed URI keeps that answer, which is
+/// what php does with it too.
+fn emit_literal_data_uri_file_get_contents_bytes(
+    ctx: &mut FunctionContext<'_>,
+    path: &str,
+    persist: bool,
+) {
+    match decode_data_uri_for_fopen(path) {
+        Some(payload) => {
+            let (symbol, len) = ctx.data.add_string(&payload);
+            match ctx.emitter.target.arch {
+                Arch::AArch64 => {
+                    abi::emit_symbol_address(ctx.emitter, "x1", &symbol);
+                    ctx.emitter.instruction(&format!("mov x2, #{}", len));      // decoded data:// payload byte length
+                }
+                Arch::X86_64 => {
+                    abi::emit_symbol_address(ctx.emitter, "rax", &symbol);
+                    ctx.emitter.instruction(&format!("mov rdx, {}", len));      // decoded data:// payload byte length
+                }
+            }
+            if persist {
+                abi::emit_call_label(ctx.emitter, "__rt_str_persist");
+            }
+        }
+        None => match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, #0");                          // null string pointer asks the boxer for PHP false
+                ctx.emitter.instruction("mov x2, #0");                          // clear the unused failure length
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("xor eax, eax");                        // null string pointer asks the boxer for PHP false
+                ctx.emitter.instruction("xor edx, edx");                        // clear the unused failure length
+            }
+        },
+    }
+}
+
 fn emit_literal_phar_file_get_contents_bytes(
     ctx: &mut FunctionContext<'_>,
     path: &str,

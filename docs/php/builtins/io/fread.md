@@ -8,7 +8,7 @@ sidebar:
 ## fread()
 
 ```php
-function fread(resource $stream, int $length): string
+function fread(resource $stream, int $length): mixed
 ```
 
 Binary-safe file read.
@@ -17,7 +17,7 @@ Binary-safe file read.
 - `$stream` (`resource`)
 - `$length` (`int`)
 
-**Returns**: `string`
+**Returns**: `mixed`
 
 ## Availability
 

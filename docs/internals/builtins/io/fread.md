@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function fread(resource $stream, int $length): string
+function fread(resource $stream, int $length): mixed
 ```
 
 ## What the type checker enforces
