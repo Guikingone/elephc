@@ -835,33 +835,61 @@ echo "done";
     assert_eq!(out.stdout, "done");
 }
 
-/// Verifies `fputcsv()` casts every field, as `php_fputcsv` does through `zval_get_tmp_string`.
+/// Verifies `fputcsv()` casts each element LAYOUT, as `php_fputcsv` does per field.
 ///
-/// Each row here is a DIFFERENT element layout, and the layout — not a static string-array
-/// requirement — is what the writer has to read: 16-byte `(ptr, len)` slots for strings, 8-byte
-/// payloads for int/float/bool, 8-byte cell pointers for a gradual array. Every expectation
-/// below was measured against `php -n` 8.5.6.
-#[test]
-fn test_fputcsv_casts_every_field_layout_like_php() {
-    let (out, dir) = compile_and_run_in_dir(
+/// One case per layout rather than one test for all six. The layout is what the writer has to
+/// read — 16-byte (ptr, len) slots for strings, 8-byte payloads for int/float/bool, 8-byte cell
+/// pointers for a gradual array — so a single combined test can only report that one of six is
+/// wrong, which is useless on an architecture this host cannot run. Every expectation was
+/// measured against `php -n` 8.5.6.
+fn fputcsv_layout_case(row: &str, expected: &str) {
+    let source = format!(
         r#"<?php
 $out = fopen("cast_out.csv", "w");
-fputcsv($out, ["a", "b"], ",", "\"", "\\");
-fputcsv($out, [1, 2, 3], ",", "\"", "\\");
-fputcsv($out, [1.5, 2.25], ",", "\"", "\\");
-fputcsv($out, [true, false], ",", "\"", "\\");
-fputcsv($out, ["name", 42, 3.5, true, null], ",", "\"", "\\");
-fputcsv($out, ["with,comma", 7], ",", "\"", "\\");
+fputcsv($out, {row}, ",", "\"", "\\");
 fclose($out);
 echo file_get_contents("cast_out.csv");
 unlink("cast_out.csv");
-"#,
+"#
     );
-    assert_eq!(
-        out,
-        "a,b\n1,2,3\n1.5,2.25\n1,\nname,42,3.5,1,\n\"with,comma\",7\n"
-    );
+    let (out, dir) = compile_and_run_in_dir(&source);
+    assert_eq!(out, expected, "row {row} rendered wrongly");
     let _ = fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn test_fputcsv_string_layout() {
+    fputcsv_layout_case(r#"["a", "b"]"#, "a,b\n");
+}
+
+#[test]
+fn test_fputcsv_int_layout() {
+    fputcsv_layout_case("[1, 2, 3]", "1,2,3\n");
+}
+
+#[test]
+fn test_fputcsv_float_layout() {
+    fputcsv_layout_case("[1.5, 2.25]", "1.5,2.25\n");
+}
+
+#[test]
+fn test_fputcsv_bool_layout() {
+    fputcsv_layout_case("[true, false]", "1,\n");
+}
+
+#[test]
+fn test_fputcsv_boxed_mixed_layout() {
+    fputcsv_layout_case(r#"["name", 42, 3.5, true, null]"#, "name,42,3.5,1,\n");
+}
+
+#[test]
+fn test_fputcsv_boxed_layout_still_quotes() {
+    fputcsv_layout_case(r#"["with,comma", 7]"#, "\"with,comma\",7\n");
+}
+
+#[test]
+fn test_fputcsv_empty_row() {
+    fputcsv_layout_case("[]", "\n");
 }
 
 /// Verifies a `foreach` row reaches the writer as its ARRAY, not as the Mixed cell carrying it.
