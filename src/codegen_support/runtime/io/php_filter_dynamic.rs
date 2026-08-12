@@ -14,8 +14,12 @@
 //! - Attaching needs nothing new. The literal path already goes through `__rt_filter_create` and
 //!   `__rt_stream_filter_link`, two runtime helpers with plain arguments; the only difference
 //!   here is that the id and direction are run-time values rather than immediates.
-//! - An unrecognised filter name publishes direction 0, which opens the resource unfiltered —
-//!   what the literal path does with the same URL.
+//! - An unrecognised name is SKIPPED and its neighbours still apply, and a URL whose every name is
+//!   unrecognised publishes direction 0, which opens the resource unfiltered. Both readings match
+//!   what the literal path does with the same URL, and what `php -n` 8.5.6 was measured doing.
+//! - The parse publishes a LIST. `read=string.toupper|string.rot13` names two filters and php runs
+//!   the bytes through both; a one-slot hand-off answered the first filter's result and said
+//!   nothing, which is the worst shape a wrong answer can take.
 
 use crate::codegen_support::abi;
 use crate::codegen_support::{emit::Emitter, platform::Arch};
@@ -23,6 +27,14 @@ use crate::codegen_support::{emit::Emitter, platform::Arch};
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_READ_FILTER_HEAD_OFFSET, STREAM_WRITE_FILTER_HEAD_OFFSET,
 };
+
+/// Filters a single run-time `php://filter` URL can hand to the attach.
+///
+/// php-src imposes no limit, so this is a bound elephc adds; it exists because the hand-off is a
+/// fixed BSS array rather than an allocation. Names past it are dropped. Nothing in the wild
+/// chains anywhere near this many — the literal path, which is what real code takes, has no bound
+/// at all — but the number is stated here rather than left to be discovered from the assembly.
+pub(crate) const PHP_FILTER_PENDING_MAX: usize = 32;
 
 /// Emits `__rt_pf_match`, `__rt_php_filter_parse` and `__rt_php_filter_attach_pending`.
 pub fn emit_php_filter_dynamic(emitter: &mut Emitter) {
@@ -70,10 +82,11 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: parse a run-time php://filter URL ---");
     emitter.label_global("__rt_php_filter_parse");
-    // Frame: [0]=cursor [8]=remaining [16]=direction [24]=scan index, saved pair at [48].
-    emitter.instruction("sub sp, sp, #64");                                     // reserve the parse frame
-    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
+    // Frame: [0]=cursor [8]=remaining [16]=direction [24]=scan index / name length
+    //        [32]=segment start [40]=filters resolved [48]=separator offset, saved pair at [64].
+    emitter.instruction("sub sp, sp, #80");                                     // reserve the parse frame
+    emitter.instruction("stp x29, x30, [sp, #64]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #64");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the path
     emitter.instruction("str x1, [sp, #8]");                                    // preserve its length
     abi::emit_symbol_address(emitter, "x2", "_pf_n_prefix");
@@ -163,42 +176,70 @@ fn emit_filter_parse_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_pf_match");
     emitter.instruction("cbnz x0, __rt_pfp_no");                                // nested filters are not supported
 
-    // Only the first filter of a `|`-separated list is applied, matching the literal path.
+    // -- resolve EVERY name in the `|` chain, in order, the way the literal path does --
+    emitter.instruction("str xzr, [sp, #32]");                                  // the current segment's start offset
+    emitter.instruction("str xzr, [sp, #40]");                                  // filters resolved so far
+
+    emitter.label("__rt_pfp_seg");
     emitter.instruction("ldr x9, [sp, #24]");                                   // the full name length
+    emitter.instruction("ldr x10, [sp, #32]");                                  // where this segment starts
+    emitter.instruction("cmp x10, x9");
+    emitter.instruction("b.hs __rt_pfp_publish");                               // past the last segment
+    // Measure this segment: it ends at the next '|', or at the end of the name.
     emitter.instruction("ldr x0, [sp, #0]");                                    // the name
-    emitter.instruction("mov x10, #0");                                         // scan index
+    emitter.instruction("mov x11, x10");                                        // scan index, from the segment start
     emitter.label("__rt_pfp_pipe");
-    emitter.instruction("cmp x10, x9");                                         // reached the end of the name?
-    emitter.instruction("b.hs __rt_pfp_resolve");                               // no pipe: use the whole name
-    emitter.instruction("ldrb w11, [x0, x10]");
-    emitter.instruction("cmp w11, #124");                                       // ASCII '|'
-    emitter.instruction("b.eq __rt_pfp_resolve");                               // stop at the first one
-    emitter.instruction("add x10, x10, #1");
+    emitter.instruction("cmp x11, x9");                                         // reached the end of the name?
+    emitter.instruction("b.hs __rt_pfp_seg_end");                               // no further pipe: the segment runs to it
+    emitter.instruction("ldrb w12, [x0, x11]");
+    emitter.instruction("cmp w12, #124");                                       // ASCII '|'
+    emitter.instruction("b.eq __rt_pfp_seg_end");                               // this one closes the segment
+    emitter.instruction("add x11, x11, #1");
     emitter.instruction("b __rt_pfp_pipe");
 
-    emitter.label("__rt_pfp_resolve");
-    emitter.instruction("mov x1, x10");                                         // the first filter's name length
+    emitter.label("__rt_pfp_seg_end");
+    emitter.instruction("str x11, [sp, #48]");                                  // remember where the separator sits
+    emitter.instruction("sub x1, x11, x10");                                    // this segment's length
+    emitter.instruction("cbz x1, __rt_pfp_seg_next");                           // an empty segment names nothing
+    emitter.instruction("add x0, x0, x10");                                     // the segment's first byte
     emitter.instruction("bl __rt_builtin_filter_id");                           // x0 = the built-in id, or 0
-    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_id");
-    emitter.instruction("str x0, [x12]");                                       // publish it
+    emitter.instruction("cbz x0, __rt_pfp_seg_next");                           // an unrecognised name is SKIPPED
+    emitter.instruction("ldr x11, [sp, #40]");                                  // filters resolved so far
+    emitter.instruction(&format!("cmp x11, #{PHP_FILTER_PENDING_MAX}"));
+    emitter.instruction("b.hs __rt_pfp_seg_next");                              // the hand-off array is full
+    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_ids");
+    emitter.instruction("str x0, [x12, x11, lsl #3]");                          // append this filter to the list
+    emitter.instruction("add x11, x11, #1");
+    emitter.instruction("str x11, [sp, #40]");
+
+    emitter.label("__rt_pfp_seg_next");
+    emitter.instruction("ldr x11, [sp, #48]");                                  // the separator this segment ended on
+    emitter.instruction("add x11, x11, #1");                                    // the next segment starts after it
+    emitter.instruction("str x11, [sp, #32]");
+    emitter.instruction("b __rt_pfp_seg");
+
+    emitter.label("__rt_pfp_publish");
+    emitter.instruction("ldr x11, [sp, #40]");                                  // how many filters resolved
+    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_count");
+    emitter.instruction("str x11, [x12]");                                      // publish the count
     emitter.instruction("ldr x9, [sp, #16]");                                   // the requested direction
-    emitter.instruction("cmp x0, #0");                                          // did the name resolve?
-    emitter.instruction("csel x9, xzr, x9, eq");                                // an unknown filter attaches nothing
+    emitter.instruction("cmp x11, #0");                                         // did ANY name resolve?
+    emitter.instruction("csel x9, xzr, x9, eq");                                // a chain of unknowns attaches nothing
     abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_mode");
     emitter.instruction("str x9, [x12]");                                       // publish the direction
     emitter.instruction("mov x0, #1");                                          // the caller should open the resource
-    emitter.instruction("ldp x29, x30, [sp, #48]");
-    emitter.instruction("add sp, sp, #64");
+    emitter.instruction("ldp x29, x30, [sp, #64]");
+    emitter.instruction("add sp, sp, #80");
     emitter.instruction("ret");
 
     emitter.label("__rt_pfp_no");
-    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_id");
+    abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_count");
     emitter.instruction("str xzr, [x12]");                                      // nothing is pending
     abi::emit_symbol_address(emitter, "x12", "_php_filter_pending_mode");
     emitter.instruction("str xzr, [x12]");
     emitter.instruction("mov x0, #0");                                          // the path is not a usable filter URL
-    emitter.instruction("ldp x29, x30, [sp, #48]");
-    emitter.instruction("add sp, sp, #64");
+    emitter.instruction("ldp x29, x30, [sp, #64]");
+    emitter.instruction("add sp, sp, #80");
     emitter.instruction("ret");
 }
 
@@ -208,17 +249,19 @@ fn emit_filter_attach_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: attach the filter a php://filter URL named ---");
     emitter.label_global("__rt_php_filter_attach_pending");
     // Frame: [0]=boxed result [8]=stream handle [16]=filter handle [24]=direction
-    emitter.instruction("sub sp, sp, #48");                                     // reserve the attach frame
-    emitter.instruction("stp x29, x30, [sp, #32]");                             // save frame pointer and return address
-    emitter.instruction("add x29, sp, #32");                                    // establish the helper frame pointer
+    //        [32]=list index [40]=filters published, saved pair at [48].
+    emitter.instruction("sub sp, sp, #64");                                     // reserve the attach frame
+    emitter.instruction("stp x29, x30, [sp, #48]");                             // save frame pointer and return address
+    emitter.instruction("add x29, sp, #48");                                    // establish the helper frame pointer
     emitter.instruction("str x0, [sp, #0]");                                    // preserve the boxed result
     abi::emit_symbol_address(emitter, "x9", "_php_filter_pending_mode");
     emitter.instruction("ldr x10, [x9]");                                       // the direction the URL asked for
     emitter.instruction("str xzr, [x9]");                                       // clear it: exactly one open consumes it
     emitter.instruction("str x10, [sp, #24]");
-    abi::emit_symbol_address(emitter, "x9", "_php_filter_pending_id");
-    emitter.instruction("ldr x11, [x9]");                                       // the filter it named
+    abi::emit_symbol_address(emitter, "x9", "_php_filter_pending_count");
+    emitter.instruction("ldr x11, [x9]");                                       // how many filters the URL named
     emitter.instruction("str xzr, [x9]");                                       // cleared for the same reason
+    emitter.instruction("str x11, [sp, #40]");
     emitter.instruction("cbz x10, __rt_pfa_done");                              // no direction: nothing to attach
     emitter.instruction("cbz x11, __rt_pfa_done");                              // no filter: the resource opened plain
     emitter.instruction("ldr x0, [sp, #0]");
@@ -227,7 +270,19 @@ fn emit_filter_attach_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b.ne __rt_pfa_done");                                  // a false result carries no stream
     emitter.instruction("ldr x9, [x0, #8]");                                    // the opaque stream handle
     emitter.instruction("str x9, [sp, #8]");
-    emitter.instruction("mov x0, x11");                                         // the built-in filter id
+
+    // Attach in list order: php runs the bytes through the filters the way the URL spelled them,
+    // and `__rt_stream_filter_link` appends at the tail, so creating in order builds that chain.
+    emitter.instruction("str xzr, [sp, #32]");                                  // the first filter in the list
+    emitter.label("__rt_pfa_next");
+    emitter.instruction("ldr x9, [sp, #32]");                                   // which filter this pass attaches
+    emitter.instruction("ldr x10, [sp, #40]");                                  // how many there are
+    emitter.instruction("cmp x9, x10");
+    emitter.instruction("b.hs __rt_pfa_done");                                  // the whole chain is attached
+    abi::emit_symbol_address(emitter, "x11", "_php_filter_pending_ids");
+    emitter.instruction("ldr x0, [x11, x9, lsl #3]");                           // the built-in filter id
+    emitter.instruction("add x9, x9, #1");                                      // advance before the calls clobber it
+    emitter.instruction("str x9, [sp, #32]");
     emitter.instruction("mov x1, #0");                                          // built-ins carry no user-filter object
     emitter.instruction("ldr x2, [sp, #24]");                                   // direction bits from the URL
     emitter.instruction("mov x3, #0");                                          // built-ins retain no params value
@@ -244,16 +299,18 @@ fn emit_filter_attach_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_pfa_write");
     emitter.instruction("ldr x10, [sp, #24]");
     emitter.instruction("tst x10, #2");                                         // does it filter writes?
-    emitter.instruction("b.eq __rt_pfa_done");
+    emitter.instruction("b.eq __rt_pfa_next");
     emitter.instruction("ldr x0, [sp, #8]");                                    // stream handle
     emitter.instruction("ldr x1, [sp, #16]");                                   // filter handle
     emitter.instruction(&format!("mov x2, #{STREAM_WRITE_FILTER_HEAD_OFFSET}"));
     emitter.instruction("mov x3, #0");                                          // append at the chain tail
     abi::emit_call_label(emitter, "__rt_stream_filter_link");
+    emitter.instruction("b __rt_pfa_next");                                     // on to the next filter in the chain
+
     emitter.label("__rt_pfa_done");
     emitter.instruction("ldr x0, [sp, #0]");                                    // hand the boxed result straight back
-    emitter.instruction("ldp x29, x30, [sp, #32]");
-    emitter.instruction("add sp, sp, #48");
+    emitter.instruction("ldp x29, x30, [sp, #48]");
+    emitter.instruction("add sp, sp, #64");
     emitter.instruction("ret");
 }
 
@@ -291,10 +348,11 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     emitter.blank();
     emitter.comment("--- runtime: parse a run-time php://filter URL ---");
     emitter.label_global("__rt_php_filter_parse");
-    // Frame: [rbp-8]=cursor [rbp-16]=remaining [rbp-24]=direction [rbp-32]=scan index
+    // Frame: [rbp-8]=cursor [rbp-16]=remaining [rbp-24]=direction [rbp-32]=scan index / name length
+    //        [rbp-40]=segment start [rbp-48]=filters resolved [rbp-56]=separator offset
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the parse frame
-    emitter.instruction("sub rsp, 48");                                         // reserve the spill slots
+    emitter.instruction("sub rsp, 64");                                         // reserve the spill slots
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // preserve the path
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // preserve its length
     abi::emit_symbol_address(emitter, "rdx", "_pf_n_prefix");
@@ -384,27 +442,58 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("test rax, rax");
     emitter.instruction("jnz __rt_pfp_no_x");                                   // nested filters are not supported
 
+    // -- resolve EVERY name in the `|` chain, in order, the way the literal path does --
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // the current segment's start offset
+    emitter.instruction("mov QWORD PTR [rbp - 48], 0");                         // filters resolved so far
+
+    emitter.label("__rt_pfp_seg_x");
     emitter.instruction("mov r9, QWORD PTR [rbp - 32]");                        // the full name length
+    emitter.instruction("mov r10, QWORD PTR [rbp - 40]");                       // where this segment starts
+    emitter.instruction("cmp r10, r9");
+    emitter.instruction("jae __rt_pfp_publish_x");                              // past the last segment
+    // Measure this segment: it ends at the next '|', or at the end of the name.
     emitter.instruction("mov rdi, QWORD PTR [rbp - 8]");                        // the name
-    emitter.instruction("xor r10, r10");                                        // scan index
+    emitter.instruction("mov r11, r10");                                        // scan index, from the segment start
     emitter.label("__rt_pfp_pipe_x");
-    emitter.instruction("cmp r10, r9");                                         // reached the end of the name?
-    emitter.instruction("jae __rt_pfp_resolve_x");                              // no pipe: use the whole name
-    emitter.instruction("movzx eax, BYTE PTR [rdi + r10]");
+    emitter.instruction("cmp r11, r9");                                         // reached the end of the name?
+    emitter.instruction("jae __rt_pfp_seg_end_x");                              // no further pipe: the segment runs to it
+    emitter.instruction("movzx eax, BYTE PTR [rdi + r11]");
     emitter.instruction("cmp eax, 124");                                        // ASCII '|'
-    emitter.instruction("je __rt_pfp_resolve_x");                               // stop at the first one
-    emitter.instruction("add r10, 1");
+    emitter.instruction("je __rt_pfp_seg_end_x");                               // this one closes the segment
+    emitter.instruction("add r11, 1");
     emitter.instruction("jmp __rt_pfp_pipe_x");
 
-    emitter.label("__rt_pfp_resolve_x");
-    emitter.instruction("mov rsi, r10");                                        // the first filter's name length
+    emitter.label("__rt_pfp_seg_end_x");
+    emitter.instruction("mov QWORD PTR [rbp - 56], r11");                       // remember where the separator sits
+    emitter.instruction("mov rsi, r11");
+    emitter.instruction("sub rsi, r10");                                        // this segment's length
+    emitter.instruction("jz __rt_pfp_seg_next_x");                              // an empty segment names nothing
+    emitter.instruction("add rdi, r10");                                        // the segment's first byte
     emitter.instruction("call __rt_builtin_filter_id");                         // rax = the built-in id, or 0
-    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_id");
-    emitter.instruction("mov QWORD PTR [r8], rax");                             // publish it
+    emitter.instruction("test rax, rax");
+    emitter.instruction("jz __rt_pfp_seg_next_x");                              // an unrecognised name is SKIPPED
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // filters resolved so far
+    emitter.instruction(&format!("cmp r11, {PHP_FILTER_PENDING_MAX}"));
+    emitter.instruction("jae __rt_pfp_seg_next_x");                             // the hand-off array is full
+    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_ids");
+    emitter.instruction("mov QWORD PTR [r8 + r11 * 8], rax");                   // append this filter to the list
+    emitter.instruction("add r11, 1");
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");
+
+    emitter.label("__rt_pfp_seg_next_x");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 56]");                       // the separator this segment ended on
+    emitter.instruction("add r11, 1");                                          // the next segment starts after it
+    emitter.instruction("mov QWORD PTR [rbp - 40], r11");
+    emitter.instruction("jmp __rt_pfp_seg_x");
+
+    emitter.label("__rt_pfp_publish_x");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 48]");                       // how many filters resolved
+    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_count");
+    emitter.instruction("mov QWORD PTR [r8], r11");                             // publish the count
     emitter.instruction("mov r9, QWORD PTR [rbp - 24]");                        // the requested direction
     emitter.instruction("xor r10, r10");
-    emitter.instruction("test rax, rax");                                       // did the name resolve?
-    emitter.instruction("cmove r9, r10");                                       // an unknown filter attaches nothing
+    emitter.instruction("test r11, r11");                                       // did ANY name resolve?
+    emitter.instruction("cmove r9, r10");                                       // a chain of unknowns attaches nothing
     abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_mode");
     emitter.instruction("mov QWORD PTR [r8], r9");                              // publish the direction
     emitter.instruction("mov rax, 1");                                          // the caller should open the resource
@@ -413,7 +502,7 @@ fn emit_filter_parse_x86_64(emitter: &mut Emitter) {
     emitter.instruction("ret");
 
     emitter.label("__rt_pfp_no_x");
-    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_id");
+    abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_count");
     emitter.instruction("mov QWORD PTR [r8], 0");                               // nothing is pending
     abi::emit_symbol_address(emitter, "r8", "_php_filter_pending_mode");
     emitter.instruction("mov QWORD PTR [r8], 0");
@@ -431,6 +520,7 @@ fn emit_filter_attach_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: attach the filter a php://filter URL named ---");
     emitter.label_global("__rt_php_filter_attach_pending");
     // Frame: [rbp-8]=boxed result [rbp-16]=stream handle [rbp-24]=filter handle [rbp-32]=direction
+    //        [rbp-40]=list index [rbp-48]=filters published
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the attach frame
     emitter.instruction("sub rsp, 48");                                         // reserve the spill slots
@@ -439,9 +529,10 @@ fn emit_filter_attach_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov r10, QWORD PTR [r9]");                             // the direction the URL asked for
     emitter.instruction("mov QWORD PTR [r9], 0");                               // clear it: exactly one open consumes it
     emitter.instruction("mov QWORD PTR [rbp - 32], r10");
-    abi::emit_symbol_address(emitter, "r9", "_php_filter_pending_id");
-    emitter.instruction("mov r11, QWORD PTR [r9]");                             // the filter it named
+    abi::emit_symbol_address(emitter, "r9", "_php_filter_pending_count");
+    emitter.instruction("mov r11, QWORD PTR [r9]");                             // how many filters the URL named
     emitter.instruction("mov QWORD PTR [r9], 0");                               // cleared for the same reason
+    emitter.instruction("mov QWORD PTR [rbp - 48], r11");
     emitter.instruction("test r10, r10");
     emitter.instruction("jz __rt_pfa_done_x");                                  // no direction: nothing to attach
     emitter.instruction("test r11, r11");
@@ -451,7 +542,19 @@ fn emit_filter_attach_x86_64(emitter: &mut Emitter) {
     emitter.instruction("jne __rt_pfa_done_x");                                 // a false result carries no stream
     emitter.instruction("mov r9, QWORD PTR [rax + 8]");                         // the opaque stream handle
     emitter.instruction("mov QWORD PTR [rbp - 16], r9");
-    emitter.instruction("mov rdi, r11");                                        // the built-in filter id
+
+    // Attach in list order: php runs the bytes through the filters the way the URL spelled them,
+    // and `__rt_stream_filter_link` appends at the tail, so creating in order builds that chain.
+    emitter.instruction("mov QWORD PTR [rbp - 40], 0");                         // the first filter in the list
+    emitter.label("__rt_pfa_next_x");
+    emitter.instruction("mov r9, QWORD PTR [rbp - 40]");                        // which filter this pass attaches
+    emitter.instruction("mov r10, QWORD PTR [rbp - 48]");                       // how many there are
+    emitter.instruction("cmp r9, r10");
+    emitter.instruction("jae __rt_pfa_done_x");                                 // the whole chain is attached
+    abi::emit_symbol_address(emitter, "r11", "_php_filter_pending_ids");
+    emitter.instruction("mov rdi, QWORD PTR [r11 + r9 * 8]");                   // the built-in filter id
+    emitter.instruction("add r9, 1");                                           // advance before the calls clobber it
+    emitter.instruction("mov QWORD PTR [rbp - 40], r9");
     emitter.instruction("xor esi, esi");                                        // built-ins carry no user-filter object
     emitter.instruction("mov rdx, QWORD PTR [rbp - 32]");                       // direction bits from the URL
     emitter.instruction("xor ecx, ecx");                                        // built-ins retain no params value
@@ -468,15 +571,97 @@ fn emit_filter_attach_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_pfa_write_x");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");
     emitter.instruction("test r10, 2");                                         // does it filter writes?
-    emitter.instruction("jz __rt_pfa_done_x");
+    emitter.instruction("jz __rt_pfa_next_x");
     emitter.instruction("mov rdi, QWORD PTR [rbp - 16]");                       // stream handle
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // filter handle
     emitter.instruction(&format!("mov rdx, {STREAM_WRITE_FILTER_HEAD_OFFSET}"));
     emitter.instruction("xor ecx, ecx");                                        // append at the chain tail
     abi::emit_call_label(emitter, "__rt_stream_filter_link");
+    emitter.instruction("jmp __rt_pfa_next_x");                                 // on to the next filter in the chain
+
     emitter.label("__rt_pfa_done_x");
     emitter.instruction("mov rax, QWORD PTR [rbp - 8]");                        // hand the boxed result straight back
     emitter.instruction("mov rsp, rbp");
     emitter.instruction("pop rbp");
     emitter.instruction("ret");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// The attach loop must spill its index BEFORE the calls that consume the filter.
+    ///
+    /// `r9` and `x9` are caller-saved on both ABIs, so an index left in a register across
+    /// `__rt_filter_create` and `__rt_stream_filter_link` comes back as whatever those helpers
+    /// left behind. The loop would then re-attach one filter forever or walk off the list — and
+    /// only for a chain of two or more, which is precisely the case this change introduced.
+    #[test]
+    fn test_the_attach_loop_spills_its_index_before_the_calls() {
+        for (arch, label, spill) in [
+            (Arch::AArch64, "__rt_pfa_next:", "str x9, [sp, #32]"),
+            (
+                Arch::X86_64,
+                "__rt_pfa_next_x:",
+                "mov QWORD PTR [rbp - 40], r9",
+            ),
+        ] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_php_filter_dynamic(&mut emitter);
+            let asm = emitter.output();
+            let at = asm
+                .find(label)
+                .unwrap_or_else(|| panic!("{arch:?}: the attach loop must be labelled"));
+            let spilled = asm[at..]
+                .find(spill)
+                .unwrap_or_else(|| panic!("{arch:?}: the loop index must be spilled"));
+            let called = asm[at..]
+                .find("__rt_filter_create")
+                .unwrap_or_else(|| panic!("{arch:?}: the loop must create a filter"));
+            assert!(
+                spilled < called,
+                "{arch:?}: the index must reach the frame before the first call clobbers it"
+            );
+        }
+    }
+
+    /// Each emitter's frame must reach the deepest slot it writes.
+    ///
+    /// Publishing a list needed two more parse slots and two more attach slots than the single-id
+    /// hand-off did. A slot past the reservation is a write below `rsp` on x86_64 and into the
+    /// saved `x30` on AArch64 — the second is a corrupted return address, which reproduces as a
+    /// crash nowhere near this file.
+    #[test]
+    fn test_every_frame_slot_written_is_inside_its_reservation() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_php_filter_dynamic(&mut emitter);
+            let asm = emitter.output();
+            match arch {
+                Arch::AArch64 => {
+                    // The parse writes [sp, #48]; its saved pair must sit above that.
+                    assert!(
+                        asm.contains("sub sp, sp, #80") && asm.contains("stp x29, x30, [sp, #64]"),
+                        "the parse frame must clear the separator slot before the linkage"
+                    );
+                    assert!(
+                        asm.contains("sub sp, sp, #64") && asm.contains("stp x29, x30, [sp, #48]"),
+                        "the attach frame must clear the count slot before the linkage"
+                    );
+                }
+                Arch::X86_64 => {
+                    // The parse writes [rbp - 56]; anything past the reservation is below rsp.
+                    assert!(
+                        asm.contains("sub rsp, 64"),
+                        "the parse frame must reserve the separator slot"
+                    );
+                    assert!(
+                        asm.contains("mov QWORD PTR [rbp - 56], r11"),
+                        "the parse must record the separator it stopped on"
+                    );
+                }
+            }
+        }
+    }
 }

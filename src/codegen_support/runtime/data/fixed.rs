@@ -1227,11 +1227,20 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
         ".globl _gai_msg_middle\n_gai_msg_middle:\n    .ascii {GAI_MSG_MIDDLE:?}\n"
     ));
     out.push_str(&emit_php_wrapper_scheme_table());
-    // A `php://filter/...` URL resolved at run time: the filter it names, the direction it asked
+    // A `php://filter/...` URL resolved at run time: the filters it names, the direction it asked
     // for, and the resource to open. Published by the parse so the attach can run once that
     // resource is open and boxed; cleared by the attach, so a later plain open cannot inherit
     // them.
-    out.push_str(&comm_directive("_php_filter_pending_id", 8, target));
+    //
+    // A LIST, not a single id: `read=string.toupper|string.rot13` names two filters and php runs
+    // the bytes through both, in order. The literal path already resolved the whole chain, so a
+    // one-slot hand-off was the run-time parse silently answering the first filter's result.
+    out.push_str(&comm_directive(
+        "_php_filter_pending_ids",
+        crate::codegen_support::runtime::io::PHP_FILTER_PENDING_MAX * 8,
+        target,
+    ));
+    out.push_str(&comm_directive("_php_filter_pending_count", 8, target));
     out.push_str(&comm_directive("_php_filter_pending_mode", 8, target));
     out.push_str(&comm_directive("_php_filter_res_ptr", 8, target));
     out.push_str(&comm_directive("_php_filter_res_len", 8, target));

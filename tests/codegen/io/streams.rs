@@ -6352,6 +6352,67 @@ echo " nested=", var_export(@fopen($nested, "r"), true);
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies a RUN-TIME `php://filter` chain runs every filter, in order.
+///
+/// The literal path resolved the whole `|` chain; the run-time parse stopped at the first name and
+/// said nothing, so `read=a|b` answered `a`'s output. That is the worst shape a wrong answer takes
+/// — plausible bytes, no diagnostic — and it only reached this path when the URL was assembled
+/// rather than written out, which is why the literal test above stayed green throughout.
+///
+/// `convert.base64-encode` and `string.toupper` do not commute, so swapping them proves the ORDER
+/// is right rather than just the count. The third case pins that an unrecognised name is SKIPPED
+/// and its neighbours still apply — the same reading the literal path was measured against.
+#[test]
+fn test_run_time_filter_chain_applies_every_filter_in_order() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rtchain.txt", "Hello World");
+$res = "rtchain" . ".txt";
+$a = fopen("php://filter/read=convert.base64-encode|string.toupper/resource=" . $res, "r");
+echo stream_get_contents($a), "|";
+fclose($a);
+$b = fopen("php://filter/read=string.toupper|convert.base64-encode/resource=" . $res, "r");
+echo stream_get_contents($b), "|";
+fclose($b);
+$c = fopen("php://filter/read=string.toupper|no.such.filter/resource=" . $res, "r");
+echo stream_get_contents($c), "|";
+fclose($c);
+$d = fopen("php://filter/read=string.tolower|string.rot13|string.toupper/resource=" . $res, "r");
+echo stream_get_contents($d);
+fclose($d);
+unlink("rtchain.txt");
+"#,
+    );
+    // The same four expectations `php -n` 8.5.6 produces for these URLs. The fourth runs THREE
+    // names, because a two-slot hand-off would pass a two-filter test and still drop the tail.
+    assert_eq!(
+        out,
+        "SGVSBG8GV29YBGQ=|SEVMTE8gV09STEQ=|HELLO WORLD|URYYB JBEYQ"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a run-time filter chain whose names are ALL unrecognised opens the resource plain.
+///
+/// The direction is published from the resolved count, so this is the case that distinguishes
+/// "no filter matched" from "the URL named no filters at all" — both must open unfiltered rather
+/// than fail, which is what `php -n` does.
+#[test]
+fn test_run_time_filter_chain_of_unknown_names_opens_unfiltered() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+file_put_contents("rtunk.txt", "Hello");
+$res = "rtunk" . ".txt";
+$a = @fopen("php://filter/read=no.such|also.missing/resource=" . $res, "r");
+echo var_export($a !== false, true), ":", stream_get_contents($a);
+fclose($a);
+unlink("rtunk.txt");
+"#,
+    );
+    assert_eq!(out, "true:Hello");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a `data://` URI built at RUN TIME decodes and opens.
 ///
 /// A literal URI is decoded during lowering and its bytes embedded, which left a run-time one
