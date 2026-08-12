@@ -310,6 +310,27 @@ function mysqli_real_query(mixed $mysql, string $query): bool {
     return $mysql->real_query($query);
 }
 
+function mysqli_multi_query(mixed $mysql, string $query): bool {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_multi_query(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->multi_query($query);
+}
+
+function mysqli_more_results(mixed $mysql): bool {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_more_results(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->more_results();
+}
+
+function mysqli_next_result(mixed $mysql): bool {
+    if (!($mysql instanceof mysqli)) {
+        throw new TypeError("mysqli_next_result(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");
+    }
+    return $mysql->next_result();
+}
+
 function mysqli_store_result(mixed $mysql, int $mode = 0): mysqli_result|false {
     if (!($mysql instanceof mysqli)) {
         throw new TypeError("mysqli_store_result(): Argument #1 (\$mysql) must be of type mysqli, " . gettype($mysql) . " given");

@@ -296,6 +296,74 @@ $db->query("DROP TABLE mq");
     assert_eq!(out, "ins|7|bp|ex|12|1");
 }
 
+/// `multi_query` sends the whole batch in one round-trip; `store_result`
+/// returns each set, `more_results`/`next_result` walk the retained sets, and
+/// a non-select statement in the batch updates `affected_rows` instead.
+#[test]
+#[ignore]
+fn test_mysqli_multi_query_traverses_result_sets() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mm");
+$db->query("CREATE TABLE mm (v INT)");
+echo $db->multi_query("SELECT 1 AS a; INSERT INTO mm (v) VALUES (5), (6); SELECT 2 AS b") ? "mq" : "no";
+$r1 = $db->store_result();
+if (!($r1 instanceof mysqli_result)) {
+    echo "no-r1";
+    exit(1);
+}
+echo "|", $r1->fetch_column(0);
+echo "|", $db->more_results() ? "more" : "done";
+echo "|", $db->next_result() ? "next" : "no-next";
+echo "|", $db->store_result() === false ? "F" : "set";
+echo "|", $db->affected_rows;
+echo "|", $db->more_results() ? "more" : "done";
+echo "|", $db->next_result() ? "next" : "no-next";
+$r2 = $db->store_result();
+if (!($r2 instanceof mysqli_result)) {
+    echo "no-r2";
+    exit(1);
+}
+echo "|", $r2->fetch_column(0);
+echo "|", $db->more_results() ? "more" : "done";
+echo "|", $db->next_result() ? "next" : "no-next";
+echo "|", $r1->num_rows;
+$db->query("DROP TABLE mm");
+"#,
+    ));
+    assert_eq!(
+        out,
+        "mq|1|more|next|F|2|more|next|2|done|no-next|1"
+    );
+}
+
+/// The procedural multi_query pipeline mirrors the object surface.
+#[test]
+#[ignore]
+fn test_mysqli_multi_query_procedural() {
+    let out = compile_and_run(&my_program(
+        r#"
+echo mysqli_multi_query($db, "SELECT 7 AS a; SELECT 8 AS b") ? "mq" : "no";
+$r = mysqli_store_result($db);
+if (!($r instanceof mysqli_result)) {
+    echo "no-r";
+    exit(1);
+}
+echo "|", $r->fetch_column(0);
+echo "|", mysqli_more_results($db) ? "more" : "done";
+echo "|", mysqli_next_result($db) ? "next" : "no-next";
+$r2 = mysqli_store_result($db);
+if (!($r2 instanceof mysqli_result)) {
+    echo "no-r2";
+    exit(1);
+}
+echo "|", $r2->fetch_column(0);
+echo "|", mysqli_more_results($db) ? "more" : "done";
+"#,
+    ));
+    assert_eq!(out, "mq|7|more|next|8|done");
+}
+
 /// Connection information, ping, charset, autocommit, and a commit round-trip
 /// against the live server.
 #[test]

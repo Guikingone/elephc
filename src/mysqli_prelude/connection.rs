@@ -73,6 +73,10 @@ class mysqli {
     // Buffered result produced by real_query() and picked up by store_result()
     // (and, in the multi_query path, by next_result()).
     private ?mysqli_result $pendingResult = null;
+    // multi_query() batch state: the live bridge statement (kept alive until
+    // every result set is consumed) and the eager next_rowset probe verdict.
+    private int $multiStmt = -1;
+    private bool $multiMore = false;
 
     public function __construct(
         ?string $hostname = null,
@@ -203,6 +207,9 @@ class mysqli {
 
     public function close(): bool {
         if ($this->conn >= 0) {
+            // Finalize any live multi_query batch statement before the
+            // connection handle goes back to the bridge.
+            $this->multiClose();
             // Roll an open transaction back first (matching PHP and keeping a
             // persistent handle clean when it returns to the pool).
             if (elephc_pdo_in_transaction($this->conn) === 1) {
@@ -492,6 +499,54 @@ class mysqli {
         return $this->runQuery($query) != 0;
     }
 
+    public function multi_query(string $query): bool {
+        if ($query === "") {
+            throw new ValueError("mysqli::multi_query(): Argument #1 (\$query) must not be empty");
+        }
+        if (!$this->requireConnection()) {
+            return false;
+        }
+        // One server round-trip for the whole batch: the bridge's emulated
+        // prepare + step executes the string with multi-statements enabled
+        // (mysqlnd's own default, mirrored by the bridge) and retains every
+        // wire result set for elephc_pdo_next_rowset.
+        $this->multiClose();
+        $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
+        if ($_stmt < 0) {
+            return $this->opFailed();
+        }
+        $_rc = elephc_pdo_step($_stmt);
+        if ($_rc < 0) {
+            $this->opFailed();
+            elephc_pdo_finalize($_stmt);
+            return false;
+        }
+        $this->multiStmt = $_stmt;
+        $this->multiDrainCurrent($_rc);
+        return true;
+    }
+
+    public function more_results(): bool {
+        return $this->multiMore;
+    }
+
+    public function next_result(): bool {
+        // The probe in multiDrainCurrent already advanced the statement onto
+        // the next retained result set; step its first row and drain it.
+        if (!$this->multiMore || $this->multiStmt < 0) {
+            $this->multiMore = false;
+            return false;
+        }
+        $_rc = elephc_pdo_step($this->multiStmt);
+        if ($_rc < 0) {
+            $this->opFailed();
+            $this->multiClose();
+            return false;
+        }
+        $this->multiDrainCurrent($_rc);
+        return true;
+    }
+
     public function store_result(int $mode = 0): mysqli_result|false {
         $_result = $this->pendingResult;
         if ($_result === null) {
@@ -692,6 +747,65 @@ class mysqli {
         $this->clearError();
         $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens);
         return 2;
+    }
+
+    // Drains the CURRENT result set of the active multi_query batch into
+    // $this->pendingResult (or records affected_rows/insert_id for a
+    // non-select set), then eagerly probes elephc_pdo_next_rowset so
+    // more_results() can answer without consuming; the batch statement is
+    // finalized as soon as the probe reports no further set.
+    private function multiDrainCurrent(int $firstStep): void {
+        $_stmt = $this->multiStmt;
+        $_cols = elephc_pdo_column_count($_stmt);
+        if ($_cols == 0) {
+            $this->affected_rows = elephc_pdo_changes($this->conn);
+            $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
+            $this->field_count = 0;
+            $this->pendingResult = null;
+        } else {
+            $_names = [];
+            $_tables = [];
+            $_natives = [];
+            $_flags = [];
+            $_lens = [];
+            for ($_i = 0; $_i < $_cols; $_i++) {
+                $_names[] = elephc_pdo_column_name($_stmt, $_i);
+                $_tables[] = elephc_pdo_column_table_name($_stmt, $_i);
+                $_natives[] = elephc_pdo_column_native_type($_stmt, $_i);
+                $_flags[] = elephc_pdo_column_flags($_stmt, $_i);
+                $_lens[] = elephc_pdo_column_len($_stmt, $_i);
+            }
+            $_cells = [];
+            $_rowCount = 0;
+            $_rc = $firstStep;
+            while ($_rc == 1) {
+                for ($_i = 0; $_i < $_cols; $_i++) {
+                    $_cells[] = $this->columnValue($_stmt, $_i);
+                }
+                $_rowCount = $_rowCount + 1;
+                $_rc = elephc_pdo_step($_stmt);
+            }
+            $this->affected_rows = $_rowCount;
+            $this->insert_id = 0;
+            $this->field_count = $_cols;
+            $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens);
+        }
+        $this->warning_count = elephc_pdo_warning_count($this->conn);
+        $this->clearError();
+        $this->multiMore = elephc_pdo_next_rowset($_stmt) == 1;
+        if (!$this->multiMore) {
+            elephc_pdo_finalize($_stmt);
+            $this->multiStmt = -1;
+        }
+    }
+
+    // Finalizes any active multi_query batch statement and clears its state.
+    private function multiClose(): void {
+        if ($this->multiStmt >= 0) {
+            elephc_pdo_finalize($this->multiStmt);
+            $this->multiStmt = -1;
+        }
+        $this->multiMore = false;
     }
 
     // Decodes one cell of the current row, same type dispatch as
