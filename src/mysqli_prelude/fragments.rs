@@ -22,6 +22,7 @@ pub(super) fn source_for_version(php_version: PhpVersion) -> String {
     source.push_str(super::constants::SRC);
     source.push_str(super::exception::SRC);
     source.push_str(super::connection::SRC);
+    source.push_str(super::procedural::SRC);
     if php_version < PhpVersion::Php81 {
         // PHP 8.0's default mysqli_report mode is MYSQLI_REPORT_OFF; 8.1+
         // defaults to MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT.

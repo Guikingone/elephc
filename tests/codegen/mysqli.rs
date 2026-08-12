@@ -45,6 +45,80 @@ echo class_exists('PDO') ? '1' : '0';
     assert_eq!(out, "01");
 }
 
+/// A failed constructor connect under `MYSQLI_REPORT_OFF` leaves a usable
+/// object with `connect_errno` / `connect_error` populated (no exception, no
+/// PDO types). Port 1 on localhost refuses immediately, so this needs no
+/// server and cannot hang.
+#[test]
+fn test_mysqli_connect_failure_sets_connect_errno() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = @new mysqli("127.0.0.1", "nope", "nope", "nope", 1);
+echo $db->connect_errno > 0 ? "err" : "ok";
+echo "|";
+echo $db->connect_error !== "" ? "msg" : "empty";
+"#,
+    );
+    assert_eq!(out, "err|msg");
+}
+
+/// Procedural `mysqli_connect()` returns `false` on failure under REPORT_OFF,
+/// and the no-argument `mysqli_connect_errno()` / `mysqli_connect_error()`
+/// read the process-wide last-connect failure.
+#[test]
+fn test_mysqli_connect_procedural_failure_returns_false() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = mysqli_connect("127.0.0.1", "nope", "nope", "nope", 1);
+echo $db === false ? "F" : "obj";
+echo "|", mysqli_connect_errno() > 0 ? "err" : "ok";
+echo "|", mysqli_connect_error() !== null ? "msg" : "null";
+"#,
+    );
+    assert_eq!(out, "F|err|msg");
+}
+
+/// Under `MYSQLI_REPORT_STRICT` a failed connect throws `mysqli_sql_exception`
+/// — never `PDOException` — with the SQLSTATE on the public property.
+#[test]
+fn test_mysqli_connect_failure_strict_throws_mysqli_sql_exception() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+try {
+    new mysqli("127.0.0.1", "nope", "nope", "nope", 1);
+    echo "no-throw";
+} catch (mysqli_sql_exception $e) {
+    echo "caught|", strlen($e->getMessage()) > 0 ? "msg" : "empty";
+    echo "|", $e->sqlstate !== "" ? "state" : "none";
+}
+"#,
+    );
+    assert_eq!(out, "caught|msg|state");
+}
+
+/// Operations on an unconnected handle fail loudly but silently-with-`false`
+/// under REPORT_OFF, recording CR_SERVER_GONE_ERROR (2006) — and
+/// `real_escape_string` still escapes with the default (backslash) rules.
+#[test]
+fn test_mysqli_unconnected_ops_and_offline_escape() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = mysqli_init();
+echo $db->ping() ? "T" : "F";
+echo "|", $db->errno;
+echo "|", $db->select_db("nope") ? "T" : "F";
+echo "|", $db->real_escape_string("a'b\\c");
+echo "|", $db->options(MYSQLI_OPT_CONNECT_TIMEOUT, 1) ? "T" : "F";
+echo "|", $db->options(99, 1) ? "T" : "F";
+"#,
+    );
+    assert_eq!(out, r"F|2006|F|a\'b\\c|T|F");
+}
+
 /// The mysqli exception hierarchy is mysqli's own: `mysqli_sql_exception`
 /// extends `RuntimeException`, and the locked `MYSQLI_*` constants carry
 /// php-src's values.
