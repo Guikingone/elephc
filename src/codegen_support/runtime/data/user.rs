@@ -2365,7 +2365,7 @@ fn emit_user_wrapper_vtable(out: &mut String, class_info: &ClassInfo) {
         .properties
         .iter()
         .find(|(property, php_type)| {
-            property == "context" && matches!(php_type, PhpType::Mixed)
+            property == "context" && matches!(php_type, PhpType::Mixed | PhpType::Void)
         })
         .and_then(|(property, _)| class_info.property_offsets.get(property))
         .map(|offset| offset + 1)

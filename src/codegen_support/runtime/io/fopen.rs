@@ -234,7 +234,14 @@ pub fn emit_fopen(emitter: &mut Emitter) {
     emitter.instruction("str x1, [sp, #40]");                                   // preserve the selected context while releasing the old property cell
     emitter.instruction("ldr x9, [sp, #32]");                                   // reload the wrapper object pointer
     emitter.instruction("ldr x0, [x9, x11]");                                   // load the previous boxed Mixed context property
+    // An UNTYPED `public $context;` is initialised by its class prologue to the in-band tagged
+    // null, not to a cell pointer — the two spellings of the same PHP-null differ only in
+    // elephc's own representation. Freeing that sentinel dereferences `PHP_INT_MAX - 1`.
+    abi::emit_load_int_immediate(emitter, "x12", crate::codegen_support::sentinels::NULL_SENTINEL);
+    emitter.instruction("cmp x0, x12");
+    emitter.instruction("b.eq __rt_fopen_uw_context_box");                       // nothing owned yet: skip the release
     emitter.instruction("bl __rt_mixed_free_deep");                             // release the replaced property's owned Mixed cell
+    emitter.label("__rt_fopen_uw_context_box");
     emitter.instruction("ldr x1, [sp, #40]");                                   // reload the selected context handle for boxing
     emitter.instruction("mov x0, #9");                                          // runtime tag 9 = resource
     emitter.instruction("mov x2, #9");                                          // resource kind 9 = stream context
@@ -519,7 +526,17 @@ fn emit_fopen_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rsp + 40], rdi");                       // preserve the selected context while releasing the old property cell
     emitter.instruction("mov r11, QWORD PTR [rsp + 32]");                       // reload the wrapper object pointer
     emitter.instruction("mov rax, QWORD PTR [r11 + r10]");                      // load the previous boxed Mixed context property
+    // An UNTYPED `public $context;` is initialised by its class prologue to the in-band tagged
+    // null, not to a cell pointer — the two spellings of the same PHP-null differ only in
+    // elephc's own representation. Freeing that sentinel dereferences `PHP_INT_MAX - 1`.
+    emitter.instruction(&format!(
+        "mov r9, {}",
+        crate::codegen_support::sentinels::NULL_SENTINEL
+    ));
+    emitter.instruction("cmp rax, r9");
+    emitter.instruction("je __rt_fopen_uw_context_box_x86");                    // nothing owned yet: skip the release
     emitter.instruction("call __rt_mixed_free_deep");                           // release the replaced property's owned Mixed cell
+    emitter.label("__rt_fopen_uw_context_box_x86");
     emitter.instruction("mov rdi, QWORD PTR [rsp + 40]");                       // reload the selected context handle for boxing
     emitter.instruction("mov rax, 9");                                          // runtime tag 9 = resource
     emitter.instruction("mov rsi, 9");                                          // resource kind 9 = stream context

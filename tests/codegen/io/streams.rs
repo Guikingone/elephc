@@ -705,6 +705,72 @@ unlink("t_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies an UNTYPED `public $context;` receives its context — the spelling the manual shows.
+///
+/// `public mixed $context;` already worked. The untyped form was read as declaring nothing, so
+/// the wrapper never got its context and collected the dynamic-property deprecation meant for
+/// classes that really declared none. The two spellings are the same PHP null and differ only in
+/// elephc's representation: an untyped property is initialised to the in-band tagged null rather
+/// than to a cell pointer, which the context injection was freeing as though it were one.
+#[test]
+fn test_an_untyped_context_property_receives_its_context() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class W {
+    public $context;
+    public function stream_open($path, $mode, $options, &$opened) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("w", "W");
+$h = fopen("w://x", "r");
+echo $h === false ? "false" : "resource";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "resource");
+    assert!(
+        !out.stderr.contains("dynamic property"),
+        "a declared $context must not be deprecated as invented, got stderr={}",
+        out.stderr
+    );
+}
+
+/// Verifies the dynamic-property deprecation still fires for a wrapper that declares NO context.
+///
+/// The guard above widens which spellings count as declared, so this pins the other side of it:
+/// PHP assigns the context whether or not the class declared a property for it, and deprecates
+/// the invented assignment.
+#[test]
+fn test_a_wrapper_without_a_context_property_is_still_deprecated() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class N {
+    public function stream_open($path, $mode, $options, &$opened) { return true; }
+    public function stream_read($n) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_stat() { return []; }
+    public function stream_close() {}
+}
+stream_wrapper_register("n", "N");
+$h = fopen("n://x", "r");
+echo $h === false ? "false" : "resource";
+fclose($h);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "resource");
+    assert!(
+        out.stderr
+            .contains("Creation of dynamic property N::$context is deprecated"),
+        "expected PHP 8.2's deprecation, got stderr={}",
+        out.stderr
+    );
+}
+
 /// Verifies an unknown scheme reports the MISSING WRAPPER, which is the reason php gives first.
 ///
 /// php-src emits two warnings here. elephc emitted only the second, which says "No such file or
