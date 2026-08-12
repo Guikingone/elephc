@@ -24,7 +24,15 @@ pub(super) fn parse_zip_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
 /// `.phar/stub.php` entry becomes the stub and other `.phar/*` control entries are
 /// hidden from the entry listing.
 pub(super) fn parse_zip_archive(data: &[u8]) -> Option<Archive> {
-    verify_zip_phar_signature(data)?;
+    parse_zip_archive_with_public_key(data, None)
+}
+
+/// Parses a zip-based PHAR and authenticates an OpenSSL signature with `public_key`.
+pub(super) fn parse_zip_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Archive> {
+    verify_zip_phar_signature(data, public_key)?;
     let eocd = find_zip_eocd(data)?;
     let (entry_count, central_dir_offset) = zip_eocd_info(data)?;
     let comment_len = le16(data, eocd + 20)? as usize;

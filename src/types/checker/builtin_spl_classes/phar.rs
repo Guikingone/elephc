@@ -528,10 +528,22 @@ fn phar_set_zip_password_body() -> Vec<crate::parser::ast::Stmt> {
     ))]
 }
 
-/// Builds `getSignature()` returning `['hash' => <uppercase hex>, 'hash_type' => <name>]`
-/// read from the archive's signature trailer.
+/// Builds `getSignature()` from an authenticated archive signature, returning
+/// `false` when the bridge cannot verify or read both signature fields.
 fn phar_get_signature_body() -> Vec<crate::parser::ast::Stmt> {
     vec![
+        assign_stmt(
+            "sigType",
+            function_call(
+                "__elephc_phar_get_signature_type",
+                vec![property_access(this_expr(), "path")],
+            ),
+        ),
+        if_stmt(
+            binary_expr(var_expr("sigType"), BinOp::StrictEq, string_expr("")),
+            vec![return_stmt(bool_expr(false))],
+            None,
+        ),
         assign_stmt(
             "sigHash",
             function_call(
@@ -539,12 +551,10 @@ fn phar_get_signature_body() -> Vec<crate::parser::ast::Stmt> {
                 vec![property_access(this_expr(), "path")],
             ),
         ),
-        assign_stmt(
-            "sigType",
-            function_call(
-                "__elephc_phar_get_signature_type",
-                vec![property_access(this_expr(), "path")],
-            ),
+        if_stmt(
+            binary_expr(var_expr("sigHash"), BinOp::StrictEq, string_expr("")),
+            vec![return_stmt(bool_expr(false))],
+            None,
         ),
         return_stmt(expr(ExprKind::ArrayLiteralAssoc(vec![
             (string_expr("hash"), var_expr("sigHash")),

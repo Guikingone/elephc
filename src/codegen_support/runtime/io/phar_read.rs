@@ -15,16 +15,13 @@
 //! - This is the runtime counterpart to the compile-time `extract_phar_entry`
 //!   (`src/codegen_support/phar_stream.rs`). Literal `phar://` URLs still take
 //!   the compile-time fast path (bytes embedded in the binary); only non-literal
-//!   URLs reach here. Runtime reads support native uncompressed, gzip, and
-//!   bzip2-compressed PHAR entries; runtime write opens preserve the full URL
-//!   until `fclose()` so the native bridge can split archive and entry names.
-//! - Reuses `__rt_file_get_contents` (reads the whole archive into a heap buffer)
-//!   and tail-calls `__rt_data_stream` (writes the matched entry to an unlinked
-//!   tmpfile and rewinds it) so the resulting fd behaves like any read stream.
-//! - zlib/libbz2 entry points are called through runtime function-pointer slots
-//!   that EIR call sites publish only for dynamic PHAR-capable reads.
-//! - The archive/entry split is the `.phar/` boundary (matching the write path);
-//!   a runtime archive path without `.phar/` in its name is unsupported in M2.
+//!   URLs reach here. The authenticating Rust bridge owns native, tar, ZIP, and
+//!   whole-archive compressed reads; a missing bridge fails closed instead of
+//!   entering the legacy assembly parser. Runtime write opens preserve the full
+//!   URL until `fclose()` so the native bridge can split archive and entry names.
+//! - Successful bridge reads tail-call `__rt_data_stream`, which writes the
+//!   matched bytes to an unlinked tmpfile and rewinds it so the resulting file
+//!   descriptor behaves like any other readable stream.
 
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
@@ -56,7 +53,7 @@ pub fn emit_phar_read(emitter: &mut Emitter) {
     // -- bridge reader for native/tar/zip PHAR containers when published --
     abi::emit_symbol_address(emitter, "x9", "_elephc_phar_extract_url_fn");
     emitter.instruction("ldr x9, [x9]");                                        // load the optional elephc-phar bridge entry pointer
-    emitter.instruction("cbz x9, __rt_phar_read_asm_fallback");                 // use the assembly reader when no bridge was published
+    emitter.instruction("cbz x9, __rt_phar_read_fail");                         // no authenticating bridge means the PHAR read must fail closed
     abi::emit_symbol_address(emitter, "x2", "_phar_extract_len");
     emitter.instruction("blr x9");                                              // elephc_phar_extract_url(url_ptr, url_len, &len)
     emitter.instruction("cbz x0, __rt_phar_read_fail");                         // bridge miss means archive or entry was not readable
@@ -522,7 +519,7 @@ fn emit_phar_read_linux_x86_64(emitter: &mut Emitter) {
     // -- bridge reader for native/tar/zip PHAR containers when published --
     abi::emit_load_symbol_to_reg(emitter, "r9", "_elephc_phar_extract_url_fn", 0); // load the optional elephc-phar bridge entry pointer
     emitter.instruction("test r9, r9");                                         // was the bridge reader published?
-    emitter.instruction("jz __rt_phar_read_asm_fallback_x86");                  // use the assembly reader when no bridge was published
+    emitter.instruction("jz __rt_phar_read_fail_x86");                          // no authenticating bridge means the PHAR read must fail closed
     abi::emit_symbol_address(emitter, "rdx", "_phar_extract_len"); // pass output-length scratch to the bridge
     emitter.instruction("call r9");                                             // elephc_phar_extract_url(url_ptr, url_len, &len)
     emitter.instruction("test rax, rax");                                       // did the bridge find archive bytes?
@@ -957,4 +954,34 @@ fn emit_phar_decompress_helpers_x86_64(emitter: &mut Emitter) {
     emitter.instruction("add rsp, 80");                                         // release the bzip2 helper frame
     emitter.instruction("pop rbp");                                             // restore the caller frame pointer
     emitter.instruction("ret");                                                 // return decompressed bytes or null on failure
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Verifies every supported architecture rejects runtime PHAR reads when
+    /// the authenticating Rust bridge was not published.
+    #[test]
+    fn missing_phar_bridge_never_enters_the_assembly_parser() {
+        for (target, fail_branch, legacy_branch) in [
+            (
+                Target::new(Platform::MacOS, Arch::AArch64),
+                "cbz x9, __rt_phar_read_fail",
+                "cbz x9, __rt_phar_read_asm_fallback",
+            ),
+            (
+                Target::new(Platform::Linux, Arch::X86_64),
+                "jz __rt_phar_read_fail_x86",
+                "jz __rt_phar_read_asm_fallback_x86",
+            ),
+        ] {
+            let mut emitter = Emitter::new(target);
+            emit_phar_read(&mut emitter);
+            let assembly = emitter.output();
+            assert!(assembly.contains(fail_branch), "{target:?}");
+            assert!(!assembly.contains(legacy_branch), "{target:?}");
+        }
+    }
 }

@@ -23,7 +23,14 @@ pub(super) fn parse_native_phar_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u
 /// The stub is the byte prefix up to and including the `__HALT_COMPILER();` marker
 /// (and any trailing ` ?>\r\n`); the global metadata is the manifest's metadata field.
 pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
-    verify_native_phar_signature(data)?;
+    parse_native_phar_archive_with_public_key(data, None)
+}
+
+/// Parses a native PHAR and authenticates an OpenSSL trailer with `public_key`.
+pub(super) fn parse_native_phar_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Archive> {
     let halt = b"__HALT_COMPILER();";
     let halt_idx = find_subslice(data, halt)?;
     let mut p = halt_idx + halt.len();
@@ -39,6 +46,12 @@ pub(super) fn parse_native_phar_archive(data: &[u8]) -> Option<Archive> {
     let data_section = manifest_start.checked_add(4)?.checked_add(manifest_len)?;
     data.get(..data_section)?;
     let num_files = le32(data, manifest_start + 4)?;
+    let global_flags = le32(data, manifest_start + 10)?;
+    verify_native_phar_signature(
+        data,
+        global_flags & PHAR_HDR_SIGNATURE != 0,
+        public_key,
+    )?;
     let mut q = manifest_start + 8 + 2 + 4;
     let alias_len = le32(data, q)? as usize;
     q = q.checked_add(4)?.checked_add(alias_len)?;
@@ -152,7 +165,7 @@ pub(super) fn upsert_entry(entries: &mut Vec<ArchiveEntry>, entry_name: &[u8], p
 /// archive cannot be read or has no such entry.
 pub(super) fn get_file_metadata_bytes(archive_path: &[u8], entry_name: &[u8]) -> Option<Vec<u8>> {
     let path = std::path::Path::new(std::str::from_utf8(archive_path).ok()?);
-    let archive = parse_archive(&std::fs::read(path).ok()?)?;
+    let archive = parse_archive_path(path)?;
     let entry = archive.entries.iter().find(|e| e.name == entry_name)?;
     Some(entry.metadata.clone())
 }
@@ -165,7 +178,7 @@ pub(super) fn set_file_metadata_bytes(
     metadata: &[u8],
 ) -> Option<()> {
     let path = std::path::Path::new(std::str::from_utf8(archive_path).ok()?);
-    let mut archive = parse_archive(&std::fs::read(path).ok()?)?;
+    let mut archive = parse_archive_path(path)?;
     let entry = archive.entries.iter_mut().find(|e| e.name == entry_name)?;
     entry.metadata.clear();
     entry.metadata.extend_from_slice(metadata);

@@ -23,7 +23,15 @@ pub(super) fn parse_tar_entry(data: &[u8], entry: &[u8]) -> Option<Vec<u8>> {
 /// The reserved `.phar/stub.php` and `.phar/.metadata.bin` files become the stub and
 /// metadata; any other `.phar/*` control file is hidden from the entry listing.
 pub(super) fn parse_tar_archive(data: &[u8]) -> Option<Archive> {
-    verify_tar_phar_signature(data)?;
+    parse_tar_archive_with_public_key(data, None)
+}
+
+/// Parses a tar-based PHAR and authenticates an OpenSSL signature with `public_key`.
+pub(super) fn parse_tar_archive_with_public_key(
+    data: &[u8],
+    public_key: Option<&rsa::RsaPublicKey>,
+) -> Option<Archive> {
+    verify_tar_phar_signature(data, public_key)?;
     let mut p = 0usize;
     let mut entries = Vec::new();
     let mut metadata = Vec::new();

@@ -20,6 +20,19 @@ fn phar_documentation_discloses_decompression_safety_limits() {
     );
 }
 
+/// Verifies user-facing PHAR documentation discloses the OpenSSL public-key
+/// sidecar contract and the fail-closed behavior for unauthenticated archives.
+#[test]
+fn phar_documentation_discloses_openssl_verification_contract() {
+    let streams_docs = include_str!("../../../../docs/php/streams.md");
+    assert!(
+        streams_docs.contains("<archive>.pubkey")
+            && streams_docs.contains("fail closed")
+            && streams_docs.contains("does not create this sidecar"),
+        "PHAR docs must disclose the OpenSSL sidecar and fail-closed contract"
+    );
+}
+
 /// Runs one allocation-sensitive test in a fresh exact-filtered child so
 /// unrelated parallel PHAR tests cannot contaminate the global counter.
 fn run_allocation_probe_in_child(test_name: &str) {
@@ -135,5 +148,45 @@ fn native_phar_payload_ending_in_gbmb_remains_readable() {
     assert_eq!(
         extract_entry_bytes(&archive, b"payload.txt").as_deref(),
         Some(&payload[..])
+    );
+}
+
+/// Verifies a native PHAR that declares the signature header flag cannot be
+/// opened without a complete, recognized, and valid signature trailer.
+#[test]
+fn native_phar_signature_flag_requires_valid_trailer() {
+    let mut archive = build_native_phar(&[("payload.txt", b"signed by declaration")]);
+    let halt = find_subslice(&archive, b"__HALT_COMPILER();").unwrap();
+    let mut manifest_start = halt + b"__HALT_COMPILER();".len();
+    for &byte in &[b' ', b'?', b'>', b'\r', b'\n'] {
+        if archive.get(manifest_start) == Some(&byte) {
+            manifest_start += 1;
+        }
+    }
+    archive[manifest_start + 10..manifest_start + 14]
+        .copy_from_slice(&PHAR_HDR_SIGNATURE.to_le_bytes());
+
+    assert!(
+        parse_native_phar_archive(&archive).is_none(),
+        "the signed-header flag must not be accepted without a trailer"
+    );
+
+    archive.extend_from_slice(&0x7fff_ffffu32.to_le_bytes());
+    archive.extend_from_slice(b"GBMB");
+    assert!(
+        parse_native_phar_archive(&archive).is_none(),
+        "an unknown signature type must not satisfy the signed-header flag"
+    );
+}
+
+/// Verifies a recognizable signature trailer is rejected when the native
+/// manifest does not declare the signature header flag.
+#[test]
+fn native_phar_signature_trailer_requires_header_flag() {
+    let mut archive = build_native_phar(&[("payload.txt", b"unsigned manifest")]);
+    append_sha1_signature(&mut archive);
+    assert!(
+        parse_native_phar_archive(&archive).is_none(),
+        "signature framing and the native manifest flag must agree"
     );
 }

@@ -143,7 +143,14 @@ applies a hash signature, and `setSignatureAlgorithm(Phar::OPENSSL, $privateKey)
 with RSA-SHA1 using a PEM private key (PKCS#1 or PKCS#8). Native PHARs store the signature
 in their trailer; tar and zip phars store it in a `.phar/signature.bin` control entry. The
 resulting signature is verifiable by the PHP interpreter (for OpenSSL, place the matching
-public key in `<archive>.pubkey`). `getSignature()` returns `['hash' => <uppercase hex>,
+public key in `<archive>.pubkey`; signing does not create this sidecar). Elephc also
+requires that sidecar when opening an
+OpenSSL-signed archive: reads, entry listings, metadata access, mutations, compression,
+and `getSignature()` fail closed when the key is missing, malformed, or does not verify
+the archive. PEM public keys may use SubjectPublicKeyInfo (`BEGIN PUBLIC KEY`) or PKCS#1
+(`BEGIN RSA PUBLIC KEY`) encoding. APIs that receive archive bytes without a filesystem
+path cannot locate a sidecar and therefore reject OpenSSL-signed input.
+`getSignature()` returns `['hash' => <uppercase hex>,
 'hash_type' => 'MD5'|'SHA-1'|'SHA-256'|'SHA-512'|'OpenSSL']`.
 
 Metadata persistence covers the same scalar+array subset as
