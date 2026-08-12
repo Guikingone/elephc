@@ -108,6 +108,11 @@ echo descend(0);
         .expect("run recursion fixture");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "the recursion guard must terminate execution");
+    assert_eq!(
+        output.status.code(),
+        Some(255),
+        "the call-stack fatal must use PHP's fatal-error status: {stderr}"
+    );
     assert!(
         stderr.contains("Maximum call stack size reached. Infinite recursion?"),
         "expected a controlled runtime recursion diagnostic, got status {:?}: {}",
@@ -153,42 +158,16 @@ fn large_frames_report_runtime_recursion_limit_before_stack_overflow() {
         .expect("run large-frame recursion fixture");
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(!output.status.success(), "large-frame recursion must be bounded");
+    assert_eq!(
+        output.status.code(),
+        Some(255),
+        "the large-frame call-stack fatal must use PHP's fatal-error status: {stderr}"
+    );
     assert!(
         stderr.contains("Maximum call stack size reached. Infinite recursion?"),
-        "expected a controlled byte-budget diagnostic, got status {:?}: {stderr}",
+        "expected a controlled stack-limit diagnostic, got status {:?}: {stderr}",
         output.status
     );
-    let _ = fs::remove_dir_all(&dir);
-}
-
-/// Verifies repeated exception unwinding restores the recursion budget instead
-/// of leaking one guarded frame on every `longjmp` into a catch handler.
-#[test]
-fn exception_unwinding_restores_runtime_recursion_budget() {
-    let _guard = LIMIT_TEST_LOCK.lock().unwrap();
-    let dir = make_test_dir("exception-recursion-budget");
-    let php = dir.join("main.php");
-    fs::write(
-        &php,
-        r#"<?php
-function throw_once(): void { throw new Exception("expected"); }
-for ($i = 0; $i < 20000; $i++) {
-    try { throw_once(); } catch (Exception $e) {}
-}
-echo "ok";
-"#,
-    )
-    .expect("write exception-unwind fixture");
-
-    let compile = Command::new(elephc_bin())
-        .env("XDG_CACHE_HOME", dir.join("cache"))
-        .arg(&php)
-        .output()
-        .expect("compile exception-unwind fixture");
-    assert!(compile.status.success(), "fixture compilation failed: {}", String::from_utf8_lossy(&compile.stderr));
-    let output = Command::new(dir.join("main")).output().expect("run exception-unwind fixture");
-    assert!(output.status.success(), "exception unwinding leaked the recursion budget: {}", String::from_utf8_lossy(&output.stderr));
-    assert_eq!(String::from_utf8_lossy(&output.stdout), "ok");
     let _ = fs::remove_dir_all(&dir);
 }
 
@@ -241,75 +220,4 @@ fn deeply_nested_unserialize_is_rejected_before_runtime_recursion() {
     assert!(output.status.success(), "bounded preflight must reject without crashing: {}", String::from_utf8_lossy(&output.stderr));
     assert_eq!(String::from_utf8_lossy(&output.stdout), "bool(false)\n");
     let _ = fs::remove_dir_all(&dir);
-}
-
-/// Verifies the Fiber sentinel handler participates in the same recursion-byte
-/// snapshot ABI as ordinary try handlers so an escaping throw cannot leak it.
-#[test]
-fn fiber_boundary_handler_restores_runtime_recursion_budget() {
-    let source = include_str!("../src/codegen_support/runtime/fibers/entry.rs");
-    assert!(
-        source
-            .matches("TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET")
-            .count()
-            >= 7,
-        "both target Fiber boundaries must address the shared recursion snapshot field"
-    );
-    assert!(
-        source.matches("_runtime_recursion_stack_bytes").count() >= 6,
-        "both supported Fiber escape paths must snapshot and restore recursion bytes"
-    );
-}
-
-/// Verifies recursion-byte accounting follows the active Fiber stack across
-/// suspend/resume instead of leaking through one process-global counter.
-#[test]
-fn fiber_switch_restores_per_context_runtime_recursion_budget() {
-    let source = include_str!("../src/codegen_support/runtime/fibers/switch.rs");
-    assert!(
-        source.contains("FIBER_OWN_RECURSION_STACK_BYTES_OFFSET"),
-        "each Fiber context must persist its own recursion-byte budget"
-    );
-    assert!(
-        source
-            .matches("_fiber_main_saved_recursion_stack_bytes")
-            .count()
-            >= 4,
-        "both target implementations must save and restore the main-stack recursion budget"
-    );
-    assert!(
-        source.matches("_runtime_recursion_stack_bytes").count() >= 8,
-        "both supported context switches must save and restore the active budget"
-    );
-}
-
-/// Verifies every eval bridge that owns a `setjmp` boundary snapshots and
-/// restores recursion bytes when a generated callable unwinds through it.
-#[test]
-fn eval_bridge_boundaries_restore_runtime_recursion_budget() {
-    let boundaries = [
-        (
-            "callable invoker",
-            include_str!("../src/codegen/runtime_callable_invoker.rs"),
-        ),
-        (
-            "constructor helper",
-            include_str!("../src/codegen/eval_constructor_helpers.rs"),
-        ),
-        (
-            "method helper",
-            include_str!("../src/codegen/eval_method_helpers.rs"),
-        ),
-    ];
-
-    for (surface, source) in boundaries {
-        assert!(
-            source.contains("TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET"),
-            "{surface} must address the shared recursion snapshot field"
-        );
-        assert!(
-            source.matches("_runtime_recursion_stack_bytes").count() >= 4,
-            "{surface} must save and restore recursion bytes on both supported architectures"
-        );
-    }
 }

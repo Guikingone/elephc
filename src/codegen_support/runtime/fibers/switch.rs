@@ -28,8 +28,8 @@ use crate::codegen_support::runtime::system::{
 
 use super::alloc::FIBER_GUARD_PAGE_SIZE;
 use super::{
-    FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET,
-    FIBER_OWN_RECURSION_STACK_BYTES_OFFSET, FIBER_SAVED_SP_OFFSET, FIBER_STACK_BASE_OFFSET,
+    FIBER_OWN_CALL_FRAME_OFFSET, FIBER_OWN_EXC_HEAD_OFFSET, FIBER_SAVED_SP_OFFSET,
+    FIBER_STACK_BASE_OFFSET,
 };
 
 /// Call-stack floor for a coroutine stack, measured from the fiber's mmap base.
@@ -112,8 +112,6 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     emitter.instruction(&format!("str x12, [x10, #{}]", FIBER_OWN_EXC_HEAD_OFFSET)); // source_fiber->own_exc_head = head
     abi::emit_load_symbol_to_reg(emitter, "x13", "_exc_call_frame_top", 0);     // x13 = current head of the activation-record cleanup chain
     emitter.instruction(&format!("str x13, [x10, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // source_fiber->own_call_frame = head
-    abi::emit_load_symbol_to_reg(emitter, "x13", "_runtime_recursion_stack_bytes", 0);
-    emitter.instruction(&format!("str x13, [x10, #{}]", FIBER_OWN_RECURSION_STACK_BYTES_OFFSET)); // preserve the source Fiber byte budget
     emitter.instruction("b __rt_fiber_switch_load_target");                     // skip the main-thread save path
 
     // -- source = main thread: persist its SP, exception chain head, and call-frame chain head into globals --
@@ -123,8 +121,6 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x12", "_fiber_main_saved_exc", 0);  // _fiber_main_saved_exc = main thread handler chain head
     abi::emit_load_symbol_to_reg(emitter, "x13", "_exc_call_frame_top", 0);     // x13 = current head of the activation-record cleanup chain on main
     abi::emit_store_reg_to_symbol(emitter, "x13", "_fiber_main_saved_call_frame", 0); // _fiber_main_saved_call_frame = main thread call-frame chain head
-    abi::emit_load_symbol_to_reg(emitter, "x13", "_runtime_recursion_stack_bytes", 0);
-    abi::emit_store_reg_to_symbol(emitter, "x13", "_fiber_main_saved_recursion_stack_bytes", 0);
 
     // -- swap _fiber_current to the target and load its context --
     emitter.label("__rt_fiber_switch_load_target");
@@ -136,8 +132,6 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x12", "_exc_handler_top", 0);       // restore the target fiber's handler chain head globally
     emitter.instruction(&format!("ldr x13, [x0, #{}]", FIBER_OWN_CALL_FRAME_OFFSET)); // x13 = target fiber's saved activation-record cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "x13", "_exc_call_frame_top", 0);    // restore the target fiber's call-frame chain head globally
-    emitter.instruction(&format!("ldr x13, [x0, #{}]", FIBER_OWN_RECURSION_STACK_BYTES_OFFSET));
-    abi::emit_store_reg_to_symbol(emitter, "x13", "_runtime_recursion_stack_bytes", 0);
     emit_adopt_fiber_stack_limit_aarch64(emitter);
     emitter.instruction(&format!("ldr x11, [x0, #{}]", FIBER_SAVED_SP_OFFSET)); // x11 = target fiber's saved SP
     emitter.instruction("mov sp, x11");                                         // adopt the target fiber's stack
@@ -149,8 +143,6 @@ pub fn emit_fiber_switch(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x12", "_exc_handler_top", 0);       // restore the main thread handler chain head globally
     abi::emit_load_symbol_to_reg(emitter, "x13", "_fiber_main_saved_call_frame", 0); // x13 = main thread's saved activation-record cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "x13", "_exc_call_frame_top", 0);    // restore the main thread call-frame chain head globally
-    abi::emit_load_symbol_to_reg(emitter, "x13", "_fiber_main_saved_recursion_stack_bytes", 0);
-    abi::emit_store_reg_to_symbol(emitter, "x13", "_runtime_recursion_stack_bytes", 0);
     abi::emit_load_symbol_to_reg(emitter, "x14", STACK_LIMIT_MAIN_SYMBOL, 0);   // x14 = the OS-thread call-stack floor measured at process start
     abi::emit_store_reg_to_symbol(emitter, "x14", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
     abi::emit_load_symbol_to_reg(emitter, "x11", "_fiber_main_saved_sp", 0);    // x11 = main thread's saved SP
@@ -278,8 +270,6 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_EXC_HEAD_OFFSET)); // source_fiber->own_exc_head = head
     abi::emit_load_symbol_to_reg(emitter, "r11", "_exc_call_frame_top", 0);     // r11 = current head of the activation-record cleanup chain
     emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_CALL_FRAME_OFFSET)); // source_fiber->own_call_frame = head
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_runtime_recursion_stack_bytes", 0);
-    emitter.instruction(&format!("mov QWORD PTR [r10 + {}], r11", FIBER_OWN_RECURSION_STACK_BYTES_OFFSET)); // preserve source Fiber byte budget
     emitter.instruction("jmp __rt_fiber_switch_load_target");                   // skip the main-thread save path
 
     // -- source = main thread: persist its SP and exception/call-frame chain heads --
@@ -289,8 +279,6 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_exc", 0);  // _fiber_main_saved_exc = main thread handler chain head
     abi::emit_load_symbol_to_reg(emitter, "r11", "_exc_call_frame_top", 0);     // r11 = current head of the main-thread cleanup chain
     abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_call_frame", 0); // _fiber_main_saved_call_frame = main thread cleanup chain head
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_runtime_recursion_stack_bytes", 0);
-    abi::emit_store_reg_to_symbol(emitter, "r11", "_fiber_main_saved_recursion_stack_bytes", 0);
 
     // -- swap _fiber_current to the target and load its context --
     emitter.label("__rt_fiber_switch_load_target");
@@ -303,8 +291,6 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_handler_top", 0);       // restore the target fiber's handler chain head globally
     emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_OWN_CALL_FRAME_OFFSET)); // r11 = target fiber's cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);    // restore the target fiber's cleanup chain head globally
-    emitter.instruction(&format!("mov r11, QWORD PTR [rdi + {}]", FIBER_OWN_RECURSION_STACK_BYTES_OFFSET));
-    abi::emit_store_reg_to_symbol(emitter, "r11", "_runtime_recursion_stack_bytes", 0);
     emit_adopt_fiber_stack_limit_x86_64(emitter);
     emitter.instruction(&format!("mov rsp, QWORD PTR [rdi + {}]", FIBER_SAVED_SP_OFFSET)); // adopt the target fiber's saved stack pointer
     emitter.instruction("jmp __rt_fiber_switch_restore");                       // proceed to restore callee-saved registers
@@ -315,8 +301,6 @@ fn emit_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_handler_top", 0);       // restore the main thread handler chain head globally
     abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_call_frame", 0); // r11 = main thread's saved cleanup chain head
     abi::emit_store_reg_to_symbol(emitter, "r11", "_exc_call_frame_top", 0);    // restore the main thread cleanup chain head globally
-    abi::emit_load_symbol_to_reg(emitter, "r11", "_fiber_main_saved_recursion_stack_bytes", 0);
-    abi::emit_store_reg_to_symbol(emitter, "r11", "_runtime_recursion_stack_bytes", 0);
     abi::emit_load_symbol_to_reg(emitter, "rax", STACK_LIMIT_MAIN_SYMBOL, 0);   // rax = the OS-thread call-stack floor measured at process start
     abi::emit_store_reg_to_symbol(emitter, "rax", STACK_LIMIT_SYMBOL, 0);       // restore the main-thread floor now that the main stack is current again
     abi::emit_load_symbol_to_reg(emitter, "rsp", "_fiber_main_saved_sp", 0);    // adopt the main thread's saved stack pointer

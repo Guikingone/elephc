@@ -40,7 +40,7 @@
 //! - Exception firewall: identical to the collation adapter. A compiled-PHP `throw` is
 //!   a `longjmp`; letting it cross this C boundary would unwind over SQLite's VDBE and
 //!   the Rust bridge frame (deadlock/UB/exit). The adapter pushes its own `setjmp`
-//!   handler record (the same 240-byte layout as the EIR try/catch slot) around the
+//!   handler record (the same 224-byte layout as the EIR try/catch slot) around the
 //!   invoke; on a `longjmp` it pops the handler, swallows the pending exception, and
 //!   writes `out.tag = -1`, which the bridge dispatcher turns into a `sqlite3_result_error`
 //!   (surfacing as a PDOException at the query boundary). Re-raising the original
@@ -50,20 +50,18 @@
 use crate::codegen_support::callable_descriptor::CALLABLE_DESC_INVOKER_OFFSET;
 use crate::codegen_support::try_handlers::{
     TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
-    TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_SLOT_SIZE,
 };
 use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 // The firewall builds its handler record by hand and must match the layout the EIR
 // try/catch machinery and `__rt_throw_current` assume: next@0, survivor@8,
-// diag@TRY_HANDLER_DIAG_DEPTH_OFFSET, stack_bytes@TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET,
-// jmp_buf@TRY_HANDLER_JMP_BUF_OFFSET. Assert the ABI-critical offsets at compile
+// diag@TRY_HANDLER_DIAG_DEPTH_OFFSET, jmp_buf@TRY_HANDLER_JMP_BUF_OFFSET. Assert the ABI-critical offsets at compile
 // time so a constant drift breaks the build here rather than corrupting a `longjmp`
 // at runtime.
 const _: () = assert!(TRY_HANDLER_DIAG_DEPTH_OFFSET == 16);
-const _: () = assert!(TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET == 24);
-const _: () = assert!(TRY_HANDLER_JMP_BUF_OFFSET == 32);
-const _: () = assert!(TRY_HANDLER_SLOT_SIZE == 240);
+const _: () = assert!(TRY_HANDLER_JMP_BUF_OFFSET == 24);
+const _: () = assert!(TRY_HANDLER_SLOT_SIZE == 224);
 
 /// Emits `__rt_pdo_call_scalar(descriptor, argv, argc, out)`.
 ///
@@ -81,8 +79,8 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     emitter.label_global("__rt_pdo_call_scalar");
 
     // Stack frame (320 bytes):
-    //   [sp, #0]   = handler record (240 bytes): next@0, survivor@8, diag@16,
-    //                stack_bytes@24, jmp_buf@32.
+    //   [sp, #0]   = handler area (224-byte record + 16-byte pad): next@0, survivor@8, diag@16,
+    //                jmp_buf@24.
     //   [sp, #240] = descriptor      [sp, #248] = argv       [sp, #256] = argc
     //   [sp, #264] = out ptr         [sp, #272] = args array ptr
     //   [sp, #280] = boxed args cell [sp, #288] = boxed return  [sp, #296] = loop index
@@ -192,13 +190,11 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     // record.diag = _rt_diag_suppression
     abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction("str x10, [sp, #16]");                                  // handler record: saved diagnostic-suppression depth
-    abi::emit_load_symbol_to_reg(emitter, "x10", "_runtime_recursion_stack_bytes", 0);
-    emitter.instruction("str x10, [sp, #24]");                                  // handler record: saved user-stack byte budget
     // _exc_handler_top = &record (record base = sp + 0)
     emitter.instruction("mov x10, sp");                                         // x10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // link the record as the active handler
-    // setjmp(&jmp_buf) where jmp_buf = record + 32
-    emitter.instruction("add x0, sp, #32");                                     // x0 = &jmp_buf inside the handler record
+    // setjmp(&jmp_buf) where jmp_buf = record + 24
+    emitter.instruction("add x0, sp, #24");                                     // x0 = &jmp_buf inside the handler record
     emitter.bl_c("setjmp"); // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("cbnz x0, __rt_pdo_call_scalar_threw");                 // nonzero → arrived via longjmp
 
@@ -214,8 +210,6 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
-    emitter.instruction("ldr x10, [sp, #24]");                                  // saved user-stack byte budget
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_runtime_recursion_stack_bytes", 0);
 
     // -- type-preserving decode: unbox once and dispatch on the runtime tag --
     emitter.instruction("ldr x0, [sp, #288]");                                  // boxed return
@@ -291,8 +285,6 @@ pub fn emit_pdo_call_scalar(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("ldr x10, [sp, #16]");                                  // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0); // restore it
-    emitter.instruction("ldr x10, [sp, #24]");                                  // saved user-stack byte budget
-    abi::emit_store_reg_to_symbol(emitter, "x10", "_runtime_recursion_stack_bytes", 0);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // swallow the pending exception (surfaced as a SQL error)
     emitter.instruction("ldr x11, [sp, #264]");                                 // out pointer
     emitter.instruction("mov x10, #-1");                                        // ElephcResult tag -1 = ERROR (bridge raises sqlite3_result_error)
@@ -327,12 +319,12 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     //   [rbp-8]   descriptor   [rbp-16] argv     [rbp-24] argc     [rbp-32] out ptr
     //   [rbp-40]  args array   [rbp-48] boxed args cell           [rbp-56] boxed return
     //   [rbp-64]  loop index
-    //   [rbp-304] handler record (240 bytes): next@0, survivor@8, diag@16,
-    //             stack_bytes@24, jmp_buf@32.
+    //   [rbp-304] handler area (224-byte record + 16-byte pad): next@0, survivor@8, diag@16,
+    //             jmp_buf@24.
     //   push rbp + sub rsp,304 keeps rsp 16-aligned for the nested calls.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish the adapter frame pointer
-    emitter.instruction("sub rsp, 304");                                        // reserve the slots and the 240-byte handler record
+    emitter.instruction("sub rsp, 304");                                        // reserve slots, the 224-byte handler record, and padding
 
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                        // save descriptor pointer
     emitter.instruction("mov QWORD PTR [rbp - 16], rsi");                       // save argv base pointer
@@ -428,11 +420,9 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("mov QWORD PTR [rbp - 296], r10");                      // handler record: survivor frame (cleanup stops here)
     abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0); // current diagnostic-suppression depth
     emitter.instruction("mov QWORD PTR [rbp - 288], r10");                      // handler record: saved diagnostic depth
-    abi::emit_load_symbol_to_reg(emitter, "r10", "_runtime_recursion_stack_bytes", 0);
-    emitter.instruction("mov QWORD PTR [rbp - 280], r10");                      // handler record: saved user-stack byte budget
     emitter.instruction("lea r10, [rbp - 304]");                                // r10 = address of this handler record
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // link the record as the active handler
-    emitter.instruction("lea rdi, [rbp - 272]");                                // rdi = &jmp_buf inside the handler record (record + 32)
+    emitter.instruction("lea rdi, [rbp - 280]");                                // rdi = &jmp_buf inside the handler record (record + 24)
     emitter.bl_c("setjmp"); // returns 0 on first pass, 1 when a throw longjmps back
     emitter.instruction("test rax, rax");                                       // did control arrive via longjmp?
     emitter.instruction("jne __rt_pdo_call_scalar_threw_x86");                  // nonzero → arrived via longjmp
@@ -449,8 +439,6 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
-    emitter.instruction("mov r10, QWORD PTR [rbp - 280]");                      // saved user-stack byte budget
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_runtime_recursion_stack_bytes", 0);
 
     // -- type-preserving decode: unbox once and dispatch on the runtime tag --
     emitter.instruction("mov rax, QWORD PTR [rbp - 56]");                       // boxed return (unbox reads RAX)
@@ -520,8 +508,6 @@ fn emit_pdo_call_scalar_linux_x86_64(emitter: &mut Emitter) {
     abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0); // unlink the handler record
     emitter.instruction("mov r10, QWORD PTR [rbp - 288]");                      // saved diagnostic-suppression depth
     abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0); // restore it
-    emitter.instruction("mov r10, QWORD PTR [rbp - 280]");                      // saved user-stack byte budget
-    abi::emit_store_reg_to_symbol(emitter, "r10", "_runtime_recursion_stack_bytes", 0);
     abi::emit_store_zero_to_symbol(emitter, "_exc_value", 0); // swallow the pending exception (surfaced as a SQL error)
     emitter.instruction("mov r11, QWORD PTR [rbp - 32]");                       // out pointer
     emitter.instruction("mov QWORD PTR [r11], -1");                             // out.tag = -1 (ERROR; bridge raises sqlite3_result_error)

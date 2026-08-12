@@ -14,8 +14,7 @@ use crate::codegen_support::runtime::data::{
     UNSER_TYPE_GIVEN_SUFFIX,
 };
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
-    TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
 /// Emits the non-returning dynamic unserialize TypeError helper.
@@ -377,8 +376,6 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             emitter.instruction("str x10, [sp, #8]");                           // preserve the activation frame surviving this boundary
             crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
             emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_runtime_recursion_stack_bytes", 0);
-            emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // snapshot user-stack accounting across longjmp
             emitter.instruction("mov x10, sp");                                 // compute this invocation's handler record address
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
@@ -413,8 +410,6 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
             emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // restore stack accounting skipped by longjmp
-            crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_runtime_recursion_stack_bytes", 0);
             emitter.instruction("mov x0, #0");                                  // cleanup ignores the placeholder result on throw
             emitter.instruction("bl __rt_unserialize_end");                     // close this opened context exactly once
             emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_link_offset)); // restore caller frame before rethrow
@@ -437,8 +432,6 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", survivor_offset)); // activation frame surviving this boundary
             crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_rt_diag_suppression", 0);
             emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", boundary_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression
-            crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "r10", "_runtime_recursion_stack_bytes", 0);
-            emitter.instruction(&format!("mov QWORD PTR [rbp - {}], r10", boundary_bytes - TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // snapshot stack accounting
             emitter.instruction(&format!("lea r10, [rbp - {}]", previous_handler_offset)); // compute this handler record address
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!("lea rdi, [rbp - {}]", boundary_bytes - TRY_HANDLER_JMP_BUF_OFFSET)); // pass opaque jmp_buf to setjmp
@@ -476,8 +469,6 @@ pub(super) fn emit_unserialize_object_to_string_helper(emitter: &mut Emitter) {
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_exc_handler_top", 0);
             emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", boundary_bytes - TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
             crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_rt_diag_suppression", 0);
-            emitter.instruction(&format!("mov r10, QWORD PTR [rbp - {}]", boundary_bytes - TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // restore stack accounting skipped by longjmp
-            crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "r10", "_runtime_recursion_stack_bytes", 0);
             emitter.instruction("xor eax, eax");                                // cleanup ignores placeholder result on throw
             emitter.instruction("call __rt_unserialize_end");                   // close this opened context exactly once
             emitter.instruction("leave");                                       // discard protected invocation frame

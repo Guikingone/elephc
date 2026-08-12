@@ -25,7 +25,6 @@ use crate::codegen_support::RuntimeFeatures;
 /// are available when branches are assembled.
 pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     diagnostics::emit_diagnostics(emitter);
-    system::emit_recursion_guard(emitter);
 
     // Shared numeric coercions. Emitted first because string, array, and cast helpers all
     // branch into `__rt_php_float_to_int` for PHP's float→int rules.

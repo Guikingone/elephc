@@ -9,8 +9,7 @@
 
 use crate::codegen_support::emit::Emitter;
 use crate::codegen_support::try_handlers::{
-    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET,
-    TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET, TRY_HANDLER_SLOT_SIZE,
+    TRY_HANDLER_DIAG_DEPTH_OFFSET, TRY_HANDLER_JMP_BUF_OFFSET, TRY_HANDLER_SLOT_SIZE,
 };
 
 /// Emits the AArch64 public unserialize entry and its exception-cleanup boundary.
@@ -35,8 +34,6 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     emitter.instruction("str x10, [sp, #8]");                                   // preserve the activation frame that survives this boundary
     crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_rt_diag_suppression", 0);
     emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // snapshot diagnostic suppression across longjmp
-    crate::codegen_support::abi::emit_load_symbol_to_reg(emitter, "x10", "_runtime_recursion_stack_bytes", 0);
-    emitter.instruction(&format!("str x10, [sp, #{}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // snapshot the user-stack budget across longjmp
     emitter.instruction("mov x10, sp");                                         // compute this wrapper's exception-handler record address
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("add x0, sp, #{}", TRY_HANDLER_JMP_BUF_OFFSET)); // pass this boundary's opaque jmp_buf to setjmp
@@ -70,8 +67,6 @@ pub(super) fn emit_entry(emitter: &mut Emitter) {
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_exc_handler_top", 0);
     emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_DIAG_DEPTH_OFFSET)); // restore diagnostic suppression skipped by longjmp
     crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_rt_diag_suppression", 0);
-    emitter.instruction(&format!("ldr x10, [sp, #{}]", TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET)); // restore the user-stack budget skipped by longjmp
-    crate::codegen_support::abi::emit_store_reg_to_symbol(emitter, "x10", "_runtime_recursion_stack_bytes", 0);
     emitter.instruction("mov x0, #0");                                          // end cleanup ignores the placeholder parse result on throw
     emitter.instruction("bl __rt_unserialize_end");                             // release policy/context state before propagating the Throwable
     emitter.instruction(&format!("ldp x29, x30, [sp, #{}]", frame_link_offset)); // restore the caller frame before rethrowing

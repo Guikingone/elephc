@@ -53,10 +53,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(".data\n");
     out.push_str(&comm_directive("_concat_buf", 65536, target));
     out.push_str(&comm_directive("_concat_off", 8, target));
-    out.push_str(&comm_directive("_runtime_recursion_stack_bytes", 8, target));
-    out.push_str(&format!(
-        ".globl _runtime_recursion_depth_msg\n_runtime_recursion_depth_msg:\n    .ascii {STACK_OVERFLOW_MSG:?}\n"
-    ));
     out.push_str(&comm_directive("_unser_depth", 8, target));
     out.push_str(".globl _unser_depth_msg\n_unser_depth_msg:\n    .ascii \"Fatal error: maximum unserialize depth exceeded\\n\"\n");
     out.push_str(&comm_directive("_unser_allowed_mode", 8, target));
@@ -252,11 +248,6 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     out.push_str(&comm_directive("_fiber_main_saved_sp", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_exc", 8, target));
     out.push_str(&comm_directive("_fiber_main_saved_call_frame", 8, target));
-    out.push_str(&comm_directive(
-        "_fiber_main_saved_recursion_stack_bytes",
-        8,
-        target,
-    ));
     // Call-stack overflow guard state. _stack_limit is the low-water stack address of the
     // execution context that is running right now: every compiled function prologue does an
     // unsigned compare of the stack pointer against it and branches to __rt_stack_overflow

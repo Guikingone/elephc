@@ -10,9 +10,6 @@
 //!   explicit unsupported-feature errors for control flow not lowered yet.
 //! - The main prologue initializes supported static-property storage before
 //!   user blocks run.
-//! - Catch-block entry restores state skipped by exception `longjmp` paths.
-
-use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use crate::codegen::abi;
@@ -23,9 +20,8 @@ use crate::codegen::platform::Arch;
 use crate::codegen::Emit;
 use crate::codegen::WebIsolation;
 use crate::codegen::UNINITIALIZED_TYPED_PROPERTY_SENTINEL;
-use crate::codegen_support::try_handlers::TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET;
 use crate::codegen_support::DeferredFiberWrapper;
-use crate::ir::{BasicBlock, Function, Immediate, InstId, Module, Op};
+use crate::ir::{BasicBlock, Function, InstId, Module};
 use crate::names::{
     function_epilogue_symbol, function_symbol, method_symbol, php_symbol_key,
     static_method_symbol, static_property_symbol,
@@ -1038,34 +1034,20 @@ fn emit_static_property_default_value(
     Ok(())
 }
 
-/// Emits every block in table order after indexing exception-handler tokens once.
+/// Emits every block in table order.
 fn emit_blocks(ctx: &mut FunctionContext<'_>) -> Result<()> {
-    let handler_tokens: HashSet<i64> = ctx
-        .function
-        .instructions
-        .iter()
-        .filter_map(|inst| match inst.immediate {
-            Some(Immediate::I64(token)) if inst.op == Op::TryPushHandler => Some(token),
-            _ => None,
-        })
-        .collect();
     let blocks = ctx.function.blocks.clone();
     for block in blocks {
-        emit_block(ctx, &block, &handler_tokens)?;
+        emit_block(ctx, &block)?;
     }
     Ok(())
 }
 
-/// Emits one EIR basic block using precomputed exception-handler membership.
-fn emit_block(
-    ctx: &mut FunctionContext<'_>,
-    block: &BasicBlock,
-    handler_tokens: &HashSet<i64>,
-) -> Result<()> {
+/// Emits one EIR basic block.
+fn emit_block(ctx: &mut FunctionContext<'_>, block: &BasicBlock) -> Result<()> {
     ctx.emitter.comment(&format!("@block name={}", block.name));
     let block_label = ctx.block_label_for_id(block.id)?;
     ctx.emitter.label(&block_label);
-    emit_handler_recursion_restore(ctx, block, handler_tokens)?;
     for inst_id in &block.instructions {
         emit_instruction_source_marker(ctx, *inst_id)?;
         lower_inst::lower_instruction(ctx, *inst_id)?;
@@ -1074,29 +1056,6 @@ fn emit_block(
         CodegenIrError::invalid_module(format!("block '{}' has no terminator", block.name))
     })?;
     lower_term::lower_terminator(ctx, terminator)
-}
-
-/// Restores the stack-byte budget captured by the try record when `longjmp`
-/// enters an implicit catch block and therefore bypasses intermediate epilogues.
-fn emit_handler_recursion_restore(
-    ctx: &mut FunctionContext<'_>,
-    block: &BasicBlock,
-    handler_tokens: &HashSet<i64>,
-) -> Result<()> {
-    let token = i64::from(block.id.as_raw());
-    if !handler_tokens.contains(&token) {
-        return Ok(());
-    }
-    let offset = ctx.try_handler_offset(token)?;
-    let scratch = abi::temp_int_reg(ctx.emitter.target);
-    ctx.emitter.comment("restore user-stack byte budget after exception longjmp");
-    abi::load_at_offset(
-        ctx.emitter,
-        scratch,
-        offset - TRY_HANDLER_RECURSION_STACK_BYTES_OFFSET,
-    );
-    abi::emit_store_reg_to_symbol(ctx.emitter, scratch, "_runtime_recursion_stack_bytes", 0);
-    Ok(())
 }
 
 /// Emits the source-map marker for an EIR instruction when it carries a real PHP span.
