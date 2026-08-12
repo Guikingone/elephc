@@ -457,10 +457,16 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     // A scalar array stores bare payloads. Wrapping one in a frame-local Mixed cell lets the
     // single `__rt_mixed_cast_string` formatter serve int, float, bool and null alike, and the
     // array's value_type doubles as the cell tag because both use the same numbering.
-    emitter.instruction("mov QWORD PTR [rbp - 136], rdx");                        // cell tag = the array's element value_type
+    // A Mixed cell is read at ASCENDING addresses — tag at the base, payload at +8, high word at
+    // +16 — and an rbp-relative frame grows DOWNWARD, so the tag has to take the lowest address
+    // of the three. Writing them in frame order instead put the payload and high word BELOW the
+    // base, and the reader then took the two slots above it: the element value_type and the
+    // enclosure-doubling flag. AArch64 addresses the same cell from `sp` with rising offsets,
+    // which is why only one architecture was wrong.
+    emitter.instruction("mov QWORD PTR [rbp - 152], rdx");                        // cell tag = the array's element value_type
     emitter.instruction("mov QWORD PTR [rbp - 144], rdi");                        // cell payload low word
-    emitter.instruction("mov QWORD PTR [rbp - 152], 0");                          // cell payload high word
-    emitter.instruction("lea rdi, [rbp - 136]");                                  // cast the frame-local cell
+    emitter.instruction("mov QWORD PTR [rbp - 136], 0");                          // cell payload high word
+    emitter.instruction("lea rdi, [rbp - 152]");                                  // cast the frame-local cell
     emitter.label("__rt_fputcsv_x_field_cast");
     emitter.instruction("call __rt_mixed_cast_string");                           // rax = payload pointer, rdx = payload length
     // Only the string arm allocates (through `__rt_str_persist`); int/float/bool render into the

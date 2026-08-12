@@ -301,10 +301,14 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_uww_x_scheme");
     emitter.instruction("mov rsi, QWORD PTR [rbp - 24]");                       // the scheme sits at the path start
     emitter.instruction("mov rcx, QWORD PTR [rbp - 40]");
+    // The counter is cleared BEFORE the clamp branch, not after it. Clearing it only on the
+    // clamped path left the common case entering the loop with the previous fragment's counter
+    // still in r9, which is already past the length — so the loop exited at once and the scheme
+    // came out empty. The AArch64 side clamps with `csel` and cannot express the same slip.
+    emitter.instruction("xor r9, r9");
     emitter.instruction(&format!("cmp rcx, {SCHEME_CLAMP}"));
     emitter.instruction("jbe __rt_uww_x_scheme_loop");
     emitter.instruction(&format!("mov rcx, {SCHEME_CLAMP}"));                   // never write past the buffer
-    emitter.instruction("xor r9, r9");
     emitter.label("__rt_uww_x_scheme_loop");
     emitter.instruction("cmp r9, rcx");
     emitter.instruction("jae __rt_uww_x_tail");

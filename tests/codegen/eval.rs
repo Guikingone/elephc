@@ -6628,6 +6628,38 @@ echo function_exists("spl_classes"); echo is_callable("spl_classes");');
     );
 }
 
+/// Verifies an eval()'d open failure names the file and the reason, as the compiled path does.
+///
+/// The AOT warning was fixed to carry both; the eval interpreter has its own emitter and was
+/// left behind saying `fopen(): Failed to open stream` with nothing after it. `file()` was
+/// worse: it announced itself as `file_get_contents()`. The reason is read from the OS rather
+/// than assumed, because "No such file or directory" is wrong for a file that exists and
+/// cannot be read.
+#[test]
+fn test_eval_open_failure_names_the_file_and_the_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+eval('$a = fopen("missing_a.txt", "r");');
+eval('$b = file_get_contents("missing_b.txt");');
+eval('$c = file("missing_c.txt");');
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    for expected in [
+        "Warning: fopen(missing_a.txt): Failed to open stream: No such file or directory",
+        "Warning: file_get_contents(missing_b.txt): Failed to open stream: No such file or directory",
+        "Warning: file(missing_c.txt): Failed to open stream: No such file or directory",
+    ] {
+        assert!(
+            out.stderr.contains(expected),
+            "missing {expected:?}, got stderr={}",
+            out.stderr
+        );
+    }
+}
+
 /// Verifies eval fragments can construct and dispatch SPL container objects.
 #[test]
 fn test_eval_constructs_and_dispatches_spl_container_objects() {

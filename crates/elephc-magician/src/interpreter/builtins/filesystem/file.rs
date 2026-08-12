@@ -93,13 +93,18 @@ pub(in crate::interpreter) fn eval_file_result(
             let bytes = values.string_bytes(result)?;
             return eval_file_lines_array(&bytes, flags, values);
         }
-        values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
+        values.warning(&format!(
+            "Warning: file({path}): Failed to open stream: {}\n",
+            crate::stream_resources::EVAL_OPEN_DEFAULT_REASON
+        ))?;
         return values.array_new(0);
     }
     let bytes = match super::file_get_contents::eval_read_path_or_wrapper_bytes(&path) {
         Ok(bytes) => bytes,
-        Err(_) => {
-            values.warning("Warning: file_get_contents(): Failed to open stream\n")?;
+        Err(reason) => {
+            values.warning(&format!(
+                "Warning: file({path}): Failed to open stream: {reason}\n"
+            ))?;
             return values.array_new(0);
         }
     };

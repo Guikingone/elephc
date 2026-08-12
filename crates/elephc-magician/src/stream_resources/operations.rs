@@ -63,6 +63,7 @@ impl EvalStreamResources {
             chunk_sizes: _,
             default_stream_context: _,
             disabled_builtin_stream_wrappers: _,
+            last_open_error: _,
             next_id: _,
             socket_names: _,
             user_stream_wrapper_classes: _,
