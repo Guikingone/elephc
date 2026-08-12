@@ -3365,15 +3365,20 @@ echo ($r[0] ?? "quiet"), "\n";
 }
 
 /// Sentinel-derived nulls stay canonical across non-indexing Mixed consumers:
-/// count/casts/empty, JSON encoding, and serialization must not dereference a
+/// casts/empty, JSON encoding, and serialization must not dereference a
 /// container-shaped payload or observe it as an array.
+///
+/// `count()` is the one that raises rather than answering: php reports
+/// `TypeError: count(): … null given` for this exact program, so it is caught here to keep the
+/// remaining consumers under test. The old expectation of `0` recorded elephc's own silent
+/// answer, which is what made a null read as an empty collection.
 #[test]
 fn test_ternary_missed_read_structural_mixed_consumers_observe_null() {
     let out = compile_and_run_capture(
         r#"<?php
 $rows = [[1, 2]];
 $r = $argc == 1 ? $rows[5] : ["fallback"];
-echo count($r), "\n";
+try { echo count($r), "\n"; } catch (\TypeError $e) { echo "count-raises\n"; }
 echo empty($r) ? "empty\n" : "not-empty\n";
 echo (int) $r, "\n";
 echo json_encode($r), "\n";
@@ -3382,7 +3387,7 @@ echo zval_type(zval_pack($r)), "\n";
 "#,
     );
     assert!(out.success, "program crashed: {}", out.stderr);
-    assert_eq!(out.stdout, "0\nempty\n0\nnull\nN;\n1\n");
+    assert_eq!(out.stdout, "count-raises\nempty\n0\nnull\nN;\n1\n");
     assert_eq!(
         out.stderr.matches("Warning: Undefined array key 5").count(),
         1
