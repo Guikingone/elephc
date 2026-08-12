@@ -12,7 +12,7 @@ mod managed;
 mod platform;
 
 use super::{
-    callables, diagnostics, exceptions, generators, numeric, round_mode, strings,
+    bcmath, callables, diagnostics, exceptions, generators, numeric, round_mode, strings,
     system,
 };
 use crate::codegen_support::emit::Emitter;
@@ -130,6 +130,7 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     strings::emit_rtrim_mask(emitter);
     strings::emit_ltrim_mask(emitter);
     strings::emit_trim_mask(emitter);
+    bcmath::emit_bcmath(emitter);
 
     // Callable introspection runtime functions
     callables::emit_is_callable_runtime(emitter);
