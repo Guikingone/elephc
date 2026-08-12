@@ -1,0 +1,230 @@
+---
+title: "mysqli (MySQL / MariaDB)"
+description: "The mysqli subset: connections, buffered queries and results, prepared statements, multi_query, mysqli_report error handling, and the documented divergences from php-src."
+sidebar:
+  order: 18
+---
+
+elephc ships a documented **mysqli subset** for MySQL and MariaDB, implemented
+as its own PHP surface over the same pure-Rust MySQL client that backs
+[PDO](./pdo.md) (`crates/elephc-pdo`). A mysqli program links no system MySQL
+client library, and it never declares the PDO classes: `mysqli`,
+`mysqli_stmt`, `mysqli_result`, and `mysqli_sql_exception` are their own
+types, and a mysqli failure never throws `PDOException`.
+
+The prelude is injected automatically when a program references a mysqli
+class or calls a `mysqli_*` function. `--with-mysqli` force-injects the
+surface (and links the bridge) for programs with no statically visible usage.
+`extension_loaded('mysqli')` is true exactly when the surface is compiled in;
+`mysqlnd` is never reported (elephc is not mysqlnd).
+
+## Connecting
+
+```php
+<?php
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+$db = new mysqli("127.0.0.1", "user", "secret", "appdb", 3306);
+echo $db->host_info, "\n";     // "127.0.0.1 via TCP/IP"
+echo $db->server_info, "\n";   // e.g. "8.4.6"
+$db->close();
+```
+
+- `new mysqli()` with no arguments behaves like `mysqli_init()`: no connection
+  is attempted until `real_connect()`.
+- A host beginning with `p:` selects a persistent connection; the remainder is
+  the real host (`new mysqli("p:127.0.0.1", …)`).
+- The socket argument is honored only when the host is empty or exactly
+  `localhost`; any other host connects over TCP. The default port is `3306`.
+- `real_connect()` accepts the `MYSQLI_CLIENT_FOUND_ROWS`,
+  `MYSQLI_CLIENT_COMPRESS`, and `MYSQLI_CLIENT_IGNORE_SPACE` flags.
+  `MYSQLI_CLIENT_SSL` is **rejected with a clear error** — elephc's mysqli has
+  no TLS path; use PDO MySQL's `Pdo\Mysql::ATTR_SSL_*` attributes when you
+  need TLS.
+- `mysqli_options()` honors `MYSQLI_OPT_CONNECT_TIMEOUT`,
+  `MYSQLI_INIT_COMMAND`, and `MYSQLI_SET_CHARSET_NAME` (collected before
+  `real_connect`, applied at connect time).
+- Connect-time failures populate `connect_errno` / `connect_error` (distinct
+  from `errno` / `error`), and the no-argument procedural
+  `mysqli_connect_errno()` / `mysqli_connect_error()` read the process-wide
+  last connect attempt, exactly like PHP.
+
+Every public method has a `mysqli_*` procedural alias
+(`mysqli_connect`, `mysqli_query`, `mysqli_prepare`, …), so
+`function_exists('mysqli_query')` is true once the surface is compiled in.
+elephc always requires the explicit link argument, including under
+`--php-version=8.0` (PHP 8.0's implicit last-opened-link fallback is not
+implemented; PHP 8.1+ requires the object anyway).
+
+## Queries and results
+
+`mysqli::query()` returns a **fully buffered** `mysqli_result` that owns its
+rows: a later query on the same connection never invalidates an earlier
+result.
+
+```php
+$r1 = $db->query("SELECT name FROM users ORDER BY id");
+$r2 = $db->query("SELECT COUNT(*) AS c FROM users");   // $r1 stays valid
+$r1->data_seek(0);
+foreach ($r1 as $i => $row) {          // assoc rows, integer keys
+    echo $i, ": ", $row["name"], "\n";
+}
+echo $r1->num_rows, " users\n";
+```
+
+The fetch family matches PHP: `fetch_assoc()`, `fetch_row()`,
+`fetch_array(MYSQLI_ASSOC|MYSQLI_NUM|MYSQLI_BOTH)`, `fetch_object()`,
+`fetch_all()`, `fetch_column()` (PHP 8.1+), `data_seek()`, `fetch_field()`,
+`fetch_fields()`, `fetch_field_direct()`, the `$lengths` property, and
+`free()` / `free_result()` / `close()`. `fetch_*` return `null` when the
+cursor is exhausted (`fetch_column()` returns `false`).
+
+Field metadata comes from the wire protocol: `name`, `orgname`, `table`,
+`orgtable`, `type` (`MYSQLI_TYPE_*`), `flags`, and `length` are real;
+metadata the bridge does not expose (`def`, `db`, `max_length`, `charsetnr`,
+`decimals`) reads `0` / `""`.
+
+Non-select statements return `true` and refresh `affected_rows` and
+`insert_id` on the connection. `real_query()` runs the statement and leaves
+the result pending for `store_result()`; `use_result()` is an alias of
+`store_result()` (results are always buffered — see divergences).
+
+## Prepared statements
+
+`mysqli::prepare()` uses real server-side (non-emulated) `?` placeholders.
+
+```php
+$ins = $db->prepare("INSERT INTO users (name, score) VALUES (?, ?)");
+$name = "Ada";
+$score = 1.5;
+$ins->bind_param("sd", $name, $score);
+$ins->execute();
+
+$sel = $db->prepare("SELECT id, name FROM users WHERE name = ?");
+$sel->execute(["Ada"]);            // PHP 8.1+ shape: binds as strings
+$result = $sel->get_result();
+$row = $result->fetch_assoc();
+```
+
+- `bind_param($types, ...$vars)` accepts the `i` / `d` / `s` / `b` type
+  characters and validates that the variable count matches the type string.
+  **The variable values are captured when `bind_param()` is called** — see
+  divergences below.
+- `execute(?array $params = null)` optionally binds an array per execution
+  (every element as a string, `null` as SQL NULL), replacing prior binds for
+  that execution.
+- `get_result()` drains the result set into an independent `mysqli_result`
+  and leaves the statement re-executable.
+- `store_result()` consumes the pending rows so `$stmt->num_rows` is valid.
+- `mysqli::execute_query($sql, $params)` (PHP 8.2+) is
+  prepare + execute + get_result in one call.
+- Statement properties: `affected_rows`, `errno`, `error`, `field_count`,
+  `insert_id`, `num_rows`, `param_count`, `sqlstate`.
+
+`bind_result()` and `fetch()` are **not provided** — see divergences.
+
+## multi_query
+
+`multi_query()` sends the whole batch in one server round-trip; the retained
+result sets are walked with `store_result()` / `more_results()` /
+`next_result()`:
+
+```php
+$db->multi_query("SELECT 1 AS a; INSERT INTO t (v) VALUES (5); SELECT 2 AS b");
+$first = $db->store_result();          // buffered result for SELECT 1
+while ($db->more_results()) {
+    $db->next_result();
+    $set = $db->store_result();        // false for the INSERT's OK packet
+    if ($set === false) {
+        echo $db->affected_rows, " rows\n";
+    }
+}
+```
+
+Each produced `mysqli_result` is independent and stays valid while the batch
+advances.
+
+## Errors, mysqli_report, and mysqli_sql_exception
+
+`mysqli_report()` mirrors PHP 8.1+: the default is
+`MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT` (under `--php-version=8.0` the
+default is `MYSQLI_REPORT_OFF`).
+
+| Mode | Failure behavior |
+|---|---|
+| `MYSQLI_REPORT_STRICT` set | throw `mysqli_sql_exception` (extends `RuntimeException`) |
+| `MYSQLI_REPORT_ERROR` only | write the message to STDERR, return `false` |
+| `MYSQLI_REPORT_OFF` | silent `false` |
+
+After a failure, `errno`, `error`, `sqlstate`, and `error_list` are populated
+on the connection (or the statement). `mysqli_sql_exception` exposes its
+SQLSTATE as a public `$sqlstate` property (php-src keeps it protected behind
+`getSqlState()`).
+
+## Escaping
+
+`real_escape_string()` / `escape_string()` return the escaped payload
+**without** wrapping quotes, using the same MySQL rules as `PDO::quote()`:
+backslash-escaping of `\`, `'`, `"`, NUL, `\n`, `\r`, and ctrl-Z — and, when
+the live session has `NO_BACKSLASH_ESCAPES` enabled, quote-doubling only
+(backslash-escaping is unsafe in that mode; this mirrors mysqlnd).
+
+## Divergences from php-src
+
+- **`bind_param()` captures values at bind time.** PHP binds *references* and
+  reads the current variable values at each `execute()`; elephc cannot alias
+  caller variables past the call, so the values are snapshotted when
+  `bind_param()` runs. Re-executing with fresh values means re-calling
+  `bind_param()` or passing `execute($params)`. Passing a literal instead of
+  a variable is tolerated (PHP rejects it).
+- **`bind_result()` / `fetch()` are not declared.** Writing fetched rows back
+  into caller variables needs the same cross-call aliasing; a silently inert
+  binding would be worse than an honest absence (`method_exists` stays
+  truthful). Use `get_result()` and the `mysqli_result` fetch family.
+- **`MYSQLI_USE_RESULT` is accepted but still buffered.** True unbuffered
+  `use_result()` streaming is out of scope; `use_result()` behaves like
+  `store_result()`.
+- **`MYSQLI_CLIENT_SSL` is rejected** with
+  `"elephc mysqli does not support MYSQLI_CLIENT_SSL; use PDO MySQL TLS attributes"`.
+- **No `mysqlnd`**: `extension_loaded('mysqlnd')` is `false`, and
+  `mysqli_get_client_info()` reports the bridge's own client string, not a
+  mysqlnd version.
+- **No implicit PHP 8.0 last-link**: procedural functions always require the
+  explicit `mysqli` argument.
+- **Procedural aliases validate the link/result argument at runtime** with a
+  `TypeError` naming the expected class, so passing a `false` query result
+  onward fails loudly.
+- **Property writes stick**: the public `mysqli` / `mysqli_result` /
+  `mysqli_stmt` properties are refreshed after operations but are not
+  write-barriered; assigning to them is not rejected.
+- **`ping()` runs `SELECT 1`** rather than the wire-protocol ping packet.
+- **`query()` with multiple statements executes the whole string** (the
+  bridge connects with multi-statements enabled, matching mysqlnd's default)
+  but returns only the first result set and discards the rest; php-src's
+  `mysqli_query()` rejects multi-statement strings. Use `multi_query()` for
+  batches.
+- **`fetch_object()` constructs before assigning properties** (the
+  `PDO::FETCH_PROPS_LATE` order); php-src assigns the row first and calls the
+  constructor afterwards.
+- **`param_count` is a client-side count** of `?` placeholders outside
+  string literals, identifiers, and comments; the bridge does not expose the
+  server's count.
+- **Capability probes do not inject the surface**: like PDO,
+  `class_exists('mysqli')` in a program with no other mysqli reference
+  reports `false`; build with `--with-mysqli` to force the surface.
+- **`eval()` never sees mysqli** (same rule as PDO):
+  `extension_loaded('mysqli')` is `false` inside `eval()`.
+- `mysqli_sql_exception::$sqlstate` is public (php-src: protected +
+  `getSqlState()`).
+
+## Not implemented (fails loudly)
+
+The v1 subset deliberately omits — calls fail to compile
+(undeclared symbol) rather than silently pretending:
+
+- `mysqli_poll` / `mysqli_reap_async_query` / async connect
+- `change_user`, `kill`, `dump_debug_info`, `refresh`, embedded server
+- `mysqli_ssl_set` (and `MYSQLI_CLIENT_SSL`, rejected at connect)
+- true unbuffered `use_result`
+- the `mysqli_driver` and `mysqli_warning` objects
+- `bind_result` / `fetch` (see divergences)
+- the legacy `mysql_*` API

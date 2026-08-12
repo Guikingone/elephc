@@ -975,6 +975,18 @@ and 0.x validation rather than by speculative pass work.
 - [ ] Apple notarization for direct downloads (codesign + notarytool)
 - [x] Installation / packaging documentation for the supported host platforms — macOS Homebrew, source builds, release artifacts, native toolchain requirements, and managed native dependency prerequisites are covered in `docs/getting-started/installation.md`
 
+### mysqli (MySQL / MariaDB) — subset over the elephc-pdo bridge
+
+A second PHP database surface (`mysqli` / `mysqli_stmt` / `mysqli_result` /
+`mysqli_sql_exception` and the procedural `mysqli_*` aliases) speaking to the
+existing `elephc_pdo` MySQL client; extension reporting is surface-based, so a
+mysqli-only program never declares or reports PDO.
+
+- [x] Prelude + shared `elephc_pdo` externs; no PDO class leak
+- [x] Connect / escape / transactions / buffered query / result
+- [x] Prepared statements
+- [x] multi_query
+
 ## Later 0.x product tracks
 
 These are valuable product directions that build on the stabilized 0.x compiler
