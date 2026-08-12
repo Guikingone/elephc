@@ -200,6 +200,16 @@ pub(crate) const STREAM_TRANSPORT_OFFSET: i64 = 208;
 /// clears it, since a seek puts both back in agreement.
 pub(crate) const STREAM_APPEND_SKIP_OFFSET: i64 = 216;
 
+/// Byte offset of the position PHP keeps for a userspace-wrapper stream.
+///
+/// php-src has no tell op for these: `main/streams/userspace.c` calls `stream_tell` only from
+/// inside `php_userstreamop_seek`, to reconcile after a seek. The position itself is PHP's own,
+/// advanced by the bytes each read and write moved — which is why `ftell()` answers `7` after
+/// reading seven bytes even when the wrapper's `stream_tell()` is written to return something
+/// else entirely. Asking the method on every `ftell()`, as this used to, reports whatever the
+/// wrapper feels like rather than where the stream is.
+pub(crate) const STREAM_WRAPPER_POS_OFFSET: i64 = 224;
+
 /// Transport value for a TCP endpoint, which php-src names after the ssl-capable transport.
 pub(crate) const STREAM_TRANSPORT_TCP: u64 = 1;
 
@@ -331,6 +341,8 @@ const _: () = {
     assert!(STREAM_TRANSPORT_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(STREAM_APPEND_SKIP_OFFSET == STREAM_TRANSPORT_OFFSET + 8);
     assert!(STREAM_APPEND_SKIP_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
+    assert!(STREAM_WRAPPER_POS_OFFSET == STREAM_APPEND_SKIP_OFFSET + 8);
+    assert!(STREAM_WRAPPER_POS_OFFSET < STREAM_OWNERSHIP_FLAGS_OFFSET);
     assert!(CONTEXT_STATE_SIZE == 32);
     assert!(CONTEXT_PARAMS_OFFSET == CONTEXT_OPTIONS_OFFSET + 8);
     assert!(CONTEXT_NOTIFIER_OFFSET == CONTEXT_PARAMS_OFFSET + 8);

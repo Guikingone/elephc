@@ -62,6 +62,9 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     io::emit_errno_warning(emitter);
     io::emit_stream_append_skip(emitter);
     io::emit_stream_clear_append_skip(emitter);
+    io::emit_stream_wrapper_pos(emitter);
+    io::emit_stream_wrapper_pos_advance(emitter);
+    io::emit_stream_wrapper_pos_set(emitter);
     io::emit_stream_type_name(emitter);
     io::emit_socket_connect_warning(emitter);
     io::emit_gai_publish(emitter);

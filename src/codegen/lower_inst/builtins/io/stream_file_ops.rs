@@ -233,10 +233,58 @@ pub(crate) fn lower_fread(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
         FREAD_NON_POSITIVE_LENGTH_MESSAGE,
     );
     abi::emit_call_label(ctx.emitter, "__rt_fread");
+    // php-src advances a userspace wrapper's position by whatever the read moved, and reports
+    // THAT from ftell() — it never asks the wrapper. See __rt_stream_wrapper_pos.
+    emit_advance_wrapper_position(ctx, stream, "fread")?;
     // An exhausted stream answers "" and a FAILED read answers false, so emptiness cannot
     // decide this: the helper reports which one it was in x0/rcx.
     box_stream_string_or_false_on_unconsumed_result(ctx, "fread");
     store_if_result(ctx, inst)
+}
+
+/// Moves a userspace wrapper's PHP-side position by the bytes a read just produced.
+///
+/// php-src keeps `stream->position` for these streams itself and advances it on every read and
+/// write; `stream_tell` is consulted only from inside the seek op. Doing the same here is what
+/// lets `ftell()` answer 7 after seven bytes rather than whatever the wrapper's own
+/// `stream_tell()` chooses to return. The helper is a no-op for a stream with no state, and the
+/// field it moves is read only on the wrapper path, so a file stream is unaffected.
+fn emit_advance_wrapper_position(
+    ctx: &mut FunctionContext<'_>,
+    stream: ValueId,
+    name: &str,
+) -> Result<()> {
+    match ctx.emitter.target.arch {
+        // The result travels on an explicit frame rather than in a scratch register: materializing
+        // the handle clobbers the ones a caller would reach for, which showed up as a position
+        // advanced by the handle instead of by the bytes read.
+        Arch::AArch64 => {
+            ctx.emitter.instruction("sub sp, sp, #32");
+            ctx.emitter.instruction("stp x1, x2, [sp, #0]");                    // the string pair the caller is owed
+            ctx.emitter.instruction("str x0, [sp, #16]");                       // and the success flag beside it
+            load_stream_handle_to_result(ctx, stream, name)?;
+            ctx.emitter.instruction("ldr x1, [sp, #8]");                        // the bytes this read produced
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos_advance");
+            ctx.emitter.instruction("ldp x1, x2, [sp, #0]");
+            ctx.emitter.instruction("ldr x0, [sp, #16]");
+            ctx.emitter.instruction("add sp, sp, #32");
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("sub rsp, 32");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 0], rax");            // the string pair the caller is owed
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rdx");
+            ctx.emitter.instruction("mov QWORD PTR [rsp + 16], rcx");           // and the success flag beside it
+            load_stream_handle_to_result(ctx, stream, name)?;
+            ctx.emitter.instruction("mov rdi, rax");
+            ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");            // the bytes this read produced
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos_advance");
+            ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 0]");
+            ctx.emitter.instruction("mov rdx, QWORD PTR [rsp + 8]");
+            ctx.emitter.instruction("mov rcx, QWORD PTR [rsp + 16]");
+            ctx.emitter.instruction("add rsp, 32");
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `fwrite(stream, data)` and boxes a byte count or PHP `false` on error.

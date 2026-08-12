@@ -123,7 +123,13 @@ pub(crate) fn lower_feof(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> R
     store_if_result(ctx, inst)
 }
 
-/// Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`.
+/// Lowers `ftell(stream)` as `lseek(fd, 0, SEEK_CUR)`, or as PHP's own position for a wrapper.
+///
+/// php-src has NO tell op for userspace wrappers: `main/streams/userspace.c` calls `stream_tell`
+/// only from inside `php_userstreamop_seek`, to reconcile after a seek. `ftell()` reports the
+/// position PHP maintains itself, advanced by whatever each read and write moved. Asking the
+/// method here — as this used to — reports whatever the wrapper chooses to say: with a
+/// `stream_tell()` written to return 999, PHP answers 7 after seven bytes and elephc answered 999.
 pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     super::super::ensure_arg_count(inst, "ftell", 1)?;
     let stream = expect_operand(inst, 0)?;
@@ -141,7 +147,8 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.syscall(199);
             ctx.emitter.instruction(&format!("b {}", after_dispatch_label));    // skip wrapper stream_tell after the native probe
             ctx.emitter.label(&wrapper_label);
-            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_ftell");
+            load_stream_handle_to_result(ctx, stream, "ftell")?;
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos");
             ctx.emitter.label(&after_dispatch_label);
         }
         Arch::X86_64 => {
@@ -154,8 +161,9 @@ pub(crate) fn lower_ftell(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> 
             ctx.emitter.instruction("call lseek");                              // query the current stream position
             ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));  // skip wrapper stream_tell after the native probe
             ctx.emitter.label(&wrapper_label);
-            ctx.emitter.instruction("mov rdi, rax");                            // pass the synthetic wrapper descriptor to the tell helper
-            abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_ftell");
+            load_stream_handle_to_result(ctx, stream, "ftell")?;
+            ctx.emitter.instruction("mov rdi, rax");                            // the handle owns the tracked position
+            abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos");
             ctx.emitter.label(&after_dispatch_label);
         }
     }

@@ -51,6 +51,14 @@ pub(super) fn lower_fseek_aarch64(
     ctx.emitter.instruction(&format!("b {}", after_dispatch_label));            // skip wrapper stream_seek after the native path
     ctx.emitter.label(&wrapper_label);
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
+    // php-src reconciles the position it keeps for a wrapper stream after every seek — that is
+    // the ONE place `main/streams/userspace.c` calls `stream_tell`. Without this, `ftell()` keeps
+    // reporting where the reads had left it.
+    ctx.emitter.instruction("str x0, [sp, #24]");                               // hold the seek result
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    ctx.emitter.instruction("ldr x1, [sp, #8]");                                // the offset it was moved to
+    abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos_set");
+    ctx.emitter.instruction("ldr x0, [sp, #24]");                               // restore the seek result
     ctx.emitter.label(&after_dispatch_label);
     ctx.emitter.instruction("add sp, sp, #32");                                 // release seek scratch storage
 }

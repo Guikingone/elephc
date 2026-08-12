@@ -7304,10 +7304,12 @@ echo "|st=" . gettype($src);
 
 /// Verifies compiled PHP output for fopen user wrapper ftell dispatches to stream tell.
 #[test]
-fn test_fopen_user_wrapper_ftell_dispatches_to_stream_tell() {
-    // Phase 10 follow-up: ftell() dispatches into the wrapper's stream_tell
-    // and returns the int it reports. Without stream_tell, the helper falls
-    // through to -1 (PHP's ftell failure sentinel).
+fn test_fopen_user_wrapper_ftell_does_not_dispatch_to_stream_tell() {
+    // The old name and expectation were both fiction: `42|-1`, on the belief that ftell()
+    // dispatches into the wrapper. `php -n` answers `0|0` for this exact program. php-src has no
+    // tell op for userspace wrappers — `main/streams/userspace.c` calls `stream_tell` only from
+    // inside `php_userstreamop_seek` — so a freshly opened stream is at 0 whatever the method
+    // says, and a wrapper without the method is at 0 too rather than at a failure sentinel.
     let out = compile_and_run(
         r#"<?php
 class TellW {
@@ -7326,7 +7328,7 @@ $g = fopen("notell://x", "r");
 echo ftell($g);
 "#,
     );
-    assert_eq!(out, "42|-1");
+    assert_eq!(out, "0|0");
 }
 
 /// Verifies compiled PHP output for fopen user wrapper fstat dispatches to stream stat.
@@ -8023,6 +8025,50 @@ echo $n->stream_write(41);
 "#,
     );
     assert_eq!(out, "wrapped| payload|42");
+}
+
+/// `ftell()` on a wrapper stream reports PHP's position, not whatever `stream_tell()` says.
+///
+/// php-src has no tell op for userspace wrappers: `main/streams/userspace.c` calls `stream_tell`
+/// only from inside `php_userstreamop_seek`, to reconcile after a seek. The position is PHP's
+/// own, advanced by whatever each read moved. elephc asked the method on every `ftell()`, and
+/// since an undeclared return hands back a boxed cell, it printed a pointer — a different number
+/// each run.
+///
+/// Fixing only the boxing would have been worse than the crash-shaped answer: it would have
+/// reported what the wrapper CLAIMS. The sequence here separates the two — after seven bytes the
+/// answer must be 7, and after `fseek(3)` it must follow the seek.
+#[test]
+fn test_wrapper_ftell_reports_phps_position_not_stream_tell() {
+    let out = compile_and_run(
+        r#"<?php
+class Pos {
+    public $pos = 0;
+    public static string $data = "wrapped payload";
+    public function stream_open($p, $m, $o, &$op) { $this->pos = 0; return true; }
+    public function stream_read($count) {
+        $r = substr(self::$data, $this->pos, $count);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= strlen(self::$data); }
+    public function stream_seek($offset, $whence) { $this->pos = $offset; return true; }
+    public function stream_tell() { return $this->pos; }
+    public function stream_close() {}
+}
+stream_wrapper_register("memp", "Pos");
+$h = fopen("memp://x", "r");
+echo ftell($h), "|";
+echo fread($h, 7), "|";
+echo ftell($h), "|";
+fseek($h, 3);
+echo ftell($h), "|";
+echo fread($h, 4), "|";
+echo ftell($h);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "0|wrapped|7|3|pped|7");
 }
 
 /// A failing IPv6 server has to say why, like its IPv4 sibling.
