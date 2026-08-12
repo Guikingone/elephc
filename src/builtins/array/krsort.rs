@@ -21,6 +21,6 @@ builtin! {
         crate::builtins::semantics::runtime_fn_semantics(crate::ir::RuntimeFnId::Krsort),
         crate::builtins::semantics::BuiltinArgumentLowering::ReverseKeySort,
     ),
-    summary: "Sorts an array by key in descending order.",
+    summary: "Sorts an array by key in descending SORT_REGULAR order; PHP sort flags are not yet supported.",
     php_manual: "https://www.php.net/manual/en/function.krsort.php",
 }

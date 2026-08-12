@@ -32313,7 +32313,7 @@
   {
     "area": "Array",
     "canonical_name": "krsort",
-    "description": "Sorts an array by key in descending order.",
+    "description": "Sorts an array by key in descending SORT_REGULAR order; PHP sort flags are not yet supported.",
     "eval": {
       "area": "array",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/array/krsort.rs",
@@ -32428,7 +32428,7 @@
   {
     "area": "Array",
     "canonical_name": "ksort",
-    "description": "Sorts an array by key in ascending order.",
+    "description": "Sorts an array by key in ascending SORT_REGULAR order; PHP sort flags are not yet supported.",
     "eval": {
       "area": "array",
       "home_file": "crates/elephc-magician/src/interpreter/builtins/array/ksort.rs",
