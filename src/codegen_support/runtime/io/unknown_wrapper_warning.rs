@@ -343,3 +343,69 @@ fn emit_x86_64(emitter: &mut Emitter) {
     emitter.instruction("leave");
     emitter.instruction("ret");
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// Every copy loop must clear its counter on the path that REACHES it, not only on the
+    /// clamped one.
+    ///
+    /// The x86_64 scheme copy cleared `r9` after the clamp branch, so the ordinary case — a
+    /// scheme shorter than the clamp — jumped straight into the loop carrying the previous
+    /// fragment's counter, which is already past the length. The loop exited at once and the
+    /// warning read `Unable to find the wrapper ""`. AArch64 clamps with `csel` and cannot
+    /// express the same slip, so this is pinned on the emitted assembly instead of a run.
+    #[test]
+    fn test_x86_64_clears_the_scheme_counter_before_the_clamp_branch() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_unknown_wrapper_warning(&mut emitter);
+        let asm = emitter.output();
+        // The counter is cleared in every copy loop, so the check is scoped to the span between
+        // the scheme block's label and its clamp — a whole-file search would happily match some
+        // other loop's clear and pass while this one was still missing.
+        let block = asm
+            .find("__rt_uww_x_scheme:")
+            .expect("the scheme copy block must be labelled");
+        let clamp = asm[block..]
+            .find(&format!("cmp rcx, {SCHEME_CLAMP}"))
+            .map(|at| block + at)
+            .expect("the scheme copy must clamp its length");
+        assert!(
+            asm[block..clamp].contains("xor r9, r9"),
+            "the counter must be cleared BEFORE the clamp branch, or the unclamped path skips it"
+        );
+    }
+
+    /// Both architectures must consult BOTH wrapper authorities before warning.
+    ///
+    /// `stream_wrapper_register()` is a runtime call, so a scheme the compiler never heard of
+    /// can be valid by the time the open happens; and a built-in scheme must never be reported
+    /// missing. Emitting the warning without either lookup would be a false positive on
+    /// perfectly ordinary code.
+    #[test]
+    fn test_both_wrapper_authorities_are_consulted_before_warning() {
+        for arch in [Arch::AArch64, Arch::X86_64] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_unknown_wrapper_warning(&mut emitter);
+            let asm = emitter.output();
+            for helper in ["__rt_path_is_wrapper", "__rt_builtin_wrapper_index"] {
+                assert!(
+                    asm.contains(helper),
+                    "{arch:?} must ask {helper} before reporting a missing wrapper"
+                );
+            }
+            let warn = asm
+                .find("__rt_diag_warning")
+                .expect("the helper must be able to warn");
+            let last_lookup = asm
+                .rfind("__rt_builtin_wrapper_index")
+                .expect("the built-in lookup must be emitted");
+            assert!(
+                last_lookup < warn,
+                "{arch:?} must consult the built-ins BEFORE composing the warning"
+            );
+        }
+    }
+}

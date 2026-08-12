@@ -634,3 +634,75 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fputcsv_nl_lit");
     emitter.instruction(".ascii \"\\n\"");                                    // trailing newline character literal
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::codegen_support::platform::{Platform, Target};
+
+    /// The frame-local Mixed cell must be written at ASCENDING addresses from the pointer the
+    /// formatter receives, on BOTH architectures.
+    ///
+    /// This is the one invariant a same-architecture test suite cannot catch. A Mixed cell is
+    /// read as tag@0, payload@+8, high@+16. AArch64 addresses it from `sp` with rising offsets,
+    /// so writing the fields in frame order is automatically correct there; an x86_64 `rbp`
+    /// frame grows DOWNWARD, so the same line order puts the payload and high word BELOW the
+    /// base and the formatter reads the two unrelated slots above it instead. The whole CSV cast
+    /// suite was green on aarch64 and segfaulted on x86_64 for exactly this reason, so the
+    /// layout is pinned on the EMITTED assembly rather than on a run.
+    #[test]
+    fn test_fputcsv_x86_64_builds_the_mixed_cell_at_ascending_addresses() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::X86_64));
+        emit_fputcsv(&mut emitter);
+        let asm = emitter.output();
+        let base = asm
+            .find("lea rdi, [rbp - 152]")
+            .expect("the cell pointer must be the LOWEST of the three slots");
+        for (offset, slot) in [(0usize, "rbp - 152"), (8, "rbp - 144"), (16, "rbp - 136")] {
+            assert!(
+                asm.contains(&format!("QWORD PTR [{slot}]")),
+                "cell field at +{offset} must live at [{slot}]"
+            );
+        }
+        // The tag is the field the formatter reads first, so it must occupy the base itself.
+        let tag_write = asm
+            .find("mov QWORD PTR [rbp - 152], rdx")
+            .expect("the cell tag must be written at the base address");
+        assert!(tag_write < base, "the cell must be filled before it is passed");
+    }
+
+    /// The AArch64 half writes the same cell upward from `sp`, and its pointer is the LOWEST
+    /// offset of the three for the same reason.
+    #[test]
+    fn test_fputcsv_aarch64_builds_the_mixed_cell_at_ascending_addresses() {
+        let mut emitter = Emitter::new(Target::new(Platform::Linux, Arch::AArch64));
+        emit_fputcsv(&mut emitter);
+        let asm = emitter.output();
+        assert!(asm.contains("str x12, [sp, #144]"), "cell tag at the base");
+        assert!(asm.contains("str x5, [sp, #152]"), "cell payload at +8");
+        assert!(asm.contains("str xzr, [sp, #160]"), "cell high word at +16");
+        assert!(asm.contains("add x0, sp, #144"), "the cell pointer is the base");
+    }
+
+    /// Both architectures must hand the row's formatting scratch back before returning.
+    ///
+    /// `__rt_itoa` formats into the shared 64 KiB concat arena and advances its cursor, so a
+    /// long numeric loop would walk off the arena — silently — if the writer kept the ground it
+    /// used. The failure this pins is a memory overrun, not a wrong field, which is why it is
+    /// pinned on the emitted code rather than left to a functional test.
+    #[test]
+    fn test_fputcsv_restores_the_callers_concat_cursor() {
+        // The symbol is NAMED a different number of times per architecture — AArch64 needs an
+        // `adrp`/`add` pair per address, x86_64 a single `lea` — so the count is stated per
+        // target rather than shared, which is the honest form of "twice: once in, once out".
+        for (arch, mentions) in [(Arch::AArch64, 4), (Arch::X86_64, 2)] {
+            let mut emitter = Emitter::new(Target::new(Platform::Linux, arch));
+            emit_fputcsv(&mut emitter);
+            let asm = emitter.output();
+            assert_eq!(
+                asm.matches("_concat_off").count(),
+                mentions,
+                "{arch:?} must read the cursor on entry and write it back on return"
+            );
+        }
+    }
+}
