@@ -2,7 +2,7 @@
 title: "socket_set_timeout() — internals"
 description: "Compiler internals for socket_set_timeout(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 222
+  order: 221
 ---
 
 ## `socket_set_timeout()` — internals

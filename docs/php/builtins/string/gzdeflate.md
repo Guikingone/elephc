@@ -2,7 +2,7 @@
 title: "gzdeflate()"
 description: "Deflate a string using the DEFLATE data format."
 sidebar:
-  order: 397
+  order: 396
 ---
 
 ## gzdeflate()

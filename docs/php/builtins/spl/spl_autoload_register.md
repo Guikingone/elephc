@@ -2,7 +2,7 @@
 title: "spl_autoload_register()"
 description: "Register given function as __autoload() implementation."
 sidebar:
-  order: 374
+  order: 373
 ---
 
 ## spl_autoload_register()

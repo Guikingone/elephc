@@ -2,7 +2,7 @@
 title: "hash_copy() — internals"
 description: "Compiler internals for hash_copy(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 402
+  order: 401
 ---
 
 ## `hash_copy()` — internals

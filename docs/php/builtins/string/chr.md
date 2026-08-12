@@ -2,7 +2,7 @@
 title: "chr()"
 description: "Returns a one-character string from the given byte code point."
 sidebar:
-  order: 390
+  order: 389
 ---
 
 ## chr()

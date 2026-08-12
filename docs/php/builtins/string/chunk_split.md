@@ -2,7 +2,7 @@
 title: "chunk_split()"
 description: "Splits a string into fixed-length chunks separated by a given string."
 sidebar:
-  order: 391
+  order: 390
 ---
 
 ## chunk_split()

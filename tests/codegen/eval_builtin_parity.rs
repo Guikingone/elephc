@@ -44,7 +44,6 @@ const STATIC_ONLY_REGISTRY_BUILTINS: &[&str] = &[
     "octdec",
     "serialize",
     "set_file_buffer",
-    "set_socket_blocking",
     "socket_get_status",
     "socket_set_block",
     "socket_set_blocking",

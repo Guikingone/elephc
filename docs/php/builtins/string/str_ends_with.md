@@ -2,7 +2,7 @@
 title: "str_ends_with()"
 description: "Checks if a string ends with a given substring."
 sidebar:
-  order: 440
+  order: 439
 ---
 
 ## str_ends_with()

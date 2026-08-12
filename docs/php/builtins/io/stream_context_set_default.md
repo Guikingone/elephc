@@ -2,7 +2,7 @@
 title: "stream_context_set_default()"
 description: "Sets the default stream context."
 sidebar:
-  order: 229
+  order: 228
 ---
 
 ## stream_context_set_default()

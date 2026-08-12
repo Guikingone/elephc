@@ -2,7 +2,7 @@
 title: "buffer_new()"
 description: "buffer_new() — misc builtin supported by Elephc."
 sidebar:
-  order: 314
+  order: 313
 ---
 
 ## buffer_new()

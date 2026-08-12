@@ -2,7 +2,7 @@
 title: "pi()"
 description: "Gets value of pi."
 sidebar:
-  order: 303
+  order: 302
 ---
 
 ## pi()

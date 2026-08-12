@@ -2,7 +2,7 @@
 title: "readline()"
 description: "Reads a line from the user's terminal."
 sidebar:
-  order: 356
+  order: 355
 ---
 
 ## readline()

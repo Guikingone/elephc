@@ -2,7 +2,7 @@
 title: "exit() — internals"
 description: "Compiler internals for exit(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 352
+  order: 351
 ---
 
 ## `exit()` — internals

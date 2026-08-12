@@ -2,7 +2,7 @@
 title: "substr_replace() — internals"
 description: "Compiler internals for substr_replace(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 466
+  order: 465
 ---
 
 ## `substr_replace()` — internals

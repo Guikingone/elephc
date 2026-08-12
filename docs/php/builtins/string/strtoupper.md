@@ -2,7 +2,7 @@
 title: "strtoupper()"
 description: "Converts a string to uppercase."
 sidebar:
-  order: 462
+  order: 461
 ---
 
 ## strtoupper()

@@ -2,7 +2,7 @@
 title: "print_r()"
 description: "Prints human-readable information about a variable."
 sidebar:
-  order: 326
+  order: 325
 ---
 
 ## print_r()

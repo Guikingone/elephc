@@ -2,7 +2,7 @@
 title: "mb_ereg_match()"
 description: "Tests whether a regex pattern matches the beginning of a string (multibyte)."
 sidebar:
-  order: 361
+  order: 360
 ---
 
 ## mb_ereg_match()

@@ -2,7 +2,7 @@
 title: "random_int() — internals"
 description: "Compiler internals for random_int(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 307
+  order: 306
 ---
 
 ## `random_int()` — internals

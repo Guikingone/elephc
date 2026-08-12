@@ -2,7 +2,7 @@
 title: "htmlentities() — internals"
 description: "Compiler internals for htmlentities(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 410
+  order: 409
 ---
 
 ## `htmlentities()` — internals

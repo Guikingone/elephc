@@ -2,7 +2,7 @@
 title: "spl_autoload_unregister()"
 description: "Unregister given function as __autoload() implementation."
 sidebar:
-  order: 375
+  order: 374
 ---
 
 ## spl_autoload_unregister()

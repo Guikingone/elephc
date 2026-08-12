@@ -2,7 +2,7 @@
 title: "zval_free() — internals"
 description: "Compiler internals for zval_free(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 346
+  order: 345
 ---
 
 ## `zval_free()` — internals

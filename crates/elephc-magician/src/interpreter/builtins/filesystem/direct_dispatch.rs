@@ -125,7 +125,6 @@ pub(in crate::interpreter) fn eval_builtin_filesystem_call(
         "stream_set_blocking" => super::stream_set_blocking::eval_stream_set_blocking_declared_call(args, context, scope, values),
         "diskfreespace" => super::diskfreespace::eval_diskfreespace_declared_call(args, context, scope, values),
         "set_file_buffer" => super::set_file_buffer::eval_set_file_buffer_declared_call(args, context, scope, values),
-        "set_socket_blocking" => super::set_socket_blocking::eval_set_socket_blocking_declared_call(args, context, scope, values),
         "socket_get_status" => super::socket_get_status::eval_socket_get_status_declared_call(args, context, scope, values),
         "socket_set_block" => super::socket_set_block::eval_socket_set_block_declared_call(args, context, scope, values),
         "socket_set_blocking" => super::socket_set_blocking::eval_socket_set_blocking_declared_call(args, context, scope, values),

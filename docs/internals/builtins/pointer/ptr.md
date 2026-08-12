@@ -2,7 +2,7 @@
 title: "ptr() — internals"
 description: "Compiler internals for ptr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 331
+  order: 330
 ---
 
 ## `ptr()` — internals

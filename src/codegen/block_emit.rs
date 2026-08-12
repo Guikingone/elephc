@@ -777,14 +777,21 @@ fn class_method_entry_symbol(function: &Function) -> Result<String> {
 /// a separate process-entry stub is emitted that calls `elephc_web_run` with
 /// argc/argv and the handler address, then exits with the bridge return value.
 #[allow(clippy::too_many_arguments)]
-/// The superglobals PHP has in a CLI request, measured rather than assumed.
+/// PHP's auto-globals: the superglobals a CLI request materializes ON MENTION.
 ///
-/// `php -n` reports `$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE` and `$_FILES` as set, and
-/// `$_ENV`, `$_REQUEST`, `$_SESSION` and `$GLOBALS` as absent — `$_SESSION` only appears once
-/// `session_start()` has run, which is why `isset($_SESSION)` is false in a fresh CLI script.
-/// Seeding the whole list would have made that `isset()` answer the opposite of PHP.
-pub(crate) const CLI_INITIALIZED_SUPERGLOBALS: &[&str] =
-    &["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES"];
+/// Two measurements of `php -n` look contradictory and are both right. Walking `$GLOBALS`
+/// reports `$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE` and `$_FILES` present while `$_ENV` and
+/// `$_REQUEST` are absent; yet `isset($_ENV)` answers TRUE. The difference is the mention
+/// itself: PHP compiles a reference to an auto-global into a marker and populates the variable
+/// at run time, so naming `$_ENV` is what brings it into existence. That is why the seeding
+/// below is conditional — it is not an optimisation, it is the rule PHP follows.
+///
+/// `$_SESSION` and `$GLOBALS` are deliberately absent from this list. `$_SESSION` appears only
+/// once `session_start()` has run, so seeding it would make `isset($_SESSION)` answer the
+/// opposite of PHP in a fresh script, and PHP's own regression test says so.
+pub(crate) const CLI_INITIALIZED_SUPERGLOBALS: &[&str] = &[
+    "_SERVER", "_GET", "_POST", "_COOKIE", "_FILES", "_ENV", "_REQUEST",
+];
 
 /// Gives those superglobals a live empty hash before a CLI program's first statement.
 ///
@@ -795,6 +802,13 @@ pub(crate) const CLI_INITIALIZED_SUPERGLOBALS: &[&str] =
 /// not the finish: populating them the way PHP does is separate work.
 fn emit_cli_superglobal_initializers(ctx: &mut FunctionContext<'_>) {
     for name in CLI_INITIALIZED_SUPERGLOBALS {
+        // Seed only what the program names. A superglobal no statement mentions cannot be
+        // observed, and seeding it is not free: each hash is a live heap block from the first
+        // instruction onwards, which exhausted the deliberately tiny arenas the allocator's own
+        // tests run under and made every program pay for storage it never reads.
+        if !ctx.has_global_name(name) {
+            continue;
+        }
         let symbol = crate::names::ir_global_symbol(name);
         // __rt_hash_new takes TWO arguments: capacity AND the value_type tag. Passing only the
         // capacity left the tag reading whatever the register happened to hold, which built a

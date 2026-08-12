@@ -2,7 +2,7 @@
 title: "constant()"
 description: "Returns the value of a constant given its name."
 sidebar:
-  order: 315
+  order: 314
 ---
 
 ## constant()

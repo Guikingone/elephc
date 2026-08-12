@@ -2,7 +2,7 @@
 title: "phpversion()"
 description: "Returns the targeted PHP language version, or one extension's version."
 sidebar:
-  order: 325
+  order: 324
 ---
 
 ## phpversion()

@@ -2,7 +2,7 @@
 title: "strtr() — internals"
 description: "Compiler internals for strtr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 463
+  order: 462
 ---
 
 ## `strtr()` — internals

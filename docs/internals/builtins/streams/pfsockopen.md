@@ -2,7 +2,7 @@
 title: "pfsockopen() — internals"
 description: "Compiler internals for pfsockopen(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 380
+  order: 379
 ---
 
 ## `pfsockopen()` — internals

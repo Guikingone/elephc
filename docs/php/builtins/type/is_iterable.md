@@ -2,7 +2,7 @@
 title: "is_iterable()"
 description: "Checks whether a variable is iterable."
 sidebar:
-  order: 492
+  order: 491
 ---
 
 ## is_iterable()

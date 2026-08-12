@@ -2,7 +2,7 @@
 title: "octdec()"
 description: "Converts a octal string to its decimal number."
 sidebar:
-  order: 302
+  order: 301
 ---
 
 ## octdec()

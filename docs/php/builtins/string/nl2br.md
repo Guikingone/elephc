@@ -2,7 +2,7 @@
 title: "nl2br()"
 description: "Inserts HTML line breaks before newlines in a string."
 sidebar:
-  order: 422
+  order: 421
 ---
 
 ## nl2br()

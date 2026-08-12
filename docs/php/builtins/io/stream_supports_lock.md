@@ -2,7 +2,7 @@
 title: "stream_supports_lock()"
 description: "Tells whether the stream supports locking."
 sidebar:
-  order: 261
+  order: 260
 ---
 
 ## stream_supports_lock()

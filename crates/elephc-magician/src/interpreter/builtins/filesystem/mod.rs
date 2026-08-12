@@ -117,7 +117,6 @@ mod stream_select;
 mod stream_set_blocking;
 mod diskfreespace;
 mod set_file_buffer;
-mod set_socket_blocking;
 mod socket_get_status;
 mod socket_set_block;
 mod socket_set_blocking;

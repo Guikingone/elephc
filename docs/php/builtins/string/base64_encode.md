@@ -2,7 +2,7 @@
 title: "base64_encode()"
 description: "Encodes binary data into a Base64 string."
 sidebar:
-  order: 387
+  order: 386
 ---
 
 ## base64_encode()

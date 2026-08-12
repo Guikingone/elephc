@@ -2,7 +2,7 @@
 title: "stream_socket_get_name() — internals"
 description: "Compiler internals for stream_socket_get_name(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 255
+  order: 254
 ---
 
 ## `stream_socket_get_name()` — internals

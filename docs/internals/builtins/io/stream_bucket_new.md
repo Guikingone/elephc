@@ -2,7 +2,7 @@
 title: "stream_bucket_new() — internals"
 description: "Compiler internals for stream_bucket_new(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 224
+  order: 223
 ---
 
 ## `stream_bucket_new()` — internals

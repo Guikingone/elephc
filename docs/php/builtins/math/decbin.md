@@ -2,7 +2,7 @@
 title: "decbin()"
 description: "Converts an integer to its binary string representation."
 sidebar:
-  order: 282
+  order: 281
 ---
 
 ## decbin()

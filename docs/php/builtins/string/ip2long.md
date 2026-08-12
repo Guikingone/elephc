@@ -2,7 +2,7 @@
 title: "ip2long()"
 description: "Converts a string containing an IPv4 address into a long integer."
 sidebar:
-  order: 415
+  order: 414
 ---
 
 ## ip2long()

@@ -2,7 +2,7 @@
 title: "dechex()"
 description: "Converts an integer to its hexadecimal string representation."
 sidebar:
-  order: 283
+  order: 282
 ---
 
 ## dechex()

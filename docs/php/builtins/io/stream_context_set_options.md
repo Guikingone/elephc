@@ -2,7 +2,7 @@
 title: "stream_context_set_options()"
 description: "Sets several options on the specified context from an array."
 sidebar:
-  order: 231
+  order: 230
 ---
 
 ## stream_context_set_options()

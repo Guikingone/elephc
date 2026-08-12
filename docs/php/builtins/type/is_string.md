@@ -2,7 +2,7 @@
 title: "is_string()"
 description: "Checks whether a variable is a string."
 sidebar:
-  order: 500
+  order: 499
 ---
 
 ## is_string()

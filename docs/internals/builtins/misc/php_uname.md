@@ -2,7 +2,7 @@
 title: "php_uname() — internals"
 description: "Compiler internals for php_uname(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 324
+  order: 323
 ---
 
 ## `php_uname()` — internals

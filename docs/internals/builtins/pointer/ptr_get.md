@@ -2,7 +2,7 @@
 title: "ptr_get() — internals"
 description: "Compiler internals for ptr_get(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 332
+  order: 331
 ---
 
 ## `ptr_get()` — internals

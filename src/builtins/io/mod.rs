@@ -205,7 +205,6 @@ pub mod touch;
 pub mod umask;
 pub mod unlink;
 pub mod set_file_buffer;
-pub mod set_socket_blocking;
 pub mod socket_get_status;
 pub mod socket_set_block;
 pub mod socket_set_blocking;

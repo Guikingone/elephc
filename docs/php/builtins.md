@@ -226,7 +226,6 @@ sidebar:
 | [`rewind()`](./builtins/io/rewind.md) | `(resource $stream): bool` | `bool` | ✓ | ✓ |
 | [`rewinddir()`](./builtins/io/rewinddir.md) | `(resource $dir_handle): void` | `void` | ✓ | ✓ |
 | [`set_file_buffer()`](./builtins/io/set_file_buffer.md) | `(mixed $stream, int $size): int` | `int` | ✓ | ✓ |
-| [`set_socket_blocking()`](./builtins/io/set_socket_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
 | [`socket_get_status()`](./builtins/io/socket_get_status.md) | `(mixed $stream): mixed` | `mixed` | ✓ | ✓ |
 | [`socket_set_block()`](./builtins/io/socket_set_block.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |
 | [`socket_set_blocking()`](./builtins/io/socket_set_blocking.md) | `(mixed $stream, bool $enable): bool` | `bool` | ✓ | ✓ |

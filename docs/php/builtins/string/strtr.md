@@ -2,7 +2,7 @@
 title: "strtr()"
 description: "Translates bytes pairwise, or applies longest-match-first replacement pairs."
 sidebar:
-  order: 463
+  order: 462
 ---
 
 ## strtr()

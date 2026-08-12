@@ -2,7 +2,7 @@
 title: "substr() — internals"
 description: "Compiler internals for substr(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 464
+  order: 463
 ---
 
 ## `substr()` — internals

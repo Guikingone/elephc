@@ -2,7 +2,7 @@
 title: "sscanf() — internals"
 description: "Compiler internals for sscanf(): lowering path, type checks, and runtime helpers."
 sidebar:
-  order: 438
+  order: 437
 ---
 
 ## `sscanf()` — internals

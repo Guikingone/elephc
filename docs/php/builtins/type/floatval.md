@@ -2,7 +2,7 @@
 title: "floatval()"
 description: "Returns the float value of a variable."
 sidebar:
-  order: 480
+  order: 479
 ---
 
 ## floatval()

@@ -2,7 +2,7 @@
 title: "zval_unpack()"
 description: "Unpacks a PHP zval pointer into an owned elephc Mixed value."
 sidebar:
-  order: 349
+  order: 348
 ---
 
 ## zval_unpack()

@@ -2,7 +2,7 @@
 title: "zval_pack()"
 description: "Packs an elephc runtime value into a heap-allocated PHP zval pointer."
 sidebar:
-  order: 347
+  order: 346
 ---
 
 ## zval_pack()
