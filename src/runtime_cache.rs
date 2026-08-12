@@ -539,14 +539,15 @@ fn runtime_cache_key_with_build_identity(
     pic: bool,
     build_identity: &[u8],
 ) -> u64 {
-    let feature_bits = (features.regex as u8)
-        | ((features.mb_strlen as u8) << 1)
-        | ((features.phar_archive as u8) << 2)
-        | ((features.descriptor_invoker as u8) << 3)
-        | ((features.eval_bridge as u8) << 4)
-        | ((features.eval_scope as u8) << 5)
-        | ((features.web as u8) << 6)
-        | ((pic as u8) << 7);
+    let feature_bits = (features.regex as u16)
+        | ((features.mb_strlen as u16) << 1)
+        | ((features.phar_archive as u16) << 2)
+        | ((features.descriptor_invoker as u16) << 3)
+        | ((features.eval_bridge as u16) << 4)
+        | ((features.eval_scope as u16) << 5)
+        | ((features.web as u16) << 6)
+        | ((features.pdo_udf as u16) << 7)
+        | ((pic as u16) << 8);
     let mut identity = format!("{}:{heap_size}:{feature_bits}:", target.as_str()).into_bytes();
     identity.extend_from_slice(build_identity);
     runtime_bytes_hash(&identity)
@@ -646,6 +647,50 @@ mod tests {
             b"emitter-build-b",
         );
         assert_ne!(first, second, "different runtime emitters must never share a cache entry");
+    }
+
+    /// Verifies every optional runtime-emission switch has an independent cache identity.
+    #[test]
+    fn runtime_cache_key_covers_every_runtime_feature_and_pic_mode() {
+        let target = Target::detect_host();
+        let baseline = runtime_cache_key_with_build_identity(
+            8 * 1024 * 1024,
+            target,
+            RuntimeFeatures::none(),
+            false,
+            b"same-emitter",
+        );
+        let variants = [
+            RuntimeFeatures { regex: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { mb_strlen: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { phar_archive: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { descriptor_invoker: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { eval_bridge: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { eval_scope: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { web: true, ..RuntimeFeatures::none() },
+            RuntimeFeatures { pdo_udf: true, ..RuntimeFeatures::none() },
+        ];
+
+        let mut keys = std::collections::HashSet::from([baseline]);
+        for features in variants {
+            let key = runtime_cache_key_with_build_identity(
+                8 * 1024 * 1024,
+                target,
+                features,
+                false,
+                b"same-emitter",
+            );
+            assert_ne!(key, baseline, "runtime feature was omitted from the cache identity");
+            assert!(keys.insert(key), "runtime features produced colliding cache identities");
+        }
+        let pic = runtime_cache_key_with_build_identity(
+            8 * 1024 * 1024,
+            target,
+            RuntimeFeatures::none(),
+            true,
+            b"same-emitter",
+        );
+        assert!(keys.insert(pic), "PIC mode collided with a runtime-feature identity");
     }
 
     /// Verifies Cargo reruns the identity builder when a runtime source file is
