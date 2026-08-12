@@ -22,6 +22,7 @@ pub(super) fn source_for_version(php_version: PhpVersion) -> String {
     source.push_str(super::constants::SRC);
     source.push_str(super::exception::SRC);
     source.push_str(super::connection::SRC);
+    source.push_str(super::result::SRC);
     source.push_str(super::procedural::SRC);
     if php_version < PhpVersion::Php81 {
         // PHP 8.0's default mysqli_report mode is MYSQLI_REPORT_OFF; 8.1+
@@ -30,8 +31,37 @@ pub(super) fn source_for_version(php_version: PhpVersion) -> String {
             "public static int $reportMode = 3;",
             "public static int $reportMode = 0;",
         );
+        // mysqli_result::fetch_column and its procedural alias are PHP 8.1+.
+        remove_version_block(
+            &mut source,
+            "    // -- elephc PHP >= 8.1 mysqli fetch_column begin --",
+            "    // -- elephc PHP >= 8.1 mysqli fetch_column end --",
+        );
+        remove_version_block(
+            &mut source,
+            "// -- elephc PHP >= 8.1 mysqli fetch_column begin --",
+            "// -- elephc PHP >= 8.1 mysqli fetch_column end --",
+        );
     }
     source
+}
+
+/// Removes one inclusive source fragment delimited by stable version-gate
+/// comments. Panics when either marker is missing because a renamed prelude
+/// marker must fail compiler tests loudly instead of silently exposing a
+/// method in the wrong PHP version (same contract as the PDO prelude's helper).
+fn remove_version_block(source: &mut String, begin: &str, end: &str) {
+    let start = source
+        .find(begin)
+        .unwrap_or_else(|| panic!("missing mysqli prelude version-gate marker: {begin}"));
+    let relative_end = source[start..]
+        .find(end)
+        .unwrap_or_else(|| panic!("missing mysqli prelude version-gate marker: {end}"));
+    let mut finish = start + relative_end + end.len();
+    if source.as_bytes().get(finish) == Some(&b'\n') {
+        finish += 1;
+    }
+    source.replace_range(start..finish, "");
 }
 
 #[cfg(test)]
@@ -59,6 +89,16 @@ mod tests {
             crate::parser::parse_internal(&tokens)
                 .unwrap_or_else(|e| panic!("{version:?} prelude must parse: {e:?}"));
         }
+    }
+
+    /// `fetch_column` (method and procedural alias) exists from PHP 8.1 only.
+    #[test]
+    fn fetch_column_is_version_gated() {
+        let php80 = source_for_version(PhpVersion::Php80);
+        assert!(!php80.contains("fetch_column"));
+        let php81 = source_for_version(PhpVersion::Php81);
+        assert!(php81.contains("public function fetch_column"));
+        assert!(php81.contains("function mysqli_fetch_column"));
     }
 
     /// PHP 8.0 bakes `mysqli_report` default OFF; 8.1+ bakes ERROR|STRICT.

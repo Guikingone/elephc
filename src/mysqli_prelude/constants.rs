@@ -53,4 +53,35 @@ const MYSQLI_SET_CHARSET_NAME = 7;
 const MYSQLI_TRANS_START_WITH_CONSISTENT_SNAPSHOT = 1;
 const MYSQLI_TRANS_START_READ_WRITE = 2;
 const MYSQLI_TRANS_START_READ_ONLY = 4;
+
+// Column types reported by mysqli_result::fetch_field()->type, mapped from the
+// bridge's native wire-type names (values match php-src / the MySQL protocol).
+const MYSQLI_TYPE_DECIMAL = 0;
+const MYSQLI_TYPE_TINY = 1;
+const MYSQLI_TYPE_SHORT = 2;
+const MYSQLI_TYPE_LONG = 3;
+const MYSQLI_TYPE_FLOAT = 4;
+const MYSQLI_TYPE_DOUBLE = 5;
+const MYSQLI_TYPE_NULL = 6;
+const MYSQLI_TYPE_TIMESTAMP = 7;
+const MYSQLI_TYPE_LONGLONG = 8;
+const MYSQLI_TYPE_INT24 = 9;
+const MYSQLI_TYPE_DATE = 10;
+const MYSQLI_TYPE_TIME = 11;
+const MYSQLI_TYPE_DATETIME = 12;
+const MYSQLI_TYPE_YEAR = 13;
+const MYSQLI_TYPE_NEWDATE = 14;
+const MYSQLI_TYPE_VARCHAR = 15;
+const MYSQLI_TYPE_BIT = 16;
+const MYSQLI_TYPE_JSON = 245;
+const MYSQLI_TYPE_NEWDECIMAL = 246;
+const MYSQLI_TYPE_ENUM = 247;
+const MYSQLI_TYPE_SET = 248;
+const MYSQLI_TYPE_TINY_BLOB = 249;
+const MYSQLI_TYPE_MEDIUM_BLOB = 250;
+const MYSQLI_TYPE_LONG_BLOB = 251;
+const MYSQLI_TYPE_BLOB = 252;
+const MYSQLI_TYPE_VAR_STRING = 253;
+const MYSQLI_TYPE_STRING = 254;
+const MYSQLI_TYPE_GEOMETRY = 255;
 "#;

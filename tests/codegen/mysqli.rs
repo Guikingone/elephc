@@ -119,6 +119,53 @@ echo "|", $db->options(99, 1) ? "T" : "F";
     assert_eq!(out, r"F|2006|F|a\'b\\c|T|F");
 }
 
+/// An empty query string throws `ValueError` (php-src's message), and a query
+/// on an unconnected handle under REPORT_OFF returns `false` with `errno` set.
+#[test]
+fn test_mysqli_query_empty_string_and_unconnected() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+$db = mysqli_init();
+try {
+    $db->query("");
+    echo "no";
+} catch (ValueError $e) {
+    echo "ve";
+}
+echo "|", $db->query("SELECT 1") === false ? "F" : "ok";
+echo "|", $db->errno;
+"#,
+    );
+    assert_eq!(out, "ve|F|2006");
+}
+
+/// Procedural aliases validate their link/result argument at runtime with a
+/// `TypeError` naming the expected class (PHP's own behavior), so the classic
+/// `mysqli_query(...)` → `mysqli_num_rows(...)` pipeline fails loudly on a
+/// `false` result instead of reading garbage.
+#[test]
+fn test_mysqli_procedural_alias_type_errors() {
+    let out = compile_and_run(
+        r#"<?php
+mysqli_report(MYSQLI_REPORT_OFF);
+try {
+    mysqli_num_rows(false);
+    echo "no";
+} catch (TypeError $e) {
+    echo strpos($e->getMessage(), "mysqli_result") !== false ? "te-result" : "te-?";
+}
+try {
+    mysqli_ping("not-a-link");
+    echo "|no";
+} catch (TypeError $e) {
+    echo "|", strpos($e->getMessage(), "must be of type mysqli") !== false ? "te-link" : "te-?";
+}
+"#,
+    );
+    assert_eq!(out, "te-result|te-link");
+}
+
 /// The mysqli exception hierarchy is mysqli's own: `mysqli_sql_exception`
 /// extends `RuntimeException`, and the locked `MYSQLI_*` constants carry
 /// php-src's values.

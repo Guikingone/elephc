@@ -70,6 +70,9 @@ class mysqli {
     private string $optCharsetName = "";
     // Connection charset, lazily read from the server on first ask.
     private string $currentCharset = "";
+    // Buffered result produced by real_query() and picked up by store_result()
+    // (and, in the multi_query path, by next_result()).
+    private ?mysqli_result $pendingResult = null;
 
     public function __construct(
         ?string $hostname = null,
@@ -409,6 +412,54 @@ class mysqli {
         return $this->options($option, $value);
     }
 
+    public function query(string $query, int $resultmode = 0): mysqli_result|bool {
+        if ($query === "") {
+            throw new ValueError("mysqli::query(): Argument #1 (\$query) must not be empty");
+        }
+        if ($resultmode != 0 && $resultmode != 1) {
+            throw new ValueError("mysqli::query(): Argument #2 (\$result_mode) must be either MYSQLI_STORE_RESULT or MYSQLI_USE_RESULT");
+        }
+        // MYSQLI_USE_RESULT (1) is accepted but still buffered — documented
+        // divergence; true unbuffered use_result is out of scope.
+        $_code = $this->runQuery($query);
+        if ($_code == 0) {
+            return false;
+        }
+        if ($_code == 1) {
+            return true;
+        }
+        $_result = $this->pendingResult;
+        $this->pendingResult = null;
+        if ($_result === null) {
+            return false;
+        }
+        return $_result;
+    }
+
+    public function real_query(string $query): bool {
+        if ($query === "") {
+            throw new ValueError("mysqli::real_query(): Argument #1 (\$query) must not be empty");
+        }
+        // Same drain as query(); a produced result set stays pending until
+        // store_result() picks it up.
+        return $this->runQuery($query) != 0;
+    }
+
+    public function store_result(int $mode = 0): mysqli_result|false {
+        $_result = $this->pendingResult;
+        if ($_result === null) {
+            return false;
+        }
+        $this->pendingResult = null;
+        return $_result;
+    }
+
+    public function use_result(): mysqli_result|false {
+        // Alias of store_result: results are always buffered (documented
+        // divergence; true unbuffered streaming is out of scope).
+        return $this->store_result();
+    }
+
     public function get_server_info(): string {
         return $this->server_info;
     }
@@ -520,6 +571,104 @@ class mysqli {
         if ((mysqli::$reportMode & 1) != 0) {
             fwrite(STDERR, "mysqli error: " . $message . "\n");
         }
+    }
+
+    // Executes one statement through the bridge and fully buffers any result
+    // set (result identity: a later query must never invalidate an earlier
+    // mysqli_result, so every row is drained and the statement finalized before
+    // this returns). Returns 0 = failure (error state recorded and reported),
+    // 1 = success with no result set (DML/DDL: affected_rows/insert_id set),
+    // 2 = success with a result buffered into $this->pendingResult.
+    private function runQuery(string $query): int {
+        if (!$this->requireConnection()) {
+            return 0;
+        }
+        $_stmt = elephc_pdo_prepare($this->conn, $query, 1);
+        if ($_stmt < 0) {
+            $this->opFailed();
+            return 0;
+        }
+        $_rc = elephc_pdo_step($_stmt);
+        if ($_rc < 0) {
+            $this->opFailed();
+            elephc_pdo_finalize($_stmt);
+            return 0;
+        }
+        // Column metadata is definitely known after the first step, including
+        // for emulated prepares that only execute at step time.
+        $_columnCount = elephc_pdo_column_count($_stmt);
+        if ($_columnCount == 0) {
+            $this->affected_rows = elephc_pdo_changes($this->conn);
+            $this->insert_id = elephc_pdo_last_insert_id($this->conn, "");
+            $this->field_count = 0;
+            $this->warning_count = elephc_pdo_warning_count($this->conn);
+            elephc_pdo_finalize($_stmt);
+            $this->clearError();
+            $this->pendingResult = null;
+            return 1;
+        }
+        $_names = [];
+        $_tables = [];
+        $_natives = [];
+        $_flags = [];
+        $_lens = [];
+        for ($_i = 0; $_i < $_columnCount; $_i++) {
+            $_names[] = elephc_pdo_column_name($_stmt, $_i);
+            $_tables[] = elephc_pdo_column_table_name($_stmt, $_i);
+            $_natives[] = elephc_pdo_column_native_type($_stmt, $_i);
+            $_flags[] = elephc_pdo_column_flags($_stmt, $_i);
+            $_lens[] = elephc_pdo_column_len($_stmt, $_i);
+        }
+        // Cells are buffered FLAT in row-major order (see mysqli_result): every
+        // buffered value stays a Mixed scalar and fetches build fresh rows.
+        $_cells = [];
+        $_rowCount = 0;
+        while ($_rc == 1) {
+            for ($_i = 0; $_i < $_columnCount; $_i++) {
+                $_cells[] = $this->columnValue($_stmt, $_i);
+            }
+            $_rowCount = $_rowCount + 1;
+            $_rc = elephc_pdo_step($_stmt);
+        }
+        if ($_rc < 0) {
+            $this->opFailed();
+            elephc_pdo_finalize($_stmt);
+            return 0;
+        }
+        elephc_pdo_finalize($_stmt);
+        // php-src: for a SELECT, affected_rows mirrors num_rows and insert_id
+        // resets to 0 (the statement generated no AUTO_INCREMENT value).
+        $this->affected_rows = $_rowCount;
+        $this->insert_id = 0;
+        $this->field_count = $_columnCount;
+        $this->warning_count = elephc_pdo_warning_count($this->conn);
+        $this->clearError();
+        $this->pendingResult = mysqli_result::__elephcFromDrain($_cells, $_rowCount, $_names, $_tables, $_natives, $_flags, $_lens);
+        return 2;
+    }
+
+    // Decodes one cell of the current row, same type dispatch as
+    // PDOStatement::fetch's columnValue (int / float / null / length-counted
+    // TEXT-or-BLOB copy so embedded NUL bytes survive); mysqli has no
+    // stringify/oracle-nulls modes, so those branches are absent.
+    private function columnValue(int $stmt, int $index): mixed {
+        $_type = elephc_pdo_column_type($stmt, $index);
+        if ($_type == 1) {
+            return elephc_pdo_column_int($stmt, $index);
+        }
+        if ($_type == 2) {
+            return elephc_pdo_column_double($stmt, $index);
+        }
+        if ($_type == 5) {
+            return null;
+        }
+        // The $_len == 0 guard is load-bearing: the bridge returns a NULL
+        // pointer for an empty buffer and ptr_read_string fatals on NULL.
+        $_len = elephc_pdo_column_data_len($stmt, $index);
+        if ($_len > 0) {
+            return __elephc_ptr_read_string(elephc_pdo_column_data_ptr($stmt, $index), $_len);
+        }
+        return "";
     }
 
     // Runs a one-row one-column SELECT and returns its integer value (0 on any

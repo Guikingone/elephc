@@ -83,6 +83,98 @@ echo $db->real_escape_string("a'b\\c");
     assert_eq!(out, r"a\'b\\c");
 }
 
+/// The core result-identity guarantee: `query()` returns a `mysqli_result`
+/// that OWNS its rows, so a later query on the same connection leaves an
+/// earlier result fully usable (`data_seek`, `fetch_assoc`, `num_rows`).
+#[test]
+#[ignore]
+fn test_mysqli_query_assoc_and_independent_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mj");
+$db->query("CREATE TABLE mj (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(32))");
+$db->query("INSERT INTO mj (name) VALUES ('Ada'), ('Ben')");
+$r1 = $db->query("SELECT name FROM mj ORDER BY id");
+$r2 = $db->query("SELECT COUNT(*) AS c FROM mj");
+$row = $r2->fetch_assoc();
+echo $row["c"], "|";
+$r1->data_seek(1);
+$second = $r1->fetch_assoc();
+echo $second["name"], "|";
+echo $r1->num_rows;
+$db->query("DROP TABLE mj");
+"#,
+    ));
+    assert_eq!(out, "2|Ben|2");
+}
+
+/// The fetch family over one buffered result: fetch_row / fetch_array modes /
+/// fetch_object / fetch_all / fetch_column / foreach, plus field metadata.
+#[test]
+#[ignore]
+fn test_mysqli_fetch_family_and_foreach() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mf");
+$db->query("CREATE TABLE mf (id INT PRIMARY KEY AUTO_INCREMENT, name VARCHAR(32), score DOUBLE)");
+$db->query("INSERT INTO mf (name, score) VALUES ('Ada', 1.5), ('Ben', 2.25)");
+$r = $db->query("SELECT id, name, score FROM mf ORDER BY id");
+if (!($r instanceof mysqli_result)) {
+    echo "no-result";
+    exit(1);
+}
+$row = $r->fetch_row();
+echo $row[1], "|";
+$both = $r->fetch_array(MYSQLI_BOTH);
+echo $both[1], "=", $both["name"], "|";
+$r->data_seek(0);
+$obj = $r->fetch_object();
+echo $obj->name, ":", $obj->score, "|";
+$r->data_seek(0);
+$all = $r->fetch_all(MYSQLI_ASSOC);
+echo count($all), "|";
+$r->data_seek(0);
+echo $r->fetch_column(1), "|";
+$names = "";
+foreach ($r as $i => $frow) {
+    $names = $names . $i . $frow["name"];
+}
+echo $names, "|";
+$f = $r->fetch_field();
+echo $f->name, ":", $f->type == MYSQLI_TYPE_LONG || $f->type == MYSQLI_TYPE_LONGLONG ? "int" : "other";
+echo "|", $r->field_count, "|", mysqli_num_rows($r);
+$db->query("DROP TABLE mf");
+"#,
+    ));
+    // fetch_row consumes row 0 (Ada), fetch_array then sees row 1 (Ben); each
+    // data_seek(0) rewinds before the next family member.
+    assert_eq!(out, "Ada|Ben=Ben|Ada:1.5|2|Ada|0Ada1Ben|id:int|3|2");
+}
+
+/// Non-select statements return `true` and refresh `affected_rows` /
+/// `insert_id`; `real_query` + `store_result` picks up the pending result.
+#[test]
+#[ignore]
+fn test_mysqli_non_select_and_store_result() {
+    let out = compile_and_run(&my_program(
+        r#"
+$db->query("DROP TABLE IF EXISTS mn");
+$db->query("CREATE TABLE mn (id INT PRIMARY KEY AUTO_INCREMENT, v INT)");
+$ok = $db->query("INSERT INTO mn (v) VALUES (10)");
+echo $ok === true ? "T" : "F";
+echo "|", $db->affected_rows, "|", $db->insert_id;
+$db->query("INSERT INTO mn (v) VALUES (20), (30)");
+echo "|", $db->affected_rows;
+echo "|", $db->real_query("SELECT v FROM mn ORDER BY id") ? "rq" : "no";
+$r = $db->store_result();
+echo "|", $r === false ? "F" : $r->num_rows;
+echo "|", $db->store_result() === false ? "empty" : "again";
+$db->query("DROP TABLE mn");
+"#,
+    ));
+    assert_eq!(out, "T|1|1|2|rq|3|empty");
+}
+
 /// Connection information, ping, charset, autocommit, and a commit round-trip
 /// against the live server.
 #[test]
