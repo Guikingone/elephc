@@ -90,6 +90,22 @@ struct RequestLease {
     active: bool,
 }
 
+impl RequestLease {
+    /// Creates an inactive lease that cannot cancel an ID before its dispatch is sent.
+    fn pending(id: u64, cancel: mpsc::Sender<u64>) -> Self {
+        Self {
+            id,
+            cancel,
+            active: false,
+        }
+    }
+
+    /// Arms cancellation after the descriptor-bearing dispatch datagram is accepted.
+    fn arm(&mut self) {
+        self.active = true;
+    }
+}
+
 /// Terminates an over-time handler without affecting its broker or worker.
 extern "C" fn handle_exec_timeout(_signal: libc::c_int) {
     const MESSAGE: &[u8] =
@@ -297,14 +313,16 @@ impl HandlerBroker {
         worker_stream.set_nonblocking(true)?;
         control::set_close_on_exec(worker_stream.as_raw_fd())?;
         control::set_close_on_exec(broker_stream.as_raw_fd())?;
-        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
-        let lease = RequestLease {
-            id,
-            cancel: self.cancel.clone(),
-            active: true,
-        };
         let dispatch_control = self.dispatch.lock().await;
-        Self::send_channel(&dispatch_control, id, broker_stream.as_raw_fd()).await?;
+        let id = self.next_id.fetch_add(1, Ordering::Relaxed);
+        let mut lease = RequestLease::pending(id, self.cancel.clone());
+        Self::send_channel(
+            &dispatch_control,
+            id,
+            broker_stream.as_raw_fd(),
+            &mut lease,
+        )
+        .await?;
         drop(broker_stream);
         drop(dispatch_control);
 
@@ -353,6 +371,7 @@ impl HandlerBroker {
         dispatch: &AsyncFd<OwnedFd>,
         id: u64,
         channel: RawFd,
+        lease: &mut RequestLease,
     ) -> io::Result<()> {
         loop {
             let mut writable = dispatch.writable().await?;
@@ -361,6 +380,7 @@ impl HandlerBroker {
             }) {
                 Ok(result) => {
                     result?;
+                    lease.arm();
                     break;
                 }
                 Err(_) => continue,
@@ -405,5 +425,69 @@ impl Drop for RequestLease {
             let _ = self.cancel.send(self.id);
             self.active = false;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc::TryRecvError;
+    use std::time::Duration;
+
+    /// Builds the smallest request snapshot needed to exercise broker dispatch cancellation.
+    fn empty_request() -> HandlerRequest {
+        HandlerRequest {
+            method: "GET".to_string(),
+            uri: "/".to_string(),
+            path: "/".to_string(),
+            query: String::new(),
+            headers: Vec::new(),
+            body: Vec::new(),
+            remote_addr: "127.0.0.1".to_string(),
+            remote_port: 1,
+            server_addr: "127.0.0.1".to_string(),
+            server_port: 2,
+            protocol: "HTTP/1.1".to_string(),
+        }
+    }
+
+    /// Verifies cancellation while waiting for the serialized dispatch lock emits no orphan ID.
+    #[test]
+    fn cancellation_before_dispatch_does_not_notify_broker() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("build current-thread test runtime");
+        runtime.block_on(async {
+            let (worker_dispatch, broker_dispatch) = control::datagram_pair()
+                .expect("create dispatch socket pair");
+            control::set_nonblocking(worker_dispatch.as_raw_fd())
+                .expect("make worker dispatch socket nonblocking");
+            let (cancel, cancellations) = mpsc::channel();
+            let broker = HandlerBroker {
+                dispatch: Arc::new(Mutex::new(
+                    AsyncFd::new(worker_dispatch).expect("register dispatch socket"),
+                )),
+                cancel,
+                permits: Arc::new(Semaphore::new(1)),
+                next_id: Arc::new(AtomicU64::new(1)),
+            };
+            let dispatch_lock = Arc::clone(&broker.dispatch).lock_owned().await;
+
+            let cancelled = tokio::time::timeout(
+                Duration::from_millis(10),
+                broker.dispatch(empty_request()),
+            )
+            .await;
+            assert!(cancelled.is_err(), "dispatch unexpectedly passed the held lock");
+            assert_eq!(
+                cancellations.try_recv(),
+                Err(TryRecvError::Empty),
+                "a request that was never dispatched emitted an orphan cancellation ID"
+            );
+
+            drop(dispatch_lock);
+            drop(broker_dispatch);
+        });
     }
 }
