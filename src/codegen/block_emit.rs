@@ -783,7 +783,7 @@ fn class_method_entry_symbol(function: &Function) -> Result<String> {
 /// `$_ENV`, `$_REQUEST`, `$_SESSION` and `$GLOBALS` as absent — `$_SESSION` only appears once
 /// `session_start()` has run, which is why `isset($_SESSION)` is false in a fresh CLI script.
 /// Seeding the whole list would have made that `isset()` answer the opposite of PHP.
-const CLI_INITIALIZED_SUPERGLOBALS: &[&str] =
+pub(crate) const CLI_INITIALIZED_SUPERGLOBALS: &[&str] =
     &["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES"];
 
 /// Gives those superglobals a live empty hash before a CLI program's first statement.
@@ -823,6 +823,24 @@ fn emit_cli_superglobal_initializers(ctx: &mut FunctionContext<'_>) {
             }
         }
         abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        // The boxer RETAINS the hash, so it now has two owners: this frame and the cell. Drop
+        // this one, leaving the cell as the single owner the epilogue release can free —
+        // otherwise every seeded superglobal survives to exit and a heap-debug run reports five
+        // live blocks in a program that never touched a superglobal at all.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                abi::emit_push_reg(ctx.emitter, "x0");
+                ctx.emitter.instruction("ldr x0, [x0, #8]");                    // the hash the cell carries
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+                abi::emit_pop_reg(ctx.emitter, "x0");
+            }
+            Arch::X86_64 => {
+                abi::emit_push_reg(ctx.emitter, "rax");
+                ctx.emitter.instruction("mov rdi, QWORD PTR [rax + 8]");        // the hash the cell carries
+                abi::emit_call_label(ctx.emitter, "__rt_decref_hash");
+                abi::emit_pop_reg(ctx.emitter, "rax");
+            }
+        }
         abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
     }
 }

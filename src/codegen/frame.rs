@@ -408,6 +408,25 @@ fn emit_main_static_local_cleanup(ctx: &mut FunctionContext<'_>) {
 
 /// Releases global symbol storage owned by the top-level EIR body before diagnostics.
 fn emit_main_global_epilogue_cleanup(ctx: &mut FunctionContext<'_>) {
+    // The CLI superglobals are seeded in the prologue whether or not the program mentions them,
+    // so they have to be released the same way. The loop below only walks globals the program
+    // NAMES, which left five hashes behind in any program that never touched one — invisible
+    // except to a heap-debug run, where it turned the ledger from clean to leaking.
+    if !ctx.module.web {
+        for name in crate::codegen::block_emit::CLI_INITIALIZED_SUPERGLOBALS {
+            let symbol = ir_global_symbol(name);
+            if !ctx.data.has_comm(&symbol) {
+                continue;
+            }
+            if ctx.module.data.global_names.iter().any(|named| named == name) {
+                continue;                                    // the loop below already releases it
+            }
+            ctx.emitter
+                .comment(&format!("epilogue release seeded ${}", name));
+            emit_static_symbol_value_cleanup(ctx, &symbol, &PhpType::Mixed);
+            abi::emit_store_zero_to_symbol(ctx.emitter, &symbol, 0);
+        }
+    }
     let globals = ctx.module.data.global_names.clone();
     for name in globals {
         if ctx.module.extern_globals.contains_key(&name) {
