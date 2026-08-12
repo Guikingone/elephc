@@ -734,6 +734,7 @@ name = "elephc-magician"
 version = "0.1.0"
 dependencies = [
  "elephc-builtin-contract",
+ "elephc-bcmath",
  "elephc-crypto",
  "elephc-phar",
  "flate2",

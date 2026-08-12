@@ -65,6 +65,18 @@ echo bcscale(3), '|', bcscale(), '|', bcdiv('105', '6.55957');
     assert_eq!(out, "0|3|16.007");
 }
 
+/// Verifies AOT and Magician calls observe the same process-wide BCMath scale.
+#[test]
+fn test_bcscale_is_shared_with_eval() {
+    let out = compile_and_run(
+        r#"<?php
+bcscale(4);
+eval('echo bcmul("1", "1");');
+"#,
+    );
+    assert_eq!(out, "1.0000");
+}
+
 /// Verifies a runtime nullable scale chooses process scale while explicit zero remains distinct.
 #[test]
 fn test_bcmath_dynamic_nullable_scale() {
@@ -106,12 +118,13 @@ fn test_bcmath_failures_are_catchable() {
         r#"<?php
 $bad = '1e2';
 try { bcadd($bad, '1'); } catch (\ValueError $e) { echo get_class($e), '|', $e->getMessage(), "\n"; }
-try { bcdiv('1', '0'); } catch (\DivisionByZeroError $e) { echo get_class($e), '|', $e->getMessage(); }
+try { bcdiv('1', '0'); } catch (\DivisionByZeroError $e) { echo get_class($e), '|', $e->getMessage(), "\n"; }
+try { bcround('1', 0, 9); } catch (\ValueError $e) { echo get_class($e), '|', $e->getMessage(); }
 "#,
     );
     assert_eq!(
         out,
-        "ValueError|bcadd(): Argument #1 ($num1) is not well-formed\nDivisionByZeroError|Division by zero"
+        "ValueError|bcadd(): Argument #1 ($num1) is not well-formed\nDivisionByZeroError|Division by zero\nValueError|bcround(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)"
     );
 }
 

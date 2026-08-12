@@ -25,6 +25,7 @@ const CORE_LOADED_EXTENSIONS: &[&str] = &[
     "Core",
     "standard",
     "SPL",
+    "bcmath",
     "json",
     "pcre",
     "date",
