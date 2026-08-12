@@ -25,8 +25,9 @@ use crate::source::SourceMode;
 use crate::timings::CompileTimings;
 use crate::{
     autoload, codegen, debug_info, errors, exports, func_args, ir, ir_lower, ir_passes, lexer,
-    linker, list_id_prelude, name_resolver, opcache_prelude, optimize, parser, pdo_prelude,
-    resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude, web_prelude,
+    linker, list_id_prelude, mysqli_prelude, name_resolver, opcache_prelude, optimize, parser,
+    pdo_prelude, resolver, runtime_cache, source_map, tz_prelude, types, var_export_prelude,
+    web_prelude,
 };
 
 mod backend;
@@ -176,6 +177,21 @@ pub(crate) fn compile(config: CliConfig) {
         linked_php_surfaces.push("PDO".to_string());
     }
     timings.record_since("pdo-prelude", phase_started);
+
+    // Inject the mysqli prelude (a second PHP surface over the same elephc_pdo
+    // bridge) only when the program references a mysqli symbol or
+    // `--with-mysqli` forces it. Runs AFTER the PDO injection so the shared
+    // extern block — prepended idempotently by whichever surface injects — is
+    // declared exactly once, and never injects the PDO classes.
+    crate::progress::phase("mysqli-prelude");
+    let phase_started = Instant::now();
+    let mysqli_force = with_crates.contains("mysqli");
+    let mysqli_used = mysqli_force || mysqli_prelude::program_uses_mysqli(&ast);
+    let ast = mysqli_prelude::inject_if_used(ast, mysqli_force, php_version);
+    if mysqli_used {
+        linked_php_surfaces.push("mysqli".to_string());
+    }
+    timings.record_since("mysqli-prelude", phase_started);
 
     // Inject the timezone-introspection prelude (extern block + array marshalling,
     // written in elephc-PHP) only when the program references getLocation /

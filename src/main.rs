@@ -43,6 +43,7 @@ mod opcache_prelude;
 mod optimize;
 mod parser;
 mod php_version;
+mod mysqli_prelude;
 mod pdo_prelude;
 mod php_profile;
 mod prelude_prune;

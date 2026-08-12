@@ -232,12 +232,28 @@ fn try_compile_source_to_asm_with_defines_repr(
     let resolved = elephc::resolver::resolve(ast, dir).expect("resolve failed");
     let resolved = elephc::autoload::collect_aliases(resolved);
     let mut prelude_inventory = elephc::optimize::reachability::PreludeInventory::new();
+    // Surface usage is decided BEFORE injection, mirroring `pipeline::compile`:
+    // the harness seeds `set_linked_extensions` from the same bits so
+    // `extension_loaded('PDO'/'mysqli')` agrees between `compile_and_run` and
+    // the CLI. mysqli injects after PDO so the shared `elephc_pdo` externs
+    // (merged in idempotently by either) are declared exactly once.
+    let pdo_used = elephc::pdo_prelude::program_uses_pdo(&resolved);
     let resolved = elephc::pdo_prelude::inject_if_used_for_version(
         resolved,
         false,
         php_version,
         &mut prelude_inventory,
     );
+    let mysqli_used = elephc::mysqli_prelude::program_uses_mysqli(&resolved);
+    let resolved = elephc::mysqli_prelude::inject_if_used(resolved, false, php_version);
+    let mut linked_php_surfaces: Vec<String> = Vec::new();
+    if pdo_used {
+        linked_php_surfaces.push("PDO".to_string());
+    }
+    if mysqli_used {
+        linked_php_surfaces.push("mysqli".to_string());
+    }
+    elephc::codegen::set_linked_extensions(linked_php_surfaces);
     let resolved = elephc::tz_prelude::inject_if_used(resolved, false, &mut prelude_inventory);
     let resolved = elephc::list_id_prelude::inject_if_used(resolved, &mut prelude_inventory);
     let resolved = elephc::var_export_prelude::inject_if_used(resolved, &mut prelude_inventory);

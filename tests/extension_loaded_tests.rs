@@ -175,6 +175,58 @@ fn pdo_usage_still_reports_pdo_without_mysqli() {
     );
 }
 
+/// Verifies a mysqli-only program reports mysqli — and not PDO — even though both
+/// surfaces link the same `elephc_pdo` archive: reporting tracks the injected PHP
+/// surface, not the staticlib.
+#[test]
+fn mysqli_usage_reports_mysqli_not_pdo() {
+    let dir = make_test_dir("ext_mysqli_not_pdo");
+    let src = "<?php new mysqli(); \
+        var_dump(extension_loaded('mysqli')); \
+        var_dump(extension_loaded('PDO')); \
+        var_dump(extension_loaded('mysqlnd'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out, "bool(true)\nbool(false)\nbool(false)\n",
+        "mysqli usage: mysqli loaded, PDO not loaded, mysqlnd never reported"
+    );
+}
+
+/// Verifies `--with-mysqli` force-injects the mysqli surface for a program with no
+/// static mysqli reference, without dragging the PDO classes or extension along.
+#[test]
+fn with_mysqli_force_injects_without_static_new() {
+    let dir = make_test_dir("ext_with_mysqli");
+    let src = "<?php var_dump(class_exists('mysqli')); \
+        var_dump(extension_loaded('mysqli')); \
+        var_dump(extension_loaded('PDO')); \
+        var_dump(class_exists('PDO'));";
+    let bin = compile_with_flags(&dir, src, "app", &["--with-mysqli"]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out,
+        "bool(true)\nbool(true)\nbool(false)\nbool(false)\n",
+        "--with-mysqli: mysqli class + extension present, PDO absent"
+    );
+}
+
+/// Verifies a program using BOTH surfaces reports both extensions (they share one
+/// archive; the shared externs must be declared exactly once for this to compile).
+#[test]
+fn pdo_and_mysqli_usage_reports_both() {
+    let dir = make_test_dir("ext_pdo_and_mysqli");
+    let src = "<?php new PDO('sqlite::memory:'); new mysqli(); \
+        var_dump(extension_loaded('PDO')); \
+        var_dump(extension_loaded('mysqli'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out, "bool(true)\nbool(true)\n",
+        "both surfaces: PDO and mysqli both loaded"
+    );
+}
+
 /// Verifies extension-name matching is case-insensitive (PHP semantics): `--with-tls`
 /// makes `extension_loaded('openssl')` and `extension_loaded('OpenSSL')` both report true.
 #[test]
