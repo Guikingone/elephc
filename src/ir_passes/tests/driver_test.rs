@@ -49,6 +49,23 @@ impl IrPass for NoopPass {
     }
 }
 
+/// A pass whose cheap applicability predicate rejects the sample function.
+struct InapplicablePass;
+impl IrPass for InapplicablePass {
+    /// Returns the synthetic pass name used if the applicability gate regresses.
+    fn name(&self) -> &'static str {
+        "inapplicable"
+    }
+    /// Declares that this pass has no relevant shape to inspect in the function.
+    fn is_applicable(&self, _function: &Function) -> bool {
+        false
+    }
+    /// Panics if the driver runs a pass after its applicability predicate rejected it.
+    fn run(&self, _function: &mut Function, _data: &mut DataPool) -> bool {
+        panic!("inapplicable pass must not run")
+    }
+}
+
 /// A pass that mutates once (appends `!` to the name) then reports stable.
 struct AppendBangPass;
 impl IrPass for AppendBangPass {
@@ -102,6 +119,15 @@ impl IrPass for DropTerminatorPass {
 fn noop_pass_converges_without_change() {
     let mut function = sample_function();
     let passes: Vec<Box<dyn IrPass>> = vec![Box::new(NoopPass)];
+    drive(&mut function, &passes);
+    assert_eq!(function.name, "sample");
+}
+
+/// A rejected applicability predicate skips both pass execution and validation.
+#[test]
+fn inapplicable_pass_is_skipped() {
+    let mut function = sample_function();
+    let passes: Vec<Box<dyn IrPass>> = vec![Box::new(InapplicablePass)];
     drive(&mut function, &passes);
     assert_eq!(function.name, "sample");
 }

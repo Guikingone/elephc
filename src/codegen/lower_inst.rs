@@ -36,6 +36,7 @@ use super::{CodegenIrError, Result};
 mod arithmetic;
 mod arrays;
 mod buffers;
+mod checked_int_to_int;
 mod runtime_functions;
 pub(crate) mod builtins;
 mod callables;
@@ -176,6 +177,21 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
         Op::ICheckedAdd => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_add_checked"),
         Op::ICheckedSub => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_sub_checked"),
         Op::ICheckedMul => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_mul_checked"),
+        Op::ICheckedAddToInt => checked_int_to_int::lower_checked_int_to_int(
+            ctx,
+            &inst,
+            checked_int_to_int::CheckedIntOp::Add,
+        ),
+        Op::ICheckedSubToInt => checked_int_to_int::lower_checked_int_to_int(
+            ctx,
+            &inst,
+            checked_int_to_int::CheckedIntOp::Sub,
+        ),
+        Op::ICheckedMulToInt => checked_int_to_int::lower_checked_int_to_int(
+            ctx,
+            &inst,
+            checked_int_to_int::CheckedIntOp::Mul,
+        ),
         Op::ICheckedPow => arithmetic::lower_int_checked_binop(ctx, &inst, "__rt_int_pow_checked"),
         Op::IDiv => arithmetic::lower_int_div_to_float(ctx, &inst),
         Op::ISMod => arithmetic::lower_int_mod(ctx, &inst),
@@ -288,6 +304,7 @@ pub(super) fn lower_instruction(ctx: &mut FunctionContext<'_>, inst_id: InstId) 
             builtins::system::lower_elephc_initialize_pdo_statement(ctx, &inst)
         }
         Op::PropGet => objects::lower_prop_get(ctx, &inst),
+        Op::PropGetForWrite => objects::lower_prop_get_for_write(ctx, &inst),
         Op::PropInitialized => objects::lower_prop_initialized(ctx, &inst),
         Op::LoadPropRefCell => objects::lower_load_prop_ref_cell(ctx, &inst),
         Op::LoadArrayElemRefCell => arrays::lower_load_array_elem_ref_cell(ctx, &inst),

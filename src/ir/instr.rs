@@ -274,6 +274,15 @@ pub enum Op {
     ICheckedAdd,
     ICheckedSub,
     ICheckedMul,
+    /// Adds two integers with PHP overflow promotion, then applies PHP's integer cast
+    /// without materializing the intermediate boxed `Mixed` value.
+    ICheckedAddToInt,
+    /// Subtracts two integers with PHP overflow promotion, then applies PHP's integer
+    /// cast without materializing the intermediate boxed `Mixed` value.
+    ICheckedSubToInt,
+    /// Multiplies two integers with PHP overflow promotion, then applies PHP's integer
+    /// cast without materializing the intermediate boxed `Mixed` value.
+    ICheckedMulToInt,
     ICheckedPow,
     IDiv,
     ISDiv,
@@ -421,6 +430,7 @@ pub enum Op {
     /// Initializes the private base state of a PDO statement subclass.
     DynamicPdoStatementInitialize,
     PropGet,
+    PropGetForWrite,
     PropInitialized,
     PropSet,
     /// Clears a declared instance-property slot for `unset($obj->prop)`: releases the
@@ -560,6 +570,9 @@ impl Op {
             | IAdd
             | ISub
             | IMul
+            | ICheckedAddToInt
+            | ICheckedSubToInt
+            | ICheckedMulToInt
             | IPow
             | INeg
             | IBitAnd
@@ -668,6 +681,13 @@ impl Op {
             }
             PropGet | NullsafePropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
+            }
+            // Not a pure read despite the name, exactly like `ArrayGetForWrite`: the
+            // copy-on-write split rewrites the receiver's PROPERTY slot, so it must never be
+            // treated as reorderable or redundant against the plain property reads around it.
+            PropGetForWrite => {
+                E::READS_HEAP | E::WRITES_HEAP | E::ALLOC_HEAP | E::REFCOUNT_OP
+                    | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
             }
             DynamicPropGet => {
                 E::READS_HEAP | E::MAY_THROW | E::MAY_WARN | E::MAY_DEOPT
@@ -836,6 +856,9 @@ impl Op {
             ICheckedAdd => "ichecked_add",
             ICheckedSub => "ichecked_sub",
             ICheckedMul => "ichecked_mul",
+            ICheckedAddToInt => "ichecked_add_to_int",
+            ICheckedSubToInt => "ichecked_sub_to_int",
+            ICheckedMulToInt => "ichecked_mul_to_int",
             ICheckedPow => "ichecked_pow",
             IDiv => "idiv",
             ISDiv => "isdiv",
@@ -961,6 +984,7 @@ impl Op {
             DynamicPdoStatementConstructorCall => "dynamic_pdo_statement_constructor_call",
             DynamicPdoStatementInitialize => "dynamic_pdo_statement_initialize",
             PropGet => "prop_get",
+            PropGetForWrite => "prop_get_for_write",
             PropInitialized => "prop_initialized",
             PropSet => "prop_set",
             PropUnset => "prop_unset",

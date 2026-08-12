@@ -2,9 +2,9 @@
 //! Integration tests for the EIR common-subexpression elimination pass (`cse`)
 //! driven by the fixed-point pass driver. Fixtures use a local seeded from the
 //! runtime `$argc` value so the repeated subexpressions are not constant-folded
-//! away at the AST level and reach EIR, where peephole load forwarding collapses
-//! the repeated reads to one value and CSE then deduplicates the identical pure
-//! computations built on it.
+//! away at the AST level and reach EIR. Mixed-observing checked arithmetic stays
+//! boxed and is deliberately outside CSE; issue-623 integer-sink coverage lives
+//! in the adjacent `checked_int_sink` integration module.
 //!
 //! Called from:
 //! - `cargo test` through Rust's test harness.
