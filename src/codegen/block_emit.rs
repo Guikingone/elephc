@@ -69,7 +69,10 @@ pub(super) fn emit_module(
     // In `--web` builds the reset routine references every request superglobal.
     // If a superglobal is never read or written by user/prelude code, the symbol
     // would otherwise be missing from the object, so reserve storage up front.
-    if web {
+    // Reserved in every build, not only under `--web`: a CLI program reads these too, and PHP
+    // has them as arrays there. Leaving the storage absent left `$_SERVER` reading as a zeroed
+    // word — a null — which `count()` now correctly refuses instead of silently answering 0.
+    {
         let sg_type = crate::superglobals::superglobal_type();
         let sg_size = sg_type.codegen_repr().stack_size().max(8);
         for name in crate::superglobals::SUPERGLOBALS {
@@ -774,6 +777,56 @@ fn class_method_entry_symbol(function: &Function) -> Result<String> {
 /// a separate process-entry stub is emitted that calls `elephc_web_run` with
 /// argc/argv and the handler address, then exits with the bridge return value.
 #[allow(clippy::too_many_arguments)]
+/// The superglobals PHP has in a CLI request, measured rather than assumed.
+///
+/// `php -n` reports `$_SERVER`, `$_GET`, `$_POST`, `$_COOKIE` and `$_FILES` as set, and
+/// `$_ENV`, `$_REQUEST`, `$_SESSION` and `$GLOBALS` as absent — `$_SESSION` only appears once
+/// `session_start()` has run, which is why `isset($_SESSION)` is false in a fresh CLI script.
+/// Seeding the whole list would have made that `isset()` answer the opposite of PHP.
+const CLI_INITIALIZED_SUPERGLOBALS: &[&str] =
+    &["_SERVER", "_GET", "_POST", "_COOKIE", "_FILES"];
+
+/// Gives those superglobals a live empty hash before a CLI program's first statement.
+///
+/// PHP has these as arrays in CLI — `count($_SERVER)` answers 68 there, not an error — while
+/// elephc reserved the storage only under `--web` and left it zeroed otherwise. A zeroed word
+/// reads back as null, which was invisible for as long as `count()` answered 0 for a null and
+/// surfaced the moment it started raising PHP's TypeError. Seeding an empty hash is the floor,
+/// not the finish: populating them the way PHP does is separate work.
+fn emit_cli_superglobal_initializers(ctx: &mut FunctionContext<'_>) {
+    for name in CLI_INITIALIZED_SUPERGLOBALS {
+        let symbol = crate::names::ir_global_symbol(name);
+        // __rt_hash_new takes TWO arguments: capacity AND the value_type tag. Passing only the
+        // capacity left the tag reading whatever the register happened to hold, which built a
+        // malformed hash that boxed back as null — the symptom that looked like the seeding
+        // never happening at all.
+        let (cap_reg, tag_reg) = match ctx.emitter.target.arch {
+            Arch::AArch64 => ("x0", "x1"),
+            Arch::X86_64 => ("rdi", "rsi"),
+        };
+        abi::emit_load_int_immediate(ctx.emitter, cap_reg, 8);
+        abi::emit_load_int_immediate(ctx.emitter, tag_reg, 7);                  // entries are boxed Mixed
+        abi::emit_call_label(ctx.emitter, "__rt_hash_new");
+        // Boxed, not raw: outside `--web` the checker leaves these names `Mixed`, so the slot is
+        // read as a tagged cell. `__rt_mixed_from_value` takes the TAG first and the payload
+        // second — handing it the pointer as the tag is what made the cell read back as null.
+        match ctx.emitter.target.arch {
+            Arch::AArch64 => {
+                ctx.emitter.instruction("mov x1, x0");                          // the hash is the payload
+                ctx.emitter.instruction("mov x0, #5");                          // tag 5 = associative array
+                ctx.emitter.instruction("mov x2, #0");
+            }
+            Arch::X86_64 => {
+                ctx.emitter.instruction("mov rdi, rax");                        // the hash is the payload
+                ctx.emitter.instruction("mov rax, 5");                          // tag 5 = associative array
+                ctx.emitter.instruction("xor esi, esi");
+            }
+        }
+        abi::emit_call_label(ctx.emitter, "__rt_mixed_from_value");
+        abi::emit_store_reg_to_symbol(ctx.emitter, abi::int_result_reg(ctx.emitter), &symbol, 0);
+    }
+}
+
 fn emit_main_function(
     module: &Module,
     function: &Function,
@@ -801,6 +854,7 @@ fn emit_main_function(
         frame::emit_web_handler_prologue(&mut ctx);
     } else {
         frame::emit_main_prologue(&mut ctx);
+        emit_cli_superglobal_initializers(&mut ctx);
     }
     if requires_elephc_tls {
         crate::codegen::tls::publish_tls_function_pointers(ctx.emitter);
