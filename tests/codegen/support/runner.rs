@@ -106,6 +106,10 @@ const TEST_BRIDGE_STATICLIBS: &[TestBridgeStaticlib] = &[
         lib_name: "elephc_magician",
         package: "elephc-magician",
     },
+    TestBridgeStaticlib {
+        lib_name: "elephc_curl",
+        package: "elephc-curl",
+    },
 ];
 
 /// Default timeout for executing one compiled codegen fixture binary.
