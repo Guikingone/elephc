@@ -6396,11 +6396,14 @@ echo chdir("sub") ? "D" : "!";
 $after = getcwd();
 echo strlen($after) > strlen($before) ? "W" : "!";
 echo ":";
-echo sys_get_temp_dir();
+// A RELATIONSHIP, not a literal: php derives this from TMPDIR, which on macOS is a private
+// per-user directory and not /tmp. The point here is that the IR backend dispatches the call.
+$t = sys_get_temp_dir();
+echo strlen($t) > 0 && substr($t, 0, 1) === "/" ? "T" : "!";
 "#;
     assert_eq!(
         compile_and_run_ir_backend("working_directory", source),
-        "CMDW:/tmp"
+        "CMDW:T"
     );
 }
 

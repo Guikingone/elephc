@@ -187,7 +187,12 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("bl __rt_fgets");                                       // x1 = line ptr, x2 = line len
 
     // -- EOF check: len == 0 -> return 0 (false) --
-    emitter.instruction("cbz x2, __rt_fgetcsv_eof");                            // len == 0 -> EOF, return 0
+    // The EOF exit lives past `__rt_csv_parse_buffer`, so it belongs to that helper's atom under
+    // macOS dead stripping and a conditional branch cannot reach it: `.alt_entry` targets accept
+    // `b`/`bl` only. Branch over an unconditional one instead.
+    emitter.instruction("cbnz x2, __rt_fgetcsv_have_line");                     // a real line: parse it
+    emitter.instruction("b __rt_fgetcsv_eof");                                  // len == 0 -> EOF, return 0
+    emitter.label("__rt_fgetcsv_have_line");
 
     // -- set up scan pointers into the line buffer --
     //
@@ -382,7 +387,9 @@ fn emit_fgetcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("b __rt_fgetcsv_epilogue");                             // -> common epilogue
 
     // -- EOF: return 0 (false) --
-    emitter.label("__rt_fgetcsv_eof");
+    // Shared, not local: `__rt_fgetcsv` reaches it from its own atom, and only a real symbol keeps
+    // this one alive under `-dead_strip`.
+    emitter.label_shared("__rt_fgetcsv_eof");
     emitter.instruction("mov x0, #0");                                         // x0 = 0 (false / EOF)
 
     // -- epilogue: restore registers and return --
