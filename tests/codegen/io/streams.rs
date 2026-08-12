@@ -705,6 +705,80 @@ unlink("t_out.csv");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies `fputcsv()` casts every field, as `php_fputcsv` does through `zval_get_tmp_string`.
+///
+/// Each row here is a DIFFERENT element layout, and the layout — not a static string-array
+/// requirement — is what the writer has to read: 16-byte `(ptr, len)` slots for strings, 8-byte
+/// payloads for int/float/bool, 8-byte cell pointers for a gradual array. Every expectation
+/// below was measured against `php -n` 8.5.6.
+#[test]
+fn test_fputcsv_casts_every_field_layout_like_php() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$out = fopen("cast_out.csv", "w");
+fputcsv($out, ["a", "b"], ",", "\"", "\\");
+fputcsv($out, [1, 2, 3], ",", "\"", "\\");
+fputcsv($out, [1.5, 2.25], ",", "\"", "\\");
+fputcsv($out, [true, false], ",", "\"", "\\");
+fputcsv($out, ["name", 42, 3.5, true, null], ",", "\"", "\\");
+fputcsv($out, ["with,comma", 7], ",", "\"", "\\");
+fclose($out);
+echo file_get_contents("cast_out.csv");
+unlink("cast_out.csv");
+"#,
+    );
+    assert_eq!(
+        out,
+        "a,b\n1,2,3\n1.5,2.25\n1,\nname,42,3.5,1,\n\"with,comma\",7\n"
+    );
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a `foreach` row reaches the writer as its ARRAY, not as the Mixed cell carrying it.
+///
+/// A gradually-typed row arrives boxed. Writing the box would not merely mis-render a field: the
+/// cell's tag word reads as a length, so this two-field row came out as four fields of raw header
+/// bytes before the writer unwrapped it.
+#[test]
+fn test_fputcsv_writes_a_foreach_row_not_its_box() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$out = fopen("rows_out.csv", "w");
+foreach ([[1, 2], [3, 4]] as $row) {
+    fputcsv($out, $row, ",", "\"", "\\");
+}
+fclose($out);
+echo file_get_contents("rows_out.csv");
+unlink("rows_out.csv");
+"#,
+    );
+    assert_eq!(out, "1,2\n3,4\n");
+    let _ = fs::remove_dir_all(&dir);
+}
+
+/// Verifies a long numeric run hands its formatting scratch back, row by row.
+///
+/// `__rt_itoa` formats into the shared 64 KiB concat arena and advances its cursor. A writer that
+/// never reclaimed the row's scratch would walk off the arena long before this loop ends, so the
+/// failure this pins is a silent memory overrun rather than a wrong field.
+#[test]
+fn test_fputcsv_reclaims_its_cast_scratch_across_many_rows() {
+    let (out, dir) = compile_and_run_in_dir(
+        r#"<?php
+$out = fopen("many.csv", "w");
+for ($i = 0; $i < 4000; $i++) {
+    fputcsv($out, [$i, $i * 2, $i * 3], ",", "\"", "\\");
+}
+fclose($out);
+$lines = file("many.csv");
+echo count($lines), "|", trim($lines[0]), "|", trim($lines[3999]);
+unlink("many.csv");
+"#,
+    );
+    assert_eq!(out, "4000|0,0,0|3999,7998,11997");
+    let _ = fs::remove_dir_all(&dir);
+}
+
 /// Verifies a `php://filter` chain runs EVERY filter, in order.
 ///
 /// Only the first name was applied, so `read=a|b` silently produced `a`'s output — which

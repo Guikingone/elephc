@@ -708,10 +708,12 @@ fn boxed_string_array_union(ty: &PhpType) -> bool {
     saw_string_array
 }
 
-/// Replaces a boxed `array<string>|false` in the result register with its array pointer.
+/// Replaces a boxed array in the result register with the array pointer it carries.
 ///
-/// A value that is `false` at run time has no array to write, which PHP reports as a
-/// `TypeError` rather than writing an empty row.
+/// A value that is not an array at run time has no row to write, which PHP reports as a
+/// `TypeError` rather than writing an empty row. Reaching this with the box still on would be
+/// worse than a wrong row: the cell's tag word reads as a length, so a two-field row renders as
+/// four fields of raw header bytes.
 fn emit_unwrap_boxed_string_array(ctx: &mut FunctionContext<'_>, label_prefix: &str) {
     let ok = ctx.next_label(&format!("{}_fields_array", label_prefix));
     match ctx.emitter.target.arch {
@@ -734,6 +736,76 @@ fn emit_unwrap_boxed_string_array(ctx: &mut FunctionContext<'_>, label_prefix: &
     }
 }
 
+/// The `value_type` an element layout of PHP strings carries — the only layout that stores
+/// 16-byte `(ptr, len)` slots rather than 8-byte payloads.
+const CSV_FIELD_TAG_STRING: u8 = 1;
+
+/// Returns the runtime `value_type` tag `__rt_fputcsv` needs to read a field array's elements.
+///
+/// PHP casts every field to string (`php_fputcsv` calls `zval_get_tmp_string` per field), so the
+/// question a CSV writer must answer is not "is this a string array?" but "how are its elements
+/// stored?". The tags below are the subset of the indexed-array `value_type` numbering that can
+/// appear in a CSV row, and they MUST keep agreeing with `emit_array_value_type_stamp`, which is
+/// what writes them into the array header — the runtime reuses each tag directly as the Mixed
+/// cell tag it builds to format the field.
+///
+/// Objects, nested arrays and resources are deliberately absent: PHP warns and renders those
+/// ("Array to string conversion"), which is a separate behaviour this writer does not yet carry,
+/// so they stay a lowering-time refusal rather than becoming a silently wrong field.
+/// `None` means the element layout is not knowable at compile time and the array header — the
+/// same authority `__rt_implode` consults — must be read at run time instead.
+fn csv_field_value_type_tag(ty: &PhpType, name: &str) -> Result<Option<u8>> {
+    let element = match ty {
+        PhpType::Array(element) => element.codegen_repr(),
+        // A gradually-typed value carries no element type here, but the array it points at still
+        // carries its stamped `value_type`. Reading the header keeps those rows writable rather
+        // than guessing a layout that a wrong guess would misread as raw memory.
+        PhpType::Mixed | PhpType::Union(_) => return Ok(None),
+        other => {
+            return Err(CodegenIrError::unsupported(format!(
+                "{} for PHP type {:?}",
+                name, other
+            )));
+        }
+    };
+    match element {
+        PhpType::Str => Ok(Some(CSV_FIELD_TAG_STRING)),
+        PhpType::Int => Ok(Some(0)),
+        PhpType::Float => Ok(Some(2)),
+        PhpType::Bool => Ok(Some(3)),
+        PhpType::Mixed | PhpType::Union(_) => Ok(Some(7)),
+        // An empty array literal carries an uninhabited element type. No element is ever
+        // dereferenced, so the string layout is the safe choice and keeps `fputcsv($f, [])`
+        // from being rejected at lowering time.
+        PhpType::Void | PhpType::Never => Ok(Some(CSV_FIELD_TAG_STRING)),
+        other => Err(CodegenIrError::unsupported(format!(
+            "{} for PHP element type {:?}",
+            name, other
+        ))),
+    }
+}
+
+/// Reads the loaded array's stamped `value_type` and leaves it in the CSV element-tag position.
+///
+/// Emitted only when the lowering could not name the element layout. The array pointer is in the
+/// result register; the tag lands in the scratch register the packing step ORs into `csv_opts`.
+fn emit_csv_field_tag_from_header(ctx: &mut FunctionContext<'_>) {
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction("ldr x9, [x0, #-8]");                       // load the packed array kind word
+            ctx.emitter.instruction("lsr x9, x9, #8");                          // move the value_type tag into the low bits
+            ctx.emitter.instruction("and x9, x9, #0xf");                        // isolate the 4-bit element value_type tag
+            ctx.emitter.instruction("lsl x9, x9, #24");                         // park it in the csv_opts element lane
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("mov r9, QWORD PTR [rax - 8]");             // load the packed array kind word
+            ctx.emitter.instruction("shr r9, 8");                               // move the value_type tag into the low bits
+            ctx.emitter.instruction("and r9, 0xf");                             // isolate the 4-bit element value_type tag
+            ctx.emitter.instruction("shl r9, 24");                              // park it in the csv_opts element lane
+        }
+    }
+}
+
 /// passing separator/enclosure/escape as a packed `csv_opts` word and eol as (ptr, len).
 pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -> Result<()> {
     ensure_arg_count_between(inst, "fputcsv", 2, 6)?;
@@ -749,13 +821,32 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
     // is the whole point of the pair — so the boxed form is unwrapped here rather than
     // rejected. The union guarantees the payload IS a string array, so the existing writer
     // works on it unchanged once the box is off.
-    if boxed_string_array_union(&ctx.raw_value_php_type(fields)?) {
+    let field_tag = if boxed_string_array_union(&ctx.raw_value_php_type(fields)?) {
         ctx.load_value_to_result(fields)?;
         emit_unwrap_boxed_string_array(ctx, "fputcsv");
+        Some(CSV_FIELD_TAG_STRING)
     } else {
-        require_string_array(ctx.load_value_to_result(fields)?.codegen_repr(), "fputcsv fields")?;
-    }
+        let declared = ctx.value_php_type(fields)?;
+        ctx.load_value_to_result(fields)?;
+        let tag = csv_field_value_type_tag(&declared, "fputcsv fields")?;
+        if tag.is_none() {
+            // A gradually-typed row arrives BOXED — `foreach ([[1, 2]] as $row)` hands over a
+            // Mixed cell, not the inner array. The header read below must see the array itself.
+            emit_unwrap_boxed_string_array(ctx, "fputcsv");
+        }
+        tag
+    };
     abi::emit_push_reg(ctx.emitter, abi::int_result_reg(ctx.emitter));            // save fields array pointer
+    if field_tag.is_none() {
+        // The element lane is pushed ON TOP of the array pointer so the packing step, which pops
+        // the three delimiter bytes it pushed after this, finds the tag waiting directly beneath.
+        emit_csv_field_tag_from_header(ctx);
+        let tag_reg = match arch {
+            Arch::AArch64 => "x9",
+            Arch::X86_64 => "r9",
+        };
+        abi::emit_push_reg(ctx.emitter, tag_reg);                                 // save the element value_type read from the header
+    }
 
     // -- extract first byte of separator / enclosure / escape (or default) --
     let csv_indices: [(usize, u8, &str); 3] = [
@@ -810,6 +901,17 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             ctx.emitter.instruction("orr x2, x2, x0, lsl #8");                  // include enclosure in csv_opts
             abi::emit_pop_reg(ctx.emitter, "x0");                                // pop separator byte
             ctx.emitter.instruction("orr x2, x2, x0");                          // complete csv_opts in x2
+            match field_tag {
+                // Tag 0 (int) is already the cleared lane, and AArch64 cannot encode `orr #0`.
+                Some(0) => {}
+                Some(tag) => ctx
+                    .emitter
+                    .instruction(&format!("orr x2, x2, #{}", (tag as i64) << 24)), // stamp the element value_type into bits 24..27
+                None => {
+                    abi::emit_pop_reg(ctx.emitter, "x0");                        // pop the element value_type read from the header
+                    ctx.emitter.instruction("orr x2, x2, x0");                   // it arrives already shifted into bits 24..27
+                }
+            }
             abi::emit_push_reg(ctx.emitter, "x2");                              // save packed csv_opts
         }
         Arch::X86_64 => {
@@ -821,6 +923,18 @@ pub(crate) fn lower_fputcsv(ctx: &mut FunctionContext<'_>, inst: &Instruction) -
             ctx.emitter.instruction("or rdx, rax");                             // include enclosure in csv_opts
             abi::emit_pop_reg(ctx.emitter, "rax");                               // pop separator byte
             ctx.emitter.instruction("or rdx, rax");                             // complete csv_opts in rdx
+            match field_tag {
+                // Tag 0 (int) is already the cleared lane; mirror the AArch64 skip so both
+                // architectures emit the same packing for an int-array row.
+                Some(0) => {}
+                Some(tag) => ctx
+                    .emitter
+                    .instruction(&format!("or rdx, {}", (tag as i64) << 24)),   // stamp the element value_type into bits 24..27
+                None => {
+                    abi::emit_pop_reg(ctx.emitter, "rax");                       // pop the element value_type read from the header
+                    ctx.emitter.instruction("or rdx, rax");                      // it arrives already shifted into bits 24..27
+                }
+            }
             abi::emit_push_reg(ctx.emitter, "rdx");                             // save packed csv_opts
         }
     }

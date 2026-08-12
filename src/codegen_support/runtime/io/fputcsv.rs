@@ -38,10 +38,12 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fputcsv ---");
     emitter.label_global("__rt_fputcsv");
 
-    // -- set up stack frame: 144 bytes (fd, arr, total, index, sep, enc, esc, eol_ptr, eol_len, arrlen, field_ptr, field_len, scratch, scratch2, fp, lr, escaped) --
-    //    The last 16 bytes carry the `escaped` flag the enclosure-doubling loop needs; fp/lr
-    //    stay at #112 so every other offset in this helper is unchanged.
-    emitter.instruction("sub sp, sp, #144");                                    // allocate 144 bytes on the stack
+    // -- set up stack frame: 192 bytes (fd, arr, total, index, sep, enc, esc, eol_ptr, eol_len, arrlen, field_ptr, field_len, scratch, scratch2, fp, lr, escaped, elem_tag, mixed cell, owned temp, saved concat offset) --
+    //    The last 48 bytes carry the non-string element machinery: the element value_type tag,
+    //    a 24-byte Mixed cell built in place so one formatter serves every scalar layout, the
+    //    owned cast result, and the caller's `_concat_off`. fp/lr stay at #112 so every other
+    //    offset in this helper is unchanged.
+    emitter.instruction("sub sp, sp, #192");                                    // allocate 192 bytes on the stack
     emitter.instruction("stp x29, x30, [sp, #112]");                            // save frame pointer and return address
     emitter.instruction("add x29, sp, #112");                                   // establish new frame pointer
 
@@ -57,6 +59,21 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.instruction("and w6, w6, #0xff");                                   // enc = (csv_opts >> 8) & 0xFF
     emitter.instruction("lsr w7, w2, #16");                                      // shift right 16 for esc
     emitter.instruction("and w7, w7, #0xff");                                   // esc = (csv_opts >> 16) & 0xFF
+
+    // -- unpack the element value_type the lowering stamped into csv_opts bits 24..27 --
+    //    PHP casts every field to string, so the element layout — not a static string-array
+    //    requirement — is what this helper needs to know.
+    emitter.instruction("lsr w8, w2, #24");                                      // shift the element value_type tag down
+    emitter.instruction("and x8, x8, #0xf");                                     // isolate the 4-bit element value_type tag
+    emitter.instruction("str x8, [sp, #136]");                                   // save the element value_type tag
+
+    // -- reserve the caller's concat cursor so a row's casts cannot outgrow the shared buffer --
+    //    `__rt_itoa` / `__rt_ftoa` format into `_concat_buf` at `_concat_off` and advance it.
+    //    Restoring the entry value on return reclaims the whole row's scratch, which keeps a
+    //    long `foreach` writing numeric rows from walking off the 64 KiB arena.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [x9]");                                        // load the caller's concat write offset
+    emitter.instruction("str x10, [sp, #176]");                                  // save it for the epilogue to restore
 
     // -- apply defaults: sep==0 -> 0x2C, enc==0 -> 0x22 --
     emitter.instruction("cbnz w5, __rt_fputcsv_sep_ok");                        // if sep != 0, skip default
@@ -101,10 +118,42 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
     emitter.label("__rt_fputcsv_field");
     emitter.instruction("ldr x9, [sp, #24]");                                    // reload current index
     emitter.instruction("ldr x10, [sp, #8]");                                    // reload array pointer
+    emitter.instruction("str xzr, [sp, #168]");                                   // clear the owned cast slot; borrowed layouts release nothing
+    emitter.instruction("ldr x12, [sp, #136]");                                  // reload the element value_type tag
+    emitter.instruction("cmp x12, #1");                                          // is this a string array?
+    emitter.instruction("b.ne __rt_fputcsv_field_nonstr");                        // only value_type 1 stores 16-byte (ptr, len) slots
     emitter.instruction("lsl x11, x9, #4");                                      // byte offset = index * 16
     emitter.instruction("add x11, x10, x11");                                    // element address = array + offset
     emitter.instruction("ldr x3, [x11, #24]");                                    // load string pointer (skip 24-byte header)
     emitter.instruction("ldr x4, [x11, #32]");                                    // load string length
+    emitter.instruction("b __rt_fputcsv_field_ready");                            // the payload is already a string
+
+    // -- every other layout stores 8-byte slots and must be cast the way PHP casts a field --
+    emitter.label("__rt_fputcsv_field_nonstr");
+    emitter.instruction("lsl x11, x9, #3");                                      // byte offset = index * 8
+    emitter.instruction("add x11, x10, x11");                                    // element address = array + offset
+    emitter.instruction("ldr x5, [x11, #24]");                                    // load the raw element payload (skip 24-byte header)
+    emitter.instruction("cmp x12, #7");                                          // are elements boxed Mixed cells?
+    emitter.instruction("b.eq __rt_fputcsv_field_boxed");                         // a boxed slot already points at a cell
+    // A scalar array stores bare payloads. Wrapping one in a frame-local Mixed cell lets the
+    // single `__rt_mixed_cast_string` formatter serve int, float, bool and null alike, and the
+    // array's value_type doubles as the cell tag because both use the same numbering.
+    emitter.instruction("str x12, [sp, #144]");                                  // cell tag = the array's element value_type
+    emitter.instruction("str x5, [sp, #152]");                                    // cell payload low word
+    emitter.instruction("str xzr, [sp, #160]");                                   // cell payload high word
+    emitter.instruction("add x0, sp, #144");                                      // cast the frame-local cell
+    emitter.instruction("b __rt_fputcsv_field_cast");                             // format it
+    emitter.label("__rt_fputcsv_field_boxed");
+    emitter.instruction("mov x0, x5");                                            // value_type 7 slots hold the cell pointer itself
+    emitter.label("__rt_fputcsv_field_cast");
+    emitter.instruction("bl __rt_mixed_cast_string");                             // x1 = payload pointer, x2 = payload length
+    // Only the string arm allocates (through `__rt_str_persist`); int/float/bool render into the
+    // shared concat scratch and null returns a null pointer. `__rt_heap_free` ignores all of
+    // those by contract, so recording the result unconditionally can neither leak nor wild-free.
+    emitter.instruction("str x1, [sp, #168]");                                   // record the cast result as this row's owned temporary
+    emitter.instruction("mov x3, x1");                                            // field pointer
+    emitter.instruction("mov x4, x2");                                            // field length
+    emitter.label("__rt_fputcsv_field_ready");
 
     // -- check if field needs quoting (contains sep, enc, esc, or whitespace) --
     emitter.instruction("stp x3, x4, [sp, #80]");                                 // save field ptr and len (overlapping frame top is fine; we saved fp/lr at #80 but this is scratch above fp)
@@ -247,6 +296,10 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
 
     // -- advance to next element --
     emitter.label("__rt_fputcsv_next");
+    emitter.instruction("ldr x0, [sp, #168]");                                        // the cast result this field owned, if any
+    emitter.instruction("cbz x0, __rt_fputcsv_next_advance");                          // string slots and borrowed scratch own nothing
+    emitter.instruction("bl __rt_heap_free");                                          // release the persisted cast result now its bytes are written
+    emitter.label("__rt_fputcsv_next_advance");
     emitter.instruction("ldr x9, [sp, #24]");                                         // reload current index
     emitter.instruction("add x9, x9, #1");                                             // increment index
     emitter.instruction("str x9, [sp, #24]");                                         // save updated index
@@ -280,11 +333,15 @@ fn emit_fputcsv_aarch64(emitter: &mut Emitter) {
 
     // -- return total bytes written --
     emitter.label("__rt_fputcsv_ret");
+    // -- reclaim the row's cast scratch before returning --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "x9", "_concat_off");
+    emitter.instruction("ldr x10, [sp, #176]");                                       // the caller's concat write offset
+    emitter.instruction("str x10, [x9]");                                             // hand the whole row's scratch back
     emitter.instruction("ldr x0, [sp, #16]");                                         // return total bytes written
 
     // -- restore frame and return --
     emitter.instruction("ldp x29, x30, [sp, #112]");                             // restore frame pointer and return address
-    emitter.instruction("add sp, sp, #144");                                    // deallocate stack frame
+    emitter.instruction("add sp, sp, #192");                                    // deallocate stack frame
     emitter.instruction("ret");                                                 // return to caller
 
     // -- literal data for newline --
@@ -302,12 +359,14 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.comment("--- runtime: fputcsv ---");
     emitter.label_global("__rt_fputcsv");
 
-    // -- prologue: 128-byte frame with rbp --
-    //    The extra 16 bytes carry the `escaped` flag at [rbp - 120] that the
-    //    enclosure-doubling loop needs; every other offset is unchanged.
+    // -- prologue: 176-byte frame with rbp --
+    //    [rbp - 120] carries the `escaped` flag the enclosure-doubling loop needs; the last 48
+    //    bytes carry the non-string element machinery (element value_type tag, a 24-byte Mixed
+    //    cell built in place, the owned cast result, the caller's `_concat_off`). Every other
+    //    offset is unchanged.
     emitter.instruction("push rbp");                                            // preserve the caller frame pointer
     emitter.instruction("mov rbp, rsp");                                        // establish a stable frame base
-    emitter.instruction("sub rsp, 128");                                         // reserve aligned stack space for writer state
+    emitter.instruction("sub rsp, 176");                                         // reserve aligned stack space for writer state
 
     // -- save inputs --
     emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                         // preserve the destination file descriptor
@@ -327,6 +386,21 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.instruction("shr rdx, 8");                                          // shift right 8 more for esc
     emitter.instruction("movzx ecx, dl");                                       // esc = (csv_opts >> 16) & 0xFF
     emitter.instruction("mov QWORD PTR [rbp - 56], rcx");                         // save esc
+
+    // -- unpack the element value_type the lowering stamped into csv_opts bits 24..27 --
+    //    PHP casts every field to string, so the element layout — not a static string-array
+    //    requirement — is what this helper needs to know.
+    emitter.instruction("shr rdx, 8");                                          // shift the element value_type tag down
+    emitter.instruction("and rdx, 0xf");                                        // isolate the 4-bit element value_type tag
+    emitter.instruction("mov QWORD PTR [rbp - 128], rdx");                       // save the element value_type tag
+
+    // -- reserve the caller's concat cursor so a row's casts cannot outgrow the shared buffer --
+    //    `__rt_itoa` / `__rt_ftoa` format into `_concat_buf` at `_concat_off` and advance it.
+    //    Restoring the entry value on return reclaims the whole row's scratch, which keeps a
+    //    long `foreach` writing numeric rows from walking off the 64 KiB arena.
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    emitter.instruction("mov r11, QWORD PTR [r10]");                             // load the caller's concat write offset
+    emitter.instruction("mov QWORD PTR [rbp - 168], r11");                       // save it for the epilogue to restore
 
     // -- apply defaults: sep==0 -> 0x2C, enc==0 -> 0x22 --
     emitter.instruction("cmp QWORD PTR [rbp - 40], 0");                           // sep == 0?
@@ -361,11 +435,41 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
     emitter.label("__rt_fputcsv_x_field");
     emitter.instruction("mov r10, QWORD PTR [rbp - 32]");                         // reload the current field index
     emitter.instruction("mov r11, QWORD PTR [rbp - 16]");                         // reload the source string-array pointer
+    emitter.instruction("mov QWORD PTR [rbp - 160], 0");                          // clear the owned cast slot; borrowed layouts release nothing
+    emitter.instruction("mov rdx, QWORD PTR [rbp - 128]");                        // reload the element value_type tag
+    emitter.instruction("cmp rdx, 1");                                           // is this a string array?
+    emitter.instruction("jne __rt_fputcsv_x_field_nonstr");                       // only value_type 1 stores 16-byte (ptr, len) slots
     emitter.instruction("mov rcx, r10");                                         // copy the field index before scaling
     emitter.instruction("shl rcx, 4");                                           // convert the field index into the byte offset
     emitter.instruction("lea rcx, [r11 + rcx + 24]");                            // compute the current string-slot address
     emitter.instruction("mov r8, QWORD PTR [rcx]");                              // load the current field string pointer
     emitter.instruction("mov r9, QWORD PTR [rcx + 8]");                           // load the current field string length
+    emitter.instruction("jmp __rt_fputcsv_x_field_ready");                        // the payload is already a string
+
+    // -- every other layout stores 8-byte slots and must be cast the way PHP casts a field --
+    emitter.label("__rt_fputcsv_x_field_nonstr");
+    emitter.instruction("mov rcx, r10");                                         // copy the field index before scaling
+    emitter.instruction("shl rcx, 3");                                           // convert the field index into the byte offset
+    emitter.instruction("lea rcx, [r11 + rcx + 24]");                            // compute the current 8-byte slot address
+    emitter.instruction("mov rdi, QWORD PTR [rcx]");                             // load the raw element payload
+    emitter.instruction("cmp rdx, 7");                                           // are elements boxed Mixed cells?
+    emitter.instruction("je __rt_fputcsv_x_field_cast");                          // a boxed slot already holds the cell pointer
+    // A scalar array stores bare payloads. Wrapping one in a frame-local Mixed cell lets the
+    // single `__rt_mixed_cast_string` formatter serve int, float, bool and null alike, and the
+    // array's value_type doubles as the cell tag because both use the same numbering.
+    emitter.instruction("mov QWORD PTR [rbp - 136], rdx");                        // cell tag = the array's element value_type
+    emitter.instruction("mov QWORD PTR [rbp - 144], rdi");                        // cell payload low word
+    emitter.instruction("mov QWORD PTR [rbp - 152], 0");                          // cell payload high word
+    emitter.instruction("lea rdi, [rbp - 136]");                                  // cast the frame-local cell
+    emitter.label("__rt_fputcsv_x_field_cast");
+    emitter.instruction("call __rt_mixed_cast_string");                           // rax = payload pointer, rdx = payload length
+    // Only the string arm allocates (through `__rt_str_persist`); int/float/bool render into the
+    // shared concat scratch and null returns a null pointer. `__rt_heap_free` ignores all of
+    // those by contract, so recording the result unconditionally can neither leak nor wild-free.
+    emitter.instruction("mov QWORD PTR [rbp - 160], rax");                        // record the cast result as this row's owned temporary
+    emitter.instruction("mov r8, rax");                                          // field pointer
+    emitter.instruction("mov r9, rdx");                                          // field length
+    emitter.label("__rt_fputcsv_x_field_ready");
     emitter.instruction("mov QWORD PTR [rbp - 88], r8");                         // preserve the current field pointer
     emitter.instruction("mov QWORD PTR [rbp - 96], r9");                         // preserve the current field length
     emitter.instruction("mov QWORD PTR [rbp - 104], 0");                         // needs_quote starts false
@@ -479,6 +583,11 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
 
     // -- advance to next element --
     emitter.label("__rt_fputcsv_x_next");
+    emitter.instruction("mov rax, QWORD PTR [rbp - 160]");                     // the cast result this field owned, if any
+    emitter.instruction("test rax, rax");                                      // string slots and borrowed scratch own nothing
+    emitter.instruction("jz __rt_fputcsv_x_next_advance");                     // skip the release for a borrowed payload
+    emitter.instruction("call __rt_heap_free");                                // release the persisted cast result now its bytes are written
+    emitter.label("__rt_fputcsv_x_next_advance");
     emitter.instruction("add QWORD PTR [rbp - 32], 1");                        // advance the field index
     emitter.instruction("jmp __rt_fputcsv_x_loop");                           // continue emitting the remaining fields
 
@@ -507,6 +616,10 @@ fn emit_fputcsv_linux_x86_64(emitter: &mut Emitter) {
 
     // -- return total bytes written --
     emitter.label("__rt_fputcsv_x_ret");
+    // -- reclaim the row's cast scratch before returning --
+    crate::codegen_support::abi::emit_symbol_address(emitter, "r10", "_concat_off");
+    emitter.instruction("mov r11, QWORD PTR [rbp - 168]");                     // the caller's concat write offset
+    emitter.instruction("mov QWORD PTR [r10], r11");                           // hand the whole row's scratch back
     emitter.instruction("mov rax, QWORD PTR [rbp - 24]");                      // return the total written byte count
     emitter.instruction("leave");                                             // restore rbp + rsp
     emitter.instruction("ret");                                               // return to caller
