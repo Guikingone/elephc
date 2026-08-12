@@ -274,6 +274,20 @@ pub(super) fn emit_error_value(ctx: &mut FunctionContext<'_>, message: ValueId) 
 /// persisted pointer/length pair. The uncaught diagnostic names `ValueError` just like the static
 /// path, so an unhandled oversized range still reports PHP's error class rather than the
 /// unwinder's generic fallback.
+/// Throws a catchable PHP `TypeError` whose message already sits in the string-result registers.
+///
+/// The static `emit_type_error()` covers the guards whose wording is fixed. `count()` is the one
+/// that cannot use it: php names the offending type in the message — and with the VALUE's own
+/// spelling, `false` rather than `bool` — so the text is picked at run time from a table and
+/// handed over as a pointer/length pair. Emitting the seven wordings as static throws instead
+/// would inline seven throwable constructions at every `count()` call site.
+pub(super) fn emit_type_error_from_string_result(ctx: &mut FunctionContext<'_>) {
+    let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
+    abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);
+    emit_uncaught_dynamic_throwable_fatal_if_no_handler(ctx, "TypeError");
+    emit_dynamic_throwable_object(ctx, "_spl_type_error_class_id");
+}
+
 pub(super) fn emit_value_error_from_string_result(ctx: &mut FunctionContext<'_>) {
     let (message_ptr_reg, message_len_reg) = abi::string_result_regs(ctx.emitter);
     abi::emit_push_reg_pair(ctx.emitter, message_ptr_reg, message_len_reg);

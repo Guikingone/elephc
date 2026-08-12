@@ -94,6 +94,22 @@ pub(crate) const SOCKET_FAILED_REASON_UNKNOWN: &str = "Unknown error";
 /// Tail of the socket warning, after the reason.
 pub(crate) const SOCKET_FAILED_REASON_CLOSE: &str = ")\n";
 
+/// The `count()` TypeError texts, indexed the way `__rt_count_reject_index` answers.
+///
+/// PHP names the type with the VALUE's own spelling — a boolean reports `true` or `false`, not
+/// `bool` — so these are read off `php -n` 8.5.6 rather than derived from the tag names. A
+/// non-`Countable` object is absent on purpose: PHP names the class there, which needs a lookup
+/// and a composed string.
+pub(crate) const COUNT_TYPE_ERROR_MESSAGES: [&str; 7] = [
+    "count(): Argument #1 ($value) must be of type Countable|array, int given",
+    "count(): Argument #1 ($value) must be of type Countable|array, string given",
+    "count(): Argument #1 ($value) must be of type Countable|array, float given",
+    "count(): Argument #1 ($value) must be of type Countable|array, true given",
+    "count(): Argument #1 ($value) must be of type Countable|array, false given",
+    "count(): Argument #1 ($value) must be of type Countable|array, null given",
+    "count(): Argument #1 ($value) must be of type Countable|array, resource given",
+];
+
 /// A lone newline, for a diagnostic written out in fragments.
 pub(crate) const DIAG_NEWLINE: &str = "\n";
 

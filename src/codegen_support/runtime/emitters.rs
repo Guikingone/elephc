@@ -41,6 +41,8 @@ pub(crate) fn emit_runtime(emitter: &mut Emitter, features: RuntimeFeatures) {
     // accessors. Must precede the io helpers below, which resolve handles through it.
     resources::emit_resource_runtime(emitter);
     arrays::emit_array_set_resource(emitter);
+    arrays::emit_count_reject_index(emitter);
+    arrays::emit_count_type_message(emitter);
     io::emit_builtin_filter_id(emitter);
     io::emit_builtin_wrapper_index(emitter);
     io::emit_stream_wrapper_restore_diag(emitter);

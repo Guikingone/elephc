@@ -170,6 +170,10 @@ pub(crate) fn emit_runtime_data_fixed(heap_size: usize, target: Target) -> Strin
     ] {
         out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
     }
+    // The count() TypeError texts, published under the labels `__rt_count_type_message` indexes.
+    for (label, message) in crate::codegen_support::runtime::arrays::count_type_error_symbols() {
+        out.push_str(&format!(".globl {label}\n{label}:\n    .ascii {message:?}\n"));
+    }
     // serialize()/unserialize() reference tracking (PHP r:/R: back-references).
     // serialize: a global value counter (every serialized value consumes the next
     // index, keys excluded) plus a pointer->index map of already-serialized objects

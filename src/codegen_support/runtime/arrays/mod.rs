@@ -162,6 +162,7 @@ mod mixed_cast_int;
 mod mixed_intval_base;
 mod mixed_cast_string;
 mod mixed_free_deep;
+mod count_reject;
 mod mixed_count;
 mod mixed_is_empty;
 mod mixed_numeric_binops;
@@ -478,6 +479,8 @@ pub use mixed_intval_base::emit_mixed_intval_base;
 /// Emit Mixed-to-integer cast helper.
 pub use mixed_cast_string::emit_mixed_cast_string;
 /// Emit Mixed-to-string cast helper.
+pub use count_reject::{emit_count_reject_index, emit_count_type_message};
+pub(crate) use count_reject::count_type_error_symbols;
 pub use mixed_count::emit_mixed_count;
 /// Emit Mixed count helper.
 pub use mixed_free_deep::emit_mixed_free_deep;
