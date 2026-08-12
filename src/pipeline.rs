@@ -154,22 +154,27 @@ pub(crate) fn compile(config: CliConfig) {
     // written in elephc-PHP) only when the program references PDO, so non-PDO
     // binaries never declare the elephc_pdo externs or link the bridge.
     // Runs after include resolution so PDO usage inside includes is detected.
+    // `pdo_used` is decided BEFORE injection and recorded as a PHP surface:
+    // extension reporting is surface-based because the `elephc_pdo` archive
+    // backs more than one PHP surface (PDO and mysqli).
     crate::progress::phase("pdo-prelude");
     let phase_started = Instant::now();
+    let pdo_force = with_crates.contains("pdo");
+    let pdo_used = pdo_force || pdo_prelude::program_uses_pdo(&ast);
     let ast = if php_version == crate::web_prelude::PhpVersion::default() {
-        pdo_prelude::inject_if_used(
-            ast,
-            with_crates.contains("pdo"),
-            &mut prelude_inventory,
-        )
+        pdo_prelude::inject_if_used(ast, pdo_force, &mut prelude_inventory)
     } else {
         pdo_prelude::inject_if_used_for_version(
             ast,
-            with_crates.contains("pdo"),
+            pdo_force,
             php_version,
             &mut prelude_inventory,
         )
     };
+    let mut linked_php_surfaces: Vec<String> = Vec::new();
+    if pdo_used {
+        linked_php_surfaces.push("PDO".to_string());
+    }
     timings.record_since("pdo-prelude", phase_started);
 
     // Inject the timezone-introspection prelude (extern block + array marshalling,
@@ -550,6 +555,7 @@ pub(crate) fn compile(config: CliConfig) {
     backend::emit_and_link(backend::BackendInputs {
         filename,
         with_crates: &with_crates,
+        linked_php_surfaces: &linked_php_surfaces,
         ir_module,
         web,
         web_isolation,

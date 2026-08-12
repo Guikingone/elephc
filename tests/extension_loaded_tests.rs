@@ -157,6 +157,24 @@ fn with_bcmath_reports_extension_loaded() {
     assert_eq!(run_binary(&bin), "yes");
 }
 
+/// Verifies a program that auto-detects PDO usage (no `--with-pdo`) reports the PDO
+/// extension from the injected PHP surface — and does NOT report mysqli, even though
+/// both surfaces link the same `elephc_pdo` archive. Guards the surface-based
+/// reporting split: the linked archive alone must not imply any PHP extension.
+#[test]
+fn pdo_usage_still_reports_pdo_without_mysqli() {
+    let dir = make_test_dir("ext_pdo_not_mysqli");
+    let src = "<?php new PDO('sqlite::memory:'); \
+        var_dump(extension_loaded('PDO')); \
+        var_dump(extension_loaded('mysqli'));";
+    let bin = compile_with_flags(&dir, src, "app", &[]);
+    let out = run_binary(&bin);
+    assert_eq!(
+        out, "bool(true)\nbool(false)\n",
+        "PDO usage: PDO loaded from the injected surface, mysqli not loaded"
+    );
+}
+
 /// Verifies extension-name matching is case-insensitive (PHP semantics): `--with-tls`
 /// makes `extension_loaded('openssl')` and `extension_loaded('OpenSSL')` both report true.
 #[test]

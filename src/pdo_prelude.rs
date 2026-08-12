@@ -57,6 +57,13 @@ fn parsed_bridge_externs() -> Program {
         .clone()
 }
 
+/// Returns whether the program references the PDO surface. Exposed so the
+/// pipeline can record the "PDO" PHP surface for `extension_loaded()` reporting
+/// using the same detection that decides prelude injection.
+pub fn program_uses_pdo(program: &[Stmt]) -> bool {
+    detect::program_uses_pdo(program)
+}
+
 /// Prepends every shared `extern "elephc_pdo"` declaration that `program` does not
 /// ALREADY declare, so both PHP surfaces can request the bridge symbols without
 /// duplicating any. A per-name MERGE (rather than an all-or-nothing skip) is
