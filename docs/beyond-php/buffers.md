@@ -11,7 +11,11 @@ sidebar:
 
 ## Why not PHP arrays?
 
-PHP arrays are hash tables. Every access goes through hashing, probing, and entry comparison. A `buffer<T>` access instead resolves an opaque handle, checks the handle generation and bounds, then performs direct address arithmetic over a contiguous payload: `payload + index * stride`.
+PHP arrays are hash tables. Every access goes through hashing, probing, and entry
+comparison. A `buffer<T>` access instead resolves an opaque handle, checks the handle
+generation and bounds, then performs direct address arithmetic over a contiguous
+payload: `payload + index * stride`. Repeated immutable integer index arithmetic can
+be shared or moved out of loops by the EIR optimizer.
 
 ## Creating buffers
 

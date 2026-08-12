@@ -297,7 +297,7 @@ pub(super) fn lower_int_shift(
 }
 
 /// Loads an integer arithmetic operand, coercing PHP null to integer zero.
-fn load_integer_operand(
+pub(super) fn load_integer_operand(
     ctx: &mut FunctionContext<'_>,
     value: ValueId,
     reg: &str,
