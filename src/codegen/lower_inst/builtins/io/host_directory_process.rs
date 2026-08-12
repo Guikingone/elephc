@@ -8,6 +8,7 @@
 //! - Preserves target-aware ABI handling, runtime calls, and result ownership.
 
 use super::*;
+use crate::codegen_support::runtime::data::{DISK_FREE_SPACE_WARNING, DISK_TOTAL_SPACE_WARNING};
 use crate::codegen_support::runtime::io::{SOCKET_WARNING_FSOCKOPEN};
 
 /// Lowers `disk_free_space(path)` through the shared disk-space runtime helper.
@@ -46,11 +47,50 @@ pub(super) fn lower_disk_space(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_disk_space");
+    emit_disk_space_failure_warning(ctx, name)?;
     // php answers false for a path it cannot stat. float(0) is a legitimate reading for a
     // full filesystem, so `disk_free_space($d) === false` never fired and arithmetic
     // silently used zero.
     box_float_or_false_result(ctx, name);
     store_if_result(ctx, inst)
+}
+
+/// Emits the warning PHP prints for a path `statfs` could not read.
+///
+/// PHP names the function and the reason and nothing else — `disk_free_space(): No such file or
+/// directory` — so this cannot go through the failed-open composer, which is built around a path.
+/// The helper reports the reason in `x1`/`rdx` beside its flag; the warning call clobbers both the
+/// flag and the payload register, so the failing branch re-establishes them for the boxing.
+fn emit_disk_space_failure_warning(ctx: &mut FunctionContext<'_>, name: &str) -> Result<()> {
+    let done = ctx.next_label("disk_space_warning_done");
+    let (symbol, len) = if name == "disk_total_space" {
+        ("_disk_total_space_warn", DISK_TOTAL_SPACE_WARNING.len())
+    } else {
+        ("_disk_free_space_warn", DISK_FREE_SPACE_WARNING.len())
+    };
+    match ctx.emitter.target.arch {
+        Arch::AArch64 => {
+            ctx.emitter.instruction(&format!("cbnz x0, {done}"));               // a reading warns about nothing
+            ctx.emitter.instruction("mov x2, x1");                              // the reason, before the prefix takes x1
+            abi::emit_symbol_address(ctx.emitter, "x0", symbol);
+            ctx.emitter.instruction(&format!("mov x1, #{len}"));
+            abi::emit_call_label(ctx.emitter, "__rt_errno_warning");
+            ctx.emitter.instruction("mov x0, #0");                              // restore the failure flag the boxing reads
+            ctx.emitter.instruction("fmov d0, xzr");                            // and the payload it ignores
+            ctx.emitter.label(&done);
+        }
+        Arch::X86_64 => {
+            ctx.emitter.instruction("test rax, rax");                           // a reading warns about nothing
+            ctx.emitter.instruction(&format!("jnz {done}"));
+            abi::emit_symbol_address(ctx.emitter, "rdi", symbol);               // the reason already sits in rdx
+            ctx.emitter.instruction(&format!("mov rsi, {len}"));
+            abi::emit_call_label(ctx.emitter, "__rt_errno_warning");
+            ctx.emitter.instruction("xor eax, eax");                            // restore the failure flag the boxing reads
+            ctx.emitter.instruction("xorps xmm0, xmm0");                        // and the payload it ignores
+            ctx.emitter.label(&done);
+        }
+    }
+    Ok(())
 }
 
 /// Lowers `gethostname()` through the shared runtime helper.

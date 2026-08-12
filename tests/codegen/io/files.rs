@@ -47,6 +47,48 @@ echo var_export($f <= disk_total_space("/"), true);
     assert_eq!(out, "false|false|true,true,true");
 }
 
+/// A disk-space failure names itself and the reason, as php does.
+///
+/// Answering `false` was only half of it: php also prints `disk_free_space(): No such file or
+/// directory`, so a script that watched the warning to notice a bad path saw a silent `false`.
+/// php names NEITHER the path here nor a fixed middle, which is why this does not go through the
+/// failed-open composer.
+///
+/// The `@` half is the control. A diagnostic that ignores suppression is as wrong as a missing
+/// one, and it is the half that a hand-written warning path gets wrong.
+#[test]
+fn test_disk_space_failure_names_itself_and_the_reason() {
+    let out = compile_and_run_capture(
+        r#"<?php
+echo var_export(disk_free_space("/no/such/dir"), true), "|";
+echo var_export(disk_total_space("/no/such/dir"), true), "|";
+echo var_export(@disk_free_space("/no/such/dir"), true), "|";
+echo var_export(is_float(disk_free_space("/")), true);
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "false|false|false|true");
+    assert!(
+        out.stderr
+            .contains("Warning: disk_free_space(): No such file or directory\n"),
+        "expected php's wording, got stderr={}",
+        out.stderr
+    );
+    assert!(
+        out.stderr
+            .contains("Warning: disk_total_space(): No such file or directory\n"),
+        "expected the total-space wording too, got stderr={}",
+        out.stderr
+    );
+    // Three calls fail, one of them suppressed: exactly two lines may be printed.
+    assert_eq!(
+        out.stderr.matches("No such file or directory").count(),
+        2,
+        "@ must suppress the third, got stderr={}",
+        out.stderr
+    );
+}
+
 /// Verifies `sys_get_temp_dir()` derives its answer from `TMPDIR`, as php does.
 ///
 /// It used to answer a hardcoded `/tmp`. On macOS php hands out a private per-user directory,

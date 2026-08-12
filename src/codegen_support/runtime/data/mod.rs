@@ -94,6 +94,18 @@ pub(crate) const SOCKET_FAILED_REASON_UNKNOWN: &str = "Unknown error";
 /// Tail of the socket warning, after the reason.
 pub(crate) const SOCKET_FAILED_REASON_CLOSE: &str = ")\n";
 
+/// A lone newline, for a diagnostic written out in fragments.
+pub(crate) const DIAG_NEWLINE: &str = "\n";
+
+/// Head of the warning `disk_free_space()` prints for a path it cannot stat.
+///
+/// PHP names the function and the reason and nothing else here — no path, unlike the failed-open
+/// warning — so the runtime only has to append `strerror` and a newline.
+pub(crate) const DISK_FREE_SPACE_WARNING: &str = "Warning: disk_free_space(): ";
+
+/// The `disk_total_space()` form of [`DISK_FREE_SPACE_WARNING`].
+pub(crate) const DISK_TOTAL_SPACE_WARNING: &str = "Warning: disk_total_space(): ";
+
 pub(crate) const OB_NTC_NO_END_FLUSH: &str =
     "Notice: ob_end_flush(): Failed to delete and flush buffer. No buffer to delete or flush\n";
 /// ob_get_flush() no-buffer notice line.
