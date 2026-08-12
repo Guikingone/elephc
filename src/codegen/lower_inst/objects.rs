@@ -129,6 +129,7 @@ mod interface_layout;
 mod property_resolution;
 mod property_compatibility;
 mod property_loads;
+mod property_fetch_for_write;
 mod property_stores;
 mod property_store_values;
 mod typed_property_guards;
@@ -195,6 +196,7 @@ pub(super) use instanceof_entry::{lower_instanceof, lower_instanceof_dynamic};
 pub(super) use known_property_reads::{
     lower_load_prop_ref_cell, lower_prop_get, lower_prop_initialized,
 };
+pub(super) use property_fetch_for_write::lower_prop_get_for_write;
 pub(super) use property_resolution::{
     emit_boxed_null, emit_nullable_receiver_object_payload, nullable_object_receiver_class,
     raw_value_php_type,
