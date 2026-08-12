@@ -103,6 +103,14 @@ pub(super) fn lower_fseek_x86_64(
     ctx.emitter.instruction(&format!("jmp {}", after_dispatch_label));          // skip wrapper stream_seek after the native path
     ctx.emitter.label(&wrapper_label);
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
+    // Mirrors the AArch64 reconciliation above, which this half was missing entirely: without it
+    // `ftell()` keeps reporting where the reads had left the stream, so `fseek($h, 3)` followed by
+    // `ftell($h)` answered 7 on x86_64 and 3 on aarch64 for the same program.
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 24], rax");                   // hold the seek result
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    ctx.emitter.instruction("mov rsi, QWORD PTR [rsp + 8]");                    // the offset it was moved to
+    abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos_set");
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 24]");                   // restore the seek result
     ctx.emitter.label(&after_dispatch_label);
     ctx.emitter.instruction("add rsp, 32");                                     // release seek scratch storage
 }
@@ -146,6 +154,14 @@ pub(super) fn lower_rewind_aarch64(
     ctx.emitter.instruction("mov x1, #0");                                      // pass offset 0 to wrapper stream_seek
     ctx.emitter.instruction("mov x2, #0");                                      // pass SEEK_SET to wrapper stream_seek
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
+    // `rewind()` is `fseek($h, 0)` and needs the same reconciliation, which NEITHER architecture
+    // had: the wrapper's own position went back to zero, elephc's did not, so `ftell()` after a
+    // rewind still answered where the reads had stopped.
+    ctx.emitter.instruction("str x0, [sp, #8]");                                // hold the wrapper seek result
+    ctx.emitter.instruction("ldr x0, [sp, #0]");                                // the opaque stream handle
+    ctx.emitter.instruction("mov x1, #0");                                      // a rewind always lands at offset zero
+    abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos_set");
+    ctx.emitter.instruction("ldr x0, [sp, #8]");                                // restore the wrapper seek result
     ctx.emitter.instruction("cmp x0, #0");                                      // wrapper fseek returns zero on success
     ctx.emitter.instruction("cset x0, eq");                                     // rewind returns true only when wrapper seek succeeded
     ctx.emitter.label(&after_dispatch_label);
@@ -190,6 +206,12 @@ pub(super) fn lower_rewind_x86_64(
     ctx.emitter.instruction("xor esi, esi");                                    // pass offset 0 to wrapper stream_seek
     ctx.emitter.instruction("xor edx, edx");                                    // pass SEEK_SET to wrapper stream_seek
     abi::emit_call_label(ctx.emitter, "__rt_user_wrapper_fseek");
+    // See the AArch64 counterpart: `rewind()` needs the same position reconciliation `fseek()` does.
+    ctx.emitter.instruction("mov QWORD PTR [rsp + 8], rax");                    // hold the wrapper seek result
+    ctx.emitter.instruction("mov rdi, QWORD PTR [rsp + 0]");                    // the opaque stream handle
+    ctx.emitter.instruction("xor esi, esi");                                    // a rewind always lands at offset zero
+    abi::emit_call_label(ctx.emitter, "__rt_stream_wrapper_pos_set");
+    ctx.emitter.instruction("mov rax, QWORD PTR [rsp + 8]");                    // restore the wrapper seek result
     ctx.emitter.instruction("cmp rax, 0");                                      // wrapper fseek returns zero on success
     ctx.emitter.instruction("sete al");                                         // mark wrapper seek success as true
     ctx.emitter.instruction("movzx eax, al");                                   // widen rewind bool result

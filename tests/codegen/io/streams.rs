@@ -8364,6 +8364,48 @@ fclose($h);
     assert_eq!(out, "0|wrapped|7|3|pped|7");
 }
 
+/// `rewind()` reconciles the wrapper position the same way `fseek()` does.
+///
+/// `rewind($h)` IS `fseek($h, 0)`, and it needed the same reconciliation — which NEITHER
+/// architecture had. The wrapper's own `$this->pos` went back to zero, so the read after the
+/// rewind returned the right bytes and only the number `ftell()` reported was wrong: `php -n`
+/// answers `wrapped|7|0|wrap|4`, elephc answered `wrapped|7|7|wrap|11`. Reading the correct
+/// bytes while reporting the wrong offset is what let this sit behind the `fseek()` test.
+///
+/// The read after the rewind is part of the assertion on purpose: a fix that reset the tracked
+/// position without leaving the stream usable would satisfy the `0` and fail here.
+#[test]
+fn test_rewind_resets_the_position_ftell_reports_for_a_wrapper() {
+    let out = compile_and_run(
+        r#"<?php
+class Rew {
+    public $pos = 0;
+    public static string $data = "wrapped payload";
+    public function stream_open($p, $m, $o, &$op) { $this->pos = 0; return true; }
+    public function stream_read($count) {
+        $r = substr(self::$data, $this->pos, $count);
+        $this->pos += strlen($r);
+        return $r;
+    }
+    public function stream_eof() { return $this->pos >= strlen(self::$data); }
+    public function stream_seek($offset, $whence) { $this->pos = $offset; return true; }
+    public function stream_tell() { return $this->pos; }
+    public function stream_close() {}
+}
+stream_wrapper_register("memrw", "Rew");
+$h = fopen("memrw://x", "r");
+echo fread($h, 7), "|";
+echo ftell($h), "|";
+rewind($h);
+echo ftell($h), "|";
+echo fread($h, 4), "|";
+echo ftell($h);
+fclose($h);
+"#,
+    );
+    assert_eq!(out, "wrapped|7|0|wrap|4");
+}
+
 /// `file_get_contents()` reads through a registered wrapper, as `fopen()` already did.
 ///
 /// php-src has no separate reader here — `file_get_contents` is `php_stream_open_wrapper`
