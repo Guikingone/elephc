@@ -721,6 +721,22 @@ fn test_link_plan(
     for framework in extra_frameworks {
         plan.push(LinkItem::Framework(framework.clone()));
     }
+    // The eval bridge's archive already CONTAINS elephc-crypto's objects, so naming both here
+    // presents every `elephc_crypto_*` symbol twice and the link fails with four duplicate
+    // symbols. `src/link_planning.rs` drops it for the same reason; this plan is a hand-rolled
+    // mirror of that one, so the rule has to exist in both places until they are unified — a
+    // program that needs eval() and hashing at once is the only shape that reaches it.
+    if named.contains("elephc_magician") {
+        let kept: Vec<LinkItem> = plan
+            .items()
+            .iter()
+            .filter(|item| {
+                !matches!(item, LinkItem::NamedLibrary { name, .. } if name == "elephc_crypto")
+            })
+            .cloned()
+            .collect();
+        return LinkPlan::from_items(kept);
+    }
     plan
 }
 
