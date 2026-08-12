@@ -663,6 +663,7 @@ dependencies = [
  "bzip2-rs",
  "console",
  "elephc-builtin-contract",
+ "elephc-bcmath",
  "elephc-crypto",
  "elephc-image",
  "elephc-magician",
@@ -689,6 +690,10 @@ dependencies = [
 
 [[package]]
 name = "elephc-builtin-contract"
+version = "0.1.0"
+
+[[package]]
+name = "elephc-bcmath"
 version = "0.1.0"
 
 [[package]]
