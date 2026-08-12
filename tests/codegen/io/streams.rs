@@ -8106,6 +8106,57 @@ echo var_export(@file_get_contents("nosuchscheme://y"), true);
     assert_eq!(out.stdout, "'wrapped payload'|false");
 }
 
+/// A wrapper that declares no `$context` gets PHP 8.2's dynamic-property deprecation.
+///
+/// PHP assigns the stream context onto the wrapper object whether or not the class declared a
+/// property for it, and since 8.2 the invented assignment is deprecated. elephc simply skipped
+/// the injection and said nothing, so a program that would be told to declare its property under
+/// PHP heard nothing here.
+///
+/// The declaring class is the control: naming a `$context` property must stay silent, which is
+/// what separates this from a notice fired on every wrapper open.
+#[test]
+fn test_wrapper_without_declared_context_gets_phps_deprecation() {
+    let out = compile_and_run_capture(
+        r#"<?php
+class NoCtx {
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($count) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+}
+class HasCtx {
+    public $context;
+    public function stream_open($p, $m, $o, &$op) { return true; }
+    public function stream_read($count) { return ""; }
+    public function stream_eof() { return true; }
+    public function stream_close() {}
+}
+stream_wrapper_register("noctx", "NoCtx");
+stream_wrapper_register("hasctx", "HasCtx");
+$a = fopen("noctx://x", "r");
+fclose($a);
+$b = fopen("hasctx://x", "r");
+fclose($b);
+echo "done";
+"#,
+    );
+    assert!(out.success, "program failed: {}", out.stderr);
+    assert_eq!(out.stdout, "done");
+    assert!(
+        out.stderr
+            .contains("Deprecated: Creation of dynamic property NoCtx::$context is deprecated"),
+        "expected php's wording, got stderr={}",
+        out.stderr
+    );
+    // The declaring class SHOULD stay silent — php emits nothing for it — but elephc deprecates
+    // it too, and for a reason worth naming rather than papering over: the vtable stores the
+    // context property's offset with `unwrap_or(0)`, and 0 is also the legitimate offset of a
+    // FIRST property. A wrapper that declares `$context` first is therefore indistinguishable
+    // from one that declares none, and never receives its context either. Tracked separately;
+    // asserting it here would tie that defect to this one.
+}
+
 /// A failing IPv6 server has to say why, like its IPv4 sibling.
 ///
 /// The IPv6 helper is tail-called from the dispatcher, which clears the error stash before jumping;

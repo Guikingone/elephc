@@ -110,6 +110,16 @@ pub(crate) const COUNT_TYPE_ERROR_MESSAGES: [&str; 7] = [
     "count(): Argument #1 ($value) must be of type Countable|array, resource given",
 ];
 
+/// Head of PHP 8.2's deprecation for a property it has to invent.
+///
+/// A stream wrapper that declares no `$context` still receives one: PHP assigns it and, since
+/// 8.2, deprecates the assignment. The class name sits between the two fragments.
+pub(crate) const DYNAMIC_PROP_DEPRECATED_HEAD: &str =
+    "Deprecated: Creation of dynamic property ";
+
+/// Tail of [`DYNAMIC_PROP_DEPRECATED_HEAD`], after the class name.
+pub(crate) const DYNAMIC_PROP_DEPRECATED_TAIL: &str = "::$context is deprecated\n";
+
 /// A lone newline, for a diagnostic written out in fragments.
 pub(crate) const DIAG_NEWLINE: &str = "\n";
 

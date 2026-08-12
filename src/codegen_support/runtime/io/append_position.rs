@@ -18,7 +18,10 @@
 use crate::codegen_support::runtime::resources::layout::{
     STREAM_APPEND_SKIP_OFFSET, STREAM_WRAPPER_POS_OFFSET,
 };
-use crate::codegen_support::{emit::Emitter, platform::Arch};
+use crate::codegen_support::runtime::data::{
+    DYNAMIC_PROP_DEPRECATED_HEAD, DYNAMIC_PROP_DEPRECATED_TAIL,
+};
+use crate::codegen_support::{abi, emit::Emitter, platform::Arch};
 
 /// Emits `__rt_stream_append_skip(handle)`, answering the bytes `O_APPEND` has jumped over.
 ///
@@ -221,6 +224,73 @@ pub fn emit_stream_wrapper_pos_set(emitter: &mut Emitter) {
             emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
             emitter.instruction(&format!("mov QWORD PTR [rax + {STREAM_WRAPPER_POS_OFFSET}], r10"));
             emitter.label("__rt_swps_done_x86");
+            emitter.instruction("mov rsp, rbp");
+            emitter.instruction("pop rbp");
+            emitter.instruction("ret");
+        }
+    }
+}
+
+/// Emits `__rt_dynamic_context_deprecation(class_id)`, PHP 8.2's notice for an invented property.
+///
+/// A stream wrapper that declares no `$context` still receives one, and since PHP 8.2 the
+/// assignment is deprecated: `Deprecated: Creation of dynamic property Mem::$context is
+/// deprecated`. The class name comes from the shared class-id table that `var_dump` reads, so an
+/// id with no name writes nothing between the fragments rather than dangling.
+pub fn emit_dynamic_context_deprecation(emitter: &mut Emitter) {
+    emitter.blank();
+    emitter.comment("--- runtime: dynamic context property deprecation ---");
+    emitter.label_global("__rt_dynamic_context_deprecation");
+    match emitter.target.arch {
+        Arch::AArch64 => {
+            emitter.instruction("sub sp, sp, #32");
+            emitter.instruction("stp x29, x30, [sp, #16]");
+            emitter.instruction("add x29, sp, #16");
+            emitter.instruction("str x0, [sp, #0]");                            // hold the class id across the writes
+            abi::emit_symbol_address(emitter, "x1", "_dyn_prop_dep_head");
+            emitter.instruction(&format!("mov x2, #{}", DYNAMIC_PROP_DEPRECATED_HEAD.len()));
+            emitter.instruction("bl __rt_diag_warning");                        // honours the @ suppression depth
+            emitter.instruction("ldr x9, [sp, #0]");
+            abi::emit_symbol_address(emitter, "x10", "_class_name_count");
+            emitter.instruction("ldr x10, [x10]");
+            emitter.instruction("cmp x9, x10");
+            emitter.instruction("b.hs __rt_dcd_tail");                          // an unknown id names nothing
+            abi::emit_symbol_address(emitter, "x11", "_class_name_entries");
+            emitter.instruction("add x11, x11, x9, lsl #4");                    // 16-byte (ptr, len) entries
+            emitter.instruction("ldr x1, [x11]");
+            emitter.instruction("ldr x2, [x11, #8]");
+            emitter.instruction("bl __rt_diag_warning");
+            emitter.label("__rt_dcd_tail");
+            abi::emit_symbol_address(emitter, "x1", "_dyn_prop_dep_tail");
+            emitter.instruction(&format!("mov x2, #{}", DYNAMIC_PROP_DEPRECATED_TAIL.len()));
+            emitter.instruction("bl __rt_diag_warning");
+            emitter.instruction("ldp x29, x30, [sp, #16]");
+            emitter.instruction("add sp, sp, #32");
+            emitter.instruction("ret");
+        }
+        Arch::X86_64 => {
+            emitter.instruction("push rbp");
+            emitter.instruction("mov rbp, rsp");
+            emitter.instruction("sub rsp, 16");
+            emitter.instruction("mov QWORD PTR [rbp - 8], rdi");                // hold the class id across the writes
+            abi::emit_symbol_address(emitter, "rdi", "_dyn_prop_dep_head");
+            emitter.instruction(&format!("mov rsi, {}", DYNAMIC_PROP_DEPRECATED_HEAD.len()));
+            emitter.instruction("call __rt_diag_warning");
+            emitter.instruction("mov r10, QWORD PTR [rbp - 8]");
+            abi::emit_symbol_address(emitter, "r11", "_class_name_count");
+            emitter.instruction("mov r11, QWORD PTR [r11]");
+            emitter.instruction("cmp r10, r11");
+            emitter.instruction("jae __rt_dcd_tail_x86");                       // an unknown id names nothing
+            abi::emit_symbol_address(emitter, "r11", "_class_name_entries");
+            emitter.instruction("shl r10, 4");                                  // 16-byte (ptr, len) entries
+            emitter.instruction("add r11, r10");
+            emitter.instruction("mov rdi, QWORD PTR [r11]");
+            emitter.instruction("mov rsi, QWORD PTR [r11 + 8]");
+            emitter.instruction("call __rt_diag_warning");
+            emitter.label("__rt_dcd_tail_x86");
+            abi::emit_symbol_address(emitter, "rdi", "_dyn_prop_dep_tail");
+            emitter.instruction(&format!("mov rsi, {}", DYNAMIC_PROP_DEPRECATED_TAIL.len()));
+            emitter.instruction("call __rt_diag_warning");
             emitter.instruction("mov rsp, rbp");
             emitter.instruction("pop rbp");
             emitter.instruction("ret");

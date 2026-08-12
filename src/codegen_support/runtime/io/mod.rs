@@ -259,7 +259,8 @@ pub(crate) use open_failed_warning::{emit_open_failed_warning, OPEN_FAILED_MSG_C
 pub(crate) use errno_warning::emit_errno_warning;
 pub(crate) use append_position::{
     emit_stream_append_skip, emit_stream_clear_append_skip, emit_stream_wrapper_pos,
-    emit_stream_wrapper_pos_advance, emit_stream_wrapper_pos_set,
+    emit_dynamic_context_deprecation, emit_stream_wrapper_pos_advance,
+    emit_stream_wrapper_pos_set,
 };
 pub(crate) use stream_type_name::emit_stream_type_name;
 pub(crate) use stream_socket_accept::emit_stream_socket_accept;
