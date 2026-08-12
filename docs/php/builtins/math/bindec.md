@@ -2,7 +2,7 @@
 title: "bindec()"
 description: "Converts a binary string to its decimal number."
 sidebar:
-  order: 267
+  order: 281
 ---
 
 ## bindec()

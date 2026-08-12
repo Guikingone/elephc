@@ -2,7 +2,7 @@
 title: "ptr_write8()"
 description: "Writes one byte through a raw pointer."
 sidebar:
-  order: 334
+  order: 348
 ---
 
 ## ptr_write8()

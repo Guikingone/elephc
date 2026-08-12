@@ -10,13 +10,13 @@ sidebar:
 
 Baseline: **PHP 8.4.20** (CLI snapshot of 2026-08-11, 59 extensions, 2030 internal functions).
 
-Overall builtin coverage: **459 / 2030** (23%).
+Overall builtin coverage: **473 / 2030** (23%).
 
 ## Builtin coverage by PHP module
 
 | PHP module | Supported | Coverage | AOT | eval() |
 |---|---|---|---|---|
-| `bcmath` | 0 / 14 | 0% | 0 | 0 |
+| `bcmath` | 14 / 14 | 100% | 14 | 14 |
 | `bz2` | 0 / 10 | 0% | 0 | 0 |
 | `calendar`† | 0 / 18 | 0% | 0 | 0 |
 | `core` | 32 / 59 | 54% | 28 | 30 |
