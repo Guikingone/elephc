@@ -24,7 +24,6 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::{mpsc, Arc};
 
 use tokio::io::unix::AsyncFd;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::{Mutex, OwnedSemaphorePermit, Semaphore};
 
 use crate::handler_ipc::{self, HandlerRequest, ResponseFrame, ResponseStart};
@@ -336,12 +335,9 @@ impl HandlerBroker {
                     format!("could not write handler request {id}: {error}"),
                 )
             })?;
-        writer.shutdown().await.map_err(|error| {
-            io::Error::new(
-                error.kind(),
-                format!("could not finish handler request {id}: {error}"),
-            )
-        })?;
+        // The request frame is length-prefixed, so the handler never relies on EOF to
+        // delimit it. Dropping the write half still attempts SHUT_WR, but deliberately
+        // ignores ENOTCONN when a fast handler has already returned and closed its peer.
         drop(writer);
         drop(request);
         let first_frame = handler_ipc::read_response_frame(&mut reader)

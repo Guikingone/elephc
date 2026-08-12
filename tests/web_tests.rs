@@ -529,8 +529,8 @@ fn web_pool_reuses_and_recycles_handler_children() {
     let _ = server.wait();
 }
 
-/// Regression: concurrent pool traffic must surface closed IPC peers as I/O
-/// errors instead of letting SIGPIPE terminate and respawn the web worker.
+/// Regression: concurrent pool traffic must tolerate handlers that close immediately
+/// after a framed response, while still keeping SIGPIPE contained as an I/O error.
 #[test]
 fn web_pool_worker_survives_concurrent_connection_load() {
     let dir = make_test_dir("web_pool_sigpipe");
