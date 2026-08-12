@@ -15,7 +15,9 @@ builtin! {
     name: "disk_free_space",
     area: Io,
     params: [directory: Str],
-    returns: Float,
+    // php returns float|false — false for a path it cannot stat. Declaring Float
+    // discarded the false and handed back a plain 0.0.
+    returns: Mixed,
     semantics: crate::builtins::semantics::runtime_fn_semantics(
         crate::ir::RuntimeFnId::DiskFreeSpace,
     ),

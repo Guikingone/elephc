@@ -15920,7 +15920,7 @@
           "type": "string"
         }
       ],
-      "return_type": "float",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "disk_free_space",
@@ -16034,7 +16034,7 @@
           "type": "string"
         }
       ],
-      "return_type": "float",
+      "return_type": "mixed",
       "variadic": null
     },
     "slug": "disk_total_space",

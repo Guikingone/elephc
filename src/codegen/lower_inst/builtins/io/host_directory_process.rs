@@ -46,6 +46,10 @@ pub(super) fn lower_disk_space(
         }
     }
     abi::emit_call_label(ctx.emitter, "__rt_disk_space");
+    // php answers false for a path it cannot stat. float(0) is a legitimate reading for a
+    // full filesystem, so `disk_free_space($d) === false` never fired and arithmetic
+    // silently used zero.
+    box_float_or_false_result(ctx, name);
     store_if_result(ctx, inst)
 }
 

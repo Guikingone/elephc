@@ -39,7 +39,7 @@ sidebar:
 ## Signature summary
 
 ```php
-function disk_free_space(string $directory): float
+function disk_free_space(string $directory): mixed
 ```
 
 ## What the type checker enforces

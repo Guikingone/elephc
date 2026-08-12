@@ -270,9 +270,13 @@ echo $total >= $free ? "o" : "O";
     assert_eq!(out, "fto");
 }
 
-/// Verifies compiled PHP output for disk free space invalid path returns zero.
+/// A path that cannot be stat'd answers `false`, not a reading of zero.
+///
+/// The old expectation named the defect: `float(0)` is a legitimate reading for a full filesystem,
+/// so `disk_free_space($d) === false` never fired and arithmetic on the result silently used zero.
+/// PHP returns `float|false` and this is the `false`.
 #[test]
-fn test_disk_free_space_invalid_path_returns_zero() {
+fn test_disk_free_space_invalid_path_is_false() {
     let out = compile_and_run(r#"<?php var_dump(disk_free_space("/no/such/path/xyz123"));"#);
-    assert_eq!(out, "float(0)\n");
+    assert_eq!(out, "bool(false)\n");
 }

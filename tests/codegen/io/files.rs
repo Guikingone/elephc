@@ -24,6 +24,29 @@ echo file_get_contents("test.txt");
     let _ = fs::remove_dir_all(&dir);
 }
 
+/// Verifies the disk-space family answers `false` for a path it cannot stat.
+///
+/// Both answered `float(0)`, which is a legitimate reading for a full filesystem — so
+/// `disk_free_space($d) === false` never fired and arithmetic silently used zero.
+///
+/// The success half is the control, and it is the half a `float|false` change can break:
+/// declaring the union changes how the value is carried, so the result still has to be a
+/// float that adds, divides and compares.
+#[test]
+fn test_disk_space_reports_false_for_an_unstattable_path() {
+    let out = compile_and_run(
+        r#"<?php
+echo var_export(@disk_free_space("/no/such/dir"), true), "|";
+echo var_export(@disk_total_space("/no/such/dir"), true), "|";
+$f = disk_free_space("/");
+echo var_export(is_float($f), true), ",";
+echo var_export($f > 0, true), ",";
+echo var_export($f <= disk_total_space("/"), true);
+"#,
+    );
+    assert_eq!(out, "false|false|true,true,true");
+}
+
 /// Verifies `sys_get_temp_dir()` derives its answer from `TMPDIR`, as php does.
 ///
 /// It used to answer a hardcoded `/tmp`. On macOS php hands out a private per-user directory,
