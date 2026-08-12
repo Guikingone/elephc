@@ -441,7 +441,8 @@ pub unsafe extern "C" fn elephc_bcmath_free(ptr: *mut u8, len: usize) {
         return;
     }
     let _ = catch_unwind(AssertUnwindSafe(|| {
-        drop(Vec::from_raw_parts(ptr, len, len));
+        let slice = ptr::slice_from_raw_parts_mut(ptr, len);
+        drop(Box::from_raw(slice));
     }));
 }
 
@@ -549,8 +550,7 @@ unsafe fn read_utf8<'a>(ptr: *const u8, len: usize) -> Result<&'a str, BcError> 
 
 /// Leaks one result string to its C caller and writes its exact pointer/length pair.
 unsafe fn write_output(value: String, out_ptr: *mut *mut u8, out_len: *mut usize) {
-    let mut bytes = value.into_bytes();
-    bytes.shrink_to_fit();
+    let mut bytes = value.into_bytes().into_boxed_slice();
     *out_ptr = bytes.as_mut_ptr();
     *out_len = bytes.len();
     std::mem::forget(bytes);
@@ -644,4 +644,3 @@ mod tests {
         assert_eq!(message, b"Division by zero");
     }
 }
-
