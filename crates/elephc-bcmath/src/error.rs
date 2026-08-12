@@ -124,9 +124,10 @@ impl BcError {
             Self::PrecisionRange => {
                 "bcround(): Argument #2 ($precision) is out of range".to_string()
             }
-            Self::RoundMode => "bcround(): Argument #3 ($mode) must be a valid rounding mode"
-                .to_string(),
+            Self::RoundMode => {
+                "bcround(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)"
+                    .to_string()
+            }
         }
     }
 }
-

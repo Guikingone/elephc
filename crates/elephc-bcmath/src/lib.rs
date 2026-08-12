@@ -3,7 +3,7 @@
 //!
 //! Called from:
 //! - Elephc AOT runtime helpers through `elephc_bcmath_*` function pointers.
-//! - Magician through the public Rust operation functions.
+//! - Magician through the same exported `elephc_bcmath_*` C ABI.
 //!
 //! Key details:
 //! - String outputs are freshly allocated and released with `elephc_bcmath_free`.
@@ -63,6 +63,9 @@ pub unsafe extern "C" fn elephc_bcmath_add(
         scale_is_null,
         out_ptr,
         out_len,
+        "bcadd",
+        "num1",
+        "num2",
         bc_add,
     )
 }
@@ -91,6 +94,9 @@ pub unsafe extern "C" fn elephc_bcmath_sub(
         scale_is_null,
         out_ptr,
         out_len,
+        "bcsub",
+        "num1",
+        "num2",
         bc_sub,
     )
 }
@@ -119,6 +125,9 @@ pub unsafe extern "C" fn elephc_bcmath_mul(
         scale_is_null,
         out_ptr,
         out_len,
+        "bcmul",
+        "num1",
+        "num2",
         bc_mul,
     )
 }
@@ -147,6 +156,9 @@ pub unsafe extern "C" fn elephc_bcmath_div(
         scale_is_null,
         out_ptr,
         out_len,
+        "bcdiv",
+        "num1",
+        "num2",
         bc_div,
     )
 }
@@ -175,6 +187,9 @@ pub unsafe extern "C" fn elephc_bcmath_mod(
         scale_is_null,
         out_ptr,
         out_len,
+        "bcmod",
+        "num1",
+        "num2",
         bc_mod,
     )
 }
@@ -204,8 +219,8 @@ pub unsafe extern "C" fn elephc_bcmath_divmod(
     clear_outputs(quotient_ptr, quotient_len);
     clear_outputs(remainder_ptr, remainder_len);
     run_abi(|| {
-        let left = read_utf8(left_ptr, left_len)?;
-        let right = read_utf8(right_ptr, right_len)?;
+        let left = read_utf8(left_ptr, left_len, "bcdivmod", 1, "num1")?;
+        let right = read_utf8(right_ptr, right_len, "bcdivmod", 2, "num2")?;
         let (quotient, remainder) = bc_divmod(left, right, optional_scale(scale, scale_is_null))?;
         write_output(quotient, quotient_ptr, quotient_len);
         write_output(remainder, remainder_ptr, remainder_len);
@@ -237,6 +252,9 @@ pub unsafe extern "C" fn elephc_bcmath_pow(
         scale_is_null,
         out_ptr,
         out_len,
+        "bcpow",
+        "num",
+        "exponent",
         bc_pow,
     )
 }
@@ -263,9 +281,9 @@ pub unsafe extern "C" fn elephc_bcmath_powmod(
     }
     clear_outputs(out_ptr, out_len);
     run_abi(|| {
-        let base = read_utf8(base_ptr, base_len)?;
-        let exponent = read_utf8(exponent_ptr, exponent_len)?;
-        let modulus = read_utf8(modulus_ptr, modulus_len)?;
+        let base = read_utf8(base_ptr, base_len, "bcpowmod", 1, "num")?;
+        let exponent = read_utf8(exponent_ptr, exponent_len, "bcpowmod", 2, "exponent")?;
+        let modulus = read_utf8(modulus_ptr, modulus_len, "bcpowmod", 3, "modulus")?;
         let result = bc_powmod(
             base,
             exponent,
@@ -297,6 +315,8 @@ pub unsafe extern "C" fn elephc_bcmath_sqrt(
         scale_is_null,
         out_ptr,
         out_len,
+        "bcsqrt",
+        "num",
         bc_sqrt,
     )
 }
@@ -320,8 +340,8 @@ pub unsafe extern "C" fn elephc_bcmath_comp(
     }
     *out_cmp = 0;
     run_abi(|| {
-        let left = read_utf8(left_ptr, left_len)?;
-        let right = read_utf8(right_ptr, right_len)?;
+        let left = read_utf8(left_ptr, left_len, "bccomp", 1, "num1")?;
+        let right = read_utf8(right_ptr, right_len, "bccomp", 2, "num2")?;
         *out_cmp = bc_comp(left, right, optional_scale(scale, scale_is_null))?;
         Ok(())
     })
@@ -338,7 +358,7 @@ pub unsafe extern "C" fn elephc_bcmath_ceil(
     out_ptr: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
-    unary_abi(value_ptr, value_len, out_ptr, out_len, bc_ceil)
+    unary_abi(value_ptr, value_len, out_ptr, out_len, "bcceil", "num", bc_ceil)
 }
 
 /// Returns the greatest integer less than or equal to a numeric string.
@@ -352,7 +372,15 @@ pub unsafe extern "C" fn elephc_bcmath_floor(
     out_ptr: *mut *mut u8,
     out_len: *mut usize,
 ) -> i32 {
-    unary_abi(value_ptr, value_len, out_ptr, out_len, bc_floor)
+    unary_abi(
+        value_ptr,
+        value_len,
+        out_ptr,
+        out_len,
+        "bcfloor",
+        "num",
+        bc_floor,
+    )
 }
 
 /// Rounds a numeric string with signed precision and a PHP rounding-mode integer.
@@ -373,7 +401,7 @@ pub unsafe extern "C" fn elephc_bcmath_round(
     }
     clear_outputs(out_ptr, out_len);
     run_abi(|| {
-        let value = read_utf8(value_ptr, value_len)?;
+        let value = read_utf8(value_ptr, value_len, "bcround", 1, "num")?;
         write_output(bc_round(value, precision, mode)?, out_ptr, out_len);
         Ok(())
     })
@@ -456,6 +484,9 @@ unsafe fn binary_abi(
     scale_is_null: i32,
     out_ptr: *mut *mut u8,
     out_len: *mut usize,
+    func: &'static str,
+    left_name: &'static str,
+    right_name: &'static str,
     operation: fn(&str, &str, Option<i64>) -> Result<String, BcError>,
 ) -> i32 {
     if !valid_output_pair(out_ptr, out_len) {
@@ -463,8 +494,8 @@ unsafe fn binary_abi(
     }
     clear_outputs(out_ptr, out_len);
     run_abi(|| {
-        let left = read_utf8(left_ptr, left_len)?;
-        let right = read_utf8(right_ptr, right_len)?;
+        let left = read_utf8(left_ptr, left_len, func, 1, left_name)?;
+        let right = read_utf8(right_ptr, right_len, func, 2, right_name)?;
         let result = operation(left, right, optional_scale(scale, scale_is_null))?;
         write_output(result, out_ptr, out_len);
         Ok(())
@@ -479,6 +510,8 @@ unsafe fn unary_scaled_abi(
     scale_is_null: i32,
     out_ptr: *mut *mut u8,
     out_len: *mut usize,
+    func: &'static str,
+    arg_name: &'static str,
     operation: fn(&str, Option<i64>) -> Result<String, BcError>,
 ) -> i32 {
     if !valid_output_pair(out_ptr, out_len) {
@@ -486,7 +519,7 @@ unsafe fn unary_scaled_abi(
     }
     clear_outputs(out_ptr, out_len);
     run_abi(|| {
-        let value = read_utf8(value_ptr, value_len)?;
+        let value = read_utf8(value_ptr, value_len, func, 1, arg_name)?;
         let result = operation(value, optional_scale(scale, scale_is_null))?;
         write_output(result, out_ptr, out_len);
         Ok(())
@@ -499,6 +532,8 @@ unsafe fn unary_abi(
     value_len: usize,
     out_ptr: *mut *mut u8,
     out_len: *mut usize,
+    func: &'static str,
+    arg_name: &'static str,
     operation: fn(&str) -> Result<String, BcError>,
 ) -> i32 {
     if !valid_output_pair(out_ptr, out_len) {
@@ -506,7 +541,7 @@ unsafe fn unary_abi(
     }
     clear_outputs(out_ptr, out_len);
     run_abi(|| {
-        let value = read_utf8(value_ptr, value_len)?;
+        let value = read_utf8(value_ptr, value_len, func, 1, arg_name)?;
         write_output(operation(value)?, out_ptr, out_len);
         Ok(())
     })
@@ -528,12 +563,18 @@ fn run_abi(operation: impl FnOnce() -> Result<(), BcError>) -> i32 {
 }
 
 /// Converts one pointer/length input pair to UTF-8 or a stable malformed status.
-unsafe fn read_utf8<'a>(ptr: *const u8, len: usize) -> Result<&'a str, BcError> {
+unsafe fn read_utf8<'a>(
+    ptr: *const u8,
+    len: usize,
+    func: &'static str,
+    arg_pos: u32,
+    arg_name: &'static str,
+) -> Result<&'a str, BcError> {
     if ptr.is_null() && len != 0 {
         return Err(BcError::Malformed {
-            func: "bcmath",
-            arg_pos: 1,
-            arg_name: "num",
+            func,
+            arg_pos,
+            arg_name,
         });
     }
     let bytes = if len == 0 {
@@ -542,9 +583,9 @@ unsafe fn read_utf8<'a>(ptr: *const u8, len: usize) -> Result<&'a str, BcError> 
         std::slice::from_raw_parts(ptr, len)
     };
     std::str::from_utf8(bytes).map_err(|_| BcError::Malformed {
-        func: "bcmath",
-        arg_pos: 1,
-        arg_name: "num",
+        func,
+        arg_pos,
+        arg_name,
     })
 }
 
@@ -642,5 +683,34 @@ mod tests {
         unsafe { elephc_bcmath_last_error(&mut message_ptr, &mut message_len) };
         let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
         assert_eq!(message, b"Division by zero");
+    }
+
+    /// Verifies invalid UTF-8 retains the called function and argument context.
+    #[test]
+    fn c_abi_invalid_utf8_publishes_argument_message() {
+        let invalid = [0xff];
+        let mut out_ptr = ptr::null_mut();
+        let mut out_len = 0usize;
+        let status = unsafe {
+            elephc_bcmath_add(
+                invalid.as_ptr(),
+                invalid.len(),
+                b"1".as_ptr(),
+                1,
+                0,
+                0,
+                &mut out_ptr,
+                &mut out_len,
+            )
+        };
+        assert_eq!(status, BCMATH_ERR_MALFORMED);
+        let mut message_ptr = ptr::null();
+        let mut message_len = 0;
+        unsafe { elephc_bcmath_last_error(&mut message_ptr, &mut message_len) };
+        let message = unsafe { std::slice::from_raw_parts(message_ptr, message_len) };
+        assert_eq!(
+            message,
+            b"bcadd(): Argument #1 ($num1) is not well-formed"
+        );
     }
 }

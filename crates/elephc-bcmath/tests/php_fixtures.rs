@@ -98,4 +98,8 @@ fn failure_fixtures_match_php_categories() {
         Err(BcError::PowModNegativeExponent)
     ));
     assert!(matches!(bc_round("1", 0, 9), Err(BcError::RoundMode)));
+    assert_eq!(
+        BcError::RoundMode.php_message(),
+        "bcround(): Argument #3 ($mode) must be a valid rounding mode (RoundingMode::*)"
+    );
 }
